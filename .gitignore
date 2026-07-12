@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Pi runtime (fetched by scripts/fetch-pi.sh)
+runtime/
+
+# Session data (per-workspace)
+.pi-science/sessions/
+.pi-science/provenance.jsonl
+.pi-science/runs.jsonl
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test
+.pytest_cache/
+coverage/
+.pi-science/
