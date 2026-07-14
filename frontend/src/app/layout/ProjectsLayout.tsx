@@ -6,8 +6,10 @@ import { useRuntimeStore } from "../../lib/runtime-store";
 import { InspectorShell } from "../../components/inspector/InspectorShell";
 import { RightPane } from "../../components/inspector/RightPane";
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
+import { setCurrentCwd } from "../../lib/files";
 import { cn } from "../../lib/cn";
 import { getClient, type SessionInfo } from "../../lib/pi-science-client";
+import { ErrorBoundary } from "../../components/ErrorBoundary";
 
 export function ProjectsLayout() {
   const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed);
@@ -25,16 +27,36 @@ export function ProjectsLayout() {
   const isProjects = location.pathname === "/" || location.pathname === "/settings";
   const isWorkspace = !!activeCwd;
 
+  // Set current CWD for file loading
+  useEffect(() => {
+    if (activeCwd) setCurrentCwd(activeCwd);
+  }, [activeCwd]);
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-bg text-text">
       {/* Sidebar */}
       {sidebarCollapsed ? (
-        <button
-          className="fade-in rounded p-1 text-text hover:bg-surface-2 absolute left-0 top-3 z-10"
-          onClick={() => setSidebarCollapsed(false)}
-        >
-          <PanelLeft size={16} />
-        </button>
+        <aside className="h-full flex-col border-r border-border bg-surface flex shrink-0 overflow-hidden w-12 items-center py-3 gap-2">
+          <button
+            className="rounded p-1.5 text-muted hover:text-text hover:bg-surface-2"
+            onClick={() => setSidebarCollapsed(false)}
+            title="Expand sidebar"
+          >
+            <PanelLeft size={16} />
+          </button>
+          {/* Icon-only nav */}
+          <CollapsedNavItem to="/" icon={isWorkspace ? <ArrowLeft size={16} /> : <FolderOpen size={16} />} label="Projects" />
+          {!isWorkspace && <CollapsedNavItem to="/skills" icon={<Puzzle size={16} />} label="Skills" />}
+          {isWorkspace && (
+            <>
+              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} icon={<FileText size={16} />} label="Files" />
+              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} icon={<BookOpen size={16} />} label="Notebooks" />
+              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/runs`} icon={<Play size={16} />} label="Runs" />
+            </>
+          )}
+          <div className="flex-1" />
+          <CollapsedNavItem to="/settings" icon={<Settings size={16} />} label="Settings" />
+        </aside>
       ) : (
         <aside className="h-full flex-col border-r border-border bg-surface flex shrink-0 overflow-hidden" style={{ width: sidebarWidth }}>
           <div className="flex flex-col h-full px-3 py-4">
@@ -44,10 +66,10 @@ export function ProjectsLayout() {
                 Pi-Science
               </h1>
               <button
-                className="rounded p-1 text-muted hover:text-text hover:bg-surface-2"
+                className="rounded p-1.5 text-muted hover:text-text hover:bg-surface-2"
                 onClick={() => setSidebarCollapsed(true)}
               >
-                <PanelLeft size={14} />
+                <PanelLeft size={16} />
               </button>
             </div>
 
@@ -98,7 +120,9 @@ export function ProjectsLayout() {
       {/* Inspector */}
       {inspectorOpen && inspectorData && (
         <RightPane onClose={closeInspector}>
-          <InspectorShell inspector={inspectorData} onClose={closeInspector} />
+          <ErrorBoundary>
+            <InspectorShell inspector={inspectorData} onClose={closeInspector} />
+          </ErrorBoundary>
         </RightPane>
       )}
     </div>
@@ -116,8 +140,14 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
   const [deleting, setDeleting] = useState<string | null>(null);
 
   useEffect(() => {
-    getClient().listSessions(cwd).then((list) => {
-      useRuntimeStore.setState({ sessions: list, cwd });
+    getClient().listSessions(cwd).then(async (list) => {
+      // Inject session names from localStorage (backend doesn't store names)
+      const { getSessionName } = await import("../../lib/pi-science-client");
+      const named = list.map((s: SessionInfo) => ({
+        ...s,
+        name: s.name || getSessionName(s.id) || undefined,
+      }));
+      useRuntimeStore.setState({ sessions: named, cwd });
       // Auto-load most recent session if none active
       const state = useRuntimeStore.getState();
       if (list.length > 0 && !state.activeSessionId) {
@@ -219,6 +249,25 @@ function relativeTime(dateStr: string): string {
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h`;
   return `${Math.floor(hours / 24)}d`;
+}
+
+/** Icon-only nav item for the collapsed sidebar strip. */
+function CollapsedNavItem({ to, icon, label }: { to: string; icon: React.ReactNode; label: string }) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const active = location.pathname.startsWith(to) && to !== "/";
+  return (
+    <button
+      onClick={() => navigate(to)}
+      className={cn(
+        "rounded p-1.5 text-muted hover:text-text hover:bg-surface-2 transition-colors",
+        active && "text-accent",
+      )}
+      title={label}
+    >
+      {icon}
+    </button>
+  );
 }
 
 function SidebarNavItem({ to, label, icon, active }: { to: string; label: string; icon?: React.ReactNode; active: boolean }) {

@@ -1,13 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, ChevronDown } from "lucide-react";
+import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, ChevronDown, Pin, PinOff, Pencil, Trash2, X } from "lucide-react";
 import { cn } from "../../lib/cn";
+import { ErrorBoundary } from "../../components/ErrorBoundary";
 
 interface Workspace {
   name: string;
   path: string;
   session_count: number;
   last_modified: string;
+}
+
+// ── Demo dismissal (localStorage — UI preference, not data) ──
+
+function loadDismissedDemos(): Set<string> {
+  try {
+    const raw = localStorage.getItem("pi-science-dismissed-demos");
+    return new Set(raw ? JSON.parse(raw) : []);
+  } catch { return new Set(); }
+}
+
+function saveDismissedDemos(set: Set<string>) {
+  localStorage.setItem("pi-science-dismissed-demos", JSON.stringify([...set]));
 }
 
 export function ProjectsPage() {
@@ -17,6 +31,11 @@ export function ProjectsPage() {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [editingName, setEditingName] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [installingDemo, setInstallingDemo] = useState(false);
+  // Pinned paths stored server-side in ~/.pi-science/pinned.json — shared across browsers
+  const [pinned, setPinned] = useState<Set<string>>(new Set());
+  const [dismissedDemos, setDismissedDemos] = useState<Set<string>>(loadDismissedDemos);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const dirInputRef = useRef<HTMLInputElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
@@ -24,32 +43,52 @@ export function ProjectsPage() {
   const loadWorkspaces = async () => {
     try {
       const res = await fetch("/api/workspaces");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setWorkspaces(await res.json());
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { loadWorkspaces(); }, []);
+  const loadPinned = async () => {
+    try {
+      const res = await fetch("/api/workspaces/pinned");
+      if (!res.ok) return;
+      const data = await res.json();
+      setPinned(new Set(data.paths || []));
+    } catch { /* ignore */ }
+  };
+
+  useEffect(() => { loadWorkspaces(); loadPinned(); }, []);
+
+  // Safety: force loading off after 10s even if API never responds
+  useEffect(() => {
+    const t = setTimeout(() => setLoading(false), 10000);
+    return () => clearTimeout(t);
+  }, []);
 
   const handleCreate = async () => {
     setCreating(true); setDropdownOpen(false);
     try {
-      const name = "Untitled Workspace";
+      const name = `Untitled Workspace ${crypto.randomUUID().slice(0, 8)}`;
       const res = await fetch("/api/workspaces", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }),
       });
-      if (res.ok) {
-        await loadWorkspaces();
-        // Find the new card and start editing its name
-        const updated = await fetch("/api/workspaces").then(r => r.json());
-        const newest = updated.find((w: Workspace) => w.name === name);
-        if (newest) {
-          setEditingName(newest.path);
-          setEditValue("");
-          setTimeout(() => nameInputRef.current?.focus(), 100);
-        }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert((err as any).detail || `Failed to create workspace (${res.status})`);
+        return;
       }
-    } catch (e) { console.error(e); }
+      await loadWorkspaces();
+      const updated = await fetch("/api/workspaces").then(r => r.json());
+      const newest = updated.find((w: Workspace) => w.name === name);
+      if (newest) {
+        setEditingName(newest.path);
+        setEditValue("");
+        setTimeout(() => nameInputRef.current?.focus(), 50);
+      }
+    } catch (e) {
+      alert("Network error — check that the backend is running.");
+    }
     finally { setCreating(false); }
   };
 
@@ -60,14 +99,65 @@ export function ProjectsPage() {
       return;
     }
     try {
-      await fetch("/api/workspaces/rename", {
+      const res = await fetch("/api/workspaces/rename", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: oldPath, name: newName }),
       });
-    } catch (e) { console.error(e); }
+      if (!res.ok) alert("Failed to rename workspace");
+    } catch (e) { alert("Network error — check that the backend is running."); }
     setEditingName(null);
     await loadWorkspaces();
+  };
+
+  const handleDelete = async (path: string) => {
+    if (confirmDelete !== path) {
+      setConfirmDelete(path);
+      return;
+    }
+    setConfirmDelete(null);
+    try {
+      const res = await fetch("/api/workspaces/delete", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      });
+      if (!res.ok) { alert("Failed to delete workspace"); return; }
+      // Also unpin if pinned (server-side)
+      if (pinned.has(path)) {
+        await fetch("/api/workspaces/unpin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path }),
+        });
+        const next = new Set(pinned);
+        next.delete(path);
+        setPinned(next);
+      }
+      await loadWorkspaces();
+    } catch (e) { alert("Network error — check that the backend is running."); }
+  };
+
+  const togglePin = async (path: string) => {
+    const isPinned = pinned.has(path);
+    const endpoint = isPinned ? "/api/workspaces/unpin" : "/api/workspaces/pin";
+    try {
+      await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      });
+      const next = new Set(pinned);
+      if (isPinned) next.delete(path); else next.add(path);
+      setPinned(next);
+    } catch (e) { console.error(e); }
+  };
+
+  const dismissDemo = (name: string) => {
+    const next = new Set(dismissedDemos);
+    next.add(name);
+    setDismissedDemos(next);
+    saveDismissedDemos(next);
   };
 
   const handleOpenFolder = () => {
@@ -96,6 +186,16 @@ export function ProjectsPage() {
     } catch (e) { console.error(e); }
   };
 
+  const installDemo = async (name: string) => {
+    setInstallingDemo(true);
+    try {
+      const res = await fetch(`/api/workspaces/demo?name=${name}`, { method: "POST" });
+      const w = await res.json();
+      navigate(`/workspace/${encodeURIComponent(w.path)}`);
+    } catch (e) { console.error(e); }
+    finally { setInstallingDemo(false); }
+  };
+
   const timeAgo = (d: string) => {
     const diff = Date.now() - new Date(d).getTime();
     const mins = Math.floor(diff / 60000);
@@ -106,13 +206,22 @@ export function ProjectsPage() {
 
   if (loading) return <div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin text-muted" /></div>;
 
+  // Split into pinned & unpinned
+  const pinnedWs = workspaces.filter(w => pinned.has(w.path));
+  const unpinnedWs = workspaces.filter(w => !pinned.has(w.path));
+  const demos = [
+    { name: "molecules", icon: "🧬", title: "Molecular Playground", desc: "Lysozyme structure · Aspirin · Caffeine · Drug-likeness analysis" },
+    { name: "climate", icon: "🌍", title: "Climate Trends", desc: "Global temperature anomaly data (NASA GISTEMP v4) with guided analysis" },
+  ];
+
   return (
+    <ErrorBoundary>
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-[900px] px-8 py-12">
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="font-serif text-2xl text-text">Projects</h1>
+            <h1 className="font-serif text-xl text-text">Projects</h1>
             <p className="mt-1 text-sm text-muted">{workspaces.length} workspace{workspaces.length !== 1 ? "s" : ""}</p>
           </div>
           <div className="relative">
@@ -143,41 +252,159 @@ export function ProjectsPage() {
           </div>
         </div>
 
-        {/* Cards */}
+        {/* Demo cards (dismissible) */}
+        {demos.filter(d => !dismissedDemos.has(d.name)).length > 0 && (
+          <div className="mb-6 flex gap-3">
+            {demos.filter(d => !dismissedDemos.has(d.name)).map(d => (
+              <button key={d.name} onClick={() => installDemo(d.name)} disabled={installingDemo}
+                className="rounded-card border border-accent/30 bg-accent/5 p-4 text-left flex-1 hover:border-accent/50 hover:shadow-pop transition-all flex items-center gap-3 relative group/demo"
+              >
+                <span className="text-2xl">{d.icon}</span>
+                <div className="flex-1">
+                  <h3 className="font-medium text-text">{d.title}</h3>
+                  <p className="text-xs text-muted mt-0.5">{d.desc}</p>
+                </div>
+                <span className="rounded-full bg-accent/15 px-3 py-1 text-[11px] font-medium text-accent shrink-0">
+                  {installingDemo ? "Installing…" : "Try Demo"}
+                </span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); dismissDemo(d.name); }}
+                  className="absolute top-2 right-2 rounded p-1 text-muted/50 hover:text-muted hover:bg-surface-2 opacity-0 group-hover/demo:opacity-100 transition-opacity"
+                >
+                  <X size={13} />
+                </button>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Workspace cards */}
         {workspaces.length === 0 ? (
           <div className="text-center py-20">
             <FolderOpen size={48} className="mx-auto text-muted/40 mb-4" />
             <p className="text-muted text-sm">No workspaces yet. Create one to get started.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-4">
-            {workspaces.map((w) => (
-              <button key={w.path} onClick={() => navigate(`/workspace/${encodeURIComponent(w.path)}`)} className={cn("rounded-card border border-border bg-surface p-5 text-left shadow-card", "hover:border-accent/40 hover:shadow-pop transition-all")}>
-                <div className="flex items-start justify-between mb-3">
-                  <FolderOpen size={28} className="text-accent/60" />
-                  <span className="text-[10px] text-muted/60">{timeAgo(w.last_modified)}</span>
+          <>
+            {/* Pinned section */}
+            {pinnedWs.length > 0 && (
+              <>
+                <div className="flex items-center gap-2 mb-3">
+                  <Pin size={13} className="text-accent" />
+                  <span className="text-xs font-medium uppercase tracking-wider text-muted">Pinned</span>
+                  <span className="text-[10px] text-muted/60 ml-1">{pinnedWs.length}</span>
                 </div>
-                {editingName === w.path ? (
-                  <input
-                    ref={nameInputRef}
-                    value={editValue}
-                    onChange={(e) => setEditValue(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") handleRename(w.path); if (e.key === "Escape") setEditingName(null); }}
-                    onBlur={() => handleRename(w.path)}
-                    placeholder={w.name}
-                    onClick={(e) => e.stopPropagation()}
-                    className="rounded-input border border-accent bg-surface px-2 py-0.5 text-sm font-medium text-text outline-none w-full"
-                  />
-                ) : (
-                  <h3 className="font-medium text-text truncate">{w.name}</h3>
+                <div className="grid grid-cols-3 gap-4 mb-6">
+                  {pinnedWs.map(w => <WorkspaceCard key={w.path} w={w} {...{ pinned, togglePin, editingName, setEditingName, editValue, setEditValue, handleRename, handleDelete, confirmDelete, nameInputRef, navigate, timeAgo }} />)}
+                </div>
+                {unpinnedWs.length > 0 && (
+                  <div className="border-t border-faint mb-6" />
                 )}
-                <div className="flex items-center gap-1.5 mt-2 text-xs text-muted">
-                  <MessageSquare size={12} /> <span>{w.session_count} session{w.session_count !== 1 ? "s" : ""}</span>
-                </div>
-              </button>
-            ))}
-          </div>
+              </>
+            )}
+
+            {/* Unpinned grid */}
+            {unpinnedWs.length > 0 && (
+              <div className="grid grid-cols-3 gap-4">
+                {unpinnedWs.map(w => <WorkspaceCard key={w.path} w={w} {...{ pinned, togglePin, editingName, setEditingName, editValue, setEditValue, handleRename, handleDelete, confirmDelete, nameInputRef, navigate, timeAgo }} />)}
+              </div>
+            )}
+          </>
         )}
+      </div>
+    </div>
+    </ErrorBoundary>
+  );
+}
+
+/* ── Workspace Card ── */
+
+function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingName, editValue, setEditValue, handleRename, handleDelete, confirmDelete, nameInputRef, navigate, timeAgo }: {
+  w: Workspace;
+  pinned: Set<string>;
+  togglePin: (path: string) => void;
+  editingName: string | null;
+  setEditingName: (v: string | null) => void;
+  editValue: string;
+  setEditValue: (v: string) => void;
+  handleRename: (path: string) => Promise<void>;
+  handleDelete: (path: string) => Promise<void>;
+  confirmDelete: string | null;
+  nameInputRef: React.RefObject<HTMLInputElement | null>;
+  navigate: (to: string) => void;
+  timeAgo: (d: string) => string;
+}) {
+  const isPinned = pinned.has(w.path);
+  const isConfirming = confirmDelete === w.path;
+
+  const startEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingName(w.path);
+    setEditValue(w.name);
+    setTimeout(() => nameInputRef.current?.focus(), 50);
+  };
+
+  return (
+    <div
+      onClick={() => navigate(`/workspace/${encodeURIComponent(w.path)}`)}
+      className={cn(
+        "group relative rounded-card border border-border bg-surface p-4 text-left shadow-card cursor-pointer",
+        "hover:border-accent/40 hover:shadow-pop transition-all",
+        isPinned && "ring-1 ring-accent/30",
+      )}
+    >
+      {/* Hover action buttons — bottom-right of card */}
+      <div className="absolute right-2 bottom-2 hidden group-hover:flex items-center gap-0.5 bg-surface/95 rounded-input border border-border/60 p-0.5 shadow-card z-10"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          onClick={() => togglePin(w.path)}
+          className={cn("rounded p-1.5 hover:bg-surface-2", isPinned ? "text-accent" : "text-muted hover:text-text")}
+          title={isPinned ? "Unpin" : "Pin to top"}
+        >
+          {isPinned ? <Pin size={13} /> : <PinOff size={13} />}
+        </button>
+        <button
+          onClick={startEdit}
+          className="rounded p-1.5 text-muted hover:text-text hover:bg-surface-2"
+          title="Rename"
+        >
+          <Pencil size={13} />
+        </button>
+        <button
+          onClick={() => handleDelete(w.path)}
+          className={cn(
+            "rounded p-1.5 hover:bg-error/10",
+            isConfirming ? "text-error bg-error/10" : "text-muted hover:text-error",
+          )}
+          title={isConfirming ? "Click again to confirm" : "Delete workspace"}
+        >
+          <Trash2 size={13} />
+        </button>
+      </div>
+
+      <div className="flex items-start justify-between mb-3">
+        <FolderOpen size={22} className="text-accent/60" />
+        <span className="text-[10px] text-muted/60">{timeAgo(w.last_modified)}</span>
+      </div>
+
+      {editingName === w.path ? (
+        <input
+          ref={nameInputRef}
+          value={editValue}
+          onChange={(e) => setEditValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") handleRename(w.path); if (e.key === "Escape") setEditingName(null); }}
+          onBlur={() => handleRename(w.path)}
+          onClick={(e) => e.stopPropagation()}
+          placeholder={w.name}
+          className="rounded-input border border-accent bg-surface px-2 py-0.5 text-sm font-medium text-text outline-none w-full"
+        />
+      ) : (
+        <h3 className="text-sm font-medium text-text truncate">{w.name}</h3>
+      )}
+
+      <div className="flex items-center gap-1.5 mt-2 text-[11px] text-muted">
+        <MessageSquare size={12} /> <span>{w.session_count} session{w.session_count !== 1 ? "s" : ""}</span>
       </div>
     </div>
   );

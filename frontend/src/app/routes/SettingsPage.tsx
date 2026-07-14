@@ -1,13 +1,14 @@
 import { useEffect, useState, useCallback } from "react";
-import { Key, Trash2, Eye, EyeOff, Check, Loader2, Cpu, Puzzle, FlaskConical } from "lucide-react";
+import { Key, Trash2, Eye, EyeOff, Check, Loader2, Cpu, Puzzle, FlaskConical, Server } from "lucide-react";
 import { cn } from "../../lib/cn";
 
-type Tab = "llm" | "extensions" | "mcp";
+type Tab = "llm" | "extensions" | "mcp" | "compute";
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "llm", label: "LLM", icon: <Cpu size={14} /> },
   { id: "extensions", label: "Extensions", icon: <Puzzle size={14} /> },
   { id: "mcp", label: "MCP", icon: <FlaskConical size={14} /> },
+  { id: "compute", label: "Compute", icon: <Server size={14} /> },
 ];
 
 interface Provider {
@@ -87,6 +88,7 @@ export function SettingsPage() {
         {tab === "llm" && <LLMTab config={config!} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} saveModel={saveModel} />}
         {tab === "extensions" && <ExtensionsTab />}
         {tab === "mcp" && <MCPTab />}
+        {tab === "compute" && <ComputeTab />}
       </div>
     </div>
   );
@@ -177,6 +179,7 @@ function ExtensionsTab() {
         <ExtCard name="MCP Adapter" pkg="pi-mcp-adapter" desc="Bridges MCP servers into pi. One proxy tool for all servers with lazy loading and OAuth support." checked />
         <ExtCard name="Subagents" pkg="pi-subagents" desc="Delegate work to focused child agents: scout, researcher, planner, worker, reviewer, oracle." checked />
         <ExtCard name="Web Access" pkg="pi-web-access" desc="Web search, URL fetching, YouTube/video understanding. Multi-provider with smart fallbacks." checked />
+        <ExtCard name="Context Mode" pkg="context-mode" desc="Sandboxed code execution (12 languages) + FTS5 knowledge index. Reduces context bloat by up to 98% in long scientific sessions. Auto-installs ctx_execute, ctx_search, ctx_index tools." checked />
       </Section>
     </div>
   );
@@ -265,6 +268,125 @@ function McpRow({ id, label, disc, desc, src, keyEnv, enabled, onToggle }: {
           {enabled ? "On" : "Off"}
         </button>
       </div>
+    </div>
+  );
+}
+
+/* ── Compute Tab ── */
+
+interface Machine {
+  host: string; label: string; user: string; port: number; identity_file: string; scheduler: string;
+}
+
+function ComputeTab() {
+  const [machines, setMachines] = useState<Machine[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState({ host: "", label: "", user: "", port: 22, identity_file: "", scheduler: "" });
+  const [adding, setAdding] = useState(false);
+  const [probing, setProbing] = useState<Record<string, any>>({});
+  const [error, setError] = useState("");
+
+  const load = async () => {
+    try {
+      const res = await fetch("/api/compute/machines");
+      const d = await res.json();
+      setMachines(d.machines || []);
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const handleAdd = async () => {
+    if (!form.host.trim()) return;
+    setAdding(true); setError("");
+    try {
+      await fetch("/api/compute/machines", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form),
+      });
+      setForm({ host: "", label: "", user: "", port: 22, identity_file: "", scheduler: "" });
+      await load();
+    } catch (e: any) { setError(e.message); }
+    finally { setAdding(false); }
+  };
+
+  const handleDelete = async (label: string) => {
+    await fetch(`/api/compute/machines/${label}`, { method: "DELETE" });
+    await load();
+  };
+
+  const handleProbe = async (machine: Machine) => {
+    setProbing((p: any) => ({ ...p, [machine.label]: true }));
+    try {
+      const params = new URLSearchParams({ host: machine.host, user: machine.user, port: String(machine.port), identity_file: machine.identity_file });
+      const res = await fetch(`/api/compute/probe?${params}`, { method: "POST" });
+      const info = await res.json();
+      setProbing((p: any) => ({ ...p, [machine.label]: info }));
+    } catch (e) { console.error(e); }
+    finally { setProbing((p: any) => ({ ...p, [machine.label]: false })); }
+  };
+
+  if (loading) return <div className="text-sm text-muted py-4">Loading…</div>;
+
+  return (
+    <div className="space-y-6">
+      <Section title="Remote Machines">
+        <p className="text-[11px] text-muted mb-3">
+          Configure SSH servers, GPU boxes, or Slurm clusters for remote computation.
+          Config is saved to <code className="font-mono text-[11px] bg-surface-2 px-1 rounded">.pi-science/compute.json</code>.
+        </p>
+
+        {/* Add form */}
+        <div className="rounded-card border border-border bg-surface p-4 mb-3">
+          <div className="grid grid-cols-3 gap-2 mb-2">
+            <input value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder="Label*" className="rounded-input border border-border bg-surface-2 px-2 py-1.5 text-xs text-text outline-none" />
+            <input value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} placeholder="Hostname*" className="rounded-input border border-border bg-surface-2 px-2 py-1.5 text-xs text-text outline-none font-mono" />
+            <input value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} placeholder="User" className="rounded-input border border-border bg-surface-2 px-2 py-1.5 text-xs text-text outline-none" />
+          </div>
+          <div className="flex items-center gap-2">
+            <select value={form.scheduler} onChange={(e) => setForm({ ...form, scheduler: e.target.value })} className="rounded-input border border-border bg-surface-2 px-2 py-1.5 text-xs text-text outline-none">
+              <option value="">Direct SSH</option>
+              <option value="slurm">Slurm</option>
+            </select>
+            <button onClick={handleAdd} disabled={!form.host.trim() || adding}
+              className="rounded-input bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40">{adding ? "Adding…" : "Add Machine"}</button>
+            {error && <span className="text-xs text-error">{error}</span>}
+          </div>
+        </div>
+
+        {/* Machine list */}
+        {machines.length === 0 ? (
+          <p className="text-[12px] text-muted/60 italic">No machines configured</p>
+        ) : (
+          machines.map((m) => (
+            <div key={m.label} className="rounded-card border border-border bg-surface px-4 py-3 mb-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-medium text-text">{m.label}</span>
+                  <span className="ml-2 font-mono text-[11px] text-muted">{m.user}@{m.host}:{m.port}</span>
+                  {m.scheduler && <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 text-[10px] uppercase text-accent">{m.scheduler}</span>}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => handleProbe(m)} disabled={!!probing[m.label]}
+                    className="rounded-input px-2 py-1 text-[11px] text-link hover:bg-surface-2">
+                    {probing[m.label] === true ? <Loader2 size={12} className="animate-spin" /> : probing[m.label] ? "Probed" : "Probe"}
+                  </button>
+                  <button onClick={() => handleDelete(m.label)} className="rounded-input px-2 py-1 text-[11px] text-error hover:bg-error/10">
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              </div>
+              {probing[m.label] && typeof probing[m.label] === "object" && (
+                <div className="mt-2 rounded-input bg-surface-2 p-2 font-mono text-[10px] text-muted">
+                  {probing[m.label].reachable
+                    ? `Cores: ${probing[m.label].cores} · RAM: ${probing[m.label].memory} · GPUs: ${probing[m.label].gpus} · Slurm: ${probing[m.label].has_slurm ? "yes" : "no"}`
+                    : `Error: ${probing[m.label].error || "unreachable"}`}
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </Section>
     </div>
   );
 }

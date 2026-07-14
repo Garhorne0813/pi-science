@@ -22,7 +22,7 @@ if [ -d "$LOCAL_PI_REPO/packages/coding-agent/src" ]; then
   fi
 
   # Install extensions (MCP adapter, subagents)
-  for pkg in pi-mcp-adapter pi-subagents pi-web-access; do
+  for pkg in pi-mcp-adapter pi-subagents pi-web-access context-mode; do
     if [ ! -d "node_modules/$pkg" ]; then
       echo "  Installing $pkg..."
       npm install "$pkg" --save-dev --ignore-scripts 2>&1 | tail -1

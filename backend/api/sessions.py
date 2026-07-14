@@ -25,15 +25,17 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 @router.post("", response_model=CreateSessionResponse)
 async def create_session(body: CreateSessionRequest):
     """Create a new agent session (spawns pi RPC process if needed)."""
-    # If a pi process already exists for this cwd, create a NEW session within it
+    # If a pi process already exists for this cwd, reuse it via new_session
     existing = pi_manager.get_by_cwd(body.cwd)
     if existing and existing.is_alive:
         result = await existing.send_command("new_session")
         if result.get("success"):
-            new_id = existing.session_id
-            return CreateSessionResponse(id=new_id, cwd=body.cwd)
+            return CreateSessionResponse(id=existing.session_id, cwd=body.cwd)
+        # new_session failed — return existing session id rather than spawning a duplicate
+        if existing.session_id:
+            return CreateSessionResponse(id=existing.session_id, cwd=body.cwd)
 
-    # No existing process, spawn a new one
+    # No existing process, spawn a new one (protected by per-cwd mutex)
     pi = await pi_manager.get_or_spawn(
         cwd=body.cwd,
         session_dir=str(get_sessions_dir(body.cwd)),

@@ -8,7 +8,7 @@ interface Notebook {
 }
 
 interface JupyterStatus {
-  running: boolean; port: number; url: string | null;
+  running: boolean; port: number; url: string | null; env_ready?: boolean;
 }
 
 export function NotebooksPage() {
@@ -16,7 +16,7 @@ export function NotebooksPage() {
   const workspaceCwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [loading, setLoading] = useState(true);
-  const [jupyter, setJupyter] = useState<JupyterStatus>({ running: false, port: 8888, url: null });
+  const [jupyter, setJupyter] = useState<JupyterStatus>({ running: false, port: 8888, url: null, env_ready: false });
   const [starting, setStarting] = useState(false);
 
   const loadNotebooks = async () => {
@@ -37,11 +37,46 @@ export function NotebooksPage() {
 
   useEffect(() => { loadNotebooks(); loadJupyterStatus(); }, [workspaceCwd]);
 
+  const [setupProgress, setSetupProgress] = useState<string[]>([]);
+  const [settingUp, setSettingUp] = useState(false);
+
+  const setupJupyterEnv = async () => {
+    setSettingUp(true);
+    setSetupProgress([]);
+    try {
+      const eventSource = new EventSource("/api/notebooks/jupyter/setup");
+      eventSource.onmessage = (e) => {
+        const d = JSON.parse(e.data);
+        if (d.status === "done") {
+          setSetupProgress((p) => [...p, "✅ " + d.text]);
+          eventSource.close();
+          setSettingUp(false);
+          loadJupyterStatus();
+        } else if (d.status === "error") {
+          setSetupProgress((p) => [...p, "❌ " + d.text]);
+          eventSource.close();
+          setSettingUp(false);
+        } else {
+          setSetupProgress((p) => [...p, d.text]);
+        }
+      };
+      eventSource.onerror = () => {
+        eventSource.close();
+        setSettingUp(false);
+      };
+    } catch (e) { console.error(e); setSettingUp(false); }
+  };
+
   const startJupyter = async () => {
     setStarting(true);
     try {
       const res = await fetch(`/api/notebooks/jupyter/start?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "POST" });
-      setJupyter(await res.json());
+      if (res.ok) {
+        setJupyter(await res.json());
+      } else {
+        const err = await res.json();
+        alert(err.detail || "Failed to start Jupyter");
+      }
     } catch (e) { console.error(e); }
     finally { setStarting(false); }
   };
@@ -80,7 +115,8 @@ export function NotebooksPage() {
             <div>
               <h2 className="text-sm font-medium text-text">Jupyter Lab</h2>
               <p className="text-xs text-muted mt-0.5">
-                {jupyter.running ? `Running on port ${jupyter.port}` : "Not running"}
+                {jupyter.running ? `Running on port ${jupyter.port}` :
+                 jupyter.env_ready ? "Environment ready" : "Environment not set up"}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -93,14 +129,26 @@ export function NotebooksPage() {
                     <Square size={12} /> Stop
                   </button>
                 </>
-              ) : (
+              ) : jupyter.env_ready ? (
                 <button onClick={startJupyter} disabled={starting}
                   className="rounded-input bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40 flex items-center gap-1">
                   {starting ? <RefreshCw size={12} className="animate-spin" /> : <Play size={12} />} Start
                 </button>
+              ) : (
+                <button onClick={setupJupyterEnv} disabled={settingUp}
+                  className="rounded-input bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40 flex items-center gap-1">
+                  {settingUp ? <RefreshCw size={12} className="animate-spin" /> : "⚡"} Setup Jupyter
+                </button>
               )}
             </div>
           </div>
+          {setupProgress.length > 0 && (
+            <div className="mt-3 rounded-input bg-surface-2 p-3 max-h-32 overflow-y-auto">
+              {setupProgress.map((line: string, i: number) => (
+                <div key={i} className="font-mono text-[11px] text-muted">{line}</div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Notebook list */}

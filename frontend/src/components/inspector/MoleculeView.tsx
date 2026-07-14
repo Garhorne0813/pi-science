@@ -85,12 +85,17 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
 
         const viewer = $3Dmol.createViewer(containerRef.current, { backgroundColor: "white" });
         viewerRef.current = viewer;
-        viewer.setBackgroundColor(0xffffff, 0); // transparent → our white stage shows
+        viewer.setBackgroundColor(0xffffff, 0);
         viewer.addModel(model, format);
+        const count = viewer.selectedAtoms({}).length;
+        if (count === 0) {
+          setError("Failed to load structure — file may be empty or in an unsupported format");
+          return;
+        }
         applyStyle(viewer, styleMode, isMacromolecule);
         viewer.zoomTo();
         viewer.render();
-        setAtomCount(viewer.selectedAtoms({}).length);
+        setAtomCount(count);
         requestAnimationFrame(() => {
           if (!cancelled) {
             viewer.resize();

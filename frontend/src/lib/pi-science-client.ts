@@ -123,12 +123,17 @@ export class PiScienceClient {
   ];
 
   connect(sessionId: string): void {
-    // Aggressively clean up old connection before making a new one
+    // If already connected to the same session, don't disrupt the stream
+    if (this.sessionId === sessionId && this.eventSource?.readyState === EventSource.OPEN) {
+      return;
+    }
+    // Close old connection only if switching sessions
     if (this.eventSource) {
       this.eventSource.close();
       this.eventSource = null;
     }
-    this.listeners.clear();
+    // IMPORTANT: don't clear listeners here — they're registered once and persist.
+    // _registerEventListener adds them; disconnect() is the only place that clears.
     this.sessionId = sessionId;
 
     const url = `${this.baseUrl}/api/sessions/${sessionId}/events`;
@@ -149,13 +154,10 @@ export class PiScienceClient {
       }
     };
 
-    // Backend sends NAMED events (event: text.updated, event: session.idle, etc.)
-    // EventSource.onmessage only fires for unnamed events, so we use addEventListener
     for (const evt of PiScienceClient.SSE_EVENTS) {
       this.eventSource.addEventListener(evt, (e: MessageEvent) => forward(e.data));
     }
 
-    // Also catch any unnamed events as fallback
     this.eventSource.onmessage = (e) => forward(e.data);
 
     this.eventSource.onerror = () => {
@@ -169,7 +171,7 @@ export class PiScienceClient {
       this.eventSource = null;
     }
     this.sessionId = null;
-    this.listeners.clear();  // Remove all listeners to prevent duplicates on reconnect
+    this.listeners.clear();
   }
 
   onEvent(fn: (event: PiScienceEvent) => void): () => void {

@@ -207,7 +207,14 @@ async function loadSessionsInternal() {
   }
 }
 
+let _listenerRegistered = false;
+
 function _registerEventListener(client: PiScienceClient) {
+  // Prevent duplicate listeners — each call adds a new function, causing
+  // double-processing and potential race conditions on SSE events
+  if (_listenerRegistered) return;
+  _listenerRegistered = true;
+
   client.onEvent((event) => {
     const state = useRuntimeStore.getState();
     if (event.type === "agent_start") {
@@ -284,57 +291,92 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   disconnect: () => {
     const { client } = get();
     client?.disconnect();
+    _listenerRegistered = false;  // allow re-registration on next connect
     set({ status: "offline", client: null, activeSessionId: null });
   },
 
   sendPrompt: async (message: string) => {
-    let { client, activeSessionId, thread, cwd } = get();
-    if (!client) return;
+    const state = get();
+    let { client, activeSessionId, thread, cwd } = state;
+    // client is a singleton, always available after first getClient()
+    if (!client) client = getClient();
 
     _textBuffer = "";
 
-    // Add user message locally
+    // Always add user message locally — must show immediately regardless of session state
     const userBlock: ThreadBlock = {
       kind: "user",
       id: `user-${Date.now()}`,
       text: message,
     };
-    const blocks = [...thread.blocks, userBlock];
-    const index = { ...thread.index, [userBlock.id]: blocks.length - 1 };
-    set({ thread: { blocks, index, loaded: true }, working: true });
+    set({
+      thread: {
+        blocks: [...thread.blocks, userBlock],
+        index: { ...thread.index, [userBlock.id]: thread.blocks.length },
+        loaded: true,
+      },
+      working: true,
+    });
 
-    // If no active SSE, connect to existing session or create new one
-    if (!client.isConnected) {
-      if (activeSessionId) {
-        // Existing session (historical or just created) — just connect SSE
-        client.connect(activeSessionId);
-        _registerEventListener(client);
-        set({ client });
-      } else {
-        // No session at all — create new
-        try {
-          const result = await client.createSession(cwd);
-          activeSessionId = result.id;
-          const newSession: SessionInfo = { id: result.id, cwd: cwd, name: "New Session" };
-          set((s) => ({ activeSessionId: result.id, sessions: [newSession, ...s.sessions].slice(0, 50) }));
-          client.connect(result.id);
-          _registerEventListener(client);
-          set({ client });
-        } catch (err) {
-          console.error("Failed to create session for prompt:", err);
-          set({ working: false });
-          return;
+    // Ensure a session exists and SSE is connected
+    try {
+      if (!client.isConnected || !activeSessionId) {
+        if (activeSessionId) {
+          // Existing session — just connect SSE
+          client.connect(activeSessionId);
+        } else {
+          // No session — create new (or wait for connect() to finish in useEffect)
+          // Retry a few times in case connect() is still spawning pi
+          const maxWait = 30000; // 30s max
+          const start = Date.now();
+          while (!activeSessionId && (Date.now() - start) < maxWait) {
+            // Check if connect() in useEffect already created one
+            const current = get();
+            activeSessionId = current.activeSessionId;
+            if (activeSessionId && current.client?.isConnected) break;
+            await new Promise(r => setTimeout(r, 500));
+          }
+          if (!activeSessionId) {
+            // Still no session — create one ourselves
+            const result = await client.createSession(cwd);
+            activeSessionId = result.id;
+            set((s) => ({
+              activeSessionId: result.id,
+              sessions: [{ id: result.id, cwd, name: "New Session" } as SessionInfo, ...s.sessions].slice(0, 50),
+            }));
+          }
+          if (!client.isConnected) {
+            client.connect(activeSessionId);
+            _registerEventListener(client);
+          }
         }
       }
-    }
 
-    // Use first user message as session name
-    if (activeSessionId) {
-      const { setSessionName } = await import("./pi-science-client");
-      setSessionName(activeSessionId, message);
-    }
+      // Use first user message as session name
+      if (activeSessionId) {
+        const { setSessionName } = await import("./pi-science-client");
+        setSessionName(activeSessionId, message);
+      }
 
-    await client.sendPrompt(activeSessionId, message);
+      await client.sendPrompt(activeSessionId, message);
+    } catch (err) {
+      console.error("Failed to send prompt:", err);
+      set({ working: false });
+      // Add error block to thread so user sees something happened
+      const errorBlock: ThreadBlock = {
+        kind: "status-line",
+        id: `error-${Date.now()}`,
+        text: err instanceof Error ? err.message : "Failed to send message — check that the backend is running.",
+        level: "error",
+      } as ThreadBlock;
+      set((s) => ({
+        thread: {
+          blocks: [...s.thread.blocks, errorBlock],
+          index: { ...s.thread.index, [errorBlock.id]: s.thread.blocks.length },
+          loaded: true,
+        },
+      }));
+    }
   },
 
   abort: async () => {

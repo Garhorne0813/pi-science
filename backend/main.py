@@ -91,7 +91,12 @@ def main():
 
 
 # Register cleanup on exit
-atexit.register(lambda: asyncio.run(pi_manager.shutdown_all()))
+def _cleanup():
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(pi_manager.shutdown_all())
+    loop.run_until_complete(kernel_manager.shutdown_all())
+    loop.close()
+atexit.register(_cleanup)
 
 
 if __name__ == "__main__":

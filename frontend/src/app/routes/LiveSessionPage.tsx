@@ -9,6 +9,7 @@ import type { ThreadBlock } from "../../types/thread";
 import { MarkdownViewer } from "../../components/markdown-viewer/MarkdownViewer";
 import { extractArtifactRefs, refToArtifactBlock, fileInspectorFromBlock } from "../../lib/artifacts";
 import { setCurrentCwd } from "../../lib/files";
+import { ErrorBoundary } from "../../components/ErrorBoundary";
 
 export function LiveSessionPage() {
   const { sessionId, cwd: rawCwd } = useParams<{ sessionId: string; cwd: string }>();
@@ -97,7 +98,7 @@ export function LiveSessionPage() {
           <span className={cn("h-2 w-2 rounded-full shrink-0",
             status === "ready" ? "bg-ok" : status === "error" ? "bg-error" : "bg-muted"
           )} />
-          <h1 className="min-w-0 truncate text-[13px] font-medium text-text">{title}</h1>
+          <h1 className="min-w-0 truncate text-[13px] font-serif font-medium text-text">{title}</h1>
         </div>
       </header>
 
@@ -107,7 +108,9 @@ export function LiveSessionPage() {
           {thread.blocks.length === 0 && !working && (
             <WelcomeScreen onPick={(msg) => sendPrompt(msg)} />
           )}
-          {renderBlocks(thread.blocks)}
+          <ErrorBoundary>
+            {renderBlocks(thread.blocks)}
+          </ErrorBoundary>
           {working && thread.blocks.length === 0 && (
             <div className="flex items-center gap-2 text-sm text-muted py-4">
               <Loader2 size={14} className="animate-spin text-accent" />

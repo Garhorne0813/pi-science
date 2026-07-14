@@ -21,6 +21,7 @@
     "3dmol": "^2.5.5",
     "autoprefixer": "^10.5.2",
     "clsx": "^2.1.1",
+    "context-mode": "^1.0.169",
     "docx-preview": "^0.4.0",
     "exceljs": "^4.4.0",
     "highlight.js": "^11.11.1",

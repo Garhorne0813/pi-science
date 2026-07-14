@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import signal
 import subprocess
 import uuid
 from datetime import datetime, timezone
@@ -34,15 +35,20 @@ class PiProcess:
         cwd: str,
         session_id: str,
         config: PiConfig,
+        session_dir: str = "",
     ):
         self.process = process
         self.cwd = cwd
         self.session_id = session_id
         self.config = config
+        self.session_dir = session_dir
+        self._pgid = process.pid  # process group leader (start_new_session=True)
         self.pending_requests: dict[str, asyncio.Future] = {}
         self._event_queue: asyncio.Queue = asyncio.Queue()
         self._reader_task: Optional[asyncio.Task] = None
+        self._stderr_task: Optional[asyncio.Task] = None
         self._started_at = datetime.now(timezone.utc)
+        self._last_activity = datetime.now(timezone.utc)
 
     @classmethod
     async def spawn(cls, cwd: str, session_dir: str, config: PiConfig) -> "PiProcess":
@@ -83,13 +89,16 @@ class PiProcess:
 
         thinking = config.thinking or PI_DEFAULT_THINKING
 
-        # Load MCP adapter and subagent extensions
+        # Load MCP adapter, subagent, and context-mode extensions
         if PI_MODE == "dev":
             ext_base = Path(PI_CLI_PATH).parent.parent.parent.parent  # pi repo root
         else:
             ext_base = Path(PI_CLI_PATH).parent  # runtime dir
         mcp_ext = ext_base / "node_modules" / "pi-mcp-adapter" / "index.ts"
-        sub_ext = ext_base / "node_modules" / "pi-subagents" / "index.ts"
+        sub_ext = ext_base / "node_modules" / "pi-subagents" / "src" / "extension" / "index.ts"
+        # context-mode: sandboxed execution + FTS5 knowledge index for long sessions
+        ctx_ext = ext_base / "node_modules" / "context-mode" / "build" / "adapters" / "pi" / "extension.js"
+        ctx_skills = ext_base / "node_modules" / "context-mode" / "skills"
 
         args.extend([
             "--model", effective_model,
@@ -103,6 +112,11 @@ class PiProcess:
             args.extend(["-e", str(mcp_ext)])
         if sub_ext.exists():
             args.extend(["-e", str(sub_ext)])
+        # context-mode: sandbox code execution + session continuity via FTS5
+        if ctx_ext.exists():
+            args.extend(["-e", str(ctx_ext)])
+        if ctx_skills.exists():
+            args.extend(["--skill", str(ctx_skills)])
 
         # Add explicitly configured skills
         for skill_path in config.skills:
@@ -115,6 +129,10 @@ class PiProcess:
         # Set up environment with API keys from config + env vars
         from api.settings import get_env_with_keys
         env = get_env_with_keys()
+
+        # context-mode: store its SQLite/FTS5 database inside pi-science data dir
+        from config import BASE_DIR
+        env["CONTEXT_MODE_DIR"] = str(BASE_DIR / "context-mode")
 
         if config.provider:
             env["PI_DEFAULT_PROVIDER"] = config.provider
@@ -132,19 +150,25 @@ class PiProcess:
             env=env,
             text=True,
             bufsize=1,  # Line buffered
+            start_new_session=True,  # Isolate in own process group — killpg on shutdown
         )
 
-        instance = cls(process, cwd, session_id="", config=config)
+        instance = cls(process, cwd, session_id="", config=config, session_dir=session_dir)
         # Update model to the effective one used
         instance.config.model = effective_model
 
-        # Start the stdout reader
+        # Start stdout + stderr readers (stderr MUST be drained to avoid deadlock)
         instance._reader_task = asyncio.create_task(instance._read_stdout())
+        instance._stderr_task = asyncio.create_task(instance._read_stderr())
 
         # Get initial state to retrieve session ID
         state = await instance.send_command("get_state")
         if state.get("success") and state.get("data"):
             instance.session_id = state["data"].get("sessionId", "")
+
+        # Write PID file so stale process detection works across restarts
+        pid_file = Path(session_dir) / ".pi-pid"
+        pid_file.write_text(str(process.pid))
 
         return instance
 
@@ -171,8 +195,24 @@ class PiProcess:
         # Run blocking reader in default executor
         await loop.run_in_executor(None, read_lines)
 
+    async def _read_stderr(self):
+        """Background task: drain stderr to prevent pipe buffer deadlock.
+        If stderr fills up (>64KB OS pipe buffer), the pi process blocks on
+        stderr write and never produces more stdout. We drain it continuously."""
+        loop = asyncio.get_event_loop()
+
+        def drain():
+            for line in self.process.stderr:
+                print(f"[pi-manager:stderr] {line.rstrip()}")
+
+        try:
+            await loop.run_in_executor(None, drain)
+        except Exception:
+            pass  # Process already exited, pipe closed
+
     async def _dispatch(self, data: dict):
         """Route stdout data to either pending request future or event queue."""
+        self._last_activity = datetime.now(timezone.utc)
         msg_type = data.get("type")
 
         if msg_type == "response":
@@ -276,7 +316,11 @@ class PiProcess:
                 return
 
     async def shutdown(self):
-        """Gracefully shut down the pi process."""
+        """Gracefully shut down the pi process and its entire process group.
+
+        Uses killpg to ensure all descendants (tsx, Node.js workers, MCP bridge,
+        context-mode server) are terminated — like open-science's Tauri sidecar
+        with parent_process_death_signal."""
         if self._reader_task:
             self._reader_task.cancel()
             try:
@@ -285,12 +329,30 @@ class PiProcess:
                 pass
 
         if self.process.poll() is None:
-            self.process.terminate()
             try:
-                self.process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait()
+                # SIGTERM the entire process group first (graceful)
+                os.killpg(self._pgid, signal.SIGTERM)
+                try:
+                    self.process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    # Force kill if graceful shutdown fails
+                    os.killpg(self._pgid, signal.SIGKILL)
+                    self.process.wait()
+            except (ProcessLookupError, OSError):
+                # Process group already gone — just clean up the main process
+                try:
+                    self.process.kill()
+                    self.process.wait()
+                except OSError:
+                    pass
+
+        # Remove PID file
+        try:
+            pid_file = Path(self.session_dir) / ".pi-pid" if self.session_dir else None
+            if pid_file and pid_file.exists():
+                pid_file.unlink()
+        except Exception:
+            pass
 
         # Fail all pending requests
         for req_id, future in self.pending_requests.items():
@@ -307,11 +369,41 @@ class PiManager:
 
     One PiProcess per working directory (cwd). Sessions within the same
     cwd share the same pi process, switching via switch_session RPC command.
+
+    Idle processes (no activity for IDLE_TTL seconds) are automatically
+    shut down to free memory and LLM connection slots.
     """
+
+    IDLE_TTL = 30 * 60  # 30 minutes
 
     def __init__(self):
         self._processes: dict[str, PiProcess] = {}  # cwd -> PiProcess
         self._session_map: dict[str, str] = {}  # session_id -> cwd
+        self._idle_task: Optional[asyncio.Task] = None
+        self._spawn_locks: dict[str, asyncio.Lock] = {}  # per-cwd spawn mutex
+
+    def _start_idle_check(self):
+        """Start the idle cleanup background task (idempotent)."""
+        if self._idle_task is None or self._idle_task.done():
+            self._idle_task = asyncio.create_task(self._idle_cleanup_loop())
+
+    async def _idle_cleanup_loop(self):
+        """Periodically check for and shut down idle pi processes."""
+        while True:
+            try:
+                await asyncio.sleep(5 * 60)  # Check every 5 minutes
+                now = datetime.now(timezone.utc)
+                for cwd in list(self._processes.keys()):
+                    pi = self._processes.get(cwd)
+                    if pi and pi.is_alive:
+                        idle_seconds = (now - pi._last_activity).total_seconds()
+                        if idle_seconds > self.IDLE_TTL:
+                            print(f"[pi-manager] Shutting down idle pi process for {cwd} ({idle_seconds:.0f}s idle)")
+                            await self._remove(cwd)
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                pass  # Don't crash the cleanup loop
 
     async def get_or_spawn(
         self,
@@ -319,26 +411,54 @@ class PiManager:
         session_dir: str,
         config: PiConfig,
     ) -> PiProcess:
-        """Get existing PiProcess for cwd or spawn a new one."""
+        """Get existing PiProcess for cwd or spawn a new one.
+
+        Uses a PID file in the session directory to detect and recover from
+        stale pi processes left behind after a backend restart (e.g. uvicorn
+        --reload clears the in-memory process dict but leaves OS processes).
+        """
         cwd = str(Path(cwd).resolve())
 
-        if cwd in self._processes:
-            pi = self._processes[cwd]
-            if pi.is_alive:
-                return pi
-            else:
-                # Dead process, clean up
-                await self._remove(cwd)
+        # Prevent concurrent spawns for the same cwd (race between connect() and sendPrompt())
+        if cwd not in self._spawn_locks:
+            self._spawn_locks[cwd] = asyncio.Lock()
+        async with self._spawn_locks[cwd]:
+            # Re-check after acquiring lock — another caller may have spawned already
+            if cwd in self._processes:
+                pi = self._processes[cwd]
+                if pi.is_alive:
+                    return pi
+                else:
+                    await self._remove(cwd)
 
-        # Create session directory for this cwd
-        encoded_cwd = cwd.lstrip("/").replace("/", "-")
-        cwd_session_dir = str(Path(session_dir) / encoded_cwd)
-        os.makedirs(cwd_session_dir, exist_ok=True)
+            # Create session directory for this cwd
+            encoded_cwd = cwd.lstrip("/").replace("/", "-")
+            cwd_session_dir = str(Path(session_dir) / encoded_cwd)
+            os.makedirs(cwd_session_dir, exist_ok=True)
 
-        pi = await PiProcess.spawn(cwd, cwd_session_dir, config)
-        self._processes[cwd] = pi
-        self._session_map[pi.session_id] = cwd
-        return pi
+            # ── Detect & recover from stale pi processes ──
+            pid_file = Path(cwd_session_dir) / ".pi-pid"
+            if pid_file.exists():
+                try:
+                    old_pid = int(pid_file.read_text().strip())
+                    try:
+                        os.kill(old_pid, 0)
+                        print(f"[pi-manager] Killing stale pi process (pid={old_pid}) for {cwd}")
+                        os.kill(old_pid, 9)
+                    except OSError:
+                        pass
+                except (ValueError, FileNotFoundError):
+                    pass
+                try:
+                    pid_file.unlink()
+                except OSError:
+                    pass
+
+            pi = await PiProcess.spawn(cwd, cwd_session_dir, config)
+            self._processes[cwd] = pi
+            self._session_map[pi.session_id] = cwd
+            self._start_idle_check()
+            return pi
 
     def get_by_session(self, session_id: str) -> Optional[PiProcess]:
         """Get PiProcess by session ID."""
