@@ -1,6 +1,7 @@
 import type { Inspector } from "../../types/thread";
 import { FilePreviewInspector } from "./FilePreviewInspector";
 import { NotebookPanel } from "./NotebookPanel";
+import { useRuntimeStore } from "../../lib/runtime-store";
 
 /** Right pane. Renders the correct inspector variant. */
 export function InspectorShell({
@@ -14,13 +15,15 @@ export function InspectorShell({
   onEvaluate?: (expr: string) => void;
   controls?: React.ReactNode;
 }) {
+  const cwd = useRuntimeStore((state) => state.cwd);
+
   return (
     <div className="h-full border-l border-border bg-surface" data-variant={inspector.variant}>
       {inspector.variant === "file" && (
         <FilePreviewInspector data={inspector} onClose={onClose} controls={controls} />
       )}
       {inspector.variant === "notebook-panel" && (
-        <NotebookPanel onClose={onClose} />
+        <NotebookPanel onClose={onClose} cwd={cwd} />
       )}
       {inspector.variant === "artifact" && (
         <ArtifactStub data={inspector} onClose={onClose} controls={controls} />

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { ArrowUp, Loader2, Square, Paperclip, X } from "lucide-react";
-import { getSessionName } from "../../lib/pi-science-client";
+import { getSessionName, type AvailableModel } from "../../lib/pi-science-client";
 import { useRuntimeStore } from "../../lib/runtime-store";
 import { useUiStore } from "../../lib/store";
 import { cn } from "../../lib/cn";
@@ -15,7 +15,7 @@ export function LiveSessionPage() {
   const workspaceCwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
   const {
     status, thread, working, connect, disconnect,
-    sendPrompt, abort, activeSessionId,
+    sendPrompt, abort, activeSessionId, setModel: setRuntimeModel,
   } = useRuntimeStore();
   const [input, setInput] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -23,6 +23,10 @@ export function LiveSessionPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [models, setModels] = useState<AvailableModel[]>([]);
+  const [selectedModel, setSelectedModel] = useState("");
+  const [thinking, setThinking] = useState("high");
+  const [modelError, setModelError] = useState<string | null>(null);
 
   useEffect(() => {
     setCurrentCwd(workspaceCwd);
@@ -34,19 +38,49 @@ export function LiveSessionPage() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [thread.blocks]);
 
+  useEffect(() => {
+    fetch("/api/settings/config")
+      .then((res) => res.json())
+      .then((data) => {
+        setModels(Array.isArray(data.available_models) ? data.available_models : []);
+        setSelectedModel(data.model || "");
+        setThinking(data.thinking || "high");
+      })
+      .catch(() => setModelError("Unable to load model list"));
+  }, []);
+
+  const handleModelChange = async (model: string) => {
+    setSelectedModel(model);
+    setModelError(null);
+    try {
+      await setRuntimeModel(model);
+      await fetch("/api/settings/model", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model, thinking }),
+      });
+    } catch (e) {
+      setModelError(e instanceof Error ? e.message : "Unable to set model");
+    }
+  };
+
   const uploadFiles = useCallback(async (fileList: FileList | File[]) => {
     const arr = Array.from(fileList);
     for (const f of arr) {
       const form = new FormData();
       form.append("file", f);
       try {
-        await fetch("/api/files/upload", { method: "POST", body: form });
+        const res = await fetch(`/api/files/upload?cwd=${encodeURIComponent(workspaceCwd)}`, {
+          method: "POST",
+          body: form,
+        });
+        if (!res.ok) throw new Error(`Upload failed: ${res.statusText}`);
         setFiles((prev) => [...prev, f]);
       } catch (err) {
         console.error("Upload failed:", err);
       }
     }
-  }, []);
+  }, [workspaceCwd]);
 
   const handleSend = async () => {
     const text = input.trim();
@@ -149,13 +183,25 @@ export function LiveSessionPage() {
             rows={2}
             className="max-h-[160px] w-full resize-none bg-transparent px-3 py-2 text-sm leading-6 text-text outline-none placeholder:text-muted"
           />
-          <div className="flex items-center justify-between px-3 pb-2">
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="rounded-input px-2 py-1 text-xs text-muted hover:text-text hover:bg-surface-2 flex items-center gap-1"
-            >
-              <Paperclip size={13} /> Attach
-            </button>
+          <div className="flex items-center justify-between gap-2 px-3 pb-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="rounded-input px-2 py-1 text-xs text-muted hover:text-text hover:bg-surface-2 flex items-center gap-1"
+              >
+                <Paperclip size={13} /> Attach
+              </button>
+              <select
+                aria-label="Select model"
+                value={selectedModel}
+                onChange={(e) => void handleModelChange(e.target.value)}
+                className="min-w-0 max-w-[300px] rounded-input border border-border bg-surface-2 px-2 py-1 text-[11px] text-text outline-none"
+              >
+                {models.length === 0 && <option value={selectedModel}>{selectedModel || "Loading models…"}</option>}
+                {models.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
+              </select>
+              {modelError && <span className="max-w-[180px] truncate text-[10px] text-error" title={modelError}>{modelError}</span>}
+            </div>
             <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFilePick} />
             {working ? (
               <button onClick={abort} className="h-7 w-7 rounded-input bg-accent text-accent-fg flex items-center justify-center hover:bg-error transition-colors">

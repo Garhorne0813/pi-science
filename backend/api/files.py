@@ -8,7 +8,12 @@ from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from fastapi.responses import FileResponse
 
 from models import FileContent, PreviewData
-from services.file_service import read_file_content, get_preview_data, detect_preview_kind
+from services.file_service import (
+    read_file_content,
+    get_preview_data,
+    detect_preview_kind,
+    resolve_workspace_path,
+)
 
 from datetime import datetime, timezone
 
@@ -23,9 +28,9 @@ async def list_files(
     """List files in the workspace, optionally in a subdirectory."""
     import os as _os
     ws = _workspace_dir(cwd)
-    target = (ws / subdir).resolve() if subdir else ws
-    # Safety check
-    if not str(target).startswith(str(ws.resolve())):
+    try:
+        target = resolve_workspace_path(ws, subdir or ".")
+    except ValueError:
         raise HTTPException(status_code=403, detail="Path outside workspace")
     if not target.exists() or not target.is_dir():
         return []
@@ -54,7 +59,10 @@ async def get_breadcrumbs(
 ):
     """Return breadcrumb path components from workspace root to subdir."""
     ws = _workspace_dir(cwd)
-    target = (ws / subdir).resolve() if subdir else ws
+    try:
+        target = resolve_workspace_path(ws, subdir or ".")
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path outside workspace")
     parts = []
     current = ws.resolve()
     for part in str(target.relative_to(ws)).split("/"):
@@ -72,8 +80,9 @@ async def delete_file(
 ):
     """Delete a file or empty directory from the workspace."""
     ws = _workspace_dir(cwd)
-    target = (ws / path).resolve()
-    if not str(target).startswith(str(ws.resolve())):
+    try:
+        target = resolve_workspace_path(ws, path)
+    except ValueError:
         raise HTTPException(status_code=403, detail="Path outside workspace")
     if not target.exists():
         raise HTTPException(status_code=404, detail="File not found")
@@ -95,8 +104,9 @@ async def probe_file(
     """Probe a file to get its structure summary without loading the whole thing."""
     from services.large_file import probe_file as probe
     ws = _workspace_dir(cwd)
-    target = (ws / path).resolve()
-    if not str(target).startswith(str(ws.resolve())):
+    try:
+        target = resolve_workspace_path(ws, path)
+    except ValueError:
         raise HTTPException(status_code=403, detail="Path outside workspace")
     return probe(target)
 
@@ -108,7 +118,13 @@ async def upload_file(
 ):
     """Upload a file to the workspace."""
     ws = _workspace_dir(cwd)
-    dest = ws / file.filename
+    filename = Path(file.filename or "").name
+    if not filename or filename in {".", ".."}:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    try:
+        dest = resolve_workspace_path(ws, filename)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path outside workspace")
     # Don't overwrite existing files
     if dest.exists():
         raise HTTPException(status_code=409, detail=f"File already exists: {file.filename}")
@@ -133,10 +149,10 @@ async def raw_file(
     cwd: str = Query(".", description="Working directory"),
 ):
     """Serve raw file for browser-native viewing (PDFs, images, HTML, video)."""
-    full_path = (_workspace_dir(cwd) / path).resolve()
-    ws_root = _workspace_dir(cwd).resolve()
-
-    if not str(full_path).startswith(str(ws_root)):
+    ws_root = _workspace_dir(cwd)
+    try:
+        full_path = resolve_workspace_path(ws_root, path)
+    except ValueError:
         raise HTTPException(status_code=403, detail="Path outside workspace")
 
     if not full_path.exists():

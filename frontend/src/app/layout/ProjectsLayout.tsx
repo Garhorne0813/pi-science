@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useParams, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
-import { PanelLeft, Settings, MessageSquare, Plus, Trash2, FolderOpen, ArrowLeft, Sun, Moon, Puzzle, FileText, BookOpen, Play } from "lucide-react";
+import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Sun, Moon, Puzzle, FileText, BookOpen, Play } from "lucide-react";
 import { useUiStore } from "../../lib/store";
 import { useRuntimeStore } from "../../lib/runtime-store";
 import { InspectorShell } from "../../components/inspector/InspectorShell";
@@ -111,9 +111,11 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
   const sessions = useRuntimeStore((s) => s.sessions);
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
   const loadSession = useRuntimeStore((s) => s.loadSession);
+  const forkSession = useRuntimeStore((s) => s.forkSession);
   const createNewSession = useRuntimeStore((s) => s.createNewSession);
   const navigate = useNavigate();
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [forking, setForking] = useState<string | null>(null);
 
   useEffect(() => {
     getClient().listSessions(cwd).then((list) => {
@@ -160,6 +162,20 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
     }
   };
 
+  const handleFork = async (e: React.MouseEvent, sessionId: string) => {
+    e.stopPropagation();
+    if (forking) return;
+    setForking(sessionId);
+    try {
+      const newId = await forkSession(sessionId);
+      navigate(`/workspace/${encodeURIComponent(cwd)}/session/${newId}`);
+    } catch (err) {
+      console.error("Fork failed:", err);
+    } finally {
+      setForking(null);
+    }
+  };
+
   return (
     <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
       <div className="flex items-center justify-between px-2 mb-1">
@@ -191,6 +207,16 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
                     {relativeTime(s.updated_at || s.created_at!)}
                   </span>
                 )}
+              </button>
+              <button
+                onClick={(e) => handleFork(e, s.id)}
+                className={cn(
+                  "shrink-0 rounded p-1 text-muted hover:text-accent hover:bg-accent/10",
+                  "hidden group-hover:block", forking === s.id && "block",
+                )}
+                title="Fork session"
+              >
+                <GitFork size={12} />
               </button>
               <button
                 onClick={(e) => handleDelete(e, s.id)}

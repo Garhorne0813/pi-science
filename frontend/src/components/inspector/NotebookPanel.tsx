@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 
 interface CellResult {
   ok: boolean;
@@ -15,20 +15,20 @@ interface Cell {
   running: boolean;
 }
 
-export function NotebookPanel({ onClose }: { onClose: () => void }) {
+export function NotebookPanel({ onClose, cwd }: { onClose: () => void; cwd?: string }) {
   const [notebookId] = useState(() => `nb-${Date.now()}`);
   const [cells, setCells] = useState<Cell[]>([]);
   const [kernelStatus, setKernelStatus] = useState<"checking" | "ready" | "unavailable">("checking");
 
   // Check kernel availability on mount
-  useState(() => {
+  useEffect(() => {
     fetch("/api/kernels/status")
       .then((r) => r.json())
       .then((d) => {
         setKernelStatus(d.interpreters?.python ? "ready" : "unavailable");
       })
       .catch(() => setKernelStatus("unavailable"));
-  });
+  }, []);
 
   const addCell = useCallback((language: "python" | "r") => {
     const cell: Cell = {
@@ -50,7 +50,8 @@ export function NotebookPanel({ onClose }: { onClose: () => void }) {
     if (!cell) return;
 
     try {
-      const res = await fetch("/api/kernels/execute", {
+      const params = new URLSearchParams({ cwd: cwd || "." });
+      const res = await fetch(`/api/kernels/execute?${params}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -72,7 +73,7 @@ export function NotebookPanel({ onClose }: { onClose: () => void }) {
         )
       );
     }
-  }, [cells, notebookId]);
+  }, [cells, notebookId, cwd]);
 
   const updateCellCode = useCallback((cellId: string, code: string) => {
     setCells((prev) =>

@@ -10,6 +10,13 @@ RUNTIME_DIR="$PROJECT_DIR/runtime/pi"
 
 mkdir -p "$RUNTIME_DIR"
 
+# Keep npm's cache inside the project runtime by default. This avoids startup
+# failures when ~/.npm contains files created by a previous root-owned npm
+# invocation. Respect an explicitly configured cache path.
+NPM_CACHE_DIR="${NPM_CONFIG_CACHE:-$RUNTIME_DIR/.npm-cache}"
+mkdir -p "$NPM_CACHE_DIR"
+export NPM_CONFIG_CACHE="$NPM_CACHE_DIR"
+
 # ── Strategy 1: Local pi repo (dev mode) ──
 LOCAL_PI_REPO="$(dirname "$PROJECT_DIR")/pi"
 if [ -d "$LOCAL_PI_REPO/packages/coding-agent/src" ]; then

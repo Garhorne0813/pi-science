@@ -1,5 +1,5 @@
 // Inline previews for Office formats, rendered locally (no conversion service):
-// docx via docx-preview (HTML), xlsx via SheetJS sheet_to_html (merged cells
+// docx via docx-preview (HTML), xlsx via ExcelJS-generated HTML (merged cells
 // kept), pptx via pptx-preview (inline-styled slide list). Each renderer is
 // dynamic-imported so the heavy libraries stay out of the main bundle.
 //
@@ -240,8 +240,8 @@ export function PptxView({ bytes, scrollKey }: { bytes: ArrayBuffer; scrollKey: 
           import("@/lib/pptx"),
         ]);
         if (cancelled) return;
-        // Decks styled via paragraph-level defRPr render unstyled (tiny black
-        // text) in pptx-preview — rewrite them into explicit per-run form first.
+        // Keep this normalization hook separate so provider-specific PPTX
+        // compatibility rewrites can be added without changing the viewer.
         const normalized = await normalizePptxForPreview(bytes);
         if (cancelled) return;
         // Fit slides to the pane, with a floor so a collapsed pane stays legible.

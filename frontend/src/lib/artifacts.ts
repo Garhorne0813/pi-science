@@ -67,8 +67,8 @@ const EXT_KIND: Record<string, ArtifactKind> = {
   mp4: "figure", webm: "figure", mov: "figure", m4v: "figure", ogv: "figure",
   py: "script", r: "script", jl: "script", sh: "script",
   ipynb: "notebook",
-  pdf: "report", tex: "report", md: "report", docx: "report", pptx: "report",
-  csv: "table", tsv: "table", parquet: "table", xlsx: "table",
+  pdf: "report", tex: "report", md: "report", docx: "report", docm: "report", dotx: "report", pptx: "report", pptm: "report", potx: "report",
+  csv: "table", tsv: "table", parquet: "table", xlsx: "table", xlsm: "table", xltx: "table",
   mol: "data", sdf: "data", smi: "data", smiles: "data",
   bed: "data", bedgraph: "data", bdg: "data", gff: "data", gff3: "data", gtf: "data", vcf: "data",
   stl: "model", obj: "model", ply: "model", gltf: "model", glb: "model",
@@ -96,7 +96,7 @@ export function extToKind(ext: string): ArtifactKind {
 const REF_EXTS = [
   "pdf", "html", "htm", "svg", "png", "jpg", "jpeg", "gif", "webp",
   "csv", "tsv", "md", "tex", "json", "py", "ipynb", "r",
-  "docx", "xlsx", "pptx",
+  "docx", "docm", "dotx", "xlsx", "xlsm", "xltx", "pptx", "pptm", "potx",
   "mp4", "webm", "mov", "m4v",
   "mol", "mol2", "sdf", "smi", "smiles", "cif", "mcif", "mmcif", "pdb", "pqr", "xyz", "cube",
   "bed", "bedgraph", "bdg", "gff", "gff3", "gtf", "vcf",
@@ -135,8 +135,14 @@ const MIME: Record<string, string> = {
   bed: "text/plain", bedgraph: "text/plain", bdg: "text/plain",
   gff: "text/plain", gff3: "text/plain", gtf: "text/plain", vcf: "text/plain",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  docm: "application/vnd.ms-word.document.macroEnabled.12",
+  dotx: "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  xlsm: "application/vnd.ms-excel.sheet.macroEnabled.12",
+  xltx: "application/vnd.openxmlformats-officedocument.spreadsheetml.template",
   pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  pptm: "application/vnd.ms-powerpoint.presentation.macroEnabled.12",
+  potx: "application/vnd.openxmlformats-officedocument.presentationml.template",
 };
 
 export function extOf(filename: string): string {
@@ -187,7 +193,9 @@ export function previewKind(ext: string): PreviewKind {
   if (["mp4", "webm", "mov", "m4v", "ogv"].includes(e)) return "video";
   if (e === "csv" || e === "tsv") return "table";
   if (e === "md" || e === "markdown") return "markdown";
-  if (e === "docx" || e === "xlsx" || e === "pptx") return e;
+  if (["docx", "docm", "dotx"].includes(e)) return "docx";
+  if (["xlsx", "xlsm", "xltx"].includes(e)) return "xlsx";
+  if (["pptx", "pptm", "potx"].includes(e)) return "pptx";
   if (MESH_EXTS.includes(e)) return "mesh";
   if (FITS_EXTS.includes(e)) return "fits";
   if (e === "dos") return "dos";

@@ -20,6 +20,14 @@ export interface SessionInfo {
   name?: string;
 }
 
+export interface AvailableModel {
+  id: string;
+  provider: string;
+  model: string;
+  label: string;
+  custom?: boolean;
+}
+
 // ── Session name helpers (localStorage) ──
 
 const NAME_KEY = "pi-science.session-names";
@@ -89,20 +97,63 @@ export class PiScienceClient {
     return res.json();
   }
 
-  async getMessages(sessionId: string): Promise<HistoryMessage[]> {
-    const res = await fetch(`${this.baseUrl}/api/sessions/${sessionId}/messages`);
+  async getMessages(sessionId: string, cwd?: string): Promise<HistoryMessage[]> {
+    const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+    const res = await fetch(`${this.baseUrl}/api/sessions/${sessionId}/messages${params}`);
     if (!res.ok) return [];
     const data = await res.json();
     return data.messages ?? [];
   }
 
-  async sendPrompt(sessionId: string, message: string): Promise<void> {
-    const res = await fetch(`${this.baseUrl}/api/sessions/${sessionId}/prompt`, {
+  async resumeSession(sessionId: string, cwd: string): Promise<void> {
+    const params = new URLSearchParams({ cwd });
+    const res = await fetch(`${this.baseUrl}/api/sessions/${sessionId}/resume?${params}`, {
+      method: "POST",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) {
+      throw new Error(data.error || `Resume session failed: ${res.statusText}`);
+    }
+  }
+
+  async forkSession(sessionId: string, cwd: string, entryId?: string): Promise<{ id: string }> {
+    const params = new URLSearchParams({ cwd });
+    const res = await fetch(`${this.baseUrl}/api/sessions/${sessionId}/fork?${params}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(entryId ? { entry_id: entryId } : {}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) {
+      throw new Error(data.error || `Fork session failed: ${res.statusText}`);
+    }
+    return { id: data.id };
+  }
+
+  async sendPrompt(sessionId: string, message: string, cwd?: string): Promise<void> {
+    const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+    const res = await fetch(`${this.baseUrl}/api/sessions/${sessionId}/prompt${params}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message }),
     });
-    if (!res.ok) throw new Error(`Send prompt failed: ${res.statusText}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) {
+      throw new Error(data.error || `Send prompt failed: ${res.statusText}`);
+    }
+  }
+
+  async setModel(sessionId: string, model: string, cwd?: string): Promise<void> {
+    const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
+    const res = await fetch(`${this.baseUrl}/api/sessions/${sessionId}/model${params}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) {
+      throw new Error(data.error || `Set model failed: ${res.statusText}`);
+    }
   }
 
   async abort(sessionId: string): Promise<void> {

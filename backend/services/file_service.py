@@ -7,6 +7,20 @@ from typing import Optional
 
 from models import FileContent, PreviewData
 
+
+def resolve_workspace_path(workspace_dir: Path, path: str = ".") -> Path:
+    """Resolve a path and reject traversal outside the workspace root.
+
+    ``str.startswith`` is not sufficient here: ``/tmp/project-evil`` is not
+    inside ``/tmp/project`` even though the string has the same prefix.
+    ``Path.is_relative_to`` also handles the workspace root itself correctly.
+    """
+    root = workspace_dir.resolve()
+    target = (root / path).resolve()
+    if not target.is_relative_to(root):
+        raise ValueError(f"Path outside workspace: {path}")
+    return target
+
 # Common scientific file extension -> preview kind mapping
 EXT_TO_KIND: dict[str, str] = {
     ".fits": "fits",
@@ -50,10 +64,9 @@ EXT_TO_KIND: dict[str, str] = {
     ".r": "text",
     ".sh": "text",
     ".ipynb": "notebook",
-    ".xlsx": "office",
-    ".xls": "office",
-    ".docx": "office",
-    ".pptx": "office",
+    ".xlsx": "office", ".xlsm": "office", ".xltx": "office",
+    ".docx": "office", ".docm": "office", ".dotx": "office",
+    ".pptx": "office", ".pptm": "office", ".potx": "office",
 }
 
 
@@ -65,11 +78,7 @@ def detect_preview_kind(path: str) -> str:
 
 def read_file_content(workspace_dir: Path, path: str, encoding: str = "utf8") -> FileContent:
     """Read a file from the workspace."""
-    full_path = (workspace_dir / path).resolve()
-
-    # Safety: ensure file is within workspace
-    if not str(full_path).startswith(str(workspace_dir.resolve())):
-        raise ValueError(f"Path outside workspace: {path}")
+    full_path = resolve_workspace_path(workspace_dir, path)
 
     if not full_path.exists():
         raise FileNotFoundError(f"File not found: {path}")
@@ -98,9 +107,7 @@ def read_file_content(workspace_dir: Path, path: str, encoding: str = "utf8") ->
 
 def get_preview_data(workspace_dir: Path, path: str) -> PreviewData:
     """Get preview data for a scientific file."""
-    full_path = (workspace_dir / path).resolve()
-    if not str(full_path).startswith(str(workspace_dir.resolve())):
-        raise ValueError(f"Path outside workspace: {path}")
+    full_path = resolve_workspace_path(workspace_dir, path)
 
     kind = detect_preview_kind(path)
     preview = PreviewData(kind=kind, filename=Path(path).name)

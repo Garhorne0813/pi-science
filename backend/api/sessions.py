@@ -14,6 +14,9 @@ from models import (
     CreateSessionResponse,
     SessionInfo,
     PromptRequest,
+    ForkSessionRequest,
+    SetModelRequest,
+    PiConfig,
 )
 from services.pi_manager import pi_manager
 from services.event_normalizer import normalize_event
@@ -67,31 +70,29 @@ async def delete_session(
     cwd: str = Query(".", description="Working directory"),
 ):
     """Delete a session file from disk. Searches all known locations."""
-    import glob as glob_mod
     from config import BASE_DIR, WORKSPACES_DIR
 
-    patterns = [
-        # CWD-local sessions
-        str(Path(cwd).resolve() / ".pi-science" / "sessions" / "**" / f"*{session_id}*.jsonl"),
-        # All workspaces
-        str(WORKSPACES_DIR / "**" / ".pi-science" / "sessions" / "**" / f"*{session_id}*.jsonl"),
-        # Centralized old location
-        str(BASE_DIR / "sessions" / "**" / f"*{session_id}*.jsonl"),
-    ]
-
     deleted = False
-    for pattern in patterns:
-        for path in glob_mod.glob(pattern, recursive=True):
-            Path(path).unlink()
-            deleted = True
+    roots = [
+        Path(cwd).resolve() / ".pi-science" / "sessions",
+        WORKSPACES_DIR,
+        BASE_DIR / "sessions",
+    ]
+    for path in _find_session_files(session_id, roots):
+        path.unlink()
+        deleted = True
 
     if deleted:
+        pi_manager.unbind_session(session_id)
         return {"ok": True}
     return {"ok": False, "error": "session not found"}
 
 
 @router.get("/{session_id}/messages")
-async def get_messages(session_id: str):
+async def get_messages(
+    session_id: str,
+    cwd: str = Query(".", description="Working directory"),
+):
     """Get message history for a session. Falls back to reading JSONL from disk."""
     pi = pi_manager.get_by_session(session_id)
     if pi:
@@ -101,19 +102,83 @@ async def get_messages(session_id: str):
             return {"messages": messages}
 
     # Session not active — read from disk
-    messages = _read_session_from_disk(session_id)
+    messages = _read_session_from_disk(session_id, cwd)
     return {"messages": messages}
 
 
+@router.post("/{session_id}/resume")
+async def resume_session(
+    session_id: str,
+    cwd: str = Query(".", description="Working directory"),
+):
+    """Resume a persisted session in the workspace's pi process."""
+    pi = await pi_manager.resume_session(session_id, cwd, PiConfig())
+    if not pi:
+        return {"ok": False, "error": "session not found or could not be resumed"}
+    return {"ok": True, "id": session_id, "cwd": str(Path(cwd).resolve())}
+
+
+@router.post("/{session_id}/fork")
+async def fork_session(
+    session_id: str,
+    body: Optional[ForkSessionRequest] = None,
+    cwd: str = Query(".", description="Working directory"),
+):
+    """Fork a persisted session into a new session file."""
+    pi = await pi_manager.resume_session(session_id, cwd, PiConfig())
+    if not pi:
+        return {"ok": False, "error": "session not found or could not be resumed"}
+
+    entry_id = body.entry_id if body else None
+    command = "fork" if entry_id else "clone"
+    params = {"entryId": entry_id} if entry_id else {}
+    result = await pi.send_command(command, **params)
+    if not result.get("success"):
+        return {"ok": False, "error": result.get("error", f"{command} failed")}
+    return {"ok": True, "id": pi.session_id, "cwd": str(Path(cwd).resolve())}
+
+
 @router.post("/{session_id}/prompt")
-async def send_prompt(session_id: str, body: PromptRequest):
+async def send_prompt(
+    session_id: str,
+    body: PromptRequest,
+    cwd: str = Query(".", description="Working directory"),
+):
     """Send a user prompt to the agent. Streams response via SSE at /events."""
     pi = pi_manager.get_by_session(session_id)
     if not pi:
-        return {"ok": False, "error": "session not found"}
+        # Historical sessions are lazy: load them on the first prompt.
+        pi = await pi_manager.resume_session(session_id, cwd, PiConfig())
+        if not pi:
+            return {"ok": False, "error": "session not found or could not be resumed"}
 
-    await pi.send_command("prompt", message=body.message)
-    return {"ok": True}
+    result = await pi.send_command("prompt", message=body.message)
+    if not result.get("success"):
+        return {"ok": False, "error": result.get("error", "prompt rejected")}
+    return {"ok": True, "id": pi.session_id}
+
+
+@router.post("/{session_id}/model")
+async def set_session_model(
+    session_id: str,
+    body: SetModelRequest,
+    cwd: str = Query(".", description="Working directory"),
+):
+    """Change the active pi session model using provider/model notation."""
+    model = body.model.strip()
+    if "/" not in model:
+        return {"ok": False, "error": "Model must use provider/model notation"}
+    provider, model_id = model.split("/", 1)
+    pi = pi_manager.get_by_session(session_id)
+    if not pi:
+        pi = await pi_manager.resume_session(session_id, cwd, PiConfig())
+    if not pi:
+        return {"ok": False, "error": "session not found or could not be resumed"}
+
+    result = await pi.send_command("set_model", provider=provider, modelId=model_id)
+    if not result.get("success"):
+        return {"ok": False, "error": result.get("error", "model not found")}
+    return {"ok": True, "id": pi.session_id, "model": model}
 
 
 @router.post("/{session_id}/abort")
@@ -270,23 +335,20 @@ def _parse_session_header(filepath: Path) -> Optional[SessionInfo]:
         return None
 
 
-def _read_session_from_disk(session_id: str) -> list[dict]:
+def _read_session_from_disk(session_id: str, cwd: Optional[str] = None) -> list[dict]:
     """Read session messages directly from the JSONL file on disk.
     Searches both the centralized dir and workspace-local .pi-science/sessions/."""
-    import glob as glob_mod
     from config import BASE_DIR, WORKSPACES_DIR
 
-    patterns = [
-        str(BASE_DIR / "sessions" / "**" / f"*{session_id}*.jsonl"),
-        str(WORKSPACES_DIR / "**" / ".pi-science" / "sessions" / "**" / f"*{session_id}*.jsonl"),
-    ]
-    matches = []
-    for pattern in patterns:
-        matches.extend(glob_mod.glob(pattern, recursive=True))
+    roots = []
+    if cwd:
+        roots.append(Path(cwd).resolve() / ".pi-science" / "sessions")
+    roots.extend([BASE_DIR / "sessions", WORKSPACES_DIR])
+    matches = _find_session_files(session_id, roots)
     if not matches:
         return []
 
-    filepath = Path(matches[0])
+    filepath = matches[0]
     if not filepath.exists():
         return []
 
@@ -316,6 +378,26 @@ def _read_session_from_disk(session_id: str) -> list[dict]:
         pass
 
     return messages
+
+
+def _find_session_files(session_id: str, roots: list[Path]) -> list[Path]:
+    """Return session files whose JSONL header has the exact requested ID."""
+    matches: list[Path] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        # WORKSPACES_DIR may contain many nested workspace-local session
+        # directories; parsing the header keeps the match exact.
+        candidates = root.rglob("*.jsonl")
+        for path in candidates:
+            try:
+                with path.open(encoding="utf-8") as f:
+                    header = json.loads(f.readline())
+                if header.get("type") == "session" and header.get("id") == session_id:
+                    matches.append(path)
+            except (OSError, json.JSONDecodeError):
+                continue
+    return matches
 
 
 def _convert_entries_to_messages(data: dict) -> list[dict]:

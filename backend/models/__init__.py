@@ -39,6 +39,16 @@ class PromptRequest(BaseModel):
     message: str
 
 
+class SetModelRequest(BaseModel):
+    """Select a provider/model pair for an active session."""
+    model: str
+
+
+class ForkSessionRequest(BaseModel):
+    """Optional entry to fork from; omitted means clone the active branch."""
+    entry_id: Optional[str] = None
+
+
 # ── Agent Messages / Events ──
 
 class AgentMessageBase(BaseModel):

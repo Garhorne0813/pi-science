@@ -1,7 +1,12 @@
 """File API tests."""
 
 import pytest
-from services.file_service import detect_preview_kind, read_file_content, EXT_TO_KIND
+from services.file_service import (
+    detect_preview_kind,
+    read_file_content,
+    resolve_workspace_path,
+    EXT_TO_KIND,
+)
 
 
 class TestDetectPreviewKind:
@@ -83,6 +88,12 @@ class TestReadFileContent:
         with pytest.raises(ValueError, match="outside workspace"):
             read_file_content(temp_workspace, "../outside.txt")
 
+    def test_path_prefix_sibling_is_outside_workspace(self, temp_workspace):
+        """A sibling whose name shares the workspace prefix is not inside it."""
+        sibling = temp_workspace.parent / f"{temp_workspace.name}-evil"
+        with pytest.raises(ValueError, match="outside workspace"):
+            resolve_workspace_path(temp_workspace, f"../{sibling.name}/secret.txt")
+
 
 class TestExtToKind:
     def test_all_registered_extensions(self):
@@ -134,3 +145,18 @@ class TestFilesAPI:
         assert data["filename"] == "test.csv"
         assert data["metadata"]["rows"] == 3
         assert data["metadata"]["columns"] == 3
+
+    async def test_upload_uses_requested_workspace(self, client, temp_workspace):
+        res = await client.post(
+            f"/api/files/upload?cwd={temp_workspace}",
+            files={"file": ("uploaded.txt", b"hello", "text/plain")},
+        )
+        assert res.status_code == 200
+        assert (temp_workspace / "uploaded.txt").read_text() == "hello"
+
+    async def test_list_rejects_sibling_prefix_traversal(self, client, temp_workspace):
+        sibling = temp_workspace.parent / f"{temp_workspace.name}-evil"
+        res = await client.get(
+            f"/api/files?cwd={temp_workspace}&subdir=../{sibling.name}"
+        )
+        assert res.status_code == 403

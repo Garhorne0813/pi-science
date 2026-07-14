@@ -91,6 +91,12 @@ class PiProcess:
         mcp_ext = ext_base / "node_modules" / "pi-mcp-adapter" / "index.ts"
         sub_ext = ext_base / "node_modules" / "pi-subagents" / "index.ts"
 
+        # Register extension-provided flags before passing --mcp-config.
+        if mcp_ext.exists():
+            args.extend(["-e", str(mcp_ext)])
+        if sub_ext.exists():
+            args.extend(["-e", str(sub_ext)])
+
         args.extend([
             "--model", effective_model,
             "--thinking", thinking,
@@ -99,10 +105,12 @@ class PiProcess:
             "--no-skills",
         ])
 
-        if mcp_ext.exists():
-            args.extend(["-e", str(mcp_ext)])
-        if sub_ext.exists():
-            args.extend(["-e", str(sub_ext)])
+        # The MCP adapter registers this flag itself. Supplying a filtered
+        # config makes the Settings allowlist effective for this process.
+        from api.settings import get_mcp_runtime_config
+        mcp_config = get_mcp_runtime_config(cwd)
+        if mcp_config:
+            args.extend(["--mcp-config", str(mcp_config)])
 
         # Add explicitly configured skills
         for skill_path in config.skills:
@@ -115,6 +123,14 @@ class PiProcess:
         # Set up environment with API keys from config + env vars
         from api.settings import get_env_with_keys
         env = get_env_with_keys()
+
+        # Materialize UI-managed custom providers into the pi models.json
+        # location and expose their keys through environment interpolation.
+        from api.settings import get_custom_models_runtime
+        custom_agent_dir, custom_env = get_custom_models_runtime(cwd)
+        if custom_agent_dir:
+            env["PI_CODING_AGENT_DIR"] = str(custom_agent_dir)
+            env.update(custom_env)
 
         if config.provider:
             env["PI_DEFAULT_PROVIDER"] = config.provider
@@ -201,15 +217,15 @@ class PiProcess:
     async def send_command(self, cmd_type: str, **params) -> dict:
         """Send an RPC command and await the response.
 
-        Special handling for new_session: updates the session map."""
+        Session-switching commands update the manager's session map after the
+        runtime confirms the new state."""
         result = await self._send_command_internal(cmd_type, **params)
-        if cmd_type == "new_session" and result.get("success"):
-            # pi created a new session — update our tracking
+        if cmd_type in {"new_session", "switch_session", "fork", "clone"} and result.get("success"):
+            # pi changed the active session — refresh the state and rebind it.
             old_id = self.session_id
             new_state = await self._send_command_internal("get_state")
             if new_state.get("success") and new_state.get("data"):
                 self.session_id = new_state["data"].get("sessionId", self.session_id)
-                # Update the session map
                 from .pi_manager import pi_manager
                 pi_manager._session_map.pop(old_id, None)
                 pi_manager._session_map[self.session_id] = self.cwd
@@ -339,6 +355,61 @@ class PiManager:
         self._processes[cwd] = pi
         self._session_map[pi.session_id] = cwd
         return pi
+
+    @staticmethod
+    def _find_session_file(session_id: str, cwd: str) -> Optional[Path]:
+        """Find a persisted session by its exact header ID."""
+        from config import get_sessions_dir
+
+        session_dir = get_sessions_dir(cwd)
+        if not session_dir.exists():
+            return None
+        for path in session_dir.rglob("*.jsonl"):
+            try:
+                with path.open(encoding="utf-8") as f:
+                    header = json.loads(f.readline())
+                if header.get("type") == "session" and header.get("id") == session_id:
+                    return path.resolve()
+            except (OSError, json.JSONDecodeError):
+                continue
+        return None
+
+    async def resume_session(
+        self,
+        session_id: str,
+        cwd: str,
+        config: PiConfig,
+    ) -> Optional[PiProcess]:
+        """Load a persisted session into the workspace's pi process."""
+        cwd = str(Path(cwd).resolve())
+        session_path = self._find_session_file(session_id, cwd)
+        if session_path is None:
+            return None
+
+        pi = self.get_by_cwd(cwd)
+        spawned = False
+        if pi is None or not pi.is_alive:
+            if pi is not None:
+                await self._remove(cwd)
+            from config import get_sessions_dir
+
+            pi = await self.get_or_spawn(
+                cwd=cwd,
+                session_dir=str(get_sessions_dir(cwd)),
+                config=config,
+            )
+            spawned = True
+
+        result = await pi.send_command("switch_session", sessionPath=str(session_path))
+        if not result.get("success"):
+            if spawned:
+                await self._remove(cwd)
+            return None
+        return pi
+
+    def unbind_session(self, session_id: str):
+        """Remove a session alias from the in-memory process map."""
+        self._session_map.pop(session_id, None)
 
     def get_by_session(self, session_id: str) -> Optional[PiProcess]:
         """Get PiProcess by session ID."""

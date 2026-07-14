@@ -96,6 +96,20 @@ class TestKernelAPI:
         assert data["ok"] is False
         assert "ZeroDivisionError" in (data["error"] or "")
 
+    async def test_execute_python_uses_requested_workspace(self, client, temp_workspace):
+        marker = temp_workspace / "marker.txt"
+        marker.write_text("workspace-ok")
+        res = await client.post(
+            f"/api/kernels/execute?cwd={temp_workspace}",
+            json={
+                "language": "python",
+                "code": "from pathlib import Path\nPath('marker.txt').read_text()",
+                "notebook_id": "test-cwd",
+            },
+        )
+        assert res.status_code == 200
+        assert res.json()["result"] == "'workspace-ok'"
+
     async def test_shutdown_notebook(self, client):
         """POST /api/kernels/{id}/shutdown kills a notebook session."""
         # Create a session first

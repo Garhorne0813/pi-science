@@ -42,8 +42,10 @@ interface RuntimeState {
   disconnect: () => void;
   sendPrompt: (message: string) => Promise<void>;
   abort: () => Promise<void>;
+  setModel: (model: string) => Promise<void>;
   loadSessions: () => Promise<void>;
   loadSession: (sessionId: string) => Promise<void>;
+  forkSession: (sessionId: string) => Promise<string>;
   createNewSession: () => Promise<string>;
   setDraft: (text: string) => void;
 }
@@ -253,7 +255,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       // Historical session — load messages only, don't connect SSE
       set({ client, activeSessionId: sessionId, status: "ready" });
       try {
-        const messages = await client.getMessages(sessionId);
+        const messages = await client.getMessages(sessionId, cwd);
         const blocks = convertHistoryToBlocks(messages);
         const index: Record<string, number> = {};
         blocks.forEach((b, i) => { index[b.id] = i; });
@@ -306,10 +308,19 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     // If no active SSE, connect to existing session or create new one
     if (!client.isConnected) {
       if (activeSessionId) {
-        // Existing session (historical or just created) — just connect SSE
-        client.connect(activeSessionId);
-        _registerEventListener(client);
-        set({ client });
+        // Historical sessions must be loaded into the pi process before the
+        // SSE stream is opened; otherwise the backend returns a one-shot
+        // "session not found" stream.
+        try {
+          await client.resumeSession(activeSessionId, cwd);
+          client.connect(activeSessionId);
+          _registerEventListener(client);
+          set({ client });
+        } catch (err) {
+          console.error("Failed to resume session:", err);
+          set({ working: false, status: "error" });
+          return;
+        }
       } else {
         // No session at all — create new
         try {
@@ -334,7 +345,11 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       setSessionName(activeSessionId, message);
     }
 
-    await client.sendPrompt(activeSessionId, message);
+    if (!activeSessionId) {
+      set({ working: false, status: "error" });
+      return;
+    }
+    await client.sendPrompt(activeSessionId, message, cwd);
   },
 
   abort: async () => {
@@ -343,6 +358,21 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       await client.abort(activeSessionId);
     }
     set({ working: false });
+  },
+
+  setModel: async (model: string) => {
+    let { client, activeSessionId, cwd } = get();
+    if (!activeSessionId) return;
+    client = client ?? getClient();
+    // Historical sessions have no live process until the first interaction.
+    // Resume them here so changing the model works before sending a prompt.
+    if (!client.isConnected) {
+      await client.resumeSession(activeSessionId, cwd);
+      client.connect(activeSessionId);
+      _registerEventListener(client);
+      set({ client });
+    }
+    await client.setModel(activeSessionId, model, cwd);
   },
 
   loadSessions: async () => {
@@ -356,13 +386,35 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     _currentTurnId = "";
 
     // Load messages from disk (works for inactive sessions)
-    const messages = await getClient().getMessages(sessionId);
+    const messages = await getClient().getMessages(sessionId, get().cwd);
     const blocks = convertHistoryToBlocks(messages);
     const index: Record<string, number> = {};
     blocks.forEach((b, i) => { index[b.id] = i; });
     set({ thread: { blocks, index, loaded: true }, activeSessionId: sessionId, working: false,
       status: "ready", client: getClient() });
     // Note: don't connect SSE for historical sessions — only when user sends a prompt
+  },
+
+  forkSession: async (sessionId: string) => {
+    const { cwd, client: currentClient } = get();
+    currentClient?.disconnect();
+    const client = getClient();
+    const result = await client.forkSession(sessionId, cwd);
+    const messages = await client.getMessages(result.id, cwd);
+    const blocks = convertHistoryToBlocks(messages);
+    const index: Record<string, number> = {};
+    blocks.forEach((b, i) => { index[b.id] = i; });
+    client.connect(result.id);
+    _registerEventListener(client);
+    set({
+      client,
+      activeSessionId: result.id,
+      thread: { blocks, index, loaded: true },
+      working: false,
+      status: "ready",
+    });
+    await loadSessionsInternal();
+    return result.id;
   },
 
   createNewSession: async () => {

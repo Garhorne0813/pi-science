@@ -30,6 +30,7 @@ class KernelSession:
     process: subprocess.Popen
     language: str  # "python" or "r"
     notebook_id: str
+    cwd: str
     pending: dict = field(default_factory=dict)
 
     async def execute(self, code: str) -> CellResult:
@@ -98,11 +99,13 @@ class KernelManager:
 
     async def get_or_create(self, notebook_id: str, language: str, cwd: str = ".") -> KernelSession:
         """Get existing kernel session or create a new one."""
+        cwd = str(Path(cwd).resolve())
         if notebook_id in self._sessions:
             session = self._sessions[notebook_id]
-            if session.is_alive:
+            if session.is_alive and session.cwd == cwd and session.language == language:
                 return session
-            # Dead process, clean up
+            # Do not reuse a notebook ID across workspaces or languages.
+            session.shutdown()
             del self._sessions[notebook_id]
 
         session = await self._spawn(notebook_id, language, cwd=cwd)
@@ -133,7 +136,12 @@ class KernelManager:
             cwd=cwd,  # Set CWD to workspace so relative paths work
         )
 
-        session = KernelSession(process=process, language=language, notebook_id=notebook_id)
+        session = KernelSession(
+            process=process,
+            language=language,
+            notebook_id=notebook_id,
+            cwd=str(Path(cwd).resolve()),
+        )
 
         # Quick health check
         result = await session.execute("1+1")
@@ -167,7 +175,7 @@ class KernelManager:
     def list_sessions(self) -> list[dict]:
         """List active kernel sessions."""
         return [
-            {"notebook_id": nid, "language": s.language, "alive": s.is_alive}
+            {"notebook_id": nid, "language": s.language, "cwd": s.cwd, "alive": s.is_alive}
             for nid, s in self._sessions.items()
         ]
 
