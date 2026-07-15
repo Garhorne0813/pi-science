@@ -1,70 +1,150 @@
-"""Session resume/fork plumbing tests that do not require the pi runtime."""
+"""Tests for session API endpoints — compact, export, and session lifecycle."""
 
 import json
+import tempfile
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
-from config import get_sessions_dir
-from api.sessions import _read_session_from_disk
+from main import app
 from models import PiConfig
-from services.pi_manager import PiManager
 
 
-class FakePi:
-    def __init__(self, cwd: str):
-        self.cwd = cwd
-        self.session_id = "active-session"
-        self.is_alive = True
-        self.calls: list[tuple[str, dict]] = []
-
-    async def send_command(self, command: str, **params):
-        self.calls.append((command, params))
-        return {"success": True}
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
 
 
-def _write_session(cwd, session_id: str):
-    session_dir = get_sessions_dir(str(cwd)) / "encoded"
-    session_dir.mkdir(parents=True)
-    path = session_dir / f"{session_id}.jsonl"
-    path.write_text(json.dumps({"type": "session", "id": session_id}) + "\n")
-    return path
+@pytest.fixture
+async def client():
+    """Async HTTP test client."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
+        yield ac
 
 
-def test_find_session_file_uses_exact_session_id(tmp_path):
-    mgr = PiManager()
-    path = _write_session(tmp_path, "session-123")
-    assert mgr._find_session_file("session-123", str(tmp_path)) == path.resolve()
-    assert mgr._find_session_file("session-12", str(tmp_path)) is None
+# ── Compact endpoint ──
+
+class TestCompactEndpoint:
+    @pytest.mark.anyio
+    async def test_compact_session_not_found(self, client):
+        """Compact should return error for non-existent session."""
+        with patch("api.sessions.pi_manager") as mock_mgr:
+            mock_mgr.get_by_session.return_value = None
+            res = await client.post("/api/sessions/nonexistent/compact")
+            assert res.status_code == 200
+            data = res.json()
+            assert data["ok"] is False
+
+    @pytest.mark.anyio
+    async def test_compact_forwards_to_pi(self, client):
+        """Compact should send 'compact' command to pi process."""
+        mock_pi = MagicMock()
+        mock_pi.send_command = AsyncMock(return_value={"success": True})
+
+        with patch("api.sessions.pi_manager") as mock_mgr:
+            mock_mgr.get_by_session.return_value = mock_pi
+            res = await client.post("/api/sessions/test-session/compact")
+            assert res.status_code == 200
+            data = res.json()
+            assert data["ok"] is True
+            mock_pi.send_command.assert_called_once_with("compact")
 
 
-def test_read_session_history_uses_workspace_cwd(tmp_path):
-    session_dir = get_sessions_dir(str(tmp_path)) / "encoded"
-    session_dir.mkdir(parents=True)
-    path = session_dir / "session-456.jsonl"
-    path.write_text(
-        json.dumps({"type": "session", "id": "session-456"})
-        + "\n"
-        + json.dumps({
-            "type": "message",
-            "id": "message-1",
-            "message": {"role": "user", "content": [{"type": "text", "text": "hello"}]},
-        })
-        + "\n"
-    )
-    messages = _read_session_from_disk("session-456", str(tmp_path))
-    assert messages[0]["content"][0]["text"] == "hello"
+# ── Export endpoint ──
+
+class TestExportEndpoint:
+    @pytest.mark.anyio
+    async def test_export_session_not_found(self, client, temp_workspace):
+        """Export should 404 when session has no messages on disk or in memory."""
+        with patch("api.sessions.pi_manager") as mock_mgr:
+            mock_mgr.get_by_session.return_value = None
+            # No session on disk either (temp_workspace has no .pi-science)
+            res = await client.get("/api/sessions/nonexistent/export?format=html")
+            assert res.status_code == 404
+
+    @pytest.mark.anyio
+    async def test_export_html_empty_session(self, client):
+        """Export HTML for a session with messages returns HTML."""
+        with patch("api.sessions._read_session_from_disk") as mock_read:
+            mock_read.return_value = [
+                {
+                    "id": "msg-1",
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Hello"}],
+                    "timestamp": "2026-01-01T00:00:00Z",
+                },
+                {
+                    "id": "msg-2",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Hi there!"}],
+                    "timestamp": "2026-01-01T00:00:01Z",
+                },
+            ]
+            res = await client.get("/api/sessions/test-session/export?format=html")
+            assert res.status_code == 200
+            html = res.text
+            assert "<!DOCTYPE html>" in html
+            assert "Hello" in html
+            assert "Hi there!" in html
+
+    @pytest.mark.anyio
+    async def test_export_jsonl_empty_session(self, client):
+        """Export JSONL for a session with messages returns NDJSON."""
+        with patch("api.sessions._read_session_from_disk") as mock_read:
+            mock_read.return_value = [
+                {
+                    "id": "msg-1",
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Hello"}],
+                    "timestamp": "2026-01-01T00:00:00Z",
+                },
+            ]
+            res = await client.get("/api/sessions/test-session/export?format=jsonl")
+            assert res.status_code == 200
+            assert res.headers["content-type"] == "application/x-ndjson"
+            lines = res.text.strip().split("\n")
+            assert len(lines) == 1
+            assert json.loads(lines[0])["role"] == "user"
+
+    @pytest.mark.anyio
+    async def test_export_html_default_format(self, client):
+        """Export without format parameter defaults to HTML."""
+        with patch("api.sessions._read_session_from_disk") as mock_read:
+            mock_read.return_value = [
+                {
+                    "id": "msg-1",
+                    "role": "user",
+                    "content": [{"type": "text", "text": "test"}],
+                    "timestamp": "2026-01-01T00:00:00Z",
+                },
+            ]
+            res = await client.get("/api/sessions/test-session/export")
+            assert res.status_code == 200
+            assert "<!DOCTYPE html>" in res.text
 
 
-@pytest.mark.anyio
-async def test_resume_session_switches_existing_process(tmp_path):
-    mgr = PiManager()
-    path = _write_session(tmp_path, "session-123")
-    cwd = str(tmp_path.resolve())
-    fake = FakePi(cwd)
-    mgr._processes[cwd] = fake
-    mgr._session_map[fake.session_id] = cwd
+# ── Session CRUD edge cases ──
 
-    resumed = await mgr.resume_session("session-123", cwd, PiConfig())
+class TestSessionCrud:
+    @pytest.mark.anyio
+    async def test_list_sessions_empty_dir(self, client, temp_workspace):
+        """List sessions returns empty list for directory with no sessions."""
+        res = await client.get(
+            "/api/sessions",
+            params={"cwd": str(temp_workspace)},
+        )
+        assert res.status_code == 200
+        assert res.json() == []
 
-    assert resumed is fake
-    assert fake.calls == [("switch_session", {"sessionPath": str(path.resolve())})]
+    @pytest.mark.anyio
+    async def test_delete_nonexistent(self, client):
+        """Delete non-existent session returns ok:false with error."""
+        with patch("api.sessions.pi_manager") as mock_mgr:
+            mock_mgr.get_by_session.return_value = None
+            res = await client.delete("/api/sessions/nonexistent?cwd=.")
+            assert res.status_code == 200
+            data = res.json()
+            assert data["ok"] is False

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { ArrowUp, Loader2, Square, Paperclip, X } from "lucide-react";
-import { getSessionName } from "../../lib/pi-science-client";
+import { getSessionName, setSessionName } from "../../lib/pi-science-client";
 import { useRuntimeStore } from "../../lib/runtime-store";
 import { useUiStore } from "../../lib/store";
 import { cn } from "../../lib/cn";
@@ -10,6 +10,8 @@ import { MarkdownViewer } from "../../components/markdown-viewer/MarkdownViewer"
 import { extractArtifactRefs, refToArtifactBlock, fileInspectorFromBlock } from "../../lib/artifacts";
 import { setCurrentCwd } from "../../lib/files";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
+import { SlashCommandMenu } from "../../components/SlashCommandMenu";
+import { fetchDynamicCommands, resetDynamicCommands } from "../../lib/slash-commands";
 
 export function LiveSessionPage() {
   const { sessionId, cwd: rawCwd } = useParams<{ sessionId: string; cwd: string }>();
@@ -21,15 +23,26 @@ export function LiveSessionPage() {
   const [input, setInput] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [showSlashMenu, setShowSlashMenu] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     setCurrentCwd(workspaceCwd);
+    resetDynamicCommands();
     connect(workspaceCwd, sessionId || undefined);
     return () => disconnect();
   }, [sessionId, workspaceCwd]);
+
+  // Fetch dynamic slash commands (skills, extensions) when session is ready
+  useEffect(() => {
+    if (status === "ready" && activeSessionId) {
+      fetchDynamicCommands(activeSessionId);
+    }
+  }, [status, activeSessionId]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -49,9 +62,122 @@ export function LiveSessionPage() {
     }
   }, []);
 
+  // ── Slash commands ──
+
+  const handleSlashSelect = useCallback(async (text: string) => {
+    setShowSlashMenu(false);
+    if (!text.startsWith("/")) {
+      setInput(text);
+      return;
+    }
+
+    const parts = text.slice(1).split(/\s+/);
+    const cmd = parts[0];
+    const arg = parts.slice(1).join(" ");
+
+    switch (cmd) {
+      case "new": {
+        // Start a fresh session in the same workspace
+        connect(workspaceCwd);
+        setInput("");
+        break;
+      }
+      case "name": {
+        if (arg && activeSessionId) {
+          setSessionName(activeSessionId, arg);
+        }
+        setInput(arg ? "" : "/name ");
+        break;
+      }
+      case "model": {
+        if (arg) {
+          try {
+            await fetch("/api/settings/model", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ model: arg }),
+            });
+          } catch {}
+        }
+        setInput(arg ? "" : "/model ");
+        break;
+      }
+      case "compact": {
+        if (activeSessionId) {
+          try {
+            await fetch(`/api/sessions/${activeSessionId}/compact`, { method: "POST" });
+          } catch {}
+        }
+        setInput("");
+        break;
+      }
+      case "session": {
+        // Show session stats as a system message in the composer area
+        const stats = [
+          `Session: ${activeSessionId?.slice(0, 8) || "N/A"}`,
+          `Status: ${status}`,
+          `CWD: ${workspaceCwd}`,
+          `Thread blocks: ${thread.blocks.length}`,
+        ].join("\n");
+        alert(stats); // TODO: replace with a proper toast/status display
+        setInput("");
+        break;
+      }
+      case "copy": {
+        const lastAgent = [...thread.blocks].reverse().find((b) => b.kind === "agent");
+        if (lastAgent && lastAgent.kind === "agent") {
+          const text = lastAgent.parts.map((p) => p.text).join("");
+          try {
+            await navigator.clipboard.writeText(text);
+          } catch {
+            // Fallback for older browsers / non-HTTPS
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand("copy");
+            document.body.removeChild(ta);
+          }
+        }
+        setInput("");
+        break;
+      }
+      case "export": {
+        const format = arg === "jsonl" ? "jsonl" : "html";
+        if (activeSessionId) {
+          try {
+            window.open(`/api/sessions/${activeSessionId}/export?format=${format}`, "_blank");
+          } catch {}
+        }
+        setInput(arg ? "" : "/export ");
+        break;
+      }
+      default: {
+        // Skill, extension, or prompt-template commands: send to pi agent
+        if (cmd.startsWith("skill:") || cmd.includes(":")) {
+          // Forward as a prompt — pi will invoke the skill/extension
+          setInput("");
+          sendPrompt(text);
+        } else {
+          // Unknown command — insert as text for the user to review
+          setInput(text);
+        }
+        break;
+      }
+    }
+  }, [workspaceCwd, activeSessionId, status, thread.blocks, connect, sendPrompt]);
+
+  // ── Composer handlers ──
+
   const handleSend = async () => {
     const text = input.trim();
     if ((!text && files.length === 0) || working) return;
+
+    // Slash commands typed manually (without using autocomplete)
+    if (text.startsWith("/")) {
+      handleSlashSelect(text);
+      return;
+    }
 
     let message = text;
     if (files.length > 0) {
@@ -66,7 +192,22 @@ export function LiveSessionPage() {
     sendPrompt(message);
   };
 
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    setInput(value);
+    // Show slash menu when input starts with "/" and has no space yet
+    if (value.startsWith("/") && value.indexOf(" ") === -1) {
+      setShowSlashMenu(true);
+    } else if (!value.startsWith("/")) {
+      setShowSlashMenu(false);
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // If slash menu is open, let it handle the keyboard
+    if (showSlashMenu && (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === "Escape")) {
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -123,14 +264,23 @@ export function LiveSessionPage() {
       {/* Composer */}
       <div className="px-8 pb-5 pt-2 shrink-0">
         <div
+          ref={composerRef}
           className={cn(
-            "mx-auto max-w-[760px] rounded-card border bg-surface shadow-card transition-colors",
+            "mx-auto max-w-[760px] rounded-card border bg-surface shadow-card transition-colors relative",
             dragOver ? "border-accent bg-accent/5" : "border-border",
           )}
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
         >
+          {showSlashMenu && (
+            <SlashCommandMenu
+              input={input}
+              onSelect={handleSlashSelect}
+              onDismiss={() => setShowSlashMenu(false)}
+              anchorRef={composerRef}
+            />
+          )}
           {files.length > 0 && (
             <div className="flex flex-wrap gap-1.5 px-3 pt-2">
               {files.map((f, i) => (
@@ -146,9 +296,9 @@ export function LiveSessionPage() {
           <textarea
             ref={inputRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder={dragOver ? "Drop files here…" : "Ask anything — analyze data, run code, explore results"}
+            placeholder={dragOver ? "Drop files here…" : "Ask anything — or type / for commands"}
             rows={2}
             className="max-h-[160px] w-full resize-none bg-transparent px-3 py-2 text-sm leading-6 text-text outline-none placeholder:text-muted"
           />

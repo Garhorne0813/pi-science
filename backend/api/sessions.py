@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from sse_starlette.sse import EventSourceResponse
 
 from config import get_sessions_dir
@@ -128,6 +128,96 @@ async def abort_session(session_id: str):
 
     await pi.send_command("abort")
     return {"ok": True}
+
+
+@router.get("/{session_id}/commands")
+async def get_session_commands(session_id: str):
+    """Get all available slash commands including skills for this session."""
+    pi = pi_manager.get_by_session(session_id)
+    if not pi:
+        return {"commands": []}
+
+    result = await pi.send_command("get_commands")
+    commands = []
+    if result.get("success") and result.get("data"):
+        commands = result["data"].get("commands", [])
+    return {"commands": commands}
+
+
+@router.post("/{session_id}/compact")
+async def compact_session(session_id: str):
+    """Manually trigger context compaction for the session."""
+    pi = pi_manager.get_by_session(session_id)
+    if not pi:
+        return {"ok": False, "error": "session not found"}
+
+    result = await pi.send_command("compact")
+    return {"ok": result.get("success", False)}
+
+
+@router.get("/{session_id}/export")
+async def export_session(
+    session_id: str,
+    format: str = Query("html", description="Export format: html or jsonl"),
+):
+    """Export a session as HTML or JSONL."""
+    import html as html_mod
+
+    messages = _read_session_from_disk(session_id)
+    if not messages:
+        # Try active session
+        pi = pi_manager.get_by_session(session_id)
+        if pi:
+            result = await pi.send_command("get_entries")
+            if result.get("success"):
+                messages = _convert_entries_to_messages(result.get("data", {}))
+
+    if not messages:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if format == "jsonl":
+        import io
+        buf = io.StringIO()
+        for m in messages:
+            buf.write(json.dumps(m, ensure_ascii=False) + "\n")
+        from fastapi.responses import Response
+        return Response(
+            content=buf.getvalue(),
+            media_type="application/x-ndjson",
+            headers={"Content-Disposition": f'attachment; filename="session-{session_id[:8]}.jsonl"'},
+        )
+
+    # HTML export
+    title = f"Session {session_id[:8]}"
+    rows: list[str] = []
+    for m in messages:
+        role = m.get("role", "unknown")
+        content = m.get("content", [])
+        text_parts: list[str] = []
+        for c in content if isinstance(content, list) else []:
+            if isinstance(c, dict) and c.get("type") == "text":
+                text_parts.append(c.get("text", ""))
+            elif isinstance(c, str):
+                text_parts.append(c)
+        body = html_mod.escape("\n".join(text_parts)).replace("\n", "<br>")
+        role_label = {"user": "🧑 You", "assistant": "🤖 Assistant"}.get(role, role)
+        rows.append(
+            f'<div style="margin:12px 0;padding:12px;border-radius:8px;'
+            f'background:{ "#f0f4f8" if role == "user" else "#fff" };">'
+            f'<div style="font-size:11px;color:#888;margin-bottom:6px;">{html_mod.escape(role_label)}</div>'
+            f'<div style="font-size:14px;line-height:1.6;">{body}</div></div>'
+        )
+    html = (
+        f"<!DOCTYPE html><html><head><meta charset=utf-8><title>{html_mod.escape(title)}</title>"
+        f'<style>body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;'
+        f"max-width:760px;margin:40px auto;padding:0 20px;background:#fafafa;}}</style></head>"
+        f"<body><h1>{html_mod.escape(title)}</h1>{''.join(rows)}</body></html>"
+    )
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(
+        content=html,
+        headers={"Content-Disposition": f'attachment; filename="session-{session_id[:8]}.html"'},
+    )
 
 
 @router.get("/{session_id}/events")

@@ -22,6 +22,25 @@ The core interface: a streaming chat where AI agents write, execute, and visuali
 - **Markdown rendering** — agent responses support tables, code blocks, LaTeX math, and file-path detection
 - **Session management** — create, resume, fork, and delete conversations; history preserved per workspace
 - **AGENTS.md / KNOWLEDGE.md** — per-workspace agent instructions auto-seeded on session creation
+- **Slash commands** — type `/` in the composer to access built-in commands (`/new`, `/model`, `/compact`, `/copy`, `/export`, `/name`, `/session`) and dynamic ones from skills and extensions
+- **Skill commands** — skills installed in `.pi/skills/` register as `/skill:<name>` commands that invoke the skill through the agent
+
+### Slash Commands · 斜杠命令
+
+Type `/` in the composer to bring up the command menu. Built-in commands execute UI actions; skill and extension commands are forwarded to the agent.
+
+在输入框中输入 `/` 即可唤出命令菜单。内置命令直接执行 UI 操作；技能和扩展命令则转发给智能体处理。
+
+| Command · 命令 | Action |
+|---|---|
+| `/new` | Start a new session · 新建会话 |
+| `/model <provider/model>` | Switch the active model · 切换模型 |
+| `/compact` | Manually compact session context · 压缩上下文 |
+| `/name <name>` | Rename current session · 重命名会话 |
+| `/copy` | Copy last agent reply to clipboard · 复制回复 |
+| `/export <html\|jsonl>` | Export session to file · 导出会话 |
+| `/session` | Show session info and stats · 会话统计 |
+| `/skill:<name>` | Invoke a workspace skill via the agent · 调用技能 |
 
 ### Project Knowledge Reviewer · 项目知识审稿人
 
@@ -146,7 +165,8 @@ Every file the agent creates or edits is automatically recorded with full lineag
 │  (browse,   │  Tool cards                │  Version history  │
 │   right-    │  Code blocks               │  Notebook cells   │
 │   click)    │  Markdown                  │                   │
-│             │  Composer input            │                   │
+│             │  Composer (type / for      │                   │
+│             │  slash commands)            │                   │
 ├─────────────┴────────────────────────────┴───────────────────┤
 │  Status bar: pi processes · kernel sessions · health          │
 └──────────────────────────────────────────────────────────────┘
