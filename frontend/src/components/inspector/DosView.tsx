@@ -11,7 +11,7 @@ import { cn } from "@/lib/cn";
  * Fermi level marked. Offline, from the file alone; uses the app chart palette.
  */
 export function DosView({ filename, bytes }: { filename: string; bytes: ArrayBuffer }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   const parsed = useMemo<{ dos: DosData | null; error: string | null }>(() => {
     try {
       return { dos: parseDoscar(new TextDecoder().decode(bytes)), error: null };

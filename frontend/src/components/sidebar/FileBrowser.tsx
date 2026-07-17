@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { FolderOpen, File, ChevronRight, ChevronDown, RefreshCw, Copy } from "lucide-react";
 import { useUiStore } from "../../lib/store";
+import { fileInspectorForPath } from "../../lib/artifacts";
 
 interface DirEntry {
   path: string;
@@ -17,7 +18,7 @@ export function FileBrowser({ cwd }: { cwd: string }) {
   const [contextMenu, setContextMenu] = useState<{ entry: DirEntry; x: number; y: number } | null>(null);
   const openInspector = useUiStore((s) => s.openInspector);
 
-  const loadFiles = async () => {
+  const loadFiles = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams({ cwd });
@@ -28,9 +29,9 @@ export function FileBrowser({ cwd }: { cwd: string }) {
       }
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  };
+  }, [cwd]);
 
-  useEffect(() => { loadFiles(); }, [cwd]);
+  useEffect(() => { void loadFiles(); }, [loadFiles]);
   useEffect(() => {
     const close = () => setContextMenu(null);
     document.addEventListener("click", close);
@@ -39,7 +40,7 @@ export function FileBrowser({ cwd }: { cwd: string }) {
 
   const handleClick = (entry: DirEntry) => {
     if (entry.isDir) return;
-    openInspector({ variant: "file", path: entry.path, filename: entry.name } as any);
+    openInspector(fileInspectorForPath(entry.path, entry.name, undefined, cwd));
   };
 
   const handleContextMenu = (e: React.MouseEvent, entry: DirEntry) => {
@@ -55,14 +56,14 @@ export function FileBrowser({ cwd }: { cwd: string }) {
   return (
     <div className="border-t border-faint mt-2 pt-2">
       <div
-        onClick={() => { setExpanded(!expanded); if (!expanded) loadFiles(); }}
+        onClick={() => { setExpanded(!expanded); if (!expanded) void loadFiles(); }}
         className="flex items-center justify-between w-full px-2 py-1 text-xs font-medium uppercase tracking-wider text-muted hover:text-text cursor-pointer"
       >
         <span className="flex items-center gap-1.5">
           {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
           Files
         </span>
-        <span onClick={(e) => { e.stopPropagation(); loadFiles(); }} className="hover:text-text cursor-pointer">
+        <span onClick={(e) => { e.stopPropagation(); void loadFiles(); }} className="hover:text-text cursor-pointer">
           <RefreshCw size={10} className={loading ? "animate-spin" : ""} />
         </span>
       </div>

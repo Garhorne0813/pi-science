@@ -1,14 +1,21 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { BookOpen, Play, Square, RefreshCw, ExternalLink } from "lucide-react";
 import { cn } from "../../lib/cn";
+import { useUiStore } from "../../lib/store";
+import { fileInspectorForPath } from "../../lib/artifacts";
 
 interface Notebook {
   path: string; name: string; size: number; modified: string;
 }
 
 interface JupyterStatus {
-  running: boolean; port: number; url: string | null; env_ready?: boolean;
+  running: boolean;
+  port: number | null;
+  url: string | null;
+  cwd: string | null;
+  matches_workspace: boolean;
+  env_ready?: boolean;
 }
 
 export function NotebooksPage() {
@@ -16,26 +23,38 @@ export function NotebooksPage() {
   const workspaceCwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [loading, setLoading] = useState(true);
-  const [jupyter, setJupyter] = useState<JupyterStatus>({ running: false, port: 8888, url: null, env_ready: false });
+  const [jupyter, setJupyter] = useState<JupyterStatus>({
+    running: false,
+    port: null,
+    url: null,
+    cwd: null,
+    matches_workspace: true,
+    env_ready: false,
+  });
   const [starting, setStarting] = useState(false);
+  const [jupyterError, setJupyterError] = useState<string | null>(null);
+  const openInspector = useUiStore((state) => state.openInspector);
 
-  const loadNotebooks = async () => {
+  const loadNotebooks = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(`/api/notebooks?cwd=${encodeURIComponent(workspaceCwd)}`);
       setNotebooks(await res.json());
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  };
+  }, [workspaceCwd]);
 
-  const loadJupyterStatus = async () => {
+  const loadJupyterStatus = useCallback(async () => {
     try {
-      const res = await fetch("/api/notebooks/jupyter/status");
+      const res = await fetch(`/api/notebooks/jupyter/status?cwd=${encodeURIComponent(workspaceCwd)}`);
       setJupyter(await res.json());
-    } catch (e) { /* ignore */ }
-  };
+    } catch { /* ignore */ }
+  }, [workspaceCwd]);
 
-  useEffect(() => { loadNotebooks(); loadJupyterStatus(); }, [workspaceCwd]);
+  useEffect(() => {
+    void loadNotebooks();
+    void loadJupyterStatus();
+  }, [loadJupyterStatus, loadNotebooks]);
 
   const [setupProgress, setSetupProgress] = useState<string[]>([]);
   const [settingUp, setSettingUp] = useState(false);
@@ -69,23 +88,24 @@ export function NotebooksPage() {
 
   const startJupyter = async () => {
     setStarting(true);
+    setJupyterError(null);
     try {
       const res = await fetch(`/api/notebooks/jupyter/start?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "POST" });
-      if (res.ok) {
-        setJupyter(await res.json());
-      } else {
-        const err = await res.json();
-        alert(err.detail || "Failed to start Jupyter");
-      }
-    } catch (e) { console.error(e); }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `Unable to start Jupyter Lab (${res.status})`);
+      setJupyter({ ...data, matches_workspace: true });
+    } catch (e) { setJupyterError(e instanceof Error ? e.message : String(e)); }
     finally { setStarting(false); }
   };
 
   const stopJupyter = async () => {
+    setJupyterError(null);
     try {
-      await fetch("/api/notebooks/jupyter/stop", { method: "POST" });
-      setJupyter({ running: false, port: 8888, url: null });
-    } catch (e) { console.error(e); }
+      const res = await fetch(`/api/notebooks/jupyter/stop?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `Unable to stop Jupyter Lab (${res.status})`);
+      setJupyter({ running: false, port: null, url: null, cwd: null, matches_workspace: true });
+    } catch (e) { setJupyterError(e instanceof Error ? e.message : String(e)); }
   };
 
   const timeAgo = (d: string) => {
@@ -104,23 +124,27 @@ export function NotebooksPage() {
             <h1 className="font-serif text-xl text-text">Notebooks</h1>
             <p className="mt-1 text-sm text-muted">{notebooks.length} notebook{notebooks.length !== 1 ? "s" : ""} in workspace</p>
           </div>
-          <button onClick={loadNotebooks} className="rounded-input px-2 py-1 text-xs text-muted hover:text-text hover:bg-surface-2 flex items-center gap-1">
+          <button onClick={() => void loadNotebooks()} className="rounded-input px-2 py-1 text-xs text-muted hover:text-text hover:bg-surface-2 flex items-center gap-1">
             <RefreshCw size={12} className={loading ? "animate-spin" : ""} /> Refresh
           </button>
         </div>
 
         {/* Jupyter Server */}
-        <div className={cn("rounded-card border p-4 mb-6", jupyter.running ? "border-ok/40 bg-ok/5" : "border-border bg-surface")}>
+        <div className={cn("rounded-card border p-4 mb-6", jupyter.running && jupyter.matches_workspace ? "border-ok/40 bg-ok/5" : "border-border bg-surface")}>
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-sm font-medium text-text">Jupyter Lab</h2>
               <p className="text-xs text-muted mt-0.5">
-                {jupyter.running ? `Running on port ${jupyter.port}` :
-                 jupyter.env_ready ? "Environment ready" : "Environment not set up"}
+                {jupyter.running
+                  ? jupyter.matches_workspace
+                    ? `Running on port ${jupyter.port}`
+                    : `Running for another workspace: ${jupyter.cwd}`
+                  : jupyter.env_ready ? "Environment ready" : "Environment not set up"}
               </p>
+              {jupyterError && <p role="alert" className="mt-1 text-xs text-error">{jupyterError}</p>}
             </div>
             <div className="flex items-center gap-2">
-              {jupyter.running ? (
+              {jupyter.running && jupyter.matches_workspace ? (
                 <>
                   <a href={jupyter.url!} target="_blank" className="rounded-input px-3 py-1.5 text-xs text-link hover:bg-surface-2 flex items-center gap-1">
                     <ExternalLink size={12} /> Open
@@ -163,12 +187,17 @@ export function NotebooksPage() {
         ) : (
           <div className="rounded-card border border-border bg-surface overflow-hidden">
             {notebooks.map((nb) => (
-              <div key={nb.path} className="flex items-center gap-3 px-4 py-2.5 border-b border-faint last:border-b-0 hover:bg-surface-2 text-sm">
+              <button
+                key={nb.path}
+                type="button"
+                onClick={() => openInspector(fileInspectorForPath(nb.path, nb.name, undefined, workspaceCwd))}
+                className="flex min-h-11 w-full items-center gap-3 border-b border-faint px-4 py-2.5 text-left text-sm hover:bg-surface-2 last:border-b-0"
+              >
                 <BookOpen size={16} className="text-accent/60 shrink-0" />
                 <span className="truncate text-text flex-1">{nb.path}</span>
                 <span className="text-xs text-muted shrink-0">{timeAgo(nb.modified)}</span>
                 <span className="text-xs text-muted shrink-0 w-16 text-right">{(nb.size / 1024).toFixed(1)} KB</span>
-              </div>
+              </button>
             ))}
           </div>
         )}

@@ -1,7 +1,62 @@
 """Kernel manager and API tests."""
 
+import asyncio
+import json
+import time
+
 import pytest
-from services.kernel_manager import KernelManager, kernel_manager, CellResult
+from services.kernel_manager import KernelManager, KernelSession, CellResult
+
+
+class _AliveProcess:
+    def poll(self):
+        return None
+
+
+class _SerializedIoProcess(_AliveProcess):
+    def __init__(self):
+        self.requests: list[dict] = []
+        self.reading = 0
+        self.overlapped = False
+        self.stdin = self
+        self.stdout = self
+
+    def write(self, value: str):
+        if self.reading:
+            self.overlapped = True
+        self.requests.append(json.loads(value))
+
+    def flush(self):
+        return None
+
+    def readline(self):
+        self.reading += 1
+        try:
+            time.sleep(0.03)
+            request = self.requests.pop(0)
+            return json.dumps({
+                "id": request["id"],
+                "ok": True,
+                "stdout": "",
+                "result": request["code"],
+            }) + "\n"
+        finally:
+            self.reading -= 1
+
+
+class _FakeKernel(_AliveProcess):
+    def __init__(self, notebook_id: str, language: str, cwd: str):
+        self.notebook_id = notebook_id
+        self.language = language
+        self.cwd = cwd
+        self.shutdown_called = False
+
+    @property
+    def is_alive(self):
+        return True
+
+    def shutdown(self):
+        self.shutdown_called = True
 
 
 class TestKernelManager:
@@ -30,6 +85,94 @@ class TestKernelManager:
         result = CellResult(ok=False, error="NameError: name 'x' is not defined")
         assert not result.ok
         assert result.error is not None
+
+    @pytest.mark.anyio
+    async def test_same_kernel_serializes_concurrent_execute_calls(self, tmp_path):
+        process = _SerializedIoProcess()
+        session = KernelSession(
+            process=process,
+            language="python",
+            notebook_id="shared",
+            cwd=str(tmp_path),
+        )
+
+        first, second = await asyncio.gather(
+            session.execute("first"),
+            session.execute("second"),
+        )
+
+        assert [first.result, second.result] == ["first", "second"]
+        assert process.overlapped is False
+
+    @pytest.mark.anyio
+    async def test_same_notebook_id_is_isolated_by_workspace_and_language(self, tmp_path, monkeypatch):
+        mgr = KernelManager()
+        first_cwd = tmp_path / "first"
+        second_cwd = tmp_path / "second"
+        first_cwd.mkdir()
+        second_cwd.mkdir()
+        spawned = []
+
+        async def fake_spawn(notebook_id, language, cwd="."):
+            session = _FakeKernel(notebook_id, language, str(cwd))
+            spawned.append(session)
+            return session
+
+        monkeypatch.setattr(mgr, "_spawn", fake_spawn)
+
+        first = await mgr.get_or_create("same", "python", str(first_cwd))
+        second = await mgr.get_or_create("same", "python", str(second_cwd))
+        third = await mgr.get_or_create("same", "r", str(first_cwd))
+
+        assert len(spawned) == 3
+        assert first is not second and first is not third and second is not third
+        assert not any(session.shutdown_called for session in spawned)
+
+        await mgr.shutdown_notebook("same", cwd=str(first_cwd))
+        assert first.shutdown_called is True
+        assert third.shutdown_called is True
+        assert second.shutdown_called is False
+        assert mgr.active_count == 1
+
+    @pytest.mark.anyio
+    async def test_execution_timeout_recycles_only_the_stuck_kernel(self, tmp_path, monkeypatch):
+        mgr = KernelManager()
+        first_cwd = tmp_path / "first"
+        second_cwd = tmp_path / "second"
+        first_cwd.mkdir()
+        second_cwd.mkdir()
+        spawned = []
+
+        class SlowKernel(_FakeKernel):
+            @property
+            def is_alive(self):
+                return not self.shutdown_called
+
+            async def execute(self, code):
+                if code == "hang":
+                    await asyncio.sleep(10)
+                return CellResult(ok=True, result=code)
+
+        async def fake_spawn(notebook_id, language, cwd="."):
+            session = SlowKernel(notebook_id, language, str(cwd))
+            spawned.append(session)
+            return session
+
+        monkeypatch.setattr(mgr, "_spawn", fake_spawn)
+        healthy = await mgr.get_or_create("same", "python", cwd=str(second_cwd))
+
+        result = await mgr.execute(
+            "same",
+            "python",
+            "hang",
+            cwd=str(first_cwd),
+            timeout_seconds=0.01,
+        )
+
+        assert result.ok is False
+        assert "timed out" in (result.error or "")
+        assert spawned[-1].shutdown_called is True
+        assert mgr._sessions[mgr._key("same", "python", str(second_cwd))] is healthy
 
 
 @pytest.mark.anyio
@@ -118,7 +261,7 @@ class TestKernelAPI:
             json={"language": "python", "code": "a=1", "notebook_id": "test-shutdown"},
         )
         # Shut it down
-        res = await client.post("/api/kernels/test-shutdown/shutdown")
+        res = await client.post("/api/kernels/test-shutdown/shutdown", params={"cwd": "."})
         assert res.status_code == 200
         assert res.json()["ok"] is True
 

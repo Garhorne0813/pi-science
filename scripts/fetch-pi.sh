@@ -10,6 +10,13 @@ RUNTIME_DIR="$PROJECT_DIR/runtime/pi"
 
 mkdir -p "$RUNTIME_DIR"
 
+# Keep npm's cache inside the project runtime by default. This avoids startup
+# failures when ~/.npm contains files created by a previous root-owned npm
+# invocation. Respect an explicitly configured cache path.
+NPM_CACHE_DIR="${NPM_CONFIG_CACHE:-$RUNTIME_DIR/.npm-cache}"
+mkdir -p "$NPM_CACHE_DIR"
+export NPM_CONFIG_CACHE="$NPM_CACHE_DIR"
+
 # ── Strategy 1: Local pi repo (dev mode) ──
 LOCAL_PI_REPO="$(dirname "$PROJECT_DIR")/pi"
 if [ -d "$LOCAL_PI_REPO/packages/coding-agent/src" ]; then
@@ -36,12 +43,18 @@ if [ -d "$LOCAL_PI_REPO/packages/coding-agent/src" ]; then
 fi
 
 # ── Strategy 2: npm install (production) ──
-echo "==> Installing @earendil-works/pi-coding-agent@$PI_VERSION from npm..."
+echo "==> Installing @earendil-works/pi-coding-agent@$PI_VERSION and extensions from npm..."
 cd "$RUNTIME_DIR"
 if [ ! -f "node_modules/.package-lock.json" ]; then
   npm init -y --silent 2>/dev/null
 fi
-npm install "@earendil-works/pi-coding-agent@$PI_VERSION" --ignore-scripts 2>&1 | tail -3
+npm install \
+  "@earendil-works/pi-coding-agent@$PI_VERSION" \
+  pi-mcp-adapter \
+  pi-subagents \
+  pi-web-access \
+  context-mode \
+  --ignore-scripts 2>&1 | tail -3
 
 PI_INSTALLED="$RUNTIME_DIR/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"
 if [ -f "$PI_INSTALLED" ]; then

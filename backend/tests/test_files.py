@@ -146,6 +146,11 @@ class TestFilesAPI:
         assert data["metadata"]["rows"] == 3
         assert data["metadata"]["columns"] == 3
 
+    async def test_preview_missing_file_404(self, client, temp_workspace):
+        cwd = str(temp_workspace)
+        res = await client.get(f"/api/files/missing.csv/preview?cwd={cwd}")
+        assert res.status_code == 404
+
     async def test_upload_uses_requested_workspace(self, client, temp_workspace):
         res = await client.post(
             f"/api/files/upload?cwd={temp_workspace}",

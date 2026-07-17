@@ -14,7 +14,7 @@ import { cn } from "@/lib/cn";
 const SERIES = Array.from({ length: 8 }, (_, i) => `var(--series-${i + 1})`);
 
 export function TableChart({ table }: { table: ParsedTable }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   const cols = useMemo(() => analyzeColumns(table), [table]);
   const def = useMemo(() => defaultChartSpec(cols), [cols]);
   const [type, setType] = useState<ChartType>(def?.type ?? "line");

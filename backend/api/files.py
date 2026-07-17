@@ -11,11 +11,9 @@ from models import FileContent, PreviewData
 from services.file_service import (
     read_file_content,
     get_preview_data,
-    detect_preview_kind,
     resolve_workspace_path,
 )
 
-from datetime import datetime, timezone
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
@@ -26,7 +24,6 @@ async def list_files(
     subdir: str = Query("", description="Subdirectory path relative to workspace"),
 ):
     """List files in the workspace, optionally in a subdirectory."""
-    import os as _os
     ws = _workspace_dir(cwd)
     try:
         target = resolve_workspace_path(ws, subdir or ".")

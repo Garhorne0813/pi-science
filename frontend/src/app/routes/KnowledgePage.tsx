@@ -38,6 +38,7 @@ import {
 } from "../../lib/project-knowledge";
 import { useRuntimeStore } from "../../lib/runtime-store";
 import { useUiStore } from "../../lib/store";
+import { fileInspectorForPath } from "../../lib/artifacts";
 
 type Tab = "overview" | "inbox" | "knowledge" | "files" | "history";
 
@@ -743,7 +744,7 @@ function FilesTab({
             </div>
             <div className="divide-y divide-faint">
               {rows.slice(0, 40).map((file) => (
-                <button key={file.id} type="button" onClick={() => openInspector({ variant: "file", path: file.path, filename: file.name } as never)} className="flex min-h-11 w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-surface-2">
+                <button key={file.id} type="button" onClick={() => openInspector(fileInspectorForPath(file.path, file.name, undefined, cwd))} className="flex min-h-11 w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-surface-2">
                   <FileText size={15} className="shrink-0 text-muted" />
                   <span className="min-w-0 flex-1 truncate text-sm text-text">{file.path}</span>
                   <span className="shrink-0 font-mono text-[10px] text-muted">{formatFileSize(file.size)}</span>

@@ -10,7 +10,7 @@ import { parseEigenval, type BandData } from "@/lib/bands";
  * Offline, from the file alone; uses the app chart palette.
  */
 export function BandView({ filename, bytes }: { filename: string; bytes: ArrayBuffer }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   const parsed = useMemo<{ data: BandData | null; error: string | null }>(() => {
     try {
       return { data: parseEigenval(new TextDecoder().decode(bytes)), error: null };

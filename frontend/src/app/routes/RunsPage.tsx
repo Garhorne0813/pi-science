@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Play, Check, X, Loader2, RefreshCw, ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "../../lib/cn";
@@ -22,16 +22,16 @@ export function RunsPage() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [logs, setLogs] = useState<Record<string, string>>({});
 
-  const loadRuns = async () => {
+  const loadRuns = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(`/api/runs?cwd=${encodeURIComponent(workspaceCwd)}`);
       setRuns(await res.json());
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  };
+  }, [workspaceCwd]);
 
-  useEffect(() => { loadRuns(); }, [workspaceCwd]);
+  useEffect(() => { void loadRuns(); }, [loadRuns]);
 
   const toggleLog = async (runId: string) => {
     if (expanded[runId]) {
@@ -44,7 +44,7 @@ export function RunsPage() {
         const res = await fetch(`/api/runs/${runId}/log?cwd=${encodeURIComponent(workspaceCwd)}`);
         const data = await res.json();
         setLogs((p) => ({ ...p, [runId]: data.log || "(no log)" }));
-      } catch (e) { setLogs((p) => ({ ...p, [runId]: "(error loading log)" })); }
+      } catch { setLogs((p) => ({ ...p, [runId]: "(error loading log)" })); }
     }
   };
 
@@ -64,7 +64,7 @@ export function RunsPage() {
             <h1 className="font-serif text-xl text-text">Runs</h1>
             <p className="mt-1 text-sm text-muted">{runs.length} experiment run{runs.length !== 1 ? "s" : ""}</p>
           </div>
-          <button onClick={loadRuns} className="rounded-input px-2 py-1 text-xs text-muted hover:text-text hover:bg-surface-2 flex items-center gap-1">
+          <button onClick={() => void loadRuns()} className="rounded-input px-2 py-1 text-xs text-muted hover:text-text hover:bg-surface-2 flex items-center gap-1">
             <RefreshCw size={12} className={loading ? "animate-spin" : ""} /> Refresh
           </button>
         </div>

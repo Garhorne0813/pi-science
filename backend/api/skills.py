@@ -1,7 +1,5 @@
 """Skills API — list and manage agent skills."""
 
-import asyncio
-import glob
 import logging
 import os
 import re
@@ -39,49 +37,49 @@ async def list_skills(cwd: str = Query(".", description="Working directory")):
     except ValueError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
 
-    skills = []
-    for name, path, source in _discover_all_skills():
-        skills.append(SkillInfo(name=name, description="", location=path, source=source))
-    return skills
+    return [
+        SkillInfo(name=name, description="", location=path, source=source)
+        for name, path, source in _discover_all_skills(str(cwd_path))
+    ]
 
 
-def _discover_all_skills() -> list[tuple[str, str, str]]:
-    """Discover all skills from all known locations.
-
-    Returns list of (name, path, source) tuples. Used by both the skills
-    listing page and the settings toggle endpoint.
-    """
+def _discover_all_skills(cwd: str = ".") -> list[tuple[str, str, str]]:
+    """Discover project, user, bundled, and installed package skills."""
     results: list[tuple[str, str, str]] = []
-
-    # Project skills
-    project_dir = Path(".") / ".pi" / "skills"
+    project_dir = Path(cwd).expanduser().resolve() / ".pi" / "skills"
     for info in _scan_skills(project_dir, "project"):
         results.append((info.name, info.location, info.source))
 
-    # User skills: ~/.pi/agent/skills/
-    user_dir = Path.home() / ".pi" / "agent" / "skills"
-    for info in _scan_skills(user_dir, "user"):
-        results.append((info.name, info.location, info.source))
-
-    # User skills (alternate): ~/.agents/skills/
-    agents_dir = Path.home() / ".agents" / "skills"
-    for info in _scan_skills(agents_dir, "user"):
-        results.append((info.name, info.location, info.source))
-
-    # Builtin + bundled: pi repo
-    pi_repo = Path(__file__).parent.parent.parent.parent / "pi"
-    if pi_repo.exists():
-        for info in _scan_skills(pi_repo / ".pi" / "skills", "builtin"):
+    for user_dir in (Path.home() / ".pi" / "agent" / "skills", Path.home() / ".agents" / "skills"):
+        for info in _scan_skills(user_dir, "user"):
             results.append((info.name, info.location, info.source))
-        # Scan bundled skill packages in node_modules
-        nm_dir = pi_repo / "node_modules"
-        if nm_dir.exists():
-            for child in nm_dir.iterdir():
-                skills_subdir = child / "skills"
-                if skills_subdir.is_dir():
-                    for info in _scan_skills(skills_subdir, "builtin"):
-                        results.append((info.name, info.location, info.source))
 
+    # Support both a local Pi checkout and the npm runtime layout.
+    from config import PI_CLI_PATH
+    cli_path = Path(PI_CLI_PATH).resolve()
+    if "packages" in cli_path.parts:
+        package_index = cli_path.parts.index("packages")
+        dev_root = Path(*cli_path.parts[:package_index])
+    else:
+        dev_root = cli_path.parent
+    candidates = [
+        dev_root,
+        cli_path.parent.parent.parent.parent if "node_modules" in cli_path.parts else cli_path.parent,
+        Path(__file__).resolve().parents[2] / "runtime" / "pi",
+    ]
+    seen_roots: set[Path] = set()
+    for pi_root in candidates:
+        if pi_root in seen_roots or not pi_root.exists():
+            continue
+        seen_roots.add(pi_root)
+        for info in _scan_skills(pi_root / ".pi" / "skills", "builtin"):
+            results.append((info.name, info.location, info.source))
+        node_modules = pi_root / "node_modules"
+        if node_modules.exists():
+            for child in node_modules.iterdir():
+                skills_dir = child / "skills"
+                for info in _scan_skills(skills_dir, "builtin"):
+                    results.append((info.name, info.location, info.source))
     return results
 
 

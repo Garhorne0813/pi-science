@@ -59,6 +59,23 @@ Each workspace has a durable `PROJECT.md` and a Reviewer-managed inbox. Conversa
 
 Workspace-local data is stored under `.pi-science/knowledge/`, `.pi-science/inbox/`, `.pi-science/history/`, `.pi-science/index.json`, and `.pi-science/policy.yaml`.
 
+### Project Knowledge Reviewer · 项目知识审稿人
+
+Each workspace has a durable `PROJECT.md` and a Reviewer-managed inbox. Conversations and project files are analyzed for useful knowledge, but nothing enters the formal project record until the user accepts it.
+
+每个工作区都有持续演化的 `PROJECT.md` 和 Reviewer 待整理区。系统会从对话和项目文件中识别有效知识，但只有用户确认后才能写入正式项目记录。
+
+- **Proposal-only Reviewer** — extracts findings, conclusions, decisions, hypotheses, open questions, tasks, project changes, and artifacts
+- **Evidence links** — proposals retain their source session, message IDs, related files, confidence, and conflicts
+- **Human approval** — accept, edit, reject, or batch-review proposals before they update `PROJECT.md`
+- **Automatic or manual review** — run silently after settled conversations, or trigger “Review” from the composer
+- **Hybrid file organization** — shallow physical folders plus logical views by type, topic, and time
+- **Safe file plans** — preview moves/renames, detect collisions and references, execute transactionally, and undo from history
+- **Project versions** — every reviewed document update creates a restorable project-document version
+- **Per-project policy** — lock paths, set naming conventions, and learn from accepted/rejected proposal categories
+
+Workspace-local data is stored under `.pi-science/knowledge/`, `.pi-science/inbox/`, `.pi-science/history/`, `.pi-science/index.json`, and `.pi-science/policy.yaml`.
+
 ### Scientific File Viewers · 科学文件查看器
 
 15+ built-in viewers render scientific data formats natively in the browser. No plugin needed.
@@ -135,7 +152,7 @@ Every file the agent creates or edits is automatically recorded with full lineag
 ### Theme & Internationalization · 主题与国际化
 
 - **Warm paper aesthetic** — cream whites, soft shadows, serif headings; dark mode via `[data-theme="dark"]`
-- **English & Simplified Chinese** — switch in Settings; all UI labels, file viewers, and inspector panels translated
+- **English & Simplified Chinese** — switch in Settings for Project Knowledge and scientific inspector/viewer labels; the remaining workbench shell currently uses English
 - **Resizable panels** — drag to resize sidebar, inspector, and composer
 
 ---
@@ -147,11 +164,12 @@ Every file the agent creates or edits is automatically recorded with full lineag
 | Page · 页面 | Route · 路由 | What you do there |
 |---|---|---|
 | **Projects** | `/` | Workspace cards — create, open, or delete project folders |
-| **Chat** | `/live/:sessionId` | Agent conversation — streaming responses, tool cards, file previews |
-| **Files** | `/files` | Full file browser — breadcrumb nav, table/chart views for data files |
-| **Notebooks** | `/notebooks` | .ipynb listing, Jupyter Lab start/stop, kernel status |
-| **Runs** | `/runs` | Experiment history — command, status, host, outputs |
-| **Project Knowledge** | `/knowledge` | Review proposals, inspect `PROJECT.md`, browse logical files, and undo changes |
+| **Workspace** | `/workspace/:cwd` | Open a project and resume or create its conversations |
+| **Chat** | `/workspace/:cwd/session/:sessionId` | Agent conversation — streaming responses, tool cards, file previews |
+| **Files** | `/workspace/:cwd/files` | Full file browser — breadcrumb nav, table/chart views for data files |
+| **Notebooks** | `/workspace/:cwd/notebooks` | Open and run .ipynb files; manage the workspace's Jupyter Lab server |
+| **Runs** | `/workspace/:cwd/runs` | Experiment history — command, status, host, outputs |
+| **Project Knowledge** | `/workspace/:cwd/knowledge` | Review proposals, inspect `PROJECT.md`, browse logical files, and undo changes |
 | **Skills** | `/skills` | Installed agent skills and scientific tool detection |
 | **Settings** | `/settings` | LLM config, API keys, model selection, extensions, MCP servers |
 
@@ -178,7 +196,7 @@ Every file the agent creates or edits is automatically recorded with full lineag
 
 ### Prerequisites · 前置条件
 
-- **Python** ≥ 3.11 with `pip`
+- **Python** ≥ 3.11 with `pip` (Conda is optional)
 - **Node.js** ≥ 22
 - **LLM API key** — e.g. `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, or `OPENAI_API_KEY`
 
@@ -195,6 +213,8 @@ This installs everything and starts both servers:
 - **API docs** → `http://127.0.0.1:8787/docs`
 
 Then open Settings → LLM, enter your API key, and start a conversation.
+
+Jupyter Lab is optional because `.ipynb` files can run directly in Pi-Science. To use the separate “Open Jupyter Lab” button, install it into the same Python environment with `python -m pip install jupyterlab`.
 
 ### Configure API Key · 配置 API 密钥
 

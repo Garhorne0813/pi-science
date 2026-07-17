@@ -1,6 +1,5 @@
 import { useRef, useState } from "react";
 import { Check, ChevronLeft, ChevronRight, Download, X } from "lucide-react";
-import { useTranslation } from "react-i18next";
 import type { ArtifactInspector as ArtifactInspectorT, ArtifactTab } from "../../types/thread";
 import { useScrollMemory } from "@/lib/scrollMemory";
 import { cn } from "@/lib/cn";
@@ -9,7 +8,13 @@ import { PaneTitlebarInset } from "./RightPane";
 import { resolveArtifactContent } from "@/lib/artifacts";
 import { saveTextWithFeedback } from "@/lib/download";
 
-const TABS: ArtifactTab[] = ["Code", "Execution Log", "Messages", "Environment", "Review"];
+const TABS: Array<{ id: ArtifactTab; label: string }> = [
+  { id: "code", label: "Code" },
+  { id: "log", label: "Execution Log" },
+  { id: "messages", label: "Messages" },
+  { id: "environment", label: "Environment" },
+  { id: "review", label: "Review" },
+];
 
 export function ArtifactInspector({
   data,
@@ -21,18 +26,24 @@ export function ArtifactInspector({
   /** Pane-level header buttons (e.g. maximize), rendered before Close. */
   controls?: React.ReactNode;
 }) {
-  const { t } = useTranslation(["inspector", "common"]);
-  const [tab, setTab] = useState<ArtifactTab>("Code");
+  const [tab, setTab] = useState<ArtifactTab>("code");
   const [versionIdx, setVersionIdx] = useState(() =>
-    Math.max(0, data.versions.findIndex((v) => v.label === data.activeVersion)),
+    Math.max(
+      0,
+      data.versions.findIndex(
+        (version) => version.id === data.activeVersion || version.label === data.activeVersion,
+      ),
+    ),
   );
 
-  const activeLabel = data.versions[versionIdx]?.label ?? data.activeVersion;
-  const content = resolveArtifactContent(data, activeLabel);
+  const activeVersion = data.versions[versionIdx];
+  const activeKey = activeVersion?.id ?? activeVersion?.label ?? data.activeVersion;
+  const activeLabel = activeVersion?.label ?? activeVersion?.id ?? data.activeVersion;
+  const content = resolveArtifactContent(data, activeKey);
   const scriptName = data.filename ?? data.title;
 
   const step = (delta: number) =>
-    setVersionIdx((i) => Math.min(data.versions.length - 1, Math.max(0, i + delta)));
+    setVersionIdx((i) => Math.min(Math.max(0, data.versions.length - 1), Math.max(0, i + delta)));
 
   // Viewing position per artifact tab, restored when reopened.
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -77,25 +88,25 @@ export function ArtifactInspector({
       </header>
 
       <nav className="flex items-center gap-4 border-b border-border px-4">
-        {TABS.map((tabName) => (
+        {TABS.map(({ id, label }) => (
           <button
-            key={tabName}
-            onClick={() => setTab(tabName)}
+            key={id}
+            onClick={() => setTab(id)}
             className={cn(
               "flex items-center gap-1 border-b-2 py-2.5 text-sm",
-              tab === tabName
+              tab === id
                 ? "border-accent text-text"
                 : "border-transparent text-muted hover:text-text",
             )}
           >
-            {tabName}
-            {tabName === "Review" && content.reviewPassed && <Check size={13} className="text-ok" />}
+            {label}
+            {id === "review" && content.reviewPassed && <Check size={13} className="text-ok" />}
           </button>
         ))}
       </nav>
 
       <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto p-4">
-        {tab === "Code" && (
+        {tab === "code" && (
           <div className="space-y-3">
             <button
               className="flex items-center gap-2 rounded-input bg-link px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
@@ -103,10 +114,10 @@ export function ArtifactInspector({
             >
               <Download size={15} /> {"Download script"}
             </button>
-            {data.inputs.length > 0 && (
+            {(data.inputs ?? []).length > 0 && (
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs text-muted">{"Inputs"}</span>
-                {data.inputs.map((f) => (
+                {(data.inputs ?? []).map((f) => (
                   <span
                     key={f}
                     className="rounded-input bg-surface-2 px-2 py-1 font-mono text-xs text-text ring-1 ring-border"
@@ -119,8 +130,8 @@ export function ArtifactInspector({
             <CodeViewer code={content.code} language={data.language} startLine={data.codeStartLine} />
           </div>
         )}
-        {tab === "Execution Log" && <Pre text={content.executionLog ?? "No execution log"} />}
-        {tab === "Messages" && (
+        {tab === "log" && <Pre text={content.executionLog ?? "No execution log"} />}
+        {tab === "messages" && (
           <ul className="space-y-2">
             {(content.messages ?? []).map((m, i) => (
               <li key={i} className="rounded-input bg-surface-2 px-3 py-2 text-sm text-text">
@@ -132,8 +143,8 @@ export function ArtifactInspector({
             )}
           </ul>
         )}
-        {tab === "Environment" && <Pre text={content.environment ?? "No environment info"} />}
-        {tab === "Review" &&
+        {tab === "environment" && <Pre text={content.environment ?? "No environment info"} />}
+        {tab === "review" &&
           (content.reviewPassed ? (
             <div className="flex items-center gap-2 text-sm text-ok">
               <Check size={16} /> {`Review passed (${activeLabel})`}

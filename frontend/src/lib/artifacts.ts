@@ -7,6 +7,7 @@ import type {
   ArtifactBlock,
   ArtifactVersion,
   ArtifactInspector,
+  FileRoot,
   FilePreviewInspector,
   NotebookFileInspector,
 } from "../types/thread";
@@ -181,15 +182,35 @@ export function previewKindForName(filename: string): PreviewKind {
 export function fileInspectorFromBlock(
   a: ArtifactBlock,
 ): FilePreviewInspector | NotebookFileInspector {
-  // Notebooks open in the runnable editor, not the raw-JSON preview.
-  if (extOf(a.filename) === "ipynb") return { variant: "notebook-file", path: a.path };
+  const path = a.path ?? a.filename;
+  const inspector = fileInspectorForPath(path, a.filename);
+  if (inspector.variant === "notebook-file") return inspector;
   return {
-    variant: "file",
-    path: a.path,
-    filename: a.filename,
+    ...inspector,
     artifact: a.artifact,
     language: a.language ?? EXT_LANG[extOf(a.filename)],
     content: a.content,
+  };
+}
+
+/** Build the correct inspector for any workspace path. */
+export function fileInspectorForPath(
+  path: string,
+  filename = path.split(/[\\/]/).pop() || path,
+  root?: FileRoot,
+  cwd?: string,
+): FilePreviewInspector | NotebookFileInspector {
+  if (extOf(filename) === "ipynb") {
+    return { variant: "notebook-file", path, root, cwd };
+  }
+  return {
+    variant: "file",
+    path,
+    filename,
+    root,
+    cwd,
+    artifact: extToKind(extOf(filename)),
+    language: EXT_LANG[extOf(filename)],
   };
 }
 
@@ -198,6 +219,7 @@ export function refToArtifactBlock(path: string): ArtifactBlock {
   const filename = path.split(/[\\/]/).pop() || path;
   return {
     kind: "artifact",
+    id: `ref-${path}`,
     path,
     filename,
     artifact: extToKind(extOf(filename)),
@@ -229,7 +251,7 @@ export function deriveArtifact(event: ToolUpdatedEvent): ArtifactBlock | null {
     const nb = firstString(input, ["notebook_path", "path", "document_id"]);
     if (!nb || !nb.endsWith(".ipynb")) return null;
     const filename = nb.split(/[\\/]/).pop() || nb;
-    return { kind: "artifact", path: nb, filename, artifact: "notebook", tool: event.tool };
+    return { kind: "artifact", id: `artifact-${nb}`, path: nb, filename, artifact: "notebook", tool: event.tool };
   }
 
   if (!WRITE_TOOLS.has(tool)) return null;
@@ -243,6 +265,7 @@ export function deriveArtifact(event: ToolUpdatedEvent): ArtifactBlock | null {
 
   return {
     kind: "artifact",
+    id: `artifact-${path}`,
     path,
     filename,
     artifact: extToKind(ext),
@@ -255,7 +278,7 @@ export function deriveArtifact(event: ToolUpdatedEvent): ArtifactBlock | null {
 /** Resolve the content shown for the active version, falling back to inspector-level fields. */
 export function resolveArtifactContent(
   data: ArtifactInspector,
-  activeLabel: string,
+  activeVersion: string,
 ): {
   code: string;
   executionLog?: string;
@@ -263,9 +286,11 @@ export function resolveArtifactContent(
   environment?: string;
   reviewPassed?: boolean;
 } {
-  const v: ArtifactVersion | undefined = data.versions.find((x) => x.label === activeLabel);
+  const v: ArtifactVersion | undefined = data.versions.find(
+    (version) => version.id === activeVersion || version.label === activeVersion,
+  );
   return {
-    code: v?.code ?? data.code,
+    code: v?.code ?? v?.content ?? data.code ?? "",
     executionLog: v?.executionLog ?? data.executionLog,
     messages: v?.messages ?? data.messages,
     environment: v?.environment ?? data.environment,

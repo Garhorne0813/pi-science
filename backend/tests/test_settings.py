@@ -7,6 +7,22 @@ import pytest
 
 @pytest.mark.anyio
 class TestSettingsAPI:
+    async def test_runtime_extensions_reports_real_discovery(self, client, monkeypatch):
+        import api.settings as settings
+
+        monkeypatch.setattr(settings, "runtime_extension_status", lambda: [{
+            "id": "pi-web-access",
+            "name": "Web Access",
+            "description": "Web tools",
+            "installed": True,
+            "path": "/runtime/node_modules/pi-web-access/index.ts",
+        }])
+
+        res = await client.get("/api/settings/extensions")
+
+        assert res.status_code == 200
+        assert res.json()["extensions"][0]["installed"] is True
+
     async def test_list_providers(self, client):
         """GET /api/settings/providers returns supported providers."""
         res = await client.get("/api/settings/providers")
@@ -126,6 +142,32 @@ class TestSettingsAPI:
         assert "custom-luna-gateway/luna-max" in {m["id"] for m in data["available_models"]}
         assert "api_key" not in data["custom_providers"][0]
 
+    async def test_skill_toggle_and_reset(self, client, temp_config_dir, monkeypatch):
+        import api.skills as skills
+
+        monkeypatch.setattr(skills, "_discover_all_skills", lambda _cwd=".": [
+            ("research", "/tmp/research/SKILL.md", "user"),
+            ("coding", "/tmp/coding/SKILL.md", "builtin"),
+        ])
+
+        initial = await client.get("/api/settings/skills")
+        assert initial.status_code == 200
+        assert all(item["enabled"] for item in initial.json()["skills"])
+
+        disabled = await client.put(
+            "/api/settings/skills/toggle",
+            json={"name": "research", "enabled": False},
+        )
+        assert disabled.status_code == 200
+        state = await client.get("/api/settings/skills")
+        by_name = {item["name"]: item for item in state.json()["skills"]}
+        assert by_name["research"]["enabled"] is False
+        assert by_name["coding"]["enabled"] is True
+
+        reset = await client.delete("/api/settings/skills")
+        assert reset.status_code == 200
+        assert (await client.get("/api/settings/skills")).json()["configured"] is False
+
     def test_custom_models_runtime_uses_env_backed_key(self, temp_config_dir):
         from api.settings import _save_config, get_custom_models_runtime
 
@@ -145,6 +187,33 @@ class TestSettingsAPI:
         payload = json.loads((agent_dir / "models.json").read_text())
         assert payload["providers"]["custom-luna-gateway"]["models"][0]["id"] == "luna-max"
         assert payload["providers"]["custom-luna-gateway"]["apiKey"].startswith("$")
+
+    def test_custom_reasoning_model_enables_max_thinking(self, temp_config_dir):
+        from api.settings import _save_config, get_custom_models_runtime
+
+        _save_config({
+            "custom_providers": [{
+                "id": "custom-api",
+                "name": "Custom API",
+                "base_url": "https://llm.example.com/v1",
+                "api": "openai-completions",
+                "api_key": "sk-custom",
+            "models": ["gpt-5.6-luna", "gpt-5.4", "plain-chat-model"],
+            }]
+        })
+
+        agent_dir, _env = get_custom_models_runtime("/tmp/reasoning-workspace")
+        payload = json.loads((agent_dir / "models.json").read_text())
+        models = {
+            model["id"]: model
+            for model in payload["providers"]["custom-custom-api"]["models"]
+        }
+
+        assert models["gpt-5.6-luna"]["reasoning"] is True
+        assert models["gpt-5.6-luna"]["thinkingLevelMap"]["max"] == "max"
+        assert models["gpt-5.6-luna"]["compat"]["supportsReasoningEffort"] is True
+        assert models["gpt-5.4"]["thinkingLevelMap"]["max"] == "high"
+        assert models["plain-chat-model"]["reasoning"] is False
 
 
 class TestProviderEnvMap:

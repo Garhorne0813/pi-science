@@ -2,16 +2,14 @@
 
 import asyncio
 import json
-import logging
 import os
 import signal
 import subprocess
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import AsyncIterator, Optional
-
-logger = logging.getLogger(__name__)
+from typing import AsyncIterator, Callable, Optional
 
 from config import (
     PI_CLI_PATH,
@@ -25,19 +23,85 @@ from config import (
 from models import PiConfig
 
 
+MAX_EVENT_STRING_CHARS = 20000
+MAX_EVENT_COLLECTION_ITEMS = 100
+PROMPT_START_RECONCILE_DELAY = 0.25
+
+
 def _is_pi_process(pid: int) -> bool:
-    """Check if a PID belongs to a pi/node process (avoid killing unrelated processes)."""
+    """Avoid killing an unrelated process when recovering a stale PID file."""
     try:
         result = subprocess.run(
             ["ps", "-p", str(pid), "-o", "command="],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode == 0:
-            cmd = result.stdout.strip().lower()
-            return any(kw in cmd for kw in ("node", "pi", "tsx"))
+            command = result.stdout.strip().lower()
+            return any(token in command for token in ("node", "pi", "tsx"))
     except (OSError, subprocess.SubprocessError):
         pass
-    return True  # If we can't verify, preserve old behavior
+    # If process inspection is unavailable, preserve the historical recovery
+    # behavior rather than leaving a stale runtime orphaned.
+    return True
+
+
+def _model_has_credentials(model: Optional[str]) -> bool:
+    """Return whether the configured environment can authenticate a model."""
+    if not model or "/" not in model:
+        return False
+    provider = model.split("/", 1)[0]
+    try:
+        from api.settings import PROVIDER_ENV_MAP, _custom_providers, _load_config
+
+        env_name = PROVIDER_ENV_MAP.get(provider)
+        if env_name and os.environ.get(env_name):
+            return True
+        stored_keys = _load_config().get("api_keys", {})
+        if env_name and stored_keys.get(provider):
+            return True
+        if provider.startswith("custom-"):
+            custom_id = provider.removeprefix("custom-")
+            return any(
+                item.get("id") == custom_id and bool(item.get("api_key"))
+                for item in _custom_providers()
+            )
+    except Exception:
+        # Credential detection is only a fallback guard. If settings cannot
+        # be read, preserve the session's own model rather than changing it.
+        return True
+    return False
+
+
+def _should_use_global_model(active_model: Optional[str], global_model: Optional[str]) -> bool:
+    """Use the current global model only when the persisted one is unusable."""
+    if not global_model or active_model == global_model:
+        return False
+    return not _model_has_credentials(active_model) and _model_has_credentials(global_model)
+
+
+def _bounded_event_value(value, depth: int = 0):
+    """Bound RPC event payloads before replay storage and SSE serialization."""
+    if depth >= 6:
+        return "[truncated]"
+    if isinstance(value, str):
+        if len(value) <= MAX_EVENT_STRING_CHARS:
+            return value
+        return value[:MAX_EVENT_STRING_CHARS] + "\n… [truncated]"
+    if isinstance(value, dict):
+        items = list(value.items())[:MAX_EVENT_COLLECTION_ITEMS]
+        result = {str(key): _bounded_event_value(item, depth + 1) for key, item in items}
+        if len(value) > len(items):
+            result["_truncated"] = True
+        return result
+    if isinstance(value, (list, tuple)):
+        items = list(value)[:MAX_EVENT_COLLECTION_ITEMS]
+        result = [_bounded_event_value(item, depth + 1) for item in items]
+        if len(value) > len(items):
+            result.append("[truncated]")
+        return result
+    return value
 
 
 class PiProcess:
@@ -53,24 +117,52 @@ class PiProcess:
         cwd: str,
         session_id: str,
         config: PiConfig,
-        session_dir: str = "",
+        session_dir: Optional[str] = None,
     ):
         self.process = process
         self.cwd = cwd
         self.session_id = session_id
         self.config = config
         self.session_dir = session_dir
-        self._pgid = process.pid  # process group leader (start_new_session=True)
+        self._pgid = getattr(process, "pid", None)
         self.pending_requests: dict[str, asyncio.Future] = {}
-        self._event_queue: asyncio.Queue = asyncio.Queue()
+        # Events are partitioned by the session that was active when they were
+        # emitted. A workspace process can switch sessions, so a single shared
+        # broadcast queue would leak one conversation into another.
+        self._event_history: dict[str, deque[tuple[int, dict]]] = {}
+        self._event_subscribers: dict[str, set[asyncio.Queue]] = {}
+        self._event_sequence: dict[str, int] = {}
+        self._event_epoch = uuid.uuid4().hex[:12]
+        self._event_lock = asyncio.Lock()
         self._reader_task: Optional[asyncio.Task] = None
         self._stderr_task: Optional[asyncio.Task] = None
-        self._stderr_buffer: str = ""
-        self._started_at = datetime.now(timezone.utc)
+        self._stderr_tail: deque[str] = deque(maxlen=200)
+        self._stderr_buffer = ""
         self._last_activity = datetime.now(timezone.utc)
+        self._started_at = datetime.now(timezone.utc)
+        self._session_started_at = self._started_at
+        self._shutting_down = False
+        self.session_path: Optional[str] = None
+        # A prompt RPC returns before the agent turn is complete. Keep a
+        # separate turn-level flag so a second prompt cannot be appended while
+        # tools/model synthesis are still running.
+        self._busy = False
+        self._awaiting_prompt_ack = False
+        self._prompt_started = False
+        self._prompt_reconcile_task: Optional[asyncio.Task] = None
+        self._turn_had_text: dict[str, bool] = {}
+        self._command_lock = asyncio.Lock()
+        self._on_session_changed: Optional[Callable[[str, str, str], None]] = None
 
     @classmethod
-    async def spawn(cls, cwd: str, session_dir: str, config: PiConfig) -> "PiProcess":
+    async def spawn(
+        cls,
+        cwd: str,
+        session_dir: str,
+        config: PiConfig,
+        *,
+        session_path: Optional[str] = None,
+    ) -> "PiProcess":
         """Spawn a new pi RPC subprocess.
 
         Args:
@@ -78,16 +170,16 @@ class PiProcess:
             session_dir: Directory for pi to store session JSONL files.
             config: Model, provider, API key, skills, extensions config.
         """
-        # Override model from config.json if not explicitly set in request
-        effective_model = config.model
-        if config.model == PI_DEFAULT_MODEL:
-            try:
-                from api.settings import _load_config
-                cfg = _load_config()
-                if cfg.get("model"):
-                    effective_model = cfg["model"]
-            except Exception:
-                logger.debug("Failed to load model override from config.json", exc_info=True)
+        # Request values override Settings; omitted values inherit the global
+        # model and thinking level consistently.
+        settings: dict = {}
+        try:
+            from api.settings import _load_config
+
+            settings = _load_config()
+        except Exception:
+            pass
+        effective_model = config.model or settings.get("model") or PI_DEFAULT_MODEL
 
         # Dev mode: tsx + TypeScript source (no build needed)
         # Prod mode: node + built JS
@@ -106,18 +198,15 @@ class PiProcess:
                 "--mode", "rpc",
             ]
 
-        thinking = config.thinking or PI_DEFAULT_THINKING
+        thinking = config.thinking or settings.get("thinking") or PI_DEFAULT_THINKING
 
-        # Load MCP adapter, subagent, and context-mode extensions
-        if PI_MODE == "dev":
-            ext_base = Path(PI_CLI_PATH).parent.parent.parent.parent  # pi repo root
-        else:
-            ext_base = Path(PI_CLI_PATH).parent  # runtime dir
-        mcp_ext = ext_base / "node_modules" / "pi-mcp-adapter" / "index.ts"
-        sub_ext = ext_base / "node_modules" / "pi-subagents" / "src" / "extension" / "index.ts"
-        # context-mode: sandboxed execution + FTS5 knowledge index for long sessions
-        ctx_ext = ext_base / "node_modules" / "context-mode" / "build" / "adapters" / "pi" / "extension.js"
-        ctx_skills = ext_base / "node_modules" / "context-mode" / "skills"
+        # Register bundled runtime extensions before passing extension-provided
+        # flags such as --mcp-config. Discovery supports both a local Pi repo
+        # and the runtime/pi npm layout (including a symlinked cli.js).
+        from services.runtime_extensions import runtime_extension_status
+        for extension in runtime_extension_status(PI_CLI_PATH):
+            if extension["installed"]:
+                args.extend(["-e", extension["path"]])
 
         args.extend([
             "--model", effective_model,
@@ -125,43 +214,38 @@ class PiProcess:
             "--session-dir", session_dir,
             "--no-extensions",
         ])
-
-        # ── Skills: respect user-configured enable/disable list ──
-        # If skills have been explicitly configured in settings, only load those.
-        # Otherwise auto-discover all skills from standard locations.
-        skills_configured = False
-        enabled_skill_paths: list[str] = []
-        try:
-            from api.settings import _load_config
-            cfg = _load_config()
-            if cfg.get("skills_configured"):
-                enabled_skill_paths = cfg.get("skill_paths", [])
-                skills_configured = True
-        except Exception:
-            pass
-
+        # By default Pi discovers skills from the standard user/project
+        # locations. Once the user explicitly toggles skills, switch to an
+        # allowlist so disabled skills are not loaded into new processes.
+        skills_configured = bool(settings.get("skills_configured", False))
         if skills_configured:
             args.append("--no-skills")
-        # else: auto-discover all skills (don't pass --no-skills)
-
-        if mcp_ext.exists():
-            args.extend(["-e", str(mcp_ext)])
-        if sub_ext.exists():
-            args.extend(["-e", str(sub_ext)])
-        # context-mode: sandbox code execution + session continuity via FTS5
-        if ctx_ext.exists():
-            args.extend(["-e", str(ctx_ext)])
-
-        if skills_configured:
-            # Only load explicitly enabled skills by path
-            for skill_path in enabled_skill_paths:
-                args.extend(["--skill", skill_path])
+            for skill_path in settings.get("skill_paths", []):
+                if isinstance(skill_path, str) and skill_path.strip():
+                    args.extend(["--skill", skill_path])
         else:
-            # Auto-discover: load context-mode + any explicitly configured skills
-            if ctx_skills.exists():
-                args.extend(["--skill", str(ctx_skills)])
-            for skill_path in config.skills:
-                args.extend(["--skill", skill_path])
+            # context-mode ships bundled skills; auto-load them alongside Pi's
+            # standard discovery when the user has not curated an allowlist.
+            from services.runtime_extensions import find_runtime_package
+
+            ctx_pkg = find_runtime_package("context-mode")
+            if ctx_pkg and (ctx_pkg / "skills").is_dir():
+                args.extend(["--skill", str(ctx_pkg / "skills")])
+        if session_path:
+            # Resume directly instead of creating a blank session and then
+            # switching, which leaves a ghost conversation in the sidebar.
+            args.extend(["--session", session_path])
+
+        # The MCP adapter registers this flag itself. Supplying a filtered
+        # config makes the Settings allowlist effective for this process.
+        from api.settings import get_mcp_runtime_config
+        mcp_config = get_mcp_runtime_config(cwd)
+        if mcp_config:
+            args.extend(["--mcp-config", str(mcp_config)])
+
+        # Add request-scoped skills in addition to the global allowlist.
+        for skill_path in config.skills:
+            args.extend(["--skill", skill_path])
 
         # Add explicitly configured extensions
         for ext_path in config.extensions:
@@ -171,24 +255,31 @@ class PiProcess:
         from api.settings import get_env_with_keys
         env = get_env_with_keys()
 
-        # context-mode: store its SQLite/FTS5 database inside pi-science data dir
-        from config import BASE_DIR
-        env["CONTEXT_MODE_DIR"] = str(BASE_DIR / "context-mode")
+        # Materialize UI-managed custom providers into the pi models.json
+        # location and expose their keys through environment interpolation.
+        from api.settings import get_custom_models_runtime
+        custom_agent_dir, custom_env = get_custom_models_runtime(cwd)
+        if custom_agent_dir:
+            env["PI_CODING_AGENT_DIR"] = str(custom_agent_dir)
+            env.update(custom_env)
 
         if config.provider:
             env["PI_DEFAULT_PROVIDER"] = config.provider
+
+        from config import BASE_DIR
+
+        # context-mode: store its SQLite/FTS5 database inside pi-science data dir
+        env["CONTEXT_MODE_DIR"] = str(BASE_DIR / "context-mode")
 
         # ── Subagent spawn support ──
         # pi-subagents uses getPiSpawnCommand() which checks PI_SUBAGENT_PI_BINARY_ENV
         # then falls back to "pi" (not in PATH for dev mode). We provide both:
         # 1. PI_SUBAGENT_PI_BINARY_ENV → wrapper script (primary path)
-        # 2. ~/.pi-science/pi in PATH → fallback for code paths that use "pi" directly
+        # 2. ~/.pi-science in PATH → fallback for code paths that use "pi" directly
         wrapper_path = _ensure_pi_subagent_wrapper(BASE_DIR, args)
         if wrapper_path:
             env["PI_SUBAGENT_PI_BINARY_ENV"] = wrapper_path
-        # Add ~/.pi-science to front of PATH so `pi` command resolves
-        pi_bin_dir = str(BASE_DIR)
-        env["PATH"] = f"{pi_bin_dir}:{env.get('PATH', '')}"
+        env["PATH"] = f"{BASE_DIR}:{env.get('PATH', '')}"
 
         # API keys are passed via environment variables (get_env_with_keys),
         # never as CLI args — `ps aux` would leak them to other users.
@@ -202,27 +293,37 @@ class PiProcess:
             env=env,
             text=True,
             bufsize=1,  # Line buffered
-            start_new_session=True,  # Isolate in own process group — killpg on shutdown
+            start_new_session=True,
         )
 
-        instance = cls(process, cwd, session_id="", config=config, session_dir=session_dir)
-        # Update model to the effective one used
-        instance.config.model = effective_model
+        # Record the PID so a restarted backend can reap an orphaned runtime.
+        try:
+            (Path(session_dir) / ".pi-pid").write_text(str(process.pid))
+        except OSError:
+            pass
 
-        # Start stdout + stderr readers (stderr MUST be drained to avoid deadlock)
+        instance = cls(process, cwd, session_id="", config=config, session_dir=session_dir)
+        # Store the effective runtime configuration, not the request defaults.
+        instance.config.model = effective_model
+        instance.config.thinking = thinking
+
+        # Start the stdout reader
         instance._reader_task = asyncio.create_task(instance._read_stdout())
         instance._stderr_task = asyncio.create_task(instance._read_stderr())
 
-        # Get initial state to retrieve session ID
-        state = await instance.send_command("get_state")
-        if state.get("success") and state.get("data"):
-            instance.session_id = state["data"].get("sessionId", "")
-
-        # Write PID file so stale process detection works across restarts
-        pid_file = Path(session_dir) / ".pi-pid"
-        pid_file.write_text(str(process.pid))
-
-        return instance
+        try:
+            # A failed startup handshake must not register a blank session or
+            # leave an untracked subprocess behind.
+            state = await instance.send_command("get_state")
+            if not state.get("success") or not state.get("data"):
+                raise RuntimeError(state.get("error", "pi runtime did not return its initial state"))
+            instance._apply_state(state["data"])
+            if not instance.session_id:
+                raise RuntimeError("pi runtime returned an empty session ID")
+            return instance
+        except BaseException:
+            await instance.shutdown()
+            raise
 
     async def _read_stdout(self):
         """Background task: read JSONL lines from stdout and dispatch."""
@@ -236,9 +337,11 @@ class PiProcess:
                     continue
                 try:
                     data = json.loads(line)
-                    # Put on queue for async dispatch
+                    # Bind the line to the session active when stdout emitted
+                    # it. Dispatch may run after a later session switch.
+                    event_session_id = self.session_id
                     asyncio.run_coroutine_threadsafe(
-                        self._dispatch(data), loop
+                        self._dispatch(data, event_session_id), loop
                     )
                 except json.JSONDecodeError:
                     # Log and skip malformed lines
@@ -246,28 +349,62 @@ class PiProcess:
 
         # Run blocking reader in default executor
         await loop.run_in_executor(None, read_lines)
+        if not self._shutting_down:
+            self._busy = False
+            self.process.poll()
+            message = f"pi process exited with code {self.process.returncode}"
+            if self._stderr_tail:
+                message += f". stderr: {' '.join(self._stderr_tail)[:500]}"
+            for req_id, future in list(self.pending_requests.items()):
+                self.pending_requests.pop(req_id, None)
+                if not future.done():
+                    future.set_result({"success": False, "error": message})
+            await self._publish_event(
+                {"type": "error", "sessionId": self.session_id, "message": message},
+                self.session_id,
+            )
 
     async def _read_stderr(self):
-        """Background task: drain stderr to prevent pipe buffer deadlock.
-        If stderr fills up (>64KB OS pipe buffer), the pi process blocks on
-        stderr write and never produces more stdout. We drain it continuously."""
+        """Continuously drain stderr so the child process cannot deadlock."""
         loop = asyncio.get_running_loop()
 
-        def drain():
+        def read_lines():
             for line in self.process.stderr:
-                stripped = line.rstrip()
-                print(f"[pi-manager:stderr] {stripped}")
-                self._stderr_buffer += stripped + "\n"
+                value = line.rstrip("\n").rstrip("\r")
+                if value:
+                    self._stderr_tail.append(value)
+                    self._stderr_buffer = (self._stderr_buffer + value + "\n")[-5000:]
 
-        try:
-            await loop.run_in_executor(None, drain)
-        except Exception:
-            logger.debug("stderr drain task ended", exc_info=True)  # Process already exited, pipe closed
+        await loop.run_in_executor(None, read_lines)
 
-    async def _dispatch(self, data: dict):
+    async def _dispatch(self, data: dict, event_session_id: Optional[str] = None):
         """Route stdout data to either pending request future or event queue."""
         self._last_activity = datetime.now(timezone.utc)
         msg_type = data.get("type")
+        event_session_id = event_session_id or self.session_id
+
+        if msg_type == "message_update" and event_session_id:
+            assistant_event = data.get("assistantMessageEvent", {})
+            if assistant_event.get("type") in {"text_delta", "text"}:
+                text = assistant_event.get("text") or assistant_event.get("delta") or ""
+                if str(text).strip():
+                    self._turn_had_text[event_session_id] = True
+
+        if msg_type == "agent_start":
+            self._awaiting_prompt_ack = False
+            self._prompt_started = True
+            if self._prompt_reconcile_task and not self._prompt_reconcile_task.done():
+                self._prompt_reconcile_task.cancel()
+
+        # turn_end is emitted for each tool/assistant turn and agent_end may be
+        # followed by retries or queued continuations. Only agent_settled means
+        # the whole conversation request is truly finished.
+        if msg_type in {"agent_settled", "error"}:
+            self._awaiting_prompt_ack = False
+            self._prompt_started = False
+            self._busy = False
+            if self._prompt_reconcile_task and not self._prompt_reconcile_task.done():
+                self._prompt_reconcile_task.cancel()
 
         if msg_type == "response":
             req_id = data.get("id")
@@ -277,57 +414,311 @@ class PiProcess:
                     future.set_result(data)
                 return
             # Response without matching request -> treat as event
-            await self._event_queue.put(data)
+            await self._publish_event(data, event_session_id)
 
         elif msg_type == "extension_ui_request":
             # Extension requests user interaction - forward as event
             # The frontend will respond via extension_ui_response
-            await self._event_queue.put(data)
+            await self._publish_event(data, event_session_id)
 
         elif msg_type == "extension_error":
             print(f"[pi-manager] extension error: {data}")
-            await self._event_queue.put(data)
+            await self._publish_event(data, event_session_id)
 
         else:
             # Agent lifecycle event (message_start, tool_execution_start, etc.)
-            await self._event_queue.put(data)
+            await self._publish_event(data, event_session_id)
+
+        await self._observe_event(data, event_session_id)
+
+    async def _publish_event(self, data: dict, session_id: Optional[str] = None):
+        session_id = session_id or self.session_id
+        if not session_id:
+            return
+        async with self._event_lock:
+            sequence = self._event_sequence.get(session_id, 0) + 1
+            self._event_sequence[session_id] = sequence
+            payload = _bounded_event_value(data)
+            payload["_piSessionId"] = session_id
+            payload["_piSequence"] = sequence
+            payload["_piEventId"] = f"{self._event_epoch}:{sequence}"
+            if data.get("type") == "agent_settled":
+                payload["_piTurnHadText"] = self._turn_had_text.get(session_id, False)
+            history = self._event_history.setdefault(session_id, deque(maxlen=2000))
+            history.append((sequence, payload))
+            for queue in tuple(self._event_subscribers.get(session_id, set())):
+                stream_gap = False
+                if queue.full():
+                    try:
+                        queue.get_nowait()
+                        stream_gap = True
+                    except asyncio.QueueEmpty:
+                        pass
+                queued_payload = dict(payload)
+                if stream_gap:
+                    queued_payload["_piStreamGap"] = True
+                queue.put_nowait((sequence, queued_payload))
+
+    async def _begin_turn(self, session_id: str) -> None:
+        """Discard the previous turn's replay window before accepting a prompt."""
+        async with self._event_lock:
+            self._event_history[session_id] = deque(maxlen=2000)
+            self._turn_had_text[session_id] = False
+
+    async def _observe_event(self, data: dict, session_id: str) -> None:
+        """Run durable side effects exactly once, independent of SSE readers."""
+        if self.session_path and "reviewer-sessions" in Path(self.session_path).parts:
+            return
+        event_type = data.get("type")
+        if event_type == "tool_execution_end" and not data.get("isError"):
+            self._record_provenance(data, session_id)
+        if event_type == "agent_settled" and session_id:
+            try:
+                from services.reviewer_service import schedule_auto_review
+
+                schedule_auto_review(self.cwd, session_id)
+            except Exception:
+                pass
+
+    def _record_provenance(self, event: dict, session_id: str) -> None:
+        tool_name = event.get("toolName", "")
+        result = event.get("result", {})
+        if tool_name == "write":
+            file_path = event.get("args", {}).get("file_path", "")
+            content = event.get("args", {}).get("content", event.get("args", {}).get("text", ""))
+            diff = None
+        elif tool_name == "edit":
+            file_path = event.get("args", {}).get("file_path", "")
+            content = None
+            diff = result.get("diff") if isinstance(result, dict) else None
+        else:
+            return
+        if not file_path:
+            return
+        try:
+            from services.provenance_store import get_store
+
+            asyncio.get_event_loop().create_task(get_store(self.cwd).record(
+                path=file_path,
+                session_id=session_id,
+                tool=tool_name,
+                tool_call_id=event.get("toolCallId"),
+                content=content if tool_name == "write" and content else None,
+                diff=diff if tool_name == "edit" else None,
+            ))
+        except Exception:
+            pass
 
     async def send_command(self, cmd_type: str, **params) -> dict:
         """Send an RPC command and await the response.
 
-        Special handling for new_session: updates the session map."""
-        result = await self._send_command_internal(cmd_type, **params)
-        if cmd_type == "new_session" and result.get("success"):
-            # pi created a new session — update our tracking
-            old_id = self.session_id
-            new_state = await self._send_command_internal("get_state")
-            if new_state.get("success") and new_state.get("data"):
-                self.session_id = new_state["data"].get("sessionId", self.session_id)
-                # Update the session map
-                from .pi_manager import pi_manager
-                pi_manager._session_map.pop(old_id, None)
-                pi_manager._session_map[self.session_id] = self.cwd
+        Session-switching commands update the manager's session map after the
+        runtime confirms the new state."""
+        if cmd_type == "prompt":
+            async with self._command_lock:
+                if self._busy:
+                    return {
+                        "success": False,
+                        "error": "agent is busy; wait for the current task to finish or stop it",
+                        "code": "busy",
+                    }
+                try:
+                    from services.reviewer_service import cancel_auto_review
+
+                    cancel_auto_review(self.cwd, self.session_id)
+                except Exception:
+                    pass
+                await self._begin_turn(self.session_id)
+                self._awaiting_prompt_ack = True
+                self._prompt_started = False
+                self._busy = True
+                result = await self._send_command_internal(cmd_type, **params)
+                if result.get("success"):
+                    self._awaiting_prompt_ack = False
+                    self._schedule_prompt_start_reconciliation(self.session_id)
+                elif result.get("code") != "timeout":
+                    self._awaiting_prompt_ack = False
+                    self._busy = False
+                return result
+
+        disruptive = {
+            "new_session",
+            "switch_session",
+            "fork",
+            "clone",
+            "set_model",
+            "set_thinking_level",
+        }
+        if cmd_type in disruptive:
+            async with self._command_lock:
+                if self._busy:
+                    return {
+                        "success": False,
+                        "error": "agent is busy; wait for the current task to finish or stop it",
+                        "code": "busy",
+                    }
+                old_id = self.session_id
+                result = await self._send_command_internal(cmd_type, **params)
+                if not result.get("success"):
+                    return result
+                if isinstance(result.get("data"), dict) and result["data"].get("cancelled"):
+                    return {
+                        "success": False,
+                        "error": f"{cmd_type} was cancelled by the runtime",
+                        "code": "cancelled",
+                    }
+                state = await self._send_command_internal("get_state")
+                if not state.get("success") or not state.get("data"):
+                    return {
+                        "success": False,
+                        "error": state.get("error", f"unable to confirm state after {cmd_type}"),
+                    }
+                self._apply_state(state["data"])
+                if cmd_type in {"new_session", "fork", "clone"} and self.session_id == old_id:
+                    return {
+                        "success": False,
+                        "error": f"{cmd_type} did not create a distinct session",
+                    }
+                if self._on_session_changed and self.session_id != old_id:
+                    self._on_session_changed(old_id, self.session_id, self.cwd)
+                return result
+
+        if cmd_type == "abort":
+            result = await self._send_command_internal(cmd_type, **params)
+            if result.get("success"):
+                self._awaiting_prompt_ack = False
+                self._prompt_started = False
+                await self.refresh_state()
+            return result
+
+        return await self._send_command_internal(cmd_type, **params)
+
+    async def refresh_state(self) -> dict:
+        result = await self._send_command_internal("get_state")
+        if result.get("success") and result.get("data"):
+            self._apply_state(result["data"])
         return result
+
+    def _schedule_prompt_start_reconciliation(self, session_id: str) -> None:
+        if self._prompt_reconcile_task and not self._prompt_reconcile_task.done():
+            self._prompt_reconcile_task.cancel()
+        self._prompt_reconcile_task = asyncio.create_task(
+            self._reconcile_prompt_start(session_id)
+        )
+
+    async def _reconcile_prompt_start(self, session_id: str) -> None:
+        """Release commands handled by extensions without starting an agent run."""
+        try:
+            await asyncio.sleep(PROMPT_START_RECONCILE_DELAY)
+            async with self._command_lock:
+                if (
+                    not self._busy
+                    or self._prompt_started
+                    or self._awaiting_prompt_ack
+                    or self.session_id != session_id
+                ):
+                    return
+                state = await self._send_command_internal("get_state")
+                if not state.get("success") or not state.get("data"):
+                    return
+                data = state["data"]
+                runtime_busy = bool(
+                    data.get("isStreaming")
+                    or data.get("isCompacting")
+                    or int(data.get("pendingMessageCount", 0) or 0) > 0
+                )
+                if runtime_busy or self._prompt_started:
+                    self._apply_state(data)
+                    return
+                self._busy = False
+                await self._publish_event(
+                    {"type": "agent_settled", "handledWithoutTurn": True},
+                    session_id,
+                )
+        except asyncio.CancelledError:
+            return
+
+    @staticmethod
+    def resolve_config(config: PiConfig) -> tuple[str, str]:
+        settings: dict = {}
+        try:
+            from api.settings import _load_config
+
+            settings = _load_config()
+        except Exception:
+            pass
+        model = config.model or settings.get("model") or PI_DEFAULT_MODEL
+        thinking = config.thinking or settings.get("thinking") or PI_DEFAULT_THINKING
+        return model, thinking
+
+    async def apply_config(self, config: PiConfig) -> dict:
+        """Apply the requested/global model and thinking to the active session."""
+        model, thinking = self.resolve_config(config)
+        if "/" not in model:
+            return {"success": False, "error": "model must use provider/model notation"}
+        if self.config.model != model:
+            provider, model_id = model.split("/", 1)
+            result = await self.send_command("set_model", provider=provider, modelId=model_id)
+            if not result.get("success"):
+                return result
+        if self.config.thinking != thinking:
+            result = await self.send_command("set_thinking_level", level=thinking)
+            if not result.get("success"):
+                return result
+        return {"success": True, "model": model, "thinking": thinking}
+
+    def _apply_state(self, state: dict) -> None:
+        next_session_id = state.get("sessionId", self.session_id)
+        if next_session_id and next_session_id != self.session_id:
+            self._session_started_at = datetime.now(timezone.utc)
+        self.session_id = next_session_id
+        self.session_path = state.get("sessionFile", self.session_path)
+        model = state.get("model") or {}
+        provider = model.get("provider")
+        model_id = model.get("id")
+        if provider and model_id:
+            self.config.model = f"{provider}/{model_id}"
+        if state.get("thinkingLevel"):
+            self.config.thinking = state["thinkingLevel"]
+        self._busy = self._awaiting_prompt_ack or bool(
+            state.get("isStreaming")
+            or state.get("isCompacting")
+            or int(state.get("pendingMessageCount", 0) or 0) > 0
+        )
+
+    async def send_notification(self, notification_type: str, **params) -> None:
+        """Send a notification-style RPC message that has no response."""
+        line = json.dumps({"type": notification_type, **params}, ensure_ascii=False) + "\n"
+        await asyncio.get_running_loop().run_in_executor(None, self._write_stdin, line)
 
     async def _send_command_internal(self, cmd_type: str, **params) -> dict:
         """Internal: send an RPC command and await the response."""
+        self._last_activity = datetime.now(timezone.utc)
         req_id = uuid.uuid4().hex
         cmd = {"id": req_id, "type": cmd_type, **params}
         line = json.dumps(cmd, ensure_ascii=False) + "\n"
 
-        future = asyncio.Future()
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
         self.pending_requests[req_id] = future
 
         # Write to stdin (run in executor to avoid blocking)
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._write_stdin, line)
+        try:
+            await loop.run_in_executor(None, self._write_stdin, line)
+        except Exception as exc:
+            self.pending_requests.pop(req_id, None)
+            return {"success": False, "error": str(exc)}
 
         try:
             result = await asyncio.wait_for(future, timeout=30.0)
             return result
         except asyncio.TimeoutError:
             self.pending_requests.pop(req_id, None)
-            return {"success": False, "error": "request timeout after 30s"}
+            return {
+                "success": False,
+                "code": "timeout",
+                "error": "request timeout after 30s",
+            }
         except Exception as e:
             self.pending_requests.pop(req_id, None)
             return {"success": False, "error": str(e)}
@@ -338,40 +729,104 @@ class PiProcess:
             self.process.stdin.write(line)
             self.process.stdin.flush()
         except (BrokenPipeError, OSError) as e:
-            print(f"[pi-manager] stdin write failed: {e}")
+            raise ConnectionError(f"pi runtime stdin is unavailable: {e}") from e
 
-    async def read_events(self) -> AsyncIterator[dict]:
-        """Async generator yielding AgentSessionEvent dicts from the event queue."""
-        while True:
-            try:
-                # Check if process is still alive
-                if self.process.poll() is not None:
-                    # Process exited — read stderr from buffer (not the pipe,
-                    # which _read_stderr is already consuming)
-                    exit_code = self.process.returncode
-                    stderr_output = self._stderr_buffer[-500:] if self._stderr_buffer else ""
-                    yield {
-                        "type": "error",
-                        "sessionId": self.session_id,
-                        "message": f"pi process exited with code {exit_code}. stderr: {stderr_output[:500]}",
-                    }
-                    return
-
-                # Wait for next event with timeout to check process liveness
-                event = await asyncio.wait_for(self._event_queue.get(), timeout=1.0)
+    async def read_events(
+        self,
+        session_id: Optional[str] = None,
+        after_sequence: Optional[int] = None,
+    ) -> AsyncIterator[dict]:
+        """Yield replayable events for exactly one session."""
+        session_id = session_id or self.session_id
+        queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
+        async with self._event_lock:
+            history = list(self._event_history.get(session_id, ()))
+            replay = [item for item in history if after_sequence is None or item[0] > after_sequence]
+            current_sequence = self._event_sequence.get(session_id, 0)
+            replay_gap = (
+                after_sequence is not None
+                and current_sequence > after_sequence
+                and (not history or history[0][0] > after_sequence + 1)
+            )
+            self._event_subscribers.setdefault(session_id, set()).add(queue)
+        try:
+            if replay_gap:
+                marker_sequence = history[0][0] - 1 if history else current_sequence
+                yield {
+                    "type": "stream_gap",
+                    "_piSessionId": session_id,
+                    "_piSequence": marker_sequence,
+                    "_piEventId": f"{self._event_epoch}:{marker_sequence}",
+                    "_piStreamGap": True,
+                }
+            for _sequence, event in replay:
                 yield event
-            except asyncio.TimeoutError:
-                # No event yet, continue checking
-                continue
-            except asyncio.CancelledError:
-                return
+            while True:
+                try:
+                    # Check if process is still alive
+                    if self.process.poll() is not None:
+                        if self._shutting_down:
+                            return
+                        # Process exited
+                        exit_code = self.process.returncode
+                        stderr_output = "\n".join(self._stderr_tail)
+                        yield {
+                            "type": "error",
+                            "sessionId": session_id,
+                            "message": f"pi process exited with code {exit_code}. stderr: {stderr_output[:500]}",
+                        }
+                        return
+
+                    # Wait for next event with timeout to check process liveness
+                    _sequence, event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                    yield event
+                except asyncio.TimeoutError:
+                    # No event yet, continue checking
+                    continue
+                except asyncio.CancelledError:
+                    return
+        finally:
+            async with self._event_lock:
+                subscribers = self._event_subscribers.get(session_id)
+                if subscribers is not None:
+                    subscribers.discard(queue)
+                    if not subscribers:
+                        self._event_subscribers.pop(session_id, None)
+
+    def sequence_after_event_id(self, event_id: Optional[str]) -> Optional[int]:
+        """Decode a replay cursor only when it belongs to this process epoch."""
+        if not event_id:
+            return None
+        if ":" in event_id:
+            epoch, raw_sequence = event_id.rsplit(":", 1)
+            if epoch != self._event_epoch:
+                return None
+        else:
+            # Accept numeric cursors emitted by older backend versions while
+            # the same process remains alive.
+            raw_sequence = event_id
+        try:
+            return max(0, int(raw_sequence))
+        except ValueError:
+            return None
+
+    def latest_event_sequence(self, session_id: str) -> int:
+        """Return the latest sequence stored for one session."""
+        return self._event_sequence.get(session_id, 0)
 
     async def shutdown(self):
-        """Gracefully shut down the pi process and its entire process group.
-
-        Uses killpg to ensure all descendants (tsx, Node.js workers, MCP bridge,
-        context-mode server) are terminated — like open-science's Tauri sidecar
-        with parent_process_death_signal."""
+        """Gracefully shut down the pi process."""
+        self._shutting_down = True
+        self._awaiting_prompt_ack = False
+        self._prompt_started = False
+        self._busy = False
+        if self._prompt_reconcile_task:
+            self._prompt_reconcile_task.cancel()
+            try:
+                await self._prompt_reconcile_task
+            except asyncio.CancelledError:
+                pass
+            self._prompt_reconcile_task = None
         if self._reader_task:
             self._reader_task.cancel()
             try:
@@ -379,31 +834,43 @@ class PiProcess:
             except asyncio.CancelledError:
                 pass
 
+        if self._stderr_task:
+            self._stderr_task.cancel()
+            try:
+                await self._stderr_task
+            except asyncio.CancelledError:
+                pass
+
         if self.process.poll() is None:
             try:
-                # SIGTERM the entire process group first (graceful)
-                os.killpg(self._pgid, signal.SIGTERM)
+                if self._pgid:
+                    os.killpg(self._pgid, signal.SIGTERM)
+                else:
+                    self.process.terminate()
                 try:
                     self.process.wait(timeout=3)
                 except subprocess.TimeoutExpired:
-                    # Force kill if graceful shutdown fails
-                    os.killpg(self._pgid, signal.SIGKILL)
+                    if self._pgid:
+                        os.killpg(self._pgid, signal.SIGKILL)
+                    else:
+                        self.process.kill()
                     self.process.wait()
             except (ProcessLookupError, OSError):
-                # Process group already gone — just clean up the main process
+                # The process group may already have exited; clean up the
+                # direct child as a best-effort fallback.
                 try:
                     self.process.kill()
                     self.process.wait()
                 except OSError:
                     pass
 
-        # Remove PID file
-        try:
-            pid_file = Path(self.session_dir) / ".pi-pid" if self.session_dir else None
-            if pid_file and pid_file.exists():
-                pid_file.unlink()
-        except Exception:
-            logger.debug("Failed to remove PID file on shutdown", exc_info=True)
+        if self.session_dir:
+            try:
+                pid_file = Path(self.session_dir) / ".pi-pid"
+                if pid_file.exists():
+                    pid_file.unlink()
+            except OSError:
+                pass
 
         # Fail all pending requests
         for req_id, future in self.pending_requests.items():
@@ -414,47 +881,49 @@ class PiProcess:
     def is_alive(self) -> bool:
         return self.process.poll() is None
 
+    @property
+    def busy(self) -> bool:
+        """Whether an agent turn is currently running."""
+        return self._busy
 
 class PiManager:
     """Global manager for pi process instances.
 
     One PiProcess per working directory (cwd). Sessions within the same
     cwd share the same pi process, switching via switch_session RPC command.
-
-    Idle processes (no activity for IDLE_TTL seconds) are automatically
-    shut down to free memory and LLM connection slots.
     """
-
-    IDLE_TTL = 30 * 60  # 30 minutes
 
     def __init__(self):
         self._processes: dict[str, PiProcess] = {}  # cwd -> PiProcess
         self._session_map: dict[str, str] = {}  # session_id -> cwd
+        self._cwd_locks: dict[str, asyncio.Lock] = {}
         self._idle_task: Optional[asyncio.Task] = None
-        self._spawn_locks: dict[str, asyncio.Lock] = {}  # per-cwd spawn mutex
+        self.IDLE_TTL = 30 * 60
 
-    def _start_idle_check(self):
-        """Start the idle cleanup background task (idempotent)."""
+    def _start_idle_check(self) -> None:
+        """Start the idle cleanup loop once the first process is spawned."""
         if self._idle_task is None or self._idle_task.done():
             self._idle_task = asyncio.create_task(self._idle_cleanup_loop())
 
-    async def _idle_cleanup_loop(self):
-        """Periodically check for and shut down idle pi processes."""
+    async def _idle_cleanup_loop(self) -> None:
         while True:
             try:
-                await asyncio.sleep(5 * 60)  # Check every 5 minutes
+                await asyncio.sleep(5 * 60)
                 now = datetime.now(timezone.utc)
-                for cwd in list(self._processes.keys()):
-                    pi = self._processes.get(cwd)
-                    if pi and pi.is_alive:
+                for cwd, pi in list(self._processes.items()):
+                    if pi.is_alive and not pi.busy:
                         idle_seconds = (now - pi._last_activity).total_seconds()
                         if idle_seconds > self.IDLE_TTL:
-                            print(f"[pi-manager] Shutting down idle pi process for {cwd} ({idle_seconds:.0f}s idle)")
                             await self._remove(cwd)
             except asyncio.CancelledError:
                 return
             except Exception:
-                logger.warning("Idle cleanup loop iteration failed", exc_info=True)  # Don't crash the cleanup loop
+                # Cleanup must never take down the API process.
+                continue
+
+    def _lock_for_cwd(self, cwd: str) -> asyncio.Lock:
+        cwd = str(Path(cwd).resolve())
+        return self._cwd_locks.setdefault(cwd, asyncio.Lock())
 
     async def get_or_spawn(
         self,
@@ -462,57 +931,544 @@ class PiManager:
         session_dir: str,
         config: PiConfig,
     ) -> PiProcess:
-        """Get existing PiProcess for cwd or spawn a new one.
-
-        Uses a PID file in the session directory to detect and recover from
-        stale pi processes left behind after a backend restart (e.g. uvicorn
-        --reload clears the in-memory process dict but leaves OS processes).
-        """
+        """Get existing PiProcess for cwd or spawn a new one."""
         cwd = str(Path(cwd).resolve())
+        async with self._lock_for_cwd(cwd):
+            return await self._get_or_spawn_unlocked(cwd, session_dir, config)
 
-        # Prevent concurrent spawns for the same cwd (race between connect() and sendPrompt())
-        if cwd not in self._spawn_locks:
-            self._spawn_locks[cwd] = asyncio.Lock()
-        async with self._spawn_locks[cwd]:
-            # Re-check after acquiring lock — another caller may have spawned already
-            if cwd in self._processes:
-                pi = self._processes[cwd]
-                if pi.is_alive:
-                    return pi
-                else:
-                    await self._remove(cwd)
+    async def _get_or_spawn_unlocked(
+        self,
+        cwd: str,
+        session_dir: str,
+        config: PiConfig,
+    ) -> PiProcess:
+        """Lock-owning implementation for get_or_spawn."""
 
-            # Create session directory for this cwd
-            encoded_cwd = cwd.lstrip("/").replace("/", "-")
-            cwd_session_dir = str(Path(session_dir) / encoded_cwd)
-            os.makedirs(cwd_session_dir, exist_ok=True)
+        if cwd in self._processes:
+            pi = self._processes[cwd]
+            if pi.is_alive:
+                return pi
+            else:
+                # Dead process, clean up
+                await self._remove(cwd)
 
-            # ── Detect & recover from stale pi processes ──
-            pid_file = Path(cwd_session_dir) / ".pi-pid"
-            if pid_file.exists():
+        return await self._spawn_process(cwd, session_dir, config)
+
+    async def _spawn_process(
+        self,
+        cwd: str,
+        session_dir: str,
+        config: PiConfig,
+        *,
+        session_path: Optional[str] = None,
+    ) -> PiProcess:
+        encoded_cwd = cwd.lstrip("/").replace("/", "-")
+        cwd_session_dir = str(Path(session_dir) / encoded_cwd)
+        os.makedirs(cwd_session_dir, exist_ok=True)
+
+        # A backend reload can lose the in-memory manager while leaving the
+        # child runtime alive. Recover the stale process before spawning a new
+        # one, avoiding duplicate Pi runtimes for the same workspace.
+        pid_file = Path(cwd_session_dir) / ".pi-pid"
+        if pid_file.exists():
+            try:
+                old_pid = int(pid_file.read_text().strip())
                 try:
-                    old_pid = int(pid_file.read_text().strip())
-                    try:
-                        os.kill(old_pid, 0)
-                        if _is_pi_process(old_pid):
-                            print(f"[pi-manager] Killing stale pi process (pid={old_pid}) for {cwd}")
-                            os.kill(old_pid, 9)
-                        else:
-                            print(f"[pi-manager] PID {old_pid} is not a pi process, skipping kill")
-                    except OSError:
-                        pass
-                except (ValueError, FileNotFoundError):
-                    pass
-                try:
-                    pid_file.unlink()
+                    os.kill(old_pid, 0)
+                    if _is_pi_process(old_pid):
+                        os.kill(old_pid, signal.SIGKILL)
                 except OSError:
                     pass
+            except (ValueError, OSError):
+                pass
+            try:
+                pid_file.unlink()
+            except OSError:
+                pass
 
-            pi = await PiProcess.spawn(cwd, cwd_session_dir, config)
-            self._processes[cwd] = pi
-            self._session_map[pi.session_id] = cwd
-            self._start_idle_check()
+        pi = await PiProcess.spawn(
+            cwd,
+            cwd_session_dir,
+            config,
+            session_path=session_path,
+        )
+        pi._on_session_changed = self._on_session_changed
+        self._processes[cwd] = pi
+        self._session_map[pi.session_id] = cwd
+        self._start_idle_check()
+        return pi
+
+    def _on_session_changed(self, old_id: str, new_id: str, cwd: str) -> None:
+        """Keep durable aliases while the workspace process changes sessions."""
+        if old_id:
+            self._session_map[old_id] = cwd
+        if new_id:
+            self._session_map[new_id] = cwd
+
+    async def create_session(
+        self,
+        cwd: str,
+        session_dir: str,
+        config: PiConfig,
+    ) -> tuple[Optional[PiProcess], dict]:
+        """Create a distinct session under a workspace-wide operation lock."""
+        cwd = str(Path(cwd).resolve())
+        async with self._lock_for_cwd(cwd):
+            pi = self._processes.get(cwd)
+            if pi is not None and not pi.is_alive:
+                await self._remove(cwd)
+                pi = None
+            if pi is None:
+                try:
+                    pi = await self._spawn_process(cwd, session_dir, config)
+                except Exception as exc:
+                    return None, {"success": False, "code": "spawn_failed", "error": str(exc)}
+                return pi, {"success": True, "session_id": pi.session_id}
+            result = await pi.send_command("new_session")
+            if not result.get("success"):
+                return None, result
+            configured = await pi.apply_config(config)
+            if not configured.get("success"):
+                model, thinking = PiProcess.resolve_config(config)
+                if model.startswith("custom-"):
+                    restarted = await self._restart_session_unlocked(
+                        pi.session_id,
+                        cwd,
+                        PiConfig(model=model, thinking=thinking),
+                    )
+                    if restarted is not None:
+                        return restarted, {
+                            "success": True,
+                            "restarted": True,
+                            "session_id": restarted.session_id,
+                        }
+                    replacement, replacement_result = await self._replace_with_blank_session_unlocked(
+                        cwd,
+                        PiConfig(model=model, thinking=thinking),
+                    )
+                    if replacement is not None:
+                        return replacement, {
+                            "success": True,
+                            "restarted": True,
+                            "replaced_blank": True,
+                            "session_id": replacement.session_id,
+                        }
+                    return None, replacement_result
+                # The runtime already created a distinct session. Returning a
+                # hard failure here strands the frontend on the previous ID
+                # while the backend is active on the new one. Keep the new
+                # conversation usable with its inherited runtime config and
+                # surface the configuration warning as metadata.
+                return pi, {
+                    "success": True,
+                    "session_id": pi.session_id,
+                    "config_warning": configured.get("error", "unable to apply requested model config"),
+                }
+            return pi, {**result, "session_id": pi.session_id}
+
+    @staticmethod
+    def _find_session_file(session_id: str, cwd: str) -> Optional[Path]:
+        """Find a persisted session by its exact header ID."""
+        from config import get_sessions_dir
+
+        session_dir = get_sessions_dir(cwd)
+        if not session_dir.exists():
+            return None
+        for path in session_dir.rglob("*.jsonl"):
+            try:
+                with path.open(encoding="utf-8") as f:
+                    header = json.loads(f.readline())
+                if header.get("type") == "session" and header.get("id") == session_id:
+                    return path.resolve()
+            except (OSError, json.JSONDecodeError):
+                continue
+        return None
+
+    async def resume_session(
+        self,
+        session_id: str,
+        cwd: str,
+        config: PiConfig,
+    ) -> Optional[PiProcess]:
+        """Load a persisted session into the workspace's pi process."""
+        cwd = str(Path(cwd).resolve())
+        async with self._lock_for_cwd(cwd):
+            pi, _result = await self._activate_session_unlocked(session_id, cwd, config)
             return pi
+
+    async def _align_model_if_needed(self, pi: PiProcess, config: PiConfig) -> dict:
+        """Repair an idle runtime whose persisted provider has no credentials."""
+        if getattr(pi, "busy", False):
+            return {"success": True}
+        global_model, _global_thinking = PiProcess.resolve_config(config)
+        if not _should_use_global_model(pi.config.model, global_model):
+            return {"success": True}
+        apply_config = getattr(pi, "apply_config", None)
+        if not callable(apply_config):
+            return {"success": True}
+        configured = await apply_config(config)
+        if configured.get("success"):
+            return {"success": True}
+        return {
+            "success": True,
+            "config_warning": configured.get("error", "unable to apply the configured model"),
+        }
+
+    async def _activate_session_unlocked(
+        self,
+        session_id: str,
+        cwd: str,
+        config: PiConfig,
+    ) -> tuple[Optional[PiProcess], dict]:
+        """Make one persisted session active while the caller owns cwd lock."""
+        pi = self.get_by_cwd(cwd)
+        if pi is not None and not pi.is_alive:
+            await self._remove(cwd)
+            pi = None
+        if pi is not None and pi.session_id == session_id:
+            self._session_map[session_id] = cwd
+            return pi, await self._align_model_if_needed(pi, config)
+
+        session_path = self._find_session_file(session_id, cwd)
+        if session_path is None:
+            return None, {
+                "success": False,
+                "code": "not_found",
+                "error": "session not found in this workspace",
+            }
+
+        if pi is None:
+            from config import get_sessions_dir
+
+            # Start directly on the persisted session. This avoids creating an
+            # extra empty conversation every time the backend is restarted.
+            try:
+                spawned = await self._spawn_process(
+                    cwd=cwd,
+                    session_dir=str(get_sessions_dir(cwd)),
+                    config=config,
+                    session_path=str(session_path),
+                )
+            except Exception as exc:
+                return None, {"success": False, "code": "spawn_failed", "error": str(exc)}
+            if spawned.session_id != session_id:
+                await self._remove(cwd)
+                return None, {
+                    "success": False,
+                    "code": "session_mismatch",
+                    "error": "runtime resumed a different session",
+                }
+            # Persisted sessions keep the model from their original turn. If
+            # that provider is no longer authenticated but the workspace has
+            # a usable global model (for example a configured custom API),
+            # align the resumed runtime before the first prompt. This avoids a
+            # confusing provider-key error on an otherwise valid conversation.
+            return spawned, await self._align_model_if_needed(spawned, config)
+
+        # A workspace has one runtime process. Never switch away from an
+        # active turn for a different session; doing so would detach its tool
+        # events and recreate the "stuck after tools" failure this recovery
+        # path is meant to avoid.
+        if getattr(pi, "busy", False) and pi.session_id != session_id:
+            return None, {
+                "success": False,
+                "code": "busy",
+                "error": "another conversation in this workspace is still running",
+            }
+
+        result = await pi.send_command("switch_session", sessionPath=str(session_path))
+        if not result.get("success"):
+            return None, result
+        if pi.session_id != session_id:
+            return None, {
+                "success": False,
+                "code": "session_mismatch",
+                "error": "runtime switched to a different session",
+            }
+        return pi, await self._align_model_if_needed(pi, config)
+
+    async def get_or_resume_session(
+        self,
+        session_id: str,
+        cwd: str,
+        config: PiConfig,
+    ) -> Optional[PiProcess]:
+        """Return a live process for a session, lazily restoring it if needed."""
+        cwd = str(Path(cwd).resolve())
+        async with self._lock_for_cwd(cwd):
+            pi, _result = await self._activate_session_unlocked(session_id, cwd, config)
+            return pi
+
+    async def run_session_command(
+        self,
+        session_id: str,
+        cwd: str,
+        config: PiConfig,
+        command: str,
+        **params,
+    ) -> tuple[Optional[PiProcess], dict]:
+        """Atomically activate a session and submit a command to it."""
+        cwd = str(Path(cwd).resolve())
+        async with self._lock_for_cwd(cwd):
+            pi, activation = await self._activate_session_unlocked(session_id, cwd, config)
+            if pi is None:
+                return None, activation
+            result = await pi.send_command(command, **params)
+            return pi, result
+
+    async def get_session_state(
+        self,
+        session_id: str,
+        cwd: str,
+        config: PiConfig,
+    ) -> tuple[Optional[PiProcess], dict]:
+        """Atomically activate a session and read its authoritative state."""
+        cwd = str(Path(cwd).resolve())
+        async with self._lock_for_cwd(cwd):
+            pi, activation = await self._activate_session_unlocked(session_id, cwd, config)
+            if pi is None:
+                return None, activation
+            return pi, await pi.refresh_state()
+
+    async def notify_session(
+        self,
+        session_id: str,
+        cwd: str,
+        config: PiConfig,
+        notification_type: str,
+        **params,
+    ) -> tuple[Optional[PiProcess], dict]:
+        """Deliver an extension notification only to its owning session."""
+        cwd = str(Path(cwd).resolve())
+        async with self._lock_for_cwd(cwd):
+            pi, activation = await self._activate_session_unlocked(session_id, cwd, config)
+            if pi is None:
+                return None, activation
+            try:
+                await pi.send_notification(notification_type, **params)
+            except Exception as exc:
+                return pi, {"success": False, "error": str(exc)}
+            return pi, {"success": True}
+
+    async def get_event_process(
+        self,
+        session_id: str,
+        cwd: str,
+        config: PiConfig,
+    ) -> tuple[Optional[PiProcess], dict]:
+        """Attach SSE without switching an already-live workspace runtime."""
+        cwd = str(Path(cwd).resolve())
+        async with self._lock_for_cwd(cwd):
+            pi = self.get_by_cwd(cwd)
+            if pi is not None and not pi.is_alive:
+                await self._remove(cwd)
+                pi = None
+            # Pi intentionally delays creating a JSONL file until the first
+            # assistant message. The active blank session is still a valid SSE
+            # target and must not be rejected merely because its file is not on
+            # disk yet. Pre-creating that file breaks Pi's exclusive first flush.
+            if pi is not None and pi.session_id == session_id:
+                self._session_map[session_id] = cwd
+                return pi, {"success": True}
+
+            session_path = self._find_session_file(session_id, cwd)
+            if session_path is None:
+                return None, {
+                    "success": False,
+                    "code": "not_found",
+                    "error": "session not found in this workspace",
+                }
+            if pi is not None:
+                self._session_map[session_id] = cwd
+                return pi, {"success": True}
+            from config import get_sessions_dir
+
+            try:
+                pi = await self._spawn_process(
+                    cwd=cwd,
+                    session_dir=str(get_sessions_dir(cwd)),
+                    config=config,
+                    session_path=str(session_path),
+                )
+            except Exception as exc:
+                return None, {"success": False, "code": "spawn_failed", "error": str(exc)}
+            if pi.session_id != session_id:
+                await self._remove(cwd)
+                return None, {
+                    "success": False,
+                    "code": "session_mismatch",
+                    "error": "runtime resumed a different session",
+                }
+            return pi, {"success": True}
+
+    async def restart_session(
+        self,
+        session_id: str,
+        cwd: str,
+        config: PiConfig,
+    ) -> Optional[PiProcess]:
+        """Restart the runtime while preserving the selected conversation."""
+        cwd = str(Path(cwd).resolve())
+        async with self._lock_for_cwd(cwd):
+            return await self._restart_session_unlocked(session_id, cwd, config)
+
+    async def _restart_session_unlocked(
+        self,
+        session_id: str,
+        cwd: str,
+        config: PiConfig,
+    ) -> Optional[PiProcess]:
+        session_path = self._find_session_file(session_id, cwd)
+        if session_path is None:
+            return None
+        await self._remove(cwd)
+        from config import get_sessions_dir
+
+        return await self._spawn_process(
+            cwd=cwd,
+            session_dir=str(get_sessions_dir(cwd)),
+            config=config,
+            session_path=str(session_path),
+        )
+
+    async def _replace_with_blank_session_unlocked(
+        self,
+        cwd: str,
+        config: PiConfig,
+    ) -> tuple[Optional[PiProcess], dict]:
+        """Replace an idle, unpersisted runtime with a freshly configured one.
+
+        Pi does not write a session file until the first prompt. A stale
+        runtime therefore cannot be restarted by path when a newly-added custom
+        provider is selected. Replacing that empty process is lossless, and the
+        caller must return the replacement session ID to the frontend.
+        """
+        await self._remove(cwd)
+        from config import get_sessions_dir
+
+        try:
+            replacement = await self._spawn_process(
+                cwd=cwd,
+                session_dir=str(get_sessions_dir(cwd)),
+                config=config,
+            )
+        except Exception as exc:
+            return None, {
+                "success": False,
+                "code": "spawn_failed",
+                "error": str(exc),
+            }
+        return replacement, {
+            "success": True,
+            "session_id": replacement.session_id,
+        }
+
+    async def configure_session(
+        self,
+        session_id: str,
+        cwd: str,
+        model: str,
+        thinking: Optional[str] = None,
+    ) -> tuple[Optional[PiProcess], dict]:
+        """Apply model/thinking atomically, restarting for new custom providers."""
+        cwd = str(Path(cwd).resolve())
+        if "/" not in model:
+            return None, {"success": False, "error": "model must use provider/model notation"}
+        provider, model_id = model.split("/", 1)
+        async with self._lock_for_cwd(cwd):
+            pi, activation = await self._activate_session_unlocked(session_id, cwd, PiConfig())
+            if pi is None:
+                return None, activation
+            previous_model = pi.config.model
+            result = await pi.send_command("set_model", provider=provider, modelId=model_id)
+            if not result.get("success"):
+                if result.get("code") == "busy":
+                    return pi, result
+                if provider.startswith("custom-"):
+                    restarted = await self._restart_session_unlocked(
+                        session_id,
+                        cwd,
+                        PiConfig(model=model, thinking=thinking or pi.config.thinking),
+                    )
+                    if restarted is not None:
+                        return restarted, {
+                            "success": True,
+                            "model": model,
+                            "thinking": restarted.config.thinking,
+                            "restarted": True,
+                            "session_id": restarted.session_id,
+                        }
+                    if pi.session_id == session_id and self._find_session_file(session_id, cwd) is None:
+                        replacement, replacement_result = await self._replace_with_blank_session_unlocked(
+                            cwd,
+                            PiConfig(model=model, thinking=thinking or pi.config.thinking),
+                        )
+                        if replacement is not None:
+                            return replacement, {
+                                "success": True,
+                                "model": model,
+                                "thinking": replacement.config.thinking,
+                                "restarted": True,
+                                "replaced_blank": True,
+                                "session_id": replacement.session_id,
+                            }
+                        return None, replacement_result
+                return pi, result
+            if thinking and thinking != pi.config.thinking:
+                thinking_result = await pi.send_command("set_thinking_level", level=thinking)
+                if not thinking_result.get("success"):
+                    # Avoid reporting the old model in the UI while leaving a
+                    # partially applied runtime configuration behind.
+                    if previous_model and previous_model != model and "/" in previous_model:
+                        old_provider, old_model_id = previous_model.split("/", 1)
+                        await pi.send_command(
+                            "set_model",
+                            provider=old_provider,
+                            modelId=old_model_id,
+                        )
+                    return pi, thinking_result
+            return pi, {
+                "success": True,
+                "model": pi.config.model or model,
+                "thinking": pi.config.thinking,
+                "restarted": False,
+                "session_id": pi.session_id,
+            }
+
+    async def delete_session(self, session_id: str, cwd: str) -> dict:
+        """Delete one workspace-scoped session without racing the live runtime."""
+        cwd = str(Path(cwd).resolve())
+        async with self._lock_for_cwd(cwd):
+            pi = self.get_by_cwd(cwd)
+            if pi is not None and pi.is_alive and pi.session_id == session_id:
+                if pi.busy:
+                    return {
+                        "success": False,
+                        "code": "busy",
+                        "error": "cannot delete a conversation while it is running",
+                    }
+                # The runtime keeps the active JSONL file open. Stop it before
+                # unlinking so the deleted conversation cannot reappear.
+                await self._remove(cwd)
+            path = self._find_session_file(session_id, cwd)
+            if path is None:
+                # Active blank sessions are intentionally not persisted until
+                # the first assistant reply. Stopping the process fully deletes
+                # such a session even though there is no JSONL to unlink.
+                if pi is not None and pi.session_id == session_id:
+                    self.unbind_session(session_id)
+                    return {"success": True}
+                return {"success": False, "code": "not_found", "error": "session not found"}
+            try:
+                path.unlink()
+            except OSError as exc:
+                return {"success": False, "code": "delete_failed", "error": str(exc)}
+            self.unbind_session(session_id)
+            return {"success": True}
+
+    def unbind_session(self, session_id: str):
+        """Remove a session alias from the in-memory process map."""
+        self._session_map.pop(session_id, None)
 
     def get_by_session(self, session_id: str) -> Optional[PiProcess]:
         """Get PiProcess by session ID."""
@@ -530,11 +1486,20 @@ class PiManager:
         """Remove and shut down a pi process."""
         pi = self._processes.pop(cwd, None)
         if pi:
-            self._session_map.pop(pi.session_id, None)
+            for session_id, mapped_cwd in list(self._session_map.items()):
+                if mapped_cwd == cwd:
+                    self._session_map.pop(session_id, None)
             await pi.shutdown()
 
     async def shutdown_all(self):
         """Shut down all managed pi processes."""
+        if self._idle_task and not self._idle_task.done():
+            self._idle_task.cancel()
+            try:
+                await self._idle_task
+            except asyncio.CancelledError:
+                pass
+            self._idle_task = None
         for cwd in list(self._processes.keys()):
             await self._remove(cwd)
 
@@ -543,7 +1508,7 @@ class PiManager:
         return sum(1 for p in self._processes.values() if p.is_alive)
 
 
-def _ensure_pi_subagent_wrapper(base_dir: Path, parent_args: list[str]) -> str | None:
+def _ensure_pi_subagent_wrapper(base_dir: Path, parent_args: list[str]) -> Optional[str]:
     """Create or refresh a shell wrapper so pi-subagents can spawn child pi processes.
 
     pi-subagents calls `getPiSpawnCommand()` which checks the env var

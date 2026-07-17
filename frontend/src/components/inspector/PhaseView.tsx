@@ -11,7 +11,7 @@ import { parsePhaseDiagram, type PhaseDiagram } from "@/lib/phase";
  * Offline, from the file alone; uses the app chart palette.
  */
 export function PhaseView({ filename, text }: { filename: string; text: string }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   const parsed = useMemo<{ pd: PhaseDiagram | null; error: string | null }>(() => {
     try {
       return { pd: parsePhaseDiagram(text), error: null };

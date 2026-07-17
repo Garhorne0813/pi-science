@@ -1,3 +1,2 @@
-/** App component — re-exports from router. */
+/** Legacy app entry kept for tooling that expects src/App.tsx. */
 export { RouterProvider as default } from "react-router-dom";
-export { router } from "./app/router";

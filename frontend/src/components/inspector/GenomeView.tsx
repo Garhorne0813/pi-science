@@ -25,7 +25,7 @@ const MIN_SPAN = 20; // don't zoom past ~20 bp
  * palette and are theme-aware via CSS tokens.
  */
 export function GenomeView({ filename, text }: { filename: string; text: string }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   const format = useMemo(() => genomeFormat(extOf(filename)), [filename]);
   const data = useMemo(
     () => (format ? parseGenome(text, format) : null),

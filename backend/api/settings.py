@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from config import BASE_DIR
+from services.runtime_extensions import runtime_extension_status
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -83,6 +84,12 @@ class CustomProviderRequest(BaseModel):
     api_key: str = ""
     api: Literal["openai-completions", "openai-responses", "anthropic-messages"] = "openai-completions"
     models: list[str] = Field(default_factory=list)
+
+
+@router.get("/extensions")
+async def list_runtime_extensions():
+    """Report extension entrypoints that the next Pi process will actually load."""
+    return {"extensions": runtime_extension_status()}
 
 
 # ── Helpers ──
@@ -273,6 +280,219 @@ def get_custom_models_runtime(cwd: Optional[str] = None) -> tuple[Optional[Path]
                 for model in provider["models"]
             ],
         }
+        if provider.get("api_key"):
+            definition["apiKey"] = f"${env_name}"
+            env[env_name] = provider["api_key"]
+        definitions["providers"][provider_id] = definition
+
+    (agent_dir / "models.json").write_text(json.dumps(definitions, indent=2) + "\n")
+    return agent_dir, env
+
+
+def _custom_provider_id(value: str) -> str:
+    """Create a stable, shell/env-safe provider identifier."""
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.strip().lower()).strip("-")
+    return (slug or "custom-api")[:48]
+
+
+def _validate_custom_base_url(value: str) -> str:
+    base_url = value.strip().rstrip("/")
+    parsed = urlparse(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("base_url must be an absolute http(s) URL")
+    if base_url.lower().endswith("/models"):
+        base_url = base_url[:-7].rstrip("/")
+    for suffix in ("/chat/completions", "/responses"):
+        if base_url.lower().endswith(suffix):
+            base_url = base_url[: -len(suffix)].rstrip("/")
+    return base_url
+
+
+def _custom_providers(config: Optional[dict] = None) -> list[dict]:
+    raw = (config or _load_config()).get("custom_providers", [])
+    if isinstance(raw, dict):
+        raw = [dict(value, id=key) for key, value in raw.items() if isinstance(value, dict)]
+    if not isinstance(raw, list):
+        return []
+    result = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            base_url = _validate_custom_base_url(str(item.get("base_url", "")))
+        except ValueError:
+            continue
+        models = [str(model).strip() for model in item.get("models", []) if str(model).strip()]
+        result.append({
+            "id": _custom_provider_id(str(item.get("id") or item.get("name") or base_url)),
+            "name": str(item.get("name") or "Custom API").strip()[:100],
+            "base_url": base_url,
+            "api_key": str(item.get("api_key") or ""),
+            "api": item.get("api") if item.get("api") in {"openai-completions", "openai-responses", "anthropic-messages"} else "openai-completions",
+            "models": list(dict.fromkeys(models)),
+        })
+    return result
+
+
+def _public_custom_provider(provider: dict) -> dict:
+    return {
+        "id": provider["id"],
+        "name": provider["name"],
+        "base_url": provider["base_url"],
+        "api": provider["api"],
+        "models": provider["models"],
+        "has_key": bool(provider.get("api_key")),
+    }
+
+
+def _fetch_custom_models(base_url: str, api_key: str = "") -> list[str]:
+    """Discover model IDs from an OpenAI-style GET /models endpoint."""
+    normalized = _validate_custom_base_url(base_url)
+    headers = {"Accept": "application/json", "User-Agent": "pi-science/0.1"}
+    if api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key.strip()}"
+    urls = [f"{normalized}/models"]
+    if not normalized.lower().endswith("/v1"):
+        urls.append(f"{normalized}/v1/models")
+    payload = None
+    last_error: Exception | None = None
+    for models_url in urls:
+        request = Request(models_url, headers=headers, method="GET")
+        try:
+            with urlopen(request, timeout=20) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            break
+        except HTTPError as exc:
+            last_error = exc
+            if exc.code == 404:
+                continue
+            raise RuntimeError(f"Model discovery failed ({exc.code})") from exc
+        except (URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+            last_error = exc
+            continue
+    if payload is None:
+        raise RuntimeError(f"Model discovery failed: {last_error}")
+
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict):
+        rows = payload.get("data", payload.get("models", []))
+        if isinstance(rows, dict):
+            rows = list(rows.values())
+    else:
+        rows = []
+
+    models: list[str] = []
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, str):
+            model_id = row
+        elif isinstance(row, dict):
+            model_id = row.get("id") or row.get("model") or row.get("name")
+        else:
+            model_id = None
+        if isinstance(model_id, str) and model_id.strip():
+            models.append(model_id.strip())
+    return list(dict.fromkeys(models))
+
+
+def _available_models(config: Optional[dict] = None) -> list[dict]:
+    config = config or _load_config()
+    models = []
+    for provider in PROVIDERS:
+        for model in provider["models"]:
+            models.append({
+                "id": f"{provider['id']}/{model}",
+                "provider": provider["id"],
+                "model": model,
+                "label": f"{provider['name']} · {model}",
+                "custom": False,
+            })
+    for provider in _custom_providers(config):
+        for model in provider["models"]:
+            models.append({
+                "id": f"custom-{provider['id']}/{model}",
+                "provider": f"custom-{provider['id']}",
+                "model": model,
+                "label": f"{provider['name']} · {model}",
+                "custom": True,
+            })
+    return models
+
+
+def _custom_model_supports_reasoning(model_id: str) -> bool:
+    """Infer thinking support from common reasoning-model naming schemes."""
+    value = model_id.strip().lower()
+    if any(token in value for token in ("gpt-5", "reasoning", "thinking", "thinker", "deepseek-r1", "qwq", "qwen3")):
+        return True
+    if re.search(r"(^|[-_/])(o1|o3|o4|r1)([-_./]|$)", value):
+        return True
+    if "claude" in value and any(token in value for token in ("3-7", "3.7", "sonnet-4", "opus-4", "haiku-4")):
+        return True
+    if "gemini-2.5" in value or "gemini-3" in value:
+        return True
+    return False
+
+
+def _custom_model_supports_max(model_id: str) -> bool:
+    """Conservatively identify custom models that accept a literal ``max``.
+
+    OpenAI-compatible gateways often expose reasoning models but only accept
+    ``high`` for older GPT-5 variants. Mapping max to high for those models
+    prevents a selectable model from producing an empty turn merely because
+    the workspace's previous model used max thinking.
+    """
+    value = model_id.strip().lower()
+    return any(token in value for token in (
+        "gpt-5.6",
+        "codex",
+        "reasoning-max",
+        "thinking-max",
+        "deepseek-r1",
+        "qwq",
+        "qwen3",
+    ))
+
+
+def get_custom_models_runtime(cwd: Optional[str] = None) -> tuple[Optional[Path], dict[str, str]]:
+    """Materialize custom providers as a pi models.json plus env-backed keys."""
+    providers = _custom_providers()
+    if not providers:
+        return None, {}
+
+    key = hashlib.sha256(str(Path(cwd).expanduser().resolve() if cwd else "default").encode()).hexdigest()[:12]
+    agent_dir = _config_file().parent / "pi-agent" / key
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    definitions = {"providers": {}}
+    env: dict[str, str] = {}
+    for provider in providers:
+        provider_id = f"custom-{provider['id']}"
+        env_name = f"PI_SCIENCE_CUSTOM_{_custom_provider_id(provider['id']).upper().replace('-', '_')}_API_KEY"
+        definition = {
+            "name": provider["name"],
+            "baseUrl": provider["base_url"],
+            "api": provider["api"],
+            "models": [],
+        }
+        for model in provider["models"]:
+            reasoning = _custom_model_supports_reasoning(model)
+            model_definition = {
+                "id": model,
+                "name": model,
+                "reasoning": reasoning,
+                "input": ["text"],
+                "contextWindow": 128000,
+                "maxTokens": 16384,
+                "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+            }
+            if reasoning:
+                # pi exposes xhigh/max only when the model explicitly maps
+                # those levels. OpenAI-compatible reasoning models also need
+                # the compatibility flag to emit reasoning_effort.
+                max_level = "max" if _custom_model_supports_max(model) else "high"
+                model_definition["thinkingLevelMap"] = {"xhigh": max_level, "max": max_level}
+                if provider["api"] == "openai-completions":
+                    model_definition["compat"] = {"supportsReasoningEffort": True}
+            definition["models"].append(model_definition)
         if provider.get("api_key"):
             definition["apiKey"] = f"${env_name}"
             env[env_name] = provider["api_key"]
@@ -572,85 +792,60 @@ class SkillToggleRequest(BaseModel):
     enabled: bool = True
 
 
-class SkillInfoResponse(BaseModel):
-    name: str
-    path: str
-    source: str
-    enabled: bool
-
-
-@router.get("/skills", response_model=dict)
+@router.get("/skills")
 async def get_skills_state():
-    """Get skill enable/disable state. Returns all discovered skills with their toggle status."""
+    """Return discovered skills and their effective enabled state."""
     from api.skills import _discover_all_skills
 
     config = _load_config()
-    configured = config.get("skills_configured", False)
+    configured = bool(config.get("skills_configured", False))
     enabled_paths = set(config.get("skill_paths", []))
-
-    all_skills: list[dict] = []
+    skills = []
     for name, path, source in _discover_all_skills():
-        all_skills.append({"name": name, "path": path, "source": source})
-
-    # Determine enabled state for each skill
-    result = []
-    for s in all_skills:
-        if configured:
-            enabled = s["path"] in enabled_paths
-        else:
-            enabled = True  # Default: all enabled
-        result.append({**s, "enabled": enabled})
-
-    return {"skills": result, "configured": configured}
+        skills.append({
+            "name": name,
+            "path": path,
+            "source": source,
+            "enabled": path in enabled_paths if configured else True,
+        })
+    return {"skills": skills, "configured": configured}
 
 
 @router.put("/skills/toggle")
 async def toggle_skill(body: SkillToggleRequest):
-    """Enable or disable a skill by name. Disabled skills are not loaded into pi sessions."""
+    """Enable or disable one skill for subsequently spawned Pi processes."""
     from api.skills import _discover_all_skills
+
     config = _load_config()
-
-    # Discover all available skills and build name→path map
-    name_to_path: dict[str, str] = {}
-    all_names: list[str] = []
-    for name, path, source in _discover_all_skills():
-        name_to_path[name] = path
-        all_names.append(name)
-
+    discovered = _discover_all_skills()
+    name_to_path = {name: path for name, path, _source in discovered}
     if body.name not in name_to_path:
         raise HTTPException(status_code=404, detail=f"Skill '{body.name}' not found")
 
-    skill_path = name_to_path[body.name]
-    configured = config.get("skills_configured", False)
-
-    if not configured:
-        # First toggle: start with all skills enabled, then apply the toggle
-        enabled_paths = set(name_to_path.values())
-        configured = True
-    else:
+    if config.get("skills_configured"):
         enabled_paths = set(config.get("skill_paths", []))
-
+    else:
+        enabled_paths = {path for _name, path, _source in discovered}
+    skill_path = name_to_path[body.name]
     if body.enabled:
         enabled_paths.add(skill_path)
     else:
         enabled_paths.discard(skill_path)
-
-    config["skill_paths"] = sorted(enabled_paths)
     config["skills_configured"] = True
+    config["skill_paths"] = sorted(enabled_paths)
     _save_config(config)
-
     return {
         "ok": True,
         "name": body.name,
         "enabled": body.enabled,
         "enabled_count": len(enabled_paths),
-        "total_count": len(all_names),
+        "total_count": len(discovered),
     }
 
 
 @router.delete("/skills")
 async def reset_skills():
-    """Reset skill configuration — all skills auto-discovered again."""
+    """Return skill loading to automatic discovery mode."""
     config = _load_config()
     config.pop("skills_configured", None)
     config.pop("skill_paths", None)

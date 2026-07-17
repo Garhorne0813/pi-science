@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
+import { kernelShutdownUrl } from "../notebook/notebook-model";
 
 interface CellResult {
   ok: boolean;
@@ -15,22 +16,32 @@ interface Cell {
   running: boolean;
 }
 
-export function NotebookPanel({ onClose, cwd }: { onClose: () => void; cwd?: string }) {
-  const [notebookId] = useState(() => `nb-${Date.now()}`);
+export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId }: { onClose: () => void; cwd?: string; notebookId?: string }) {
+  const [notebookId] = useState(() => requestedNotebookId || `nb-${Date.now()}`);
   const [cells, setCells] = useState<Cell[]>([]);
-  const [kernelStatus, setKernelStatus] = useState<"checking" | "ready" | "unavailable">("checking");
+  const [interpreters, setInterpreters] = useState<{ python: boolean; r: boolean } | null>(null);
 
   // Check kernel availability on mount
   useEffect(() => {
     fetch("/api/kernels/status")
       .then((r) => r.json())
       .then((d) => {
-        setKernelStatus(d.interpreters?.python ? "ready" : "unavailable");
+        setInterpreters({
+          python: Boolean(d.interpreters?.python),
+          r: Boolean(d.interpreters?.r),
+        });
       })
-      .catch(() => setKernelStatus("unavailable"));
+      .catch(() => setInterpreters({ python: false, r: false }));
   }, []);
 
+  useEffect(() => () => {
+    void fetch(kernelShutdownUrl(notebookId, cwd || "."), {
+      method: "POST",
+    }).catch(() => undefined);
+  }, [cwd, notebookId]);
+
   const addCell = useCallback((language: "python" | "r") => {
+    if (!interpreters?.[language]) return;
     const cell: Cell = {
       id: `cell-${Date.now()}`,
       code: "",
@@ -39,7 +50,7 @@ export function NotebookPanel({ onClose, cwd }: { onClose: () => void; cwd?: str
       running: false,
     };
     setCells((prev) => [...prev, cell]);
-  }, []);
+  }, [interpreters]);
 
   const runCell = useCallback(async (cellId: string) => {
     setCells((prev) =>
@@ -60,15 +71,17 @@ export function NotebookPanel({ onClose, cwd }: { onClose: () => void; cwd?: str
           notebook_id: notebookId,
         }),
       });
-      const data: CellResult = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `Cell execution failed: ${res.statusText}`);
       setCells((prev) =>
-        prev.map((c) => (c.id === cellId ? { ...c, running: false, result: data } : c))
+        prev.map((c) => (c.id === cellId ? { ...c, running: false, result: data as CellResult } : c))
       );
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
       setCells((prev) =>
         prev.map((c) =>
           c.id === cellId
-            ? { ...c, running: false, result: { ok: false, stdout: "", result: null, error: err.message } }
+            ? { ...c, running: false, result: { ok: false, stdout: "", result: null, error: message } }
             : c
         )
       );
@@ -97,15 +110,19 @@ export function NotebookPanel({ onClose, cwd }: { onClose: () => void; cwd?: str
           <span style={{ fontSize: "14px", fontWeight: 600 }}>Notebook</span>
           <span style={{
             fontSize: "11px", marginLeft: "8px", padding: "2px 8px", borderRadius: "8px",
-            backgroundColor: kernelStatus === "ready" ? "var(--ok)" : kernelStatus === "checking" ? "var(--warn)" : "var(--error)",
+            backgroundColor: interpreters === null ? "var(--warn)" : interpreters.python || interpreters.r ? "var(--ok)" : "var(--error)",
             color: "#fff",
           }}>
-            {kernelStatus === "ready" ? "Python Ready" : kernelStatus === "checking" ? "Checking..." : "No Kernel"}
+            {interpreters === null
+              ? "Checking..."
+              : interpreters.python || interpreters.r
+                ? `${interpreters.python ? "Python" : ""}${interpreters.python && interpreters.r ? " / " : ""}${interpreters.r ? "R" : ""} Ready`
+                : "No Kernel"}
           </span>
         </div>
         <div style={{ display: "flex", gap: "6px" }}>
-          <button onClick={() => addCell("python")} style={btnStyle("var(--accent)")}>+ Python</button>
-          <button onClick={() => addCell("r")} style={btnStyle("var(--ok)")}>+ R</button>
+          <button disabled={!interpreters?.python} onClick={() => addCell("python")} style={{ ...btnStyle("var(--accent)"), opacity: interpreters?.python ? 1 : 0.4 }}>+ Python</button>
+          <button disabled={!interpreters?.r} onClick={() => addCell("r")} style={{ ...btnStyle("var(--ok)"), opacity: interpreters?.r ? 1 : 0.4 }}>+ R</button>
           <button onClick={onClose} style={{ ...btnStyle("var(--muted)"), fontSize: "16px" }}>✕</button>
         </div>
       </div>

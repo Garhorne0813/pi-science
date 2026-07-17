@@ -25,6 +25,10 @@ ModelRunner = Callable[[str, Path], Awaitable[str]]
 
 _review_locks: dict[tuple[str, str], asyncio.Lock] = {}
 _background_tasks: set[asyncio.Task] = set()
+_auto_review_tasks: dict[tuple[str, str], asyncio.Task] = {}
+_reviewer_semaphore = asyncio.Semaphore(1)
+AUTO_REVIEW_DELAY_SECONDS = 5.0
+MAX_REVIEW_INPUT_CHARS = 80000
 
 
 class ReviewerError(RuntimeError):
@@ -81,16 +85,36 @@ class ReviewerService:
                 "message": "No new session messages to review",
             }
 
-        prepared_messages = [
-            {
+        prepared_messages: list[dict[str, Any]] = []
+        consumed_count = 0
+        total_chars = 0
+        for message in incremental:
+            text = message_text(message)
+            if text.strip() and prepared_messages and total_chars + len(text) > MAX_REVIEW_INPUT_CHARS:
+                break
+            consumed_count += 1
+            if not text.strip():
+                continue
+            remaining = MAX_REVIEW_INPUT_CHARS - total_chars
+            if remaining <= 0:
+                break
+            text = text[:remaining]
+            prepared_messages.append({
                 "id": message.get("id", ""),
                 "role": message.get("role", ""),
-                "text": message_text(message),
+                "text": text,
                 "timestamp": message.get("timestamp"),
+            })
+            total_chars += len(text)
+        if not prepared_messages:
+            self.store.set_cursor(session_id, message_count=start + consumed_count, last_message_id=None)
+            return {
+                "run_id": f"review-{uuid4().hex[:12]}",
+                "created": 0,
+                "skipped": consumed_count,
+                "proposal_ids": [],
+                "message": "No reviewable text in new session messages",
             }
-            for message in incremental
-            if message_text(message).strip()
-        ]
         run_id = f"review-{uuid4().hex[:12]}"
         started_at = utc_now_iso()
         started = time.monotonic()
@@ -115,10 +139,11 @@ class ReviewerService:
                 run_id=run_id,
             )
             created, skipped = self.store.add_proposals(proposals)
-            last_message_id = all_messages[-1].get("id") if all_messages else None
+            cursor_count = start + consumed_count
+            last_message_id = all_messages[cursor_count - 1].get("id") if cursor_count else None
             self.store.set_cursor(
                 session_id,
-                message_count=len(all_messages),
+                message_count=cursor_count,
                 last_message_id=last_message_id,
             )
             run_record.update({
@@ -362,10 +387,13 @@ async def _auto_review(cwd: str, session_id: str) -> None:
     if not service.store.get_policy().auto_review:
         return
     try:
-        # Give the pi runtime a brief moment to flush the settled assistant
-        # message to its workspace-local JSONL session file.
-        await asyncio.sleep(0.25)
-        await service.review_session(session_id, include_files=True, force_full_session=False)
+        # Debounce rapid follow-up turns and serialize Reviewer model calls so
+        # they do not stampede a local/custom API alongside the main chat.
+        await asyncio.sleep(AUTO_REVIEW_DELAY_SECONDS)
+        async with _reviewer_semaphore:
+            await service.review_session(session_id, include_files=True, force_full_session=False)
+    except asyncio.CancelledError:
+        return
     except Exception:
         # Failures are recorded by ReviewerService and must never break chat.
         logger.warning("Auto-review failed for session %s", session_id, exc_info=True)
@@ -373,6 +401,25 @@ async def _auto_review(cwd: str, session_id: str) -> None:
 
 
 def schedule_auto_review(cwd: str, session_id: str) -> None:
+    key = (str(Path(cwd).resolve()), session_id)
+    previous = _auto_review_tasks.pop(key, None)
+    if previous is not None and not previous.done():
+        previous.cancel()
     task = asyncio.create_task(_auto_review(cwd, session_id))
+    _auto_review_tasks[key] = task
     _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+
+    def cleanup(done: asyncio.Task) -> None:
+        _background_tasks.discard(done)
+        if _auto_review_tasks.get(key) is done:
+            _auto_review_tasks.pop(key, None)
+
+    task.add_done_callback(cleanup)
+
+
+def cancel_auto_review(cwd: str, session_id: str) -> None:
+    """Cancel a pending/running auto-review when the user continues chatting."""
+    key = (str(Path(cwd).resolve()), session_id)
+    task = _auto_review_tasks.pop(key, None)
+    if task is not None and not task.done():
+        task.cancel()

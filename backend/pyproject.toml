@@ -3,7 +3,7 @@ name = "pi-science"
 version = "0.1.0"
 description = "Scientific AI Workbench — powered by the pi agent runtime"
 requires-python = ">=3.11"
-readme = "README.md"
+readme = { text = "Pi-Science FastAPI backend and local scientific runtime.", content-type = "text/markdown" }
 license = { text = "MIT" }
 authors = [
     { name = "Pi-Science Contributors" }
@@ -45,7 +45,6 @@ build-backend = "setuptools.build_meta"
 include = ["api*", "services*", "models*", "pi_science*"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]

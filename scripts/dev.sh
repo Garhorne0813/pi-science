@@ -5,7 +5,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-PI_REPO="$(dirname "$PROJECT_DIR")/pi"   # pi repo next to pi-science
+BACKEND_PID=""
+FRONTEND_PID=""
+FRONTEND_REUSED=false
 
 # ── Colors ──
 RED='\033[0;31m'
@@ -16,8 +18,8 @@ NC='\033[0m'
 cleanup() {
     echo ""
     echo -e "${YELLOW}==> Shutting down...${NC}"
-    kill $BACKEND_PID 2>/dev/null || true
-    kill $FRONTEND_PID 2>/dev/null || true
+    if [ -n "$BACKEND_PID" ]; then kill "$BACKEND_PID" 2>/dev/null || true; fi
+    if [ -n "$FRONTEND_PID" ]; then kill "$FRONTEND_PID" 2>/dev/null || true; fi
     wait 2>/dev/null
 }
 trap cleanup EXIT INT TERM
@@ -30,12 +32,21 @@ if ! command -v node &>/dev/null; then
     exit 1
 fi
 echo "  Node.js: $(node --version)"
-
-if ! command -v conda &>/dev/null; then
-    echo -e "${RED}Error: Conda is required.${NC}"
+NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
+if [ "$NODE_MAJOR" -lt 22 ]; then
+    echo -e "${RED}Error: Node.js 22 or newer is required (found $(node --version)).${NC}"
     exit 1
 fi
-echo "  Conda: $(conda --version 2>/dev/null)"
+
+if command -v conda &>/dev/null; then
+    # Some Conda installations print a requests/urllib3 compatibility warning
+    # before the version line. Keep prerequisite output actionable by retaining
+    # only the actual version and treating a noisy probe as "available".
+    CONDA_VERSION="$(conda --version 2>&1 | sed -n 's/^conda[[:space:]]*//p' | head -n 1 || true)"
+    echo "  Conda: ${CONDA_VERSION:-available}"
+else
+    echo "  Conda: not installed (optional; using system Python)"
+fi
 
 # ── Step 2: Fetch/install pi agent runtime ──
 echo ""
@@ -84,6 +95,31 @@ else
     echo "  Conda environment: $CONDA_ENV"
 fi
 
+if ! "$CONDA_PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)'; then
+    echo -e "${RED}Error: Python 3.11 or newer is required (found $("$CONDA_PYTHON" --version 2>&1)).${NC}"
+    exit 1
+fi
+
+port_is_available() {
+    "$CONDA_PYTHON" -c 'import socket,sys; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", int(sys.argv[1]))); s.close()' "$1" >/dev/null 2>&1
+}
+
+# Return success when a listening process on the given port belongs to this
+# checkout's frontend. A previous `dev.sh` may have left Vite running after
+# the shell was interrupted; that process is safe to reuse.
+project_frontend_is_running() {
+    local pid cwd
+    command -v lsof >/dev/null 2>&1 || return 1
+    while read -r pid; do
+        [ -n "$pid" ] || continue
+        cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)"
+        if [ "$cwd" = "$PROJECT_DIR/frontend" ]; then
+            return 0
+        fi
+    done < <(lsof -nP -iTCP:5173 -sTCP:LISTEN -t 2>/dev/null | sort -u)
+    return 1
+}
+
 # Keep pip's cache writable in the project as well; some macOS setups have a
 # stale root-owned ~/Library/Caches/pip directory.
 PIP_CACHE_DIR="${PIP_CACHE_DIR:-$PROJECT_DIR/.cache/pip}"
@@ -91,14 +127,19 @@ mkdir -p "$PIP_CACHE_DIR"
 export PIP_CACHE_DIR
 
 cd "$PROJECT_DIR/backend"
-$CONDA_PYTHON -m pip install -e ".[dev]" --quiet 2>&1 | tail -1
+"$CONDA_PYTHON" -m pip install -e "$PROJECT_DIR/backend[dev]" --quiet 2>&1 | tail -1
 echo "  Backend dependencies installed."
 echo "  Python:  $CONDA_PYTHON"
-echo "  Package: pi-science $($CONDA_PYTHON -c 'from pi_science import __version__; print(__version__)' 2>/dev/null || echo '0.1.0')"
+echo "  Package: pi-science $("$CONDA_PYTHON" -c 'from pi_science import __version__; print(__version__)' 2>/dev/null || echo '0.1.0')"
 
 # ── Step 4: Start backend ──
 echo ""
 echo -e "${GREEN}==> Starting backend on http://localhost:8787${NC}"
+
+if ! port_is_available 8787; then
+    echo -e "${RED}Error: port 8787 is already in use. Stop the existing Pi-Science backend first.${NC}"
+    exit 1
+fi
 
 cd "$PROJECT_DIR/backend"
 
@@ -117,30 +158,66 @@ echo "  Node:     $PI_NODE_PATH"
 echo "  Pi CLI:   $PI_CLI_PATH"
 echo "  Data:     $PI_SCIENCE_HOME"
 
-$CONDA_PYTHON -m uvicorn main:app --host 127.0.0.1 --port 8787 --reload &
+"$CONDA_PYTHON" -m uvicorn main:app --host 127.0.0.1 --port 8787 --reload &
 BACKEND_PID=$!
 
 # Wait for backend to be ready
 echo "  Waiting for backend..."
-for i in $(seq 1 20); do
-    if curl -s http://127.0.0.1:8787/api/health >/dev/null 2>&1; then
+BACKEND_READY=false
+for _ in $(seq 1 20); do
+    if ! kill -0 "$BACKEND_PID" 2>/dev/null; then break; fi
+    if curl --fail --silent http://127.0.0.1:8787/api/health >/dev/null 2>&1; then
         echo -e "  ${GREEN}Backend ready.${NC}"
+        BACKEND_READY=true
         break
     fi
     sleep 0.5
 done
+if [ "$BACKEND_READY" != true ]; then
+    echo -e "${RED}Error: backend did not become ready on port 8787.${NC}"
+    exit 1
+fi
 
 # ── Step 5: Start frontend ──
 echo ""
 echo -e "${GREEN}==> Starting frontend on http://localhost:5173${NC}"
 
-cd "$PROJECT_DIR/frontend"
-if [ ! -d "node_modules" ]; then
-    echo "  Installing frontend dependencies..."
-    npm install --silent 2>&1 | tail -1
+if ! port_is_available 5173; then
+    if project_frontend_is_running; then
+        FRONTEND_REUSED=true
+        echo -e "  ${YELLOW}Reusing existing Pi-Science frontend on port 5173.${NC}"
+    else
+        echo -e "${RED}Error: port 5173 is already in use by another process. Stop it before starting Pi-Science.${NC}"
+        exit 1
+    fi
 fi
-npm run dev &
-FRONTEND_PID=$!
+
+if [ "$FRONTEND_REUSED" != true ]; then
+    cd "$PROJECT_DIR/frontend"
+    NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-$PROJECT_DIR/.cache/npm}"
+    mkdir -p "$NPM_CONFIG_CACHE"
+    export NPM_CONFIG_CACHE
+    echo "  Checking frontend dependencies..."
+    npm install --silent 2>&1 | tail -1
+    npm run dev -- --host 127.0.0.1 --port 5173 --strictPort &
+    FRONTEND_PID=$!
+
+    echo "  Waiting for frontend..."
+    FRONTEND_READY=false
+    for _ in $(seq 1 30); do
+        if ! kill -0 "$FRONTEND_PID" 2>/dev/null; then break; fi
+        if curl --fail --silent http://127.0.0.1:5173 >/dev/null 2>&1; then
+            echo -e "  ${GREEN}Frontend ready.${NC}"
+            FRONTEND_READY=true
+            break
+        fi
+        sleep 0.5
+    done
+    if [ "$FRONTEND_READY" != true ]; then
+        echo -e "${RED}Error: frontend did not become ready on port 5173.${NC}"
+        exit 1
+    fi
+fi
 
 # ── Done ──
 echo ""

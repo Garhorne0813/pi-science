@@ -8,7 +8,7 @@ export interface TableData {
 }
 
 export function TablePreview({ table }: { table: TableData }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   return (
     <div className="p-3">
       <div className="overflow-x-auto rounded-input border border-border bg-surface">

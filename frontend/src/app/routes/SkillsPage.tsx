@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { Package, Puzzle, Wrench, Check, X } from "lucide-react";
-import { cn } from "../../lib/cn";
 
 interface Skill {
   name: string;

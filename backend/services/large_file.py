@@ -4,7 +4,7 @@ import csv
 import json
 import struct
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 
 def probe_file(filepath: Path) -> dict[str, Any]:
@@ -48,9 +48,12 @@ def probe_file(filepath: Path) -> dict[str, Any]:
 
 
 def _human_size(b: int) -> str:
-    if b < 1024: return f"{b} B"
-    if b < 1_048_576: return f"{b/1024:.1f} KB"
-    if b < 1_073_741_824: return f"{b/1_048_576:.1f} MB"
+    if b < 1024:
+        return f"{b} B"
+    if b < 1_048_576:
+        return f"{b/1024:.1f} KB"
+    if b < 1_073_741_824:
+        return f"{b/1_048_576:.1f} MB"
     return f"{b/1_073_741_824:.1f} GB"
 
 
@@ -157,13 +160,17 @@ def _probe_mesh(filepath: Path, r: dict, ext: str):
     r["size"] = _human_size(filepath.stat().st_size)
     if ext == ".stl":
         with open(filepath, "rb") as f:
-            header = f.read(80)
+            f.read(80)
             count = struct.unpack("<I", f.read(4))[0]
             r["triangles"] = count
             r["format"] = "stl"
     elif ext == ".obj":
         with open(filepath, errors="replace") as f:
-            verts = sum(1 for l in f if l.startswith("v ")) if filepath.stat().st_size < 50_000_000 else "large"
+            verts = (
+                sum(1 for line in f if line.startswith("v "))
+                if filepath.stat().st_size < 50_000_000
+                else "large"
+            )
             r["vertices"] = verts
             r["format"] = "obj"
     elif ext == ".ply":

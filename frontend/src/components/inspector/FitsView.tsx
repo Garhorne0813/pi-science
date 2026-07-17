@@ -49,7 +49,7 @@ function fmtCoord(lon: number, lat: number): string {
 }
 
 export function FitsView({ filename, bytes }: { filename: string; bytes: ArrayBuffer }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   const parsed = useMemo<{ result: FitsResult | null; error: string | null }>(() => {
     try {
       return { result: parseFits(bytes), error: null };
@@ -76,7 +76,7 @@ export function FitsView({ filename, bytes }: { filename: string; bytes: ArrayBu
 }
 
 function ImageView({ filename, img }: { filename: string; img: FitsImage }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [cmap, setCmap] = useState<Cmap>("magma");
   const [stretch, setStretch] = useState<Stretch>("linear");
@@ -231,7 +231,7 @@ function Colorbar({
 }
 
 function SpectrumView({ filename, spec }: { filename: string; spec: import("@/lib/fits").FitsSpectrum }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   const { data, x0, dx, length, ctype1, bunit } = spec;
   const W = 640;
   const H = 320;

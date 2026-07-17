@@ -114,7 +114,7 @@ export function PaneTitlebarInset() {
 /** Maximize / restore toggle for the pane's header row (session pages only —
  *  full-page viewers like the Files page have nothing to maximize over). */
 export function MaximizePaneButton() {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   const inspectorMaximized = useUiStore((s) => s.inspectorMaximized);
   const setInspectorMaximized = useUiStore((s) => s.setInspectorMaximized);
   const label = inspectorMaximized ? t("shell.restorePanel") : t("shell.maximizePanel");

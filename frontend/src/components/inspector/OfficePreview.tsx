@@ -54,7 +54,7 @@ function useShadowPage(extraCss = "") {
 }
 
 function RenderState({ error, loading }: { error: string | null; loading: boolean }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   if (error) return <div className="p-4 text-sm text-muted">{error}</div>;
   if (loading)
     return (
@@ -68,7 +68,7 @@ function RenderState({ error, loading }: { error: string | null; loading: boolea
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function DocxView({ bytes, scrollKey }: { bytes: ArrayBuffer; scrollKey: string }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   const { hostRef, page } = useShadowPage();
   const wrapRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
@@ -146,7 +146,7 @@ const SHEET_CSS = `
 `;
 
 export function XlsxView({ bytes, scrollKey }: { bytes: ArrayBuffer; scrollKey: string }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   const { hostRef, page } = useShadowPage(SHEET_CSS);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [sheets, setSheets] = useState<SheetHtml[] | null>(null);
@@ -221,7 +221,7 @@ const SLIDES_CSS = `
 `;
 
 export function PptxView({ bytes, scrollKey }: { bytes: ArrayBuffer; scrollKey: string }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   const { hostRef, page } = useShadowPage(SLIDES_CSS);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);

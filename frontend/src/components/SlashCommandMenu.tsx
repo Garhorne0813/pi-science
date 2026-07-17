@@ -1,154 +1,67 @@
-import { useEffect, useRef, useState, useCallback } from "react";
-import { matchCommands, type SlashCommand } from "@/lib/slash-commands";
-import { cn } from "@/lib/cn";
+import { useEffect, useMemo, useState } from "react";
+import { cn } from "../lib/cn";
+import { matchCommands } from "../lib/slash-commands";
 
 interface Props {
-  /** The current input value in the composer. */
   input: string;
-  /** Called when a command is selected. Receives the full text to insert. */
-  onSelect: (text: string) => void;
-  /** Called when the user wants to dismiss (Escape). */
+  onSelect: (value: string) => void;
   onDismiss: () => void;
-  /** Position the menu above the textarea anchor. */
-  anchorRef: React.RefObject<HTMLElement | null>;
 }
 
-export function SlashCommandMenu({ input, onSelect, onDismiss, anchorRef }: Props) {
+export function SlashCommandMenu({ input, onSelect, onDismiss }: Props) {
+  const prefix = input.startsWith("/") && !input.includes(" ") ? input.slice(1) : null;
+  const commands = useMemo(() => (prefix === null ? [] : matchCommands(prefix)), [prefix]);
   const [activeIndex, setActiveIndex] = useState(0);
-  const menuRef = useRef<HTMLDivElement>(null);
 
-  // Extract the prefix after the last "/"
-  const prefix = extractPrefix(input);
-  const commands = matchCommands(prefix);
+  useEffect(() => setActiveIndex(0), [commands.length]);
 
-  // Reset active index when commands change
   useEffect(() => {
-    setActiveIndex(0);
-  }, [commands.length]);
-
-  // Keyboard navigation
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setActiveIndex((i) => Math.min(i + 1, Math.max(0, commands.length - 1)));
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setActiveIndex((i) => Math.max(i - 1, 0));
-      } else if (e.key === "Enter" && commands.length > 0) {
-        e.preventDefault();
-        const cmd = commands[Math.min(activeIndex, commands.length - 1)];
-        if (cmd) applyCommand(cmd, onSelect);
-      } else if (e.key === "Escape") {
-        e.preventDefault();
+    if (commands.length === 0) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
         onDismiss();
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        event.stopPropagation();
+        setActiveIndex((index) => Math.min(index + 1, commands.length - 1));
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        event.stopPropagation();
+        setActiveIndex((index) => Math.max(index - 1, 0));
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        const command = commands[activeIndex];
+        if (command) onSelect(command.argumentHint ? `/${command.name} ` : `/${command.name}`);
       }
-    },
-    [commands, activeIndex, onSelect, onDismiss],
-  );
-
-  useEffect(() => {
-    document.addEventListener("keydown", handleKeyDown, true); // capture phase
-    return () => document.removeEventListener("keydown", handleKeyDown, true);
-  }, [handleKeyDown]);
+    };
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [activeIndex, commands, onDismiss, onSelect]);
 
   if (commands.length === 0) return null;
 
   return (
-    <div
-      ref={menuRef}
-      className="absolute bottom-full left-0 mb-1 w-72 max-h-56 overflow-y-auto rounded-card border border-border bg-surface shadow-card z-50"
-    >
-      <CommandList commands={commands} activeIndex={activeIndex} onPick={(cmd) => applyCommand(cmd, onSelect)} />
-    </div>
-  );
-}
-
-/** Group commands and render the list. */
-function CommandList({
-  commands,
-  activeIndex,
-  onPick,
-}: {
-  commands: SlashCommand[];
-  activeIndex: number;
-  onPick: (cmd: SlashCommand) => void;
-}) {
-  const groups = new Map<string, SlashCommand[]>();
-  for (const c of commands) {
-    const list = groups.get(c.group) || [];
-    list.push(c);
-    groups.set(c.group, list);
-  }
-
-  const groupLabels: Record<string, string> = {
-    session: "Session",
-    workspace: "Workspace",
-    utility: "Utility",
-    skill: "Skills",
-    extension: "Extensions",
-    prompt: "Prompts",
-  };
-
-  let idx = 0;
-  const items: React.ReactNode[] = [];
-  for (const [group, cmds] of groups) {
-    items.push(
-      <div key={`g-${group}`} className="px-3 pt-2 pb-0.5 text-[10px] font-medium uppercase tracking-wider text-muted">
-        {groupLabels[group] || group}
-      </div>,
-    );
-    for (const cmd of cmds) {
-      const i = idx;
-      items.push(
+    <div className="absolute bottom-full left-0 z-50 mb-1 max-h-56 w-80 overflow-y-auto rounded-card border border-border bg-surface shadow-card">
+      {commands.map((command, index) => (
         <button
-          key={cmd.name}
-          onClick={() => onPick(cmd)}
+          key={`${command.source || "builtin"}-${command.name}`}
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => onSelect(command.argumentHint ? `/${command.name} ` : `/${command.name}`)}
           className={cn(
-            "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-surface-2",
-            i === activeIndex && "bg-surface-2 text-text",
-            i !== activeIndex && "text-text",
+            "flex w-full items-center gap-2 px-3 py-2 text-left text-xs",
+            index === activeIndex ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2",
           )}
         >
-          <span className="rounded bg-surface-2 px-1 py-0.5 font-mono text-xs text-accent">/{cmd.name}</span>
-          {cmd.source && (
-            <span className="shrink-0 rounded bg-accent/10 px-1 text-[10px] text-accent">{cmd.source}</span>
-          )}
-          <span className="flex-1 truncate text-muted">{cmd.description}</span>
-          {cmd.argumentHint && (
-            <span className="shrink-0 font-mono text-[11px] text-muted/60">{cmd.argumentHint}</span>
-          )}
-        </button>,
-      );
-      idx++;
-    }
-  }
-
-  return <>{items}</>;
-}
-
-// ── Helpers ──
-
-/** Extract the text after the last "/" in the input. Returns "" if input
- *  doesn't start with "/" or has already completed a command (space after it). */
-function extractPrefix(input: string): string {
-  if (!input.startsWith("/")) return "";
-  // If there's a space, the user has already typed the command name — show
-  // matching commands for the word after "/"
-  const firstSpace = input.indexOf(" ");
-  if (firstSpace !== -1) return "";
-  return input.slice(1);
-}
-
-/** Insert command text into the composer or execute immediate commands. */
-function applyCommand(cmd: SlashCommand, onSelect: (text: string) => void) {
-  if (cmd.immediate && !cmd.argumentHint) {
-    // Immediate commands: use a special marker that the parent can detect
-    onSelect(`/${cmd.name}`);
-  } else if (cmd.argumentHint) {
-    // Insert command name and let user type args
-    onSelect(`/${cmd.name} `);
-  } else {
-    onSelect(`/${cmd.name}`);
-  }
+          <span className="rounded bg-surface-2 px-1 font-mono text-accent">/{command.name}</span>
+          {command.source && <span className="rounded bg-accent/10 px-1 text-[10px] text-accent">{command.source}</span>}
+          <span className="min-w-0 flex-1 truncate">{command.description}</span>
+          {command.argumentHint && <span className="font-mono text-[10px] text-muted/60">{command.argumentHint}</span>}
+        </button>
+      ))}
+    </div>
+  );
 }

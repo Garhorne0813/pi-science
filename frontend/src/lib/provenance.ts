@@ -1,12 +1,6 @@
-const API = "/api/provenance";
+import type { ProvenanceRecord } from "../types/thread";
 
-export interface ProvenanceRecord {
-  path: string; version: number; ts: number; tool: string;
-  toolCallId?: string; sessionId: string; model?: string;
-  contentHash?: string; diff?: string; runId?: string;
-  content?: string; log?: string;
-  env?: Record<string, unknown>;
-}
+const API = "/api/provenance";
 
 /** Load all provenance records for a session. */
 export async function loadProvenance(cwd: string, sessionId: string): Promise<ProvenanceRecord[]> {

@@ -2,7 +2,9 @@
  *  Ported from open-science's useUiStore. */
 
 import { create } from "zustand";
-import type { ThreadBlock, Inspector } from "../types/thread";
+import type { Inspector } from "../types/thread";
+import i18n from "../i18n";
+import { detectInitialLocale, resolveLocale } from "../i18n/config";
 
 interface UiState {
   theme: "light" | "dark";
@@ -24,8 +26,9 @@ interface UiState {
 }
 
 function loadFromStorage<T>(key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback;
   try {
-    const stored = localStorage.getItem(`pi-science.${key}`);
+    const stored = window.localStorage.getItem(`pi-science.${key}`);
     return stored ? JSON.parse(stored) : fallback;
   } catch {
     return fallback;
@@ -33,8 +36,9 @@ function loadFromStorage<T>(key: string, fallback: T): T {
 }
 
 function saveToStorage(key: string, value: unknown) {
+  if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(`pi-science.${key}`, JSON.stringify(value));
+    window.localStorage.setItem(`pi-science.${key}`, JSON.stringify(value));
   } catch {
     // ignore
   }
@@ -48,10 +52,13 @@ export const useUiStore = create<UiState>((set) => ({
     set({ theme: t });
   },
 
-  locale: loadFromStorage("locale", "en"),
+  locale: detectInitialLocale(),
   setLocale: (l) => {
-    saveToStorage("locale", l);
-    set({ locale: l });
+    const locale = resolveLocale(l);
+    saveToStorage("locale", locale);
+    void i18n.changeLanguage(locale);
+    if (typeof document !== "undefined") document.documentElement.lang = locale;
+    set({ locale });
   },
 
   sidebarCollapsed: loadFromStorage("sidebar.collapsed", false),

@@ -29,6 +29,7 @@ async def execute_cell(
             language=body.language,
             code=body.code,
             cwd=cwd,
+            timeout_seconds=body.timeout_seconds,
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -37,9 +38,13 @@ async def execute_cell(
 
 
 @router.post("/{notebook_id}/shutdown")
-async def shutdown_notebook(notebook_id: str):
+async def shutdown_notebook(
+    notebook_id: str,
+    cwd: str | None = Query(None, description="Only shut down kernels in this workspace"),
+    language: str | None = Query(None, description="Optionally limit to python or r"),
+):
     """Shut down a notebook's kernel."""
-    await kernel_manager.shutdown_notebook(notebook_id)
+    await kernel_manager.shutdown_notebook(notebook_id, cwd=cwd, language=language)
     return {"ok": True}
 
 

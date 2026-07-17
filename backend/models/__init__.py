@@ -41,10 +41,10 @@ __all__ = [
 
 class PiConfig(BaseModel):
     """Configuration for spawning a pi process."""
-    model: str = "anthropic/claude-sonnet-5-20250929"
+    model: Optional[str] = None
     provider: Optional[str] = None
     api_key: Optional[str] = None
-    thinking: str = "high"
+    thinking: Optional[str] = None
     skills: List[str] = Field(default_factory=list)
     extensions: List[str] = Field(default_factory=list)
 
@@ -74,6 +74,14 @@ class PromptRequest(BaseModel):
 class SetModelRequest(BaseModel):
     """Select a provider/model pair for an active session."""
     model: str
+    thinking: Optional[str] = None
+
+
+class ExtensionUIResponseRequest(BaseModel):
+    """Reply to an interactive request emitted by a pi extension."""
+    value: Optional[str] = None
+    confirmed: Optional[bool] = None
+    cancelled: bool = False
 
 
 class ForkSessionRequest(BaseModel):
@@ -159,6 +167,7 @@ class ExecuteCellRequest(BaseModel):
     language: Literal["python", "r"]
     code: str
     notebook_id: Optional[str] = None
+    timeout_seconds: float = Field(default=120, ge=1, le=600)
 
 
 class CellResult(BaseModel):
@@ -179,6 +188,8 @@ class ProvenanceRecord(BaseModel):
     sessionId: str
     model: Optional[str] = None
     contentHash: Optional[str] = None
+    content: Optional[str] = None
     diff: Optional[str] = None
+    log: Optional[str] = None
     runId: Optional[str] = None
     env: Optional[Dict[str, Any]] = None

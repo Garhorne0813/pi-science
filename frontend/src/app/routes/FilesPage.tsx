@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { FolderOpen, File, ChevronRight, RefreshCw, Trash2, Copy, ArrowUp } from "lucide-react";
 import { useUiStore } from "../../lib/store";
-import { previewKindForName } from "../../lib/artifacts";
+import { fileInspectorForPath } from "../../lib/artifacts";
 
 interface DirEntry {
   path: string; name: string; isDir: boolean; size: number; modified: number;
@@ -22,7 +22,7 @@ export function FilesPage() {
   const [contextMenu, setContextMenu] = useState<{ entry: DirEntry; x: number; y: number } | null>(null);
   const openInspector = useUiStore((s) => s.openInspector);
 
-  const loadFiles = async (dir: string) => {
+  const loadFiles = useCallback(async (dir: string) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({ cwd: workspaceCwd });
@@ -35,26 +35,30 @@ export function FilesPage() {
       setBreadcrumbs(await bcRes.json());
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  };
+  }, [workspaceCwd]);
 
   useEffect(() => {
-    loadFiles(subdir);
-    document.addEventListener("click", () => setContextMenu(null));
-    return () => document.removeEventListener("click", () => setContextMenu(null));
-  }, [workspaceCwd, subdir]);
+    void loadFiles(subdir);
+  }, [loadFiles, subdir]);
+
+  useEffect(() => {
+    const closeContextMenu = () => setContextMenu(null);
+    document.addEventListener("click", closeContextMenu);
+    return () => document.removeEventListener("click", closeContextMenu);
+  }, []);
 
   const handleClick = (entry: DirEntry) => {
     if (entry.isDir) {
       setSubdir(entry.path);
     } else {
-      openInspector({ variant: "file", path: entry.path, filename: entry.name } as any);
+      openInspector(fileInspectorForPath(entry.path, entry.name, undefined, workspaceCwd));
     }
   };
 
   const handleDelete = async (entry: DirEntry) => {
     try {
       await fetch(`/api/files/${encodeURIComponent(entry.path)}?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "DELETE" });
-      loadFiles(subdir);
+      void loadFiles(subdir);
     } catch (e) { console.error(e); }
     setContextMenu(null);
   };
@@ -84,7 +88,7 @@ export function FilesPage() {
             {/* Breadcrumbs */}
             <div className="flex items-center gap-1 mt-2 text-sm text-muted">
               <button onClick={() => setSubdir("")} className="hover:text-text">Workspace</button>
-              {breadcrumbs.map((bc, i) => (
+              {breadcrumbs.map((bc) => (
                 <span key={bc.path} className="flex items-center gap-1">
                   <ChevronRight size={12} />
                   <button onClick={() => setSubdir(bc.path)} className="hover:text-text">{bc.name}</button>
@@ -92,7 +96,7 @@ export function FilesPage() {
               ))}
             </div>
           </div>
-          <button onClick={() => loadFiles(subdir)} className="rounded-input px-2 py-1 text-xs text-muted hover:text-text hover:bg-surface-2 flex items-center gap-1">
+          <button onClick={() => void loadFiles(subdir)} className="rounded-input px-2 py-1 text-xs text-muted hover:text-text hover:bg-surface-2 flex items-center gap-1">
             <RefreshCw size={12} className={loading ? "animate-spin" : ""} /> Refresh
           </button>
         </div>
@@ -116,7 +120,7 @@ export function FilesPage() {
           <div className="rounded-card border border-border bg-surface overflow-hidden">
             {entries.map((e) => (
               <div key={e.path} onContextMenu={(ev) => handleContextMenu(ev, e)}
-                className="flex items-center gap-3 px-4 py-2.5 border-b border-faint last:border-b-0 hover:bg-surface-2 cursor-pointer text-sm">
+                className="group flex items-center gap-3 px-4 py-2.5 border-b border-faint last:border-b-0 hover:bg-surface-2 cursor-pointer text-sm">
                 <button onClick={() => handleClick(e)} className="flex items-center gap-3 flex-1 min-w-0 text-left">
                   {e.isDir ? <FolderOpen size={16} className="text-accent/60 shrink-0" /> : <File size={16} className="text-muted shrink-0" />}
                   <span className="truncate text-text">{e.name}</span>

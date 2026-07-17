@@ -45,13 +45,14 @@ export function FilePreviewInspector({
   data,
   onClose,
   controls,
+  cwd,
 }: {
   data: FilePreviewInspectorT;
   onClose: () => void;
   /** Pane-level header buttons (e.g. maximize), rendered before Close. */
   controls?: React.ReactNode;
+  cwd?: string;
 }) {
-  const { t } = useTranslation(["inspector", "common"]);
   const kind = previewKindForName(data.filename);
   const needsUrl = kind === "pdf" || kind === "image" || kind === "html" || kind === "video";
   const needsText =
@@ -84,7 +85,7 @@ export function FilePreviewInspector({
     (async () => {
       try {
         if (needsUrl) {
-          const u = await previewUrl(data.path, data.root);
+          const u = previewUrl(data.path, data.root, cwd);
           if (cancelled) return;
           setUrl(u);
           // Browser dev has no local server; html can still preview inline content.
@@ -93,7 +94,7 @@ export function FilePreviewInspector({
           }
         }
         if (needsText && data.content === undefined) {
-          const f = await readArtifact(data.path, data.root);
+          const f = await readArtifact(data.path, data.root, cwd);
           if (cancelled) return;
           if (f && f.encoding === "utf8") setText(f.data);
           else if (f) setError("Binary file — cannot preview as text");
@@ -101,7 +102,7 @@ export function FilePreviewInspector({
             setError("File not found or inaccessible");
         }
         if (needsBytes) {
-          const f = await readArtifact(data.path, data.root);
+          const f = await readArtifact(data.path, data.root, cwd);
           if (cancelled) return;
           if (f && f.encoding === "base64") setBytes(base64ToBytes(f.data));
           else setError("File not found or inaccessible");
@@ -119,7 +120,7 @@ export function FilePreviewInspector({
     // locale switch mid-load shouldn't re-trigger a network/disk read to refresh
     // an error string.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.path, data.content, data.root, kind, needsUrl, needsText, needsBytes]);
+  }, [cwd, data.path, data.content, data.root, kind, needsUrl, needsText, needsBytes]);
 
   const canToggle =
     kind === "html" || kind === "markdown" || kind === "molecule" || kind === "genome";
@@ -139,7 +140,7 @@ export function FilePreviewInspector({
         <PaneTitlebarInset />
         <span className="truncate text-sm font-medium text-text">{data.filename}</span>
         <span className="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">
-          {(data as any).artifact || "File"}
+          {data.artifact || "File"}
         </span>
         {canToggle && (
           <div className="ml-2 flex items-center gap-1 rounded-input bg-surface-2 p-0.5">
@@ -167,7 +168,7 @@ export function FilePreviewInspector({
           className="text-text hover:opacity-60"
           aria-label={"Open"}
           title={"Open externally"}
-          onClick={() => void openArtifactExternally(data.path, data.root)}
+          onClick={() => void openArtifactExternally(data.path, data.root, cwd)}
         >
           <ExternalLink size={14} strokeWidth={1.5} />
         </button>
@@ -178,7 +179,7 @@ export function FilePreviewInspector({
       </header>
 
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto bg-surface-2">
-        {showHistory && <ProvenancePanel path={data.path} language={data.language} />}
+        {showHistory && <ProvenancePanel path={data.path} language={data.language} cwd={cwd} />}
         {!showHistory && loading && (
           <div className="flex items-center gap-2 p-4 text-sm text-muted">
             <Loader2 size={15} className="animate-spin" /> {`Loading ${data.filename}...`}
@@ -190,7 +191,8 @@ export function FilePreviewInspector({
             filename={data.filename}
             path={data.path}
             root={data.root}
-            onOpenExternally={() => void openArtifactExternally(data.path, data.root)}
+            cwd={cwd}
+            onOpenExternally={() => void openArtifactExternally(data.path, data.root, cwd)}
           />
         )}
         {!showHistory && !loading && !error && (
@@ -229,7 +231,6 @@ function Body({
   path: string;
   language?: string;
 }) {
-  const { t } = useTranslation(["inspector", "common"]);
   if (kind === "docx" || kind === "xlsx" || kind === "pptx") {
     // Office views scroll internally (the outer pane never does), so they
     // carry their own scroll memory, keyed apart from the outer container's.
@@ -431,7 +432,6 @@ function Note({ text }: { text: string }) {
 /** Tabular file preview with a Table ↔ Chart toggle. The Chart tab appears only
  *  when the data has a numeric column to plot (P1-5 native chart surface). */
 function TableView({ table }: { table: import("@/lib/csv").ParsedTable }) {
-  const { t } = useTranslation(["inspector", "common"]);
   const [view, setView] = useState<"table" | "chart">("table");
   const chartable = canChart(table);
   return (
@@ -469,15 +469,17 @@ export function PreviewError({
   filename,
   path,
   root,
+  cwd,
   onOpenExternally,
 }: {
   error: string;
   filename: string;
   path?: string;
   root?: FileRoot;
+  cwd?: string;
   onOpenExternally: () => void;
 }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   const tooLarge = /too large/i.test(error);
   const [pointer, setPointer] = useState<LargeFilePointer | null>(null);
   const [probing, setProbing] = useState(false);
@@ -488,7 +490,9 @@ export function PreviewError({
     setProbing(true);
     setProbeError(null);
     try {
-      setPointer(await probeLargeFile(path, root));
+      const result = await probeLargeFile(path, root, cwd);
+      if (result) setPointer(result);
+      else setProbeError("Unable to inspect this file.");
     } catch (e) {
       setProbeError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -529,14 +533,15 @@ export function PreviewError({
 
 /** Render the probe's memory pointer as a compact, readable fact sheet. */
 function LargeFilePointerPanel({ p }: { p: LargeFilePointer }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   if (p.error) return <div className="mt-3 text-[13px] text-error">{p.error}</div>;
   const fmt = (n: number) => formatNumber(n);
   const rows: [string, string][] = [];
   if (p.format) rows.push([t("filePreview.pointer.format"), p.format]);
   if (p.size) rows.push([t("filePreview.pointer.size"), p.size + (p.gzipped ? ` ${t("filePreview.pointer.gzipped")}` : "")]);
   if (p.approx_rows !== undefined) rows.push([t("filePreview.pointer.approxRows"), fmt(p.approx_rows)]);
-  if (p.num_rows !== undefined) rows.push([t("filePreview.pointer.rows"), fmt(p.num_rows)]);
+  const exactRows = p.num_rows ?? p.n_rows ?? p.rows;
+  if (exactRows !== undefined) rows.push([t("filePreview.pointer.rows"), fmt(exactRows)]);
   if (p.approx_reads !== undefined) rows.push([t("filePreview.pointer.approxReads"), fmt(p.approx_reads)]);
   if (p.approx_sequences !== undefined) rows.push([t("filePreview.pointer.approxSequences"), fmt(p.approx_sequences)]);
   if (p.approx_variants !== undefined) rows.push([t("filePreview.pointer.approxVariants"), fmt(p.approx_variants)]);

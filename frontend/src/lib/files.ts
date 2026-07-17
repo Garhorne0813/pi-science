@@ -26,9 +26,10 @@ export function setCurrentCwd(cwd: string) {
 export async function readArtifact(
   path: string,
   root?: FileRoot,
+  cwd?: string,
 ): Promise<ArtifactFile | null> {
   try {
-    const params = new URLSearchParams({ cwd: _currentCwd });
+    const params = new URLSearchParams({ cwd: cwd || _currentCwd });
     if (root) params.set("root", root);
     const res = await fetch(`${API}/files/${encodeURIComponent(path)}?${params}`);
     if (!res.ok) return null;
@@ -39,8 +40,8 @@ export async function readArtifact(
 }
 
 /** URL for browser-native preview (PDF, images, HTML, video). */
-export function previewUrl(path: string, root?: FileRoot): string {
-  const params = new URLSearchParams({ cwd: _currentCwd });
+export function previewUrl(path: string, root?: FileRoot, cwd?: string): string {
+  const params = new URLSearchParams({ cwd: cwd || _currentCwd });
   if (root) params.set("root", root);
   return `${API}/files/${encodeURIComponent(path)}/raw?${params}`;
 }
@@ -49,14 +50,15 @@ export function previewUrl(path: string, root?: FileRoot): string {
 export async function openArtifactExternally(
   path: string,
   root?: FileRoot,
+  cwd?: string,
 ): Promise<void> {
-  const url = previewUrl(path, root);
+  const url = previewUrl(path, root, cwd);
   window.open(url, "_blank");
 }
 
 /** Download a file through the browser. */
-export async function saveWorkspaceFile(path: string, root?: FileRoot): Promise<void> {
-  const url = previewUrl(path, root);
+export async function saveWorkspaceFile(path: string, root?: FileRoot, cwd?: string): Promise<void> {
+  const url = previewUrl(path, root, cwd);
   const a = document.createElement("a");
   a.href = url;
   a.download = path.split("/").pop() || path;
@@ -68,6 +70,7 @@ export async function absoluteArtifactPath(
   path: string,
   root?: FileRoot,
 ): Promise<string | null> {
+  void root;
   return path;
 }
 
@@ -95,9 +98,10 @@ export interface DirEntry {
   modified: number;
 }
 
-export async function listDir(rel: string, root?: FileRoot): Promise<DirEntry[]> {
+export async function listDir(rel: string, root?: FileRoot, cwd?: string): Promise<DirEntry[]> {
   try {
-    const params = new URLSearchParams({ cwd: rel || "." });
+    const params = new URLSearchParams({ cwd: cwd || _currentCwd });
+    if (rel) params.set("subdir", rel);
     if (root) params.set("root", root);
     const res = await fetch(`${API}/files?${params}`);
     if (!res.ok) return [];
@@ -107,9 +111,41 @@ export async function listDir(rel: string, root?: FileRoot): Promise<DirEntry[]>
   }
 }
 
-// Re-export for FilePreviewInspector compatibility
-export type LargeFilePointer = Record<string, unknown>;
+export interface LargeFilePointer {
+  error?: string;
+  format?: string;
+  size?: string;
+  size_bytes?: number;
+  note?: string | null;
+  hint?: string;
+  gzipped?: boolean;
+  approx_rows?: number;
+  rows?: number;
+  num_rows?: number;
+  n_rows?: number;
+  approx_reads?: number;
+  approx_sequences?: number;
+  approx_variants?: number;
+  n_columns?: number;
+  read_length?: { min: number; max: number; mean: number };
+  samples?: string[];
+  sample_ids?: string[];
+  columns?: Array<{ name: string; dtype: string }>;
+  datasets?: Array<{ path: string; shape: Array<number | string>; dtype: string }>;
+}
 
-export async function probeLargeFile(path: string, root?: string): Promise<LargeFilePointer | null> {
-  return null; // Web implementation: skip large file probing
+export async function probeLargeFile(
+  path: string,
+  root?: FileRoot,
+  cwd?: string,
+): Promise<LargeFilePointer | null> {
+  try {
+    const params = new URLSearchParams({ cwd: cwd || _currentCwd });
+    if (root) params.set("root", root);
+    const res = await fetch(`${API}/files/probe/${encodeURIComponent(path)}?${params}`);
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
 }

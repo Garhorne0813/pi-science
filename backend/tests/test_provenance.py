@@ -28,6 +28,7 @@ class TestProvenanceStore:
         assert rec1.path == "output.csv"
         assert rec1.sessionId == "sess-1"
         assert rec1.contentHash is not None
+        assert rec1.content == "a,b,c\n1,2,3\n"
 
         # Query by path
         records = await store.query(path="output.csv")
@@ -104,6 +105,15 @@ class TestProvenanceStore:
         )
         assert r1.contentHash == r2.contentHash
 
+    @pytest.mark.anyio
+    async def test_large_content_is_capped_but_hashes_full_content(self, store):
+        content = "x" * 100_001
+        record = await store.record(
+            path="large.txt", session_id="s1", tool="write", content=content
+        )
+        assert record.content == "x" * 100_000 + "\n[truncated]"
+        assert record.contentHash is not None
+
 
 class TestGetStore:
     """Tests for the store singleton registry."""
@@ -165,6 +175,11 @@ class TestProvenanceAPI:
         data = res.json()
         assert data["path"] == "data.csv"
         assert len(data["versions"]) == 2
+
+    async def test_env_lockfile_rejects_path_like_hash(self, client, temp_workspace):
+        cwd = str(temp_workspace)
+        res = await client.get(f"/api/provenance/env/not-a-hash?cwd={cwd}")
+        assert res.status_code == 400
 
     async def test_capture_environment(self, client, temp_workspace):
         """POST /api/provenance/capture returns env snapshot."""

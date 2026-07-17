@@ -11,7 +11,7 @@ import { divergingColor, parseAnomaly, type AnomalyGrid } from "@/lib/anomaly";
  * the file alone; theme-independent like the other scientific viewers.
  */
 export function AnomalyMapView({ filename, text }: { filename: string; text: string }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   const parsed = useMemo<{ grid: AnomalyGrid | null; error: string | null }>(() => {
     try {
       return { grid: parseAnomaly(text), error: null };
@@ -46,7 +46,7 @@ function niceStep(span: number): number {
 }
 
 function Map({ filename, grid }: { filename: string; grid: AnomalyGrid }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [hover, setHover] = useState<{ lat: number; lon: number; v: number } | null>(null);
 

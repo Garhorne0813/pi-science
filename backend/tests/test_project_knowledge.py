@@ -1,5 +1,6 @@
 """Project knowledge, Reviewer, and file organization tests."""
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -144,6 +145,14 @@ def test_project_document_versions_restore_knowledge_and_markdown(temp_workspace
     assert "The selected model works" not in store.project_file.read_text()
 
 
+def test_project_document_version_restore_rejects_path_traversal(temp_workspace):
+    store = ProjectKnowledgeStore(temp_workspace)
+    store.initialize()
+
+    with pytest.raises(KeyError):
+        store.restore_project_version("../../outside")
+
+
 def test_file_index_preserves_id_after_move(temp_workspace):
     source = temp_workspace / "result.csv"
     source.write_text("a,b\n1,2\n")
@@ -272,6 +281,57 @@ async def test_reviewer_rejects_unsupported_evidence(temp_workspace):
     assert result["created"] == 0
     assert result["skipped"] == 1
     assert service.store.list_proposals() == []
+
+
+@pytest.mark.anyio
+async def test_reviewer_caps_batches_without_skipping_the_next_message(temp_workspace, monkeypatch):
+    import services.reviewer_service as reviewer_module
+
+    write_session(temp_workspace, "session-capped", [
+        {"id": "message-1", "role": "user", "text": "A" * 40},
+        {"id": "message-2", "role": "assistant", "text": "B" * 40},
+    ])
+    prompts = []
+
+    async def fake_runner(prompt, workspace):
+        prompts.append(prompt)
+        return json.dumps({"proposals": []})
+
+    monkeypatch.setattr(reviewer_module, "MAX_REVIEW_INPUT_CHARS", 50)
+    service = ReviewerService(temp_workspace, model_runner=fake_runner)
+
+    await service.review_session("session-capped")
+    assert service.store.get_cursor("session-capped")["message_count"] == 1
+    await service.review_session("session-capped")
+
+    assert len(prompts) == 2
+    assert "message-1" in prompts[0] and "message-2" not in prompts[0]
+    assert "message-2" in prompts[1]
+    assert service.store.get_cursor("session-capped")["message_count"] == 2
+
+
+@pytest.mark.anyio
+async def test_auto_reviewer_schedule_debounces_and_can_be_cancelled(temp_workspace, monkeypatch):
+    import services.reviewer_service as reviewer_module
+
+    calls = []
+
+    async def fake_auto_review(cwd, session_id):
+        calls.append((cwd, session_id))
+
+    monkeypatch.setattr(reviewer_module, "_auto_review", fake_auto_review)
+    session_id = "session-debounce"
+    reviewer_module.schedule_auto_review(str(temp_workspace), session_id)
+    reviewer_module.schedule_auto_review(str(temp_workspace), session_id)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert calls == [(str(temp_workspace), session_id)]
+
+    calls.clear()
+    reviewer_module.schedule_auto_review(str(temp_workspace), session_id)
+    reviewer_module.cancel_auto_review(str(temp_workspace), session_id)
+    await asyncio.sleep(0)
+    assert calls == []
 
 
 @pytest.mark.anyio

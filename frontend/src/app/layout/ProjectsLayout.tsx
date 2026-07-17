@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useParams, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
-import { PanelLeft, Settings, MessageSquare, Plus, Trash2, FolderOpen, ArrowLeft, Sun, Moon, Puzzle, FileText, BookOpen, Play, Inbox } from "lucide-react";
+import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Sun, Moon, Puzzle, FileText, BookOpen, Play, Inbox } from "lucide-react";
 import { useUiStore } from "../../lib/store";
 import { useRuntimeStore } from "../../lib/runtime-store";
 import { InspectorShell } from "../../components/inspector/InspectorShell";
@@ -8,7 +8,7 @@ import { RightPane } from "../../components/inspector/RightPane";
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
 import { setCurrentCwd } from "../../lib/files";
 import { cn } from "../../lib/cn";
-import { getClient, type SessionInfo } from "../../lib/pi-science-client";
+import { getClient, getSessionName } from "../../lib/pi-science-client";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 
 export function ProjectsLayout() {
@@ -18,22 +18,19 @@ export function ProjectsLayout() {
   const inspectorOpen = useUiStore((s) => s.inspectorOpen);
   const inspectorData = useUiStore((s) => s.inspectorData);
   const closeInspector = useUiStore((s) => s.closeInspector);
-  const navigate = useNavigate();
   const location = useLocation();
   const { cwd: workspaceCwd } = useParams<{ cwd: string }>();
 
   // Decode workspace cwd from URL
   const activeCwd = workspaceCwd ? decodeURIComponent(workspaceCwd) : null;
-  const isProjects = location.pathname === "/" || location.pathname === "/settings";
   const isWorkspace = !!activeCwd;
 
-  // Set current CWD for file loading
   useEffect(() => {
     if (activeCwd) setCurrentCwd(activeCwd);
   }, [activeCwd]);
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-bg text-text">
+    <div className="flex h-dvh w-screen overflow-hidden bg-bg text-text">
       {/* Sidebar */}
       {sidebarCollapsed ? (
         <aside className="h-full flex-col border-r border-border bg-surface flex shrink-0 overflow-hidden w-12 items-center py-3 gap-2">
@@ -59,7 +56,9 @@ export function ProjectsLayout() {
           <CollapsedNavItem to="/settings" icon={<Settings size={16} />} label="Settings" />
         </aside>
       ) : (
-        <aside className="h-full flex-col border-r border-border bg-surface flex shrink-0 overflow-hidden" style={{ width: sidebarWidth }}>
+        <>
+        <button type="button" aria-label="Close sidebar" onClick={() => setSidebarCollapsed(true)} className="fixed inset-0 z-20 bg-black/45 md:hidden" />
+        <aside className="absolute z-30 flex h-full shrink-0 flex-col overflow-hidden border-r border-border bg-surface md:relative" style={{ width: sidebarWidth, maxWidth: "86vw" }}>
           <div className="flex flex-col h-full px-3 py-4">
             {/* Header */}
             <div className="flex items-center justify-between mb-4 px-2">
@@ -67,8 +66,9 @@ export function ProjectsLayout() {
                 Pi-Science
               </h1>
               <button
-                className="rounded p-1.5 text-muted hover:text-text hover:bg-surface-2"
+                className="flex h-10 w-10 items-center justify-center rounded-input text-muted hover:bg-surface-2 hover:text-text"
                 onClick={() => setSidebarCollapsed(true)}
+                aria-label="Close sidebar"
               >
                 <PanelLeft size={16} />
               </button>
@@ -85,10 +85,10 @@ export function ProjectsLayout() {
               {!isWorkspace && <SidebarNavItem to="/skills" label="Skills" icon={<Puzzle size={16} />} active={false} />}
               {isWorkspace && (
                 <>
-                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} label="Files" icon={<FileText size={16} />} active={false} />
-                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} label="Notebooks" icon={<BookOpen size={16} />} active={false} />
-                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/runs`} label="Runs" icon={<Play size={16} />} active={false} />
-                  <KnowledgeNavItem cwd={activeCwd!} />
+                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} label="Files" icon={<FileText size={16} />} active={location.pathname.endsWith("/files")} />
+                  <KnowledgeNavItem cwd={activeCwd!} active={location.pathname.endsWith("/knowledge")} />
+                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} label="Notebooks" icon={<BookOpen size={16} />} active={location.pathname.endsWith("/notebooks")} />
+                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/runs`} label="Runs" icon={<Play size={16} />} active={location.pathname.endsWith("/runs")} />
                 </>
               )}
             </nav>
@@ -112,10 +112,14 @@ export function ProjectsLayout() {
             </div>
           </div>
         </aside>
+        </>
       )}
 
       {/* Main */}
-      <main className="flex-1 flex flex-col overflow-hidden min-w-0">
+      <main className={cn(
+        "flex min-w-0 flex-1 flex-col overflow-hidden",
+        sidebarCollapsed && "pt-12 md:pt-0 md:pl-12",
+      )}>
         <Outlet />
       </main>
 
@@ -123,7 +127,7 @@ export function ProjectsLayout() {
       {inspectorOpen && inspectorData && (
         <RightPane onClose={closeInspector}>
           <ErrorBoundary>
-            <InspectorShell inspector={inspectorData} onClose={closeInspector} />
+            <InspectorShell inspector={inspectorData} onClose={closeInspector} cwd={activeCwd || undefined} />
           </ErrorBoundary>
         </RightPane>
       )}
@@ -136,33 +140,41 @@ export function ProjectsLayout() {
 function WorkspaceSessionList({ cwd }: { cwd: string }) {
   const sessions = useRuntimeStore((s) => s.sessions);
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
-  const loadSession = useRuntimeStore((s) => s.loadSession);
+  const working = useRuntimeStore((s) => s.working);
+  const forkSession = useRuntimeStore((s) => s.forkSession);
   const createNewSession = useRuntimeStore((s) => s.createNewSession);
   const navigate = useNavigate();
+  const location = useLocation();
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [forking, setForking] = useState<string | null>(null);
 
   useEffect(() => {
-    getClient().listSessions(cwd).then(async (list) => {
-      // Inject session names from localStorage (backend doesn't store names)
-      const { getSessionName } = await import("../../lib/pi-science-client");
-      const named = list.map((s: SessionInfo) => ({
-        ...s,
-        name: s.name || getSessionName(s.id) || undefined,
-      }));
-      useRuntimeStore.setState({ sessions: named, cwd });
-      // Auto-load most recent session if none active
-      const state = useRuntimeStore.getState();
-      if (list.length > 0 && !state.activeSessionId) {
-        const latest = list[0];
-        state.loadSession(latest.id);
-        navigate(`/workspace/${encodeURIComponent(cwd)}/session/${latest.id}`);
-      }
-    });
-  }, [cwd]);
+    let cancelled = false;
+    getClient().listSessions(cwd)
+      .then((list) => {
+        if (cancelled) return;
+        const named = list.map((session) => ({
+          ...session,
+          name: session.name || getSessionName(session.id) || undefined,
+        }));
+        useRuntimeStore.setState({ sessions: named, cwd });
+        // Auto-load most recent session if none active
+        const state = useRuntimeStore.getState();
+        const workspaceRoot = `/workspace/${encodeURIComponent(cwd)}`;
+        if (named.length > 0 && !state.activeSessionId && location.pathname === workspaceRoot) {
+          const latest = named[0];
+          navigate(`/workspace/${encodeURIComponent(cwd)}/session/${latest.id}`);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) console.error("Failed to load workspace sessions:", error);
+      });
+    return () => { cancelled = true; };
+  }, [cwd, location.pathname, navigate]);
 
   const handleDelete = async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
-    if (deleting) return;
+    if (deleting || working) return;
     setDeleting(sessionId);
     try {
       await getClient().deleteSession(sessionId, cwd);
@@ -179,16 +191,28 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
   };
 
   const handleNew = async () => {
-    const existingEmpty = sessions.find((s) => s.name === "New Session");
-    if (existingEmpty) {
-      loadSession(existingEmpty.id);
-      navigate(`/workspace/${encodeURIComponent(cwd)}/session/${existingEmpty.id}`);
-      return;
+    if (working) return;
+    try {
+      const newId = await createNewSession();
+      if (newId) {
+        navigate(`/workspace/${encodeURIComponent(cwd)}/session/${newId}`);
+      }
+    } catch (err) {
+      console.error("Create session failed:", err);
     }
-    const newId = await createNewSession();
-    if (newId) {
-      loadSession(newId);
+  };
+
+  const handleFork = async (e: React.MouseEvent, sessionId: string) => {
+    e.stopPropagation();
+    if (forking || working) return;
+    setForking(sessionId);
+    try {
+      const newId = await forkSession(sessionId);
       navigate(`/workspace/${encodeURIComponent(cwd)}/session/${newId}`);
+    } catch (err) {
+      console.error("Fork failed:", err);
+    } finally {
+      setForking(null);
     }
   };
 
@@ -196,7 +220,12 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
     <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
       <div className="flex items-center justify-between px-2 mb-1">
         <span className="text-xs font-medium uppercase tracking-wider text-muted">Sessions</span>
-        <button onClick={handleNew} className="rounded p-0.5 text-muted hover:text-text hover:bg-surface-2" title="New session">
+        <button
+          onClick={handleNew}
+          disabled={working}
+          className="rounded p-0.5 text-muted hover:text-text hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
+          title={working ? "Stop the current task before creating a new session" : "New session"}
+        >
           <Plus size={14} />
         </button>
       </div>
@@ -208,12 +237,13 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
             <div key={s.id} className="group relative flex items-center rounded-input hover:bg-surface-2">
               <button
                 onClick={() => {
-                  loadSession(s.id);
                   navigate(`/workspace/${encodeURIComponent(cwd)}/session/${s.id}`);
                 }}
+                disabled={working && activeSessionId !== s.id}
                 className={cn(
                   "flex items-center gap-2 min-w-0 flex-1 py-1 pl-2 pr-1 text-[13px] text-left",
                   activeSessionId === s.id ? "text-text font-medium" : "text-text/90",
+                  working && activeSessionId !== s.id && "cursor-not-allowed opacity-40",
                 )}
               >
                 <MessageSquare size={12} className="shrink-0 text-muted" />
@@ -225,10 +255,22 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
                 )}
               </button>
               <button
+                onClick={(e) => handleFork(e, s.id)}
+                disabled={working}
+                className={cn(
+                  "shrink-0 rounded p-1 text-muted hover:text-accent hover:bg-accent/10",
+                  "hidden group-hover:block disabled:cursor-not-allowed disabled:opacity-40", forking === s.id && "block",
+                )}
+                title="Fork session"
+              >
+                <GitFork size={12} />
+              </button>
+              <button
                 onClick={(e) => handleDelete(e, s.id)}
+                disabled={working}
                 className={cn(
                   "shrink-0 rounded p-1 mr-1 text-muted hover:text-error hover:bg-error/10",
-                  "hidden group-hover:block", deleting === s.id && "block",
+                  "hidden group-hover:block disabled:cursor-not-allowed disabled:opacity-40", deleting === s.id && "block",
                 )}
               >
                 <Trash2 size={12} />
@@ -274,26 +316,26 @@ function CollapsedNavItem({ to, icon, label }: { to: string; icon: React.ReactNo
 
 function SidebarNavItem({ to, label, icon, active, badge }: { to: string; label: string; icon?: React.ReactNode; active: boolean; badge?: number }) {
   const navigate = useNavigate();
+  const setSidebarCollapsed = useUiStore((state) => state.setSidebarCollapsed);
   return (
     <button
-      onClick={() => navigate(to)}
+      onClick={() => {
+        navigate(to);
+        if (window.innerWidth < 768) setSidebarCollapsed(true);
+      }}
       className={cn(
-        "flex items-center gap-2.5 rounded-input px-2 py-1 text-[13px] text-left w-full",
+        "flex min-h-11 items-center gap-2.5 rounded-input px-2 py-2 text-[13px] text-left w-full",
         active ? "bg-surface-2 text-text font-medium" : "text-text/90 hover:bg-surface-2 hover:text-text",
       )}
     >
       {icon && <span className="shrink-0 text-muted">{icon}</span>}
-      {label}
-      {badge !== undefined && badge > 0 && (
-        <span className="ml-auto rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold text-accent-fg leading-none">{badge}</span>
-      )}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {!!badge && <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] leading-none text-accent-fg">{badge}</span>}
     </button>
   );
 }
 
-function KnowledgeNavItem({ cwd }: { cwd: string }) {
-  const location = useLocation();
-  const active = location.pathname.endsWith("/knowledge");
+function KnowledgeNavItem({ cwd, active }: { cwd: string; active: boolean }) {
   const [pending, setPending] = useState(0);
   useEffect(() => {
     let cancelled = false;
@@ -305,15 +347,7 @@ function KnowledgeNavItem({ cwd }: { cwd: string }) {
     const interval = setInterval(poll, 8000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [cwd]);
-  return (
-    <SidebarNavItem
-      to={`/workspace/${encodeURIComponent(cwd)}/knowledge`}
-      label="Knowledge"
-      icon={<Inbox size={16} />}
-      active={active}
-      badge={pending > 0 ? pending : undefined}
-    />
-  );
+  return <SidebarNavItem to={`/workspace/${encodeURIComponent(cwd)}/knowledge`} label="Project Knowledge" icon={<Inbox size={16} />} active={active} badge={pending} />;
 }
 
 function StatusPills() {

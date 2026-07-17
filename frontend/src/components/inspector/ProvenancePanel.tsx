@@ -2,10 +2,9 @@ import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Loader2, MessageSquare, Package, RotateCcw, Terminal } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import type { ProvenanceRecord, RunRecord } from "../../types/thread";
+import type { ProvenanceEnvironment, ProvenanceRecord, RunRecord } from "../../types/thread";
 import { listProvenance, readEnvLockfile } from "@/lib/provenance";
 import { listRuns, reproduceRunPrompt } from "@/lib/runs";
-import { useUiStore } from "@/lib/store";
 import { useRuntimeStore } from "@/lib/runtime-store";
 import { CodeViewer } from "@/components/code-viewer/CodeViewer";
 import { DiffView } from "@/components/code-viewer/DiffView";
@@ -13,10 +12,10 @@ import { cn } from "@/lib/cn";
 import i18n from "@/i18n";
 
 /** The prompt the Reproduce action drafts — prefilled, reviewed, user-sent. */
-export function reproducePrompt(r: ProvenanceRecord): string {
-  const pkgs = r.env?.packages;
+function reproducePrompt(r: ProvenanceRecord): string {
+  const pkgs = packageSnapshot(r.env);
   const pkgNote = pkgs
-    ? ` The environment had ${pkgs.count} installed Python packages, listed in \`.openscience/env/${pkgs.hash}.txt\` — if the regenerated result differs, install matching versions from that lockfile and re-run.`
+    ? ` The environment had ${pkgs.count} installed Python packages, listed in \`.pi-science/env/${pkgs.hash}.txt\` — if the regenerated result differs, install matching versions from that lockfile and re-run.`
     : "";
   const env = r.env
     ? ` It was produced with${r.env.python ? ` Python ${r.env.python} on` : ""} ${r.env.platform}.${pkgNote}`
@@ -25,11 +24,11 @@ export function reproducePrompt(r: ProvenanceRecord): string {
   // A fence longer than any backtick run in the content, so embedded ``` in
   // the recorded code (e.g. a generated report.md) cannot close it early.
   const fence = "`".repeat(Math.max(3, longestBacktickRun(content) + 1));
-  // Records are capped at 100 KB (provenance.rs cap_content) — a truncated
+  // Records are capped at 100 KB by the backend — a truncated
   // record is not runnable, so tell the agent where the full code lives.
   const truncNote = content.endsWith("[truncated]")
     ? " NOTE: the recorded code below is truncated at the store's size cap — read the full " +
-      `record for \`${r.path}\` from \`.openscience/provenance.jsonl\` before re-running.`
+      `record for \`${r.path}\` from \`.pi-science/provenance.jsonl\` before re-running.`
     : "";
   return (
     `Reproduce \`${r.path}\` (provenance v${r.version}).${env} ` +
@@ -45,14 +44,26 @@ function longestBacktickRun(text: string): number {
   return max;
 }
 
+function packageSnapshot(
+  env?: ProvenanceEnvironment,
+): { hash: string; count: number } | null {
+  if (!env) return null;
+  if (env.packages) return env.packages;
+  if (typeof env.packages_hash === "string" && typeof env.package_count === "number") {
+    return { hash: env.packages_hash, count: env.package_count };
+  }
+  return null;
+}
+
 /**
  * The provenance History of one artifact: every recorded version with the code
  * that produced it, the tool, the model, and a link back to the originating
- * conversation. Data comes from `.openscience/provenance.jsonl` (P0-3).
+ * conversation. Data comes from `.pi-science/provenance.jsonl`.
  */
-export function ProvenancePanel({ path, language }: { path: string; language?: string }) {
+export function ProvenancePanel({ path, language, cwd: cwdOverride }: { path: string; language?: string; cwd?: string }) {
   const { t } = useTranslation();
-  const cwd = useRuntimeStore((s) => s.cwd);
+  const runtimeCwd = useRuntimeStore((s) => s.cwd);
+  const cwd = cwdOverride || runtimeCwd;
   const [records, setRecords] = useState<ProvenanceRecord[] | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
   // Runs a version can be produced by, keyed by runId — links a file to its recipe.
@@ -60,7 +71,8 @@ export function ProvenancePanel({ path, language }: { path: string; language?: s
   // The package lockfile currently shown, keyed by its content hash.
   const [lockfile, setLockfile] = useState<{ hash: string; text: string | null } | null>(null);
   const navigate = useNavigate();
-  const setComposerDraft = useUiStore((s) => s.setComposerDraft);
+  const setComposerDraft = useRuntimeStore((s) => s.setDraft);
+  const workspaceRoute = `/workspace/${encodeURIComponent(cwd)}`;
 
   // Toggle the pip-freeze lockfile for a snapshot hash; loads it lazily on open.
   const toggleLockfile = (hash: string) => {
@@ -81,7 +93,11 @@ export function ProvenancePanel({ path, language }: { path: string; language?: s
   const reproduce = (r: ProvenanceRecord) => {
     const run = r.runId ? runsById.get(r.runId) : undefined;
     setComposerDraft(run ? reproduceRunPrompt(run) : reproducePrompt(r));
-    navigate(r.sessionId ? `/live/${r.sessionId}` : "/live");
+    navigate(
+      r.sessionId
+        ? `${workspaceRoute}/session/${encodeURIComponent(r.sessionId)}`
+        : workspaceRoute,
+    );
   };
 
   useEffect(() => {
@@ -89,11 +105,11 @@ export function ProvenancePanel({ path, language }: { path: string; language?: s
     setRecords(null);
     void listProvenance(cwd, path).then((r) => {
       if (cancelled) return;
-      setRecords([...r].reverse()); // newest first
-      setExpanded(r.length > 0 ? r[r.length - 1].version : null);
+      setRecords(r); // backend returns newest first
+      setExpanded(r.length > 0 ? r[0].version : null);
       // Load the runs any of these versions were produced by, for the recipe.
       if (r.some((rec) => rec.runId)) {
-        void listRuns().then((runs) => {
+        void listRuns(cwd).then((runs) => {
           if (cancelled) return;
           setRunsById(new Map(runs.map((run) => [run.runId, run])));
         });
@@ -126,6 +142,7 @@ export function ProvenancePanel({ path, language }: { path: string; language?: s
     <ul className="space-y-2 p-3">
       {records.map((r) => {
         const open = expanded === r.version;
+        const packages = packageSnapshot(r.env);
         return (
           <li key={r.version} className="rounded-input border border-border bg-surface">
             <button
@@ -162,17 +179,17 @@ export function ProvenancePanel({ path, language }: { path: string; language?: s
                         .join(" · ")}
                     </span>
                   )}
-                  {r.env?.packages && (
+                  {packages && (
                     <button
                       className={cn(
                         "flex items-center gap-1 rounded px-1.5 py-0.5 font-mono hover:bg-surface-2 hover:text-text",
-                        lockfile?.hash === r.env.packages.hash && "bg-surface-2 text-text",
+                        lockfile?.hash === packages.hash && "bg-surface-2 text-text",
                       )}
-                      onClick={() => toggleLockfile(r.env!.packages!.hash)}
+                      onClick={() => toggleLockfile(packages.hash)}
                       title={t("provenance.lockfileTitle")}
-                      aria-pressed={lockfile?.hash === r.env.packages.hash}
+                      aria-pressed={lockfile?.hash === packages.hash}
                     >
-                      <Package size={11} /> {t("provenance.packageCount", { count: r.env.packages.count })}
+                      <Package size={11} /> {t("provenance.packageCount", { count: packages.count })}
                     </button>
                   )}
                   {r.log && <span className="truncate">{r.log}</span>}
@@ -193,17 +210,17 @@ export function ProvenancePanel({ path, language }: { path: string; language?: s
                   {r.sessionId && (
                     <button
                       className="flex items-center gap-1 text-link hover:underline"
-                      onClick={() => navigate(`/live/${r.sessionId}`)}
+                      onClick={() => navigate(`${workspaceRoute}/session/${encodeURIComponent(r.sessionId)}`)}
                       title={t("provenance.openConversationTitle")}
                     >
                       <MessageSquare size={12} /> {t("provenance.openConversation")}
                     </button>
                   )}
                 </div>
-                {r.env?.packages && lockfile?.hash === r.env.packages.hash && (
+                {packages && lockfile?.hash === packages.hash && (
                   <div className="rounded-input border border-border bg-surface-2">
                     <div className="border-b border-border px-2.5 py-1 text-[11px] text-muted">
-                      {t("provenance.pipFreezePrefix")}{t("provenance.packageCount", { count: r.env.packages.count })}
+                      {t("provenance.pipFreezePrefix")}{t("provenance.packageCount", { count: packages.count })}
                     </div>
                     {lockfile.text === null ? (
                       <div className="flex items-center gap-2 px-2.5 py-2 text-xs text-muted">
@@ -227,7 +244,7 @@ export function ProvenancePanel({ path, language }: { path: string; language?: s
                       {t("provenance.producedByRunPrefix")}{" "}
                       <button
                         className="font-mono text-link hover:underline"
-                        onClick={() => navigate(`/runs?run=${r.runId}`)}
+                        onClick={() => navigate(`${workspaceRoute}/runs?run=${encodeURIComponent(r.runId!)}`)}
                         title={t("provenance.openRunTitle")}
                       >
                         {r.runId}

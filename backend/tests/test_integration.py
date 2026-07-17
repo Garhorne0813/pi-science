@@ -1,16 +1,21 @@
 """Integration tests — real pi process with LLM, full SSE round-trip.
 
 These tests require a running backend and valid API keys in ~/.pi-science/config.json.
-Run with: PI_CLI_PATH=... pytest tests/test_integration.py -v -s
+Run with: PI_SCIENCE_RUN_INTEGRATION=1 pytest tests/test_integration.py -v -s
 """
 
 import json
+import os
 import time
 import pytest
 import httpx
 
 
 BACKEND_URL = "http://127.0.0.1:8787"
+pytestmark = pytest.mark.skipif(
+    os.environ.get("PI_SCIENCE_RUN_INTEGRATION") != "1",
+    reason="set PI_SCIENCE_RUN_INTEGRATION=1 to run live model integration tests",
+)
 
 
 def _api(path: str) -> str:
@@ -31,6 +36,17 @@ def _wait_for_backend(timeout: int = 10) -> bool:
     return False
 
 
+def _model_config(thinking: str | None = None) -> dict:
+    configured = httpx.get(_api("/api/settings/config"), timeout=5).json()
+    model = os.environ.get("PI_SCIENCE_INTEGRATION_MODEL") or configured.get("model")
+    if not model:
+        pytest.skip("No model configured for live integration tests")
+    return {
+        "model": model,
+        "thinking": thinking or configured.get("thinking") or "off",
+    }
+
+
 @pytest.fixture(scope="module")
 def session():
     """Create a test session that lives for the module."""
@@ -39,7 +55,7 @@ def session():
 
     r = httpx.post(
         _api("/api/sessions"),
-        json={"cwd": ".", "config": {"model": "deepseek/deepseek-v4-pro", "thinking": "high"}},
+        json={"cwd": ".", "config": _model_config()},
         timeout=10,
     )
     if r.status_code != 200:
@@ -132,7 +148,7 @@ class TestSessionLifecycle:
         """Delete a freshly created session."""
         r = httpx.post(
             _api("/api/sessions"),
-            json={"cwd": ".", "config": {"model": "deepseek/deepseek-v4-pro", "thinking": "off"}},
+            json={"cwd": ".", "config": _model_config("off")},
             timeout=10,
         )
         assert r.status_code == 200
@@ -148,7 +164,7 @@ class TestPromptAndSSE:
     def _create_session(self, thinking: str = "off") -> str:
         r = httpx.post(
             _api("/api/sessions"),
-            json={"cwd": ".", "config": {"model": "deepseek/deepseek-v4-pro", "thinking": thinking}},
+            json={"cwd": ".", "config": _model_config(thinking)},
             timeout=10,
         )
         assert r.status_code == 200, f"Create session failed: {r.text}"
@@ -400,7 +416,7 @@ class TestProvenanceIntegration:
     """Test provenance recording through the API."""
 
     def test_record_and_query(self):
-        import tempfile, os
+        import tempfile
         with tempfile.TemporaryDirectory() as tmp:
             r = httpx.post(
                 _api(f"/api/provenance/record?cwd={tmp}&path=integration_test.csv&session_id=int-1&tool=write&content=hello,world"),

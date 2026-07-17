@@ -4,7 +4,6 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { useTranslation } from "react-i18next";
-import i18n from "@/i18n";
 import { extOf } from "@/lib/artifacts";
 import { cn } from "@/lib/cn";
 
@@ -18,7 +17,7 @@ import { cn } from "@/lib/cn";
  * Drag to orbit, scroll to zoom, right-drag to pan.
  */
 export function MeshView({ filename, bytes }: { filename: string; bytes: ArrayBuffer }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   const mountRef = useRef<HTMLDivElement | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const homeRef = useRef<(() => void) | null>(null);

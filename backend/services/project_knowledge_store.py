@@ -324,7 +324,13 @@ class ProjectKnowledgeStore:
         return versions[:limit]
 
     def restore_project_version(self, version_id: str) -> dict[str, Any]:
-        path = self.project_versions_dir / f"{version_id}.json"
+        # Version IDs come from a URL path. Reject separators and any resolved
+        # path outside the project-document snapshots before reading it.
+        if not version_id or Path(version_id).name != version_id:
+            raise KeyError(version_id)
+        path = (self.project_versions_dir / f"{version_id}.json").resolve()
+        if not path.is_relative_to(self.project_versions_dir.resolve()):
+            raise KeyError(version_id)
         row = _read_json(path, None)
         if not isinstance(row, dict) or not isinstance(row.get("document"), str) or not isinstance(row.get("items"), list):
             raise KeyError(version_id)

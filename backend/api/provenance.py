@@ -4,12 +4,13 @@ import re
 
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
+import re
 
 from services.provenance_store import get_store
 
 router = APIRouter(prefix="/api/provenance", tags=["provenance"])
 
-_HASH_RE = re.compile(r"^[a-f0-9]+$")
+_HASH_RE = re.compile(r"^[0-9a-f]{16}$")
 
 
 @router.get("")
@@ -35,9 +36,11 @@ async def get_env_lockfile(
 ):
     """Read a captured environment lockfile by its content hash."""
     if not _HASH_RE.match(hash):
-        raise HTTPException(status_code=400, detail="Invalid hash format")
+        raise HTTPException(status_code=400, detail="Invalid environment lockfile hash")
     store = get_store(cwd)
-    env_file = store._env_dir / f"{hash}.txt"
+    env_file = (store._env_dir / f"{hash}.txt").resolve()
+    if not env_file.is_relative_to(store._env_dir.resolve()):
+        raise HTTPException(status_code=400, detail="Invalid environment lockfile path")
     if not env_file.exists():
         raise HTTPException(status_code=404, detail="Environment lockfile not found")
     return {"hash": hash, "text": env_file.read_text()}

@@ -91,7 +91,6 @@ async def create_workspace(body: CreateWorkspaceRequest):
 @router.post("/open", response_model=WorkspaceInfo)
 async def open_folder(body: OpenFolderRequest):
     """Open an existing folder as a workspace."""
-    import os as _os
     folder = Path(body.path).expanduser().resolve()
     if not folder.exists():
         raise HTTPException(status_code=404, detail=f"Folder not found: {folder}")
@@ -117,9 +116,17 @@ async def open_folder(body: OpenFolderRequest):
 async def rename_workspace(body: RenameWorkspaceRequest):
     """Rename a workspace directory."""
     old = Path(body.path).expanduser().resolve()
-    new = old.parent / body.name.strip().replace("/", "-").replace("\\", "-")[:100]
+    name = body.name.strip().replace("/", "-").replace("\\", "-")[:100]
+    if not name or name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="Invalid workspace name")
+    managed_root = WORKSPACES_DIR.expanduser().resolve()
+    if old == managed_root or not old.is_relative_to(managed_root):
+        raise HTTPException(status_code=403, detail="Only managed workspaces can be renamed")
     if not old.exists():
         raise HTTPException(status_code=404, detail="Workspace not found")
+    if not old.is_dir():
+        raise HTTPException(status_code=400, detail="Workspace path is not a directory")
+    new = old.parent / name
     if new.exists():
         raise HTTPException(status_code=409, detail="Name already taken")
     old.rename(new)

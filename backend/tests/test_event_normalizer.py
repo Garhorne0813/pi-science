@@ -1,6 +1,5 @@
 """Event normalizer unit tests — pi JSONL → SSE event format."""
 
-import pytest
 from services.event_normalizer import normalize_event
 
 
@@ -86,6 +85,14 @@ class TestNormalizeEvent:
         assert result is not None
         assert result["type"] == "session.idle"
 
+    def test_extension_handled_settled_preserves_marker(self):
+        result = normalize_event(
+            {"type": "agent_settled", "handledWithoutTurn": True},
+            "session-1",
+        )
+
+        assert result["handledWithoutTurn"] is True
+
     def test_tool_update_partial_output(self):
         event = {
             "type": "tool_execution_update",
@@ -99,6 +106,28 @@ class TestNormalizeEvent:
         assert result["type"] == "tool.updated"
         assert result["status"] == "running"
         assert "Collecting numpy" in result["partialOutput"]
+
+    def test_tool_update_without_identity_preserves_frontend_fallback(self):
+        event = {
+            "type": "tool_execution_update",
+            "toolCallId": "tc-1",
+            "partialResult": "still running",
+        }
+        result = normalize_event(event, "session-1")
+        assert result is not None
+        assert result["tool"] == ""
+        assert "input" not in result
+
+    def test_tool_end_without_identity_preserves_frontend_fallback(self):
+        event = {
+            "type": "tool_execution_end",
+            "toolCallId": "tc-1",
+            "result": "done",
+            "isError": False,
+        }
+        result = normalize_event(event, "session-1")
+        assert result is not None
+        assert result["tool"] == ""
 
     def test_error_event(self):
         event = {"type": "error", "message": "Connection refused"}
@@ -119,6 +148,21 @@ class TestNormalizeEvent:
         assert result is not None
         assert result["type"] == "permission.asked"
         assert result["title"] == "Confirmation"
+
+    def test_extension_ui_select_preserves_question_fields(self):
+        event = {
+            "type": "extension_ui_request",
+            "id": "ext-2",
+            "method": "select",
+            "title": "Choose",
+            "message": "Pick one",
+            "options": ["A", "B"],
+        }
+        result = normalize_event(event, "session-1")
+        assert result is not None
+        assert result["type"] == "question.asked"
+        assert result["message"] == "Pick one"
+        assert result["options"] == ["A", "B"]
 
     def test_unknown_event_returns_none(self):
         event = {"type": "unknown_thing", "data": "whatever"}
@@ -149,6 +193,18 @@ class TestNormalizeEvent:
         result = normalize_event(event, "session-1")
         assert result is not None
         assert "File written" in result.get("output", "")
+
+    def test_large_tool_payloads_are_bounded(self):
+        event = {
+            "type": "tool_execution_start",
+            "toolCallId": "tc-large",
+            "toolName": "write",
+            "args": {"content": "x" * 50000},
+        }
+        result = normalize_event(event, "session-1")
+        assert result is not None
+        assert len(result["input"]["content"]) < 25000
+        assert "truncated" in result["input"]["content"]
 
 
 class TestStringify:

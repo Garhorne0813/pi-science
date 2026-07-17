@@ -22,7 +22,7 @@ function colorFor(doc: QCodeParsed, name: string): string {
 }
 
 export function QCodeView({ filename, text }: { filename: string; text: string }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   const parsed = useMemo<{ doc: QCodeParsed | null; error: string | null }>(() => {
     try {
       return { doc: parseQCode(text), error: null };

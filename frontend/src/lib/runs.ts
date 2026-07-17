@@ -1,21 +1,26 @@
-export interface RunRecord {
-  runId: string;
-  command?: string;
-  surface: "local" | "hpc" | "ssh";
-  status: "ok" | "failed" | "running";
-  host?: string;
-  startedAt?: string;
-  endedAt?: string;
-  outputs?: { path: string; hash?: string; size?: number }[];
-  code?: string[];
-  envFile?: string;
+import type { RunRecord } from "../types/thread";
+
+export async function loadRuns(sessionId: string, cwd = "."): Promise<RunRecord[]> {
+  const runs = await listRuns(cwd);
+  return runs.filter((run) => run.sessionId === sessionId);
 }
-export async function loadRuns(sessionId: string): Promise<RunRecord[]> { return []; }
 
 export async function listRuns(cwd: string): Promise<RunRecord[]> {
-  return [];
+  try {
+    const params = new URLSearchParams({ cwd });
+    const response = await fetch(`/api/runs?${params}`);
+    if (!response.ok) return [];
+    const data: unknown = await response.json();
+    return Array.isArray(data) ? (data as RunRecord[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 export function reproduceRunPrompt(run: RunRecord): string {
-  return `Reproduce run: ${run.runId}`;
+  const command = run.command ? `\n\nRecorded command:\n\`\`\`sh\n${run.command}\n\`\`\`` : "";
+  return (
+    `Reproduce experiment run \`${run.runId}\`. Re-run it in the current workspace, ` +
+    `compare all recorded outputs with the current files, and summarize any differences.${command}`
+  );
 }

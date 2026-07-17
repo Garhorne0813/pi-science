@@ -26,7 +26,7 @@ const STYLE_OPTIONS: Array<{ value: MoleculeStyleMode; label: string }> = [
  * white stage (chemistry convention), consistent in light and dark themes.
  */
 export function MoleculeView({ filename, text }: { filename: string; text: string }) {
-  const { t } = useTranslation(["inspector", "common"]);
+  const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<GLViewer | null>(null);
   const dragRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);

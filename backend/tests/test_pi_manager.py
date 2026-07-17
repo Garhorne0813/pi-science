@@ -105,8 +105,8 @@ class TestPiManager:
 
     def test_spawn_locks_initialized(self):
         mgr = PiManager()
-        assert isinstance(mgr._spawn_locks, dict)
-        assert len(mgr._spawn_locks) == 0
+        assert isinstance(mgr._cwd_locks, dict)
+        assert len(mgr._cwd_locks) == 0
 
     def test_get_by_cwd_returns_none_for_unknown(self):
         mgr = PiManager()
@@ -246,12 +246,17 @@ class TestPiProcessDispatch:
         process.poll.return_value = None
         pi = PiProcess(process, cwd="/tmp/test", session_id="s1", config=pi_config)
 
+        stream = pi.read_events("s1")
+        task = asyncio.create_task(anext(stream))
+        await asyncio.sleep(0)
+
         await pi._dispatch({"type": "message_start", "text": "hello"})
 
-        # Event should be in the queue
-        event = await asyncio.wait_for(pi._event_queue.get(), timeout=1.0)
+        # Event should reach the session's subscriber stream
+        event = await asyncio.wait_for(task, timeout=1.0)
         assert event["type"] == "message_start"
         assert event["text"] == "hello"
+        await stream.aclose()
 
 
 # ── Tests: spawn lock ──
@@ -260,8 +265,10 @@ class TestSpawnLock:
     def test_spawn_lock_per_cwd(self):
         """Each cwd should get its own spawn lock."""
         mgr = PiManager()
-        assert "/test/a" not in mgr._spawn_locks
-        assert "/test/b" not in mgr._spawn_locks
+        assert "/test/a" not in mgr._cwd_locks
+        assert "/test/b" not in mgr._cwd_locks
+        assert mgr._lock_for_cwd("/test/a") is mgr._lock_for_cwd("/test/a")
+        assert mgr._lock_for_cwd("/test/a") is not mgr._lock_for_cwd("/test/b")
 
 
 # ── Tests: PID file mechanism ──

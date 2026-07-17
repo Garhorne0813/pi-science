@@ -14,12 +14,14 @@ export const shippedLocales: LocaleDef[] = [
 ];
 
 export function detectInitialLocale(): string {
-  try {
-    const stored = localStorage.getItem(LOCALE_KEY);
-    if (stored) return JSON.parse(stored);
-  } catch { /* ignore */ }
+  if (typeof window !== "undefined") {
+    try {
+      const stored = window.localStorage.getItem(LOCALE_KEY);
+      if (stored) return JSON.parse(stored);
+    } catch { /* ignore */ }
+  }
 
-  const browserLang = navigator.language || "";
+  const browserLang = typeof navigator === "undefined" ? "" : navigator.language || "";
   for (const loc of shippedLocales) {
     if (browserLang === loc.code || browserLang.startsWith(loc.code.split("-")[0])) {
       return loc.code;
