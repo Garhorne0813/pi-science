@@ -39,7 +39,7 @@ SECTION_TITLES = {
 
 def _atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{os.urandom(4).hex}.tmp")
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
 

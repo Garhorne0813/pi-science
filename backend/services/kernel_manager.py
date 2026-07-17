@@ -32,23 +32,37 @@ class KernelSession:
     notebook_id: str
     cwd: str
     pending: dict = field(default_factory=dict)
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def execute(self, code: str) -> CellResult:
-        """Execute code in the kernel and return the result."""
-        req_id = uuid.uuid4().hex[:8]
+        """Execute code in the kernel and return the result.
+
+        Serialized per-session via a lock to prevent stdin/stdout races
+        between concurrent requests. A 30s timeout prevents indefinite
+        blocking if the kernel hangs.
+        """
+        req_id = uuid.uuid4().hex
         req = json.dumps({"id": req_id, "code": code}) + "\n"
 
-        loop = asyncio.get_event_loop()
+        async with self._lock:
+            loop = asyncio.get_running_loop()
 
-        def _write_and_read():
-            self.process.stdin.write(req)
-            self.process.stdin.flush()
-            line = self.process.stdout.readline()
-            if not line:
-                return {"id": req_id, "ok": False, "stdout": "", "result": None, "error": "Kernel process died"}
-            return json.loads(line)
+            def _write_and_read():
+                self.process.stdin.write(req)
+                self.process.stdin.flush()
+                line = self.process.stdout.readline()
+                if not line:
+                    return {"id": req_id, "ok": False, "stdout": "", "result": None, "error": "Kernel process died"}
+                return json.loads(line)
 
-        resp = await loop.run_in_executor(None, _write_and_read)
+            try:
+                resp = await asyncio.wait_for(
+                    loop.run_in_executor(None, _write_and_read),
+                    timeout=30.0,
+                )
+            except asyncio.TimeoutError:
+                return CellResult(ok=False, error="Kernel execution timed out (30s)")
+
         return CellResult(
             ok=resp.get("ok", False),
             stdout=resp.get("stdout", ""),

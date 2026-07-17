@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
+import logging
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -10,6 +11,8 @@ import shutil
 
 from config import WORKSPACES_DIR
 from services.project_knowledge_store import initialize_project_workspace
+
+logger = logging.getLogger(__name__)
 
 HARNESS_DIR = Path(__file__).parent.parent.parent / "harness"
 
@@ -76,6 +79,7 @@ async def create_workspace(body: CreateWorkspaceRequest):
     # Seed harness files (AGENTS.md, KNOWLEDGE.md) into new workspace
     _seed_harness(path)
     initialize_project_workspace(path, create_base_directories=True)
+    _register(path)
     return WorkspaceInfo(
         name=name,
         path=str(path),
@@ -100,6 +104,7 @@ async def open_folder(body: OpenFolderRequest):
     if sessions_dir.exists():
         session_count = sum(1 for _ in sessions_dir.rglob("*.jsonl"))
 
+    _register(folder)
     return WorkspaceInfo(
         name=folder.name,
         path=str(folder),
@@ -140,7 +145,10 @@ async def delete_workspace(body: DeleteWorkspaceRequest):
     target = Path(body.path).expanduser().resolve()
     if not target.exists():
         raise HTTPException(status_code=404, detail="Workspace not found")
-    if not str(target).startswith(str(WORKSPACES_DIR.resolve())):
+    try:
+        if not target.is_relative_to(WORKSPACES_DIR.resolve()):
+            raise HTTPException(status_code=403, detail="Cannot delete outside workspaces directory")
+    except (ValueError, OSError):
         raise HTTPException(status_code=403, detail="Cannot delete outside workspaces directory")
 
     # Shut down any running pi process for this cwd
@@ -148,7 +156,7 @@ async def delete_workspace(body: DeleteWorkspaceRequest):
         from services.pi_manager import pi_manager
         await pi_manager._remove(str(target))
     except Exception:
-        pass
+        logger.warning("Failed to shut down pi process for workspace: %s", target, exc_info=True)
 
     _shutil.rmtree(target)
     return {"ok": True}
@@ -181,6 +189,7 @@ async def install_demo(name: str = Query("molecules", description="Demo name: mo
         else:
             _shutil.copy2(item, dest)
     _seed_harness(demo_path)
+    _register(demo_path)
 
     return {"ok": True, "name": demo_name, "path": str(demo_path), "label": info["label"]}
 
@@ -232,6 +241,12 @@ async def unpin_workspace(body: PinRequest):
         paths.remove(body.path)
         _save_pinned(paths)
     return {"ok": True, "pinned": False}
+
+
+def _register(workspace_path: Path):
+    """Register a workspace so file APIs accept it as cwd."""
+    from services.workspace_security import register_workspace
+    register_workspace(workspace_path)
 
 
 def _seed_harness(workspace_path: Path):

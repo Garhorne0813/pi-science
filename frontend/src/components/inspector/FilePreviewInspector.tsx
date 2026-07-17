@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, lazy, Suspense } from "react";
 import { Code2, Eye, ExternalLink, FileSearch, History, Loader2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { FilePreviewInspector as FilePreviewInspectorT, FileRoot } from "../../types/thread";
@@ -21,7 +21,8 @@ import { TableChart } from "./TableChart";
 import { canChart } from "@/lib/tableChart";
 import { DocxView, PptxView, XlsxView } from "./OfficePreview";
 import { MoleculeView } from "./MoleculeView";
-import { MeshView } from "./MeshView";
+// Lazy-load MeshView so three.js (~600KB) only loads when viewing 3D models
+const MeshView = lazy(() => import("./MeshView").then(m => ({ default: m.MeshView })));
 import { GenomeView } from "./GenomeView";
 import { FitsView } from "./FitsView";
 import { DosView } from "./DosView";
@@ -239,7 +240,9 @@ function Body({
   }
   if (kind === "mesh") {
     return bytes !== null ? (
-      <MeshView filename={filename} bytes={bytes} />
+      <Suspense fallback={<div className="p-4 text-sm text-muted">Loading 3D viewer…</div>}>
+        <MeshView filename={filename} bytes={bytes} />
+      </Suspense>
     ) : (
       <Note text={"Preview loading…"} />
     );

@@ -1,7 +1,5 @@
 """Pi-Science backend — FastAPI application entry point."""
 
-import asyncio
-import atexit
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -16,7 +14,7 @@ from api.compute import router as compute_router
 from api.settings import router as settings_router
 from api.workspaces import router as workspaces_router
 from api.skills import router as skills_router
-from api.notebooks import router as notebooks_router
+from api.notebooks import router as notebooks_router, shutdown_jupyter
 from api.runs import router as runs_router
 from api.project_knowledge import router as project_knowledge_router
 from services.pi_manager import pi_manager
@@ -31,6 +29,8 @@ async def lifespan(app: FastAPI):
     print(f"[pi-science] CORS origins: {CORS_ORIGINS}")
     yield
     # Cleanup on shutdown
+    print("[pi-science] Shutting down Jupyter...")
+    shutdown_jupyter()
     print("[pi-science] Shutting down kernels...")
     await kernel_manager.shutdown_all()
     print("[pi-science] Shutting down pi processes...")
@@ -90,15 +90,6 @@ def main():
         reload=True,
         log_level="info",
     )
-
-
-# Register cleanup on exit
-def _cleanup():
-    loop = asyncio.new_event_loop()
-    loop.run_until_complete(pi_manager.shutdown_all())
-    loop.run_until_complete(kernel_manager.shutdown_all())
-    loop.close()
-atexit.register(_cleanup)
 
 
 if __name__ == "__main__":

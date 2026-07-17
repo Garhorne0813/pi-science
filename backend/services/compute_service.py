@@ -2,12 +2,52 @@
 
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
 from typing import Optional
 
 COMPUTE_CONFIG_FILE = ".pi-science/compute.json"
+
+# Patterns that indicate shell injection attempts in remote commands.
+_DANGEROUS_PATTERNS = [
+    re.compile(r"\brm\s+-rf\s+/\b"),          # rm -rf /
+    re.compile(r"\bmkfs\b"),                   # format filesystem
+    re.compile(r"\bdd\s+.*of=/dev/"),          # write to device
+    re.compile(r">\s*/dev/sd"),                # redirect to device
+    re.compile(r"\bshutdown\b"),               # shutdown
+    re.compile(r"\b reboot\b"),                # reboot
+]
+
+_SLURM_KEY_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def _validate_remote_command(command: str) -> str:
+    """Reject commands containing obvious dangerous patterns.
+
+    SSH remote execution always passes through a remote shell, so we cannot
+    fully prevent injection — but we can catch the most destructive cases.
+    """
+    if not command or not command.strip():
+        raise ValueError("Command is required")
+    for pattern in _DANGEROUS_PATTERNS:
+        if pattern.search(command):
+            raise ValueError(f"Command rejected: contains dangerous pattern")
+    return command
+
+
+def _validate_slurm_opts(opts: dict) -> dict:
+    """Validate Slurm option keys and values to prevent script injection."""
+    cleaned = {}
+    for k, v in opts.items():
+        if not _SLURM_KEY_RE.match(str(k)):
+            raise ValueError(f"Invalid Slurm option key: {k}")
+        v_str = str(v)
+        if "\n" in v_str or "\r" in v_str:
+            raise ValueError(f"Slurm option value contains newline: {k}")
+        cleaned[str(k).replace("_", "-")] = v_str
+    return cleaned
 
 
 class Machine:
@@ -81,6 +121,11 @@ def submit_job(cwd: str, machine_label: str, command: str, job_name: str = "",
                input_files: list[str] = None, output_files: list[str] = None,
                slurm_opts: dict = None) -> dict:
     """Submit a job to a remote machine (direct SSH or Slurm)."""
+    # Validate command and slurm_opts before any execution
+    command = _validate_remote_command(command)
+    if slurm_opts:
+        slurm_opts = _validate_slurm_opts(slurm_opts)
+
     machines = load_machines(cwd)
     machine = next((m for m in machines if m.get("label") == machine_label), None)
     if not machine:
@@ -107,7 +152,7 @@ def submit_job(cwd: str, machine_label: str, command: str, job_name: str = "",
         # Submit via Slurm
         slurm_script = f"#!/bin/bash\n#SBATCH --job-name={job_name}\n"
         for k, v in slurm_opts.items():
-            slurm_script += f"#SBATCH --{k.replace('_', '-')}={v}\n"
+            slurm_script += f"#SBATCH --{k}={v}\n"
         slurm_script += f"\n{command}\n"
         script_path = Path(cwd) / f".pi-science/slurm_{job_id}.sh"
         script_path.write_text(slurm_script)
@@ -162,9 +207,20 @@ def _ssh_cmd(host: str, user: str, port: int, identity_file: str, cmd: str) -> s
     return result.stdout if result.returncode == 0 else ""
 
 
-def _run_ssh(host: str, user: str, port: int, identity_file: list[str], cmd: str):
-    ssh_opts = _ssh_opts(identity_file)
-    subprocess.Popen(
+def _run_ssh(host: str, user: str, port: int, ssh_opts: list[str], cmd: str):
+    """Run a remote command via SSH (non-blocking, returns immediately).
+
+    ``ssh_opts`` is the already-assembled option list from ``_ssh_opts()``.
+    """
+    proc = subprocess.Popen(
         ["ssh"] + ssh_opts + ["-p", str(port), f"{user}@{host}", cmd],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
+    try:
+        proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+    if proc.returncode != 0:
+        err = (proc.stderr.read() or "").strip()[-200:]
+        print(f"[compute] SSH command failed (rc={proc.returncode}): {err}")

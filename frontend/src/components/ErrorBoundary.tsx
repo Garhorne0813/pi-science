@@ -1,4 +1,5 @@
-import { Component, type ReactNode } from "react";
+import { Component, useRef, useEffect, type ReactNode } from "react";
+import { useLocation } from "react-router-dom";
 
 interface Props {
   children: ReactNode;
@@ -47,4 +48,21 @@ export class ErrorBoundary extends Component<Props, State> {
     }
     return this.props.children;
   }
+}
+
+/**
+ * ErrorBoundary wrapper that resets error state on route change.
+ * Use this inside a Router so errors don't persist across navigation.
+ */
+export function RoutedErrorBoundary({ children, fallback }: Props) {
+  const location = useLocation();
+  const ref = useRef<ErrorBoundary>(null);
+
+  useEffect(() => {
+    if (ref.current?.state.error) {
+      ref.current.setState({ error: null });
+    }
+  }, [location.pathname]);
+
+  return <ErrorBoundary ref={ref} fallback={fallback}>{children}</ErrorBoundary>;
 }

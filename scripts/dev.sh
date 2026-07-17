@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # dev.sh — One-command startup for pi-science development
 # Usage: bash scripts/dev.sh
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -91,7 +91,7 @@ mkdir -p "$PIP_CACHE_DIR"
 export PIP_CACHE_DIR
 
 cd "$PROJECT_DIR/backend"
-$CONDA_PYTHON -m pip install fastapi "uvicorn[standard]" pydantic "sse-starlette>=2.0" aiofiles "python-multipart>=0.0.9" --quiet 2>&1 | tail -1
+$CONDA_PYTHON -m pip install -e ".[dev]" --quiet 2>&1 | tail -1
 echo "  Backend dependencies installed."
 echo "  Python:  $CONDA_PYTHON"
 echo "  Package: pi-science $($CONDA_PYTHON -c 'from pi_science import __version__; print(__version__)' 2>/dev/null || echo '0.1.0')"

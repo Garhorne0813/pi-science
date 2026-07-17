@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 from pathlib import Path
@@ -16,6 +17,8 @@ from services.file_organizer import FilePlanError, WorkspaceFileOrganizer
 from services.pi_manager import PiProcess
 from services.project_knowledge_store import ProjectKnowledgeStore
 from services.session_reader import message_text, read_session_messages
+
+logger = logging.getLogger(__name__)
 
 
 ModelRunner = Callable[[str, Path], Awaitable[str]]
@@ -43,13 +46,18 @@ class ReviewerService:
         force_full_session: bool = False,
     ) -> dict[str, Any]:
         self.store.initialize(create_base_directories=True)
-        lock = _review_locks.setdefault((str(self.workspace), session_id), asyncio.Lock())
-        async with lock:
-            return await self._review_session_locked(
-                session_id,
-                include_files=include_files,
-                force_full_session=force_full_session,
-            )
+        key = (str(self.workspace), session_id)
+        lock = _review_locks.setdefault(key, asyncio.Lock())
+        try:
+            async with lock:
+                return await self._review_session_locked(
+                    session_id,
+                    include_files=include_files,
+                    force_full_session=force_full_session,
+                )
+        finally:
+            # Remove lock to prevent unbounded dict growth
+            _review_locks.pop(key, None)
 
     async def _review_session_locked(
         self,
@@ -360,6 +368,7 @@ async def _auto_review(cwd: str, session_id: str) -> None:
         await service.review_session(session_id, include_files=True, force_full_session=False)
     except Exception:
         # Failures are recorded by ReviewerService and must never break chat.
+        logger.warning("Auto-review failed for session %s", session_id, exc_info=True)
         return
 
 

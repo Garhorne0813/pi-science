@@ -85,14 +85,18 @@ export interface FigureBlock {
 
 export interface ArtifactBlock {
   kind: "artifact";
-  id: string;
+  id?: string;
   filename: string;
   artifactKind: ArtifactKind;
+  /** Alias for artifactKind — used by legacy artifacts.ts functions */
+  artifact?: ArtifactKind;
   tool: string;
   path?: string;
+  language?: string;
+  content?: string;
 }
 
-export type ArtifactKind = "code" | "data" | "figure" | "model" | "report" | "notebook" | "other";
+export type ArtifactKind = "code" | "data" | "figure" | "model" | "report" | "notebook" | "script" | "table" | "other";
 
 export interface RunningJobsBlock {
   kind: "running-jobs";

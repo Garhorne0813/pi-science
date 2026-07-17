@@ -5,8 +5,18 @@ import type { ThreadBlock } from "../types/thread";
 
 // ── Types ──
 
+/** SSE event types emitted by the backend. */
+export type PiScienceEventType =
+  | "text.updated"
+  | "tool.updated"
+  | "session.idle"
+  | "error"
+  | "question.asked"
+  | "permission.asked"
+  | "compaction.updated";
+
 export interface PiScienceEvent {
-  type: string;
+  type: PiScienceEventType;
   sessionId?: string;
   [key: string]: unknown;
 }
@@ -17,7 +27,6 @@ export interface SessionInfo {
   name?: string;
   created_at?: string;
   updated_at?: string;
-  name?: string;
 }
 
 // ── Session name helpers (localStorage) ──

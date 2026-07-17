@@ -1,64 +1,23 @@
 // Turn the agent's file-writing tool calls into traceable artifacts.
 // Pure and transport-agnostic so it can be unit-tested without a live runtime.
 
-// Local types — originally from @ai4s/sdk and @ai4s/shared
+// Types are imported from the canonical source in types/thread.ts — no duplicates.
+import type {
+  ArtifactKind,
+  ArtifactBlock,
+  ArtifactVersion,
+  ArtifactInspector,
+  FilePreviewInspector,
+  NotebookFileInspector,
+} from "../types/thread";
+
+// Re-export so existing imports from artifacts.ts keep working
+export type { ArtifactKind, ArtifactBlock, ArtifactVersion, ArtifactInspector, FilePreviewInspector, NotebookFileInspector };
+
 interface ToolUpdatedEvent {
   status: string;
   tool: string;
   input?: Record<string, unknown>;
-}
-
-export type ArtifactKind = "code" | "data" | "figure" | "model" | "report" | "notebook" | "script" | "table" | "other";
-
-export interface ArtifactBlock {
-  kind: "artifact";
-  id?: string;
-  path?: string;
-  filename: string;
-  artifact: ArtifactKind;
-  tool: string;
-  language?: string;
-  content?: string;
-}
-
-export interface ArtifactVersion {
-  label: string;
-  code?: string;
-  executionLog?: string;
-  messages?: string[];
-  environment?: string;
-  reviewPassed?: boolean;
-}
-
-export interface ArtifactInspector {
-  variant: "artifact";
-  title: string;
-  filename: string;
-  versions: ArtifactVersion[];
-  activeVersion: string;
-  inputs?: string[];
-  language?: string;
-  code?: string;
-  executionLog?: string;
-  environment?: string;
-  messages?: string[];
-  reviewPassed?: boolean;
-}
-
-export interface FilePreviewInspector {
-  variant: "file";
-  path?: string;
-  filename: string;
-  artifact?: ArtifactKind;
-  language?: string;
-  content?: string;
-  root?: string;
-}
-
-export interface NotebookFileInspector {
-  variant: "notebook-file";
-  path?: string;
-  root?: string;
 }
 
 const EXT_KIND: Record<string, ArtifactKind> = {
@@ -260,7 +219,8 @@ function firstString(input: Record<string, unknown>, keys: string[]): string | u
  * event is not a successful write we can trace to a path.
  */
 export function deriveArtifact(event: ToolUpdatedEvent): ArtifactBlock | null {
-  if (event.status !== "success") return null;
+  // Accept both "success" (legacy pi events) and "done" (ToolStatus type)
+  if (event.status !== "success" && event.status !== "done") return null;
   const tool = (event.tool ?? "").toLowerCase();
   const input = event.input ?? {};
 

@@ -23,7 +23,12 @@ _setup_lock = asyncio.Lock()  # Prevent concurrent setup
 
 
 def _workspace_dir(cwd: str = ".") -> Path:
-    return Path(cwd).resolve()
+    """Resolve and validate workspace directory against the registry."""
+    from services.workspace_security import validate_workspace_cwd
+    try:
+        return validate_workspace_cwd(cwd)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
 
 
 def _find_uv() -> str | None:
@@ -173,6 +178,12 @@ async def start_jupyter(cwd: str = Query(".", description="Working directory")):
 @router.post("/jupyter/stop")
 async def stop_jupyter():
     """Stop the Jupyter Lab server."""
+    shutdown_jupyter()
+    return {"ok": True}
+
+
+def shutdown_jupyter():
+    """Stop the Jupyter Lab server (callable from lifespan shutdown)."""
     global _jupyter_process
     if _jupyter_process:
         _jupyter_process.terminate()
@@ -180,5 +191,5 @@ async def stop_jupyter():
             _jupyter_process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             _jupyter_process.kill()
+            _jupyter_process.wait()
         _jupyter_process = None
-    return {"ok": True}

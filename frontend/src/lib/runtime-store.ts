@@ -326,15 +326,15 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
           client.connect(activeSessionId);
         } else {
           // No session — create new (or wait for connect() to finish in useEffect)
-          // Retry a few times in case connect() is still spawning pi
-          const maxWait = 30000; // 30s max
+          // Short poll: 5s max, 100ms interval (much faster than the old 30s/500ms)
+          const maxWait = 5000;
           const start = Date.now();
           while (!activeSessionId && (Date.now() - start) < maxWait) {
             // Check if connect() in useEffect already created one
             const current = get();
             activeSessionId = current.activeSessionId;
             if (activeSessionId && current.client?.isConnected) break;
-            await new Promise(r => setTimeout(r, 500));
+            await new Promise(r => setTimeout(r, 100));
           }
           if (!activeSessionId) {
             // Still no session — create one ourselves

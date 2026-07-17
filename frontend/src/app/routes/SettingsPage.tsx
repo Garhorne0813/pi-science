@@ -24,6 +24,19 @@ interface Config {
   custom_providers: CustomProvider[];
 }
 
+interface LLMTabProps {
+  config: Config;
+  apiKeyInput: Record<string, string>;
+  setApiKeyInput: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  showKey: Record<string, boolean>;
+  setShowKey: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
+  saving: string | null;
+  saveKey: (provider: string) => Promise<void>;
+  deleteKey: (provider: string) => Promise<void>;
+  saveModel: () => Promise<void>;
+  onConfigReload: () => Promise<void>;
+}
+
 export function SettingsPage() {
   const [tab, setTab] = useState<Tab>("llm");
   const [config, setConfig] = useState<Config | null>(null);
@@ -101,47 +114,89 @@ export function SettingsPage() {
 
 /* ── LLM Tab ── */
 
-function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKey, saving, saveKey, deleteKey, saveModel, onConfigReload }: any) {
+function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKey, saving, saveKey, deleteKey, saveModel, onConfigReload }: LLMTabProps) {
+  const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   if (!config) return <div className="text-sm text-muted py-4"><Loader2 size={16} className="animate-spin inline mr-2" />Loading…</div>;
+
+  const mainProviders = (config.providers || []).filter((p: Provider) => ["anthropic", "openai", "google", "deepseek", "groq", "openrouter"].includes(p.id));
+  const otherProviders = (config.providers || []).filter((p: Provider) => !["anthropic", "openai", "google", "deepseek", "groq", "openrouter"].includes(p.id));
+
   return (
     <div className="space-y-6">
+      {/* Model & Thinking */}
+      <Section title="Model">
+        <div className="rounded-card border border-border bg-surface px-4 py-3 space-y-3">
+          <div className="flex items-center gap-3">
+            <span className="font-mono text-sm text-text flex-1 truncate">{config.model}</span>
+            <div className="flex gap-1">
+              {["off", "minimal", "low", "medium", "high", "max"].map((level) => (
+                <button key={level} onClick={() => saveModel(config.model, level)}
+                  className={cn("rounded px-2 py-0.5 text-[10px] font-medium transition-colors",
+                    config.thinking === level ? "bg-accent text-accent-fg" : "text-muted hover:bg-surface-2 hover:text-text")}>{level}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </Section>
+
+      {/* API Keys — main providers in compact grid */}
       <Section title="API Keys">
-        <p className="text-[11px] text-muted mb-3">Keys stored in <code className="font-mono text-[11px] bg-surface-2 px-1 rounded">~/.pi-science/config.json</code></p>
-        <div className="space-y-2">
-          {config.providers.map((p: Provider) => (
-            <div key={p.id} className={cn("rounded-card border px-4 py-3", p.has_key ? "border-ok/40 bg-ok/5" : "border-border bg-surface")}>
-              <div className="flex items-center justify-between mb-2">
-                <div>
-                  <span className="text-sm font-medium text-text">{p.name}</span>
-                  <span className="ml-2 font-mono text-[11px] text-muted">{p.id}</span>
-                </div>
-                {p.has_key && <span className="flex items-center gap-1 rounded-full bg-ok/15 px-2 py-0.5 text-[10px] font-medium text-ok ring-1 ring-ok/30"><Check size={10} /> Connected</span>}
+        <p className="text-[11px] text-muted mb-3">Stored in <code className="font-mono text-[11px] bg-surface-2 px-1 rounded">~/.pi-science/config.json</code>. Click a provider to set its key.</p>
+        <div className="grid grid-cols-3 gap-2">
+          {mainProviders.map((p: Provider) => (
+            <button key={p.id}
+              onClick={() => !p.has_key && setExpandedProvider(expandedProvider === p.id ? null : p.id)}
+              className={cn(
+                "rounded-card border px-3 py-2.5 text-left transition-colors",
+                p.has_key ? "border-ok/30 bg-ok/5 cursor-default" : "border-border bg-surface hover:border-accent/30 cursor-pointer",
+              )}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] font-medium text-text">{p.name}</span>
+                {p.has_key
+                  ? <span className="shrink-0 text-ok"><Check size={13} /></span>
+                  : <span className="shrink-0 text-[10px] text-muted">+ key</span>
+                }
               </div>
-              {p.has_key ? (
-                <button onClick={() => deleteKey(p.id)} disabled={saving === p.id} className="rounded-input px-2 py-1 text-[11px] text-error hover:bg-error/10 flex items-center gap-1">
-                  <Trash2 size={11} /> Remove
-                </button>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <div className="flex-1 flex items-center gap-1 rounded-input border border-border bg-surface-2 px-3 py-1.5">
-                    <input type={showKey[p.id] ? "text" : "password"} value={apiKeyInput[p.id] || ""} onChange={(e) => setApiKeyInput((prev: any) => ({ ...prev, [p.id]: e.target.value }))}
-                      placeholder={p.id === "anthropic" ? "sk-ant-..." : "sk-..."}
-                      className="flex-1 bg-transparent text-[13px] text-text outline-none font-mono"
-                      onKeyDown={(e) => { if (e.key === "Enter") saveKey(p.id); }} />
-                    <button onClick={() => setShowKey((prev: any) => ({ ...prev, [p.id]: !prev[p.id] }))} className="text-muted hover:text-text">
-                      {showKey[p.id] ? <EyeOff size={13} /> : <Eye size={13} />}
-                    </button>
-                  </div>
-                  <button onClick={() => saveKey(p.id)} disabled={!apiKeyInput[p.id]?.trim() || saving === p.id}
-                    className="rounded-input bg-accent px-3 py-1.5 text-[12px] font-medium text-accent-fg disabled:opacity-40 flex items-center gap-1">
-                    {saving === p.id ? <Loader2 size={12} className="animate-spin" /> : <Key size={12} />} Save
+              {!p.has_key && expandedProvider === p.id && (
+                <div className="mt-2 flex gap-1.5" onClick={(e) => e.stopPropagation()}>
+                  <input type={showKey[p.id] ? "text" : "password"}
+                    value={apiKeyInput[p.id] || ""}
+                    onChange={(e) => setApiKeyInput((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                    placeholder="sk-..."
+                    className="flex-1 min-w-0 rounded-input border border-border bg-surface-2 px-2 py-1 text-[12px] text-text outline-none font-mono"
+                    onKeyDown={(e) => { if (e.key === "Enter") { saveKey(p.id); setExpandedProvider(null); } }}
+                    autoFocus />
+                  <button onClick={() => setShowKey((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}
+                    className="shrink-0 rounded p-1 text-muted hover:text-text">
+                    {showKey[p.id] ? <EyeOff size={12} /> : <Eye size={12} />}
+                  </button>
+                  <button onClick={() => { saveKey(p.id); setExpandedProvider(null); }}
+                    disabled={!apiKeyInput[p.id]?.trim() || saving === p.id}
+                    className="shrink-0 rounded bg-accent px-2 py-1 text-[11px] font-medium text-accent-fg disabled:opacity-40">
+                    {saving === p.id ? <Loader2 size={11} className="animate-spin" /> : "Save"}
                   </button>
                 </div>
               )}
-              <div className="mt-2 flex flex-wrap gap-1">
+              {p.has_key && (
+                <button onClick={(e) => { e.stopPropagation(); deleteKey(p.id); }}
+                  disabled={saving === p.id}
+                  className="mt-1.5 text-[10px] text-muted hover:text-error transition-colors">
+                  Remove key
+                </button>
+              )}
+            </button>
+          ))}
+        </div>
+        {/* Model chips per provider */}
+        <div className="mt-3 space-y-1">
+          {mainProviders.filter((p: Provider) => p.has_key).map((p: Provider) => (
+            <div key={`models-${p.id}`} className="flex items-center gap-1.5">
+              <span className="text-[10px] text-muted w-16 shrink-0 truncate">{p.id}</span>
+              <div className="flex flex-wrap gap-0.5">
                 {p.models.map((m: string) => (
                   <button key={m} onClick={() => saveModel(`${p.id}/${m}`)}
-                    className={cn("rounded px-1.5 py-0.5 font-mono text-[10.5px] transition-colors",
+                    className={cn("rounded px-1.5 py-0.5 font-mono text-[10px] transition-colors",
                       config.model === `${p.id}/${m}` ? "bg-accent/15 text-accent ring-1 ring-accent/30" : "text-muted hover:bg-surface-2 hover:text-text")}>{m}</button>
                 ))}
               </div>
@@ -150,24 +205,19 @@ function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKey, savi
         </div>
       </Section>
 
-      <Section title="Default Model">
-        <div className="rounded-card border border-border bg-surface px-4 py-3 space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="font-mono text-sm text-text">{config.model}</span>
-            <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[10px] text-muted ring-1 ring-border">Active</span>
+      {/* Other providers — collapsed list */}
+      {otherProviders.length > 0 && (
+        <Section title="Other Providers">
+          <div className="grid grid-cols-3 gap-1.5">
+            {otherProviders.map((p: Provider) => (
+              <div key={p.id} className="flex items-center gap-1.5 rounded px-2 py-1.5 text-[12px] text-muted">
+                {p.has_key && <span className="h-1.5 w-1.5 rounded-full bg-ok shrink-0" />}
+                <span className="truncate">{p.name}</span>
+              </div>
+            ))}
           </div>
-          <div>
-            <span className="text-[11px] text-muted mb-1.5 block">Thinking Level</span>
-            <div className="flex gap-1">
-              {["off", "minimal", "low", "medium", "high", "max"].map((level) => (
-                <button key={level} onClick={() => saveModel(config.model, level)}
-                  className={cn("rounded-input px-2 py-1 text-[11px] font-medium transition-colors",
-                    config.thinking === level ? "bg-accent text-accent-fg" : "text-muted hover:bg-surface-2 hover:text-text")}>{level}</button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </Section>
+        </Section>
+      )}
 
       <CustomApiSection providers={config.custom_providers || []} onConfigReload={onConfigReload} />
     </div>
@@ -445,7 +495,7 @@ function ComputeTab() {
       });
       setForm({ host: "", label: "", user: "", port: 22, identity_file: "", scheduler: "" });
       await load();
-    } catch (e: any) { setError(e.message); }
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setAdding(false); }
   };
 

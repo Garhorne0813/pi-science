@@ -1,10 +1,38 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useCallback, type RefObject } from "react";
 
-/** Retain a stable ref across renders, keyed by a session-unique id.
- *  In the Tauri version of open-science this would restore scroll position;
- *  in the web version it is a noop, kept to avoid changing the call sites. */
-export function useScrollMemory(key: string) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => { /* noop in web version */ }, [key]);
-  return ref;
+/** Persist and restore scroll position for a scrollable container.
+ *
+ * Usage:
+ *   const onScroll = useScrollMemory(ref, "unique-key", ready);
+ *   <div ref={ref} onScroll={onScroll} />
+ *
+ * When `ready` becomes true, the previously saved scrollTop is restored.
+ * On every scroll event, the current position is saved to sessionStorage.
+ */
+export function useScrollMemory(
+  ref: RefObject<HTMLElement | null>,
+  key: string,
+  ready: boolean = true,
+): (e: React.UIEvent) => void {
+  // Restore scroll position when content becomes ready
+  useEffect(() => {
+    if (!ready || !ref.current) return;
+    const stored = sessionStorage.getItem(`scroll:${key}`);
+    if (stored !== null) {
+      const top = parseInt(stored, 10) || 0;
+      // Use rAF to ensure content is rendered before restoring
+      requestAnimationFrame(() => {
+        if (ref.current) {
+          ref.current.scrollTop = top;
+        }
+      });
+    }
+  }, [key, ready, ref]);
+
+  // Save scroll position on scroll
+  return useCallback(() => {
+    if (ref.current) {
+      sessionStorage.setItem(`scroll:${key}`, String(ref.current.scrollTop));
+    }
+  }, [key, ref]);
 }
