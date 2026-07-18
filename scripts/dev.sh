@@ -146,10 +146,11 @@ cd "$PROJECT_DIR/backend"
 # Set environment variables so backend finds pi
 export PI_CLI_PATH="$PI_CLI"
 export PI_NODE_PATH="$(which node)"
-export PI_SCIENCE_HOME="$PROJECT_DIR/.data"
-export PI_SCIENCE_WORKSPACES="$PROJECT_DIR/workspaces"
+# Use the standard user-level data & workspace locations so dev mode
+# shares the same config, sessions, and workspaces as the installed app.
+export PI_SCIENCE_HOME="${PI_SCIENCE_HOME:-$HOME/.pi-science}"
+export PI_SCIENCE_WORKSPACES="${PI_SCIENCE_WORKSPACES:-$HOME/pi-science-workspaces}"
 
-# Create data dirs
 mkdir -p "$PI_SCIENCE_HOME/sessions" "$PI_SCIENCE_WORKSPACES"
 
 # Print config summary
