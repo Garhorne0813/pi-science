@@ -324,7 +324,7 @@ function SidebarNavItem({ to, label, icon, active, badge }: { to: string; label:
         if (window.innerWidth < 768) setSidebarCollapsed(true);
       }}
       className={cn(
-        "flex min-h-11 items-center gap-2.5 rounded-input px-2 py-2 text-[13px] text-left w-full",
+        "flex min-h-0 h-9 items-center gap-2 rounded-input px-2 text-[13px] text-left w-full",
         active ? "bg-surface-2 text-text font-medium" : "text-text/90 hover:bg-surface-2 hover:text-text",
       )}
     >

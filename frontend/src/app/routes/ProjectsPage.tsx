@@ -94,8 +94,11 @@ export function ProjectsPage() {
 
   const handleRename = async (oldPath: string) => {
     const newName = editValue.trim();
+    // Clear editing state immediately so onBlur doesn't fire a second rename
+    // when the alert dialog steals focus.
+    setEditingName(null);
+    setEditValue("");
     if (!newName || newName === oldPath.split("/").pop()) {
-      setEditingName(null);
       return;
     }
     try {
@@ -104,9 +107,11 @@ export function ProjectsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: oldPath, name: newName }),
       });
-      if (!res.ok) alert("Failed to rename workspace");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.detail || `Failed to rename workspace (${res.status})`);
+      }
     } catch (e) { alert("Network error — check that the backend is running."); }
-    setEditingName(null);
     await loadWorkspaces();
   };
 
@@ -122,7 +127,11 @@ export function ProjectsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path }),
       });
-      if (!res.ok) { alert("Failed to delete workspace"); return; }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.detail || `Failed to delete workspace (${res.status})`);
+        return;
+      }
       // Also unpin if pinned (server-side)
       if (pinned.has(path)) {
         await fetch("/api/workspaces/unpin", {

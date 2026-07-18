@@ -101,22 +101,22 @@ export function ProvenancePanel({ path, language, cwd: cwdOverride }: { path: st
   };
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     setRecords(null);
-    void listProvenance(cwd, path).then((r) => {
-      if (cancelled) return;
+    void listProvenance(cwd, path, controller.signal).then((r) => {
+      if (controller.signal.aborted) return;
       setRecords(r); // backend returns newest first
       setExpanded(r.length > 0 ? r[0].version : null);
       // Load the runs any of these versions were produced by, for the recipe.
       if (r.some((rec) => rec.runId)) {
         void listRuns(cwd).then((runs) => {
-          if (cancelled) return;
+          if (controller.signal.aborted) return;
           setRunsById(new Map(runs.map((run) => [run.runId, run])));
         });
       }
     });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [cwd, path]);
 
