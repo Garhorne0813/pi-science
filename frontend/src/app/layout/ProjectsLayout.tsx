@@ -9,7 +9,6 @@ import { FileBrowser } from "../../components/sidebar/FileBrowser";
 import { setCurrentCwd } from "../../lib/files";
 import { cn } from "../../lib/cn";
 import { getClient, getSessionName } from "../../lib/pi-science-client";
-import { setCurrentCwd } from "../../lib/files";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 
 export function ProjectsLayout() {
