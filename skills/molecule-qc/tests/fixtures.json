@@ -1,0 +1,4 @@
+[
+  {"prompt": "Check whether this SDF parses and report valence warnings", "expected_trigger": true, "trigger_terms": ["SDF", "valence"]},
+  {"prompt": "Create a bar chart from a CSV", "expected_trigger": false, "trigger_terms": ["SDF", "valence"]}
+]

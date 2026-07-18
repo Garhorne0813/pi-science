@@ -23,6 +23,12 @@ EXTENSION_SPECS = (
         "name": "Web Access",
         "description": "Adds web search, URL fetching, and supported media extraction.",
     },
+    {
+        "id": "context-mode",
+        "name": "Context Mode",
+        "description": "Sandboxed code execution + FTS5 knowledge index for long scientific sessions.",
+        "entrypoints": ("build/adapters/pi/extension.js",),
+    },
 )
 
 
@@ -36,7 +42,20 @@ def _candidate_roots(cli_path: str) -> list[Path]:
     return roots
 
 
-def find_runtime_extension(package: str, cli_path: Optional[str] = None) -> Optional[Path]:
+def find_runtime_package(package: str, cli_path: Optional[str] = None) -> Optional[Path]:
+    """Find an installed extension package directory next to the CLI."""
+    for root in _candidate_roots(cli_path or PI_CLI_PATH):
+        package_dir = root / "node_modules" / package
+        if package_dir.is_dir():
+            return package_dir
+    return None
+
+
+def find_runtime_extension(
+    package: str,
+    cli_path: Optional[str] = None,
+    extra_entrypoints: tuple[str, ...] = (),
+) -> Optional[Path]:
     """Find an extension entrypoint in a local-repo or npm runtime layout."""
     for root in _candidate_roots(cli_path or PI_CLI_PATH):
         package_dir = root / "node_modules" / package
@@ -48,6 +67,7 @@ def find_runtime_extension(package: str, cli_path: Optional[str] = None) -> Opti
                 entrypoints.extend(payload.get("pi", {}).get("extensions", []))
             except (json.JSONDecodeError, OSError, TypeError):
                 pass
+        entrypoints.extend(extra_entrypoints)
         entrypoints.extend(("index.ts", "index.js", "dist/index.js"))
         for entrypoint in dict.fromkeys(entrypoints):
             candidate = package_dir / entrypoint
@@ -59,9 +79,13 @@ def find_runtime_extension(package: str, cli_path: Optional[str] = None) -> Opti
 def runtime_extension_status(cli_path: Optional[str] = None) -> list[dict]:
     result = []
     for spec in EXTENSION_SPECS:
-        path = find_runtime_extension(spec["id"], cli_path)
+        path = find_runtime_extension(
+            spec["id"], cli_path, extra_entrypoints=spec.get("entrypoints", ())
+        )
         result.append({
-            **spec,
+            "id": spec["id"],
+            "name": spec["name"],
+            "description": spec["description"],
             "installed": path is not None,
             "path": str(path) if path else None,
         })

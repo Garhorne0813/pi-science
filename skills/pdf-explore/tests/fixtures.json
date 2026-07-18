@@ -1,0 +1,4 @@
+[
+  {"prompt": "Search the attached paper's methods and report page numbers", "expected_trigger": true, "trigger_terms": ["paper", "page"]},
+  {"prompt": "Create a new CSV from these values", "expected_trigger": false, "trigger_terms": ["pdf", "paper"]}
+]

@@ -186,6 +186,23 @@ function foldEvent(state: Thread, event: PiScienceEvent): Thread {
       break;
     }
 
+    case "artifact.published": {
+      const artifactId = String(event.artifactId || "");
+      const path = String(event.path || "");
+      const verification = event.verification as { status?: string } | undefined;
+      const block: ThreadBlock = {
+        kind: "status-line",
+        id: `artifact-${artifactId || path}-${String(event.version || "")}`,
+        text: `Published artifact: ${path}${artifactId ? ` (${artifactId})` : ""}`,
+        level: verification?.status === "failed" ? "warn" : "done",
+        artifactId,
+        path,
+      };
+      index[block.id] = blocks.length;
+      blocks.push(block);
+      break;
+    }
+
     case "session.idle": {
       _textBuffer = "";
       _currentTurnId = "";  // Reset for next turn

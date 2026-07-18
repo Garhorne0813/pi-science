@@ -194,7 +194,69 @@ function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKey, savi
       </Section>
 
       <CustomApiSection providers={config.custom_providers || []} onConfigReload={onConfigReload} />
+      <ModelEndpointSection />
     </div>
+  );
+}
+
+function ModelEndpointSection() {
+  type Endpoint = { endpoint_id: string; name: string; base_url: string; protocol: string; enabled: boolean; health: string; data_egress: string; error?: string | null };
+  const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
+  const [name, setName] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [protocol, setProtocol] = useState("openai");
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const response = await fetch("/api/endpoints");
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || "Unable to load model endpoints");
+    setEndpoints(data.endpoints || []);
+  }, []);
+  useEffect(() => { void load().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }, [load]);
+
+  const add = async () => {
+    if (!name.trim() || !baseUrl.trim()) return;
+    setError(null);
+    const response = await fetch("/api/endpoints", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name.trim(), base_url: baseUrl.trim(), protocol, data_egress: "remote" }) });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) { setError(data.detail || "Unable to register endpoint"); return; }
+    setName(""); setBaseUrl(""); await load();
+  };
+
+  const health = async (endpointId: string) => {
+    await fetch(`/api/endpoints/${encodeURIComponent(endpointId)}/health`, { method: "POST" });
+    await load();
+  };
+
+  const toggle = async (endpoint: Endpoint) => {
+    await fetch(`/api/endpoints/${encodeURIComponent(endpoint.endpoint_id)}/enabled?enabled=${!endpoint.enabled}`, { method: "PUT" });
+    await load();
+  };
+
+  return (
+    <Section title="Managed Model Endpoints">
+      <p className="mb-3 text-[11px] text-muted">Register a local or remote model service by URL. Credentials remain outside this catalog as secret references.</p>
+      {error && <p className="mb-2 rounded-input bg-error/10 px-3 py-2 text-[11px] text-error">{error}</p>}
+      <div className="grid gap-2 sm:grid-cols-[1fr_1.5fr_auto]">
+        <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Endpoint name" className="rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] text-text outline-none" />
+        <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://host/v1" className="rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] font-mono text-text outline-none" />
+        <button type="button" onClick={() => void add()} className="rounded-input bg-accent px-3 py-2 text-[12px] font-medium text-accent-fg disabled:opacity-40" disabled={!name.trim() || !baseUrl.trim()}>Register</button>
+      </div>
+      <select value={protocol} onChange={(event) => setProtocol(event.target.value)} className="mt-2 rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] text-text outline-none">
+        <option value="openai">OpenAI-compatible</option><option value="anthropic">Anthropic-compatible</option><option value="native">Native HTTP</option>
+      </select>
+      <div className="mt-3 space-y-2">
+        {endpoints.map((endpoint) => (
+          <div key={endpoint.endpoint_id} className="flex items-center gap-3 border-t border-faint pt-2 text-xs">
+            <span className="min-w-0 flex-1 truncate text-text">{endpoint.name}<span className="ml-2 font-mono text-[10px] text-muted">{endpoint.base_url}</span></span>
+            <span className={cn("text-[10px]", endpoint.health === "ready" ? "text-ok" : endpoint.health === "error" ? "text-error" : "text-muted")}>{endpoint.health}</span>
+            <button type="button" onClick={() => void health(endpoint.endpoint_id)} className="rounded-input px-2 py-1 text-[10px] text-muted hover:bg-surface-2">Check</button>
+            <button type="button" onClick={() => void toggle(endpoint)} className={cn("rounded-input px-2 py-1 text-[10px]", endpoint.enabled ? "bg-ok/15 text-ok" : "bg-surface-2 text-muted")}>{endpoint.enabled ? "On" : "Off"}</button>
+          </div>
+        ))}
+      </div>
+    </Section>
   );
 }
 
@@ -364,6 +426,7 @@ function ExtensionsTab() {
         ))}
       </Section>
       <SkillSettings />
+      <AgentProfilesSection />
     </div>
   );
 }
@@ -447,6 +510,43 @@ function SkillSettings() {
   );
 }
 
+function AgentProfilesSection() {
+  type Profile = { name: string; display_name: string; description: string; read_scope: string[]; write_scope: string[]; source: string };
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [name, setName] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    const response = await fetch("/api/agent-profiles");
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || "Unable to load agent profiles");
+    setProfiles(data.profiles || []);
+  }, []);
+  useEffect(() => { void load().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }, [load]);
+  const create = async () => {
+    const normalized = name.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+    if (!normalized || !displayName.trim()) return;
+    const response = await fetch("/api/agent-profiles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: normalized, display_name: displayName.trim(), description: "User-created profile", read_scope: ["workspace"], write_scope: ["workspace-approved"] }) });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) { setError(data.detail || "Unable to create profile"); return; }
+    setName(""); setDisplayName(""); await load();
+  };
+  return (
+    <Section title="Agent Profiles">
+      <p className="mb-3 text-[11px] text-muted">Profiles make identity, skills, connectors, and read/write scope explicit before a session uses them.</p>
+      {error && <p className="mb-2 text-[11px] text-error">{error}</p>}
+      <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+        <input value={name} onChange={(event) => setName(event.target.value)} placeholder="PROFILE_NAME" className="rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] font-mono text-text outline-none" />
+        <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Display name" className="rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] text-text outline-none" />
+        <button type="button" onClick={() => void create()} className="rounded-input bg-accent px-3 py-2 text-[12px] font-medium text-accent-fg disabled:opacity-40" disabled={!name.trim() || !displayName.trim()}>Create</button>
+      </div>
+      <div className="mt-3 space-y-2">
+        {profiles.map((profile) => <div key={profile.name} className="rounded-input border border-border bg-surface px-3 py-2"><div className="flex items-center justify-between gap-2 text-xs"><span className="font-medium text-text">{profile.display_name}</span><span className="font-mono text-[10px] text-muted">{profile.name} · {profile.source}</span></div><p className="mt-1 text-[10px] text-muted">read: {profile.read_scope.join(", ") || "none"} · write: {profile.write_scope.join(", ") || "none"}</p></div>)}
+      </div>
+    </Section>
+  );
+}
+
 function ExtCard({ name, pkg, desc, checked }: { name: string; pkg: string; desc: string; checked: boolean }) {
   return (
     <div className="rounded-card border border-border bg-surface px-4 py-3 mb-2">
@@ -469,26 +569,31 @@ function ExtCard({ name, pkg, desc, checked }: { name: string; pkg: string; desc
 /* ── MCP Tab ── */
 
 function MCPTab() {
-  const [enabled, setEnabled] = useState<Record<string, boolean>>({});
+  interface McpServer {
+    id: string; name: string; description: string; enabled: boolean; health: string;
+    auth: string; data_egress: string; transport: string; tools: Array<{ name: string }>;
+    terms_url?: string | null; privacy_url?: string | null; error?: string | null;
+  }
+  const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/settings/mcp").then(r => r.json()).then(d => {
-      const map: Record<string, boolean> = {};
-      (d.servers || []).forEach((s: string) => { map[s] = true; });
-      setEnabled(map);
-    }).finally(() => setLoading(false));
+    fetch("/api/mcp/catalog").then(async (response) => {
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "Unable to inspect MCP connectors");
+      setServers(data.servers || []);
+    }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))).finally(() => setLoading(false));
   }, []);
 
   const toggle = async (id: string, on: boolean) => {
-    const previous = !!enabled[id];
+    const previous = servers.find((server) => server.id === id)?.enabled || false;
     setError(null);
-    setEnabled((prev) => ({ ...prev, [id]: on }));
+    setServers((prev) => prev.map((server) => server.id === id ? { ...server, enabled: on } : server));
     const res = await fetch(`/api/settings/mcp/${id}?enabled=${on}`, { method: "PUT" });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      setEnabled((prev) => ({ ...prev, [id]: previous }));
+      setServers((prev) => prev.map((server) => server.id === id ? { ...server, enabled: previous } : server));
       setError(data.detail || `Could not update MCP server: ${res.statusText}`);
     }
   };
@@ -500,47 +605,45 @@ function MCPTab() {
       <Section title="Science MCP Connectors">
         {error && <p className="mb-3 rounded-input bg-error/10 px-3 py-2 text-[11px] text-error">{error}</p>}
         <p className="text-[11px] text-muted mb-3">
-          Open-source scientific MCP servers. Enable to give the agent access to literature databases, material properties, weather data, and more.
-          Requires the MCP Adapter extension.
+          Connector metadata comes from the active MCP configuration. Review health, authentication, and data destination before sending project files.
         </p>
-        <div className="space-y-2">
-          <McpRow id="paper-search" label="Literature Search" disc="all fields" desc="arXiv, PubMed, Crossref, Semantic Scholar, bioRxiv/medRxiv" src="github.com/openags/paper-search-mcp" keyEnv={null} enabled={!!enabled["paper-search"]} onToggle={toggle} />
-          <McpRow id="biomcp" label="Biomedical Databases" disc="biology" desc="PubMed, ClinicalTrials.gov, genomic variants" src="github.com/genomoncology/biomcp" keyEnv={null} enabled={!!enabled["biomcp"]} onToggle={toggle} />
-          <McpRow id="materials-project" label="Materials Project" disc="materials" desc="Material properties, crystal structures, phase diagrams" src="github.com/luffysolution-svg/mcp-materials-project" keyEnv="MP_API_KEY" enabled={!!enabled["materials-project"]} onToggle={toggle} />
-          <McpRow id="fred" label="FRED Economic Data" disc="economics" desc="GDP, inflation, unemployment (Federal Reserve)" src="github.com/tosin2013/fred-mcp" keyEnv="FRED_API_KEY" enabled={!!enabled["fred"]} onToggle={toggle} />
-          <McpRow id="open-meteo" label="Weather & Climate" disc="earth/climate" desc="Current & historical weather, air quality (free, no key)" src="github.com/isdaniel/mcp_weather_server" keyEnv={null} enabled={!!enabled["open-meteo"]} onToggle={toggle} />
-        </div>
+        {servers.length === 0 ? <p className="text-xs text-muted">No MCP servers configured.</p> : (
+          <div className="space-y-2">
+            {servers.map((server) => <McpRow key={server.id} server={server} onToggle={toggle} />)}
+          </div>
+        )}
       </Section>
     </div>
   );
 }
 
-function McpRow({ id, label, disc, desc, src, keyEnv, enabled, onToggle }: {
-  id: string; label: string; disc: string; desc: string; src: string; keyEnv: string | null; enabled: boolean; onToggle: (id: string, on: boolean) => void;
-}) {
+function McpRow({ server, onToggle }: { server: { id: string; name: string; description: string; enabled: boolean; health: string; auth: string; data_egress: string; transport: string; tools: Array<{ name: string }>; terms_url?: string | null; privacy_url?: string | null; error?: string | null }; onToggle: (id: string, on: boolean) => void }) {
   return (
     <div className="rounded-card border border-border bg-surface px-4 py-3">
       <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-text">{label}</span>
-            <span className="rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] text-muted">{disc}</span>
+            <span className="text-sm font-medium text-text">{server.name}</span>
+            <span className="rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] text-muted">{server.transport}</span>
           </div>
-          <p className="text-[11px] text-muted mt-0.5">{desc}</p>
+          <p className="text-[11px] text-muted mt-0.5">{server.description || server.id}</p>
           <div className="flex items-center gap-2 mt-1.5">
-            <a href={`https://${src}`} target="_blank" className="font-mono text-[10px] text-link hover:underline">{src}</a>
-            {keyEnv && <span className="text-[10px] text-warn">Needs {keyEnv}</span>}
-            {enabled && <span className="text-[10px] text-ok">Enabled</span>}
+            <span className={cn("text-[10px]", server.health === "ready" ? "text-ok" : server.health === "error" ? "text-error" : "text-muted")}>Health: {server.health}</span>
+            <span className={cn("text-[10px]", server.auth === "missing" ? "text-warn" : "text-muted")}>Auth: {server.auth}</span>
+            <span className={cn("text-[10px]", server.data_egress === "remote" ? "text-warn" : "text-muted")}>Data: {server.data_egress}</span>
+            <span className="text-[10px] text-muted">{server.tools.length} tools</span>
           </div>
+          {server.error && <p className="mt-1 text-[10px] text-error">{server.error}</p>}
+          {(server.terms_url || server.privacy_url) && <div className="mt-1 flex gap-2 text-[10px]">{server.terms_url && <a href={server.terms_url} target="_blank" className="text-link hover:underline">Terms</a>}{server.privacy_url && <a href={server.privacy_url} target="_blank" className="text-link hover:underline">Privacy</a>}</div>}
         </div>
         <button
-          onClick={() => onToggle(id, !enabled)}
+          onClick={() => onToggle(server.id, !server.enabled)}
           className={cn(
             "shrink-0 rounded-full px-3 py-1 text-[11px] font-medium transition-colors",
-            enabled ? "bg-ok text-white" : "bg-surface-2 text-muted hover:bg-surface hover:text-text",
+            server.enabled ? "bg-ok text-white" : "bg-surface-2 text-muted hover:bg-surface hover:text-text",
           )}
         >
-          {enabled ? "On" : "Off"}
+          {server.enabled ? "On" : "Off"}
         </button>
       </div>
     </div>

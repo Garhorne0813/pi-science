@@ -1,0 +1,5 @@
+[
+  {"prompt": "Find and compare papers about kinase inhibitors", "expected_trigger": true, "trigger_terms": ["papers", "literature"]},
+  {"prompt": "Rename result.csv", "expected_trigger": false, "trigger_terms": ["literature", "papers"]},
+  {"prompt": "What is a DOI?", "expected_trigger": false, "trigger_terms": ["literature", "papers"]}
+]

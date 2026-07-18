@@ -25,6 +25,8 @@ dependencies = [
     "sse-starlette>=2.0",
     "aiofiles>=24.0",
     "python-multipart>=0.0.9",
+    "PyYAML>=6.0",
+    "pypdf>=5.0",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +34,9 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "httpx>=0.28",
+]
+science = [
+    "Pillow>=10.0",
 ]
 
 [project.scripts]

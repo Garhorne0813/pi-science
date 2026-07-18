@@ -291,7 +291,7 @@ export class PiScienceClient {
   // Known event types from the backend (named SSE events)
   private static SSE_EVENTS = [
     "text.updated", "tool.updated", "session.idle", "error",
-    "question.asked", "permission.asked", "compaction.updated",
+    "question.asked", "permission.asked", "compaction.updated", "artifact.published",
   ];
 
   connect(sessionId: string, cwd?: string): void {

@@ -1,0 +1,4 @@
+[
+  {"prompt": "Which compositions are on the convex hull?", "expected_trigger": true, "trigger_terms": ["hull", "composition"]},
+  {"prompt": "Summarize a paper's methods", "expected_trigger": false, "trigger_terms": ["hull", "composition"]}
+]

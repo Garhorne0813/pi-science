@@ -1,0 +1,4 @@
+[
+  {"prompt": "Make a publication-ready scatter plot and check clipping", "expected_trigger": true, "trigger_terms": ["plot", "figure"]},
+  {"prompt": "List files in the workspace", "expected_trigger": false, "trigger_terms": ["plot", "figure"]}
+]

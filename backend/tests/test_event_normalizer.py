@@ -136,6 +136,14 @@ class TestNormalizeEvent:
         assert result["type"] == "error"
         assert "Connection refused" in result["message"]
 
+    def test_artifact_published_event(self):
+        result = normalize_event(
+            {"type": "artifact_published", "artifactId": "a1", "path": "plot.png", "version": 2, "verification": {"status": "passed"}},
+            "session-1",
+        )
+        assert result["type"] == "artifact.published"
+        assert result["artifactId"] == "a1"
+
     def test_extension_ui_confirm(self):
         event = {
             "type": "extension_ui_request",

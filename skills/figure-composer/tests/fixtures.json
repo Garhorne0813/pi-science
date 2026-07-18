@@ -1,0 +1,4 @@
+[
+  {"prompt": "Arrange panels A, B, and C into one publication figure", "expected_trigger": true, "trigger_terms": ["panels", "figure"]},
+  {"prompt": "Calculate a mean from a CSV", "expected_trigger": false, "trigger_terms": ["panels", "figure"]}
+]

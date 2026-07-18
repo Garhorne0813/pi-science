@@ -62,5 +62,12 @@ SESSION_IDLE_TIMEOUT = int(os.environ.get("PI_SCIENCE_SESSION_IDLE_TIMEOUT", "36
 
 
 def ensure_dirs():
-    """Create required directories."""
+    """Create required directories and register existing workspaces."""
     WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        from services.workspace_security import scan_and_register_workspaces
+
+        scan_and_register_workspaces()
+    except Exception:
+        # A registry failure should not prevent the backend from starting.
+        pass

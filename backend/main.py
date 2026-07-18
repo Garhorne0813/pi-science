@@ -1,7 +1,5 @@
 """Pi-Science backend — FastAPI application entry point."""
 
-import asyncio
-import atexit
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -18,6 +16,17 @@ from api.skills import router as skills_router
 from api.notebooks import router as notebooks_router, shutdown_jupyter_server
 from api.runs import router as runs_router
 from api.project_knowledge import router as project_knowledge_router
+from api.artifacts import router as artifacts_router
+from api.citations import router as citations_router
+from api.pdfs import router as pdfs_router
+from api.mcp import router as mcp_router
+from api.jobs import router as jobs_router
+from api.endpoints import router as endpoints_router
+from api.agent_profiles import router as agent_profiles_router
+from api.result_reviews import router as result_reviews_router
+from api.bookmarks import router as bookmarks_router
+from api.literature import router as literature_router
+from api.figures import router as figures_router
 from services.pi_manager import pi_manager
 from services.kernel_manager import kernel_manager
 
@@ -65,6 +74,17 @@ app.include_router(skills_router)
 app.include_router(notebooks_router)
 app.include_router(runs_router)
 app.include_router(project_knowledge_router)
+app.include_router(artifacts_router)
+app.include_router(citations_router)
+app.include_router(pdfs_router)
+app.include_router(mcp_router)
+app.include_router(jobs_router)
+app.include_router(endpoints_router)
+app.include_router(agent_profiles_router)
+app.include_router(result_reviews_router)
+app.include_router(bookmarks_router)
+app.include_router(literature_router)
+app.include_router(figures_router)
 
 
 @app.get("/api/health")
@@ -90,10 +110,6 @@ def main():
         reload=True,
         log_level="info",
     )
-
-
-# Register cleanup on exit
-atexit.register(lambda: asyncio.run(pi_manager.shutdown_all()))
 
 
 if __name__ == "__main__":

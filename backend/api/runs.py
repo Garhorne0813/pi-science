@@ -6,13 +6,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import aiofiles
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
 
+def _workspace_dir(cwd: str) -> Path:
+    from services.workspace_security import validate_workspace_cwd
+
+    try:
+        return validate_workspace_cwd(cwd)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 def _runs_file(cwd: str) -> Path:
-    return Path(cwd).resolve() / ".pi-science" / "runs.jsonl"
+    return _workspace_dir(cwd) / ".pi-science" / "runs.jsonl"
 
 
 @router.get("")

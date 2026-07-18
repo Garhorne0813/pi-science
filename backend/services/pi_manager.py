@@ -223,6 +223,14 @@ class PiProcess:
             for skill_path in settings.get("skill_paths", []):
                 if isinstance(skill_path, str) and skill_path.strip():
                     args.extend(["--skill", skill_path])
+        else:
+            # context-mode ships bundled skills. Load them automatically when
+            # the user has not opted into a curated skill allowlist.
+            from services.runtime_extensions import find_runtime_package
+
+            context_mode = find_runtime_package("context-mode", PI_CLI_PATH)
+            if context_mode and (context_mode / "skills").is_dir():
+                args.extend(["--skill", str(context_mode / "skills")])
         if session_path:
             # Resume directly instead of creating a blank session and then
             # switching, which leaves a ghost conversation in the sidebar.
@@ -258,9 +266,18 @@ class PiProcess:
         if config.provider:
             env["PI_DEFAULT_PROVIDER"] = config.provider
 
-        # Pi also supports --api-key flag for runtime override
-        if config.api_key:
-            args.extend(["--api-key", config.api_key])
+        from config import BASE_DIR
+
+        # Keep context-mode state inside the pi-science data directory.
+        env["CONTEXT_MODE_DIR"] = str(BASE_DIR / "context-mode")
+
+        # pi-subagents needs an executable command that can spawn another Pi
+        # process. In dev mode the CLI is launched through tsx and is not on
+        # PATH, so provide a small wrapper for child agents.
+        wrapper_path = _ensure_pi_subagent_wrapper(BASE_DIR, args)
+        if wrapper_path:
+            env["PI_SUBAGENT_PI_BINARY_ENV"] = wrapper_path
+        env["PATH"] = f"{BASE_DIR}:{env.get('PATH', '')}"
 
         process = subprocess.Popen(
             args,
@@ -292,6 +309,7 @@ class PiProcess:
             instance._apply_state(state["data"])
             if not instance.session_id:
                 raise RuntimeError("pi runtime returned an empty session ID")
+            await instance._record_skill_snapshot()
             return instance
         except BaseException:
             await instance.shutdown()
@@ -442,8 +460,38 @@ class PiProcess:
         if self.session_path and "reviewer-sessions" in Path(self.session_path).parts:
             return
         event_type = data.get("type")
+        if event_type in {"agent_start", "agent_end", "agent_settled", "error"}:
+            try:
+                from services.session_manifest import append_skill_event
+
+                asyncio.create_task(
+                    append_skill_event(
+                        self.cwd,
+                        session_id,
+                        event_type,
+                        status="error" if event_type == "error" else "ok",
+                    )
+                )
+            except Exception:
+                pass
+        if event_type == "tool_execution_end":
+            try:
+                from services.session_manifest import append_skill_event
+                tool_name = str(data.get("toolName") or "")
+                asyncio.create_task(
+                    append_skill_event(
+                        self.cwd,
+                        session_id,
+                        "tool",
+                        tool=tool_name,
+                        status="error" if data.get("isError") else "ok",
+                    )
+                )
+            except Exception:
+                pass
         if event_type == "tool_execution_end" and not data.get("isError"):
             self._record_provenance(data, session_id)
+            asyncio.create_task(self._publish_artifact_for_event(data, session_id))
         if event_type == "agent_settled" and session_id:
             try:
                 from services.reviewer_service import schedule_auto_review
@@ -451,6 +499,74 @@ class PiProcess:
                 schedule_auto_review(self.cwd, session_id)
             except Exception:
                 pass
+
+    async def _publish_artifact_for_event(self, event: dict, session_id: str) -> None:
+        """Publish written files and expose their stable manifest over SSE."""
+        tool_name = event.get("toolName", "")
+        if tool_name not in {"write", "edit"}:
+            return
+        file_path = event.get("args", {}).get("file_path", "")
+        if not file_path:
+            return
+        try:
+            candidate = Path(file_path).expanduser()
+            if not candidate.is_absolute():
+                candidate = Path(self.cwd) / candidate
+            relative = candidate.resolve().relative_to(Path(self.cwd).resolve()).as_posix()
+            from services.artifact_store import get_artifact_store
+
+            manifest = await get_artifact_store(self.cwd).publish(
+                relative,
+                session_id=session_id,
+                tool=tool_name,
+                model=self.config.model,
+            )
+            await self._publish_event(
+                {
+                    "type": "artifact_published",
+                    "artifactId": manifest.artifact_id,
+                    "path": manifest.path,
+                    "version": manifest.version,
+                    "mime": manifest.mime,
+                    "verification": manifest.verification.model_dump(),
+                },
+                session_id,
+            )
+        except Exception:
+            # Artifact publication is additive; it must not make a successful
+            # tool call appear failed or terminate the conversation stream.
+            return
+
+    async def _record_skill_snapshot(self) -> None:
+        """Record the effective catalog available when this Pi process starts."""
+        try:
+            from services.skill_catalog import catalog
+            from services.session_manifest import append_session_skill_snapshot
+            from api.settings import _load_config
+
+            settings = _load_config()
+            enabled_paths = set(settings.get("skill_paths", [])) if settings.get("skills_configured") else None
+            records = catalog(self.cwd, enabled_paths=enabled_paths)
+            await append_session_skill_snapshot(
+                self.cwd,
+                self.session_id,
+                [item.model_dump() for item in records],
+            )
+            for record in records:
+                if record.enabled:
+                    from services.session_manifest import append_skill_event
+
+                    await append_skill_event(
+                        self.cwd,
+                        self.session_id,
+                        "skill_loaded",
+                        skill_id=record.skill_id,
+                        skill_name=record.name,
+                        status="available" if record.validation.valid else "invalid",
+                    )
+        except Exception:
+            # Metadata must never prevent the agent runtime from starting.
+            return
 
     def _record_provenance(self, event: dict, session_id: str) -> None:
         tool_name = event.get("toolName", "")
@@ -666,7 +782,7 @@ class PiProcess:
     async def _send_command_internal(self, cmd_type: str, **params) -> dict:
         """Internal: send an RPC command and await the response."""
         self._last_activity = datetime.now(timezone.utc)
-        req_id = str(uuid.uuid4())[:8]
+        req_id = uuid.uuid4().hex
         cmd = {"id": req_id, "type": cmd_type, **params}
         line = json.dumps(cmd, ensure_ascii=False) + "\n"
 
@@ -1478,6 +1594,43 @@ class PiManager:
     @property
     def active_count(self) -> int:
         return sum(1 for p in self._processes.values() if p.is_alive)
+
+
+def _ensure_pi_subagent_wrapper(base_dir: Path, parent_args: list[str]) -> Optional[str]:
+    """Create a wrapper that lets pi-subagents spawn the current Pi runtime."""
+    try:
+        node_index = next(
+            index
+            for index, value in enumerate(parent_args)
+            if value == "node" or value.endswith("/node")
+        )
+        node_bin = parent_args[node_index]
+        tsx = parent_args[node_index + 1]
+        tsconfig_flag = parent_args[node_index + 2]
+        tsconfig_path = parent_args[node_index + 3]
+        cli_path = parent_args[node_index + 4]
+    except (StopIteration, IndexError):
+        # Production mode uses a built JS entrypoint that can be resolved by
+        # the normal `pi` binary; no wrapper is needed there.
+        return None
+
+    if tsconfig_flag != "--tsconfig":
+        return None
+
+    wrapper_path = base_dir / "pi-subagent-wrapper.sh"
+    script = (
+        "#!/bin/bash\n"
+        "# Auto-generated by pi_manager — do not edit\n"
+        f'exec "{node_bin}" "{tsx}" "{tsconfig_flag}" "{tsconfig_path}" "{cli_path}" "$@"\n'
+    )
+    try:
+        current = wrapper_path.read_text()
+    except FileNotFoundError:
+        current = ""
+    if current != script:
+        wrapper_path.write_text(script)
+        wrapper_path.chmod(0o755)
+    return str(wrapper_path)
 
 
 # Singleton

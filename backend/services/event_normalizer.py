@@ -114,6 +114,17 @@ def normalize_event(
             "message": event.get("message", str(event)),
         }
 
+    elif event_type == "artifact_published":
+        return {
+            "type": "artifact.published",
+            "sessionId": session_id,
+            "artifactId": event.get("artifactId", ""),
+            "path": event.get("path", ""),
+            "version": event.get("version"),
+            "mime": event.get("mime", ""),
+            "verification": event.get("verification", {}),
+        }
+
     elif event_type == "extension_ui_request":
         method = event.get("method", "")
         if method == "confirm":

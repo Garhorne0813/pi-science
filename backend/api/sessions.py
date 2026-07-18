@@ -22,6 +22,7 @@ from models import (
 )
 from services.pi_manager import pi_manager
 from services.event_normalizer import normalize_event
+from services.session_manifest import read_session_skills, read_skill_events
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
@@ -132,6 +133,24 @@ async def get_messages(
     # old ID. The exact persisted file is the stable source for page restores.
     messages = _read_session_from_disk(session_id, cwd)
     return {"messages": messages}
+
+
+@router.get("/{session_id}/skills")
+async def get_session_skills(
+    session_id: str,
+    cwd: str = Query(".", description="Working directory"),
+):
+    """Return the immutable skill snapshot and events for a session."""
+    from services.workspace_security import validate_workspace_cwd
+
+    try:
+        workspace = str(validate_workspace_cwd(cwd))
+    except ValueError as exc:
+        return JSONResponse(status_code=403, content={"error": str(exc)})
+    return {
+        "snapshot": await read_session_skills(workspace, session_id),
+        "events": await read_skill_events(workspace, session_id),
+    }
 
 
 @router.post("/{session_id}/resume")

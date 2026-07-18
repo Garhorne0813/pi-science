@@ -10,6 +10,7 @@ import shutil
 
 from config import WORKSPACES_DIR
 from services.project_knowledge_store import initialize_project_workspace
+from services.workspace_security import register_workspace
 
 HARNESS_DIR = Path(__file__).parent.parent.parent / "harness"
 
@@ -76,6 +77,7 @@ async def create_workspace(body: CreateWorkspaceRequest):
     # Seed harness files (AGENTS.md, KNOWLEDGE.md) into new workspace
     _seed_harness(path)
     initialize_project_workspace(path, create_base_directories=True)
+    register_workspace(path)
     return WorkspaceInfo(
         name=name,
         path=str(path),
@@ -98,6 +100,8 @@ async def open_folder(body: OpenFolderRequest):
     session_count = 0
     if sessions_dir.exists():
         session_count = sum(1 for _ in sessions_dir.rglob("*.jsonl"))
+
+    register_workspace(folder)
 
     return WorkspaceInfo(
         name=folder.name,

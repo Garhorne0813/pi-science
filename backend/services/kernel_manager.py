@@ -40,7 +40,9 @@ class KernelSession:
             if not self.is_alive:
                 return CellResult(ok=False, error="Kernel process died")
 
-            req_id = uuid.uuid4().hex[:8]
+            # Keep the full UUID; short IDs make concurrent kernel requests
+            # unnecessarily vulnerable to collisions over long-lived sessions.
+            req_id = uuid.uuid4().hex
             req = json.dumps({"id": req_id, "code": code}) + "\n"
             loop = asyncio.get_running_loop()
 

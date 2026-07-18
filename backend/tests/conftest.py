@@ -31,7 +31,10 @@ async def client():
 def temp_workspace():
     """Temporary workspace directory for file tests."""
     with tempfile.TemporaryDirectory() as tmp:
-        yield Path(tmp)
+        workspace = Path(tmp)
+        # Match a real initialized workspace so cwd validation is exercised.
+        (workspace / ".pi-science").mkdir()
+        yield workspace
 
 
 @pytest.fixture

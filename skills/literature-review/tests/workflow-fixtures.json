@@ -1,0 +1,9 @@
+[
+  {
+    "prompt": "Review the evidence for kinase inhibitors",
+    "expected_trigger": true,
+    "trigger_terms": ["review", "evidence"],
+    "required_outputs": ["search_record", "evidence_table", "limitations"],
+    "produced_outputs": ["search_record", "evidence_table", "limitations"]
+  }
+]

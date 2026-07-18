@@ -9,6 +9,15 @@ from services.provenance_store import get_store
 router = APIRouter(prefix="/api/provenance", tags=["provenance"])
 
 
+def _workspace_dir(cwd: str) -> str:
+    from services.workspace_security import validate_workspace_cwd
+
+    try:
+        return str(validate_workspace_cwd(cwd))
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 @router.get("")
 async def query_provenance(
     cwd: str = Query(".", description="Working directory"),
@@ -17,7 +26,7 @@ async def query_provenance(
     limit: int = Query(100, ge=1, le=1000),
 ):
     """Query provenance records."""
-    store = get_store(cwd)
+    store = get_store(_workspace_dir(cwd))
     records = await store.query(path=path, session_id=session_id, limit=limit)
     return {
         "records": [r.model_dump() for r in records],
@@ -33,7 +42,7 @@ async def get_env_lockfile(
     """Read a captured environment lockfile by its content hash."""
     if not re.fullmatch(r"[0-9a-fA-F]{16}", hash):
         raise HTTPException(status_code=400, detail="Invalid environment lockfile hash")
-    store = get_store(cwd)
+    store = get_store(_workspace_dir(cwd))
     env_file = (store._env_dir / f"{hash}.txt").resolve()
     if not env_file.is_relative_to(store._env_dir.resolve()):
         raise HTTPException(status_code=400, detail="Invalid environment lockfile path")
@@ -48,7 +57,7 @@ async def get_versions(
     cwd: str = Query(".", description="Working directory"),
 ):
     """Get all versions of a specific artifact."""
-    store = get_store(cwd)
+    store = get_store(_workspace_dir(cwd))
     records = await store.get_versions(path)
     return {"path": path, "versions": [r.model_dump() for r in records]}
 
@@ -59,7 +68,7 @@ async def capture_environment(
     label: Optional[str] = Query(None),
 ):
     """Capture current Python environment snapshot."""
-    store = get_store(cwd)
+    store = get_store(_workspace_dir(cwd))
     env_data = await store.capture_environment(label=label)
     return env_data
 
@@ -77,7 +86,7 @@ async def record_provenance(
     run_id: Optional[str] = Query(None),
 ):
     """Manually record a provenance entry."""
-    store = get_store(cwd)
+    store = get_store(_workspace_dir(cwd))
     record = await store.record(
         path=path,
         session_id=session_id,

@@ -5,6 +5,8 @@ environment snapshot, enabling full artifact lineage reconstruction.
 """
 
 import hashlib
+import json
+import logging
 import time
 from pathlib import Path
 from typing import Optional
@@ -12,6 +14,8 @@ from typing import Optional
 import aiofiles
 
 from models import ProvenanceRecord
+
+logger = logging.getLogger(__name__)
 
 MAX_CONTENT_CHARS = 100_000
 
@@ -28,6 +32,28 @@ class ProvenanceStore:
         self._env_dir = self._dir / "env"
         self._dir.mkdir(parents=True, exist_ok=True)
         self._env_dir.mkdir(parents=True, exist_ok=True)
+        self._version_index: dict[str, int] = {}
+        self._build_version_index()
+
+    def _build_version_index(self) -> None:
+        """Build a path/version index once instead of scanning on every write."""
+        if not self._file.exists():
+            return
+        try:
+            with open(self._file) as stream:
+                for line in stream:
+                    try:
+                        record = json.loads(line)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    path = record.get("path")
+                    version = record.get("version", 0)
+                    if path and isinstance(version, int):
+                        self._version_index[path] = max(
+                            self._version_index.get(path, 0), version
+                        )
+        except OSError:
+            return
 
     async def record(
         self,
@@ -68,6 +94,7 @@ class ProvenanceStore:
         async with aiofiles.open(self._file, "a") as f:
             await f.write(line)
 
+        self._version_index[path] = version
         return record
 
     async def query(
@@ -94,6 +121,7 @@ class ProvenanceStore:
                         continue
                     results.append(rec)
                 except Exception:
+                    logger.debug("Skipping malformed provenance record", exc_info=True)
                     continue
 
         # Return newest first
@@ -105,9 +133,8 @@ class ProvenanceStore:
         return await self.query(path=path, limit=100)
 
     async def _next_version(self, path: str) -> int:
-        """Get the next version number for an artifact path."""
-        records = await self.query(path=path, limit=1)
-        return (records[0].version + 1) if records else 1
+        """Get the next version number for an artifact path in O(1)."""
+        return self._version_index.get(path, 0) + 1
 
     async def capture_environment(
         self,
@@ -141,6 +168,7 @@ class ProvenanceStore:
             env_file = self._env_dir / f"{freeze_hash}.txt"
             env_file.write_text(freeze_text)
         except Exception:
+            logger.debug("pip freeze failed during environment capture", exc_info=True)
             env_data["packages_hash"] = None
 
         if include_hardware:
@@ -149,7 +177,7 @@ class ProvenanceStore:
                 cpu_count = os.cpu_count() or 0
                 env_data["cpu_count"] = cpu_count
             except Exception:
-                pass
+                logger.debug("Failed to detect CPU count", exc_info=True)
 
         return env_data
 

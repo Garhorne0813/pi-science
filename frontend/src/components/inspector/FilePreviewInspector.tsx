@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Code2, Eye, ExternalLink, FileSearch, History, Loader2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { FilePreviewInspector as FilePreviewInspectorT, FileRoot } from "../../types/thread";
@@ -19,9 +19,11 @@ import { ProvenancePanel } from "./ProvenancePanel";
 import { TablePreview } from "./TablePreview";
 import { TableChart } from "./TableChart";
 import { canChart } from "@/lib/tableChart";
-import { DocxView, PptxView, XlsxView } from "./OfficePreview";
-import { MoleculeView } from "./MoleculeView";
-import { MeshView } from "./MeshView";
+const DocxView = lazy(() => import("./OfficePreview").then((module) => ({ default: module.DocxView })));
+const PptxView = lazy(() => import("./OfficePreview").then((module) => ({ default: module.PptxView })));
+const XlsxView = lazy(() => import("./OfficePreview").then((module) => ({ default: module.XlsxView })));
+const MoleculeView = lazy(() => import("./MoleculeView").then((module) => ({ default: module.MoleculeView })));
+const MeshView = lazy(() => import("./MeshView").then((module) => ({ default: module.MeshView })));
 import { GenomeView } from "./GenomeView";
 import { FitsView } from "./FitsView";
 import { DosView } from "./DosView";
@@ -195,16 +197,18 @@ export function FilePreviewInspector({
           />
         )}
         {!showHistory && !loading && !error && (
-          <Body
-            kind={kind}
-            url={url}
-            text={text}
-            bytes={bytes}
-            showCode={tab === "code"}
-            filename={data.filename}
-            path={data.path}
-            language={data.language}
-          />
+          <Suspense fallback={<Note text="Loading scientific viewer…" />}>
+            <Body
+              kind={kind}
+              url={url}
+              text={text}
+              bytes={bytes}
+              showCode={tab === "code"}
+              filename={data.filename}
+              path={data.path}
+              language={data.language}
+            />
+          </Suspense>
         )}
       </div>
     </div>

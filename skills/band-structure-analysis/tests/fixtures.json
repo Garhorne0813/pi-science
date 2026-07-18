@@ -1,0 +1,4 @@
+[
+  {"prompt": "Plot the bands from EIGENVAL and label the reciprocal path", "expected_trigger": true, "trigger_terms": ["EIGENVAL", "bands"]},
+  {"prompt": "Search Crossref for papers", "expected_trigger": false, "trigger_terms": ["EIGENVAL", "bands"]}
+]

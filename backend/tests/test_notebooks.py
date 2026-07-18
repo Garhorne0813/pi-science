@@ -85,6 +85,7 @@ async def test_jupyter_start_is_scoped_to_workspace(client, temp_workspace, monk
 async def test_jupyter_rejects_cross_workspace_start_and_stop(client, temp_workspace, monkeypatch):
     other = temp_workspace / "other"
     other.mkdir()
+    (other / ".pi-science").mkdir()
     monkeypatch.setattr(notebooks, "_find_available_port", lambda: 43124)
     monkeypatch.setattr(
         notebooks.subprocess,
@@ -131,4 +132,4 @@ async def test_jupyter_rejects_missing_workspace(client, temp_workspace):
         "/api/notebooks/jupyter/start",
         params={"cwd": str(missing)},
     )
-    assert response.status_code == 400
+    assert response.status_code == 403

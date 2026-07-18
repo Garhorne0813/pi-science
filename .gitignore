@@ -43,3 +43,12 @@ coverage/
 # Project documentation (local only, not versioned)
 ARCHITECTURE.md
 CHANGELOG.md
+
+# Dev-only runtime data
+.data/
+workspaces/
+
+# Local credentials and generated logs
+.env.example
+CODE_REVIEW.md
+*.log

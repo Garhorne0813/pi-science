@@ -19,6 +19,51 @@ from .project_knowledge import (
     ReviewResponse,
     SourceReference,
 )
+from .skill import (
+    SkillFile,
+    SkillInfo,
+    SkillMetadata,
+    SkillRequirement,
+    SkillThirdParty,
+    SkillValidation,
+)
+from .citation import Citation, CitationBatchRequest, CitationVerifyRequest
+from .mcp import McpServerInfo, McpToolInfo
+from .compute import (
+    CapabilityCheck,
+    ComputeRequirement,
+    JobRecord,
+    JobSubmitRequest,
+    ModelEndpoint,
+    ModelEndpointRequest,
+)
+from .agent_profile import AgentProfile, AgentProfileRequest
+from .literature import LiteratureRecord, LiteratureSearchRequest
+
+
+class ArtifactVerification(BaseModel):
+    status: Literal["pending", "passed", "failed"] = "pending"
+    checks: Dict[str, Any] = Field(default_factory=dict)
+    errors: List[str] = Field(default_factory=list)
+    checked_at: Optional[datetime] = None
+
+
+class ArtifactManifest(BaseModel):
+    """Stable, user-visible description of a published workspace artifact."""
+
+    artifact_id: str
+    version: int = Field(ge=1)
+    path: str
+    kind: str
+    mime: str
+    size: int = Field(ge=0)
+    sha256: str = Field(min_length=16, max_length=64)
+    published_at: datetime
+    producer: Dict[str, Any] = Field(default_factory=dict)
+    inputs: List[Dict[str, Any]] = Field(default_factory=list)
+    environment: Dict[str, Any] = Field(default_factory=dict)
+    verification: ArtifactVerification = Field(default_factory=ArtifactVerification)
+    visibility: Literal["workspace", "private"] = "workspace"
 
 __all__ = [
     "BatchDecisionRequest",
@@ -34,6 +79,29 @@ __all__ = [
     "ReviewRequest",
     "ReviewResponse",
     "SourceReference",
+    "SkillFile",
+    "SkillInfo",
+    "SkillMetadata",
+    "SkillRequirement",
+    "SkillThirdParty",
+    "SkillValidation",
+    "ArtifactManifest",
+    "ArtifactVerification",
+    "Citation",
+    "CitationBatchRequest",
+    "CitationVerifyRequest",
+    "McpServerInfo",
+    "McpToolInfo",
+    "CapabilityCheck",
+    "ComputeRequirement",
+    "JobRecord",
+    "JobSubmitRequest",
+    "ModelEndpoint",
+    "ModelEndpointRequest",
+    "AgentProfile",
+    "AgentProfileRequest",
+    "LiteratureRecord",
+    "LiteratureSearchRequest",
 ]
 
 

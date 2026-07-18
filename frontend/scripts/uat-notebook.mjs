@@ -61,7 +61,7 @@ async function waitForKernelCount(expected) {
 async function run() {
   await seedWorkspace();
   const browser = await chromium.launch({ executablePath: chromePath, headless: true });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const page = await browser.newPage({ locale: "en-US", viewport: { width: 1440, height: 1000 } });
   const runtimeErrors = [];
   page.on("pageerror", (error) => runtimeErrors.push(error.message));
   page.on("console", (message) => {

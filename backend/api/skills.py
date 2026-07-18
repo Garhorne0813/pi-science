@@ -1,21 +1,20 @@
-"""Skills API — list and manage agent skills."""
+"""Skills API — discover, validate, and inspect agent skills."""
 
-import re
+from __future__ import annotations
+
 import subprocess
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from config import PI_CLI_PATH
+from models.skill import SkillInfo
+from services.skill_catalog import catalog, discover_raw, get_skill, validate_directory
+from services.workspace_security import validate_workspace_cwd
+
 router = APIRouter(prefix="/api/skills", tags=["skills"])
-
-
-class SkillInfo(BaseModel):
-    name: str
-    description: str
-    location: str = ""
-    source: str = "project"  # builtin, project, user
 
 
 class ToolInfo(BaseModel):
@@ -24,29 +23,18 @@ class ToolInfo(BaseModel):
     version: Optional[str] = None
 
 
-@router.get("", response_model=list[SkillInfo])
-async def list_skills(cwd: str = Query(".", description="Working directory")):
-    """List all skills from project, user, and builtin locations."""
-    return [
-        SkillInfo(name=name, description="", location=path, source=source)
-        for name, path, source in _discover_all_skills(cwd)
-    ]
+def _safe_cwd(cwd: str) -> str:
+    if cwd == ".":
+        return cwd
+    try:
+        return str(validate_workspace_cwd(cwd))
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
-def _discover_all_skills(cwd: str = ".") -> list[tuple[str, str, str]]:
-    """Discover project, user, bundled, and installed package skills."""
-    results: list[tuple[str, str, str]] = []
-    project_dir = Path(cwd).expanduser().resolve() / ".pi" / "skills"
-    for info in _scan_skills(project_dir, "project"):
-        results.append((info.name, info.location, info.source))
-
-    for user_dir in (Path.home() / ".pi" / "agent" / "skills", Path.home() / ".agents" / "skills"):
-        for info in _scan_skills(user_dir, "user"):
-            results.append((info.name, info.location, info.source))
-
-    # Support both a local Pi checkout and the npm runtime layout.
-    from config import PI_CLI_PATH
-    cli_path = Path(PI_CLI_PATH).resolve()
+def _runtime_roots() -> list[Path]:
+    """Return candidate Pi runtime roots for compatibility and diagnostics."""
+    cli_path = Path(PI_CLI_PATH).expanduser().resolve()
     if "packages" in cli_path.parts:
         package_index = cli_path.parts.index("packages")
         dev_root = Path(*cli_path.parts[:package_index])
@@ -57,20 +45,20 @@ def _discover_all_skills(cwd: str = ".") -> list[tuple[str, str, str]]:
         cli_path.parent.parent.parent.parent if "node_modules" in cli_path.parts else cli_path.parent,
         Path(__file__).resolve().parents[2] / "runtime" / "pi",
     ]
-    seen_roots: set[Path] = set()
-    for pi_root in candidates:
-        if pi_root in seen_roots or not pi_root.exists():
-            continue
-        seen_roots.add(pi_root)
-        for info in _scan_skills(pi_root / ".pi" / "skills", "builtin"):
-            results.append((info.name, info.location, info.source))
-        node_modules = pi_root / "node_modules"
-        if node_modules.exists():
-            for child in node_modules.iterdir():
-                skills_dir = child / "skills"
-                for info in _scan_skills(skills_dir, "builtin"):
-                    results.append((info.name, info.location, info.source))
-    return results
+    result: list[Path] = []
+    for root in candidates:
+        if root.exists() and root not in result:
+            result.append(root)
+    return result
+
+
+@router.get("", response_model=list[SkillInfo])
+async def list_skills(cwd: str = Query(".", description="Working directory")):
+    """List effective skills using project > user > builtin precedence."""
+    # ``.`` is useful for the local development workspace even before it is
+    # registered. Explicit absolute paths are validated by the catalog's
+    # callers before project files are accessed.
+    return catalog(_safe_cwd(cwd))
 
 
 @router.get("/tools", response_model=list[ToolInfo])
@@ -79,7 +67,7 @@ async def detect_tools():
     tools = []
     for name, cmd in [("python", ["python3", "--version"]), ("R", ["Rscript", "--version"]),
                        ("Node.js", ["node", "--version"]), ("Git", ["git", "--version"]),
-                       ("uv", ["uv", "--version"]), ("jupyter", ["jupyter", "--version"])]:
+                       ("uv", ["uv", "--version"]), ("jupyter", ["jupyter", "--version"])] :
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             version = (result.stdout or result.stderr).strip().split("\n")[0] if result.returncode == 0 else None
@@ -89,37 +77,50 @@ async def detect_tools():
     return tools
 
 
-def _scan_skills(directory: Path, source: str) -> list[SkillInfo]:
-    """Scan a directory for SKILL.md files."""
-    if not directory.exists():
-        return []
-    skills = []
-    for skill_file in sorted(directory.rglob("SKILL.md")):
-        try:
-            name, desc = _parse_skill_md(skill_file)
-            skills.append(SkillInfo(
-                name=name or skill_file.parent.name,
-                description=desc or "",
-                location=str(skill_file),
-                source=source,
-            ))
-        except Exception:
-            pass
-    return skills
+@router.get("/{skill_id}", response_model=SkillInfo)
+async def skill_detail(skill_id: str, cwd: str = Query(".", description="Working directory")):
+    record = get_skill(skill_id, _safe_cwd(cwd))
+    if record is None:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    return record.public()
 
 
-def _parse_skill_md(path: Path) -> tuple[Optional[str], Optional[str]]:
-    """Parse name and description from SKILL.md frontmatter."""
-    text = path.read_text()
-    match = re.match(r'^---\s*\n(.*?)\n---', text, re.DOTALL)
-    if not match:
-        return None, None
-    name = None
-    desc = None
-    for line in match.group(1).split("\n"):
-        line = line.strip()
-        if line.startswith("name:"):
-            name = line.split(":", 1)[1].strip()
-        elif line.startswith("description:"):
-            desc = line.split(":", 1)[1].strip()
-    return name, desc
+@router.post("/validate")
+async def validate_skills(
+    cwd: str = Query(".", description="Working directory"),
+    path: Optional[str] = Query(None, description="Skill directory or SKILL.md path"),
+):
+    safe_cwd = _safe_cwd(cwd)
+    target = Path(path or safe_cwd).expanduser().resolve()
+    if path and safe_cwd != ".":
+        workspace = Path(safe_cwd).resolve()
+        if not target.is_relative_to(workspace) or ".pi-science" in target.relative_to(workspace).parts:
+            raise HTTPException(status_code=403, detail="Skill path must remain inside the workspace")
+    if target.is_file():
+        target = target.parent
+    validations = validate_directory(target)
+    return {
+        "valid": all(item.valid for item in validations),
+        "validations": [item.model_dump() for item in validations],
+    }
+
+
+def _discover_all_skills(cwd: str = ".") -> list[tuple[str, str, str]]:
+    """Legacy tuple API consumed by Settings and existing integrations."""
+    return [
+        (record.metadata.name, str(record.source_path), record.source)
+        for record in discover_raw(cwd)
+    ]
+
+
+def _scan_skills(directory: Path, source: str):
+    """Compatibility scanner retained for older tests/extensions."""
+    return [record.public() for record in discover_raw(str(directory.parent)) if record.source == source]
+
+
+def _parse_skill_md(path: Path):
+    """Compatibility parser returning the old name/description pair."""
+    for record in discover_raw(str(path.parent.parent)):
+        if record.source_path == path:
+            return record.metadata.name, record.metadata.description
+    return None, None

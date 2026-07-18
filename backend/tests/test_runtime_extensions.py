@@ -29,6 +29,7 @@ def test_status_reports_missing_extensions_without_inventing_paths(tmp_path):
         "pi-mcp-adapter",
         "pi-subagents",
         "pi-web-access",
+        "context-mode",
     }
     assert all(item["installed"] is False and item["path"] is None for item in status)
 

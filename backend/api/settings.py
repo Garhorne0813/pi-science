@@ -610,17 +610,24 @@ class SkillToggleRequest(BaseModel):
 async def get_skills_state():
     """Return discovered skills and their effective enabled state."""
     from api.skills import _discover_all_skills
+    from services.skill_catalog import catalog as skill_catalog
 
     config = _load_config()
     configured = bool(config.get("skills_configured", False))
     enabled_paths = set(config.get("skill_paths", []))
+    metadata = {item.name: item for item in skill_catalog(".")}
     skills = []
     for name, path, source in _discover_all_skills():
+        record = metadata.get(name)
         skills.append({
             "name": name,
             "path": path,
             "source": source,
             "enabled": path in enabled_paths if configured else True,
+            "skill_id": record.skill_id if record else None,
+            "digest": record.digest if record else None,
+            "quality": record.quality if record else "draft",
+            "validation": record.validation.model_dump() if record else None,
         })
     return {"skills": skills, "configured": configured}
 

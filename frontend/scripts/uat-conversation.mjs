@@ -28,7 +28,7 @@ async function run() {
   await mkdir(workspace, { recursive: true });
   const config = await api("/api/settings/config");
   const browser = await chromium.launch({ executablePath: chromePath, headless: true });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const page = await browser.newPage({ locale: "en-US", viewport: { width: 1440, height: 1000 } });
   const runtimeErrors = [];
   const createdSessions = [];
   page.on("pageerror", (error) => runtimeErrors.push(error.message));
@@ -38,6 +38,11 @@ async function run() {
   try {
     const route = `/workspace/${encodeURIComponent(workspace)}`;
     await page.goto(`${frontend}${route}`, { waitUntil: "domcontentloaded" });
+    // A fresh workspace intentionally opens with a blank composer. Create the
+    // first persisted session explicitly before asserting the session route.
+    if (!/\/session\//.test(page.url())) {
+      await page.getByTitle("New session").click();
+    }
     await page.waitForURL(/\/session\//, { timeout: 20_000 });
     const firstSession = sessionIdFromUrl(page.url());
     if (!firstSession) throw new Error(`No session ID after connect: ${page.url()}`);

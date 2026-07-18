@@ -134,8 +134,13 @@ async def upload_file(
 
 
 def _workspace_dir(cwd: str = ".") -> Path:
-    """Resolve workspace directory. Defaults to cwd but can be overridden."""
-    return Path(cwd).resolve()
+    """Resolve and validate workspace directory against the registry."""
+    from services.workspace_security import validate_workspace_cwd
+
+    try:
+        return validate_workspace_cwd(cwd)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 # ── Specific routes MUST come before the catch-all /{path:path} ──

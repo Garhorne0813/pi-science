@@ -551,6 +551,7 @@ function AgentMessage({ parts, partial }: { parts: { id: string; text: string }[
 
   // Detect file references and make them clickable
   const refs = extractArtifactRefs(text);
+  const citations = [...new Set(text.match(/10\.\d{4,9}\/[^\s)\]}>]+/gi) || [])];
 
   const handleFileClick = (filePath: string) => {
     const block = refToArtifactBlock(filePath);
@@ -574,6 +575,32 @@ function AgentMessage({ parts, partial }: { parts: { id: string; text: string }[
           ))}
         </div>
       )}
+      {citations.length > 0 && <CitationBadges identifiers={citations} />}
+    </div>
+  );
+}
+
+function CitationBadges({ identifiers }: { identifiers: string[] }) {
+  const [states, setStates] = useState<Record<string, string>>(() => Object.fromEntries(identifiers.map((id) => [id, "unverified"])));
+  const verify = async (identifier: string) => {
+    setStates((current) => ({ ...current, [identifier]: "checking" }));
+    try {
+      const normalized = await fetch("/api/citations/normalize", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ identifiers: [identifier] }) }).then((response) => response.json());
+      const citation = normalized.citations?.[0];
+      if (!citation) throw new Error("not found");
+      const result = await fetch("/api/citations/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ citation }) }).then((response) => response.json());
+      setStates((current) => ({ ...current, [identifier]: result.verification || "unverified" }));
+    } catch {
+      setStates((current) => ({ ...current, [identifier]: "network_error" }));
+    }
+  };
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {identifiers.map((identifier) => (
+        <button key={identifier} type="button" onClick={() => void verify(identifier)} className="rounded-input border border-border bg-surface px-2 py-1 font-mono text-[10px] text-muted hover:bg-surface-2" title="Verify citation against a provider">
+          DOI · {states[identifier]}
+        </button>
+      ))}
     </div>
   );
 }
@@ -616,8 +643,18 @@ function ToolCard({ block }: { block: ToolCallBlock }) {
   );
 }
 
-function StatusLine({ block }: { block: { kind: "status-line"; text: string; level: string } }) {
+function StatusLine({ block }: { block: { kind: "status-line"; text: string; level: string; artifactId?: string; path?: string } }) {
+  const openInspector = useUiStore((s) => s.openInspector);
+  const cwd = useRuntimeStore((s) => s.cwd);
   const tone = block.level === "error" ? "text-error" : block.level === "done" ? "text-ok" : "text-muted";
+  if (block.path) {
+    const artifact = refToArtifactBlock(block.path);
+    return (
+      <button type="button" onClick={() => openInspector({ ...fileInspectorFromBlock(artifact as any), cwd } as any)} className={cn("flex items-center gap-2 text-xs hover:underline", tone)}>
+        {block.text}
+      </button>
+    );
+  }
   return (
     <div className={cn("flex items-center gap-2 text-xs", tone)}>
       {block.level === "running" && <Loader2 size={14} className="animate-spin text-accent" />}

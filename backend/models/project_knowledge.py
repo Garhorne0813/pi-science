@@ -123,6 +123,9 @@ class ProjectPolicy(BaseModel):
     naming_pattern: str = "{date}_{topic}_{kind}_{version}"
     accepted_counts: dict[str, int] = Field(default_factory=dict)
     rejected_counts: dict[str, int] = Field(default_factory=dict)
+    external_services_allowed: bool = True
+    allowed_egress_domains: list[str] = Field(default_factory=list)
+    blocked_data_classes: list[str] = Field(default_factory=list)
     updated_at: str = Field(default_factory=utc_now_iso)
 
 
@@ -171,3 +174,6 @@ class ProjectPolicyUpdate(BaseModel):
     minimum_files_for_new_category: Optional[int] = Field(default=None, ge=1, le=100)
     locked_paths: Optional[list[str]] = None
     naming_pattern: Optional[str] = Field(default=None, max_length=200)
+    external_services_allowed: Optional[bool] = None
+    allowed_egress_domains: Optional[list[str]] = None
+    blocked_data_classes: Optional[list[str]] = None

@@ -9,6 +9,7 @@ import { FileBrowser } from "../../components/sidebar/FileBrowser";
 import { cn } from "../../lib/cn";
 import { getClient, getSessionName } from "../../lib/pi-science-client";
 import { setCurrentCwd } from "../../lib/files";
+import { ErrorBoundary } from "../../components/ErrorBoundary";
 
 export function ProjectsLayout() {
   const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed);
@@ -70,6 +71,7 @@ export function ProjectsLayout() {
               {isWorkspace && (
                 <>
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} label="Files" icon={<FileText size={16} />} active={location.pathname.endsWith("/files")} />
+                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/skills`} label="Skills" icon={<Puzzle size={16} />} active={location.pathname.endsWith("/skills")} />
                   <KnowledgeNavItem cwd={activeCwd!} active={location.pathname.endsWith("/knowledge")} />
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} label="Notebooks" icon={<BookOpen size={16} />} active={location.pathname.endsWith("/notebooks")} />
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/runs`} label="Runs" icon={<Play size={16} />} active={location.pathname.endsWith("/runs")} />
@@ -110,7 +112,9 @@ export function ProjectsLayout() {
       {/* Inspector */}
       {inspectorOpen && inspectorData && (
         <RightPane onClose={closeInspector}>
-          <InspectorShell inspector={inspectorData} onClose={closeInspector} cwd={activeCwd || undefined} />
+          <ErrorBoundary>
+            <InspectorShell inspector={inspectorData} onClose={closeInspector} cwd={activeCwd || undefined} />
+          </ErrorBoundary>
         </RightPane>
       )}
     </div>

@@ -12,7 +12,12 @@ router = APIRouter(prefix="/api/notebooks", tags=["notebooks"])
 
 
 def _workspace_dir(cwd: str = ".") -> Path:
-    return Path(cwd).resolve()
+    from services.workspace_security import validate_workspace_cwd
+
+    try:
+        return validate_workspace_cwd(cwd)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.get("")

@@ -7,6 +7,7 @@ Run with: PI_SCIENCE_RUN_INTEGRATION=1 pytest tests/test_integration.py -v -s
 import json
 import os
 import time
+from pathlib import Path
 import pytest
 import httpx
 
@@ -418,6 +419,8 @@ class TestProvenanceIntegration:
     def test_record_and_query(self):
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
+            # The API only accepts initialized/registered workspaces.
+            (Path(tmp) / ".pi-science").mkdir()
             r = httpx.post(
                 _api(f"/api/provenance/record?cwd={tmp}&path=integration_test.csv&session_id=int-1&tool=write&content=hello,world"),
                 timeout=5,

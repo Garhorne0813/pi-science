@@ -121,6 +121,8 @@ export interface StatusLineBlock {
   id: string;
   text: string;
   level: "info" | "warn" | "error" | "done";
+  artifactId?: string;
+  path?: string;
 }
 
 // ── Image attachment ──
@@ -213,6 +215,7 @@ export interface PdfInspector {
   path?: string;
   filename?: string;
   url?: string;
+  page?: number;
 }
 
 export type ArtifactTab = "code" | "environment" | "log" | "messages" | "review" | "provenance";

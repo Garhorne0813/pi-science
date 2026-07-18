@@ -95,6 +95,7 @@ Every file the agent creates or edits is automatically recorded with full lineag
 ### Computing · 计算
 
 - **Python / R Kernels** — persistent, isolated sessions per notebook; execute code and capture output
+- **Skill validation & reproducibility** — validate skill metadata, evaluate trigger fixtures, publish hashed artifacts, and inspect session skill snapshots
 - **Jupyter Lab** — one-click start/stop from the Notebooks page; opens in a new browser tab
 - **Large File Probe** — structure detection for files too large to preview (CSV, NetCDF, FITS, Parquet, STL, genomics); shows schema, row counts, column types, sample values without loading the entire file
 - **Experiment Runs** — track commands, outputs, and status in `.pi-science/runs.jsonl`
@@ -106,6 +107,15 @@ Every file the agent creates or edits is automatically recorded with full lineag
 | **pi-mcp-adapter** | Bridge to MCP servers — literature search (PubMed, arXiv), biomed, materials databases, weather |
 | **pi-subagents** | Multi-agent orchestration: scout, researcher, planner, worker, reviewer, oracle |
 | **pi-web-access** | Web search, URL fetching, YouTube/video understanding |
+
+### Skill-driven research runtime · 技能驱动科研运行时
+
+Skills are validated YAML-described capability packages rather than bare
+prompt files. The workbench records the skill digest loaded for each session,
+publishes user-visible artifacts with content hashes and verification status,
+and exposes read-only literature, PDF page-index, MCP catalog, job, result
+review, and transcript bookmark APIs. See [docs/skill-schema.md](docs/skill-schema.md)
+and [docs/science-platform-runtime.md](docs/science-platform-runtime.md).
 
 ### Workspaces · 工作区
 
