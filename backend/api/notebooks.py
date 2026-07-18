@@ -19,6 +19,18 @@ router = APIRouter(prefix="/api/notebooks", tags=["notebooks"])
 JUPYTER_ENV = BASE_DIR / "jupyter-env"
 JUPYTER_PACKAGES = ["jupyterlab", "ipykernel", "numpy", "pandas", "matplotlib"]
 
+
+def _jupyter_bin() -> Path:
+    return JUPYTER_ENV / "bin" / "jupyter-lab"
+
+
+def _env_python() -> str:
+    return str(JUPYTER_ENV / "bin" / "python")
+
+
+def _find_uv() -> str | None:
+    return shutil.which("uv")
+
 _jupyter_process: subprocess.Popen | None = None
 _jupyter_port = 8888
 import asyncio

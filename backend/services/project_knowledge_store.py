@@ -110,6 +110,11 @@ class ProjectKnowledgeStore:
             base.mkdir(exist_ok=True)
             for name in BASE_DIRECTORIES:
                 (base / name).mkdir(exist_ok=True)
+            # Keep the legacy top-level layout available for existing projects
+            # and integrations while the hidden knowledge base is used by the
+            # new UI.
+            for name in BASE_DIRECTORIES:
+                (self.workspace / name).mkdir(exist_ok=True)
 
         if not self.items_file.exists():
             _write_json(self.items_file, [])

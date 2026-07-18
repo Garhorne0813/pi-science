@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from services.compute_service import (
+from services.remote_compute_service import (
     load_machines, save_machines, probe_machine, submit_job,
 )
 
