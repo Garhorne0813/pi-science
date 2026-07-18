@@ -16,6 +16,11 @@ from models.project_knowledge import utc_now_iso
 MANAGED_START = "<!-- pi-science:project-knowledge:start -->"
 MANAGED_END = "<!-- pi-science:project-knowledge:end -->"
 
+# Scientific-project skeleton created once per workspace.  Directories live
+# under a hidden folder so the root stays clean and the user sees a single
+# "Project Knowledge Base" entry rather than six scattered empty folders.
+PROJECT_KNOWLEDGE_BASE = ".project_knowledge_base"
+
 BASE_DIRECTORIES = (
     "sources",
     "research",
@@ -101,8 +106,10 @@ class ProjectKnowledgeStore:
         ):
             directory.mkdir(parents=True, exist_ok=True)
         if create_base_directories:
+            base = self.workspace / PROJECT_KNOWLEDGE_BASE
+            base.mkdir(exist_ok=True)
             for name in BASE_DIRECTORIES:
-                (self.workspace / name).mkdir(exist_ok=True)
+                (base / name).mkdir(exist_ok=True)
 
         if not self.items_file.exists():
             _write_json(self.items_file, [])
