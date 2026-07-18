@@ -227,7 +227,10 @@ export function LiveSessionPage() {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // Skip when IME is composing (e.g. Chinese Pinyin user presses
+    // Enter to confirm raw pinyin as English — that Enter belongs
+    // to the IME, not the app).
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       void handleSend();
     }

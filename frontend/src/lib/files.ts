@@ -39,11 +39,17 @@ export async function readArtifact(
   }
 }
 
-/** URL for browser-native preview (PDF, images, HTML, video). */
+/** URL for browser-native preview (PDF, images, HTML, video).
+ *  Uses /serve/ instead of /{path}/raw so relative references
+ *  (CSS, JS, images) in HTML resolve back to the same prefix.
+ *  Each path segment is encoded individually so / separators stay
+ *  literal — otherwise the browser sees %2F as part of a single
+ *  filename and relative resolution breaks. */
 export function previewUrl(path: string, root?: FileRoot, cwd?: string): string {
   const params = new URLSearchParams({ cwd: cwd || _currentCwd });
   if (root) params.set("root", root);
-  return `${API}/files/${encodeURIComponent(path)}/raw?${params}`;
+  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+  return `${API}/files/serve/${encodedPath}?${params}`;
 }
 
 /** Open a file in the OS default app — web fallback: open in new tab. */

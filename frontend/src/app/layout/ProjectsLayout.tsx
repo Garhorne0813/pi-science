@@ -30,6 +30,12 @@ export function ProjectsLayout() {
     if (activeCwd) setCurrentCwd(activeCwd);
   }, [activeCwd]);
 
+  // Close the inspector when switching workspaces — stale inspector
+  // data from workspace A makes no sense after navigating to workspace B.
+  useEffect(() => {
+    closeInspector();
+  }, [activeCwd]);
+
   return (
     <div className="flex h-dvh w-screen overflow-hidden bg-bg text-text">
       {/* Sidebar */}
@@ -125,8 +131,8 @@ export function ProjectsLayout() {
         <Outlet />
       </main>
 
-      {/* Inspector */}
-      {inspectorOpen && inspectorData && (
+      {/* Inspector — only in workspace context */}
+      {isWorkspace && inspectorOpen && inspectorData && (
         <RightPane onClose={closeInspector}>
           <ErrorBoundary>
             <InspectorShell inspector={inspectorData} onClose={closeInspector} cwd={activeCwd || undefined} />
