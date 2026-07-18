@@ -22,6 +22,27 @@ The core interface: a streaming chat where AI agents write, execute, and visuali
 - **Markdown rendering** — agent responses support tables, code blocks, LaTeX math, and file-path detection
 - **Session management** — create, resume, fork, and delete conversations; history preserved per workspace
 - **AGENTS.md / KNOWLEDGE.md** — per-workspace agent instructions auto-seeded on session creation
+- **Slash commands** — type `/` in the composer to access built-in commands (`/new`, `/model`, `/compact`, `/copy`, `/export`, `/name`, `/session`) and dynamic ones from skills and extensions
+- **Skill commands** — skills installed in `.pi/skills/` register as `/skill:<name>` commands that invoke the skill through the agent
+- **Interactive prompts** — extension confirm/select/input/editor requests render as inline cards you can answer without leaving the chat
+- **Resilient streaming** — reconnecting SSE replays missed events (`Last-Event-ID` cursors), one runtime per workspace with a busy guard, and page reloads merge durable history with live output
+
+### Slash Commands · 斜杠命令
+
+Type `/` in the composer to bring up the command menu. Built-in commands execute UI actions; skill and extension commands are forwarded to the agent.
+
+在输入框中输入 `/` 即可唤出命令菜单。内置命令直接执行 UI 操作；技能和扩展命令则转发给智能体处理。
+
+| Command · 命令 | Action |
+|---|---|
+| `/new` | Start a new session · 新建会话 |
+| `/model <provider/model>` | Switch the active model · 切换模型 |
+| `/compact` | Manually compact session context · 压缩上下文 |
+| `/name <name>` | Rename current session · 重命名会话 |
+| `/copy` | Copy last agent reply to clipboard · 复制回复 |
+| `/export <html\|jsonl>` | Export session to file · 导出会话 |
+| `/session` | Show session info and stats · 会话统计 |
+| `/skill:<name>` | Invoke a workspace skill via the agent · 调用技能 |
 
 ### Project Knowledge Reviewer · 项目知识审稿人
 
@@ -107,6 +128,7 @@ Every file the agent creates or edits is automatically recorded with full lineag
 | **pi-mcp-adapter** | Bridge to MCP servers — literature search (PubMed, arXiv), biomed, materials databases, weather |
 | **pi-subagents** | Multi-agent orchestration: scout, researcher, planner, worker, reviewer, oracle |
 | **pi-web-access** | Web search, URL fetching, YouTube/video understanding |
+| **context-mode** | Sandboxed code execution (12 languages) + FTS5 knowledge index for long scientific sessions |
 
 ### Skill-driven research runtime · 技能驱动科研运行时
 
@@ -126,7 +148,7 @@ and [docs/science-platform-runtime.md](docs/science-platform-runtime.md).
 ### Theme & Internationalization · 主题与国际化
 
 - **Warm paper aesthetic** — cream whites, soft shadows, serif headings; dark mode via `[data-theme="dark"]`
-- **English & Simplified Chinese** — switch in Settings for Project Knowledge and scientific inspector/viewer labels; the remaining workbench shell currently uses English
+- **English & Simplified Chinese** — auto-detected on first launch, switchable in Settings → General; covers the workbench shell, Project Knowledge, and the scientific inspectors (an i18n coverage test keeps both locales in sync)
 - **Resizable panels** — drag to resize sidebar, inspector, and composer
 
 ---
@@ -157,7 +179,8 @@ and [docs/science-platform-runtime.md](docs/science-platform-runtime.md).
 │  (browse,   │  Tool cards                │  Version history  │
 │   right-    │  Code blocks               │  Notebook cells   │
 │   click)    │  Markdown                  │                   │
-│             │  Composer input            │                   │
+│             │  Composer (type / for      │                   │
+│             │  slash commands)            │                   │
 ├─────────────┴────────────────────────────┴───────────────────┤
 │  Status bar: pi processes · kernel sessions · health          │
 └──────────────────────────────────────────────────────────────┘

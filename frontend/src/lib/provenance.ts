@@ -16,10 +16,14 @@ export async function loadProvenance(cwd: string, sessionId: string): Promise<Pr
 }
 
 /** List all recorded versions of a file. */
-export async function listProvenance(cwd: string, path: string): Promise<ProvenanceRecord[]> {
+export async function listProvenance(
+  cwd: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<ProvenanceRecord[]> {
   try {
     const params = new URLSearchParams({ cwd });
-    const res = await fetch(`${API}/versions/${encodeURIComponent(path)}?${params}`);
+    const res = await fetch(`${API}/versions/${encodeURIComponent(path)}?${params}`, { signal });
     if (!res.ok) return [];
     const data = await res.json();
     return data.versions ?? [];

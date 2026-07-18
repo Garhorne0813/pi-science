@@ -15,6 +15,7 @@ interface JupyterStatus {
   url: string | null;
   cwd: string | null;
   matches_workspace: boolean;
+  env_ready?: boolean;
 }
 
 export function NotebooksPage() {
@@ -28,6 +29,7 @@ export function NotebooksPage() {
     url: null,
     cwd: null,
     matches_workspace: true,
+    env_ready: false,
   });
   const [starting, setStarting] = useState(false);
   const [jupyterError, setJupyterError] = useState<string | null>(null);
@@ -53,6 +55,36 @@ export function NotebooksPage() {
     void loadNotebooks();
     void loadJupyterStatus();
   }, [loadJupyterStatus, loadNotebooks]);
+
+  const [setupProgress, setSetupProgress] = useState<string[]>([]);
+  const [settingUp, setSettingUp] = useState(false);
+
+  const setupJupyterEnv = async () => {
+    setSettingUp(true);
+    setSetupProgress([]);
+    try {
+      const eventSource = new EventSource("/api/notebooks/jupyter/setup");
+      eventSource.onmessage = (e) => {
+        const d = JSON.parse(e.data);
+        if (d.status === "done") {
+          setSetupProgress((p) => [...p, "✅ " + d.text]);
+          eventSource.close();
+          setSettingUp(false);
+          loadJupyterStatus();
+        } else if (d.status === "error") {
+          setSetupProgress((p) => [...p, "❌ " + d.text]);
+          eventSource.close();
+          setSettingUp(false);
+        } else {
+          setSetupProgress((p) => [...p, d.text]);
+        }
+      };
+      eventSource.onerror = () => {
+        eventSource.close();
+        setSettingUp(false);
+      };
+    } catch (e) { console.error(e); setSettingUp(false); }
+  };
 
   const startJupyter = async () => {
     setStarting(true);
@@ -107,7 +139,7 @@ export function NotebooksPage() {
                   ? jupyter.matches_workspace
                     ? `Running on port ${jupyter.port}`
                     : `Running for another workspace: ${jupyter.cwd}`
-                  : "Not running"}
+                  : jupyter.env_ready ? "Environment ready" : "Environment not set up"}
               </p>
               {jupyterError && <p role="alert" className="mt-1 text-xs text-error">{jupyterError}</p>}
             </div>
@@ -121,14 +153,26 @@ export function NotebooksPage() {
                     <Square size={12} /> Stop
                   </button>
                 </>
-              ) : !jupyter.running ? (
+              ) : jupyter.env_ready ? (
                 <button onClick={startJupyter} disabled={starting}
                   className="rounded-input bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40 flex items-center gap-1">
                   {starting ? <RefreshCw size={12} className="animate-spin" /> : <Play size={12} />} Start
                 </button>
-              ) : null}
+              ) : (
+                <button onClick={setupJupyterEnv} disabled={settingUp}
+                  className="rounded-input bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40 flex items-center gap-1">
+                  {settingUp ? <RefreshCw size={12} className="animate-spin" /> : "⚡"} Setup Jupyter
+                </button>
+              )}
             </div>
           </div>
+          {setupProgress.length > 0 && (
+            <div className="mt-3 rounded-input bg-surface-2 p-3 max-h-32 overflow-y-auto">
+              {setupProgress.map((line: string, i: number) => (
+                <div key={i} className="font-mono text-[11px] text-muted">{line}</div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Notebook list */}

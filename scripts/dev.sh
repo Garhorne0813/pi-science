@@ -127,7 +127,7 @@ mkdir -p "$PIP_CACHE_DIR"
 export PIP_CACHE_DIR
 
 cd "$PROJECT_DIR/backend"
-"$CONDA_PYTHON" -m pip install -e "$PROJECT_DIR/backend" --quiet 2>&1 | tail -1
+"$CONDA_PYTHON" -m pip install -e "$PROJECT_DIR/backend[dev]" --quiet 2>&1 | tail -1
 echo "  Backend dependencies installed."
 echo "  Python:  $CONDA_PYTHON"
 echo "  Package: pi-science $("$CONDA_PYTHON" -c 'from pi_science import __version__; print(__version__)' 2>/dev/null || echo '0.1.0')"
@@ -146,10 +146,11 @@ cd "$PROJECT_DIR/backend"
 # Set environment variables so backend finds pi
 export PI_CLI_PATH="$PI_CLI"
 export PI_NODE_PATH="$(which node)"
-export PI_SCIENCE_HOME="$PROJECT_DIR/.data"
-export PI_SCIENCE_WORKSPACES="$PROJECT_DIR/workspaces"
+# Use the standard user-level data & workspace locations so dev mode
+# shares the same config, sessions, and workspaces as the installed app.
+export PI_SCIENCE_HOME="${PI_SCIENCE_HOME:-$HOME/.pi-science}"
+export PI_SCIENCE_WORKSPACES="${PI_SCIENCE_WORKSPACES:-$HOME/pi-science-workspaces}"
 
-# Create data dirs
 mkdir -p "$PI_SCIENCE_HOME/sessions" "$PI_SCIENCE_WORKSPACES"
 
 # Print config summary

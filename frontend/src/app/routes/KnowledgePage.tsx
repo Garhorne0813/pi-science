@@ -508,7 +508,7 @@ function ProposalCard({
                 <div className="space-y-2">
                   <div className="text-xs font-medium text-muted">{t("knowledge.operations")}</div>
                   {operations.map((operation, index) => (
-                    <div key={index} className="grid gap-2 rounded-input border border-border bg-bg p-3 sm:grid-cols-[110px_1fr_1fr]">
+                    <div key={`${operation.type}-${operation.target}-${index}`} className="grid gap-2 rounded-input border border-border bg-bg p-3 sm:grid-cols-[110px_1fr_1fr]">
                       <select value={operation.type} onChange={(event) => setOperations((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, type: event.target.value as FileOperation["type"] } : item))} className="min-h-11 rounded-input border border-border bg-surface px-2 text-sm text-text">
                         <option value="mkdir">mkdir</option>
                         <option value="move">move</option>

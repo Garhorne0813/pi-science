@@ -87,9 +87,11 @@ export interface ArtifactBlock {
   kind: "artifact";
   id: string;
   filename: string;
-  artifactKind: ArtifactKind;
+  artifact: ArtifactKind;
   tool: string;
   path?: string;
+  language?: string;
+  content?: string;
 }
 
 export type ArtifactKind =

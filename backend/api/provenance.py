@@ -1,5 +1,7 @@
 """Provenance API — query and manage artifact provenance records."""
 
+import re
+
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 import re
@@ -7,6 +9,8 @@ import re
 from services.provenance_store import get_store
 
 router = APIRouter(prefix="/api/provenance", tags=["provenance"])
+
+_HASH_RE = re.compile(r"^[0-9a-f]{16}$")
 
 
 def _workspace_dir(cwd: str) -> str:
@@ -40,7 +44,7 @@ async def get_env_lockfile(
     cwd: str = Query(".", description="Working directory"),
 ):
     """Read a captured environment lockfile by its content hash."""
-    if not re.fullmatch(r"[0-9a-fA-F]{16}", hash):
+    if not _HASH_RE.match(hash):
         raise HTTPException(status_code=400, detail="Invalid environment lockfile hash")
     store = get_store(_workspace_dir(cwd))
     env_file = (store._env_dir / f"{hash}.txt").resolve()

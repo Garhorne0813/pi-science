@@ -69,12 +69,16 @@ async def detect_tools():
                        ("Node.js", ["node", "--version"]), ("Git", ["git", "--version"]),
                        ("uv", ["uv", "--version"]), ("jupyter", ["jupyter", "--version"])] :
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            result = await asyncio.to_thread(
+                subprocess.run, cmd, capture_output=True, text=True, timeout=5
+            )
             version = (result.stdout or result.stderr).strip().split("\n")[0] if result.returncode == 0 else None
-            tools.append(ToolInfo(name=name, found=result.returncode == 0, version=version))
+            return ToolInfo(name=name, found=result.returncode == 0, version=version)
         except Exception:
-            tools.append(ToolInfo(name=name, found=False))
-    return tools
+            logger.debug("Tool detection failed for %s", name, exc_info=True)
+            return ToolInfo(name=name, found=False)
+
+    return await asyncio.gather(*[_check(name, cmd) for name, cmd in tool_specs])
 
 
 @router.get("/{skill_id}", response_model=SkillInfo)

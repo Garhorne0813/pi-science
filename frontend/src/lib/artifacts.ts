@@ -1,39 +1,24 @@
 // Turn the agent's file-writing tool calls into traceable artifacts.
 // Pure and transport-agnostic so it can be unit-tested without a live runtime.
 
-// Local types — originally from @ai4s/sdk and @ai4s/shared
+// Types are imported from the canonical source in types/thread.ts — no duplicates.
 import type {
-  ArtifactInspector,
   ArtifactKind,
+  ArtifactBlock,
   ArtifactVersion,
+  ArtifactInspector,
   FileRoot,
   FilePreviewInspector,
   NotebookFileInspector,
 } from "../types/thread";
 
-export type {
-  ArtifactInspector,
-  ArtifactKind,
-  ArtifactVersion,
-  FilePreviewInspector,
-  NotebookFileInspector,
-} from "../types/thread";
+// Re-export so existing imports from artifacts.ts keep working
+export type { ArtifactKind, ArtifactBlock, ArtifactVersion, ArtifactInspector, FilePreviewInspector, NotebookFileInspector };
 
 interface ToolUpdatedEvent {
   status: string;
   tool: string;
   input?: Record<string, unknown>;
-}
-
-export interface ArtifactBlock {
-  kind: "artifact";
-  id?: string;
-  path?: string;
-  filename: string;
-  artifact: ArtifactKind;
-  tool: string;
-  language?: string;
-  content?: string;
 }
 
 const EXT_KIND: Record<string, ArtifactKind> = {
@@ -234,6 +219,7 @@ export function refToArtifactBlock(path: string): ArtifactBlock {
   const filename = path.split(/[\\/]/).pop() || path;
   return {
     kind: "artifact",
+    id: `ref-${path}`,
     path,
     filename,
     artifact: extToKind(extOf(filename)),
@@ -255,7 +241,8 @@ function firstString(input: Record<string, unknown>, keys: string[]): string | u
  * event is not a successful write we can trace to a path.
  */
 export function deriveArtifact(event: ToolUpdatedEvent): ArtifactBlock | null {
-  if (event.status !== "success") return null;
+  // Accept both "success" (legacy pi events) and "done" (ToolStatus type)
+  if (event.status !== "success" && event.status !== "done") return null;
   const tool = (event.tool ?? "").toLowerCase();
   const input = event.input ?? {};
 
@@ -264,7 +251,7 @@ export function deriveArtifact(event: ToolUpdatedEvent): ArtifactBlock | null {
     const nb = firstString(input, ["notebook_path", "path", "document_id"]);
     if (!nb || !nb.endsWith(".ipynb")) return null;
     const filename = nb.split(/[\\/]/).pop() || nb;
-    return { kind: "artifact", path: nb, filename, artifact: "notebook", tool: event.tool };
+    return { kind: "artifact", id: `artifact-${nb}`, path: nb, filename, artifact: "notebook", tool: event.tool };
   }
 
   if (!WRITE_TOOLS.has(tool)) return null;
@@ -278,6 +265,7 @@ export function deriveArtifact(event: ToolUpdatedEvent): ArtifactBlock | null {
 
   return {
     kind: "artifact",
+    id: `artifact-${path}`,
     path,
     filename,
     artifact: extToKind(ext),

@@ -291,6 +291,12 @@ class PiProcess:
             start_new_session=True,
         )
 
+        # Record the PID so a restarted backend can reap an orphaned runtime.
+        try:
+            (Path(session_dir) / ".pi-pid").write_text(str(process.pid))
+        except OSError:
+            pass
+
         instance = cls(process, cwd, session_id="", config=config, session_dir=session_dir)
         # Store the effective runtime configuration, not the request defaults.
         instance.config.model = effective_model

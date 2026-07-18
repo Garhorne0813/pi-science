@@ -44,12 +44,25 @@ PROVIDER_ENV_MAP: dict[str, str] = {
 }
 
 PROVIDERS = [
-    {"id": "anthropic", "name": "Anthropic (Claude)", "models": ["claude-sonnet-5-20250929", "claude-opus-4-5", "claude-sonnet-4-20250514", "claude-haiku-4-5-20251001"]},
-    {"id": "openai", "name": "OpenAI", "models": ["gpt-5.1", "gpt-4o", "gpt-4.1-mini"]},
-    {"id": "google", "name": "Google (Gemini)", "models": ["gemini-2.5-pro", "gemini-2.5-flash"]},
-    {"id": "deepseek", "name": "DeepSeek", "models": ["deepseek-v4-pro", "deepseek-chat"]},
-    {"id": "groq", "name": "Groq", "models": ["llama-4-maverick", "mixtral-8x7b"]},
-    {"id": "openrouter", "name": "OpenRouter", "models": ["openai/gpt-5.1", "anthropic/claude-sonnet-5"]},
+    {"id": "anthropic", "name": "Anthropic", "models": ["claude-fable-5", "claude-opus-4-5", "claude-sonnet-4-20250514", "claude-haiku-4-5-20251001"]},
+    {"id": "openai", "name": "OpenAI", "models": ["gpt-5.1", "gpt-5.1-codex", "gpt-4o", "gpt-4.1", "gpt-4.1-mini"]},
+    {"id": "google", "name": "Gemini", "models": ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-3-flash-preview"]},
+    {"id": "deepseek", "name": "DeepSeek", "models": ["deepseek-v4-pro", "deepseek-v4-flash"]},
+    {"id": "groq", "name": "Groq", "models": ["meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.3-70b-versatile"]},
+    {"id": "openrouter", "name": "OpenRouter", "models": ["anthropic/claude-sonnet-5", "openai/gpt-5.1"]},
+    {"id": "cerebras", "name": "Cerebras", "models": ["gpt-oss-120b", "gemma-4-31b", "zai-glm-4.7"]},
+    {"id": "xai", "name": "xAI", "models": ["grok-4.5", "grok-4.3", "grok-3"]},
+    {"id": "mistral", "name": "Mistral", "models": ["devstral-latest", "devstral-medium-latest", "codestral-latest"]},
+    {"id": "zai", "name": "Z.AI", "models": ["glm-5.2", "glm-5.1", "glm-4.7"]},
+    {"id": "fireworks", "name": "Fireworks", "models": ["accounts/fireworks/models/deepseek-v4-pro"]},
+    {"id": "together", "name": "Together", "models": ["Qwen/Qwen3.5-397B-A17B", "MiniMaxAI/MiniMax-M3"]},
+    {"id": "vercel-ai-gateway", "name": "Vercel AI Gateway", "models": []},
+    {"id": "nvidia", "name": "NVIDIA NIM", "models": ["meta/llama-3.3-70b-instruct", "minimaxai/minimax-m3"]},
+    {"id": "cloudflare-workers-ai", "name": "Cloudflare Workers AI", "models": []},
+    {"id": "kimi-coding", "name": "Kimi", "models": ["kimi-k2-thinking", "kimi-for-coding", "k2p7"]},
+    {"id": "moonshotai", "name": "Moonshot", "models": ["kimi-k2.5", "kimi-k2-thinking-turbo"]},
+    {"id": "minimax", "name": "MiniMax", "models": ["MiniMax-M3", "MiniMax-M2.7"]},
+    {"id": "xiaomi", "name": "Xiaomi", "models": ["mimo-v2.5-pro", "mimo-v2-pro", "mimo-v2-flash"]},
 ]
 
 
@@ -98,9 +111,182 @@ def _load_config() -> dict:
     return {}
 
 def _save_config(data: dict):
+    """Atomically save config to prevent corruption on concurrent writes."""
     cf = _config_file()
     cf.parent.mkdir(parents=True, exist_ok=True)
-    cf.write_text(json.dumps(data, indent=2))
+    tmp = cf.with_name(f".{cf.name}.{os.getpid()}.{os.urandom(4).hex}.tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    os.replace(tmp, cf)
+
+
+def _custom_provider_id(value: str) -> str:
+    """Create a stable, shell/env-safe provider identifier."""
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.strip().lower()).strip("-")
+    return (slug or "custom-api")[:48]
+
+
+def _validate_custom_base_url(value: str) -> str:
+    base_url = value.strip().rstrip("/")
+    parsed = urlparse(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("base_url must be an absolute http(s) URL")
+    if base_url.lower().endswith("/models"):
+        base_url = base_url[:-7].rstrip("/")
+    for suffix in ("/chat/completions", "/responses"):
+        if base_url.lower().endswith(suffix):
+            base_url = base_url[: -len(suffix)].rstrip("/")
+    return base_url
+
+
+def _custom_providers(config: Optional[dict] = None) -> list[dict]:
+    raw = (config or _load_config()).get("custom_providers", [])
+    if isinstance(raw, dict):
+        raw = [dict(value, id=key) for key, value in raw.items() if isinstance(value, dict)]
+    if not isinstance(raw, list):
+        return []
+    result = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            base_url = _validate_custom_base_url(str(item.get("base_url", "")))
+        except ValueError:
+            continue
+        models = [str(model).strip() for model in item.get("models", []) if str(model).strip()]
+        result.append({
+            "id": _custom_provider_id(str(item.get("id") or item.get("name") or base_url)),
+            "name": str(item.get("name") or "Custom API").strip()[:100],
+            "base_url": base_url,
+            "api_key": str(item.get("api_key") or ""),
+            "api": item.get("api") if item.get("api") in {"openai-completions", "openai-responses", "anthropic-messages"} else "openai-completions",
+            "models": list(dict.fromkeys(models)),
+        })
+    return result
+
+
+def _public_custom_provider(provider: dict) -> dict:
+    return {
+        "id": provider["id"],
+        "name": provider["name"],
+        "base_url": provider["base_url"],
+        "api": provider["api"],
+        "models": provider["models"],
+        "has_key": bool(provider.get("api_key")),
+    }
+
+
+def _fetch_custom_models(base_url: str, api_key: str = "") -> list[str]:
+    """Discover model IDs from an OpenAI-style GET /models endpoint."""
+    normalized = _validate_custom_base_url(base_url)
+    headers = {"Accept": "application/json", "User-Agent": "pi-science/0.1"}
+    if api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key.strip()}"
+    urls = [f"{normalized}/models"]
+    if not normalized.lower().endswith("/v1"):
+        urls.append(f"{normalized}/v1/models")
+    payload = None
+    last_error: Exception | None = None
+    for models_url in urls:
+        request = Request(models_url, headers=headers, method="GET")
+        try:
+            with urlopen(request, timeout=20) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            break
+        except HTTPError as exc:
+            last_error = exc
+            if exc.code == 404:
+                continue
+            raise RuntimeError(f"Model discovery failed ({exc.code})") from exc
+        except (URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+            last_error = exc
+            continue
+    if payload is None:
+        raise RuntimeError(f"Model discovery failed: {last_error}")
+
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict):
+        rows = payload.get("data", payload.get("models", []))
+        if isinstance(rows, dict):
+            rows = list(rows.values())
+    else:
+        rows = []
+
+    models: list[str] = []
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, str):
+            model_id = row
+        elif isinstance(row, dict):
+            model_id = row.get("id") or row.get("model") or row.get("name")
+        else:
+            model_id = None
+        if isinstance(model_id, str) and model_id.strip():
+            models.append(model_id.strip())
+    return list(dict.fromkeys(models))
+
+
+def _available_models(config: Optional[dict] = None) -> list[dict]:
+    config = config or _load_config()
+    models = []
+    for provider in PROVIDERS:
+        for model in provider["models"]:
+            models.append({
+                "id": f"{provider['id']}/{model}",
+                "provider": provider["id"],
+                "model": model,
+                "label": f"{provider['name']} · {model}",
+                "custom": False,
+            })
+    for provider in _custom_providers(config):
+        for model in provider["models"]:
+            models.append({
+                "id": f"custom-{provider['id']}/{model}",
+                "provider": f"custom-{provider['id']}",
+                "model": model,
+                "label": f"{provider['name']} · {model}",
+                "custom": True,
+            })
+    return models
+
+
+def get_custom_models_runtime(cwd: Optional[str] = None) -> tuple[Optional[Path], dict[str, str]]:
+    """Materialize custom providers as a pi models.json plus env-backed keys."""
+    providers = _custom_providers()
+    if not providers:
+        return None, {}
+
+    key = hashlib.sha256(str(Path(cwd).expanduser().resolve() if cwd else "default").encode()).hexdigest()[:12]
+    agent_dir = _config_file().parent / "pi-agent" / key
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    definitions = {"providers": {}}
+    env: dict[str, str] = {}
+    for provider in providers:
+        provider_id = f"custom-{provider['id']}"
+        env_name = f"PI_SCIENCE_CUSTOM_{_custom_provider_id(provider['id']).upper().replace('-', '_')}_API_KEY"
+        definition = {
+            "name": provider["name"],
+            "baseUrl": provider["base_url"],
+            "api": provider["api"],
+            "models": [
+                {
+                    "id": model,
+                    "name": model,
+                    "reasoning": False,
+                    "input": ["text"],
+                    "contextWindow": 128000,
+                    "maxTokens": 16384,
+                    "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+                }
+                for model in provider["models"]
+            ],
+        }
+        if provider.get("api_key"):
+            definition["apiKey"] = f"${env_name}"
+            env[env_name] = provider["api_key"]
+        definitions["providers"][provider_id] = definition
+
+    (agent_dir / "models.json").write_text(json.dumps(definitions, indent=2) + "\n")
+    return agent_dir, env
 
 
 def _custom_provider_id(value: str) -> str:

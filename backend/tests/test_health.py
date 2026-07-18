@@ -22,11 +22,11 @@ async def test_docs_available(client):
 
 
 @pytest.mark.anyio
-async def test_unimplemented_compute_api_is_not_exposed(client):
-    """Placeholder compute routes must not look like usable production APIs."""
+async def test_compute_api_is_exposed(client):
+    """The SSH/Slurm compute API is a real local feature and stays mounted."""
     schema = (await client.get("/openapi.json")).json()
-    assert not any(path.startswith("/api/compute") for path in schema["paths"])
-    assert (await client.get("/api/compute/machines")).status_code == 404
+    assert any(path.startswith("/api/compute") for path in schema["paths"])
+    assert (await client.get("/api/compute/machines")).status_code == 200
 
 
 @pytest.mark.anyio

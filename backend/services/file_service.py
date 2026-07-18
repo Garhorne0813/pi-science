@@ -4,6 +4,8 @@ import base64
 import logging
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 from models import FileContent, PreviewData
 
 logger = logging.getLogger(__name__)

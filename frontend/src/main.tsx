@@ -4,6 +4,7 @@ import { RouterProvider } from "react-router-dom";
 import "./index.css";
 import "./i18n";
 import { router } from "./app/router";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { useUiStore } from "./lib/store";
 
 const initialUi = useUiStore.getState();
@@ -12,6 +13,21 @@ document.documentElement.lang = initialUi.locale;
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <RouterProvider router={router} />
+    <ErrorBoundary
+      fallback={
+        <div style={{ padding: "2rem", textAlign: "center", fontFamily: "system-ui, sans-serif" }}>
+          <h2 style={{ color: "#e24b4a" }}>Application Error</h2>
+          <p style={{ color: "#666" }}>An unexpected error occurred.</p>
+          <button
+            onClick={() => window.location.reload()}
+            style={{ marginTop: "1rem", padding: "0.5rem 1rem", cursor: "pointer", borderRadius: "6px", border: "1px solid #ccc" }}
+          >
+            Reload Application
+          </button>
+        </div>
+      }
+    >
+      <RouterProvider router={router} />
+    </ErrorBoundary>
   </StrictMode>
 );

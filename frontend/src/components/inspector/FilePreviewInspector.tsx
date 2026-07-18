@@ -31,7 +31,7 @@ import { BandView } from "./BandView";
 import { QCodeView } from "./QCodeView";
 import { AnomalyMapView } from "./AnomalyMapView";
 import { PhaseView } from "./PhaseView";
-import { useScrollMemory } from "@/lib/scroll-memory";
+import { useScrollMemory } from "@/lib/scrollMemory";
 import { cn } from "@/lib/cn";
 import { PaneTitlebarInset } from "./RightPane";
 
@@ -244,7 +244,9 @@ function Body({
   }
   if (kind === "mesh") {
     return bytes !== null ? (
-      <MeshView filename={filename} bytes={bytes} />
+      <Suspense fallback={<div className="p-4 text-sm text-muted">Loading 3D viewer…</div>}>
+        <MeshView filename={filename} bytes={bytes} />
+      </Suspense>
     ) : (
       <Note text={"Preview loading…"} />
     );

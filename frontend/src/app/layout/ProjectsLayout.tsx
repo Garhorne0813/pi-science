@@ -6,6 +6,7 @@ import { useRuntimeStore } from "../../lib/runtime-store";
 import { InspectorShell } from "../../components/inspector/InspectorShell";
 import { RightPane } from "../../components/inspector/RightPane";
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
+import { setCurrentCwd } from "../../lib/files";
 import { cn } from "../../lib/cn";
 import { getClient, getSessionName } from "../../lib/pi-science-client";
 import { setCurrentCwd } from "../../lib/files";
@@ -33,13 +34,28 @@ export function ProjectsLayout() {
     <div className="flex h-dvh w-screen overflow-hidden bg-bg text-text">
       {/* Sidebar */}
       {sidebarCollapsed ? (
-        <button
-          className="fade-in absolute left-1 top-1 z-40 flex h-11 w-11 items-center justify-center rounded-input text-text hover:bg-surface-2"
-          onClick={() => setSidebarCollapsed(false)}
-          aria-label="Open sidebar"
-        >
-          <PanelLeft size={16} />
-        </button>
+        <aside className="h-full flex-col border-r border-border bg-surface flex shrink-0 overflow-hidden w-12 items-center py-3 gap-2">
+          <button
+            className="rounded p-1.5 text-muted hover:text-text hover:bg-surface-2"
+            onClick={() => setSidebarCollapsed(false)}
+            title="Expand sidebar"
+          >
+            <PanelLeft size={16} />
+          </button>
+          {/* Icon-only nav */}
+          <CollapsedNavItem to="/" icon={isWorkspace ? <ArrowLeft size={16} /> : <FolderOpen size={16} />} label="Projects" />
+          {!isWorkspace && <CollapsedNavItem to="/skills" icon={<Puzzle size={16} />} label="Skills" />}
+          {isWorkspace && (
+            <>
+              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} icon={<FileText size={16} />} label="Files" />
+              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} icon={<BookOpen size={16} />} label="Notebooks" />
+              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/runs`} icon={<Play size={16} />} label="Runs" />
+              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/knowledge`} icon={<Inbox size={16} />} label="Knowledge" />
+            </>
+          )}
+          <div className="flex-1" />
+          <CollapsedNavItem to="/settings" icon={<Settings size={16} />} label="Settings" />
+        </aside>
       ) : (
         <>
         <button type="button" aria-label="Close sidebar" onClick={() => setSidebarCollapsed(true)} className="fixed inset-0 z-20 bg-black/45 md:hidden" />
@@ -55,7 +71,7 @@ export function ProjectsLayout() {
                 onClick={() => setSidebarCollapsed(true)}
                 aria-label="Close sidebar"
               >
-                <PanelLeft size={14} />
+                <PanelLeft size={16} />
               </button>
             </div>
 
@@ -281,6 +297,25 @@ function relativeTime(dateStr: string): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
+/** Icon-only nav item for the collapsed sidebar strip. */
+function CollapsedNavItem({ to, icon, label }: { to: string; icon: React.ReactNode; label: string }) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const active = location.pathname.startsWith(to) && to !== "/";
+  return (
+    <button
+      onClick={() => navigate(to)}
+      className={cn(
+        "rounded p-1.5 text-muted hover:text-text hover:bg-surface-2 transition-colors",
+        active && "text-accent",
+      )}
+      title={label}
+    >
+      {icon}
+    </button>
+  );
+}
+
 function SidebarNavItem({ to, label, icon, active, badge }: { to: string; label: string; icon?: React.ReactNode; active: boolean; badge?: number }) {
   const navigate = useNavigate();
   const setSidebarCollapsed = useUiStore((state) => state.setSidebarCollapsed);
@@ -291,7 +326,7 @@ function SidebarNavItem({ to, label, icon, active, badge }: { to: string; label:
         if (window.innerWidth < 768) setSidebarCollapsed(true);
       }}
       className={cn(
-        "flex min-h-11 items-center gap-2.5 rounded-input px-2 py-2 text-[13px] text-left w-full",
+        "flex min-h-0 h-9 items-center gap-2 rounded-input px-2 text-[13px] text-left w-full",
         active ? "bg-surface-2 text-text font-medium" : "text-text/90 hover:bg-surface-2 hover:text-text",
       )}
     >
