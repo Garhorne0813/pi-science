@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import subprocess
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
+
+logger = logging.getLogger(__name__)
 from pydantic import BaseModel
 
 from config import PI_CLI_PATH
@@ -61,24 +65,34 @@ async def list_skills(cwd: str = Query(".", description="Working directory")):
     return catalog(_safe_cwd(cwd))
 
 
+TOOL_SPECS: list[tuple[str, list[str]]] = [
+    ("python", ["python3", "--version"]),
+    ("R", ["Rscript", "--version"]),
+    ("Node.js", ["node", "--version"]),
+    ("Git", ["git", "--version"]),
+    ("uv", ["uv", "--version"]),
+    ("jupyter", ["jupyter", "--version"]),
+]
+
+
+async def _check(name: str, cmd: list[str]) -> ToolInfo:
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run, cmd, capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            version = (result.stdout or result.stderr).strip().split("\n")[0]
+            return ToolInfo(name=name, found=True, version=version)
+        return ToolInfo(name=name, found=False)
+    except Exception:
+        logger.debug("Tool detection failed for %s", name, exc_info=True)
+        return ToolInfo(name=name, found=False)
+
+
 @router.get("/tools", response_model=list[ToolInfo])
 async def detect_tools():
     """Detect installed scientific tools."""
-    tools = []
-    for name, cmd in [("python", ["python3", "--version"]), ("R", ["Rscript", "--version"]),
-                       ("Node.js", ["node", "--version"]), ("Git", ["git", "--version"]),
-                       ("uv", ["uv", "--version"]), ("jupyter", ["jupyter", "--version"])] :
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run, cmd, capture_output=True, text=True, timeout=5
-            )
-            version = (result.stdout or result.stderr).strip().split("\n")[0] if result.returncode == 0 else None
-            return ToolInfo(name=name, found=result.returncode == 0, version=version)
-        except Exception:
-            logger.debug("Tool detection failed for %s", name, exc_info=True)
-            return ToolInfo(name=name, found=False)
-
-    return await asyncio.gather(*[_check(name, cmd) for name, cmd in tool_specs])
+    return list(await asyncio.gather(*[_check(name, cmd) for name, cmd in TOOL_SPECS]))
 
 
 @router.get("/{skill_id}", response_model=SkillInfo)
