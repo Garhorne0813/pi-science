@@ -9,7 +9,6 @@ import { FileBrowser } from "../../components/sidebar/FileBrowser";
 import { setCurrentCwd } from "../../lib/files";
 import { cn } from "../../lib/cn";
 import { getClient, getSessionName } from "../../lib/pi-science-client";
-import { setCurrentCwd } from "../../lib/files";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 
 export function ProjectsLayout() {
@@ -28,6 +27,12 @@ export function ProjectsLayout() {
 
   useEffect(() => {
     if (activeCwd) setCurrentCwd(activeCwd);
+  }, [activeCwd]);
+
+  // Close the inspector when switching workspaces — stale inspector
+  // data from workspace A makes no sense after navigating to workspace B.
+  useEffect(() => {
+    closeInspector();
   }, [activeCwd]);
 
   return (
@@ -125,8 +130,8 @@ export function ProjectsLayout() {
         <Outlet />
       </main>
 
-      {/* Inspector */}
-      {inspectorOpen && inspectorData && (
+      {/* Inspector — only in workspace context */}
+      {isWorkspace && inspectorOpen && inspectorData && (
         <RightPane onClose={closeInspector}>
           <ErrorBoundary>
             <InspectorShell inspector={inspectorData} onClose={closeInspector} cwd={activeCwd || undefined} />

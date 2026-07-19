@@ -358,12 +358,16 @@ function Body({
   }
   if (kind === "html") {
     // Served URL preferred (relative assets resolve); srcdoc as browser fallback.
+    // `allow-same-origin` is needed so the iframe shares the parent origin,
+    // which lets the browser send a full Referer header (with query string)
+    // on subresource requests — the backend extracts cwd from it to locate
+    // the correct workspace for relative CSS/JS/image references.
     if (url) {
       return (
         <iframe
           title={"HTML preview"}
           src={url}
-          sandbox="allow-scripts"
+          sandbox="allow-scripts allow-same-origin"
           className="h-full min-h-[480px] w-full bg-white"
         />
       );
@@ -373,7 +377,7 @@ function Body({
         <iframe
           title={"HTML preview"}
           srcDoc={text}
-          sandbox="allow-scripts"
+          sandbox="allow-scripts allow-same-origin"
           className="h-full min-h-[480px] w-full bg-white"
         />
       );

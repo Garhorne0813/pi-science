@@ -4,7 +4,9 @@ from pathlib import Path
 
 import shutil
 
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File
+from urllib.parse import parse_qs, urlparse
+
+from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import FileResponse
 
 from models import FileContent, PreviewData
@@ -144,6 +146,57 @@ def _workspace_dir(cwd: str = ".") -> Path:
 
 
 # ── Specific routes MUST come before the catch-all /{path:path} ──
+
+@router.get("/serve/{path:path}")
+async def serve_file(
+    path: str,
+    request: Request,
+    cwd: str = Query(".", description="Working directory"),
+):
+    """Serve workspace files for iframe preview. Uses a /serve/ prefix so
+    relative references (CSS, JS, images) within HTML resolve back to the
+    same prefix — e.g. <link href="style.css"> in /serve/dir/index.html
+    resolves to /serve/dir/style.css, which this same handler serves.
+
+    When cwd is not in the query string (e.g. a subresource request from a
+    <link> or <img> tag), it is extracted from the Referer header, which
+    points back to the HTML page whose URL carries the cwd parameter."""
+    # Subresource requests (CSS, JS, images) don't carry cwd — extract from Referer
+    if cwd == ".":
+        referer = request.headers.get("referer", "")
+        if referer:
+            try:
+                qs = urlparse(referer).query
+                ref_cwd = parse_qs(qs).get("cwd", [None])[0]
+                if ref_cwd:
+                    cwd = ref_cwd
+            except (ValueError, KeyError):
+                pass
+    ws_root = _workspace_dir(cwd)
+    try:
+        full_path = resolve_workspace_path(ws_root, path)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path outside workspace")
+
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+
+    if not full_path.is_file():
+        raise HTTPException(status_code=400, detail=f"Not a file: {path}")
+
+    ext = full_path.suffix.lower()
+    mime_map = {
+        ".pdf": "application/pdf",
+        ".html": "text/html", ".htm": "text/html",
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".gif": "image/gif", ".svg": "image/svg+xml",
+        ".mp4": "video/mp4", ".webm": "video/webm",
+        ".json": "application/json", ".txt": "text/plain", ".csv": "text/csv",
+        ".css": "text/css", ".js": "application/javascript",
+    }
+    media_type = mime_map.get(ext, "application/octet-stream")
+    return FileResponse(full_path, media_type=media_type)
+
 
 @router.get("/{path:path}/raw")
 async def raw_file(
