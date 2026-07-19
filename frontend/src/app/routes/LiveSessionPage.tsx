@@ -29,6 +29,10 @@ export function LiveSessionPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Track IME composition state ourselves because some browsers fire
+  // compositionend before keydown, making isComposing unreliable for
+  // Enter-to-confirm-raw-pinyin use cases.
+  const composingRef = useRef(false);
   const [models, setModels] = useState<AvailableModel[]>([]);
   const [selectedModel, setSelectedModel] = useState("");
   const [thinking, setThinking] = useState("high");
@@ -262,8 +266,9 @@ export function LiveSessionPage() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // Skip when IME is composing (e.g. Chinese Pinyin user presses
     // Enter to confirm raw pinyin as English — that Enter belongs
-    // to the IME, not the app).
-    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    // to the IME, not the app).  We check both isComposing and our
+    // own ref because some browsers fire compositionend before keydown.
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !composingRef.current) {
       e.preventDefault();
       void handleSend();
     }
@@ -370,6 +375,8 @@ export function LiveSessionPage() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
+            onCompositionStart={() => { composingRef.current = true; }}
+            onCompositionEnd={() => { setTimeout(() => { composingRef.current = false; }, 0); }}
             placeholder={dragOver ? "Drop files here…" : "Ask anything — analyze data, run code, explore results"}
             rows={2}
             className="max-h-[160px] w-full resize-none bg-transparent px-3 py-2 text-sm leading-6 text-text outline-none placeholder:text-muted"
