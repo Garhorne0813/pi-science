@@ -209,7 +209,7 @@ class PiProcess:
                 args.extend(["-e", extension["path"]])
 
         args.extend([
-            "--model", effective_model,
+            *( ["--model", effective_model] if effective_model else [] ),
             "--thinking", thinking,
             "--session-dir", session_dir,
             "--no-extensions",

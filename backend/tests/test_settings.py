@@ -83,6 +83,11 @@ class TestSettingsAPI:
 
     async def test_set_model(self, client, temp_config_dir):
         """PUT /api/settings/model updates config."""
+        key_response = await client.put(
+            "/api/settings/api-key",
+            json={"provider": "openai", "api_key": "sk-test"},
+        )
+        assert key_response.status_code == 200
         res = await client.put(
             "/api/settings/model",
             json={"model": "openai/gpt-5.1", "thinking": "medium"},
@@ -98,14 +103,52 @@ class TestSettingsAPI:
         assert stored["model"] == "openai/gpt-5.1"
         assert stored["thinking"] == "medium"
 
+    async def test_set_model_requires_configured_provider(self, client, temp_config_dir):
+        res = await client.put(
+            "/api/settings/model",
+            json={"model": "openai/gpt-5.1", "thinking": "medium"},
+        )
+        assert res.status_code == 400
+        assert res.json()["detail"] == "Model requires a configured provider"
+
     async def test_config_defaults(self, client, temp_config_dir):
         """Without any config file, defaults are returned."""
         res = await client.get("/api/settings/config")
         data = res.json()
-        assert data["model"] == "anthropic/claude-sonnet-5-20250929"
-        assert data["thinking"] == "high"
+        assert data["model"] == ""
+        assert data["thinking"] == "off"
         # No keys set
         assert not any(data["api_keys"].values())
+
+    async def test_custom_model_uses_pi_ai_capabilities_and_clamps_thinking(self, client, temp_config_dir):
+        from api.settings import _save_config
+
+        _save_config({
+            "custom_providers": [{
+                "id": "custom-api",
+                "name": "Custom API",
+                "base_url": "https://llm.example.com/v1",
+                "api": "openai-completions",
+                "api_key": "sk-custom",
+                "models": ["gpt-5.4", "gpt-4o"],
+            }]
+        })
+
+        config = (await client.get("/api/settings/config")).json()
+        models = {model["model"]: model for model in config["available_models"]}
+        assert models["gpt-5.4"]["capability_source"] == "pi-ai:openai"
+        assert models["gpt-5.4"]["thinking_levels"] == [
+            "off", "minimal", "low", "medium", "high", "xhigh",
+        ]
+        assert models["gpt-4o"]["reasoning"] is False
+        assert models["gpt-4o"]["thinking_levels"] == ["off"]
+
+        saved = await client.put(
+            "/api/settings/model",
+            json={"model": "custom-custom-api/gpt-5.4", "thinking": "max"},
+        )
+        assert saved.status_code == 200
+        assert saved.json()["thinking"] == "xhigh"
 
     async def test_custom_provider_discover_and_save(self, client, temp_config_dir, monkeypatch):
         import api.settings as settings
@@ -212,8 +255,25 @@ class TestSettingsAPI:
         assert models["gpt-5.6-luna"]["reasoning"] is True
         assert models["gpt-5.6-luna"]["thinkingLevelMap"]["max"] == "max"
         assert models["gpt-5.6-luna"]["compat"]["supportsReasoningEffort"] is True
-        assert models["gpt-5.4"]["thinkingLevelMap"]["max"] == "high"
+        assert models["gpt-5.4"]["thinkingLevelMap"]["xhigh"] == "xhigh"
+        assert "max" not in models["gpt-5.4"]["thinkingLevelMap"]
         assert models["plain-chat-model"]["reasoning"] is False
+
+
+class TestPiModelCapabilities:
+    def test_protocol_selects_canonical_pi_ai_provider(self):
+        from services.pi_model_capabilities import get_pi_model_capability
+
+        openai = get_pi_model_capability("custom-test", "gpt-5.4", api="openai-responses")
+        assert openai is not None
+        assert openai["capability_source"] == "pi-ai:openai"
+        assert openai["thinking_levels"] == ["off", "minimal", "low", "medium", "high", "xhigh"]
+
+        anthropic = get_pi_model_capability("custom-test", "claude-fable-5", api="anthropic-messages")
+        assert anthropic is not None
+        assert anthropic["capability_source"] == "pi-ai:anthropic"
+        assert "off" not in anthropic["thinking_levels"]
+        assert anthropic["thinking_levels"][-2:] == ["xhigh", "max"]
 
 
 class TestProviderEnvMap:

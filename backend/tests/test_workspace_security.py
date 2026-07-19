@@ -2,6 +2,7 @@
 
 import pytest
 
+from api import workspaces as workspaces_api
 from services import workspace_security
 
 
@@ -32,3 +33,77 @@ def test_registered_workspace_survives_registry_round_trip(tmp_path, monkeypatch
 
     workspace_security.register_workspace(workspace)
     assert workspace_security.validate_workspace_cwd(str(workspace)) == workspace.resolve()
+
+
+def test_managed_root_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr(workspace_security, "_REGISTRY_FILE", tmp_path / "registry.json")
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    monkeypatch.setattr(workspace_security, "WORKSPACES_DIR", managed)
+
+    with pytest.raises(ValueError, match="not a registered workspace"):
+        workspace_security.validate_workspace_cwd(str(managed))
+
+
+def test_managed_root_cannot_be_registered(tmp_path, monkeypatch):
+    monkeypatch.setattr(workspace_security, "_REGISTRY_FILE", tmp_path / "registry.json")
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    monkeypatch.setattr(workspace_security, "WORKSPACES_DIR", managed)
+
+    with pytest.raises(ValueError, match="not a registered workspace"):
+        workspace_security.register_workspace(managed)
+    assert workspace_security._load_registry() == set()
+
+
+def test_scan_registers_only_marked_direct_children(tmp_path, monkeypatch):
+    monkeypatch.setattr(workspace_security, "_REGISTRY_FILE", tmp_path / "registry.json")
+    managed = tmp_path / "managed"
+    marked = managed / "marked"
+    unmarked = managed / "unmarked"
+    nested = managed / "nested"
+    (marked / ".pi-science").mkdir(parents=True)
+    unmarked.mkdir(parents=True)
+    (nested / "child" / ".pi-science").mkdir(parents=True)
+    monkeypatch.setattr(workspace_security, "WORKSPACES_DIR", managed)
+
+    workspace_security.scan_and_register_workspaces()
+
+    assert workspace_security._load_registry() == {str(marked.resolve())}
+
+
+@pytest.mark.anyio
+async def test_api_listing_filters_unmarked_children_and_root(tmp_path, monkeypatch):
+    managed = tmp_path / "managed"
+    marked = managed / "marked"
+    unmarked = managed / "unmarked"
+    (marked / ".pi-science").mkdir(parents=True)
+    unmarked.mkdir(parents=True)
+    managed.mkdir(exist_ok=True)
+    registered = tmp_path / "opened"
+    registered.mkdir()
+
+    monkeypatch.setattr(workspaces_api, "WORKSPACES_DIR", managed)
+    monkeypatch.setattr(workspaces_api, "_load_registry", lambda: {
+        str(managed.resolve()), str(registered.resolve())
+    })
+
+    result = await workspaces_api.list_workspaces()
+
+    assert {item.path for item in result} == {str(marked.resolve()), str(registered.resolve())}
+
+
+@pytest.mark.anyio
+async def test_api_open_rejects_managed_root(tmp_path, monkeypatch):
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    monkeypatch.setattr(workspace_security, "_REGISTRY_FILE", tmp_path / "registry.json")
+    monkeypatch.setattr(workspaces_api, "WORKSPACES_DIR", managed)
+    monkeypatch.setattr(workspaces_api, "register_workspace", workspace_security.register_workspace)
+    monkeypatch.setattr(workspace_security, "WORKSPACES_DIR", managed)
+
+    with pytest.raises(workspaces_api.HTTPException) as exc_info:
+        await workspaces_api.open_folder(workspaces_api.OpenFolderRequest(path=str(managed)))
+
+    assert exc_info.value.status_code == 400
+    assert workspace_security._load_registry() == set()

@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from config import BASE_DIR
+from services.pi_model_capabilities import get_pi_model_capability
 from services.runtime_extensions import runtime_extension_status
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -73,7 +74,7 @@ class ProviderKey(BaseModel):
     api_key: str
 
 class ModelConfig(BaseModel):
-    model: str = "anthropic/claude-sonnet-5-20250929"
+    model: str = ""
     thinking: str = "high"  # off, minimal, low, medium, high, max
 
 
@@ -114,7 +115,7 @@ def _save_config(data: dict):
     """Atomically save config to prevent corruption on concurrent writes."""
     cf = _config_file()
     cf.parent.mkdir(parents=True, exist_ok=True)
-    tmp = cf.with_name(f".{cf.name}.{os.getpid()}.{os.urandom(4).hex}.tmp")
+    tmp = cf.with_name(f".{cf.name}.{os.getpid()}.{os.urandom(4).hex()}.tmp")
     tmp.write_text(json.dumps(data, indent=2))
     os.replace(tmp, cf)
 
@@ -225,10 +226,76 @@ def _fetch_custom_models(base_url: str, api_key: str = "") -> list[str]:
     return list(dict.fromkeys(models))
 
 
+def _model_capability(provider_id: str, model_id: str, *, custom: bool, api: str | None = None) -> dict:
+    capability = get_pi_model_capability(provider_id, model_id, api=api)
+    if capability:
+        return capability
+    reasoning = _custom_model_supports_reasoning(model_id) if custom else False
+    levels = ["off", "minimal", "low", "medium", "high"] if reasoning else ["off"]
+    if reasoning and _custom_model_supports_max(model_id):
+        levels.extend(["xhigh", "max"])
+    return {
+        "reasoning": reasoning,
+        "thinking_levels": levels,
+        "thinking_level_map": None,
+        "capability_source": "heuristic" if custom else "fallback",
+    }
+
+
+_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+
+
+def _clamp_thinking_level(requested: str, supported: list[str]) -> str:
+    if requested in supported:
+        return requested
+    requested_index = _THINKING_LEVELS.index(requested) if requested in _THINKING_LEVELS else 0
+    for candidate in _THINKING_LEVELS[requested_index:]:
+        if candidate in supported:
+            return candidate
+    for candidate in reversed(_THINKING_LEVELS[:requested_index]):
+        if candidate in supported:
+            return candidate
+    return supported[0] if supported else "off"
+
+
+def _custom_model_definition(provider: dict, model_id: str) -> dict:
+    capability = _model_capability(
+        f"custom-{provider['id']}",
+        model_id,
+        custom=True,
+        api=provider["api"],
+    )
+    definition = {
+        "id": model_id,
+        "name": model_id,
+        "reasoning": capability["reasoning"],
+        "input": ["text"],
+        "contextWindow": 128000,
+        "maxTokens": 16384,
+        "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+    }
+    if capability["reasoning"]:
+        level_map = capability.get("thinking_level_map")
+        if not isinstance(level_map, dict):
+            levels = capability["thinking_levels"]
+            if "max" in levels:
+                level_map = {"xhigh": "max", "max": "max"}
+            elif "xhigh" in levels:
+                level_map = {"xhigh": "xhigh"}
+        if level_map:
+            definition["thinkingLevelMap"] = level_map
+        if provider["api"] == "openai-completions":
+            definition["compat"] = {"supportsReasoningEffort": True}
+    return definition
+
+
 def _available_models(config: Optional[dict] = None) -> list[dict]:
     config = config or _load_config()
+    active_keys = _get_active_api_keys()
     models = []
     for provider in PROVIDERS:
+        if not active_keys.get(provider["id"], False):
+            continue
         for model in provider["models"]:
             models.append({
                 "id": f"{provider['id']}/{model}",
@@ -236,8 +303,11 @@ def _available_models(config: Optional[dict] = None) -> list[dict]:
                 "model": model,
                 "label": f"{provider['name']} · {model}",
                 "custom": False,
+                **_model_capability(provider["id"], model, custom=False),
             })
     for provider in _custom_providers(config):
+        if not provider.get("api_key"):
+            continue
         for model in provider["models"]:
             models.append({
                 "id": f"custom-{provider['id']}/{model}",
@@ -245,6 +315,12 @@ def _available_models(config: Optional[dict] = None) -> list[dict]:
                 "model": model,
                 "label": f"{provider['name']} · {model}",
                 "custom": True,
+                **_model_capability(
+                    f"custom-{provider['id']}",
+                    model,
+                    custom=True,
+                    api=provider["api"],
+                ),
             })
     return models
 
@@ -267,18 +343,7 @@ def get_custom_models_runtime(cwd: Optional[str] = None) -> tuple[Optional[Path]
             "name": provider["name"],
             "baseUrl": provider["base_url"],
             "api": provider["api"],
-            "models": [
-                {
-                    "id": model,
-                    "name": model,
-                    "reasoning": False,
-                    "input": ["text"],
-                    "contextWindow": 128000,
-                    "maxTokens": 16384,
-                    "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
-                }
-                for model in provider["models"]
-            ],
+            "models": [_custom_model_definition(provider, model) for model in provider["models"]],
         }
         if provider.get("api_key"):
             definition["apiKey"] = f"${env_name}"
@@ -397,8 +462,11 @@ def _fetch_custom_models(base_url: str, api_key: str = "") -> list[str]:
 
 def _available_models(config: Optional[dict] = None) -> list[dict]:
     config = config or _load_config()
+    active_keys = _get_active_api_keys()
     models = []
     for provider in PROVIDERS:
+        if not active_keys.get(provider["id"], False):
+            continue
         for model in provider["models"]:
             models.append({
                 "id": f"{provider['id']}/{model}",
@@ -406,8 +474,11 @@ def _available_models(config: Optional[dict] = None) -> list[dict]:
                 "model": model,
                 "label": f"{provider['name']} · {model}",
                 "custom": False,
+                **_model_capability(provider["id"], model, custom=False),
             })
     for provider in _custom_providers(config):
+        if not provider.get("api_key"):
+            continue
         for model in provider["models"]:
             models.append({
                 "id": f"custom-{provider['id']}/{model}",
@@ -415,6 +486,12 @@ def _available_models(config: Optional[dict] = None) -> list[dict]:
                 "model": model,
                 "label": f"{provider['name']} · {model}",
                 "custom": True,
+                **_model_capability(
+                    f"custom-{provider['id']}",
+                    model,
+                    custom=True,
+                    api=provider["api"],
+                ),
             })
     return models
 
@@ -474,25 +551,7 @@ def get_custom_models_runtime(cwd: Optional[str] = None) -> tuple[Optional[Path]
             "models": [],
         }
         for model in provider["models"]:
-            reasoning = _custom_model_supports_reasoning(model)
-            model_definition = {
-                "id": model,
-                "name": model,
-                "reasoning": reasoning,
-                "input": ["text"],
-                "contextWindow": 128000,
-                "maxTokens": 16384,
-                "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
-            }
-            if reasoning:
-                # pi exposes xhigh/max only when the model explicitly maps
-                # those levels. OpenAI-compatible reasoning models also need
-                # the compatibility flag to emit reasoning_effort.
-                max_level = "max" if _custom_model_supports_max(model) else "high"
-                model_definition["thinkingLevelMap"] = {"xhigh": max_level, "max": max_level}
-                if provider["api"] == "openai-completions":
-                    model_definition["compat"] = {"supportsReasoningEffort": True}
-            definition["models"].append(model_definition)
+            definition["models"].append(_custom_model_definition(provider, model))
         if provider.get("api_key"):
             definition["apiKey"] = f"${env_name}"
             env[env_name] = provider["api_key"]
@@ -540,13 +599,23 @@ async def get_config():
     """Get full configuration (API key status only, never actual keys)."""
     config = _load_config()
     keys = _get_active_api_keys()
+    available_models = _available_models(config)
+    available_ids = {item["id"] for item in available_models}
+    configured_model = str(config.get("model") or "")
+    effective_model = configured_model if configured_model in available_ids else ""
+    selected = next((item for item in available_models if item["id"] == effective_model), None)
+    configured_thinking = str(config.get("thinking") or "high")
+    effective_thinking = _clamp_thinking_level(
+        configured_thinking,
+        selected["thinking_levels"] if selected else ["off"],
+    )
     return {
         "api_keys": keys,  # bool only: has_key or not
-        "model": config.get("model", "anthropic/claude-sonnet-5-20250929"),
-        "thinking": config.get("thinking", "high"),
+        "model": effective_model,
+        "thinking": effective_thinking,
         "providers": PROVIDERS,
         "custom_providers": [_public_custom_provider(provider) for provider in _custom_providers(config)],
-        "available_models": _available_models(config),
+        "available_models": available_models,
     }
 
 
@@ -568,6 +637,8 @@ async def delete_api_key(provider: str):
     """Remove a stored API key."""
     config = _load_config()
     config.get("api_keys", {}).pop(provider, None)
+    if str(config.get("model") or "").startswith(f"{provider}/"):
+        config["model"] = ""
     _save_config(config)
     return {"ok": True, "provider": provider}
 
@@ -576,10 +647,15 @@ async def delete_api_key(provider: str):
 async def set_model(body: ModelConfig):
     """Set default model and thinking level."""
     config = _load_config()
+    available_models = _available_models(config)
+    selected = next((item for item in available_models if item["id"] == body.model), None)
+    if body.model and selected is None:
+        raise HTTPException(status_code=400, detail="Model requires a configured provider")
+    thinking = _clamp_thinking_level(body.thinking, selected["thinking_levels"] if selected else ["off"])
     config["model"] = body.model
-    config["thinking"] = body.thinking
+    config["thinking"] = thinking
     _save_config(config)
-    return {"ok": True, "model": body.model, "thinking": body.thinking}
+    return {"ok": True, "model": body.model, "thinking": thinking}
 
 
 @router.get("/custom-providers")
@@ -650,6 +726,8 @@ async def delete_custom_provider(provider_id: str):
     config["custom_providers"] = [
         provider for provider in _custom_providers(config) if provider["id"] != normalized
     ]
+    if str(config.get("model") or "").startswith(f"custom-{normalized}/"):
+        config["model"] = ""
     _save_config(config)
     return {"ok": True, "id": normalized}
 

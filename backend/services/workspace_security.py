@@ -45,6 +45,8 @@ def register_workspace(path: str | Path) -> None:
         resolved = str(Path(path).expanduser().resolve())
     except (OSError, RuntimeError):
         return
+    if resolved == str(WORKSPACES_DIR.expanduser().resolve()):
+        raise ValueError(f"Path is not a registered workspace: {path}")
     paths = _load_registry()
     if resolved not in paths:
         paths.add(resolved)
@@ -66,6 +68,8 @@ def validate_workspace_cwd(cwd: str) -> Path:
         raise ValueError(f"Workspace does not exist: {cwd}")
     if not root.is_dir():
         raise ValueError(f"Not a directory: {cwd}")
+    if root == WORKSPACES_DIR.expanduser().resolve():
+        raise ValueError(f"Path is not a registered workspace: {cwd}")
 
     if str(root) in _load_registry():
         return root
@@ -104,7 +108,7 @@ def scan_and_register_workspaces() -> None:
     paths = _load_registry()
     changed = False
     for entry in root.iterdir():
-        if entry.is_dir() and not entry.name.startswith("."):
+        if entry.is_dir() and not entry.name.startswith(".") and (entry / ".pi-science").is_dir():
             resolved = str(entry.resolve())
             if resolved not in paths:
                 paths.add(resolved)

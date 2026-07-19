@@ -45,7 +45,7 @@ else:
     PI_TSCONFIG_PATH = None
 
 PI_NODE_PATH = os.environ.get("PI_NODE_PATH", "node")
-PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "anthropic/claude-sonnet-5-20250929")
+PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "")
 PI_DEFAULT_THINKING = os.environ.get("PI_DEFAULT_THINKING", "high")
 
 # Server

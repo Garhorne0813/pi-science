@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowUp, Loader2, Square, Paperclip, Sparkles, X } from "lucide-react";
-import { getSessionName, setSessionName, type AvailableModel } from "../../lib/pi-science-client";
+import { clampThinkingLevel, getSessionName, setSessionName, type AvailableModel } from "../../lib/pi-science-client";
 import { useRuntimeStore, type PendingInteraction } from "../../lib/runtime-store";
 import { useUiStore } from "../../lib/store";
 import { cn } from "../../lib/cn";
@@ -33,6 +33,7 @@ export function LiveSessionPage() {
   const [selectedModel, setSelectedModel] = useState("");
   const [thinking, setThinking] = useState("high");
   const [modelError, setModelError] = useState<string | null>(null);
+  const [configuringModel, setConfiguringModel] = useState(false);
   const [reviewingProject, setReviewingProject] = useState(false);
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
 
@@ -67,8 +68,13 @@ export function LiveSessionPage() {
       .then((data) => {
         const runtime = useRuntimeStore.getState();
         setModels(Array.isArray(data.available_models) ? data.available_models : []);
-        setSelectedModel(runtime.model || data.model || "");
-        setThinking(runtime.thinking || data.thinking || "high");
+        const nextModel = runtime.model || data.model || "";
+        const nextModelInfo = (Array.isArray(data.available_models) ? data.available_models : [])
+          .find((model: AvailableModel) => model.id === nextModel);
+        const supported = nextModelInfo?.thinking_levels || [];
+        const configuredThinking = runtime.thinking || data.thinking || "high";
+        setSelectedModel(nextModel);
+        setThinking(supported.length > 0 ? clampThinkingLevel(configuredThinking, supported) : configuredThinking);
       })
       .catch(() => setModelError("Unable to load model list"));
   }, []);
@@ -86,30 +92,43 @@ export function LiveSessionPage() {
     }
   }, [activeSessionId, workspaceCwd]);
 
-  const handleModelChange = async (model: string) => {
+  const selectedModelInfo = models.find((model) => model.id === selectedModel);
+  const thinkingLevels = selectedModelInfo?.thinking_levels?.length
+    ? selectedModelInfo.thinking_levels
+    : selectedModel
+      ? [thinking]
+      : [];
+  const modelControlsDisabled = working || reviewingProject || configuringModel;
+
+  const applyModelConfig = async (model: string, nextThinking: string) => {
     const previousModel = selectedModel;
     const previousThinking = thinking;
     let runtimeChanged = false;
     setSelectedModel(model);
+    setThinking(nextThinking);
     setModelError(null);
+    setConfiguringModel(true);
     try {
-      const runtimeSessionId = await setRuntimeModel(model, thinking);
-      if (runtimeSessionId && runtimeSessionId !== sessionId) {
-        navigate(
-          `/workspace/${encodeURIComponent(workspaceCwd)}/session/${runtimeSessionId}`,
-          { replace: true },
-        );
+      if (activeSessionId) {
+        const runtimeSessionId = await setRuntimeModel(model, nextThinking);
+        runtimeChanged = true;
+        if (runtimeSessionId && runtimeSessionId !== sessionId) {
+          navigate(
+            `/workspace/${encodeURIComponent(workspaceCwd)}/session/${runtimeSessionId}`,
+            { replace: true },
+          );
+        }
       }
-      runtimeChanged = true;
       const response = await fetch("/api/settings/model", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model, thinking }),
+        body: JSON.stringify({ model, thinking: nextThinking }),
       });
+      const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
         throw new Error(data.detail || `Unable to save model: ${response.statusText}`);
       }
+      setThinking(typeof data.thinking === "string" ? data.thinking : nextThinking);
     } catch (e) {
       let rolledBack = !runtimeChanged;
       if (runtimeChanged && previousModel) {
@@ -127,9 +146,23 @@ export function LiveSessionPage() {
         }
       }
       setSelectedModel(rolledBack ? previousModel : model);
+      setThinking(rolledBack ? previousThinking : nextThinking);
       const message = e instanceof Error ? e.message : "Unable to set model";
       setModelError(rolledBack ? message : `${message}; runtime rollback also failed`);
+    } finally {
+      setConfiguringModel(false);
     }
+  };
+
+  const handleModelChange = (model: string) => {
+    const nextModelInfo = models.find((item) => item.id === model);
+    const supported = nextModelInfo?.thinking_levels || [];
+    void applyModelConfig(model, clampThinkingLevel(thinking, supported));
+  };
+
+  const handleThinkingChange = (level: string) => {
+    if (!selectedModel) return;
+    void applyModelConfig(selectedModel, level);
   };
 
   const uploadFiles = useCallback(async (fileList: FileList | File[]) => {
@@ -342,7 +375,7 @@ export function LiveSessionPage() {
             className="max-h-[160px] w-full resize-none bg-transparent px-3 py-2 text-sm leading-6 text-text outline-none placeholder:text-muted"
           />
           <div className="flex items-center justify-between gap-2 px-3 pb-2">
-            <div className="flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               <button
                 onClick={() => fileInputRef.current?.click()}
                 className="rounded-input px-2 py-1 text-xs text-muted hover:text-text hover:bg-surface-2 flex items-center gap-1"
@@ -359,19 +392,35 @@ export function LiveSessionPage() {
                 {reviewingProject ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
                 Review
               </button>
-              <select
-                aria-label="Select model"
-                value={selectedModel}
-                onChange={(e) => void handleModelChange(e.target.value)}
-                disabled={working || reviewingProject || !activeSessionId}
-                className="min-w-0 max-w-[300px] rounded-input border border-border bg-surface-2 px-2 py-1 text-[11px] text-text outline-none disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {models.length === 0 && <option value={selectedModel}>{selectedModel || "Loading models…"}</option>}
-                {models.length > 0 && selectedModel && !models.some((model) => model.id === selectedModel) && (
-                  <option value={selectedModel}>{selectedModel}</option>
-                )}
-                {models.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
-              </select>
+              {models.length > 0 && (
+                <select
+                  aria-label="Select model"
+                  value={selectedModel}
+                  onChange={(e) => handleModelChange(e.target.value)}
+                  disabled={modelControlsDisabled}
+                  className="min-w-0 max-w-[300px] rounded-input border border-border bg-surface-2 px-2 py-1 text-[11px] text-text outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {!selectedModel && <option value="">Select a model…</option>}
+                  {selectedModel && !models.some((model) => model.id === selectedModel) && (
+                    <option value={selectedModel}>{selectedModel}</option>
+                  )}
+                  {models.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
+                </select>
+              )}
+              {selectedModel && thinkingLevels.length > 0 && (
+                <label className="flex items-center gap-1 rounded-input border border-border bg-surface-2 px-2 text-[11px] text-muted">
+                  <span>Think</span>
+                  <select
+                    aria-label="Select thinking level"
+                    value={thinking}
+                    onChange={(e) => handleThinkingChange(e.target.value)}
+                    disabled={modelControlsDisabled || thinkingLevels.length <= 1}
+                    className="min-h-7 bg-transparent py-1 text-[11px] text-text outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {thinkingLevels.map((level) => <option key={level} value={level}>{level}</option>)}
+                  </select>
+                </label>
+              )}
               {modelError && <span className="max-w-[180px] truncate text-[10px] text-error" title={modelError}>{modelError}</span>}
               {reviewNotice && <span className="max-w-[220px] truncate text-[10px] text-muted" title={reviewNotice}>{reviewNotice}</span>}
             </div>

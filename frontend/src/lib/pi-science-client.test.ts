@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PiScienceClient } from "./pi-science-client";
+import { clampThinkingLevel, PiScienceClient } from "./pi-science-client";
 
 
 class FakeEventSource {
@@ -56,6 +56,13 @@ afterEach(() => {
 
 
 describe("PiScienceClient conversation transport", () => {
+  it("clamps Think to the nearest level supported by the selected model", () => {
+    expect(clampThinkingLevel("max", ["off", "minimal", "low", "medium", "high", "xhigh"])).toBe("xhigh");
+    expect(clampThinkingLevel("high", ["minimal", "low", "medium", "high", "xhigh"])).toBe("high");
+    expect(clampThinkingLevel("high", ["off"])).toBe("off");
+    expect(clampThinkingLevel("unknown", ["minimal", "low"])).toBe("minimal");
+  });
+
   it("keeps listeners across reconnects and drops stale or cross-session events", () => {
     const client = new PiScienceClient();
     const events: string[] = [];

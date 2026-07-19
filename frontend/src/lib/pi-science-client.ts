@@ -23,6 +23,22 @@ export interface AvailableModel {
   model: string;
   label: string;
   custom?: boolean;
+  reasoning?: boolean;
+  thinking_levels?: string[];
+  capability_source?: string;
+}
+
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+/** Keep the current Think setting valid when the selected model changes. */
+export function clampThinkingLevel(requested: string, supported: string[]): string {
+  if (supported.includes(requested)) return requested;
+  const requestedIndex = THINKING_LEVELS.indexOf(requested as typeof THINKING_LEVELS[number]);
+  const start = requestedIndex === -1 ? 0 : requestedIndex;
+  return THINKING_LEVELS.slice(start).find((level) => supported.includes(level))
+    || [...THINKING_LEVELS].slice(0, start).reverse().find((level) => supported.includes(level))
+    || supported[0]
+    || "off";
 }
 
 // ── Session name helpers (localStorage) ──

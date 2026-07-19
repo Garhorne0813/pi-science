@@ -11,7 +11,7 @@ import shutil
 
 from config import WORKSPACES_DIR
 from services.project_knowledge_store import initialize_project_workspace
-from services.workspace_security import register_workspace
+from services.workspace_security import _load_registry, register_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +45,20 @@ async def list_workspaces():
     """List all workspace directories."""
     WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
     workspaces = []
+    managed_root = WORKSPACES_DIR.expanduser().resolve()
+    candidates = {
+        entry.resolve()
+        for entry in WORKSPACES_DIR.iterdir()
+        if entry.is_dir() and not entry.name.startswith(".") and (entry / ".pi-science").is_dir()
+    }
+    candidates.update(
+        resolved
+        for path in _load_registry()
+        if (resolved := Path(path).expanduser().resolve()).is_dir() and resolved != managed_root
+    )
 
-    for entry in sorted(WORKSPACES_DIR.iterdir(), key=lambda e: e.stat().st_mtime, reverse=True):
-        if entry.is_dir() and not entry.name.startswith("."):
+    for entry in sorted(candidates, key=lambda e: e.stat().st_mtime, reverse=True):
+        if entry.is_dir():
             # Count sessions
             sessions_dir = entry / ".pi-science" / "sessions"
             session_count = 0
@@ -104,7 +115,10 @@ async def open_folder(body: OpenFolderRequest):
     if sessions_dir.exists():
         session_count = sum(1 for _ in sessions_dir.rglob("*.jsonl"))
 
-    register_workspace(folder)
+    try:
+        register_workspace(folder)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return WorkspaceInfo(
         name=folder.name,
