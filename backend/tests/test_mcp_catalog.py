@@ -34,7 +34,8 @@ async def test_health_blocks_missing_auth():
 
 
 @pytest.mark.anyio
-async def test_mcp_api_catalog_uses_workspace_config(client, temp_workspace):
+async def test_mcp_api_catalog_uses_workspace_config(client, temp_workspace, temp_config_dir):
+    (temp_workspace / ".pi-science").mkdir(exist_ok=True)
     config = temp_workspace / ".mcp.json"
     config.write_text('{"mcpServers":{"local":{"command":"python","tools":["inspect"]}}}')
     response = await client.get("/api/mcp/catalog", params={"cwd": str(temp_workspace)})

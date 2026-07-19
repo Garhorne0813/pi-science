@@ -11,6 +11,41 @@ from typing import Any
 from config import PI_CLI_PATH, PI_NODE_PATH
 
 
+# Fallback capabilities for known providers whose model list may not yet
+# be fully represented in the pi-ai catalog.
+_PROVIDER_FALLBACK: dict[str, dict[str, Any]] = {
+    "openai": {
+        "reasoning": True,
+        "thinking_levels": ["off", "minimal", "low", "medium", "high", "xhigh"],
+        "thinking_level_map": {"off": None, "xhigh": "xhigh"},
+        "capability_source": "pi-ai:openai",
+    },
+    "openai-codex": {
+        "reasoning": True,
+        "thinking_levels": ["off", "minimal", "low", "medium", "high", "xhigh"],
+        "thinking_level_map": {"off": None, "xhigh": "xhigh"},
+        "capability_source": "pi-ai:openai",
+    },
+    "anthropic": {
+        "reasoning": True,
+        "thinking_levels": ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+        "thinking_level_map": {"off": None, "xhigh": "xhigh", "max": "max"},
+        "capability_source": "pi-ai:anthropic",
+    },
+    "google": {
+        "reasoning": True,
+        "thinking_levels": ["off", "minimal", "low", "medium", "high"],
+        "thinking_level_map": None,
+        "capability_source": "pi-ai:google",
+    },
+    "deepseek": {
+        "reasoning": True,
+        "thinking_levels": ["off", "minimal", "low", "medium", "high"],
+        "thinking_level_map": None,
+        "capability_source": "pi-ai:deepseek",
+    },
+}
+
 _API_PROVIDER_PRIORITY: dict[str, tuple[str, ...]] = {
     "openai-completions": (
         "openai",
@@ -39,11 +74,18 @@ _API_PROVIDER_PRIORITY: dict[str, tuple[str, ...]] = {
 
 def _pi_ai_root() -> Path | None:
     cli_path = Path(PI_CLI_PATH).expanduser().resolve()
+    # Search ancestor directories for @earendil-works/pi-ai (covers
+    # npm-installed prod setups where pi lives under node_modules).
     for parent in cli_path.parents:
         if parent.name == "@earendil-works":
             candidate = parent / "pi-ai"
             if (candidate / "dist" / "index.js").is_file():
                 return candidate
+    # Dev mode: pi is a sibling directory, node_modules sits at pi repo root.
+    dev_candidate = cli_path.parents[3] / "node_modules" / "@earendil-works" / "pi-ai"
+    if (dev_candidate / "dist" / "index.js").is_file():
+        return dev_candidate
+    # Prod fallback: runtime fetched into repo.
     candidate = Path(__file__).resolve().parents[2] / "runtime" / "pi" / "node_modules" / "@earendil-works" / "pi-ai"
     return candidate if (candidate / "dist" / "index.js").is_file() else None
 
@@ -121,4 +163,18 @@ def get_pi_model_capability(provider: str, model_id: str, api: str | None = None
     signature = {(item["reasoning"], tuple(item["thinking_levels"])) for item in candidates}
     if len(signature) == 1:
         return _public_capability(candidates[0], "pi-ai:model-id")
+
+    # 3. Protocol-based fallback: when api is provided, try the canonical
+    #    provider's fallback (e.g. custom provider using openai-responses →
+    #    get openai's default capabilities).
+    if api:
+        for preferred_provider in _API_PROVIDER_PRIORITY.get(api, ()):
+            fallback = _PROVIDER_FALLBACK.get(preferred_provider)
+            if fallback:
+                return dict(fallback)
+
+    # 4. Direct provider fallback: known providers with models not yet in catalog
+    fallback = _PROVIDER_FALLBACK.get(provider)
+    if fallback:
+        return dict(fallback)
     return None

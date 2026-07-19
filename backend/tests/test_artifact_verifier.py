@@ -21,7 +21,7 @@ def test_verify_text_file(tmp_path: Path):
 
 
 def test_verify_image_rejects_flat_output(tmp_path: Path):
-    Image = pytest.importorskip("PIL.Image").Image
+    Image = pytest.importorskip("PIL.Image")
 
     path = tmp_path / "flat.png"
     Image.new("RGB", (10, 10), (255, 255, 255)).save(path)
