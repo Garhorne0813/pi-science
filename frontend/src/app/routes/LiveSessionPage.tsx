@@ -268,7 +268,7 @@ export function LiveSessionPage() {
     // Enter to confirm raw pinyin as English — that Enter belongs
     // to the IME, not the app).  We check both isComposing and our
     // own ref because some browsers fire compositionend before keydown.
-    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !composingRef.current) {
+    if (e.key === "Enter" && !e.shiftKey && !(e.nativeEvent as KeyboardEvent).isComposing && !composingRef.current) {
       e.preventDefault();
       void handleSend();
     }
