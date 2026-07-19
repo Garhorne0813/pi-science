@@ -47,6 +47,8 @@ CHANGELOG.md
 # Dev-only runtime data
 .data/
 workspaces/
+.dev-data/
+.dev-workspaces/
 
 # Local credentials and generated logs
 .env.example
