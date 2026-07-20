@@ -12,15 +12,12 @@ from pathlib import Path
 from typing import AsyncIterator, Callable, Optional
 
 from config import (
-    PI_CLI_PATH,
-    PI_NODE_PATH,
     PI_DEFAULT_MODEL,
     PI_DEFAULT_THINKING,
-    PI_MODE,
-    PI_TSX_PATH,
-    PI_TSCONFIG_PATH,
 )
 from models import PiConfig
+from services.pi_event_observer import observe_event, record_skill_snapshot
+from services.pi_runtime_config import build_runtime_launch, ensure_pi_subagent_wrapper
 
 
 MAX_EVENT_STRING_CHARS = 20000
@@ -170,122 +167,20 @@ class PiProcess:
             session_dir: Directory for pi to store session JSONL files.
             config: Model, provider, API key, skills, extensions config.
         """
-        # Request values override Settings; omitted values inherit the global
-        # model and thinking level consistently.
-        settings: dict = {}
-        try:
-            from api.settings import _load_config
-
-            settings = _load_config()
-        except Exception:
-            pass
-        effective_model = config.model or settings.get("model") or PI_DEFAULT_MODEL
-
-        # Dev mode: tsx + TypeScript source (no build needed)
-        # Prod mode: node + built JS
-        if PI_MODE == "dev" and PI_TSX_PATH:
-            args = [
-                PI_NODE_PATH,
-                PI_TSX_PATH,
-                "--tsconfig", PI_TSCONFIG_PATH,
-                PI_CLI_PATH,
-                "--mode", "rpc",
-            ]
-        else:
-            args = [
-                PI_NODE_PATH,
-                PI_CLI_PATH,
-                "--mode", "rpc",
-            ]
-
-        thinking = config.thinking or settings.get("thinking") or PI_DEFAULT_THINKING
-
-        # Register bundled runtime extensions before passing extension-provided
-        # flags such as --mcp-config. Discovery supports both a local Pi repo
-        # and the runtime/pi npm layout (including a symlinked cli.js).
-        from services.runtime_extensions import runtime_extension_status
-        for extension in runtime_extension_status(PI_CLI_PATH):
-            if extension["installed"]:
-                args.extend(["-e", extension["path"]])
-
-        args.extend([
-            *( ["--model", effective_model] if effective_model else [] ),
-            "--thinking", thinking,
-            "--session-dir", session_dir,
-            "--no-extensions",
-        ])
-        # By default Pi discovers skills from the standard user/project
-        # locations. Once the user explicitly toggles skills, switch to an
-        # allowlist so disabled skills are not loaded into new processes.
-        skills_configured = bool(settings.get("skills_configured", False))
-        if skills_configured:
-            args.append("--no-skills")
-            for skill_path in settings.get("skill_paths", []):
-                if isinstance(skill_path, str) and skill_path.strip():
-                    args.extend(["--skill", skill_path])
-        else:
-            # context-mode ships bundled skills. Load them automatically when
-            # the user has not opted into a curated skill allowlist.
-            from services.runtime_extensions import find_runtime_package
-
-            context_mode = find_runtime_package("context-mode", PI_CLI_PATH)
-            if context_mode and (context_mode / "skills").is_dir():
-                args.extend(["--skill", str(context_mode / "skills")])
-        if session_path:
-            # Resume directly instead of creating a blank session and then
-            # switching, which leaves a ghost conversation in the sidebar.
-            args.extend(["--session", session_path])
-
-        # The MCP adapter registers this flag itself. Supplying a filtered
-        # config makes the Settings allowlist effective for this process.
-        from api.settings import get_mcp_runtime_config
-        mcp_config = get_mcp_runtime_config(cwd)
-        if mcp_config:
-            args.extend(["--mcp-config", str(mcp_config)])
-
-        # Add request-scoped skills in addition to the global allowlist.
-        for skill_path in config.skills:
-            args.extend(["--skill", skill_path])
-
-        # Add explicitly configured extensions
-        for ext_path in config.extensions:
-            args.extend(["-e", ext_path])
-
-        # Set up environment with API keys from config + env vars
-        from api.settings import get_env_with_keys
-        env = get_env_with_keys()
-
-        # Materialize UI-managed custom providers into the pi models.json
-        # location and expose their keys through environment interpolation.
-        from api.settings import get_custom_models_runtime
-        custom_agent_dir, custom_env = get_custom_models_runtime(cwd)
-        if custom_agent_dir:
-            env["PI_CODING_AGENT_DIR"] = str(custom_agent_dir)
-            env.update(custom_env)
-
-        if config.provider:
-            env["PI_DEFAULT_PROVIDER"] = config.provider
-
-        from config import BASE_DIR
-
-        # Keep context-mode state inside the pi-science data directory.
-        env["CONTEXT_MODE_DIR"] = str(BASE_DIR / "context-mode")
-
-        # pi-subagents needs an executable command that can spawn another Pi
-        # process. In dev mode the CLI is launched through tsx and is not on
-        # PATH, so provide a small wrapper for child agents.
-        wrapper_path = _ensure_pi_subagent_wrapper(BASE_DIR, args)
-        if wrapper_path:
-            env["PI_SUBAGENT_PI_BINARY_ENV"] = wrapper_path
-        env["PATH"] = f"{BASE_DIR}:{env.get('PATH', '')}"
+        launch = build_runtime_launch(
+            cwd,
+            session_dir,
+            config,
+            session_path=session_path,
+        )
 
         process = subprocess.Popen(
-            args,
+            launch.args,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=cwd,
-            env=env,
+            env=launch.env,
             text=True,
             bufsize=1,  # Line buffered
             start_new_session=True,
@@ -299,8 +194,8 @@ class PiProcess:
 
         instance = cls(process, cwd, session_id="", config=config, session_dir=session_dir)
         # Store the effective runtime configuration, not the request defaults.
-        instance.config.model = effective_model
-        instance.config.thinking = thinking
+        instance.config.model = launch.model
+        instance.config.thinking = launch.thinking
 
         # Start the stdout reader
         instance._reader_task = asyncio.create_task(instance._read_stdout())
@@ -462,146 +357,33 @@ class PiProcess:
             self._turn_had_text[session_id] = False
 
     async def _observe_event(self, data: dict, session_id: str) -> None:
-        """Run durable side effects exactly once, independent of SSE readers."""
-        if self.session_path and "reviewer-sessions" in Path(self.session_path).parts:
-            return
-        event_type = data.get("type")
-        if event_type in {"agent_start", "agent_end", "agent_settled", "error"}:
-            try:
-                from services.session_manifest import append_skill_event
-
-                asyncio.create_task(
-                    append_skill_event(
-                        self.cwd,
-                        session_id,
-                        event_type,
-                        status="error" if event_type == "error" else "ok",
-                    )
-                )
-            except Exception:
-                pass
-        if event_type == "tool_execution_end":
-            try:
-                from services.session_manifest import append_skill_event
-                tool_name = str(data.get("toolName") or "")
-                asyncio.create_task(
-                    append_skill_event(
-                        self.cwd,
-                        session_id,
-                        "tool",
-                        tool=tool_name,
-                        status="error" if data.get("isError") else "ok",
-                    )
-                )
-            except Exception:
-                pass
-        if event_type == "tool_execution_end" and not data.get("isError"):
-            self._record_provenance(data, session_id)
-            asyncio.create_task(self._publish_artifact_for_event(data, session_id))
-        if event_type == "agent_settled" and session_id:
-            try:
-                from services.reviewer_service import schedule_auto_review
-
-                schedule_auto_review(self.cwd, session_id)
-            except Exception:
-                pass
+        await observe_event(
+            cwd=self.cwd,
+            session_path=self.session_path,
+            model=self.config.model,
+            event=data,
+            session_id=session_id,
+            publish_event=self._publish_event,
+        )
 
     async def _publish_artifact_for_event(self, event: dict, session_id: str) -> None:
-        """Publish written files and expose their stable manifest over SSE."""
-        tool_name = event.get("toolName", "")
-        if tool_name not in {"write", "edit"}:
-            return
-        file_path = event.get("args", {}).get("file_path", "")
-        if not file_path:
-            return
-        try:
-            candidate = Path(file_path).expanduser()
-            if not candidate.is_absolute():
-                candidate = Path(self.cwd) / candidate
-            relative = candidate.resolve().relative_to(Path(self.cwd).resolve()).as_posix()
-            from services.artifact_store import get_artifact_store
+        from services.pi_event_observer import publish_artifact_for_event
 
-            manifest = await get_artifact_store(self.cwd).publish(
-                relative,
-                session_id=session_id,
-                tool=tool_name,
-                model=self.config.model,
-            )
-            await self._publish_event(
-                {
-                    "type": "artifact_published",
-                    "artifactId": manifest.artifact_id,
-                    "path": manifest.path,
-                    "version": manifest.version,
-                    "mime": manifest.mime,
-                    "verification": manifest.verification.model_dump(),
-                },
-                session_id,
-            )
-        except Exception:
-            # Artifact publication is additive; it must not make a successful
-            # tool call appear failed or terminate the conversation stream.
-            return
+        await publish_artifact_for_event(
+            cwd=self.cwd,
+            model=self.config.model,
+            event=event,
+            session_id=session_id,
+            publish_event=self._publish_event,
+        )
 
     async def _record_skill_snapshot(self) -> None:
-        """Record the effective catalog available when this Pi process starts."""
-        try:
-            from services.skill_catalog import catalog
-            from services.session_manifest import append_session_skill_snapshot
-            from api.settings import _load_config
-
-            settings = _load_config()
-            enabled_paths = set(settings.get("skill_paths", [])) if settings.get("skills_configured") else None
-            records = catalog(self.cwd, enabled_paths=enabled_paths)
-            await append_session_skill_snapshot(
-                self.cwd,
-                self.session_id,
-                [item.model_dump() for item in records],
-            )
-            for record in records:
-                if record.enabled:
-                    from services.session_manifest import append_skill_event
-
-                    await append_skill_event(
-                        self.cwd,
-                        self.session_id,
-                        "skill_loaded",
-                        skill_id=record.skill_id,
-                        skill_name=record.name,
-                        status="available" if record.validation.valid else "invalid",
-                    )
-        except Exception:
-            # Metadata must never prevent the agent runtime from starting.
-            return
+        await record_skill_snapshot(self.cwd, self.session_id)
 
     def _record_provenance(self, event: dict, session_id: str) -> None:
-        tool_name = event.get("toolName", "")
-        result = event.get("result", {})
-        if tool_name == "write":
-            file_path = event.get("args", {}).get("file_path", "")
-            content = event.get("args", {}).get("content", event.get("args", {}).get("text", ""))
-            diff = None
-        elif tool_name == "edit":
-            file_path = event.get("args", {}).get("file_path", "")
-            content = None
-            diff = result.get("diff") if isinstance(result, dict) else None
-        else:
-            return
-        if not file_path:
-            return
-        try:
-            from services.provenance_store import get_store
+        from services.pi_event_observer import record_provenance
 
-            asyncio.get_event_loop().create_task(get_store(self.cwd).record(
-                path=file_path,
-                session_id=session_id,
-                tool=tool_name,
-                tool_call_id=event.get("toolCallId"),
-                content=content if tool_name == "write" and content else None,
-                diff=diff if tool_name == "edit" else None,
-            ))
-        except Exception:
-            pass
+        record_provenance(self.cwd, event, session_id)
 
     async def send_command(self, cmd_type: str, **params) -> dict:
         """Send an RPC command and await the response.
@@ -1603,40 +1385,7 @@ class PiManager:
 
 
 def _ensure_pi_subagent_wrapper(base_dir: Path, parent_args: list[str]) -> Optional[str]:
-    """Create a wrapper that lets pi-subagents spawn the current Pi runtime."""
-    try:
-        node_index = next(
-            index
-            for index, value in enumerate(parent_args)
-            if value == "node" or value.endswith("/node")
-        )
-        node_bin = parent_args[node_index]
-        tsx = parent_args[node_index + 1]
-        tsconfig_flag = parent_args[node_index + 2]
-        tsconfig_path = parent_args[node_index + 3]
-        cli_path = parent_args[node_index + 4]
-    except (StopIteration, IndexError):
-        # Production mode uses a built JS entrypoint that can be resolved by
-        # the normal `pi` binary; no wrapper is needed there.
-        return None
-
-    if tsconfig_flag != "--tsconfig":
-        return None
-
-    wrapper_path = base_dir / "pi-subagent-wrapper.sh"
-    script = (
-        "#!/bin/bash\n"
-        "# Auto-generated by pi_manager — do not edit\n"
-        f'exec "{node_bin}" "{tsx}" "{tsconfig_flag}" "{tsconfig_path}" "{cli_path}" "$@"\n'
-    )
-    try:
-        current = wrapper_path.read_text()
-    except FileNotFoundError:
-        current = ""
-    if current != script:
-        wrapper_path.write_text(script)
-        wrapper_path.chmod(0o755)
-    return str(wrapper_path)
+    return ensure_pi_subagent_wrapper(base_dir, parent_args)
 
 
 # Singleton

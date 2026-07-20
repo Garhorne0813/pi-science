@@ -7,6 +7,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 from models import FileContent, PreviewData
+from services.preview_registry import EXT_TO_KIND, detect_preview_kind
 
 logger = logging.getLogger(__name__)
 
@@ -26,61 +27,6 @@ def resolve_workspace_path(workspace_dir: Path, path: str = ".") -> Path:
     if not target.is_relative_to(root):
         raise ValueError(f"Path outside workspace: {path}")
     return target
-
-# Common scientific file extension -> preview kind mapping
-EXT_TO_KIND: dict[str, str] = {
-    ".fits": "fits",
-    ".fit": "fits",
-    ".nc": "netcdf",
-    ".nc4": "netcdf",
-    ".h5": "netcdf",
-    ".hdf5": "netcdf",
-    ".csv": "csv",
-    ".tsv": "tsv",
-    ".pdb": "molecule",
-    ".cif": "molecule",
-    ".mol": "molecule",
-    ".mol2": "molecule",
-    ".sdf": "molecule",
-    ".smi": "molecule",
-    ".xyz": "molecule",
-    ".obj": "mesh",
-    ".stl": "mesh",
-    ".ply": "mesh",
-    ".glb": "mesh",
-    ".gltf": "mesh",
-    ".vcf": "genome",
-    ".bed": "genome",
-    ".gff": "genome",
-    ".gtf": "genome",
-    ".bam": "genome",
-    ".pdf": "pdf",
-    ".png": "image",
-    ".jpg": "image",
-    ".jpeg": "image",
-    ".gif": "image",
-    ".svg": "image",
-    ".tiff": "image",
-    ".tif": "image",
-    ".md": "markdown",
-    ".html": "html",
-    ".json": "text",
-    ".txt": "text",
-    ".py": "text",
-    ".r": "text",
-    ".sh": "text",
-    ".ipynb": "notebook",
-    ".xlsx": "office", ".xlsm": "office", ".xltx": "office",
-    ".docx": "office", ".docm": "office", ".dotx": "office",
-    ".pptx": "office", ".pptm": "office", ".potx": "office",
-}
-
-
-def detect_preview_kind(path: str) -> str:
-    """Detect the preview kind from file extension."""
-    ext = Path(path).suffix.lower()
-    return EXT_TO_KIND.get(ext, "text")
-
 
 def read_file_content(workspace_dir: Path, path: str, encoding: str = "utf8") -> FileContent:
     """Read a file from the workspace."""
