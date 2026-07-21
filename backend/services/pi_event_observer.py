@@ -119,11 +119,11 @@ async def publish_artifact_for_event(
 async def record_skill_snapshot(cwd: str, session_id: str) -> None:
     """Record the effective catalog available when a Pi process starts."""
     try:
-        from api.settings import _load_config
+        from services.settings_store import load_config
         from services.session_manifest import append_session_skill_snapshot
         from services.skill_catalog import catalog
 
-        settings = _load_config()
+        settings = load_config()
         enabled_paths = set(settings.get("skill_paths", [])) if settings.get("skills_configured") else None
         records = catalog(cwd, enabled_paths=enabled_paths)
         await append_session_skill_snapshot(

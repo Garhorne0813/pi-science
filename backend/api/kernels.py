@@ -3,6 +3,7 @@
 from fastapi import APIRouter, HTTPException, Query
 from models import ExecuteCellRequest, CellResult
 from services.kernel_manager import kernel_manager
+from services.workspace_context import WorkspaceContext
 
 router = APIRouter(prefix="/api/kernels", tags=["kernels"])
 
@@ -24,6 +25,7 @@ async def execute_cell(
 ):
     """Execute Python or R code in a persistent kernel session."""
     try:
+        cwd = str(WorkspaceContext.from_cwd(cwd, allow_process_cwd=True))
         return await kernel_manager.execute(
             notebook_id=body.notebook_id or "default",
             language=body.language,
@@ -31,6 +33,8 @@ async def execute_cell(
             cwd=cwd,
             timeout_seconds=body.timeout_seconds,
         )
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
@@ -44,6 +48,11 @@ async def shutdown_notebook(
     language: str | None = Query(None, description="Optionally limit to python or r"),
 ):
     """Shut down a notebook's kernel."""
+    if cwd is not None:
+        try:
+            cwd = str(WorkspaceContext.from_cwd(cwd, allow_process_cwd=True))
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
     await kernel_manager.shutdown_notebook(notebook_id, cwd=cwd, language=language)
     return {"ok": True}
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import mimetypes
 from datetime import datetime, timezone
@@ -13,6 +14,7 @@ import aiofiles
 from models import ArtifactManifest, ArtifactVerification
 from services.provenance_store import get_store
 from services.workspace_security import resolve_workspace_file
+from services.workspace_journal import journal_lock
 
 
 _MAX_PUBLISH_BYTES = 2 * 1024 * 1024 * 1024
@@ -78,16 +80,11 @@ class ArtifactStore:
         file_path = resolve_workspace_file(self.workspace, path, allow_metadata=False)
         if not file_path.exists() or not file_path.is_file():
             raise FileNotFoundError(path)
-        sha256, size = self._hash_file(file_path)
+        sha256, size = await asyncio.to_thread(self._hash_file, file_path)
         relative = file_path.relative_to(self.workspace).as_posix()
         mime = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
         artifact_id = hashlib.sha256(f"{self.workspace}:{relative}".encode()).hexdigest()[:24]
 
-        records = await self._read_all()
-        latest = next((item for item in reversed(records) if item.artifact_id == artifact_id), None)
-        if latest is not None and latest.sha256 == sha256:
-            return latest
-        version = (latest.version + 1) if latest else 1
         producer = {
             "tool": tool,
             "session_id": session_id,
@@ -100,22 +97,28 @@ class ArtifactStore:
             checks={"exists": True, "readable": True, "size": size, "sha256": sha256},
             checked_at=datetime.now(timezone.utc),
         )
-        manifest = ArtifactManifest(
-            artifact_id=artifact_id,
-            version=version,
-            path=relative,
-            kind=_kind(file_path, mime),
-            mime=mime,
-            size=size,
-            sha256=sha256,
-            published_at=datetime.now(timezone.utc),
-            producer=producer,
-            inputs=inputs or [],
-            environment=environment or {},
-            verification=verification,
-        )
-        async with aiofiles.open(self.manifest_file, "a", encoding="utf-8") as handle:
-            await handle.write(manifest.model_dump_json() + "\n")
+        async with journal_lock(self.manifest_file):
+            records = await self._read_all()
+            latest = next((item for item in reversed(records) if item.artifact_id == artifact_id), None)
+            if latest is not None and latest.sha256 == sha256:
+                return latest
+            version = (latest.version + 1) if latest else 1
+            manifest = ArtifactManifest(
+                artifact_id=artifact_id,
+                version=version,
+                path=relative,
+                kind=_kind(file_path, mime),
+                mime=mime,
+                size=size,
+                sha256=sha256,
+                published_at=datetime.now(timezone.utc),
+                producer=producer,
+                inputs=inputs or [],
+                environment=environment or {},
+                verification=verification,
+            )
+            async with aiofiles.open(self.manifest_file, "a", encoding="utf-8") as handle:
+                await handle.write(manifest.model_dump_json() + "\n")
         from services.telemetry import record_metric
         await record_metric(str(self.workspace), "artifact_publish", "passed", metadata={"artifact_id": artifact_id, "path": relative, "size": size})
         # Keep existing provenance consumers aware of the publication without
@@ -156,8 +159,9 @@ class ArtifactStore:
                 )
             }
         )
-        async with aiofiles.open(self.manifest_file, "a", encoding="utf-8") as handle:
-            await handle.write(updated.model_dump_json() + "\n")
+        async with journal_lock(self.manifest_file):
+            async with aiofiles.open(self.manifest_file, "a", encoding="utf-8") as handle:
+                await handle.write(updated.model_dump_json() + "\n")
         return updated
 
 

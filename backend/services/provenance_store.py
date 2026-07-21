@@ -14,6 +14,7 @@ from typing import Optional
 import aiofiles
 
 from models import ProvenanceRecord
+from services.workspace_journal import journal_lock
 
 logger = logging.getLogger(__name__)
 
@@ -67,34 +68,35 @@ class ProvenanceStore:
         run_id: Optional[str] = None,
     ) -> ProvenanceRecord:
         """Append a provenance record. Returns the created record."""
-        version = await self._next_version(path)
-        content_hash = None
-        stored_content = None
-        if content is not None:
-            content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
-            stored_content = content
-            if len(stored_content) > MAX_CONTENT_CHARS:
-                stored_content = stored_content[:MAX_CONTENT_CHARS] + "\n[truncated]"
+        async with journal_lock(self._file):
+            version = await self._next_version(path)
+            content_hash = None
+            stored_content = None
+            if content is not None:
+                content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
+                stored_content = content
+                if len(stored_content) > MAX_CONTENT_CHARS:
+                    stored_content = stored_content[:MAX_CONTENT_CHARS] + "\n[truncated]"
 
-        record = ProvenanceRecord(
-            path=path,
-            version=version,
-            ts=time.time(),
-            tool=tool,
-            toolCallId=tool_call_id,
-            sessionId=session_id,
-            model=model,
-            contentHash=content_hash,
-            content=stored_content,
-            diff=diff,
-            runId=run_id,
-        )
+            record = ProvenanceRecord(
+                path=path,
+                version=version,
+                ts=time.time(),
+                tool=tool,
+                toolCallId=tool_call_id,
+                sessionId=session_id,
+                model=model,
+                contentHash=content_hash,
+                content=stored_content,
+                diff=diff,
+                runId=run_id,
+            )
 
-        line = record.model_dump_json() + "\n"
-        async with aiofiles.open(self._file, "a") as f:
-            await f.write(line)
+            line = record.model_dump_json() + "\n"
+            async with aiofiles.open(self._file, "a") as f:
+                await f.write(line)
 
-        self._version_index[path] = version
+            self._version_index[path] = version
         return record
 
     async def query(

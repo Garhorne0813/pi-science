@@ -2,51 +2,16 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-
-from config import get_sessions_dir
+from services.session_repository import SessionRepository
 
 
 def find_session_file(session_id: str, cwd: str | Path) -> Path | None:
-    root = get_sessions_dir(str(cwd))
-    if not root.exists():
-        return None
-    for path in root.rglob("*.jsonl"):
-        try:
-            with path.open(encoding="utf-8") as handle:
-                header = json.loads(handle.readline())
-            if header.get("type") == "session" and header.get("id") == session_id:
-                return path
-        except (OSError, json.JSONDecodeError):
-            continue
-    return None
+    return SessionRepository(cwd).find(session_id)
 
 
 def read_session_messages(session_id: str, cwd: str | Path) -> list[dict]:
-    path = find_session_file(session_id, cwd)
-    if path is None:
-        return []
-    messages: list[dict] = []
-    try:
-        with path.open(encoding="utf-8") as handle:
-            for line in handle:
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if entry.get("type") != "message":
-                    continue
-                message = entry.get("message", {})
-                messages.append({
-                    "id": entry.get("id", ""),
-                    "role": message.get("role", ""),
-                    "content": message.get("content", []),
-                    "timestamp": entry.get("timestamp"),
-                })
-    except OSError:
-        return []
-    return messages
+    return SessionRepository(cwd).messages(session_id)
 
 
 def message_text(message: dict, max_chars: int = 12000) -> str:

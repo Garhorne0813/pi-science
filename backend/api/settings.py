@@ -24,6 +24,7 @@ from services.model_registry import (
     validate_custom_base_url,
 )
 from services.runtime_extensions import runtime_extension_status
+from services.settings_store import config_file, load_config, save_config
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -60,27 +61,15 @@ async def list_runtime_extensions():
 
 def _config_file() -> Path:
     """Get config file path, reading PI_SCIENCE_HOME at call time (test-friendly)."""
-    import os as _os
-    base = Path(_os.environ.get("PI_SCIENCE_HOME", Path.home() / ".pi-science"))
-    return base / "config.json"
+    return config_file()
 
 
 def _load_config() -> dict:
-    cf = _config_file()
-    if cf.exists():
-        try:
-            return json.loads(cf.read_text())
-        except json.JSONDecodeError:
-            pass
-    return {}
+    return load_config()
 
 def _save_config(data: dict):
     """Atomically save config to prevent corruption on concurrent writes."""
-    cf = _config_file()
-    cf.parent.mkdir(parents=True, exist_ok=True)
-    tmp = cf.with_name(f".{cf.name}.{os.getpid()}.{os.urandom(4).hex()}.tmp")
-    tmp.write_text(json.dumps(data, indent=2))
-    os.replace(tmp, cf)
+    save_config(data)
 
 
 def _custom_provider_id(value: str) -> str:

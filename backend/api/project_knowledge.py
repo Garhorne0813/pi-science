@@ -20,13 +20,19 @@ from services.file_organizer import FilePlanError, WorkspaceFileOrganizer
 from services.project_knowledge_store import ProjectKnowledgeStore
 from services.reviewer_service import ReviewerError, ReviewerService
 from services.session_reader import find_session_file
+from services.session_repository import SessionRepository
+from services.workspace_context import WorkspaceContext
 
 
 router = APIRouter(prefix="/api/project-knowledge", tags=["project-knowledge"])
 
 
 def _store(cwd: str) -> ProjectKnowledgeStore:
-    store = ProjectKnowledgeStore(cwd)
+    try:
+        workspace = WorkspaceContext.from_cwd(cwd)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    store = ProjectKnowledgeStore(workspace.root)
     store.initialize(create_base_directories=True)
     return store
 
@@ -39,20 +45,7 @@ def _proposal_or_404(store: ProjectKnowledgeStore, proposal_id: str):
 
 
 def _latest_session_id(cwd: str) -> Optional[str]:
-    root = get_sessions_dir(cwd)
-    if not root.exists():
-        return None
-    candidates = sorted(root.rglob("*.jsonl"), key=lambda path: path.stat().st_mtime, reverse=True)
-    for path in candidates:
-        try:
-            import json
-            with path.open(encoding="utf-8") as handle:
-                header = json.loads(handle.readline())
-            if header.get("type") == "session" and header.get("id"):
-                return header["id"]
-        except (OSError, ValueError):
-            continue
-    return None
+    return SessionRepository(WorkspaceContext.from_cwd(cwd).root).latest_id()
 
 
 @router.post("/initialize")
@@ -119,13 +112,17 @@ async def proposal_count(cwd: str = Query(...)):
 
 @router.post("/review", response_model=ReviewResponse)
 async def review_project(body: ReviewRequest):
-    session_id = body.session_id or _latest_session_id(body.cwd)
+    try:
+        workspace = str(WorkspaceContext.from_cwd(body.cwd))
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    session_id = body.session_id or _latest_session_id(workspace)
     if not session_id:
         raise HTTPException(status_code=404, detail="No session available to review")
-    if find_session_file(session_id, body.cwd) is None:
+    if find_session_file(session_id, workspace) is None:
         raise HTTPException(status_code=404, detail="Session not found in this workspace")
     try:
-        result = await ReviewerService(body.cwd).review_session(
+        result = await ReviewerService(workspace).review_session(
             session_id,
             include_files=body.include_files,
             force_full_session=body.force_full_session,

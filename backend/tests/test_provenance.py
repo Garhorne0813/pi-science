@@ -1,7 +1,19 @@
 """Provenance store and API tests."""
 
+import asyncio
 import pytest
 from services.provenance_store import ProvenanceStore, get_store
+
+
+@pytest.mark.anyio
+async def test_concurrent_records_receive_distinct_versions(tmp_path):
+    store = ProvenanceStore(str(tmp_path))
+    records = await asyncio.gather(*(
+        store.record(path="same.csv", session_id="s", tool="write", content=str(index))
+        for index in range(12)
+    ))
+
+    assert sorted(record.version for record in records) == list(range(1, 13))
 
 
 class TestProvenanceStore:

@@ -37,9 +37,9 @@ def build_runtime_launch(
     """Return subprocess args/env for one Pi RPC runtime."""
     settings: dict = {}
     try:
-        from api.settings import _load_config
+        from services.settings_store import load_config
 
-        settings = _load_config()
+        settings = load_config()
     except Exception:
         pass
 

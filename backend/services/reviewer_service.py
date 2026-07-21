@@ -327,10 +327,10 @@ organization_policy: {json.dumps(policy, ensure_ascii=False)}
         try:
             # Use the explicitly configured global model for the Reviewer,
             # including Custom API providers and the selected thinking level.
-            from api.settings import _load_config
+            from services.settings_store import load_config
             from config import PI_DEFAULT_MODEL, PI_DEFAULT_THINKING
 
-            settings = _load_config()
+            settings = load_config()
             reviewer_config = PiConfig(
                 model=settings.get("model", PI_DEFAULT_MODEL),
                 thinking=settings.get("thinking", PI_DEFAULT_THINKING),

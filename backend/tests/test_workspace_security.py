@@ -4,6 +4,7 @@ import pytest
 
 from api import workspaces as workspaces_api
 from services import workspace_security
+from services.workspace_context import WorkspaceContext
 
 
 def test_marker_workspace_is_allowed(tmp_path, monkeypatch):
@@ -23,6 +24,19 @@ def test_unregistered_directory_is_rejected(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="not a registered workspace"):
         workspace_security.validate_workspace_cwd(str(workspace))
+
+
+def test_workspace_context_exposes_canonical_paths(tmp_path, monkeypatch):
+    monkeypatch.setattr(workspace_security, "_REGISTRY_FILE", tmp_path / "registry.json")
+    monkeypatch.setattr(workspace_security, "WORKSPACES_DIR", tmp_path / "managed")
+    workspace = tmp_path / "project"
+    (workspace / ".pi-science").mkdir(parents=True)
+
+    context = WorkspaceContext.from_cwd(workspace)
+
+    assert context.root == workspace.resolve()
+    assert context.metadata_root == workspace.resolve() / ".pi-science"
+    assert context.sessions_root == workspace.resolve() / ".pi-science" / "sessions"
 
 
 def test_registered_workspace_survives_registry_round_trip(tmp_path, monkeypatch):
@@ -107,3 +121,25 @@ async def test_api_open_rejects_managed_root(tmp_path, monkeypatch):
 
     assert exc_info.value.status_code == 400
     assert workspace_security._load_registry() == set()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("method", "url", "kwargs"),
+    [
+        ("post", "/api/sessions", {"json": {}}),
+        ("get", "/api/project-knowledge/summary", {}),
+        ("post", "/api/kernels/execute", {"json": {"language": "python", "code": "1"}}),
+    ],
+)
+async def test_workspace_scoped_apis_reject_unregistered_directory(client, tmp_path, method, url, kwargs):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    if method == "post" and url == "/api/sessions":
+        kwargs["json"]["cwd"] = str(outside)
+    else:
+        kwargs["params"] = {"cwd": str(outside)}
+
+    response = await getattr(client, method)(url, **kwargs)
+
+    assert response.status_code == 403

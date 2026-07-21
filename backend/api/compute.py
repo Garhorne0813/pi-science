@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from services.remote_compute_service import (
     load_machines, save_machines, probe_machine, submit_job,
 )
+from services.egress_gateway import EgressDenied
+from services.workspace_context import WorkspaceContext
 
 router = APIRouter(prefix="/api/compute", tags=["compute"])
 
@@ -31,12 +33,14 @@ class SubmitJobRequest(BaseModel):
 @router.get("/machines")
 async def get_machines(cwd: str = Query(".", description="Working directory")):
     """List configured remote machines."""
+    cwd = str(WorkspaceContext.from_cwd(cwd, allow_process_cwd=True))
     return {"machines": load_machines(cwd)}
 
 
 @router.post("/machines")
 async def add_machine(body: SaveMachineRequest, cwd: str = Query(".", description="Working directory")):
     """Add a remote machine configuration."""
+    cwd = str(WorkspaceContext.from_cwd(cwd, allow_process_cwd=True))
     machines = load_machines(cwd)
     machine = body.model_dump()
     if not machine.get("label"):
@@ -54,6 +58,7 @@ async def add_machine(body: SaveMachineRequest, cwd: str = Query(".", descriptio
 @router.delete("/machines/{label}")
 async def remove_machine(label: str, cwd: str = Query(".", description="Working directory")):
     """Remove a remote machine."""
+    cwd = str(WorkspaceContext.from_cwd(cwd, allow_process_cwd=True))
     machines = [m for m in load_machines(cwd) if m.get("label") != label]
     save_machines(cwd, machines)
     return {"ok": True}
@@ -61,16 +66,20 @@ async def remove_machine(label: str, cwd: str = Query(".", description="Working 
 
 @router.post("/probe")
 async def probe(host: str = Query(...), user: str = Query(""),
-                port: int = Query(22), identity_file: str = Query("")):
+                port: int = Query(22), identity_file: str = Query(""), cwd: str = Query(".")):
     """Probe a remote machine for hardware info."""
-    return probe_machine(host, user, port, identity_file)
+    try:
+        return await probe_machine(cwd, host, user, port, identity_file)
+    except EgressDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.post("/run")
 async def run_job(body: SubmitJobRequest, cwd: str = Query(".", description="Working directory")):
     """Submit a job to a remote machine."""
     try:
-        result = submit_job(
+        cwd = str(WorkspaceContext.from_cwd(cwd, allow_process_cwd=True))
+        result = await submit_job(
             cwd=cwd,
             machine_label=body.machine,
             command=body.command,
@@ -80,6 +89,8 @@ async def run_job(body: SubmitJobRequest, cwd: str = Query(".", description="Wor
             slurm_opts=body.slurm or {},
         )
         return result
+    except EgressDenied as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail=str(e))
 

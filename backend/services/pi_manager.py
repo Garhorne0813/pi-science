@@ -50,19 +50,21 @@ def _model_has_credentials(model: Optional[str]) -> bool:
         return False
     provider = model.split("/", 1)[0]
     try:
-        from api.settings import PROVIDER_ENV_MAP, _custom_providers, _load_config
+        from services.model_registry import PROVIDER_ENV_MAP, custom_providers
+        from services.settings_store import load_config
 
         env_name = PROVIDER_ENV_MAP.get(provider)
         if env_name and os.environ.get(env_name):
             return True
-        stored_keys = _load_config().get("api_keys", {})
+        config = load_config()
+        stored_keys = config.get("api_keys", {})
         if env_name and stored_keys.get(provider):
             return True
         if provider.startswith("custom-"):
             custom_id = provider.removeprefix("custom-")
             return any(
                 item.get("id") == custom_id and bool(item.get("api_key"))
-                for item in _custom_providers()
+                for item in custom_providers(config)
             )
     except Exception:
         # Credential detection is only a fallback guard. If settings cannot
@@ -518,9 +520,9 @@ class PiProcess:
     def resolve_config(config: PiConfig) -> tuple[str, str]:
         settings: dict = {}
         try:
-            from api.settings import _load_config
+            from services.settings_store import load_config
 
-            settings = _load_config()
+            settings = load_config()
         except Exception:
             pass
         model = config.model or settings.get("model") or PI_DEFAULT_MODEL
@@ -945,20 +947,9 @@ class PiManager:
     @staticmethod
     def _find_session_file(session_id: str, cwd: str) -> Optional[Path]:
         """Find a persisted session by its exact header ID."""
-        from config import get_sessions_dir
+        from services.session_repository import SessionRepository
 
-        session_dir = get_sessions_dir(cwd)
-        if not session_dir.exists():
-            return None
-        for path in session_dir.rglob("*.jsonl"):
-            try:
-                with path.open(encoding="utf-8") as f:
-                    header = json.loads(f.readline())
-                if header.get("type") == "session" and header.get("id") == session_id:
-                    return path.resolve()
-            except (OSError, json.JSONDecodeError):
-                continue
-        return None
+        return SessionRepository(cwd).find(session_id)
 
     async def resume_session(
         self,

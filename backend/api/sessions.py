@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
@@ -23,8 +23,17 @@ from models import (
 from services.pi_manager import pi_manager
 from services.event_normalizer import normalize_event
 from services.session_manifest import read_session_skills, read_skill_events
+from services.session_repository import SessionRepository
+from services.workspace_context import WorkspaceContext
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+
+
+def _workspace_cwd(cwd: str) -> str:
+    try:
+        return str(WorkspaceContext.from_cwd(cwd, allow_process_cwd=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 def _runtime_failure_status(result: dict, default: int = 502) -> int:
@@ -54,9 +63,10 @@ def _event_replay_cursor(pi, session_id: str, last_event_id: Optional[str]) -> O
 @router.post("", response_model=CreateSessionResponse)
 async def create_session(body: CreateSessionRequest):
     """Create a new agent session (spawns pi RPC process if needed)."""
+    cwd = _workspace_cwd(body.cwd)
     pi, result = await pi_manager.create_session(
-        cwd=body.cwd,
-        session_dir=str(get_sessions_dir(body.cwd)),
+        cwd=cwd,
+        session_dir=str(get_sessions_dir(cwd)),
         config=body.config,
     )
     if pi is None:
@@ -70,26 +80,20 @@ async def create_session(body: CreateSessionRequest):
                 "error": result.get("error", "无法创建新对话，请先停止当前任务"),
             },
         )
-    return CreateSessionResponse(id=result.get("session_id", pi.session_id), cwd=body.cwd)
+    return CreateSessionResponse(id=result.get("session_id", pi.session_id), cwd=cwd)
 
 
 @router.get("", response_model=list[SessionInfo])
 async def list_sessions(cwd: str = Query(..., description="Working directory")):
     """List all sessions for a working directory."""
+    cwd = _workspace_cwd(cwd)
     session_dir = get_sessions_dir(cwd)
     if not session_dir.exists():
         return []
 
-    sessions = []
+    sessions = SessionRepository(cwd).list()
     seen_ids: set[str] = set()
-    for f in sorted(session_dir.rglob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True):
-        try:
-            header = _parse_session_header(f)
-            if header:
-                sessions.append(header)
-                seen_ids.add(header.id)
-        except Exception:
-            continue
+    seen_ids.update(header.id for header in sessions)
 
     # The runtime deliberately does not create a session file until an
     # assistant reply exists. Keep the currently active blank conversation in
@@ -112,6 +116,7 @@ async def delete_session(
     cwd: str = Query(".", description="Working directory"),
 ):
     """Delete exactly one session from the requested workspace."""
+    cwd = _workspace_cwd(cwd)
     result = await pi_manager.delete_session(session_id, cwd)
     if result.get("success"):
         return {"ok": True}
@@ -131,7 +136,7 @@ async def get_messages(
     # Reading the active process is racy while another request switches
     # sessions: get_entries can return a newly active blank session under the
     # old ID. The exact persisted file is the stable source for page restores.
-    messages = _read_session_from_disk(session_id, cwd)
+    messages = _read_session_from_disk(session_id, _workspace_cwd(cwd))
     return {"messages": messages}
 
 
@@ -614,44 +619,7 @@ def _parse_session_header(filepath: Path) -> Optional[SessionInfo]:
 def _read_session_from_disk(session_id: str, cwd: Optional[str] = None) -> list[dict]:
     """Read session messages directly from the JSONL file on disk.
     Session IDs are resolved only inside the requested workspace."""
-    roots = [get_sessions_dir(cwd or ".")]
-    matches = _find_session_files(session_id, roots)
-    if not matches:
-        return []
-
-    filepath = matches[0]
-    if not filepath.exists():
-        return []
-
-    messages = []
-    try:
-        with open(filepath) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if entry.get("type") == "message":
-                    msg = entry.get("message", {})
-                    messages.append({
-                        "id": entry.get("id", ""),
-                        "role": msg.get("role", ""),
-                        "content": msg.get("content", []),
-                        "toolCallId": msg.get("toolCallId"),
-                        "toolName": msg.get("toolName"),
-                        "isError": msg.get("isError", False),
-                        "timestamp": entry.get("timestamp"),
-                    })
-                elif entry.get("type") in ("thinking_level_change", "model_change"):
-                    # Skip non-message entries
-                    pass
-    except Exception:
-        pass
-
-    return messages
+    return SessionRepository(cwd or ".").messages(session_id, include_tool_fields=True)
 
 
 def _find_session_files(session_id: str, roots: list[Path]) -> list[Path]:

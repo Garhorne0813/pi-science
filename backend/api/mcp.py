@@ -4,7 +4,8 @@ from fastapi import APIRouter, HTTPException, Query
 
 from api.settings import _load_config, _load_mcp_definitions, _mcp_source_path
 from services.mcp_catalog import catalog_from_definitions, check_health
-from services.egress_policy import check_remote_egress
+from services.egress_gateway import EgressDenied, EgressGateway
+from services.workspace_context import WorkspaceContext
 from services.workspace_security import validate_workspace_cwd
 
 router = APIRouter(prefix="/api/mcp", tags=["mcp"])
@@ -38,8 +39,14 @@ async def get_health(server_id: str, cwd: str = Query(".")):
     if server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     definition = definitions[server_id]
-    allowed, reason = check_remote_egress(str(workspace), definition.get("url"), definition.get("data_class")) if server.data_egress == "remote" else (True, None)
-    if not allowed:
+    reason = None
+    try:
+        if server.data_egress == "remote":
+            EgressGateway(WorkspaceContext.from_cwd(workspace, allow_process_cwd=True)).authorize(
+                definition.get("url"), definition.get("data_class")
+            )
+    except EgressDenied as exc:
+        reason = str(exc)
         from services.telemetry import record_metric
         await record_metric(workspace, "mcp_health", "blocked", metadata={"server_id": server_id})
         return server.model_copy(update={"health": "blocked", "policy_allowed": False, "error": reason}).model_dump()
