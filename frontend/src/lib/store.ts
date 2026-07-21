@@ -5,6 +5,7 @@ import { create } from "zustand";
 import type { Inspector } from "../types/thread";
 import i18n from "../i18n";
 import { detectInitialLocale, resolveLocale } from "../i18n/config";
+import type { WorkspaceReference } from "./file-references";
 
 interface UiState {
   theme: "light" | "dark";
@@ -23,6 +24,10 @@ interface UiState {
   closeInspector: () => void;
   setInspectorWidth: (w: number) => void;
   setInspectorMaximized: (m: boolean) => void;
+  workspaceReferences: WorkspaceReference[];
+  addWorkspaceReference: (reference: WorkspaceReference) => void;
+  removeWorkspaceReference: (cwd: string, path: string) => void;
+  clearWorkspaceReferences: (cwd: string) => void;
 }
 
 function loadFromStorage<T>(key: string, fallback: T): T {
@@ -83,6 +88,19 @@ export const useUiStore = create<UiState>((set) => ({
     set({ inspectorWidth: w });
   },
   setInspectorMaximized: (m) => set({ inspectorMaximized: m }),
+
+  workspaceReferences: [],
+  addWorkspaceReference: (reference) => set((state) => ({
+    workspaceReferences: state.workspaceReferences.some((item) => item.cwd === reference.cwd && item.path === reference.path)
+      ? state.workspaceReferences
+      : [...state.workspaceReferences, reference],
+  })),
+  removeWorkspaceReference: (cwd, path) => set((state) => ({
+    workspaceReferences: state.workspaceReferences.filter((item) => item.cwd !== cwd || item.path !== path),
+  })),
+  clearWorkspaceReferences: (cwd) => set((state) => ({
+    workspaceReferences: state.workspaceReferences.filter((item) => item.cwd !== cwd),
+  })),
 }));
 
 // Re-export for RightPane compatibility

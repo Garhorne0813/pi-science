@@ -3,15 +3,16 @@ import { Key, Trash2, Eye, EyeOff, Check, Loader2, Cpu, Puzzle, FlaskConical, La
 import { cn } from "../../lib/cn";
 import { shippedLocales } from "../../i18n/config";
 import { useUiStore } from "../../lib/store";
+import { useTranslation } from "react-i18next";
 
 type Tab = "general" | "llm" | "extensions" | "mcp" | "compute";
 
-const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  { id: "general", label: "General", icon: <Languages size={14} /> },
-  { id: "llm", label: "LLM", icon: <Cpu size={14} /> },
-  { id: "extensions", label: "Extensions", icon: <Puzzle size={14} /> },
-  { id: "mcp", label: "MCP", icon: <FlaskConical size={14} /> },
-  { id: "compute", label: "Compute", icon: <Server size={14} /> },
+const TABS: { id: Tab; labelKey: string; icon: React.ReactNode }[] = [
+  { id: "general", labelKey: "settings.general", icon: <Languages size={14} /> },
+  { id: "llm", labelKey: "settings.llm", icon: <Cpu size={14} /> },
+  { id: "extensions", labelKey: "settings.extensions", icon: <Puzzle size={14} /> },
+  { id: "mcp", labelKey: "settings.mcp", icon: <FlaskConical size={14} /> },
+  { id: "compute", labelKey: "settings.compute", icon: <Server size={14} /> },
 ];
 
 interface Provider {
@@ -34,6 +35,7 @@ interface Config {
 }
 
 export function SettingsPage() {
+  const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>("general");
   const [config, setConfig] = useState<Config | null>(null);
   const [loading, setLoading] = useState(true);
@@ -81,20 +83,20 @@ export function SettingsPage() {
     finally { setSaving(null); }
   };
 
-  if (loading) return <div className="flex items-center justify-center h-full text-sm text-muted"><Loader2 size={18} className="animate-spin mr-2" />Loading…</div>;
+  if (loading) return <div className="flex items-center justify-center h-full text-sm text-muted"><Loader2 size={18} className="animate-spin mr-2" />{t("common.loading")}</div>;
 
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-[720px] px-8 py-8">
-        <h1 className="font-serif text-xl text-text mb-6">Settings</h1>
+        <h1 className="font-serif text-xl text-text mb-6">{t("nav.settings")}</h1>
 
         {/* Tab bar */}
         <div className="flex gap-1 mb-6 rounded-input bg-surface-2 p-0.5 w-fit">
-          {TABS.map((t) => (
-            <button key={t.id} onClick={() => setTab(t.id)}
+          {TABS.map((item) => (
+            <button key={item.id} onClick={() => setTab(item.id)}
               className={cn("flex items-center gap-1.5 rounded-input px-3 py-1.5 text-[13px] font-medium transition-colors",
-                tab === t.id ? "bg-surface text-text shadow-sm" : "text-muted hover:text-text")}>
-              {t.icon} {t.label}
+                tab === item.id ? "bg-surface text-text shadow-sm" : "text-muted hover:text-text")}>
+              {item.icon} {t(item.labelKey)}
             </button>
           ))}
         </div>

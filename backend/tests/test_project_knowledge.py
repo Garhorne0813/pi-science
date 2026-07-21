@@ -74,9 +74,26 @@ def test_initialize_creates_project_skeleton(temp_workspace):
     assert (temp_workspace / "PROJECT.md").exists()
     assert MANAGED_START in (temp_workspace / "PROJECT.md").read_text()
     for directory in ("sources", "research", "data", "work", "deliverables", "archive"):
-        assert (temp_workspace / directory).is_dir()
+        assert (temp_workspace / ".project_knowledge" / directory).is_dir()
+        assert not (temp_workspace / directory).exists()
     assert summary["pending_count"] == 0
     assert summary["auto_review"] is True
+
+
+def test_initialize_migrates_hidden_base_and_preserves_nonempty_legacy_directories(temp_workspace):
+    old_base = temp_workspace / ".project_knowledge_base"
+    (old_base / "research").mkdir(parents=True)
+    (old_base / "research" / "note.md").write_text("reviewed")
+    (temp_workspace / "data").mkdir()
+    (temp_workspace / "data" / "observations.csv").write_text("x\n1\n")
+    (temp_workspace / "archive").mkdir()
+
+    ProjectKnowledgeStore(temp_workspace).initialize()
+
+    assert not old_base.exists()
+    assert (temp_workspace / ".project_knowledge" / "research" / "note.md").read_text() == "reviewed"
+    assert (temp_workspace / "data" / "observations.csv").exists()
+    assert not (temp_workspace / "archive").exists()
 
 
 def test_accept_knowledge_updates_document_and_policy(temp_workspace):

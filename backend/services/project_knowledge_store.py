@@ -16,10 +16,11 @@ from models.project_knowledge import utc_now_iso
 MANAGED_START = "<!-- pi-science:project-knowledge:start -->"
 MANAGED_END = "<!-- pi-science:project-knowledge:end -->"
 
-# Scientific-project skeleton created once per workspace.  Directories live
-# under a hidden folder so the root stays clean and the user sees a single
-# "Project Knowledge Base" entry rather than six scattered empty folders.
-PROJECT_KNOWLEDGE_BASE = ".project_knowledge_base"
+# Scientific-project skeleton created once per workspace. Directories live
+# under one hidden folder so the workspace root and ordinary file list stay
+# free of six scattered management categories.
+PROJECT_KNOWLEDGE_BASE = ".project_knowledge"
+LEGACY_PROJECT_KNOWLEDGE_BASES = (".project_knowledge_base",)
 
 BASE_DIRECTORIES = (
     "sources",
@@ -107,14 +108,23 @@ class ProjectKnowledgeStore:
             directory.mkdir(parents=True, exist_ok=True)
         if create_base_directories:
             base = self.workspace / PROJECT_KNOWLEDGE_BASE
+            for legacy_name in LEGACY_PROJECT_KNOWLEDGE_BASES:
+                legacy_base = self.workspace / legacy_name
+                if legacy_base.is_dir() and not base.exists():
+                    legacy_base.rename(base)
+                    break
             base.mkdir(exist_ok=True)
             for name in BASE_DIRECTORIES:
                 (base / name).mkdir(exist_ok=True)
-            # Keep the legacy top-level layout available for existing projects
-            # and integrations while the hidden knowledge base is used by the
-            # new UI.
+            # Remove only empty legacy skeleton folders. Non-empty directories
+            # may contain user data and must keep their existing paths.
             for name in BASE_DIRECTORIES:
-                (self.workspace / name).mkdir(exist_ok=True)
+                legacy_directory = self.workspace / name
+                if legacy_directory.is_dir():
+                    try:
+                        legacy_directory.rmdir()
+                    except OSError:
+                        pass
 
         if not self.items_file.exists():
             _write_json(self.items_file, [])

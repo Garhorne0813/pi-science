@@ -1,53 +1,53 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { FolderOpen, File, ChevronRight, RefreshCw, Trash2, Copy, ArrowUp } from "lucide-react";
+import { FolderOpen, File, ChevronRight, RefreshCw, Trash2, ArrowUp } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useUiStore } from "../../lib/store";
 import { fileInspectorForPath } from "../../lib/artifacts";
-
-interface DirEntry {
-  path: string; name: string; isDir: boolean; size: number; modified: number;
-}
+import { apiRequest, invalidateApiCache } from "../../lib/api";
+import { FileContextMenu, type ContextPoint, type FileListEntry } from "../../components/sidebar/FileContextMenu";
+import { useFeedback } from "../../components/feedback/feedback-context";
 
 interface Breadcrumb {
   name: string; path: string;
 }
 
 export function FilesPage() {
+  const { t } = useTranslation();
+  const { confirm, toast } = useFeedback();
   const { cwd: rawCwd } = useParams<{ cwd: string }>();
   const workspaceCwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
-  const [entries, setEntries] = useState<DirEntry[]>([]);
+  const [entries, setEntries] = useState<FileListEntry[]>([]);
   const [breadcrumbs, setBreadcrumbs] = useState<Breadcrumb[]>([]);
   const [subdir, setSubdir] = useState("");
   const [loading, setLoading] = useState(true);
-  const [contextMenu, setContextMenu] = useState<{ entry: DirEntry; x: number; y: number } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ entry: FileListEntry; point: ContextPoint } | null>(null);
   const openInspector = useUiStore((s) => s.openInspector);
+  const addWorkspaceReference = useUiStore((s) => s.addWorkspaceReference);
 
-  const loadFiles = useCallback(async (dir: string) => {
+  const loadFiles = useCallback(async (dir: string, signal?: AbortSignal) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({ cwd: workspaceCwd });
       if (dir) params.set("subdir", dir);
-      const [filesRes, bcRes] = await Promise.all([
-        fetch(`/api/files?${params}`),
-        fetch(`/api/files/breadcrumbs?cwd=${encodeURIComponent(workspaceCwd)}&subdir=${encodeURIComponent(dir)}`),
+      const [files, nextBreadcrumbs] = await Promise.all([
+        apiRequest<FileListEntry[]>(`/api/files?${params}`, { signal, cacheTtlMs: 3000 }),
+        apiRequest<Breadcrumb[]>(`/api/files/breadcrumbs?cwd=${encodeURIComponent(workspaceCwd)}&subdir=${encodeURIComponent(dir)}`, { signal, cacheTtlMs: 3000 }),
       ]);
-      setEntries(await filesRes.json());
-      setBreadcrumbs(await bcRes.json());
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
-  }, [workspaceCwd]);
+      setEntries(files);
+      setBreadcrumbs(nextBreadcrumbs);
+    } catch (error) {
+      if (!signal?.aborted) toast(error instanceof Error ? error.message : t("files.loadError"), "error");
+    } finally { if (!signal?.aborted) setLoading(false); }
+  }, [workspaceCwd, t, toast]);
 
   useEffect(() => {
-    void loadFiles(subdir);
+    const controller = new AbortController();
+    void loadFiles(subdir, controller.signal);
+    return () => controller.abort();
   }, [loadFiles, subdir]);
 
-  useEffect(() => {
-    const closeContextMenu = () => setContextMenu(null);
-    document.addEventListener("click", closeContextMenu);
-    return () => document.removeEventListener("click", closeContextMenu);
-  }, []);
-
-  const handleClick = (entry: DirEntry) => {
+  const handleClick = (entry: FileListEntry) => {
     if (entry.isDir) {
       setSubdir(entry.path);
     } else {
@@ -55,21 +55,38 @@ export function FilesPage() {
     }
   };
 
-  const handleDelete = async (entry: DirEntry) => {
+  const handleDelete = async (entry: FileListEntry) => {
+    setContextMenu(null);
+    const approved = await confirm({
+      title: entry.isDir ? t("files.deleteFolderTitle") : t("files.deleteFileTitle"),
+      message: t("files.deleteConfirm", { name: entry.name }),
+      confirmLabel: t("common.delete"),
+      destructive: true,
+    });
+    if (!approved) return;
     try {
-      await fetch(`/api/files/${encodeURIComponent(entry.path)}?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "DELETE" });
-      void loadFiles(subdir);
-    } catch (e) { console.error(e); }
+      await apiRequest(`/api/files/${encodeURIComponent(entry.path)}?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "DELETE" });
+      invalidateApiCache("/api/files");
+      await loadFiles(subdir);
+      toast(t("files.deleted", { name: entry.name }), "success");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : t("files.deleteError"), "error");
+    }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent, entry: FileListEntry) => {
+    e.preventDefault();
+    setContextMenu({ entry, point: { x: e.clientX, y: e.clientY } });
+  };
+
+  const copyPath = async (text: string) => {
+    await navigator.clipboard.writeText(text);
+    toast(t("files.copied"), "success");
     setContextMenu(null);
   };
 
-  const handleContextMenu = (e: React.MouseEvent, entry: DirEntry) => {
-    e.preventDefault();
-    setContextMenu({ entry, x: e.clientX, y: e.clientY });
-  };
-
-  const copyPath = (text: string) => {
-    navigator.clipboard.writeText(text);
+  const referenceEntry = (entry: FileListEntry) => {
+    addWorkspaceReference({ cwd: workspaceCwd, path: entry.path, name: entry.name, isDir: entry.isDir });
     setContextMenu(null);
   };
 
@@ -84,10 +101,10 @@ export function FilesPage() {
       <div className="mx-auto max-w-[900px] px-8 py-8">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="font-serif text-xl text-text">Files</h1>
+            <h1 className="font-serif text-xl text-text">{t("nav.files")}</h1>
             {/* Breadcrumbs */}
             <div className="flex items-center gap-1 mt-2 text-sm text-muted">
-              <button onClick={() => setSubdir("")} className="hover:text-text">Workspace</button>
+              <button onClick={() => setSubdir("")} className="hover:text-text">{t("files.workspace")}</button>
               {breadcrumbs.map((bc) => (
                 <span key={bc.path} className="flex items-center gap-1">
                   <ChevronRight size={12} />
@@ -97,7 +114,7 @@ export function FilesPage() {
             </div>
           </div>
           <button onClick={() => void loadFiles(subdir)} className="rounded-input px-2 py-1 text-xs text-muted hover:text-text hover:bg-surface-2 flex items-center gap-1">
-            <RefreshCw size={12} className={loading ? "animate-spin" : ""} /> Refresh
+            <RefreshCw size={12} className={loading ? "animate-spin" : ""} /> {t("common.refresh")}
           </button>
         </div>
 
@@ -105,16 +122,16 @@ export function FilesPage() {
         {subdir && (
           <button onClick={() => { const parts = subdir.split("/"); parts.pop(); setSubdir(parts.join("/")); }}
             className="mb-3 rounded-input px-2 py-1 text-xs text-link hover:bg-surface-2 flex items-center gap-1">
-            <ArrowUp size={12} /> Up
+            <ArrowUp size={12} /> {t("files.up")}
           </button>
         )}
 
         {loading ? (
-          <div className="text-sm text-muted py-8 text-center">Loading…</div>
+          <div className="text-sm text-muted py-8 text-center">{t("common.loading")}</div>
         ) : entries.length === 0 ? (
           <div className="text-center py-16">
             <FolderOpen size={40} className="mx-auto text-muted/30 mb-3" />
-            <p className="text-sm text-muted">Empty directory</p>
+            <p className="text-sm text-muted">{t("files.empty")}</p>
           </div>
         ) : (
           <div className="rounded-card border border-border bg-surface overflow-hidden">
@@ -128,7 +145,7 @@ export function FilesPage() {
                 </button>
                 <button onClick={(ev) => { ev.stopPropagation(); handleDelete(e); }}
                   className="shrink-0 rounded p-1 text-muted hover:text-error hover:bg-error/10 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Trash2 size={14} />
+                  <Trash2 size={14} /><span className="sr-only">{t("common.delete")}</span>
                 </button>
               </div>
             ))}
@@ -137,20 +154,7 @@ export function FilesPage() {
       </div>
 
       {/* Context menu */}
-      {contextMenu && (
-        <div className="fixed z-50 rounded-card border border-border bg-surface p-1 shadow-pop min-w-[160px]"
-          style={{ left: contextMenu.x, top: contextMenu.y }}>
-          <button onClick={() => copyPath(contextMenu.entry.name)} className="flex items-center gap-2 rounded-input px-3 py-1.5 text-[12px] text-text hover:bg-surface-2 w-full text-left">
-            <Copy size={12} className="text-muted" /> Copy Name
-          </button>
-          <button onClick={() => copyPath(contextMenu.entry.path)} className="flex items-center gap-2 rounded-input px-3 py-1.5 text-[12px] text-text hover:bg-surface-2 w-full text-left">
-            <Copy size={12} className="text-muted" /> Copy Path
-          </button>
-          <button onClick={() => handleDelete(contextMenu.entry)} className="flex items-center gap-2 rounded-input px-3 py-1.5 text-[12px] text-error hover:bg-error/10 w-full text-left">
-            <Trash2 size={12} /> Delete
-          </button>
-        </div>
-      )}
+      {contextMenu && <FileContextMenu entry={contextMenu.entry} point={contextMenu.point} onClose={() => setContextMenu(null)} onReference={() => referenceEntry(contextMenu.entry)} onCopy={(text) => void copyPath(text)} onDelete={() => void handleDelete(contextMenu.entry)} />}
     </div>
   );
 }

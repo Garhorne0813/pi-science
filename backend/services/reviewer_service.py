@@ -232,7 +232,7 @@ class ReviewerService:
                     "conflicts_with": [],
                     "supersedes": [],
                     "operations": [
-                        {"type": "move", "source": "result.xlsx", "target": "data/processed/result.xlsx", "reason": "Stable category"}
+                        {"type": "move", "source": "result.xlsx", "target": ".project_knowledge/data/processed/result.xlsx", "reason": "Stable category"}
                     ],
                 },
             ]
@@ -250,7 +250,7 @@ TASK
 Extract only durable, novel project knowledge from the incremental conversation. Supported knowledge types: finding, conclusion, decision, hypothesis, question, task, project_change, artifact.
 Distinguish facts from hypotheses. Cite real source_message_ids. Compare against accepted and pending items to avoid duplicates. Use conflicts_with for contradictions and supersedes only when the new item clearly replaces an old one.
 
-You may also propose conservative file operations: mkdir, move, rename. Follow the project policy, do not touch locked paths, do not exceed the maximum directory depth, and prefer logical tags over creating sparse directories. File contents are not included; do not infer scientific claims from filenames alone.
+You may also propose conservative file operations: mkdir, move, rename. Follow the project policy, do not touch locked paths, do not exceed the maximum directory depth, and prefer logical tags over creating sparse directories. When using a stable project category, place it below .project_knowledge/(sources|research|data|work|deliverables|archive) instead of creating those category folders at the workspace root. File contents are not included; do not infer scientific claims from filenames alone.
 
 Return at most 20 proposals. Return {{"proposals": []}} when there is nothing durable.
 

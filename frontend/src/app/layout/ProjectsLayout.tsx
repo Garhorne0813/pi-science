@@ -10,8 +10,10 @@ import { setCurrentCwd } from "../../lib/files";
 import { cn } from "../../lib/cn";
 import { getClient, getSessionName } from "../../lib/pi-science-client";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
+import { useTranslation } from "react-i18next";
 
 export function ProjectsLayout() {
+  const { t } = useTranslation();
   const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed);
   const sidebarWidth = useUiStore((s) => s.sidebarWidth);
   const setSidebarCollapsed = useUiStore((s) => s.setSidebarCollapsed);
@@ -33,7 +35,20 @@ export function ProjectsLayout() {
   // data from workspace A makes no sense after navigating to workspace B.
   useEffect(() => {
     closeInspector();
-  }, [activeCwd]);
+  }, [activeCwd, closeInspector]);
+
+  // A desktop sidebar left open becomes an overlay when the viewport crosses
+  // the mobile breakpoint. Close it during that transition so it cannot cover
+  // project cards or other primary content.
+  useEffect(() => {
+    const narrow = window.matchMedia("(max-width: 767px)");
+    const collapseOnNarrow = (event: MediaQueryListEvent | MediaQueryList) => {
+      if (event.matches) setSidebarCollapsed(true);
+    };
+    collapseOnNarrow(narrow);
+    narrow.addEventListener("change", collapseOnNarrow);
+    return () => narrow.removeEventListener("change", collapseOnNarrow);
+  }, [setSidebarCollapsed]);
 
   return (
     <div className="flex h-dvh w-screen overflow-hidden bg-bg text-text">
@@ -48,18 +63,18 @@ export function ProjectsLayout() {
             <PanelLeft size={16} />
           </button>
           {/* Icon-only nav */}
-          <CollapsedNavItem to="/" icon={isWorkspace ? <ArrowLeft size={16} /> : <FolderOpen size={16} />} label="Projects" />
-          {!isWorkspace && <CollapsedNavItem to="/skills" icon={<Puzzle size={16} />} label="Skills" />}
+          <CollapsedNavItem to="/" icon={isWorkspace ? <ArrowLeft size={16} /> : <FolderOpen size={16} />} label={t("nav.projects")} />
+          {!isWorkspace && <CollapsedNavItem to="/skills" icon={<Puzzle size={16} />} label={t("nav.skills")} />}
           {isWorkspace && (
             <>
-              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} icon={<FileText size={16} />} label="Files" />
-              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} icon={<BookOpen size={16} />} label="Notebooks" />
-              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/runs`} icon={<Play size={16} />} label="Runs" />
-              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/knowledge`} icon={<Inbox size={16} />} label="Knowledge" />
+              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} icon={<FileText size={16} />} label={t("nav.files")} />
+              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} icon={<BookOpen size={16} />} label={t("nav.notebooks")} />
+              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/runs`} icon={<Play size={16} />} label={t("nav.runs")} />
+              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/knowledge`} icon={<Inbox size={16} />} label={t("nav.knowledge")} />
             </>
           )}
           <div className="flex-1" />
-          <CollapsedNavItem to="/settings" icon={<Settings size={16} />} label="Settings" />
+          <SettingsNavItem cwd={activeCwd} collapsed />
         </aside>
       ) : (
         <>
@@ -84,18 +99,18 @@ export function ProjectsLayout() {
             <nav className="flex flex-col gap-0.5 mb-3">
               <SidebarNavItem
                 to="/"
-                label={isWorkspace ? (activeCwd!.split("/").pop() || "Projects") : "Projects"}
+                label={isWorkspace ? (activeCwd!.split("/").pop() || t("nav.projects")) : t("nav.projects")}
                 icon={isWorkspace ? <ArrowLeft size={16} /> : <FolderOpen size={16} />}
                 active={false}
               />
-              {!isWorkspace && <SidebarNavItem to="/skills" label="Skills" icon={<Puzzle size={16} />} active={false} />}
+              {!isWorkspace && <SidebarNavItem to="/skills" label={t("nav.skills")} icon={<Puzzle size={16} />} active={false} />}
               {isWorkspace && (
                 <>
-                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} label="Files" icon={<FileText size={16} />} active={location.pathname.endsWith("/files")} />
-                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/skills`} label="Skills" icon={<Puzzle size={16} />} active={location.pathname.endsWith("/skills")} />
+                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} label={t("nav.files")} icon={<FileText size={16} />} active={location.pathname.endsWith("/files")} />
+                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/skills`} label={t("nav.skills")} icon={<Puzzle size={16} />} active={location.pathname.endsWith("/skills")} />
                   <KnowledgeNavItem cwd={activeCwd!} active={location.pathname.endsWith("/knowledge")} />
-                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} label="Notebooks" icon={<BookOpen size={16} />} active={location.pathname.endsWith("/notebooks")} />
-                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/runs`} label="Runs" icon={<Play size={16} />} active={location.pathname.endsWith("/runs")} />
+                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} label={t("nav.notebooks")} icon={<BookOpen size={16} />} active={location.pathname.endsWith("/notebooks")} />
+                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/runs`} label={t("nav.runs")} icon={<Play size={16} />} active={location.pathname.endsWith("/runs")} />
                 </>
               )}
             </nav>
@@ -109,10 +124,9 @@ export function ProjectsLayout() {
             {/* Bottom */}
             <div className="mt-auto">
               <div className="border-t border-faint my-3" />
-              <StatusPills />
               <div className="mt-2 flex items-center gap-1">
                 <div className="flex-1">
-                  <SidebarNavItem to="/settings" label="Settings" icon={<Settings size={16} />} active={false} />
+                  <SettingsNavItem cwd={activeCwd} />
                 </div>
                 <ThemeToggle />
               </div>
@@ -342,7 +356,40 @@ function SidebarNavItem({ to, label, icon, active, badge }: { to: string; label:
   );
 }
 
+function SettingsNavItem({ cwd, collapsed = false }: { cwd: string | null; collapsed?: boolean }) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const active = location.pathname.endsWith("/settings");
+  const target = cwd ? `/workspace/${encodeURIComponent(cwd)}/settings` : "/settings";
+  const workspaceHome = cwd ? `/workspace/${encodeURIComponent(cwd)}` : "/";
+  const state = location.state as { settingsReturnTo?: string } | null;
+  const handleClick = () => {
+    if (active) {
+      navigate(state?.settingsReturnTo || workspaceHome);
+      return;
+    }
+    navigate(target, { state: { settingsReturnTo: `${location.pathname}${location.search}${location.hash}` } });
+    if (window.innerWidth < 768) useUiStore.getState().setSidebarCollapsed(true);
+  };
+
+  if (collapsed) {
+    return (
+      <button onClick={handleClick} className={cn("rounded p-1.5 text-muted transition-colors hover:bg-surface-2 hover:text-text", active && "text-accent")} title={active ? t("nav.backToPrevious") : t("nav.settings")}>
+        <Settings size={16} />
+      </button>
+    );
+  }
+  return (
+    <button onClick={handleClick} className={cn("flex h-9 min-h-0 w-full items-center gap-2 rounded-input px-2 text-left text-[13px]", active ? "bg-surface-2 font-medium text-text" : "text-text/90 hover:bg-surface-2 hover:text-text")}>
+      <span className="shrink-0 text-muted"><Settings size={16} /></span>
+      <span className="min-w-0 flex-1 truncate">{t("nav.settings")}</span>
+    </button>
+  );
+}
+
 function KnowledgeNavItem({ cwd, active }: { cwd: string; active: boolean }) {
+  const { t } = useTranslation();
   const [pending, setPending] = useState(0);
   useEffect(() => {
     let cancelled = false;
@@ -354,24 +401,7 @@ function KnowledgeNavItem({ cwd, active }: { cwd: string; active: boolean }) {
     const interval = setInterval(poll, 8000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [cwd]);
-  return <SidebarNavItem to={`/workspace/${encodeURIComponent(cwd)}/knowledge`} label="Project Knowledge" icon={<Inbox size={16} />} active={active} badge={pending} />;
-}
-
-function StatusPills() {
-  const [health, setHealth] = useState<{ active_pi_processes: number; active_kernels: number } | null>(null);
-  useEffect(() => {
-    const poll = () => fetch("/api/health").then((r) => r.json()).then(setHealth).catch(() => setHealth(null));
-    poll();
-    const i = setInterval(poll, 8000);
-    return () => clearInterval(i);
-  }, []);
-  const t = health ? "bg-ok" : "bg-muted";
-  return (
-    <div className="flex flex-col gap-1 text-xs text-muted">
-      <Pill dot={t} label="Agent" value={health ? "Ready" : "Offline"} />
-      <Pill dot={health?.active_kernels ? "bg-ok" : "bg-muted"} label="Kernel" value={health ? `${health.active_kernels ?? 0}` : "—"} />
-    </div>
-  );
+  return <SidebarNavItem to={`/workspace/${encodeURIComponent(cwd)}/knowledge`} label={t("nav.knowledge")} icon={<Inbox size={16} />} active={active} badge={pending} />;
 }
 
 function ThemeToggle() {
@@ -385,15 +415,5 @@ function ThemeToggle() {
     >
       {theme === "light" ? <Moon size={13} /> : <Sun size={13} />}
     </button>
-  );
-}
-
-function Pill({ dot, label, value }: { dot: string; label: string; value: string }) {
-  return (
-    <div className="flex items-center gap-2 px-2">
-      <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dot)} />
-      <span className="shrink-0">{label}</span>
-      <span className="ml-auto min-w-0 truncate text-text/70">{value}</span>
-    </div>
   );
 }

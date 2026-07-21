@@ -89,9 +89,9 @@ class WorkspaceFileOrganizer:
         for row in rows:
             by_type.setdefault(row["kind"], []).append(row)
             path_parts = Path(row["path"]).parts
-            # Skip the project-knowledge-base root so topics map to the
+            # Skip the project-knowledge root so topics map to the
             # human-facing categories (research / data / work / deliverables).
-            if path_parts and path_parts[0] == ".project_knowledge_base":
+            if path_parts and path_parts[0] in {".project_knowledge", ".project_knowledge_base"}:
                 path_parts = path_parts[1:]
             topic = path_parts[1] if len(path_parts) > 2 and path_parts[0] in {"research", "data", "work", "deliverables"} else path_parts[0]
             by_topic.setdefault(topic or "workspace", []).append(row)

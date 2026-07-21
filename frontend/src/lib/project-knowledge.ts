@@ -1,3 +1,5 @@
+import { apiRequest, invalidateApiCache } from "./api";
+
 export type KnowledgeType =
   | "finding"
   | "conclusion"
@@ -105,13 +107,9 @@ export interface LogicalFileViews {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const detail = typeof data.detail === "string" ? data.detail : response.statusText;
-    throw new Error(detail || "Request failed");
-  }
-  return data as T;
+  const data = await apiRequest<T>(path, { ...init, cacheTtlMs: init?.method ? 0 : 5000 });
+  if (init?.method && init.method !== "GET") invalidateApiCache("/api/project-knowledge/");
+  return data;
 }
 
 function query(cwd: string, extra?: Record<string, string>) {

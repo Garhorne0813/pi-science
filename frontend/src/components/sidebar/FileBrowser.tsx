@@ -1,56 +1,72 @@
 import { useCallback, useEffect, useState } from "react";
-import { FolderOpen, File, ChevronRight, ChevronDown, RefreshCw, Copy } from "lucide-react";
+import { FolderOpen, File, ChevronRight, ChevronDown, RefreshCw } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useUiStore } from "../../lib/store";
 import { fileInspectorForPath } from "../../lib/artifacts";
-
-interface DirEntry {
-  path: string;
-  name: string;
-  isDir: boolean;
-  size: number;
-  modified: number;
-}
+import { apiRequest, invalidateApiCache } from "../../lib/api";
+import { useFeedback } from "../feedback/feedback-context";
+import { FileContextMenu, type ContextPoint, type FileListEntry } from "./FileContextMenu";
 
 export function FileBrowser({ cwd }: { cwd: string }) {
-  const [entries, setEntries] = useState<DirEntry[]>([]);
+  const { t } = useTranslation();
+  const { confirm, toast } = useFeedback();
+  const [entries, setEntries] = useState<FileListEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
-  const [contextMenu, setContextMenu] = useState<{ entry: DirEntry; x: number; y: number } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ entry: FileListEntry; point: ContextPoint } | null>(null);
   const openInspector = useUiStore((s) => s.openInspector);
+  const addWorkspaceReference = useUiStore((s) => s.addWorkspaceReference);
 
-  const loadFiles = useCallback(async () => {
+  const loadFiles = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({ cwd });
-      const res = await fetch(`/api/files?${params}`);
-      if (res.ok) {
-        const data = await res.json();
-        setEntries(Array.isArray(data) ? data.filter((e: DirEntry) => !e.name.startsWith(".")).slice(0, 30) : []);
-      }
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
-  }, [cwd]);
+      const data = await apiRequest<FileListEntry[]>(`/api/files?${params}`, { signal, cacheTtlMs: 3000 });
+      setEntries(Array.isArray(data) ? data.filter((entry) => !entry.name.startsWith(".")).slice(0, 30) : []);
+    } catch (error) {
+      if (!signal?.aborted) toast(error instanceof Error ? error.message : t("files.loadError"), "error");
+    } finally { if (!signal?.aborted) setLoading(false); }
+  }, [cwd, t, toast]);
 
-  useEffect(() => { void loadFiles(); }, [loadFiles]);
   useEffect(() => {
-    const close = () => setContextMenu(null);
-    document.addEventListener("click", close);
-    return () => document.removeEventListener("click", close);
-  }, []);
+    const controller = new AbortController();
+    void loadFiles(controller.signal);
+    return () => controller.abort();
+  }, [loadFiles]);
 
-  const handleClick = (entry: DirEntry) => {
+  const handleClick = (entry: FileListEntry) => {
     if (entry.isDir) return;
     openInspector(fileInspectorForPath(entry.path, entry.name, undefined, cwd));
   };
 
-  const handleContextMenu = (e: React.MouseEvent, entry: DirEntry) => {
+  const handleContextMenu = (e: React.MouseEvent, entry: FileListEntry) => {
     e.preventDefault();
-    setContextMenu({ entry, x: e.clientX, y: e.clientY });
+    setContextMenu({ entry, point: { x: e.clientX, y: e.clientY } });
   };
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
+  const copyToClipboard = async (text: string) => {
+    await navigator.clipboard.writeText(text);
+    toast(t("files.copied"), "success");
     setContextMenu(null);
+  };
+
+  const referenceEntry = (entry: FileListEntry) => {
+    addWorkspaceReference({ cwd, path: entry.path, name: entry.name, isDir: entry.isDir });
+    setContextMenu(null);
+  };
+
+  const deleteEntry = async (entry: FileListEntry) => {
+    setContextMenu(null);
+    const approved = await confirm({ title: entry.isDir ? t("files.deleteFolderTitle") : t("files.deleteFileTitle"), message: t("files.deleteConfirm", { name: entry.name }), confirmLabel: t("common.delete"), destructive: true });
+    if (!approved) return;
+    try {
+      await apiRequest(`/api/files/${encodeURIComponent(entry.path)}?cwd=${encodeURIComponent(cwd)}`, { method: "DELETE" });
+      invalidateApiCache("/api/files");
+      await loadFiles();
+      toast(t("files.deleted", { name: entry.name }), "success");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : t("files.deleteError"), "error");
+    }
   };
 
   return (
@@ -61,7 +77,7 @@ export function FileBrowser({ cwd }: { cwd: string }) {
       >
         <span className="flex items-center gap-1.5">
           {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-          Files
+          {t("nav.files")}
         </span>
         <span onClick={(e) => { e.stopPropagation(); void loadFiles(); }} className="hover:text-text cursor-pointer">
           <RefreshCw size={10} className={loading ? "animate-spin" : ""} />
@@ -70,9 +86,9 @@ export function FileBrowser({ cwd }: { cwd: string }) {
       {expanded && (
         <div className="mt-1 flex flex-col gap-0.5 max-h-48 overflow-y-auto">
           {loading && entries.length === 0 ? (
-            <p className="px-2 text-[11px] text-muted/60 italic">Loading…</p>
+            <p className="px-2 text-[11px] text-muted/60 italic">{t("common.loading")}</p>
           ) : entries.length === 0 ? (
-            <p className="px-2 text-[11px] text-muted/60 italic">No files</p>
+            <p className="px-2 text-[11px] text-muted/60 italic">{t("files.empty")}</p>
           ) : (
             entries.map((e) => (
               <button
@@ -91,19 +107,7 @@ export function FileBrowser({ cwd }: { cwd: string }) {
       )}
 
       {/* Context menu */}
-      {contextMenu && (
-        <div
-          className="fixed z-50 rounded-card border border-border bg-surface p-1 shadow-pop min-w-[160px]"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-        >
-          <button onClick={() => copyToClipboard(contextMenu.entry.name)} className="flex items-center gap-2 rounded-input px-3 py-1.5 text-[12px] text-text hover:bg-surface-2 w-full text-left">
-            <Copy size={12} className="text-muted" /> Copy Name
-          </button>
-          <button onClick={() => copyToClipboard(contextMenu.entry.path)} className="flex items-center gap-2 rounded-input px-3 py-1.5 text-[12px] text-text hover:bg-surface-2 w-full text-left">
-            <Copy size={12} className="text-muted" /> Copy Path
-          </button>
-        </div>
-      )}
+      {contextMenu && <FileContextMenu entry={contextMenu.entry} point={contextMenu.point} onClose={() => setContextMenu(null)} onReference={() => referenceEntry(contextMenu.entry)} onCopy={(text) => void copyToClipboard(text)} onDelete={() => void deleteEntry(contextMenu.entry)} />}
     </div>
   );
 }

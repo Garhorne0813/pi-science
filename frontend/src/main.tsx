@@ -6,6 +6,7 @@ import "./i18n";
 import { router } from "./app/router";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { useUiStore } from "./lib/store";
+import { FeedbackProvider } from "./components/feedback/FeedbackProvider";
 
 const initialUi = useUiStore.getState();
 document.documentElement.setAttribute("data-theme", initialUi.theme);
@@ -27,7 +28,9 @@ createRoot(document.getElementById("root")!).render(
         </div>
       }
     >
-      <RouterProvider router={router} />
+      <FeedbackProvider>
+        <RouterProvider router={router} />
+      </FeedbackProvider>
     </ErrorBoundary>
   </StrictMode>
 );

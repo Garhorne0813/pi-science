@@ -30,6 +30,7 @@ export const router = createBrowserRouter([
       { path: "workspace/:cwd/notebooks", element: wrap(<NotebooksPage />) },
       { path: "workspace/:cwd/runs", element: wrap(<RunsPage />) },
       { path: "workspace/:cwd/knowledge", element: wrap(<KnowledgePage />) },
+      { path: "workspace/:cwd/settings", element: wrap(<SettingsPage />) },
     ],
   },
 ]);

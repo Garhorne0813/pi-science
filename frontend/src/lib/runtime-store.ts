@@ -12,6 +12,7 @@ import {
   type SessionInfo,
   type HistoryMessage,
 } from "./pi-science-client";
+import { visibleUserMessage } from "./file-references";
 
 export interface PendingInteraction {
   requestId: string;
@@ -658,7 +659,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 
     // Use first user message as session name
     if (!getSessionName(activeSessionId)) {
-      setSessionName(activeSessionId, message);
+      setSessionName(activeSessionId, visibleUserMessage(message) || "Referenced files");
     }
     try {
       await client.sendPrompt(activeSessionId, message, cwd);

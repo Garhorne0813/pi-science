@@ -2,12 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   AlertTriangle,
-  BookOpen,
   Check,
   ChevronDown,
   ChevronRight,
   FileText,
-  FolderOpen,
   History,
   Inbox,
   Loader2,
@@ -17,7 +15,6 @@ import {
   RotateCcw,
   Save,
   Settings,
-  Sparkles,
   X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -39,15 +36,14 @@ import {
 import { useRuntimeStore } from "../../lib/runtime-store";
 import { useUiStore } from "../../lib/store";
 import { fileInspectorForPath } from "../../lib/artifacts";
-
-type Tab = "overview" | "inbox" | "knowledge" | "files" | "history";
+import { KnowledgePageHeader, KnowledgePageTabs, type KnowledgePageTab } from "../../components/knowledge/KnowledgePageHeader";
 
 export function KnowledgePage() {
   const { t } = useTranslation();
   const { cwd: rawCwd } = useParams<{ cwd: string }>();
   const cwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
   const activeSessionId = useRuntimeStore((state) => state.activeSessionId);
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<KnowledgePageTab>("overview");
   const [summary, setSummary] = useState<ProjectSummary | null>(null);
   const [projectDocument, setProjectDocument] = useState("");
   const [proposals, setProposals] = useState<Proposal[]>([]);
@@ -189,37 +185,9 @@ export function KnowledgePage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-bg">
+    <div className="h-full overflow-y-auto bg-bg [scrollbar-gutter:stable]">
       <div className="mx-auto w-full max-w-[1120px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-        <header className="flex flex-col gap-4 border-b border-border pb-5 md:flex-row md:items-start md:justify-between">
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted">{t("knowledge.eyebrow")}</p>
-            <h1 className="mt-1 font-serif text-2xl text-text sm:text-[28px]">{t("knowledge.title")}</h1>
-            <p className="mt-1 max-w-[680px] text-sm leading-6 text-muted">{t("knowledge.subtitle")}</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={toggleAutoReview}
-              aria-pressed={policy?.auto_review ?? false}
-              className={cn(
-                "min-h-11 rounded-input border px-3 py-2 text-xs font-medium transition-colors",
-                policy?.auto_review ? "border-ok/40 bg-ok/10 text-ok" : "border-border bg-surface text-muted hover:text-text",
-              )}
-            >
-              {policy?.auto_review ? t("knowledge.autoReviewOn") : t("knowledge.autoReviewOff")}
-            </button>
-            <button
-              type="button"
-              onClick={runReviewer}
-              disabled={reviewing}
-              className="flex min-h-11 items-center gap-2 rounded-input bg-accent px-4 py-2 text-sm font-medium text-accent-fg transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
-            >
-              {reviewing ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-              {reviewing ? t("knowledge.reviewing") : t("knowledge.reviewNow")}
-            </button>
-          </div>
-        </header>
+        <KnowledgePageHeader policy={policy} reviewing={reviewing} onToggleAutoReview={() => void toggleAutoReview()} onReview={() => void runReviewer()} />
 
         {(error || message) && (
           <div
@@ -233,13 +201,7 @@ export function KnowledgePage() {
           </div>
         )}
 
-        <div className="mt-5 flex gap-1 overflow-x-auto border-b border-border" role="tablist" aria-label={t("knowledge.tabsLabel")}>
-          <TabButton active={tab === "overview"} onClick={() => setTab("overview")} icon={<BookOpen size={15} />} label={t("knowledge.overview")} />
-          <TabButton active={tab === "inbox"} onClick={() => setTab("inbox")} icon={<Inbox size={15} />} label={t("knowledge.inbox")} badge={pending.length} />
-          <TabButton active={tab === "knowledge"} onClick={() => setTab("knowledge")} icon={<FileText size={15} />} label={t("knowledge.knowledge")} />
-          <TabButton active={tab === "files"} onClick={() => setTab("files")} icon={<FolderOpen size={15} />} label={t("knowledge.files")} />
-          <TabButton active={tab === "history"} onClick={() => setTab("history")} icon={<History size={15} />} label={t("knowledge.history")} />
-        </div>
+        <KnowledgePageTabs tab={tab} pendingCount={pending.length} onChange={setTab} onRefreshHistory={() => void loadHistory()} />
 
         <main className="py-6">
           {tab === "overview" && (
@@ -275,7 +237,6 @@ export function KnowledgePage() {
             <HistoryTab
               cwd={cwd}
               rows={historyRows}
-              onRefresh={loadHistory}
               onChanged={async () => { setFiles(null); await Promise.all([loadCore(), loadHistory()]); }}
               onError={setError}
             />
@@ -283,26 +244,6 @@ export function KnowledgePage() {
         </main>
       </div>
     </div>
-  );
-}
-
-function TabButton({ active, onClick, icon, label, badge }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string; badge?: number }) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      className={cn(
-        "relative flex min-h-11 shrink-0 items-center gap-2 px-3 text-sm font-medium transition-colors",
-        active ? "text-text" : "text-muted hover:text-text",
-        active && "after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-accent",
-      )}
-    >
-      {icon}
-      {label}
-      {!!badge && <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] leading-none text-accent-fg">{badge}</span>}
-    </button>
   );
 }
 
@@ -761,13 +702,11 @@ function FilesTab({
 function HistoryTab({
   cwd,
   rows,
-  onRefresh,
   onChanged,
   onError,
 }: {
   cwd: string;
   rows: Array<Record<string, unknown>>;
-  onRefresh: () => Promise<void>;
   onChanged: () => Promise<void>;
   onError: (message: string | null) => void;
 }) {
@@ -801,7 +740,6 @@ function HistoryTab({
   if (rows.length === 0) return <EmptyState icon={<History size={28} />} title={t("knowledge.historyEmpty")} text={t("knowledge.historyEmptyText")} />;
   return (
     <div className="space-y-3">
-      <div className="flex justify-end"><button type="button" onClick={() => void onRefresh()} className="flex min-h-11 items-center gap-1.5 rounded-input border border-border px-3 py-2 text-sm text-muted hover:text-text"><RefreshCw size={14} /> {t("knowledge.refresh")}</button></div>
       {rows.map((row, index) => {
         const id = String(row.id || `history-${index}`);
         const event = String(row.event || row.status || "event");

@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowUp, Loader2, Square, Paperclip, Sparkles, X } from "lucide-react";
+import { ArrowUp, Loader2, Square, Paperclip, Sparkles, X, File, FolderOpen } from "lucide-react";
 import { clampThinkingLevel, getSessionName, setSessionName, type AvailableModel } from "../../lib/pi-science-client";
 import { useRuntimeStore, type PendingInteraction } from "../../lib/runtime-store";
 import { useUiStore } from "../../lib/store";
@@ -12,6 +12,8 @@ import { setCurrentCwd } from "../../lib/files";
 import { projectKnowledgeApi } from "../../lib/project-knowledge";
 import { fetchDynamicCommands, resetDynamicCommands } from "../../lib/slash-commands";
 import { SlashCommandMenu } from "../../components/SlashCommandMenu";
+import { injectWorkspaceReferences, referencesFromMessage, visibleUserMessage } from "../../lib/file-references";
+import { ConversationWelcome } from "../../components/conversation/ConversationWelcome";
 
 export function LiveSessionPage() {
   const { sessionId, cwd: rawCwd } = useParams<{ sessionId: string; cwd: string }>();
@@ -29,6 +31,7 @@ export function LiveSessionPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const followOutputRef = useRef(true);
   // Track IME composition state ourselves because some browsers fire
   // compositionend before keydown, making isComposing unreliable for
   // Enter-to-confirm-raw-pinyin use cases.
@@ -40,6 +43,13 @@ export function LiveSessionPage() {
   const [configuringModel, setConfiguringModel] = useState(false);
   const [reviewingProject, setReviewingProject] = useState(false);
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
+  const allWorkspaceReferences = useUiStore((state) => state.workspaceReferences);
+  const workspaceReferences = useMemo(
+    () => allWorkspaceReferences.filter((item) => item.cwd === workspaceCwd),
+    [allWorkspaceReferences, workspaceCwd],
+  );
+  const removeWorkspaceReference = useUiStore((state) => state.removeWorkspaceReference);
+  const clearWorkspaceReferences = useUiStore((state) => state.clearWorkspaceReferences);
 
   useEffect(() => {
     if (working && activeSessionId && activeSessionId !== (sessionId || null)) {
@@ -62,9 +72,16 @@ export function LiveSessionPage() {
     };
   }, [sessionId, workspaceCwd, connect, disconnect]);
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    if (scroller && followOutputRef.current) scroller.scrollTop = scroller.scrollHeight;
   }, [thread.blocks]);
+
+  const handleThreadScroll = () => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    followOutputRef.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 96;
+  };
 
   useEffect(() => {
     fetch("/api/settings/config")
@@ -237,9 +254,9 @@ export function LiveSessionPage() {
 
   const handleSend = async () => {
     const text = input.trim();
-    if ((!text && files.length === 0) || working || reviewingProject) return;
+    if ((!text && files.length === 0 && workspaceReferences.length === 0) || working || reviewingProject) return;
 
-    if (text.startsWith("/") && files.length === 0 && await runSlashCommand(text)) {
+    if (text.startsWith("/") && files.length === 0 && workspaceReferences.length === 0 && await runSlashCommand(text)) {
       setInput("");
       return;
     }
@@ -252,14 +269,19 @@ export function LiveSessionPage() {
         : `I've uploaded these files: ${names}`;
     }
 
+    message = injectWorkspaceReferences(message, workspaceReferences);
+
     const sentFiles = files;
+    const sentReferences = workspaceReferences;
     setInput("");
     setFiles([]);
+    clearWorkspaceReferences(workspaceCwd);
     void sendPrompt(message).catch(() => {
       // Keep the failed message visible with its inline error, but restore the
       // original draft/attachments so retrying does not require retyping.
       if (!useRuntimeStore.getState().draft) setInput(text);
       setFiles((current) => current.length > 0 ? current : sentFiles);
+      sentReferences.forEach((reference) => useUiStore.getState().addWorkspaceReference(reference));
     });
   };
 
@@ -318,10 +340,10 @@ export function LiveSessionPage() {
       </header>
 
       {/* Thread */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+      <div ref={scrollRef} onScroll={handleThreadScroll} className="flex-1 overflow-y-auto [overflow-anchor:none]">
         <div className="mx-auto max-w-[760px] flex flex-col gap-4 px-8 py-6">
           {thread.blocks.length === 0 && !working && (
-            <WelcomeScreen
+            <ConversationWelcome
               onPick={(msg) => void sendPrompt(msg).catch(() => undefined)}
               disabled={reviewingProject || (!activeSessionId && status === "connecting")}
             />
@@ -353,6 +375,21 @@ export function LiveSessionPage() {
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
         >
+          {workspaceReferences.length > 0 && (
+            <div className="border-b border-faint px-3 py-2">
+              <div className="flex flex-wrap gap-1.5">
+                {workspaceReferences.map((reference) => (
+                  <span key={reference.path} className="flex max-w-full items-center gap-1 rounded-input bg-accent/5 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-accent/20" title={reference.path}>
+                    {reference.isDir ? <FolderOpen size={11} className="shrink-0 text-accent" /> : <File size={11} className="shrink-0 text-accent" />}
+                    <span className="truncate">{reference.path}</span>
+                    <button type="button" aria-label={`Remove reference ${reference.name}`} onClick={() => removeWorkspaceReference(workspaceCwd, reference.path)} className="shrink-0 text-muted hover:text-error">
+                      <X size={11} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
           {files.length > 0 && (
             <div className="flex flex-wrap gap-1.5 px-3 pt-2">
               {files.map((f, i) => (
@@ -440,10 +477,10 @@ export function LiveSessionPage() {
               <button
                 aria-label="Send message"
                 onClick={handleSend}
-                disabled={reviewingProject || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0)}
+                disabled={reviewingProject || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
                 className={cn(
                   "h-7 w-7 rounded-input flex items-center justify-center",
-                  (!reviewingProject && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0)) ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted cursor-default",
+                  (!reviewingProject && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted cursor-default",
                 )}
               >
                 <ArrowUp size={15} />
@@ -556,9 +593,7 @@ function BlockRenderer({ block }: { block: ThreadBlock }) {
   }
 }
 
-/** Group consecutive tool blocks into a collapsible summary.
- *  Shows individual cards while any tool is still running;
- *  collapses into a summary line once all are done. */
+/** Group consecutive tool blocks into one stable-height summary. */
 function ToolGroup({ blocks }: { blocks: ToolCallBlock[] }) {
   const [expanded, setExpanded] = useState(false);
   if (blocks.length <= 1) return <ToolCard block={blocks[0]} />;
@@ -566,13 +601,6 @@ function ToolGroup({ blocks }: { blocks: ToolCallBlock[] }) {
   const allDone = blocks.every((block) => block.status === "done" || block.status === "error");
   const doneCount = blocks.filter((block) => block.status === "done").length;
   const tools = [...new Set(blocks.map((block) => block.tool))].join(", ");
-
-  // While tools are running, show individual cards inline (no jumping)
-  if (!allDone) {
-    return <>{blocks.map((b) => <ToolCard key={b.id} block={b} />)}</>;
-  }
-
-  // All done — collapse into summary
   return (
     <div className="rounded-input border border-border bg-surface overflow-hidden animate-fadeIn">
       <button
@@ -581,7 +609,8 @@ function ToolGroup({ blocks }: { blocks: ToolCallBlock[] }) {
       >
         <span className="text-xs">{expanded ? "▼" : "▶"}</span>
         <span>{tools}</span>
-        <span className="ml-auto text-[10px]">
+        <span className="ml-auto flex items-center gap-1.5 text-[10px]">
+          {!allDone && <Loader2 size={11} className="animate-spin text-accent" />}
           {doneCount}/{blocks.length} done
         </span>
       </button>
@@ -595,9 +624,25 @@ function ToolGroup({ blocks }: { blocks: ToolCallBlock[] }) {
 }
 
 function UserMessage({ text }: { text: string }) {
+  const visibleText = visibleUserMessage(text);
+  const references = referencesFromMessage(text);
   return (
-    <div className="rounded-card bg-surface-2 px-4 py-3 text-[15px] leading-relaxed text-text ml-auto max-w-[85%]">
-      {text}
+    <div className="ml-auto flex max-w-[85%] flex-col items-end gap-1.5">
+      {visibleText && (
+        <div className="rounded-card bg-surface-2 px-4 py-3 text-[15px] leading-relaxed text-text whitespace-pre-wrap">
+          {visibleText}
+        </div>
+      )}
+      {references.length > 0 && (
+        <div className="flex flex-wrap justify-end gap-1.5" aria-label="Referenced context">
+          {references.map((reference) => (
+            <span key={`${reference.isDir ? "folder" : "file"}-${reference.path}`} className="flex max-w-full items-center gap-1 rounded-input border border-accent/20 bg-accent/5 px-2 py-1 font-mono text-[10px] text-muted" title={reference.path}>
+              {reference.isDir ? <FolderOpen size={10} /> : <File size={10} />}
+              <span className="truncate">{reference.path}</span>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -718,74 +763,6 @@ function StatusLine({ block }: { block: { kind: "status-line"; text: string; lev
     <div className={cn("flex items-center gap-2 text-xs", tone)}>
       {block.level === "running" && <Loader2 size={14} className="animate-spin text-accent" />}
       {block.text}
-    </div>
-  );
-}
-
-/* ── Welcome ── */
-
-function WelcomeScreen({ onPick, disabled = false }: { onPick: (msg: string) => void; disabled?: boolean }) {
-  const starters = [
-    {
-      icon: "📊", label: "Analyze data",
-      desc: "Load a CSV, NetCDF, or FITS file and find patterns.",
-      prompt: "Analyze the dataset in this directory and give me key statistical insights.",
-    },
-    {
-      icon: "📝", label: "Write report",
-      desc: "Generate a scientific report from the findings.",
-      prompt: "Write a scientific report based on the data analysis results.",
-    },
-    {
-      icon: "🐍", label: "Run Python",
-      desc: "Execute code in an interactive notebook session.",
-      prompt: "Write and run a Python script to process the data files in this workspace.",
-    },
-    {
-      icon: "🔬", label: "Run experiment",
-      desc: "Design and execute a computational experiment.",
-      prompt: "Design an experiment to test the hypothesis and run the analysis.",
-    },
-  ];
-
-  return (
-    <div className="min-h-[62vh] flex flex-col items-center justify-center">
-      <div className="max-w-[500px]">
-        <p className="text-[10.5px] font-medium uppercase tracking-[0.2em] text-muted">
-          Scientific AI Workbench
-        </p>
-        <h2 className="font-serif text-[26px] leading-tight text-text mt-1.5">
-          Pi-Science
-        </h2>
-        <p className="text-sm leading-relaxed text-muted mt-2">
-          Powered by the pi agent runtime. Analyze data, run code, and explore results with AI assistance.
-        </p>
-      </div>
-
-      <div className="mt-7 rounded-card border border-border bg-surface shadow-card w-full max-w-[500px]">
-        {starters.map((s, i) => (
-          <button
-            key={s.label}
-            onClick={() => onPick(s.prompt)}
-            disabled={disabled}
-            className={cn(
-              "group flex w-full items-center gap-3.5 px-4 py-3.5 text-left disabled:cursor-wait disabled:opacity-50",
-              !disabled && "hover:bg-surface-2",
-              i > 0 && "border-t border-border",
-              i === 0 && "rounded-t-card",
-              i === starters.length - 1 && "rounded-b-card",
-            )}
-          >
-            <span className="h-9 w-9 rounded-full bg-surface-2 text-accent ring-1 ring-border flex items-center justify-center shrink-0 text-lg">
-              {s.icon}
-            </span>
-            <div className="min-w-0">
-              <div className="text-[13.5px] font-medium text-text">{s.label}</div>
-              <div className="text-xs leading-snug text-muted mt-0.5">{s.desc}</div>
-            </div>
-          </button>
-        ))}
-      </div>
     </div>
   );
 }
