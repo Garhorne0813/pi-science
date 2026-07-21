@@ -327,8 +327,9 @@ describe("runtime conversation state", () => {
     expect(current.activeSessionId).toBe("session-first");
     expect(current.working).toBe(true);
     expect(current.thread.blocks).toContainEqual(
-      expect.objectContaining({ kind: "user", text: "first question" }),
+      expect.objectContaining({ kind: "user", text: "first question", timestamp: expect.any(String) }),
     );
+    expect(current.sessions).toContainEqual(expect.objectContaining({ id: "session-first", name: "first question" }));
     expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/sessions")).toHaveLength(1);
   });
 

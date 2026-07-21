@@ -14,13 +14,17 @@ import { fetchDynamicCommands, resetDynamicCommands } from "../../lib/slash-comm
 import { SlashCommandMenu } from "../../components/SlashCommandMenu";
 import { injectWorkspaceReferences, referencesFromMessage, visibleUserMessage } from "../../lib/file-references";
 import { ConversationWelcome } from "../../components/conversation/ConversationWelcome";
+import { MessageActions } from "../../components/conversation/MessageActions";
+import { CompactSelect } from "../../components/conversation/CompactSelect";
+import { useTranslation } from "react-i18next";
 
 export function LiveSessionPage() {
+  const { t } = useTranslation();
   const { sessionId, cwd: rawCwd } = useParams<{ sessionId: string; cwd: string }>();
   const workspaceCwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
   const navigate = useNavigate();
   const {
-    status, thread, working, connect, disconnect,
+    status, thread, sessions, working, connect, disconnect,
     sendPrompt, abort, activeSessionId, setModel: setRuntimeModel, createNewSession,
     model: runtimeModel, thinking: runtimeThinking,
     pendingInteraction, respondToInteraction,
@@ -325,7 +329,12 @@ export function LiveSessionPage() {
     }
   };
 
-  const title = activeSessionId ? (getSessionName(activeSessionId) || activeSessionId.slice(0, 8)) : "New Session";
+  const hasUserMessage = thread.blocks.some((block) => block.kind === "user");
+  const activeSession = sessions.find((session) => session.id === activeSessionId);
+  const isNewSession = !hasUserMessage && (activeSession?.name === "New Session" || thread.loaded);
+  const title = isNewSession || !activeSessionId
+    ? t("conversation.newSession")
+    : getSessionName(activeSessionId) || activeSession?.name || activeSessionId.slice(0, 8);
 
   return (
     <div className="flex flex-col h-full">
@@ -437,33 +446,29 @@ export function LiveSessionPage() {
                 Review
               </button>
               {models.length > 0 && (
-                <select
-                  aria-label="Select model"
+                <CompactSelect
+                  label="Select model"
                   value={selectedModel}
-                  onChange={(e) => handleModelChange(e.target.value)}
+                  onChange={handleModelChange}
                   disabled={modelControlsDisabled}
-                  className="min-w-0 max-w-[300px] rounded-input border border-border bg-surface-2 px-2 py-1 text-[11px] text-text outline-none disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {!selectedModel && <option value="">Select a model…</option>}
-                  {selectedModel && !models.some((model) => model.id === selectedModel) && (
-                    <option value={selectedModel}>{selectedModel}</option>
-                  )}
-                  {models.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
-                </select>
+                  className="w-[220px] max-w-[min(300px,70vw)]"
+                  options={[
+                    ...(!selectedModel ? [{ value: "", label: "Select a model…" }] : []),
+                    ...(selectedModel && !models.some((model) => model.id === selectedModel) ? [{ value: selectedModel, label: selectedModel }] : []),
+                    ...models.map((model) => ({ value: model.id, label: model.label })),
+                  ]}
+                />
               )}
               {selectedModel && thinkingLevels.length > 0 && (
-                <label className="flex items-center gap-1 rounded-input border border-border bg-surface-2 px-2 text-[11px] text-muted">
-                  <span>Think</span>
-                  <select
-                    aria-label="Select thinking level"
-                    value={thinking}
-                    onChange={(e) => handleThinkingChange(e.target.value)}
-                    disabled={modelControlsDisabled || thinkingLevels.length <= 1}
-                    className="min-h-7 bg-transparent py-1 text-[11px] text-text outline-none disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {thinkingLevels.map((level) => <option key={level} value={level}>{level}</option>)}
-                  </select>
-                </label>
+                <CompactSelect
+                  label="Select thinking level"
+                  prefix="Think"
+                  value={thinking}
+                  onChange={handleThinkingChange}
+                  disabled={modelControlsDisabled || thinkingLevels.length <= 1}
+                  className="w-[108px]"
+                  options={thinkingLevels.map((level) => ({ value: level, label: level }))}
+                />
               )}
               {modelError && <span className="max-w-[180px] truncate text-[10px] text-error" title={modelError}>{modelError}</span>}
               {reviewNotice && <span className="max-w-[220px] truncate text-[10px] text-muted" title={reviewNotice}>{reviewNotice}</span>}
@@ -585,8 +590,8 @@ function renderBlocks(blocks: ThreadBlock[]) {
 
 function BlockRenderer({ block }: { block: ThreadBlock }) {
   switch (block.kind) {
-    case "user": return <UserMessage text={block.text} />;
-    case "agent": return <AgentMessage parts={block.parts} partial={block.partial} />;
+    case "user": return <UserMessage text={block.text} timestamp={block.timestamp} />;
+    case "agent": return <AgentMessage parts={block.parts} partial={block.partial} timestamp={block.timestamp} />;
     case "tool": return <ToolCard block={block} />;
     case "status-line": return <StatusLine block={block} />;
     default: return null;
@@ -623,9 +628,10 @@ function ToolGroup({ blocks }: { blocks: ToolCallBlock[] }) {
   );
 }
 
-function UserMessage({ text }: { text: string }) {
+function UserMessage({ text, timestamp }: { text: string; timestamp?: string }) {
   const visibleText = visibleUserMessage(text);
   const references = referencesFromMessage(text);
+  const copyText = visibleText || references.map((reference) => reference.path).join("\n");
   return (
     <div className="ml-auto flex max-w-[85%] flex-col items-end gap-1.5">
       {visibleText && (
@@ -643,11 +649,12 @@ function UserMessage({ text }: { text: string }) {
           ))}
         </div>
       )}
+      <MessageActions text={copyText} timestamp={timestamp} align="right" />
     </div>
   );
 }
 
-function AgentMessage({ parts, partial }: { parts: { id: string; text: string }[]; partial?: boolean }) {
+function AgentMessage({ parts, partial, timestamp }: { parts: { id: string; text: string }[]; partial?: boolean; timestamp?: string }) {
   const text = parts.map((p) => p.text).join("");
   const openInspector = useUiStore((s) => s.openInspector);
   if (!text && partial) return null;
@@ -680,6 +687,7 @@ function AgentMessage({ parts, partial }: { parts: { id: string; text: string }[
         </div>
       )}
       {citations.length > 0 && <CitationBadges identifiers={citations} />}
+      {!partial && <MessageActions text={text} timestamp={timestamp} />}
     </div>
   );
 }

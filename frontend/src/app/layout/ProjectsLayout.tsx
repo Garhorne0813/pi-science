@@ -159,13 +159,13 @@ export function ProjectsLayout() {
 /* ── Workspace Session List ── */
 
 function WorkspaceSessionList({ cwd }: { cwd: string }) {
+  const { t } = useTranslation();
   const sessions = useRuntimeStore((s) => s.sessions);
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
   const working = useRuntimeStore((s) => s.working);
   const forkSession = useRuntimeStore((s) => s.forkSession);
   const createNewSession = useRuntimeStore((s) => s.createNewSession);
   const navigate = useNavigate();
-  const location = useLocation();
   const [deleting, setDeleting] = useState<string | null>(null);
   const [forking, setForking] = useState<string | null>(null);
 
@@ -174,16 +174,20 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
     getClient().listSessions(cwd)
       .then((list) => {
         if (cancelled) return;
+        const current = useRuntimeStore.getState();
         const named = list.map((session) => ({
           ...session,
-          name: session.name || getSessionName(session.id) || undefined,
+          name: session.name || getSessionName(session.id) || current.sessions.find((item) => item.id === session.id)?.name || undefined,
         }));
-        useRuntimeStore.setState({ sessions: named, cwd });
+        const diskIds = new Set(named.map((session) => session.id));
+        const optimisticActive = current.sessions.filter((session) => session.id === current.activeSessionId && !diskIds.has(session.id) && !session.created_at && !session.updated_at);
+        const merged = [...optimisticActive, ...named].slice(0, 50);
+        useRuntimeStore.setState({ sessions: merged, cwd });
         // Auto-load most recent session if none active
         const state = useRuntimeStore.getState();
         const workspaceRoot = `/workspace/${encodeURIComponent(cwd)}`;
-        if (named.length > 0 && !state.activeSessionId && location.pathname === workspaceRoot) {
-          const latest = named[0];
+        if (merged.length > 0 && !state.activeSessionId && window.location.pathname === workspaceRoot) {
+          const latest = merged[0];
           navigate(`/workspace/${encodeURIComponent(cwd)}/session/${latest.id}`);
         }
       })
@@ -191,7 +195,7 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
         if (!cancelled) console.error("Failed to load workspace sessions:", error);
       });
     return () => { cancelled = true; };
-  }, [cwd, location.pathname, navigate]);
+  }, [cwd, navigate]);
 
   const handleDelete = async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
@@ -240,19 +244,19 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
   return (
     <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
       <div className="flex items-center justify-between px-2 mb-1">
-        <span className="text-xs font-medium uppercase tracking-wider text-muted">Sessions</span>
+        <span className="text-xs font-medium uppercase tracking-wider text-muted">{t("conversation.sessions")}</span>
         <button
           onClick={handleNew}
           disabled={working}
           className="rounded p-0.5 text-muted hover:text-text hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
-          title={working ? "Stop the current task before creating a new session" : "New session"}
+          title={working ? t("conversation.stopBeforeNew") : t("conversation.newSession")}
         >
           <Plus size={14} />
         </button>
       </div>
       <div className="flex flex-col gap-0.5 overflow-y-auto">
         {sessions.length === 0 ? (
-          <p className="px-2 text-[12px] text-muted/60 italic">No sessions yet</p>
+          <p className="px-2 text-[12px] text-muted/60 italic">{t("conversation.noSessions")}</p>
         ) : (
           sessions.slice(0, 30).map((s) => (
             <div key={s.id} className="group relative flex items-center rounded-input hover:bg-surface-2">
@@ -268,7 +272,7 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
                 )}
               >
                 <MessageSquare size={12} className="shrink-0 text-muted" />
-                <span className="truncate flex-1">{s.name || s.id.slice(0, 8)}</span>
+                <span className="truncate flex-1">{s.name === "New Session" ? t("conversation.newSession") : s.name || s.id.slice(0, 8)}</span>
                 {(s.updated_at || s.created_at) && (
                   <span className="text-[10px] text-muted/60 shrink-0 mr-1 group-hover:hidden">
                     {relativeTime(s.updated_at || s.created_at!)}

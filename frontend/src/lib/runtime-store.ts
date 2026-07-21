@@ -131,6 +131,7 @@ function foldEvent(state: Thread, event: PiScienceEvent): Thread {
             id: turnId + "-post",
             parts: [{ id: turnId + "-post", text: _textBuffer }],
             partial: true,
+            timestamp: new Date().toISOString(),
           } as ThreadBlock);
         } else {
           blocks[existingIdx] = {
@@ -138,6 +139,7 @@ function foldEvent(state: Thread, event: PiScienceEvent): Thread {
             kind: "agent",
             parts: [{ id: turnId, text: _textBuffer }],
             partial: true,
+            timestamp: blocks[existingIdx].kind === "agent" ? blocks[existingIdx].timestamp : undefined,
           } as ThreadBlock;
         }
       } else {
@@ -147,6 +149,7 @@ function foldEvent(state: Thread, event: PiScienceEvent): Thread {
           id: blockId,
           parts: [{ id: turnId, text: _textBuffer }],
           partial: true,
+          timestamp: new Date().toISOString(),
         };
         index[blockId] = blocks.length;
         blocks.push(block);
@@ -652,6 +655,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       kind: "user",
       id: `user-${Date.now()}`,
       text: message,
+      timestamp: new Date().toISOString(),
     };
     const blocks = [...thread.blocks, userBlock];
     const index = { ...thread.index, [userBlock.id]: blocks.length - 1 };
@@ -659,7 +663,11 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 
     // Use first user message as session name
     if (!getSessionName(activeSessionId)) {
-      setSessionName(activeSessionId, visibleUserMessage(message) || "Referenced files");
+      const sessionName = visibleUserMessage(message) || "Referenced files";
+      setSessionName(activeSessionId, sessionName);
+      set((state) => ({
+        sessions: state.sessions.map((session) => session.id === activeSessionId ? { ...session, name: sessionName } : session),
+      }));
     }
     try {
       await client.sendPrompt(activeSessionId, message, cwd);
@@ -1068,7 +1076,7 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
         .filter((c: any) => c.type === "text")
         .map((c: any) => c.text)
         .join("\n");
-      if (text) blocks.push({ kind: "user", id: msg.id, text });
+      if (text) blocks.push({ kind: "user", id: msg.id, text, timestamp: msg.timestamp });
     } else if (role === "assistant") {
       for (const content of msg.content) {
         if (content.type !== "toolCall") continue;
@@ -1082,7 +1090,7 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
         .map((c: any) => c.text)
         .join("\n");
       if (text) {
-        blocks.push({ kind: "agent", id: msg.id, parts: [{ id: msg.id, text }] });
+        blocks.push({ kind: "agent", id: msg.id, parts: [{ id: msg.id, text }], timestamp: msg.timestamp });
       }
     } else if (role === "toolResult") {
       const callId = msg.toolCallId || msg.id;

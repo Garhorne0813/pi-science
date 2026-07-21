@@ -20,6 +20,7 @@ export interface UserMessageBlock {
   kind: "user";
   id: string;
   text: string;
+  timestamp?: string;
   images?: ImageAttachment[];
 }
 
@@ -28,6 +29,7 @@ export interface AgentMessageBlock {
   id: string;
   parts: AgentMessagePart[];
   partial?: boolean;
+  timestamp?: string;
   subagentId?: string;
 }
 
