@@ -23,6 +23,85 @@ class TestSettingsAPI:
         assert res.status_code == 200
         assert res.json()["extensions"][0]["installed"] is True
 
+    async def test_web_access_settings_hide_keys_and_inject_environment(self, client, temp_config_dir):
+        from api.settings import get_env_with_keys, get_web_access_runtime
+
+        saved = await client.put(
+            "/api/settings/web-access",
+            json={
+                "provider": "tavily",
+                "workflow": "auto-summary",
+                "api_keys": {"tavily": "tvly-secret"},
+            },
+        )
+        assert saved.status_code == 200
+        assert saved.json()["provider"] == "tavily"
+        tavily = next(item for item in saved.json()["providers"] if item["id"] == "tavily")
+        assert tavily["has_key"] is True
+        assert "tvly-secret" not in saved.text
+
+        public = await client.get("/api/settings/web-access")
+        assert public.status_code == 200
+        assert "tvly-secret" not in public.text
+        assert get_env_with_keys()["TAVILY_API_KEY"] == "tvly-secret"
+
+        runtime_dir = get_web_access_runtime("/tmp/example-workspace")
+        materialized = json.loads((runtime_dir / "web-search.json").read_text())
+        assert materialized == {"provider": "tavily", "workflow": "auto-summary"}
+        assert "tvly-secret" not in (runtime_dir / "web-search.json").read_text()
+
+        removed = await client.put(
+            "/api/settings/web-access",
+            json={"provider": "auto", "workflow": "none", "remove_keys": ["tavily"]},
+        )
+        assert removed.status_code == 200
+        tavily = next(item for item in removed.json()["providers"] if item["id"] == "tavily")
+        assert tavily["has_key"] is False
+
+    async def test_project_subagent_crud(self, client, temp_workspace):
+        params = {"cwd": str(temp_workspace)}
+        payload = {
+            "name": "literature-auditor",
+            "description": "Checks scientific sources",
+            "prompt": "Review sources and report unsupported claims.",
+            "model": "deepseek/deepseek-v4-flash",
+            "thinking": "high",
+            "tools": "read, grep, find, ls",
+            "system_prompt_mode": "append",
+            "inherit_project_context": True,
+            "inherit_skills": True,
+            "default_context": "fresh",
+        }
+        saved = await client.put(
+            "/api/settings/subagents/literature-auditor",
+            params=params,
+            json=payload,
+        )
+        assert saved.status_code == 200
+        assert saved.json()["restart_required"] is True
+        agent_file = temp_workspace / ".pi" / "agents" / "literature-auditor.md"
+        assert agent_file.is_file()
+        assert "name: literature-auditor" in agent_file.read_text()
+
+        listed = await client.get("/api/settings/subagents", params=params)
+        assert listed.status_code == 200
+        assert listed.json()["agents"][0]["name"] == "literature-auditor"
+        assert listed.json()["agents"][0]["prompt"].startswith("Review sources")
+
+        rejected = await client.put(
+            "/api/settings/subagents/../escape",
+            params=params,
+            json={**payload, "name": "../escape"},
+        )
+        assert rejected.status_code in {400, 404}
+
+        deleted = await client.delete(
+            "/api/settings/subagents/literature-auditor",
+            params=params,
+        )
+        assert deleted.status_code == 200
+        assert not agent_file.exists()
+
     async def test_list_providers(self, client):
         """GET /api/settings/providers returns supported providers."""
         res = await client.get("/api/settings/providers")

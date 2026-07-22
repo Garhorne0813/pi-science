@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { Package, Puzzle, Wrench, Check, X, ChevronRight, ShieldCheck, AlertTriangle } from "lucide-react";
+import { Package, Puzzle, Wrench, Check, X, ChevronRight, ShieldCheck, AlertTriangle, RotateCcw, Loader2 } from "lucide-react";
 
 interface Skill {
   skill_id: string;
@@ -35,6 +35,8 @@ export function SkillsPage() {
   const [selected, setSelected] = useState<Skill | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [configured, setConfigured] = useState(false);
+  const [saving, setSaving] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,6 +59,7 @@ export function SkillsPage() {
       const enabled = new Map<string, boolean>((settingsData.skills || []).map((item: { name: string; enabled: boolean }) => [item.name, item.enabled]));
       setSkills(skillData.map((item: Skill) => ({ ...item, enabled: enabled.get(item.name) ?? item.enabled ?? true })));
       setTools(toolData);
+      setConfigured(settingsData.configured === true);
     }).catch((cause) => {
       if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
     }).finally(() => {
@@ -66,11 +69,47 @@ export function SkillsPage() {
   }, [cwd]);
 
   if (loading) return <div className="flex items-center justify-center h-full text-sm text-muted">Loading…</div>;
-  if (error) return <div className="flex items-center justify-center h-full text-sm text-error">{error}</div>;
 
   const builtin = skills.filter(s => s.source === "builtin");
   const project = skills.filter(s => s.source === "project");
   const user = skills.filter(s => s.source === "user");
+
+  const toggleSkill = async (skill: Skill, enabled: boolean) => {
+    setSaving(skill.name);
+    setError(null);
+    setSkills((current) => current.map((item) => item.name === skill.name ? { ...item, enabled } : item));
+    try {
+      const response = await fetch("/api/settings/skills/toggle", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: skill.name, enabled }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "Unable to update skill settings");
+      setConfigured(true);
+    } catch (cause) {
+      setSkills((current) => current.map((item) => item.name === skill.name ? { ...item, enabled: skill.enabled } : item));
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const resetSkills = async () => {
+    setSaving("reset");
+    setError(null);
+    try {
+      const response = await fetch("/api/settings/skills", { method: "DELETE" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "Unable to reset skill settings");
+      setSkills((current) => current.map((item) => ({ ...item, enabled: true })));
+      setConfigured(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSaving(null);
+    }
+  };
 
   return (
     <div className="h-full overflow-y-auto">
@@ -82,6 +121,16 @@ export function SkillsPage() {
           <span className="font-mono text-xs">~/.pi/agent/skills/</span> (user),
           and bundled with pi-science.
         </p>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-card border border-border bg-surface px-4 py-3">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-medium text-text">
+              <span className={configured ? "text-accent" : "text-ok"}>{configured ? "Custom skill selection" : "Auto-discovery enabled"}</span>
+            </div>
+            <p className="mt-1 text-[11px] text-muted">Use the switches below to control skills for newly started Pi processes. Existing conversations keep their current runtime.</p>
+          </div>
+          {configured && <button type="button" onClick={() => void resetSkills()} disabled={saving !== null} className="flex min-h-9 items-center gap-1.5 rounded-input border border-border px-3 text-[11px] text-muted hover:bg-surface-2 hover:text-text disabled:opacity-50">{saving === "reset" ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />} Reset to auto-discover</button>}
+        </div>
+        {error && <p role="alert" className="mt-3 rounded-input bg-error/10 px-3 py-2 text-xs text-error">{error}</p>}
 
         <Section title="Scientific Environment" icon={<Wrench size={15} />} count={tools.length}>
           {tools.length === 0 ? (
@@ -101,7 +150,7 @@ export function SkillsPage() {
 
         {builtin.length > 0 && (
           <Section title="Built-in Skills" icon={<Puzzle size={15} />} count={builtin.length}>
-            {builtin.map(s => <SkillRow key={s.skill_id || s.name} skill={s} tag="built-in" onSelect={setSelected} />)}
+            {builtin.map(s => <SkillRow key={s.skill_id || s.name} skill={s} tag="built-in" onSelect={setSelected} onToggle={toggleSkill} saving={saving === s.name} />)}
           </Section>
         )}
 
@@ -109,7 +158,7 @@ export function SkillsPage() {
           {project.length === 0 ? (
             <Empty>No project skills. Add SKILL.md files to .pi/skills/</Empty>
           ) : (
-            project.map(s => <SkillRow key={s.skill_id || s.name} skill={s} tag="project" onSelect={setSelected} />)
+            project.map(s => <SkillRow key={s.skill_id || s.name} skill={s} tag="project" onSelect={setSelected} onToggle={toggleSkill} saving={saving === s.name} />)
           )}
         </Section>
 
@@ -117,7 +166,7 @@ export function SkillsPage() {
           {user.length === 0 ? (
             <Empty>No user skills. Add SKILL.md files to ~/.pi/agent/skills/</Empty>
           ) : (
-            user.map(s => <SkillRow key={s.skill_id || s.name} skill={s} tag="user" onSelect={setSelected} />)
+            user.map(s => <SkillRow key={s.skill_id || s.name} skill={s} tag="user" onSelect={setSelected} onToggle={toggleSkill} saving={saving === s.name} />)
           )}
         </Section>
 
@@ -140,21 +189,27 @@ function Section({ title, icon, count, children }: { title: string; icon: React.
   );
 }
 
-function SkillRow({ skill, tag, onSelect }: { skill: Skill; tag: string; onSelect: (skill: Skill) => void }) {
+function SkillRow({ skill, tag, onSelect, onToggle, saving }: { skill: Skill; tag: string; onSelect: (skill: Skill) => void; onToggle: (skill: Skill, enabled: boolean) => void; saving: boolean }) {
   const valid = skill.validation?.valid !== false;
   return (
-    <button type="button" onClick={() => onSelect(skill)} className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-surface-2">
-      <Package size={16} className="mt-0.5 shrink-0 text-muted" />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 truncate text-sm font-medium text-text">
-          {skill.name}
-          {valid ? <ShieldCheck size={13} className="shrink-0 text-ok" /> : <AlertTriangle size={13} className="shrink-0 text-error" />}
+    <div className="flex items-center hover:bg-surface-2">
+      <button type="button" onClick={() => onSelect(skill)} className="flex min-w-0 flex-1 items-start gap-3 px-4 py-3 text-left">
+        <Package size={16} className="mt-0.5 shrink-0 text-muted" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 truncate text-sm font-medium text-text">
+            {skill.name}
+            {valid ? <ShieldCheck size={13} className="shrink-0 text-ok" /> : <AlertTriangle size={13} className="shrink-0 text-error" />}
+          </div>
+          <div className="text-xs text-muted line-clamp-2">{skill.description}</div>
         </div>
-        <div className="text-xs text-muted line-clamp-2">{skill.description}</div>
-      </div>
-      <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-xs text-muted ring-1 ring-border">{tag}</span>
-      <ChevronRight size={15} className="mt-0.5 shrink-0 text-muted" />
-    </button>
+        <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-xs text-muted ring-1 ring-border">{tag}</span>
+        <ChevronRight size={15} className="mt-0.5 shrink-0 text-muted" />
+      </button>
+      <label className="mr-4 flex shrink-0 items-center gap-2 text-[10px] text-muted">
+        {saving && <Loader2 size={11} className="animate-spin" />}
+        <input type="checkbox" aria-label={`Enable ${skill.name}`} checked={skill.enabled !== false} disabled={saving} onChange={(event) => void onToggle(skill, event.target.checked)} className="h-4 w-4 accent-[var(--accent)]" />
+      </label>
+    </div>
   );
 }
 

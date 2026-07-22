@@ -3,10 +3,12 @@
 import json
 import hashlib
 import os
+import re
 from urllib.parse import urlparse
 from pathlib import Path
 from typing import Literal, Optional
 
+import yaml
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -25,6 +27,7 @@ from services.model_registry import (
 )
 from services.runtime_extensions import runtime_extension_status
 from services.settings_store import config_file, load_config, save_config
+from services.workspace_security import validate_workspace_cwd
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -51,10 +54,188 @@ class CustomProviderRequest(BaseModel):
     models: list[str] = Field(default_factory=list)
 
 
+WEB_SEARCH_KEY_ENV_MAP: dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "exa": "EXA_API_KEY",
+    "brave": "BRAVE_API_KEY",
+    "parallel": "PARALLEL_API_KEY",
+    "tavily": "TAVILY_API_KEY",
+    "perplexity": "PERPLEXITY_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+}
+WEB_SEARCH_PROVIDERS = ["auto", *WEB_SEARCH_KEY_ENV_MAP]
+WEB_SEARCH_WORKFLOWS = ["none", "summary-review", "auto-summary"]
+
+
+class WebAccessConfigRequest(BaseModel):
+    provider: Literal["auto", "openai", "exa", "brave", "parallel", "tavily", "perplexity", "gemini"] = "auto"
+    workflow: Literal["none", "summary-review", "auto-summary"] = "none"
+    api_keys: dict[str, str] = Field(default_factory=dict)
+    remove_keys: list[str] = Field(default_factory=list)
+
+
+class SubagentConfigRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    description: str = Field(default="", max_length=300)
+    prompt: str = Field(min_length=1, max_length=50_000)
+    model: str = Field(default="", max_length=200)
+    thinking: str = Field(default="", max_length=32)
+    tools: str = Field(default="", max_length=1000)
+    system_prompt_mode: Literal["replace", "append"] = "replace"
+    inherit_project_context: bool = True
+    inherit_skills: bool = False
+    default_context: Literal["fresh", "fork"] = "fresh"
+
+
 @router.get("/extensions")
 async def list_runtime_extensions():
     """Report extension entrypoints that the next Pi process will actually load."""
     return {"extensions": runtime_extension_status()}
+
+
+def _web_access_public(config: Optional[dict] = None) -> dict:
+    full_config = config or _load_config()
+    payload = full_config.get("web_access", {})
+    stored = payload.get("api_keys", {}) if isinstance(payload, dict) else {}
+    llm_keys = full_config.get("api_keys", {})
+    provider = payload.get("provider", "auto") if isinstance(payload, dict) else "auto"
+    workflow = payload.get("workflow", "none") if isinstance(payload, dict) else "none"
+    return {
+        "provider": provider if provider in WEB_SEARCH_PROVIDERS else "auto",
+        "workflow": workflow if workflow in WEB_SEARCH_WORKFLOWS else "none",
+        "providers": [
+            {
+                "id": provider_id,
+                "has_key": bool(stored.get(provider_id)) or bool(os.environ.get(env_name)) or (
+                    provider_id == "openai" and bool(llm_keys.get("openai"))
+                ) or (provider_id == "gemini" and bool(llm_keys.get("google"))),
+                "key_source": (
+                    "web-access"
+                    if stored.get(provider_id)
+                    else "environment"
+                    if os.environ.get(env_name)
+                    else "llm-settings"
+                    if (provider_id == "openai" and llm_keys.get("openai"))
+                    or (provider_id == "gemini" and llm_keys.get("google"))
+                    else None
+                ),
+                "env": env_name,
+            }
+            for provider_id, env_name in WEB_SEARCH_KEY_ENV_MAP.items()
+        ],
+    }
+
+
+@router.get("/web-access")
+async def get_web_access_config():
+    """Return web-search preferences and key presence without exposing secrets."""
+    return _web_access_public()
+
+
+@router.put("/web-access")
+async def set_web_access_config(body: WebAccessConfigRequest):
+    """Persist web-search preferences and extension-specific API keys."""
+    unknown = (set(body.api_keys) | set(body.remove_keys)) - set(WEB_SEARCH_KEY_ENV_MAP)
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown web search provider: {sorted(unknown)[0]}")
+    config = _load_config()
+    web_access = config.setdefault("web_access", {})
+    web_access["provider"] = body.provider
+    web_access["workflow"] = body.workflow
+    stored = web_access.setdefault("api_keys", {})
+    for provider_id, value in body.api_keys.items():
+        if value.strip():
+            stored[provider_id] = value.strip()
+    for provider_id in body.remove_keys:
+        stored.pop(provider_id, None)
+    _save_config(config)
+    return {"ok": True, **_web_access_public(config)}
+
+
+_SUBAGENT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+def _subagent_dir(cwd: str) -> Path:
+    try:
+        workspace = validate_workspace_cwd(cwd)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return workspace / ".pi" / "agents"
+
+
+def _parse_subagent(path: Path) -> dict:
+    text = path.read_text(encoding="utf-8")
+    metadata: dict = {}
+    prompt = text
+    if text.startswith("---\n"):
+        end = text.find("\n---\n", 4)
+        if end >= 0:
+            try:
+                parsed = yaml.safe_load(text[4:end]) or {}
+                metadata = parsed if isinstance(parsed, dict) else {}
+            except yaml.YAMLError:
+                metadata = {}
+            prompt = text[end + 5:].lstrip("\n")
+    return {
+        "name": str(metadata.get("name") or path.stem),
+        "description": str(metadata.get("description") or ""),
+        "prompt": prompt,
+        "model": str(metadata.get("model") or ""),
+        "thinking": str(metadata.get("thinking") or ""),
+        "tools": str(metadata.get("tools") or ""),
+        "system_prompt_mode": str(metadata.get("systemPromptMode") or "replace"),
+        "inherit_project_context": bool(metadata.get("inheritProjectContext", True)),
+        "inherit_skills": bool(metadata.get("inheritSkills", False)),
+        "default_context": str(metadata.get("defaultContext") or "fresh"),
+        "path": str(path),
+    }
+
+
+@router.get("/subagents")
+async def list_project_subagents(cwd: str = Query(...)):
+    directory = _subagent_dir(cwd)
+    agents = []
+    if directory.is_dir():
+        for path in sorted(directory.glob("*.md")):
+            try:
+                agents.append(_parse_subagent(path))
+            except OSError:
+                continue
+    return {"agents": agents}
+
+
+@router.put("/subagents/{agent_name}")
+async def save_project_subagent(agent_name: str, body: SubagentConfigRequest, cwd: str = Query(...)):
+    if not _SUBAGENT_NAME.fullmatch(agent_name) or body.name != agent_name:
+        raise HTTPException(status_code=400, detail="Agent name must use lowercase letters, numbers, hyphens, or underscores")
+    directory = _subagent_dir(cwd)
+    directory.mkdir(parents=True, exist_ok=True)
+    metadata = {
+        "name": body.name,
+        "description": body.description,
+        **({"model": body.model} if body.model else {}),
+        **({"thinking": body.thinking} if body.thinking else {}),
+        **({"tools": body.tools} if body.tools else {}),
+        "systemPromptMode": body.system_prompt_mode,
+        "inheritProjectContext": body.inherit_project_context,
+        "inheritSkills": body.inherit_skills,
+        "defaultContext": body.default_context,
+    }
+    frontmatter = yaml.safe_dump(metadata, sort_keys=False, allow_unicode=True).strip()
+    target = directory / f"{agent_name}.md"
+    target.write_text(f"---\n{frontmatter}\n---\n\n{body.prompt.rstrip()}\n", encoding="utf-8")
+    return {"ok": True, "agent": _parse_subagent(target), "restart_required": True}
+
+
+@router.delete("/subagents/{agent_name}")
+async def delete_project_subagent(agent_name: str, cwd: str = Query(...)):
+    if not _SUBAGENT_NAME.fullmatch(agent_name):
+        raise HTTPException(status_code=400, detail="Invalid agent name")
+    target = _subagent_dir(cwd) / f"{agent_name}.md"
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Subagent not found")
+    target.unlink()
+    return {"ok": True, "restart_required": True}
 
 
 # ── Helpers ──
@@ -102,6 +283,30 @@ def _available_models(config: Optional[dict] = None) -> list[dict]:
 
 def get_custom_models_runtime(cwd: Optional[str] = None) -> tuple[Optional[Path], dict[str, str]]:
     return custom_models_runtime(_load_config(), _config_file().parent, cwd)
+
+
+def get_web_access_runtime(cwd: Optional[str], agent_dir: Optional[Path] = None) -> Optional[Path]:
+    """Materialize non-secret pi-web-access preferences in Pi's active config dir."""
+    config = _load_config()
+    payload = config.get("web_access")
+    if not isinstance(payload, dict):
+        return agent_dir
+    provider = payload.get("provider", "auto")
+    workflow = payload.get("workflow", "none")
+    if provider not in WEB_SEARCH_PROVIDERS:
+        provider = "auto"
+    if workflow not in WEB_SEARCH_WORKFLOWS:
+        workflow = "none"
+    if agent_dir is None:
+        identity = str(Path(cwd).expanduser().resolve() if cwd else "default")
+        key = hashlib.sha256(identity.encode()).hexdigest()[:12]
+        agent_dir = _config_file().parent / "pi-agent" / key
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    (agent_dir / "web-search.json").write_text(
+        json.dumps({"provider": provider, "workflow": workflow}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return agent_dir
 
 
 def _current_env_has_key(provider: str) -> bool:
@@ -289,6 +494,14 @@ def get_env_with_keys(extra_env: dict = None) -> dict:
         if env_var and api_key:
             if env_var not in os.environ or not os.environ[env_var]:
                 env[env_var] = api_key
+
+    web_keys = config.get("web_access", {}).get("api_keys", {})
+    if isinstance(web_keys, dict):
+        for provider, api_key in web_keys.items():
+            env_var = WEB_SEARCH_KEY_ENV_MAP.get(provider)
+            if env_var and isinstance(api_key, str) and api_key:
+                if env_var not in os.environ or not os.environ[env_var]:
+                    env[env_var] = api_key
 
     if extra_env:
         env.update(extra_env)

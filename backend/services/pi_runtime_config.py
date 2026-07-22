@@ -104,12 +104,13 @@ def build_runtime_launch(
     for ext_path in config.extensions:
         args.extend(["-e", ext_path])
 
-    from api.settings import get_custom_models_runtime, get_env_with_keys
+    from api.settings import get_custom_models_runtime, get_env_with_keys, get_web_access_runtime
 
     env = get_env_with_keys()
     custom_agent_dir, custom_env = get_custom_models_runtime(cwd)
-    if custom_agent_dir:
-        env["PI_CODING_AGENT_DIR"] = str(custom_agent_dir)
+    agent_dir = get_web_access_runtime(cwd, custom_agent_dir)
+    if agent_dir:
+        env["PI_CODING_AGENT_DIR"] = str(agent_dir)
         env.update(custom_env)
 
     if config.provider:
