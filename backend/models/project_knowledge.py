@@ -65,6 +65,11 @@ class ReviewerProposalInput(BaseModel):
     conflicts_with: list[str] = Field(default_factory=list, max_length=100)
     supersedes: list[str] = Field(default_factory=list, max_length=100)
     operations: list[FileOperation] = Field(default_factory=list, max_length=50)
+    experience_ids: list[str] = Field(default_factory=list, max_length=100)
+    loop_ids: list[str] = Field(default_factory=list, max_length=100)
+    candidate_ids: list[str] = Field(default_factory=list, max_length=100)
+    evaluator_refs: list[dict] = Field(default_factory=list, max_length=100)
+    artifact_refs: list[dict] = Field(default_factory=list, max_length=100)
 
     @model_validator(mode="after")
     def validate_shape(self):
@@ -110,6 +115,11 @@ class KnowledgeItem(BaseModel):
     conflicts_with: list[str] = Field(default_factory=list)
     supersedes: list[str] = Field(default_factory=list)
     proposal_id: Optional[str] = None
+    experience_ids: list[str] = Field(default_factory=list)
+    loop_ids: list[str] = Field(default_factory=list)
+    candidate_ids: list[str] = Field(default_factory=list)
+    evaluator_refs: list[dict] = Field(default_factory=list)
+    artifact_refs: list[dict] = Field(default_factory=list)
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
 

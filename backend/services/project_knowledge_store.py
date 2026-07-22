@@ -95,17 +95,19 @@ class ProjectKnowledgeStore:
         self.runs_file = self.history_dir / "reviewer-runs.jsonl"
         self.events_file = self.history_dir / "knowledge-events.jsonl"
 
-    def initialize(self, create_base_directories: bool = True) -> dict[str, Any]:
+    def initialize(self, create_base_directories: bool = False) -> dict[str, Any]:
+        """Register the workspace without eagerly materializing knowledge state.
+
+        Project knowledge is optional.  The hidden state files, PROJECT.md, and
+        the opinionated physical directory skeleton are created by the first
+        operation that actually needs them.  ``create_base_directories`` is
+        retained as an explicit compatibility/migration hook, but normal
+        application flows leave it disabled.
+        """
         self.workspace.mkdir(parents=True, exist_ok=True)
-        for directory in (
-            self.meta_dir,
-            self.knowledge_dir,
-            self.inbox_dir,
-            self.history_dir,
-            self.transactions_dir,
-            self.project_versions_dir,
-        ):
-            directory.mkdir(parents=True, exist_ok=True)
+        # .pi-science is the workspace marker used by workspace discovery.
+        # Child directories and state files are deliberately lazy.
+        self.meta_dir.mkdir(parents=True, exist_ok=True)
         if create_base_directories:
             base = self.workspace / PROJECT_KNOWLEDGE_BASE
             for legacy_name in LEGACY_PROJECT_KNOWLEDGE_BASES:
@@ -126,24 +128,6 @@ class ProjectKnowledgeStore:
                     except OSError:
                         pass
 
-        if not self.items_file.exists():
-            _write_json(self.items_file, [])
-        if not self.proposals_file.exists():
-            _write_json(self.proposals_file, [])
-        if not self.cursors_file.exists():
-            _write_json(self.cursors_file, {})
-        if not self.policy_file.exists():
-            _write_json(self.policy_file, ProjectPolicy().model_dump())
-        if not self.project_file.exists():
-            _atomic_write_text(self.project_file, self._initial_project_document())
-        elif MANAGED_START not in self.project_file.read_text(encoding="utf-8", errors="replace"):
-            existing = self.project_file.read_text(encoding="utf-8", errors="replace").rstrip()
-            _atomic_write_text(
-                self.project_file,
-                existing + "\n\n" + self._render_managed_block([]) + "\n",
-            )
-        if not any(self.project_versions_dir.glob("*.json")):
-            self._save_project_version(self.project_file.read_text(encoding="utf-8", errors="replace"), self.list_items(), "initialized")
         return self.summary()
 
     def summary(self) -> dict[str, Any]:
@@ -165,6 +149,12 @@ class ProjectKnowledgeStore:
             "Describe the project goal, scope, and constraints here. / 在此描述项目目标、范围和约束。\n\n"
             f"{self._render_managed_block([])}\n"
         )
+
+    def project_document(self) -> str:
+        """Return the persisted project document or a non-persisted preview."""
+        if self.project_file.exists():
+            return self.project_file.read_text(encoding="utf-8", errors="replace")
+        return self._initial_project_document()
 
     def list_items(self, include_inactive: bool = True) -> list[KnowledgeItem]:
         rows = _read_json(self.items_file, [])
@@ -261,6 +251,11 @@ class ProjectKnowledgeStore:
             conflicts_with=proposal.conflicts_with,
             supersedes=proposal.supersedes,
             proposal_id=proposal.id,
+            experience_ids=proposal.experience_ids,
+            loop_ids=proposal.loop_ids,
+            candidate_ids=proposal.candidate_ids,
+            evaluator_refs=proposal.evaluator_refs,
+            artifact_refs=proposal.artifact_refs,
         )
         superseded = set(proposal.supersedes)
         if superseded:
@@ -268,6 +263,11 @@ class ProjectKnowledgeStore:
                 if old.id in superseded and old.status == "active":
                     old.status = "superseded"
                     old.updated_at = utc_now_iso()
+        # Preserve a restorable baseline only when knowledge is first accepted;
+        # merely opening the knowledge page must not create history or PROJECT.md.
+        if not any(self.project_versions_dir.glob("*.json")):
+            self._save_project_version(self.project_document(), items, "initialized")
+
         items.append(item)
         self.save_items(items)
         self.render_project_document(items)
@@ -300,7 +300,7 @@ class ProjectKnowledgeStore:
 
     def render_project_document(self, items: Optional[list[KnowledgeItem]] = None) -> str:
         items = items if items is not None else self.list_items()
-        current = self.project_file.read_text(encoding="utf-8", errors="replace") if self.project_file.exists() else ""
+        current = self.project_document()
         block = self._render_managed_block(items)
         if MANAGED_START in current and MANAGED_END in current:
             prefix, remainder = current.split(MANAGED_START, 1)
@@ -416,7 +416,6 @@ class ProjectKnowledgeStore:
         return "; ".join(parts)
 
     def get_policy(self) -> ProjectPolicy:
-        self.meta_dir.mkdir(parents=True, exist_ok=True)
         raw = _read_json(self.policy_file, {})
         try:
             return ProjectPolicy.model_validate(raw)
@@ -488,5 +487,5 @@ class ProjectKnowledgeStore:
             handle.write(json.dumps(data, ensure_ascii=False) + "\n")
 
 
-def initialize_project_workspace(workspace: str | Path, create_base_directories: bool = True) -> dict[str, Any]:
+def initialize_project_workspace(workspace: str | Path, create_base_directories: bool = False) -> dict[str, Any]:
     return ProjectKnowledgeStore(workspace).initialize(create_base_directories=create_base_directories)

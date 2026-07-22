@@ -9,7 +9,7 @@ import pytest
 from config import get_sessions_dir
 from models import FileOperation, Proposal, SourceReference
 from services.file_organizer import FilePlanError, WorkspaceFileOrganizer
-from services.project_knowledge_store import MANAGED_START, ProjectKnowledgeStore
+from services.project_knowledge_store import ProjectKnowledgeStore
 from services.reviewer_service import ReviewerService, parse_reviewer_json
 
 
@@ -67,16 +67,22 @@ def write_session(workspace: Path, session_id: str, messages: list[dict]) -> Non
     path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
 
 
-def test_initialize_creates_project_skeleton(temp_workspace):
+def test_initialize_is_lazy_and_does_not_create_project_knowledge_state(temp_workspace):
     store = ProjectKnowledgeStore(temp_workspace)
     summary = store.initialize()
 
-    assert (temp_workspace / "PROJECT.md").exists()
-    assert MANAGED_START in (temp_workspace / "PROJECT.md").read_text()
+    assert (temp_workspace / ".pi-science").is_dir()
+    assert not (temp_workspace / "PROJECT.md").exists()
+    assert not store.items_file.exists()
+    assert not store.proposals_file.exists()
+    assert not store.policy_file.exists()
+    assert not store.cursors_file.exists()
+    assert not store.history_dir.exists()
     for directory in ("sources", "research", "data", "work", "deliverables", "archive"):
-        assert (temp_workspace / ".project_knowledge" / directory).is_dir()
+        assert not (temp_workspace / ".project_knowledge" / directory).exists()
         assert not (temp_workspace / directory).exists()
     assert summary["pending_count"] == 0
+    assert summary["knowledge_count"] == 0
     assert summary["auto_review"] is True
 
 
@@ -88,7 +94,9 @@ def test_initialize_migrates_hidden_base_and_preserves_nonempty_legacy_directori
     (temp_workspace / "data" / "observations.csv").write_text("x\n1\n")
     (temp_workspace / "archive").mkdir()
 
-    ProjectKnowledgeStore(temp_workspace).initialize()
+    # Legacy skeleton migration remains available only as an explicit opt-in;
+    # normal workspace and knowledge-page initialization never invokes it.
+    ProjectKnowledgeStore(temp_workspace).initialize(create_base_directories=True)
 
     assert not old_base.exists()
     assert (temp_workspace / ".project_knowledge" / "research" / "note.md").read_text() == "reviewed"
@@ -105,6 +113,7 @@ def test_accept_knowledge_updates_document_and_policy(temp_workspace):
     item = store.accept_knowledge_proposal(proposal)
 
     assert item.status == "active"
+    assert store.project_file.exists()
     assert store.get_proposal(proposal.id).status == "accepted"
     document = store.project_file.read_text()
     assert "The selected model works" in document
@@ -148,10 +157,15 @@ def test_reject_updates_learning_policy(temp_workspace):
 def test_project_document_versions_restore_knowledge_and_markdown(temp_workspace):
     store = ProjectKnowledgeStore(temp_workspace)
     store.initialize()
-    initial_version = store.list_project_versions()[0]["id"]
+    assert store.list_project_versions() == []
     proposal = knowledge_proposal()
     store.add_proposals([proposal])
     store.accept_knowledge_proposal(proposal)
+    initial_version = next(
+        version["id"]
+        for version in store.list_project_versions()
+        if version["reason"] == "initialized"
+    )
     assert store.list_items()
     assert "The selected model works" in store.project_file.read_text()
 
@@ -209,7 +223,7 @@ def test_file_plan_apply_updates_references_and_undoes(temp_workspace):
     store = ProjectKnowledgeStore(temp_workspace)
     store.initialize()
     (temp_workspace / "result.csv").write_text("x\n1\n")
-    store.project_file.write_text(store.project_file.read_text() + "\nSee `result.csv`.\n")
+    store.project_file.write_text(store.project_document() + "\nSee `result.csv`.\n")
     organizer = WorkspaceFileOrganizer(temp_workspace)
     operations = [FileOperation(type="move", source="result.csv", target="data/result.csv")]
 
@@ -224,6 +238,33 @@ def test_file_plan_apply_updates_references_and_undoes(temp_workspace):
     assert (temp_workspace / "result.csv").exists()
     assert not (temp_workspace / "data" / "result.csv").exists()
     assert "`result.csv`" in store.project_file.read_text()
+
+
+def test_file_categories_are_created_only_when_an_approved_plan_needs_them(temp_workspace):
+    source = temp_workspace / "result.csv"
+    source.write_text("x\n1\n")
+    organizer = WorkspaceFileOrganizer(temp_workspace)
+    organizer.store.initialize()
+    target_directory = temp_workspace / ".project_knowledge" / "data" / "processed"
+
+    assert not target_directory.exists()
+
+    operations = [
+        FileOperation(
+            type="move",
+            source="result.csv",
+            target=".project_knowledge/data/processed/result.csv",
+        )
+    ]
+    preview = organizer.preview_plan(operations)
+
+    assert preview["ok"] is True
+    assert not target_directory.exists()
+
+    organizer.apply_plan(operations)
+
+    assert target_directory.is_dir()
+    assert (target_directory / "result.csv").exists()
 
 
 def test_parse_reviewer_json_accepts_fenced_payload():

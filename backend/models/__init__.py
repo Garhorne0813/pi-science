@@ -39,6 +39,18 @@ from .compute import (
 )
 from .agent_profile import AgentProfile, AgentProfileRequest
 from .literature import LiteratureRecord, LiteratureSearchRequest
+from .research_memory import (
+    CandidateEvaluationRequest,
+    CandidateProposalRequest,
+    EvaluatorSpec,
+    ExperienceRecord,
+    Inspiration,
+    KnowledgePromotionRequest,
+    ResearchLoop,
+    ResearchLoopCreateRequest,
+    ResearchLoopUpdateRequest,
+    ResearchRecordEnvelope,
+)
 
 
 class ArtifactVerification(BaseModel):
@@ -102,6 +114,16 @@ __all__ = [
     "AgentProfileRequest",
     "LiteratureRecord",
     "LiteratureSearchRequest",
+    "CandidateEvaluationRequest",
+    "CandidateProposalRequest",
+    "EvaluatorSpec",
+    "ExperienceRecord",
+    "Inspiration",
+    "KnowledgePromotionRequest",
+    "ResearchLoop",
+    "ResearchLoopCreateRequest",
+    "ResearchLoopUpdateRequest",
+    "ResearchRecordEnvelope",
 ]
 
 

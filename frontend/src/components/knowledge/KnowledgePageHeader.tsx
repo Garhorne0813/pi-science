@@ -1,10 +1,10 @@
-import { BookOpen, FileText, FolderOpen, History, Inbox, Loader2, RefreshCw, Sparkles } from "lucide-react";
+import { BookOpen, FileText, FlaskConical, FolderOpen, History, Inbox, Loader2, RefreshCw, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "../../lib/cn";
 import type { ProjectPolicy } from "../../lib/project-knowledge";
 
-export type KnowledgePageTab = "overview" | "inbox" | "knowledge" | "files" | "history";
+export type KnowledgePageTab = "overview" | "inbox" | "knowledge" | "research" | "files" | "history";
 
 export function KnowledgePageHeader({
   policy,
@@ -26,10 +26,10 @@ export function KnowledgePageHeader({
         <p className="mt-1 max-w-[680px] text-sm leading-6 text-muted">{t("knowledge.subtitle")}</p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={onToggleAutoReview} aria-pressed={policy?.auto_review ?? false} className={cn("h-9 rounded-input border px-2.5 py-1.5 text-[11px] font-medium transition-colors", policy?.auto_review ? "border-ok/40 bg-ok/10 text-ok" : "border-border bg-surface text-muted hover:text-text")}>
+        <button type="button" onClick={onToggleAutoReview} aria-pressed={policy?.auto_review ?? false} className={cn("min-h-11 rounded-input border px-3 py-2 text-sm font-medium transition-colors", policy?.auto_review ? "border-ok/40 bg-ok/10 text-ok" : "border-border bg-surface text-muted hover:text-text")}>
           {policy?.auto_review ? t("knowledge.autoReviewOn") : t("knowledge.autoReviewOff")}
         </button>
-        <button type="button" onClick={onReview} disabled={reviewing} className="flex h-9 items-center gap-1.5 rounded-input bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60">
+        <button type="button" onClick={onReview} disabled={reviewing} className="flex min-h-11 items-center gap-1.5 rounded-input bg-accent px-3 py-2 text-sm font-medium text-accent-fg transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60">
           {reviewing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
           {reviewing ? t("knowledge.reviewing") : t("knowledge.reviewNow")}
         </button>
@@ -50,10 +50,11 @@ export function KnowledgePageTabs({ tab, pendingCount, onChange, onRefreshHistor
       <TabButton active={tab === "overview"} onClick={() => onChange("overview")} icon={<BookOpen size={15} />} label={t("knowledge.overview")} />
       <TabButton active={tab === "inbox"} onClick={() => onChange("inbox")} icon={<Inbox size={15} />} label={t("knowledge.inbox")} badge={pendingCount} />
       <TabButton active={tab === "knowledge"} onClick={() => onChange("knowledge")} icon={<FileText size={15} />} label={t("knowledge.knowledge")} />
+      <TabButton active={tab === "research"} onClick={() => onChange("research")} icon={<FlaskConical size={15} />} label={t("knowledge.research")} />
       <TabButton active={tab === "files"} onClick={() => onChange("files")} icon={<FolderOpen size={15} />} label={t("knowledge.files")} />
       <TabButton active={tab === "history"} onClick={() => onChange("history")} icon={<History size={15} />} label={t("knowledge.history")} />
       {tab === "history" && (
-        <button type="button" onClick={onRefreshHistory} className="ml-auto mb-1 flex min-h-9 shrink-0 items-center gap-1.5 rounded-input px-3 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-text">
+        <button type="button" onClick={onRefreshHistory} className="ml-auto mb-1 flex min-h-11 shrink-0 items-center gap-1.5 rounded-input px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-text">
           <RefreshCw size={14} /> {t("knowledge.refresh")}
         </button>
       )}

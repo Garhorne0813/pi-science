@@ -18,6 +18,7 @@ from models import (
 )
 from services.file_organizer import FilePlanError, WorkspaceFileOrganizer
 from services.project_knowledge_store import ProjectKnowledgeStore
+from services.research_record_store import ResearchRecordStore
 from services.reviewer_service import ReviewerError, ReviewerService
 from services.session_reader import find_session_file
 from services.session_repository import SessionRepository
@@ -33,7 +34,7 @@ def _store(cwd: str) -> ProjectKnowledgeStore:
     except ValueError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     store = ProjectKnowledgeStore(workspace.root)
-    store.initialize(create_base_directories=True)
+    store.initialize()
     return store
 
 
@@ -63,7 +64,7 @@ async def get_project_document(cwd: str = Query(...)):
     store = _store(cwd)
     return {
         **store.summary(),
-        "content": store.project_file.read_text(encoding="utf-8", errors="replace"),
+        "content": store.project_document(),
     }
 
 
@@ -195,6 +196,19 @@ async def accept_proposal(
                 title=body.title,
                 summary=body.summary,
             )
+            for loop_id in proposal.loop_ids:
+                await ResearchRecordStore(store.workspace).append(
+                    "knowledge.promotion_decided",
+                    producer="project-knowledge-api",
+                    loop_id=loop_id,
+                    candidate_id=proposal.candidate_ids[0] if proposal.candidate_ids else None,
+                    run_id=proposal.source.run_ids[0] if proposal.source.run_ids else None,
+                    payload={
+                        "proposal_id": proposal.id,
+                        "knowledge_id": item.id,
+                        "decision": "accepted",
+                    },
+                )
             return {"ok": True, "proposal_id": proposal_id, "knowledge_item": item.model_dump()}
 
         history = WorkspaceFileOrganizer(cwd).apply_plan(proposal.operations, proposal_id=proposal.id)

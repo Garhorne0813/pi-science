@@ -41,6 +41,11 @@ export interface Proposal {
   conflicts_with: string[];
   supersedes: string[];
   operations: FileOperation[];
+  experience_ids?: string[];
+  loop_ids?: string[];
+  candidate_ids?: string[];
+  evaluator_refs?: Array<Record<string, unknown>>;
+  artifact_refs?: Array<Record<string, unknown>>;
   status: ProposalStatus;
   source: SourceReference;
   created_at: string;
@@ -61,6 +66,11 @@ export interface KnowledgeItem {
   related_files: string[];
   conflicts_with: string[];
   supersedes: string[];
+  experience_ids?: string[];
+  loop_ids?: string[];
+  candidate_ids?: string[];
+  evaluator_refs?: Array<Record<string, unknown>>;
+  artifact_refs?: Array<Record<string, unknown>>;
   created_at: string;
   updated_at: string;
 }

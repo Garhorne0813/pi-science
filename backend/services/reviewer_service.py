@@ -49,7 +49,7 @@ class ReviewerService:
         include_files: bool = True,
         force_full_session: bool = False,
     ) -> dict[str, Any]:
-        self.store.initialize(create_base_directories=True)
+        self.store.initialize()
         key = (str(self.workspace), session_id)
         lock = _review_locks.setdefault(key, asyncio.Lock())
         try:

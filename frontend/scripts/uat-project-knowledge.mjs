@@ -85,6 +85,7 @@ async function seedWorkspace() {
       applied_history_id: null,
     },
   ];
+  await mkdir(path.join(workspace, ".pi-science", "inbox"), { recursive: true });
   await writeFile(path.join(workspace, ".pi-science", "inbox", "proposals.json"), `${JSON.stringify(proposals, null, 2)}\n`);
 }
 

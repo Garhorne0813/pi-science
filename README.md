@@ -22,7 +22,7 @@ The core interface: a streaming chat where AI agents write, execute, and visuali
 - **Tool visualization** — file writes, shell commands, and code execution expand inline with syntax-highlighted diffs
 - **Markdown rendering** — agent responses support tables, code blocks, LaTeX math, and file-path detection
 - **Session management** — create, resume, fork, and delete conversations; history preserved per workspace
-- **AGENTS.md / KNOWLEDGE.md** — per-workspace agent instructions auto-seeded on session creation
+- **Minimal workspace contract** — only `AGENTS.md` is seeded; reviewed project memory is created lazily and maintained by the workbench
 - **Slash commands** — type `/` in the composer to access built-in commands (`/new`, `/model`, `/compact`, `/copy`, `/export`, `/name`, `/session`) and dynamic ones from skills and extensions
 - **Skill commands** — skills installed in `.pi/skills/` register as `/skill:<name>` commands that invoke the skill through the agent
 - **Interactive prompts** — extension confirm/select/input/editor requests render as inline cards you can answer without leaving the chat
@@ -45,11 +45,11 @@ Type `/` in the composer to bring up the command menu. Built-in commands execute
 | `/session` | Show session info and stats · 会话统计 |
 | `/skill:<name>` | Invoke a workspace skill via the agent · 调用技能 |
 
-### Project Knowledge Reviewer · 项目知识审稿人
+### Project Memory & Research · 项目记忆与研究循环
 
-Each workspace has a durable `PROJECT.md` and a Reviewer-managed inbox. Conversations and project files are analyzed for useful knowledge, but nothing enters the formal project record until the user accepts it.
+Project Memory connects reviewed knowledge, runs, artifacts, result reviews, and Research Loops in one view. Conversations and project files are analyzed for useful knowledge, but nothing enters the formal project record until the user accepts it. `PROJECT.md` is created only after the first accepted knowledge item.
 
-每个工作区都有持续演化的 `PROJECT.md` 和 Reviewer 待整理区。系统会从对话和项目文件中识别有效知识，但只有用户确认后才能写入正式项目记录。
+项目记忆把已审核知识、运行、产物、结果审查和研究循环放在一个视图中。系统会从对话和项目文件中识别有效知识，但只有用户确认后才能写入正式项目记录；`PROJECT.md` 在首条知识获批后才会生成。
 
 - **Proposal-only Reviewer** — extracts findings, conclusions, decisions, hypotheses, open questions, tasks, project changes, and artifacts
 - **Evidence links** — proposals retain their source session, message IDs, related files, confidence, and conflicts
@@ -59,8 +59,10 @@ Each workspace has a durable `PROJECT.md` and a Reviewer-managed inbox. Conversa
 - **Safe file plans** — preview moves/renames, detect collisions and references, execute transactionally, and undo from history
 - **Project versions** — every reviewed document update creates a restorable project-document version
 - **Per-project policy** — lock paths, set naming conventions, and learn from accepted/rejected proposal categories
+- **Research Loops** — create measurable loops, pin evaluator versions, execute immutable candidate snapshots, enforce budgets, and inspect the Pareto frontier
+- **Unified traceability** — navigate Candidate → Run → Evaluation → Experience → Knowledge without asking the agent to synchronize duplicate summaries
 
-Workspace-local data is stored under `.pi-science/knowledge/`, `.pi-science/inbox/`, `.pi-science/history/`, `.pi-science/index.json`, and `.pi-science/policy.yaml`.
+Project Memory is lazy by default: a new workspace does not pre-create `KNOWLEDGE.md`, `knowledge/`, `notes/`, `PROJECT.md`, or a Project Knowledge folder tree. The workbench creates reviewed-knowledge state only when it is first needed. New Research Loop control events share one append-only `.pi-science/research-records.jsonl`; Experience, loop state, timeline, indexes, and frontier are derived views rather than additional agent-maintained logs.
 
 ### Scientific File Viewers · 科学文件查看器
 
@@ -151,7 +153,7 @@ and [docs/science-platform-runtime.md](docs/science-platform-runtime.md).
 ### Theme & Internationalization · 主题与国际化
 
 - **Warm paper aesthetic** — cream whites, soft shadows, serif headings; dark mode via `[data-theme="dark"]`
-- **English & Simplified Chinese** — auto-detected on first launch, switchable in Settings → General; covers the workbench shell, Project Knowledge, and the scientific inspectors (an i18n coverage test keeps both locales in sync)
+- **English & Simplified Chinese** — auto-detected on first launch, switchable in Settings → General; covers the workbench shell, Project Memory, and the scientific inspectors (an i18n coverage test keeps both locales in sync)
 - **Resizable panels** — drag to resize sidebar, inspector, and composer
 
 ### LLM Provider Configuration · LLM 提供商配置
@@ -180,7 +182,7 @@ API keys are stored in the Pi-Science configuration directory. Custom provider m
 | **Files** | `/workspace/:cwd/files` | Full file browser — breadcrumb nav, table/chart views for data files |
 | **Notebooks** | `/workspace/:cwd/notebooks` | Open and run .ipynb files; manage the workspace's Jupyter Lab server |
 | **Runs** | `/workspace/:cwd/runs` | Experiment history — command, status, host, outputs |
-| **Project Knowledge** | `/workspace/:cwd/knowledge` | Review proposals, inspect `PROJECT.md`, browse logical files, and undo changes |
+| **Project Memory** | `/workspace/:cwd/knowledge` | Review knowledge proposals, inspect runs and artifacts, manage Research Loops, view the Pareto frontier, and browse the unified history |
 | **Skills** | `/skills` | Installed agent skills and scientific tool detection |
 | **Settings** | `/settings` | LLM config, API keys, model selection, extensions, MCP servers |
 

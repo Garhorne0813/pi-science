@@ -59,8 +59,13 @@
   in `.gitignore`.
 - Remote compute (SSH servers, GPU boxes, Slurm clusters) is configured in
   `.pi-science/compute.json` when available.
-- The pi-science platform records every file you write or edit in
-  `.pi-science/provenance.jsonl` automatically.
+- Pi-Science automatically records provenance, runs, artifacts, reviews,
+  research-loop events, and their relationships under `.pi-science/`.
+- Do not create, edit, summarize, or synchronize files under `.pi-science/`.
+  These are platform-owned records and derived indexes.
+- `PROJECT.md`, when present, is the reviewed human-readable project memory.
+  Treat it as context, not as an Agent-maintained notebook. New durable
+  knowledge goes through the Project Memory inbox and approval flow.
 
 ## Safety defaults (non-negotiable)
 
@@ -74,20 +79,20 @@
 ## Startup
 
 1. Read `AGENTS.md`.
-2. Read `KNOWLEDGE.md`, then the files it points to in `knowledge/`.
-3. Check `.pi-science/` for provenance data, compute configuration, and
-   previous session context.
-4. Check `.pi/skills/` for domain-specific skill guidance.
-5. Read any `notes/` entries to understand prior work in this workspace.
+2. If `PROJECT.md` exists, read it for reviewed project goals, decisions,
+   findings, questions, and artifact references.
+3. Use the Project Memory views when detailed run, artifact, review, failure,
+   or Research Loop history is needed; do not scan or rewrite internal logs.
+4. Check `.pi/skills/` for domain-specific skill guidance when present.
 
 ## Self-evolution loop
 
 - At the end of each significant work cycle, ask: what could be better?
-- Save one reusable lesson or insight as a dated entry in `notes/`.
-- When a lesson has been verified across multiple sessions, propose it as a
-  new principle or a revision to this file.
-- When facts about the project change (new data, new tools, new conclusions),
-  update `KNOWLEDGE.md` and the relevant files in `knowledge/`.
+- Report reusable findings in the conversation with their evidence. The
+  platform reviewer can turn them into Project Memory proposals.
+- Do not maintain a parallel `notes/`, `knowledge/`, or history hierarchy.
+- When a lesson has been verified across multiple sessions, propose it for
+  review instead of directly changing the reviewed memory projection.
 
 ## Principle rules
 

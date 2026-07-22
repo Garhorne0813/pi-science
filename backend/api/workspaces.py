@@ -88,9 +88,12 @@ async def create_workspace(body: CreateWorkspaceRequest):
         raise HTTPException(status_code=409, detail="Workspace already exists")
 
     path.mkdir(parents=True)
-    # Seed harness files (AGENTS.md, KNOWLEDGE.md) into new workspace
+    # Seed only the agent contract. Project memory and reviewed knowledge are
+    # created lazily by the platform instead of scaffolding agent-owned files.
     _seed_harness(path)
-    initialize_project_workspace(path, create_base_directories=True)
+    # Register only the .pi-science workspace marker. Project knowledge state,
+    # PROJECT.md, and organization directories are created on first use.
+    initialize_project_workspace(path)
     register_workspace(path)
     return WorkspaceInfo(
         name=name,
@@ -273,11 +276,10 @@ def _register(workspace_path: Path):
 
 
 def _seed_harness(workspace_path: Path):
-    """Copy harness files into a new workspace (non-clobbering)."""
+    """Copy the minimal agent contract into a workspace (non-clobbering)."""
     if not HARNESS_DIR.exists():
         return
-    for src in HARNESS_DIR.iterdir():
-        if src.is_file():
-            dst = workspace_path / src.name
-            if not dst.exists():
-                shutil.copy2(src, dst)
+    src = HARNESS_DIR / "AGENTS.md"
+    dst = workspace_path / "AGENTS.md"
+    if src.is_file() and not dst.exists():
+        shutil.copy2(src, dst)

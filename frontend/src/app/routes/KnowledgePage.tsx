@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   AlertTriangle,
+  BarChart3,
   Check,
   ChevronDown,
   ChevronRight,
@@ -10,7 +11,10 @@ import {
   Inbox,
   Loader2,
   Lock,
+  Pause,
   Pencil,
+  Play,
+  Plus,
   RefreshCw,
   RotateCcw,
   Save,
@@ -37,6 +41,7 @@ import { useRuntimeStore } from "../../lib/runtime-store";
 import { useUiStore } from "../../lib/store";
 import { fileInspectorForPath } from "../../lib/artifacts";
 import { KnowledgePageHeader, KnowledgePageTabs, type KnowledgePageTab } from "../../components/knowledge/KnowledgePageHeader";
+import { projectMemoryApi, type ExperienceRecord, type ProjectMemoryOverview, type ResearchLoop } from "../../lib/project-memory";
 
 export function KnowledgePage() {
   const { t } = useTranslation();
@@ -45,12 +50,14 @@ export function KnowledgePage() {
   const activeSessionId = useRuntimeStore((state) => state.activeSessionId);
   const [tab, setTab] = useState<KnowledgePageTab>("overview");
   const [summary, setSummary] = useState<ProjectSummary | null>(null);
+  const [memorySummary, setMemorySummary] = useState<ProjectMemoryOverview | null>(null);
   const [projectDocument, setProjectDocument] = useState("");
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [items, setItems] = useState<KnowledgeItem[]>([]);
   const [policy, setPolicy] = useState<ProjectPolicy | null>(null);
   const [files, setFiles] = useState<LogicalFileViews | null>(null);
   const [historyRows, setHistoryRows] = useState<Array<Record<string, unknown>>>([]);
+  const [researchLoops, setResearchLoops] = useState<ResearchLoop[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [reviewing, setReviewing] = useState(false);
@@ -62,17 +69,19 @@ export function KnowledgePage() {
   const loadCore = useCallback(async () => {
     setError(null);
     try {
-      const [project, proposalData, itemData, currentPolicy] = await Promise.all([
+      const [project, proposalData, itemData, currentPolicy, memory] = await Promise.all([
         projectKnowledgeApi.project(cwd),
         projectKnowledgeApi.proposals(cwd),
         projectKnowledgeApi.items(cwd),
         projectKnowledgeApi.policy(cwd),
+        projectMemoryApi.overview(cwd),
       ]);
       setSummary(project);
       setProjectDocument(project.content);
       setProposals(proposalData.proposals);
       setItems(itemData.items);
       setPolicy(currentPolicy);
+      setMemorySummary(memory);
       setSelected((current) => {
         const valid = new Set(proposalData.proposals.filter((item) => item.status === "pending").map((item) => item.id));
         return new Set([...current].filter((id) => valid.has(id)));
@@ -94,10 +103,19 @@ export function KnowledgePage() {
 
   const loadHistory = useCallback(async () => {
     try {
-      const data = await projectKnowledgeApi.history(cwd);
-      setHistoryRows(data.history);
+      const data = await projectMemoryApi.timeline(cwd);
+      setHistoryRows(data.timeline);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to load history");
+    }
+  }, [cwd]);
+
+  const loadResearch = useCallback(async () => {
+    try {
+      const data = await projectMemoryApi.loops(cwd);
+      setResearchLoops(data.loops);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to load research loops");
     }
   }, [cwd]);
 
@@ -105,7 +123,8 @@ export function KnowledgePage() {
   useEffect(() => {
     if (tab === "files" && files === null) void loadFiles();
     if (tab === "history") void loadHistory();
-  }, [tab, files, loadFiles, loadHistory]);
+    if (tab === "research") void loadResearch();
+  }, [tab, files, loadFiles, loadHistory, loadResearch]);
 
   const runReviewer = async () => {
     setReviewing(true);
@@ -208,6 +227,7 @@ export function KnowledgePage() {
             <OverviewTab
               document={projectDocument}
               summary={summary}
+              memorySummary={memorySummary}
               onRefresh={loadCore}
             />
           )}
@@ -223,6 +243,14 @@ export function KnowledgePage() {
             />
           )}
           {tab === "knowledge" && <KnowledgeTab items={items} />}
+          {tab === "research" && (
+            <ResearchTab
+              cwd={cwd}
+              loops={researchLoops}
+              onChanged={async () => { await Promise.all([loadResearch(), loadCore(), loadHistory()]); }}
+              onError={setError}
+            />
+          )}
           {tab === "files" && (
             <FilesTab
               cwd={cwd}
@@ -247,7 +275,7 @@ export function KnowledgePage() {
   );
 }
 
-function OverviewTab({ document, summary, onRefresh }: { document: string; summary: ProjectSummary | null; onRefresh: () => Promise<void> }) {
+function OverviewTab({ document, summary, memorySummary, onRefresh }: { document: string; summary: ProjectSummary | null; memorySummary: ProjectMemoryOverview | null; onRefresh: () => Promise<void> }) {
   const { t } = useTranslation();
   const visibleDocument = document
     .replace(/<!--\s*pi-science:project-knowledge:(?:start|end)\s*-->/g, "")
@@ -271,6 +299,9 @@ function OverviewTab({ document, summary, onRefresh }: { document: string; summa
       <aside className="space-y-3">
         <MetricCard label={t("knowledge.acceptedKnowledge")} value={summary?.knowledge_count ?? 0} />
         <MetricCard label={t("knowledge.pendingReview")} value={summary?.pending_count ?? 0} emphasis={(summary?.pending_count ?? 0) > 0} />
+        <MetricCard label={t("knowledge.researchRuns")} value={memorySummary?.run_count ?? 0} />
+        <MetricCard label={t("knowledge.researchArtifacts")} value={memorySummary?.artifact_count ?? 0} />
+        <MetricCard label={t("knowledge.researchLoops")} value={memorySummary?.research_loop_count ?? 0} emphasis={(memorySummary?.active_research_loop_count ?? 0) > 0} />
         <div className="rounded-card border border-border bg-surface p-4 text-xs leading-5 text-muted">
           <Lock size={15} className="mb-2 text-accent" />
           {t("knowledge.approvalBoundary")}
@@ -482,7 +513,7 @@ function ProposalCard({
 
           {localError && <div role="alert" className="mt-3 rounded-input bg-error/5 px-3 py-2 text-xs text-error">{localError}</div>}
 
-          <button type="button" onClick={() => setExpanded((value) => !value)} className="mt-3 flex min-h-11 items-center gap-1.5 text-xs font-medium text-muted hover:text-text">
+          <button type="button" onClick={() => setExpanded((value) => !value)} className="mt-3 flex min-h-11 items-center gap-1.5 text-sm font-medium text-muted hover:text-text">
             {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             {expanded ? t("knowledge.hideDetails") : t("knowledge.showDetails")}
           </button>
@@ -490,7 +521,7 @@ function ProposalCard({
             <div className="space-y-3 border-t border-faint pt-3 text-xs leading-5 text-muted">
               <div><span className="font-medium text-text">{t("knowledge.reviewerReason")}:</span> {proposal.reason}</div>
               {proposal.source.session_id && (
-                <button type="button" onClick={() => navigate(`/workspace/${encodeURIComponent(cwd)}/session/${proposal.source.session_id}`)} className="min-h-11 rounded-input border border-border px-3 py-2 text-link hover:bg-surface-2">
+                <button type="button" onClick={() => navigate(`/workspace/${encodeURIComponent(cwd)}/session/${proposal.source.session_id}`)} className="min-h-11 rounded-input border border-border px-3 py-2 text-sm text-link hover:bg-surface-2">
                   {t("knowledge.openSourceSession")} · {proposal.source.session_id.slice(0, 12)}
                 </button>
               )}
@@ -590,6 +621,199 @@ function KnowledgeTab({ items }: { items: KnowledgeItem[] }) {
         </section>
       ))}
     </div>
+  );
+}
+
+function ResearchTab({
+  cwd,
+  loops,
+  onChanged,
+  onError,
+}: {
+  cwd: string;
+  loops: ResearchLoop[];
+  onChanged: () => Promise<void>;
+  onError: (message: string | null) => void;
+}) {
+  const { t } = useTranslation();
+  const [creating, setCreating] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [title, setTitle] = useState("");
+  const [objective, setObjective] = useState("");
+  const [metric, setMetric] = useState("score");
+  const [direction, setDirection] = useState<"maximize" | "minimize">("maximize");
+  const [frontiers, setFrontiers] = useState<Record<string, ExperienceRecord[]>>({});
+
+  const create = async () => {
+    if (!title.trim() || !objective.trim() || !metric.trim()) return;
+    setBusy("create");
+    onError(null);
+    try {
+      const evaluatorId = `eval-${Date.now().toString(36)}`;
+      const evaluatorContent = JSON.stringify({ evaluatorId, metric, direction });
+      const digestBytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(evaluatorContent));
+      const digest = `sha256:${[...new Uint8Array(digestBytes)].map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+      await projectMemoryApi.registerEvaluator(cwd, {
+        evaluator_id: evaluatorId,
+        version: 1,
+        digest,
+        status: "approved",
+        metrics: [{ name: metric.trim(), direction, weight: 1 }],
+        hard_checks: ["artifact_verified"],
+      });
+      await projectMemoryApi.createLoop(cwd, {
+        title: title.trim(),
+        objective: objective.trim(),
+        evaluator_ref: { evaluator_id: evaluatorId, version: 1, digest },
+      });
+      setTitle("");
+      setObjective("");
+      setCreating(false);
+      await onChanged();
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : t("knowledge.researchCreateError"));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const action = async (loop: ResearchLoop, next: "prepare" | "start" | "pause" | "resume" | "cancel" | "complete") => {
+    setBusy(loop.loop_id);
+    onError(null);
+    try {
+      if (next === "prepare") {
+        const result = await projectMemoryApi.preflight(cwd, loop.loop_id);
+        if (!result.ok) throw new Error(result.blockers.join("; "));
+      } else {
+        await projectMemoryApi.action(cwd, loop.loop_id, next);
+      }
+      await onChanged();
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : t("knowledge.researchActionError"));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const toggleFrontier = async (loopId: string) => {
+    if (frontiers[loopId]) {
+      setFrontiers((current) => {
+        const next = { ...current };
+        delete next[loopId];
+        return next;
+      });
+      return;
+    }
+    setBusy(loopId);
+    try {
+      const result = await projectMemoryApi.frontier(cwd, loopId);
+      setFrontiers((current) => ({ ...current, [loopId]: result.frontier }));
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : t("knowledge.researchActionError"));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 rounded-card border border-border bg-surface p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="font-serif text-lg text-text">{t("knowledge.researchTitle")}</h2>
+          <p className="mt-1 text-sm text-muted">{t("knowledge.researchDescription")}</p>
+        </div>
+        <button type="button" onClick={() => setCreating((value) => !value)} className="flex min-h-11 items-center justify-center gap-2 rounded-input bg-accent px-4 py-2 text-sm font-medium text-accent-fg">
+          <Plus size={15} /> {t("knowledge.researchNew")}
+        </button>
+      </div>
+
+      {creating && (
+        <section className="rounded-card border border-border bg-surface p-5 shadow-card">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <label className="text-xs font-medium text-muted">
+              {t("knowledge.researchLoopTitle")}
+              <input value={title} onChange={(event) => setTitle(event.target.value)} className="mt-1 min-h-11 w-full rounded-input border border-border bg-bg px-3 text-sm text-text" />
+            </label>
+            <label className="text-xs font-medium text-muted">
+              {t("knowledge.researchMetric")}
+              <div className="mt-1 flex gap-2">
+                <input value={metric} onChange={(event) => setMetric(event.target.value)} className="min-h-11 min-w-0 flex-1 rounded-input border border-border bg-bg px-3 text-sm text-text" />
+                <select value={direction} onChange={(event) => setDirection(event.target.value as "maximize" | "minimize")} className="min-h-11 rounded-input border border-border bg-bg px-3 text-sm text-text">
+                  <option value="maximize">{t("knowledge.maximize")}</option>
+                  <option value="minimize">{t("knowledge.minimize")}</option>
+                </select>
+              </div>
+            </label>
+          </div>
+          <label className="mt-4 block text-xs font-medium text-muted">
+            {t("knowledge.researchObjective")}
+            <textarea value={objective} onChange={(event) => setObjective(event.target.value)} rows={4} className="mt-1 w-full rounded-input border border-border bg-bg px-3 py-2 text-sm leading-6 text-text" />
+          </label>
+          <div className="mt-4 flex justify-end gap-2">
+            <button type="button" onClick={() => setCreating(false)} className="min-h-11 rounded-input border border-border px-4 text-sm text-muted">{t("common.cancel")}</button>
+            <button type="button" disabled={busy !== null || !title.trim() || !objective.trim()} onClick={() => void create()} className="flex min-h-11 items-center gap-2 rounded-input bg-accent px-4 text-sm font-medium text-accent-fg disabled:opacity-50">
+              {busy === "create" && <Loader2 size={14} className="animate-spin" />} {t("knowledge.researchCreate")}
+            </button>
+          </div>
+        </section>
+      )}
+
+      {loops.length === 0 ? (
+        <EmptyState icon={<Play size={28} />} title={t("knowledge.researchEmpty")} text={t("knowledge.researchEmptyText")} />
+      ) : (
+        <div className="space-y-3">
+          {loops.map((loop) => (
+            <article key={loop.loop_id} className="rounded-card border border-border bg-surface p-5 shadow-card">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-semibold text-text">{loop.title}</h3>
+                    <span className="rounded-full bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-muted">{loop.status}</span>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-muted">{loop.objective}</p>
+                  <div className="mt-2 font-mono text-[10px] text-muted">{loop.loop_id} · {loop.evaluator_ref?.evaluator_id ?? t("knowledge.noEvaluator")}</div>
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  <LoopActionButton busy={busy === loop.loop_id} onClick={() => void toggleFrontier(loop.loop_id)} icon={<BarChart3 size={14} />} label={frontiers[loop.loop_id] ? t("knowledge.researchHideFrontier") : t("knowledge.researchViewFrontier")} />
+                  {loop.status === "draft" && <LoopActionButton busy={busy === loop.loop_id} onClick={() => void action(loop, "prepare")} icon={<Check size={14} />} label={t("knowledge.researchPrepare")} />}
+                  {loop.status === "ready" && <LoopActionButton busy={busy === loop.loop_id} onClick={() => void action(loop, "start")} icon={<Play size={14} />} label={t("knowledge.researchStart")} />}
+                  {loop.status === "running" && <LoopActionButton busy={busy === loop.loop_id} onClick={() => void action(loop, "pause")} icon={<Pause size={14} />} label={t("knowledge.researchPause")} />}
+                  {loop.status === "paused" && <LoopActionButton busy={busy === loop.loop_id} onClick={() => void action(loop, "resume")} icon={<Play size={14} />} label={t("knowledge.researchResume")} />}
+                  {loop.status === "running" && <LoopActionButton busy={busy === loop.loop_id} onClick={() => void action(loop, "complete")} icon={<Check size={14} />} label={t("knowledge.researchComplete")} />}
+                  {!["completed", "failed", "cancelled"].includes(loop.status) && <LoopActionButton busy={busy === loop.loop_id} onClick={() => void action(loop, "cancel")} icon={<X size={14} />} label={t("knowledge.researchCancel")} />}
+                </div>
+              </div>
+              {frontiers[loop.loop_id] && (
+                <div className="mt-4 border-t border-border pt-4">
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-muted">{t("knowledge.researchFrontier")}</h4>
+                  {frontiers[loop.loop_id].length === 0 ? (
+                    <p className="mt-2 text-sm text-muted">{t("knowledge.researchFrontierEmpty")}</p>
+                  ) : (
+                    <div className="mt-2 grid gap-2 md:grid-cols-2">
+                      {frontiers[loop.loop_id].map((experience) => (
+                        <div key={experience.experience_id} className="rounded-input bg-surface-2 p-3">
+                          <div className="font-mono text-[10px] text-muted">{experience.candidate_id}</div>
+                          <p className="mt-1 text-sm text-text">{experience.approach_summary || experience.experience_id}</p>
+                          <pre className="mt-2 overflow-auto text-[10px] text-muted">{JSON.stringify(experience.evaluation.metrics ?? {}, null, 2)}</pre>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LoopActionButton({ busy, onClick, icon, label }: { busy: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
+  return (
+    <button type="button" disabled={busy} onClick={onClick} className="flex min-h-11 items-center gap-1.5 rounded-input border border-border px-3 py-2 text-sm text-muted hover:text-text disabled:opacity-50">
+      {busy ? <Loader2 size={14} className="animate-spin" /> : icon} {label}
+    </button>
   );
 }
 

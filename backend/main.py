@@ -28,6 +28,7 @@ from api.result_reviews import router as result_reviews_router
 from api.bookmarks import router as bookmarks_router
 from api.literature import router as literature_router
 from api.figures import router as figures_router
+from api.project_memory import router as project_memory_router
 from services.pi_manager import pi_manager
 from services.kernel_manager import kernel_manager
 
@@ -87,6 +88,7 @@ app.include_router(result_reviews_router)
 app.include_router(bookmarks_router)
 app.include_router(literature_router)
 app.include_router(figures_router)
+app.include_router(project_memory_router)
 
 
 @app.get("/api/health")
