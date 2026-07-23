@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from functools import lru_cache
 from pathlib import Path
@@ -28,8 +29,8 @@ _PROVIDER_FALLBACK: dict[str, dict[str, Any]] = {
     },
     "anthropic": {
         "reasoning": True,
-        "thinking_levels": ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
-        "thinking_level_map": {"off": None, "xhigh": "xhigh", "max": "max"},
+        "thinking_levels": ["minimal", "low", "medium", "high", "xhigh", "max"],
+        "thinking_level_map": {"xhigh": "xhigh", "max": "max"},
         "capability_source": "pi-ai:anthropic",
     },
     "google": {
@@ -82,9 +83,10 @@ def _pi_ai_root() -> Path | None:
             if (candidate / "dist" / "index.js").is_file():
                 return candidate
     # Dev mode: pi is a sibling directory, node_modules sits at pi repo root.
-    dev_candidate = cli_path.parents[3] / "node_modules" / "@earendil-works" / "pi-ai"
-    if (dev_candidate / "dist" / "index.js").is_file():
-        return dev_candidate
+    if len(cli_path.parents) > 3:
+        dev_candidate = cli_path.parents[3] / "node_modules" / "@earendil-works" / "pi-ai"
+        if (dev_candidate / "dist" / "index.js").is_file():
+            return dev_candidate
     # Prod fallback: runtime fetched into repo.
     candidate = Path(__file__).resolve().parents[2] / "runtime" / "pi" / "node_modules" / "@earendil-works" / "pi-ai"
     return candidate if (candidate / "dist" / "index.js").is_file() else None
@@ -105,7 +107,7 @@ def load_pi_model_capabilities() -> dict[str, Any]:
             check=True,
         )
         payload = json.loads(completed.stdout)
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+    except (OSError, ValueError, subprocess.SubprocessError, json.JSONDecodeError):
         return {"by_full_id": {}, "by_model_id": {}}
 
     by_full_id: dict[str, dict[str, Any]] = {}
@@ -141,8 +143,38 @@ def get_pi_model_capability(provider: str, model_id: str, api: str | None = None
     exact = catalog["by_full_id"].get(f"{provider}/{model_id}")
     if exact:
         return _public_capability(exact)
+
+    # A clean installation may intentionally omit the bundled Pi runtime
+    # (for example the Python-only CI job). Known first-party providers must
+    # still expose stable capabilities without depending on a local catalog.
+    direct_fallback = _PROVIDER_FALLBACK.get(provider)
+    if direct_fallback:
+        return dict(direct_fallback)
+
     candidates = catalog["by_model_id"].get(model_id, [])
     if not candidates:
+        # Custom provider IDs cannot identify the vendor directly. Apply a
+        # protocol fallback only where the model name itself indicates a
+        # reasoning model; ordinary OpenAI-compatible chat models such as
+        # gpt-4o must remain non-reasoning. Anthropic Messages endpoints use
+        # the Anthropic capability contract directly.
+        if api == "anthropic-messages":
+            return dict(_PROVIDER_FALLBACK["anthropic"])
+        if api in {"openai-completions", "openai-responses"} and (
+            "gpt-5" in model_id.lower()
+            or re.search(r"(^|[-_/])(o1|o3|o4)([-_./]|$)", model_id.lower())
+        ):
+            fallback = dict(_PROVIDER_FALLBACK["openai"])
+            if any(token in model_id.lower() for token in (
+                "gpt-5.6", "codex", "reasoning-max", "thinking-max"
+            )):
+                fallback["thinking_levels"] = [
+                    "off", "minimal", "low", "medium", "high", "xhigh", "max"
+                ]
+                fallback["thinking_level_map"] = {
+                    "off": None, "xhigh": "xhigh", "max": "max"
+                }
+            return fallback
         return None
 
     # Custom provider IDs cannot match pi-ai's built-in IDs. Prefer the model
@@ -173,8 +205,4 @@ def get_pi_model_capability(provider: str, model_id: str, api: str | None = None
             if fallback:
                 return dict(fallback)
 
-    # 4. Direct provider fallback: known providers with models not yet in catalog
-    fallback = _PROVIDER_FALLBACK.get(provider)
-    if fallback:
-        return dict(fallback)
     return None
