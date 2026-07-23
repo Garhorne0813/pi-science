@@ -204,7 +204,7 @@ export function KnowledgePage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-bg [scrollbar-gutter:stable]">
+    <div className="h-full overflow-y-auto bg-bg [scrollbar-gutter:stable] [&_button]:!min-h-9 [&_button]:!text-xs">
       <div className="mx-auto w-full max-w-[1120px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
         <KnowledgePageHeader policy={policy} reviewing={reviewing} onToggleAutoReview={() => void toggleAutoReview()} onReview={() => void runReviewer()} />
 
@@ -288,7 +288,7 @@ function OverviewTab({ document, summary, memorySummary, onRefresh }: { document
             <p className="text-sm font-medium text-[#2b2620]">PROJECT.md</p>
             <p className="text-xs text-[#8c8174]">{t("knowledge.reviewedSource")}</p>
           </div>
-          <button type="button" onClick={() => void onRefresh()} aria-label={t("knowledge.refresh")} className="flex min-h-11 min-w-11 items-center justify-center rounded-input text-[#8c8174] hover:bg-[#f7f0ea] hover:text-[#2b2620]">
+          <button type="button" onClick={() => void onRefresh()} aria-label={t("knowledge.refresh")} className="flex min-h-9 min-w-9 items-center justify-center rounded-input text-[#8c8174] hover:bg-[#f7f0ea] hover:text-[#2b2620]">
             <RefreshCw size={15} />
           </button>
         </div>
