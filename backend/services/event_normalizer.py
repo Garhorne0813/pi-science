@@ -11,6 +11,37 @@ from typing import Any, Optional
 MAX_DISPLAY_CHARS = 20000
 
 
+def assistant_text_from_event(event: dict[str, Any]) -> str:
+    """Extract assistant text from every Pi text-bearing event shape.
+
+    Most providers emit ``text_delta`` events, but a compatible adapter may
+    only emit the final ``text_end`` event (or put the accumulated text on the
+    message). Keeping this in one place prevents those responses from being
+    misclassified as empty.
+    """
+    if event.get("type") != "message_update":
+        return ""
+    assistant_event = event.get("assistantMessageEvent") or {}
+    event_type = assistant_event.get("type", "")
+    if event_type in {"text_delta", "text"}:
+        return str(assistant_event.get("text") or assistant_event.get("delta") or "")
+    if event_type == "text_end":
+        return str(assistant_event.get("content") or "")
+    return ""
+
+
+def assistant_error_from_event(event: dict[str, Any]) -> str:
+    """Extract the provider/runtime error carried by Pi's final assistant message."""
+    if event.get("type") != "message_end":
+        return ""
+    message = event.get("message") if isinstance(event.get("message"), dict) else event
+    stop_reason = message.get("stopReason") or event.get("stopReason")
+    error_message = message.get("errorMessage") or event.get("errorMessage")
+    if stop_reason == "error" or error_message:
+        return str(error_message or "The model request failed")
+    return ""
+
+
 def normalize_event(
     event: dict[str, Any],
     session_id: str,
@@ -39,10 +70,8 @@ def normalize_event(
     elif event_type == "message_update":
         assistant_event = event.get("assistantMessageEvent", {})
         ae_type = assistant_event.get("type", "")
-        if ae_type == "text_delta" or ae_type == "text":
-            text = assistant_event.get("text", "")
-            if not text:
-                text = assistant_event.get("delta", "")
+        if ae_type in {"text_delta", "text", "text_end"}:
+            text = assistant_text_from_event(event)
             msg = event.get("message", {})
             part_id = msg.get("id", "")
             return {
@@ -55,7 +84,9 @@ def normalize_event(
         return None
 
     elif event_type == "message_end":
-        # Frontend marks message complete locally
+        error = assistant_error_from_event(event)
+        if error:
+            return {"type": "error", "sessionId": session_id, "message": error}
         return None
 
     elif event_type == "tool_execution_start":

@@ -1,8 +1,10 @@
 """Pi-Science backend — FastAPI application entry point."""
 
 from contextlib import asynccontextmanager
+import os
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import CORS_ORIGINS, HOST, PORT, ensure_dirs
@@ -55,6 +57,18 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def require_internal_token(request, call_next):
+    """Optionally make the Python process an internal-only runtime."""
+    if os.environ.get("PI_SCIENCE_REQUIRE_INTERNAL_TOKEN") == "1":
+        if request.url.path != "/api/health":
+            expected = os.environ.get("PI_SCIENCE_INTERNAL_TOKEN", "")
+            supplied = request.headers.get("x-pi-science-internal-token", "")
+            if not expected or supplied != expected:
+                return JSONResponse({"detail": "internal runtime authentication required"}, status_code=403)
+    return await call_next(request)
 
 # CORS for frontend dev server
 app.add_middleware(

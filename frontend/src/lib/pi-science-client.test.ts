@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { clampThinkingLevel, PiScienceClient } from "./pi-science-client";
+import { readSettingsResponse } from "../app/routes/SettingsPage";
+import { useRuntimeStore } from "./runtime-store";
 
 
 class FakeEventSource {
@@ -137,6 +139,23 @@ describe("PiScienceClient conversation transport", () => {
       .rejects.toThrow("cannot delete");
   });
 
+  it("preserves backend detail errors across conversation endpoints", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: "session index unavailable" }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: "Invalid API key" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PiScienceClient();
+
+    await expect(client.listSessions("/workspace")).rejects.toThrow("session index unavailable");
+    await expect(client.sendPrompt("session-a", "hello", "/workspace")).rejects.toThrow("Invalid API key");
+  });
+
   it("closes a terminal missing-session stream without reconnecting", () => {
     const client = new PiScienceClient();
     const events: string[] = [];
@@ -157,5 +176,79 @@ describe("PiScienceClient conversation transport", () => {
     expect(events).toContain("error");
     source.onerror?.({} as Event);
     expect(FakeEventSource.instances).toHaveLength(1);
+  });
+
+  it("forwards a terminal runtime error once and closes the transport", () => {
+    const client = new PiScienceClient();
+    const events: Array<{ type: string; message?: unknown }> = [];
+    client.onEvent((event) => events.push(event));
+
+    client.connect("session-a", "/workspace");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    source.emit("error", {
+      type: "error",
+      sessionId: "session-a",
+      message: "OpenAI API error (401): Invalid API key",
+      terminal: true,
+    });
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "error",
+      message: expect.stringContaining("Invalid API key"),
+    }));
+    expect(source.readyState).toBe(FakeEventSource.CLOSED);
+    expect(client.connectedSessionId).toBeNull();
+    source.onerror?.({} as Event);
+    expect(FakeEventSource.instances).toHaveLength(1);
+  });
+});
+
+describe("settings response handling", () => {
+  it("accepts successful JSON responses", async () => {
+    await expect(readSettingsResponse<{ ok: boolean }>(new Response('{"ok":true}', {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }), "fallback")).resolves.toEqual({ ok: true });
+  });
+
+  it("uses the backend error field before detail or fallback", async () => {
+    await expect(readSettingsResponse(new Response(JSON.stringify({
+      error: "custom provider could not be saved",
+      detail: "less specific detail",
+    }), {
+      status: 409,
+      headers: { "Content-Type": "application/json" },
+    }), "fallback")).rejects.toThrow("custom provider could not be saved");
+  });
+
+  it("supports detail and fallback errors for compatibility responses", async () => {
+    await expect(readSettingsResponse(new Response('{"detail":"invalid provider URL"}', {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    }), "fallback")).rejects.toThrow("invalid provider URL");
+
+    await expect(readSettingsResponse(new Response("not json", { status: 502 }), "settings unavailable"))
+      .rejects.toThrow("settings unavailable");
+  });
+
+  it("applies REST session replacements from successful settings responses", async () => {
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: null,
+      sessions: [{ id: "old", cwd: "/workspace", name: "Named conversation" }],
+    });
+
+    await readSettingsResponse(new Response(JSON.stringify({
+      ok: true,
+      session_replacements: [{ cwd: "/workspace", oldId: "old", newId: "new" }],
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }), "fallback");
+
+    expect(useRuntimeStore.getState().sessions).toContainEqual(
+      expect.objectContaining({ id: "new", name: "Named conversation" }),
+    );
   });
 });

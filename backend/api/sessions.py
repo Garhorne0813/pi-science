@@ -21,7 +21,7 @@ from models import (
     PiConfig,
 )
 from services.pi_manager import pi_manager
-from services.event_normalizer import normalize_event
+from services.event_normalizer import assistant_error_from_event, assistant_text_from_event, normalize_event
 from services.session_manifest import read_session_skills, read_skill_events
 from services.session_repository import SessionRepository
 from services.workspace_context import WorkspaceContext
@@ -58,6 +58,22 @@ def _event_replay_cursor(pi, session_id: str, last_event_id: Optional[str]) -> O
     if not last_event_id and (not pi.busy or pi.session_id != session_id):
         return pi.latest_event_sequence(session_id)
     return after_sequence
+
+
+def _should_forward_assistant_text(event: dict, delta_keys: set[str]) -> bool:
+    """Suppress Pi's final full text when deltas already carried that block."""
+    if event.get("type") != "message_update":
+        return True
+    assistant_event = event.get("assistantMessageEvent") or {}
+    event_type = assistant_event.get("type")
+    if event_type not in {"text_delta", "text", "text_end"}:
+        return True
+    message = event.get("message") or {}
+    text_key = f"{message.get('id', '')}:{assistant_event.get('contentIndex', 0)}"
+    if event_type == "text_end":
+        return text_key not in delta_keys
+    delta_keys.add(text_key)
+    return True
 
 
 @router.post("", response_model=CreateSessionResponse)
@@ -354,6 +370,19 @@ async def respond_to_interaction(
     return {"ok": True}
 
 
+@router.post("/{session_id}/auto-review")
+async def schedule_session_auto_review(
+    session_id: str,
+    cwd: str = Query(".", description="Working directory"),
+):
+    """Internal trigger used by the Node conversation owner after a turn settles."""
+    workspace = _workspace_cwd(cwd)
+    from services.reviewer_service import schedule_auto_review
+
+    schedule_auto_review(workspace, session_id)
+    return {"ok": True}
+
+
 @router.get("/{session_id}/commands")
 async def get_session_commands(
     session_id: str,
@@ -469,6 +498,8 @@ async def stream_events(
 
     async def event_generator():
         had_text = False  # Compatibility fallback for older replay entries.
+        had_error = False
+        text_delta_keys: set[str] = set()
         last_event_id = request.headers.get("last-event-id")
         after_sequence = _event_replay_cursor(pi, session_id, last_event_id)
         event_stream = pi.read_events(session_id, after_sequence=after_sequence)
@@ -508,20 +539,26 @@ async def stream_events(
 
                 # Track whether we got any real text
                 if event.get("type") == "message_update":
-                    ae = event.get("assistantMessageEvent", {})
-                    text = ae.get("text") or ae.get("delta") or ""
-                    if text.strip():
+                    if not _should_forward_assistant_text(event, text_delta_keys):
+                        continue
+                    if assistant_text_from_event(event).strip():
                         had_text = True
+
+                if event.get("type") == "error" or assistant_error_from_event(event):
+                    had_error = True
 
                 normalized = normalize_event(event, session_id)
                 if normalized is None:
                     continue
+                if normalized.get("type") == "error":
+                    had_error = True
 
                 # If agent settles without producing any text, emit an error
                 turn_had_text = bool(event.get("_piTurnHadText", had_text))
                 if (
                     event.get("type") == "agent_settled"
                     and not turn_had_text
+                    and not had_error
                     and not event.get("handledWithoutTurn")
                 ):
                     yield {
@@ -550,6 +587,8 @@ async def stream_events(
 
                 if event.get("type") == "agent_settled":
                     had_text = False  # Reset for next turn
+                    had_error = False
+                    text_delta_keys.clear()
         except Exception as e:
             yield {
                 "event": "error",

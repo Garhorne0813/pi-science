@@ -68,6 +68,18 @@ export function setSessionName(sessionId: string, name: string) {
   saveNames(names);
 }
 
+export function moveSessionName(previousSessionId: string, nextSessionId: string): string {
+  if (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId) {
+    return getSessionName(nextSessionId || previousSessionId);
+  }
+  const names = loadNames();
+  const previousName = names[previousSessionId] || "";
+  if (previousName && !names[nextSessionId]) names[nextSessionId] = previousName;
+  delete names[previousSessionId];
+  saveNames(names);
+  return names[nextSessionId] || "";
+}
+
 export interface HistoryMessage {
   id: string;
   role: string;
@@ -109,6 +121,15 @@ async function request(input: RequestInfo | URL, init?: RequestInit): Promise<Re
   } finally {
     globalThis.clearTimeout(timer);
   }
+}
+
+function responseError(data: unknown, fallback: string): string {
+  if (data && typeof data === "object") {
+    const payload = data as { error?: unknown; detail?: unknown };
+    if (typeof payload.error === "string" && payload.error) return payload.error;
+    if (typeof payload.detail === "string" && payload.detail) return payload.detail;
+  }
+  return fallback;
 }
 
 // ── Client ──
@@ -161,7 +182,7 @@ export class PiScienceClient {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.ok === false) {
-      throw new Error(data.error || `Create session failed: ${res.statusText}`);
+      throw new Error(responseError(data, `Create session failed: ${res.statusText}`));
     }
     return data;
   }
@@ -170,7 +191,7 @@ export class PiScienceClient {
     const params = new URLSearchParams({ cwd });
     const res = await request(`${this.baseUrl}/api/sessions?${params}`);
     const data = await res.json().catch(() => ([]));
-    if (!res.ok) throw new Error(`List sessions failed: ${res.statusText}`);
+    if (!res.ok) throw new Error(responseError(data, `List sessions failed: ${res.statusText}`));
     return Array.isArray(data) ? data : [];
   }
 
@@ -179,7 +200,7 @@ export class PiScienceClient {
     const res = await request(`${this.baseUrl}/api/sessions/${sessionId}/messages${params}`);
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.ok === false) {
-      throw new Error(data.error || `Load messages failed: ${res.statusText}`);
+      throw new Error(responseError(data, `Load messages failed: ${res.statusText}`));
     }
     return data.messages ?? [];
   }
@@ -191,7 +212,7 @@ export class PiScienceClient {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.ok === false) {
-      throw new Error(data.error || `Resume session failed: ${res.statusText}`);
+      throw new Error(responseError(data, `Resume session failed: ${res.statusText}`));
     }
   }
 
@@ -200,7 +221,7 @@ export class PiScienceClient {
     const res = await request(`${this.baseUrl}/api/sessions/${sessionId}/state?${params}`);
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.ok === false) {
-      throw new Error(data.error || `Read session state failed: ${res.statusText}`);
+      throw new Error(responseError(data, `Read session state failed: ${res.statusText}`));
     }
     return data as SessionState;
   }
@@ -214,7 +235,7 @@ export class PiScienceClient {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.ok === false) {
-      throw new Error(data.error || `Fork session failed: ${res.statusText}`);
+      throw new Error(responseError(data, `Fork session failed: ${res.statusText}`));
     }
     return { id: data.id };
   }
@@ -228,7 +249,7 @@ export class PiScienceClient {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.ok === false) {
-      const error = new Error(data.error || `Send prompt failed: ${res.statusText}`) as Error & {
+      const error = new Error(responseError(data, `Send prompt failed: ${res.statusText}`)) as Error & {
         code?: string;
         status?: number;
       };
@@ -252,7 +273,7 @@ export class PiScienceClient {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.ok === false) {
-      throw new Error(data.error || `Set model failed: ${res.statusText}`);
+      throw new Error(responseError(data, `Set model failed: ${res.statusText}`));
     }
     return {
       id: data.id,
@@ -268,7 +289,7 @@ export class PiScienceClient {
     const res = await request(`${this.baseUrl}/api/sessions/${sessionId}/abort${params}`, { method: "POST" });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.ok === false) {
-      throw new Error(data.error || `Abort failed: ${res.statusText}`);
+      throw new Error(responseError(data, `Abort failed: ${res.statusText}`));
     }
   }
 
@@ -277,7 +298,7 @@ export class PiScienceClient {
     const res = await request(`${this.baseUrl}/api/sessions/${sessionId}${params}`, { method: "DELETE" });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.ok === false) {
-      throw new Error(data.error || `Delete session failed: ${res.statusText}`);
+      throw new Error(responseError(data, `Delete session failed: ${res.statusText}`));
     }
   }
 
@@ -298,7 +319,7 @@ export class PiScienceClient {
     );
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.ok === false) {
-      throw new Error(data.error || `Interaction response failed: ${res.statusText}`);
+      throw new Error(responseError(data, `Interaction response failed: ${res.statusText}`));
     }
   }
 
@@ -308,6 +329,7 @@ export class PiScienceClient {
   private static SSE_EVENTS = [
     "text.updated", "tool.updated", "session.idle", "error",
     "question.asked", "permission.asked", "compaction.updated", "artifact.published",
+    "agent_start", "agent_end", "status.updated", "session.replaced", "stream.gap",
   ];
 
   connect(sessionId: string, cwd?: string): void {

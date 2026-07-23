@@ -4,6 +4,7 @@ import { Key, Trash2, Eye, EyeOff, Check, Loader2, Cpu, Puzzle, FlaskConical, La
 import { cn } from "../../lib/cn";
 import { shippedLocales } from "../../i18n/config";
 import { useUiStore } from "../../lib/store";
+import { applySessionReplacements, type SessionReplacement } from "../../lib/runtime-store";
 import { useTranslation } from "react-i18next";
 
 type Tab = "general" | "llm" | "extensions" | "mcp" | "compute";
@@ -67,6 +68,21 @@ interface Config {
   available_models: AvailableModel[];
 }
 
+export async function readSettingsResponse<T>(response: Response, fallback: string): Promise<T> {
+  const data = await response.json().catch(() => ({})) as T & {
+    error?: string;
+    detail?: string;
+    session_replacements?: SessionReplacement[];
+  };
+  if (!response.ok || (data as { ok?: boolean }).ok === false) {
+    throw new Error(data.error || data.detail || fallback);
+  }
+  if (Array.isArray(data.session_replacements)) {
+    applySessionReplacements(data.session_replacements);
+  }
+  return data;
+}
+
 export function SettingsPage() {
   const { t } = useTranslation();
   const { cwd: rawCwd } = useParams<{ cwd: string }>();
@@ -77,36 +93,42 @@ export function SettingsPage() {
   const [saving, setSaving] = useState<string | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState<Record<string, string>>({});
   const [showKey, setShowKey] = useState<Record<string, boolean>>({});
+  const [error, setError] = useState<string | null>(null);
 
   const loadConfig = useCallback(async () => {
     try {
       const res = await fetch("/api/settings/config");
-      setConfig(await res.json());
+      setConfig(await readSettingsResponse<Config>(res, "Unable to load settings"));
+      setError(null);
     } catch (e) {
-      console.error(e);
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message);
+      throw e;
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    loadConfig();
+    void loadConfig().catch(() => undefined);
   }, [loadConfig]);
 
   const saveKey = async (provider: string) => {
     const key = apiKeyInput[provider]?.trim();
     if (!key) return;
     setSaving(provider);
+    setError(null);
     try {
-      await fetch("/api/settings/api-key", {
+      const response = await fetch("/api/settings/api-key", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider, api_key: key }),
       });
+      await readSettingsResponse(response, "Unable to save API key");
       setApiKeyInput((prev) => ({ ...prev, [provider]: "" }));
       await loadConfig();
     } catch (e) {
-      console.error(e);
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(null);
     }
@@ -114,11 +136,13 @@ export function SettingsPage() {
 
   const deleteKey = async (provider: string) => {
     setSaving(provider);
+    setError(null);
     try {
-      await fetch(`/api/settings/api-key/${provider}`, { method: "DELETE" });
+      const response = await fetch(`/api/settings/api-key/${provider}`, { method: "DELETE" });
+      await readSettingsResponse(response, "Unable to delete API key");
       await loadConfig();
     } catch (e) {
-      console.error(e);
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(null);
     }
@@ -126,8 +150,9 @@ export function SettingsPage() {
 
   const saveModel = async (model: string, thinking?: string) => {
     setSaving("model");
+    setError(null);
     try {
-      await fetch("/api/settings/model", {
+      const response = await fetch("/api/settings/model", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -135,9 +160,10 @@ export function SettingsPage() {
           thinking: thinking || config?.thinking || "high",
         }),
       });
+      await readSettingsResponse(response, "Unable to save default model");
       await loadConfig();
     } catch (e) {
-      console.error(e);
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(null);
     }
@@ -155,6 +181,7 @@ export function SettingsPage() {
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-[720px] px-8 py-8">
         <h1 className="font-serif text-xl text-text mb-6">{t("nav.settings")}</h1>
+        {error && <p role="alert" className="mb-4 rounded-input bg-error/10 px-3 py-2 text-[11px] text-error">{error}</p>}
 
         {/* Tab bar */}
         <div className="flex gap-1 mb-6 rounded-input bg-surface-2 p-0.5 w-fit">
@@ -419,7 +446,7 @@ function ModelEndpointSection() {
   const load = useCallback(async () => {
     const response = await fetch("/api/endpoints");
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.detail || t("settings.endpoints.loadError"));
+    if (!response.ok) throw new Error(data.error || data.detail || t("settings.endpoints.loadError"));
     setEndpoints(data.endpoints || []);
   }, [t]);
   useEffect(() => {
@@ -441,7 +468,7 @@ function ModelEndpointSection() {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setError(data.detail || t("settings.endpoints.registerError"));
+      setError(data.error || data.detail || t("settings.endpoints.registerError"));
       return;
     }
     setName("");
@@ -523,8 +550,7 @@ function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, onClose }
           api,
         }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || t("settings.custom.discoveryError"));
+      const data = await readSettingsResponse<{ provider: CustomProvider }>(res, t("settings.custom.discoveryError"));
       setDiscovered(data.provider);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -549,8 +575,7 @@ function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, onClose }
           models: discovered.models,
         }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || t("settings.custom.saveError"));
+      await readSettingsResponse(res, t("settings.custom.saveError"));
       setDiscovered(null);
       setName("");
       setBaseUrl("");
@@ -566,13 +591,13 @@ function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, onClose }
 
   const remove = async (id: string) => {
     setError(null);
-    const res = await fetch(`/api/settings/custom-providers/${encodeURIComponent(id)}`, { method: "DELETE" });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setError(data.detail || t("settings.custom.removeError"));
-      return;
+    try {
+      const res = await fetch(`/api/settings/custom-providers/${encodeURIComponent(id)}`, { method: "DELETE" });
+      await readSettingsResponse(res, t("settings.custom.removeError"));
+      await onConfigReload();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
     }
-    await onConfigReload();
   };
 
   const closeForm = () => {
@@ -688,7 +713,7 @@ function ExtensionsTab({ workspaceCwd }: { workspaceCwd: string | null }) {
     fetch("/api/settings/extensions")
       .then(async (response) => {
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.detail || t("settings.extensionsPage.loadError"));
+        if (!response.ok) throw new Error(data.error || data.detail || t("settings.extensionsPage.loadError"));
         if (!cancelled) setExtensions(data.extensions || []);
       })
       .catch((cause) => {
@@ -747,7 +772,7 @@ function WebAccessSettings() {
   const load = useCallback(async () => {
     const response = await fetch("/api/settings/web-access");
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.detail || t("settings.web.loadError"));
+    if (!response.ok) throw new Error(data.error || data.detail || t("settings.web.loadError"));
     setConfig(data);
   }, [t]);
 
@@ -772,8 +797,7 @@ function WebAccessSettings() {
           remove_keys: removeKeys,
         }),
       });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.detail || t("settings.web.saveError"));
+      const data = await readSettingsResponse<WebAccessConfig>(response, t("settings.web.saveError"));
       setConfig(data);
       setKeys({});
       setSaved(true);
@@ -933,7 +957,7 @@ function SubagentSettings({ workspaceCwd }: { workspaceCwd: string | null }) {
     if (!workspaceCwd) return;
     const response = await fetch(`/api/settings/subagents?cwd=${encodeURIComponent(workspaceCwd)}`);
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.detail || t("settings.subagents.loadError"));
+    if (!response.ok) throw new Error(data.error || data.detail || t("settings.subagents.loadError"));
     setAgents(data.agents || []);
   }, [workspaceCwd, t]);
   useEffect(() => {
@@ -956,7 +980,7 @@ function SubagentSettings({ workspaceCwd }: { workspaceCwd: string | null }) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setError(data.detail || t("settings.subagents.saveError"));
+      setError(data.error || data.detail || t("settings.subagents.saveError"));
       setBusy(false);
       return;
     }
@@ -972,7 +996,7 @@ function SubagentSettings({ workspaceCwd }: { workspaceCwd: string | null }) {
     const response = await fetch(`/api/settings/subagents/${encodeURIComponent(agent.name)}?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "DELETE" });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setError(data.detail || t("settings.subagents.deleteError"));
+      setError(data.error || data.detail || t("settings.subagents.deleteError"));
       return;
     }
     setNotice(t("settings.subagents.deleted"));
@@ -1181,7 +1205,7 @@ function AgentProfilesSection() {
   const load = useCallback(async () => {
     const response = await fetch("/api/agent-profiles");
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.detail || t("settings.profiles.loadError"));
+    if (!response.ok) throw new Error(data.error || data.detail || t("settings.profiles.loadError"));
     setProfiles(data.profiles || []);
   }, [t]);
   useEffect(() => {
@@ -1206,7 +1230,7 @@ function AgentProfilesSection() {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setError(data.detail || t("settings.profiles.createError"));
+      setError(data.error || data.detail || t("settings.profiles.createError"));
       return;
     }
     setName("");
@@ -1292,7 +1316,7 @@ function MCPTab() {
     fetch("/api/mcp/catalog")
       .then(async (response) => {
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.detail || t("settings.mcpPage.loadError"));
+        if (!response.ok) throw new Error(data.error || data.detail || t("settings.mcpPage.loadError"));
         setServers(data.servers || []);
       })
       .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
@@ -1303,13 +1327,14 @@ function MCPTab() {
     const previous = servers.find((server) => server.id === id)?.enabled || false;
     setError(null);
     setServers((prev) => prev.map((server) => (server.id === id ? { ...server, enabled: on } : server)));
-    const res = await fetch(`/api/settings/mcp/${id}?enabled=${on}`, {
-      method: "PUT",
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
+    try {
+      const res = await fetch(`/api/settings/mcp/${id}?enabled=${on}`, {
+        method: "PUT",
+      });
+      await readSettingsResponse(res, t("settings.mcpPage.updateError", { error: res.statusText }));
+    } catch (cause) {
       setServers((prev) => prev.map((server) => (server.id === id ? { ...server, enabled: previous } : server)));
-      setError(data.detail || t("settings.mcpPage.updateError", { error: res.statusText }));
+      setError(cause instanceof Error ? cause.message : String(cause));
     }
   };
 

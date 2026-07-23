@@ -23,8 +23,12 @@ class TestSettingsAPI:
         assert res.status_code == 200
         assert res.json()["extensions"][0]["installed"] is True
 
-    async def test_web_access_settings_hide_keys_and_inject_environment(self, client, temp_config_dir):
+    async def test_web_access_settings_hide_keys_and_inject_environment(self, client, temp_config_dir, monkeypatch):
         from api.settings import get_env_with_keys, get_web_access_runtime
+
+        # The runtime intentionally lets an explicit process environment key win
+        # over persisted settings. Isolate this test from developer/CI secrets.
+        monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
         saved = await client.put(
             "/api/settings/web-access",

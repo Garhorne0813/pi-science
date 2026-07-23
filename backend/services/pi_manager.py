@@ -18,6 +18,7 @@ from config import (
 from models import PiConfig
 from services.pi_event_observer import observe_event, record_skill_snapshot
 from services.pi_runtime_config import build_runtime_launch, ensure_pi_subagent_wrapper
+from services.event_normalizer import assistant_text_from_event
 
 
 MAX_EVENT_STRING_CHARS = 20000
@@ -277,11 +278,8 @@ class PiProcess:
         event_session_id = event_session_id or self.session_id
 
         if msg_type == "message_update" and event_session_id:
-            assistant_event = data.get("assistantMessageEvent", {})
-            if assistant_event.get("type") in {"text_delta", "text"}:
-                text = assistant_event.get("text") or assistant_event.get("delta") or ""
-                if str(text).strip():
-                    self._turn_had_text[event_session_id] = True
+            if assistant_text_from_event(data).strip():
+                self._turn_had_text[event_session_id] = True
 
         if msg_type == "agent_start":
             self._awaiting_prompt_ack = False

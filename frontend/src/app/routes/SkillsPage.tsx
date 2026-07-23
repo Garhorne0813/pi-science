@@ -1,6 +1,21 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Package, Puzzle, Wrench, Check, X, ChevronRight, ShieldCheck, AlertTriangle, RotateCcw, Loader2 } from "lucide-react";
+import { applySessionReplacements, type SessionReplacement } from "../../lib/runtime-store";
+
+async function readResponse<T>(response: Response, fallback: string): Promise<T> {
+  const data = await response.json().catch(() => ({})) as T & {
+    ok?: boolean;
+    error?: string;
+    detail?: string;
+    session_replacements?: SessionReplacement[];
+  };
+  if (!response.ok || data.ok === false) throw new Error(data.error || data.detail || fallback);
+  if (Array.isArray(data.session_replacements)) {
+    applySessionReplacements(data.session_replacements as SessionReplacement[]);
+  }
+  return data;
+}
 
 interface Skill {
   skill_id: string;
@@ -43,16 +58,13 @@ export function SkillsPage() {
     const query = cwd ? `?${new URLSearchParams({ cwd })}` : "";
     Promise.all([
       fetch(`/api/skills${query}`).then(async (response) => {
-        if (!response.ok) throw new Error("Unable to load skills");
-        return response.json();
+        return readResponse<Skill[]>(response, "Unable to load skills");
       }),
       fetch("/api/skills/tools").then(async (response) => {
-        if (!response.ok) throw new Error("Unable to detect tools");
-        return response.json();
+        return readResponse<Tool[]>(response, "Unable to detect tools");
       }),
       fetch("/api/settings/skills").then(async (response) => {
-        if (!response.ok) return { skills: [] };
-        return response.json();
+        return readResponse<{ skills?: Array<{ name: string; enabled: boolean }>; configured?: boolean }>(response, "Unable to load skill settings");
       }),
     ]).then(([skillData, toolData, settingsData]) => {
       if (cancelled) return;
@@ -84,8 +96,7 @@ export function SkillsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: skill.name, enabled }),
       });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.detail || "Unable to update skill settings");
+      await readResponse<Record<string, unknown>>(response, "Unable to update skill settings");
       setConfigured(true);
     } catch (cause) {
       setSkills((current) => current.map((item) => item.name === skill.name ? { ...item, enabled: skill.enabled } : item));
@@ -100,8 +111,7 @@ export function SkillsPage() {
     setError(null);
     try {
       const response = await fetch("/api/settings/skills", { method: "DELETE" });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.detail || "Unable to reset skill settings");
+      await readResponse<Record<string, unknown>>(response, "Unable to reset skill settings");
       setSkills((current) => current.map((item) => ({ ...item, enabled: true })));
       setConfigured(false);
     } catch (cause) {

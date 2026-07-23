@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createClient } from "./pi-science-client";
-import { convertHistoryToBlocks, useRuntimeStore } from "./runtime-store";
+import { createClient, getSessionName, setSessionName } from "./pi-science-client";
+import { applySessionReplacements, convertHistoryToBlocks, useRuntimeStore } from "./runtime-store";
 
 
 class FakeEventSource {
@@ -145,12 +145,16 @@ describe("runtime conversation state", () => {
     expect(current.status).toBe("ready");
   });
 
-  it("recovers a missing session to a ready blank conversation", async () => {
+  it.each([
+    "session not found in this workspace",
+    "session is not active in this workspace",
+    "session not active in this workspace",
+  ])("recovers a missing session response (%s) to a ready blank conversation", async (message) => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/messages")) return jsonResponse({ messages: [] });
       if (url.includes("/state")) {
-        return jsonResponse({ ok: false, error: "session not found in this workspace" }, 404);
+        return jsonResponse({ ok: false, error: message }, 404);
       }
       if (url.startsWith("/api/sessions?")) return jsonResponse([]);
       throw new Error(`Unexpected request: ${url}`);
@@ -166,7 +170,11 @@ describe("runtime conversation state", () => {
     expect(FakeEventSource.instances[0].readyState).toBe(FakeEventSource.CLOSED);
   });
 
-  it("clears the active session when SSE reports a terminal missing-session error", async () => {
+  it.each([
+    "session not found in this workspace",
+    "session is not active in this workspace",
+    "session not active in this workspace",
+  ])("clears the active session when SSE reports terminal missing-session error: %s", async (message) => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/messages")) return jsonResponse({ messages: [] });
@@ -181,12 +189,43 @@ describe("runtime conversation state", () => {
     source.emit("error", {
       type: "error",
       sessionId: "stale-session",
-      message: "session not found in this workspace",
+      message,
       terminal: true,
     });
 
     expect(useRuntimeStore.getState().activeSessionId).toBeNull();
     expect(useRuntimeStore.getState().status).toBe("ready");
+    expect(source.readyState).toBe(FakeEventSource.CLOSED);
+  });
+
+  it("renders a terminal runtime error and settles the active turn", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-a", { is_streaming: true }));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    source.emit("error", {
+      type: "error",
+      sessionId: "session-a",
+      message: "OpenAI API error (401): Invalid API key",
+      terminal: true,
+    });
+
+    const current = useRuntimeStore.getState();
+    expect(current.activeSessionId).toBe("session-a");
+    expect(current.working).toBe(false);
+    expect(current.status).toBe("error");
+    expect(current.thread.blocks).toContainEqual(expect.objectContaining({
+      kind: "status-line",
+      level: "error",
+      text: expect.stringContaining("Invalid API key"),
+    }));
     expect(source.readyState).toBe(FakeEventSource.CLOSED);
   });
 
@@ -445,6 +484,55 @@ describe("runtime conversation state", () => {
     expect(blocks).toContainEqual(
       expect.objectContaining({ kind: "agent", id: "assistant-live" }),
     );
+  });
+
+  it("replaces accumulated text when the server sends a corrected final snapshot", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-a", { is_streaming: true }));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    FakeEventSource.instances[0].emit("agent_start", { type: "agent_start", sessionId: "session-a" });
+    FakeEventSource.instances[0].emit("text.updated", {
+      type: "text.updated", sessionId: "session-a", partId: "assistant-live", text: "helo",
+    });
+    FakeEventSource.instances[0].emit("text.updated", {
+      type: "text.updated", sessionId: "session-a", partId: "assistant-live", text: "hello", replace: true,
+    });
+
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
+      expect.objectContaining({ kind: "agent", parts: [{ id: "assistant-live", text: "hello" }] }),
+    );
+  });
+
+  it("rebuilds conversation history when the durable SSE cursor has expired", async () => {
+    let messageReads = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) {
+        messageReads += 1;
+        return jsonResponse({ messages: messageReads === 1 ? [] : [{
+          id: "assistant-snapshot",
+          role: "assistant",
+          content: [{ type: "text", text: "durable snapshot" }],
+        }] });
+      }
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    FakeEventSource.instances[0].emit("stream.gap", {
+      type: "stream.gap", sessionId: "session-a", missingCursor: "expired",
+    });
+
+    await vi.waitFor(() => expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
+      expect.objectContaining({ kind: "agent", id: "assistant-snapshot" }),
+    ));
+    expect(useRuntimeStore.getState().status).toBe("ready");
   });
 
   it("does not let a stale state snapshot clear live working activity", async () => {
@@ -737,6 +825,80 @@ describe("runtime conversation state", () => {
     expect(current.activeSessionId).toBe("forked");
     expect(current.thread.blocks).toContainEqual(
       expect.objectContaining({ kind: "status-line", text: "temporary read failure" }),
+    );
+  });
+
+  it("moves to a replacement session emitted after a runtime configuration reload", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state(url.includes("replacement") ? "replacement" : "original"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([{ id: "replacement", cwd: "/workspace" }]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "original");
+    FakeEventSource.instances[0].emit("session.replaced", {
+      type: "session.replaced",
+      sessionId: "original",
+      replacementSessionId: "replacement",
+    });
+    await vi.waitFor(() => expect(useRuntimeStore.getState().activeSessionId).toBe("replacement"));
+    expect(FakeEventSource.instances.at(-1)?.url).toContain("/api/sessions/replacement/events");
+    await vi.waitFor(() => expect(useRuntimeStore.getState().sessions).toContainEqual(
+      expect.objectContaining({ id: "replacement" }),
+    ));
+    expect(useRuntimeStore.getState().working).toBe(false);
+  });
+
+  it("preserves custom names when REST replaces the active session", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("replacement/messages")) return jsonResponse({ messages: [] });
+      if (url.startsWith("/api/sessions?")) return jsonResponse([{ id: "replacement", cwd: "/workspace" }]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    setSessionName("original", "My experiment");
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: "original",
+      sessions: [{ id: "original", cwd: "/workspace", name: "My experiment" }],
+      thread: { blocks: [], index: {}, loaded: true },
+      status: "ready",
+    });
+
+    expect(applySessionReplacements([
+      { cwd: "/workspace", oldId: "original", newId: "replacement" },
+    ])).toBe("replacement");
+
+    expect(useRuntimeStore.getState().activeSessionId).toBe("replacement");
+    expect(useRuntimeStore.getState().sessions).toContainEqual(
+      expect.objectContaining({ id: "replacement", name: "My experiment" }),
+    );
+    expect(getSessionName("replacement")).toBe("My experiment");
+    expect(getSessionName("original")).toBe("");
+    expect(FakeEventSource.instances.at(-1)?.url).toContain("/api/sessions/replacement/events");
+  });
+
+  it("renders compaction start, completion, and failure state", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-1"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-1");
+    FakeEventSource.instances[0].emit("compaction.updated", { type: "compaction.updated", sessionId: "session-1", status: "start" });
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
+      expect.objectContaining({ id: "compaction-status", level: "info", text: expect.stringContaining("Compacting") }),
+    );
+    FakeEventSource.instances[0].emit("compaction.updated", { type: "compaction.updated", sessionId: "session-1", status: "end" });
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
+      expect.objectContaining({ id: "compaction-status", level: "done", text: "Conversation context compacted" }),
+    );
+    FakeEventSource.instances[0].emit("compaction.updated", { type: "compaction.updated", sessionId: "session-1", status: "error", message: "context overflow" });
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
+      expect.objectContaining({ id: "compaction-status", level: "error", text: expect.stringContaining("context overflow") }),
     );
   });
 });

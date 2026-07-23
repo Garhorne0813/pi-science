@@ -39,6 +39,7 @@ Thumbs.db
 .pytest_cache/
 coverage/
 .pi-science/
+.runtime/
 
 # Project documentation (local only, not versioned)
 ARCHITECTURE.md

@@ -9,7 +9,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from config import get_sessions_dir
-from api.sessions import _error_stream, _event_replay_cursor, _read_session_from_disk
+from api.sessions import (
+    _error_stream,
+    _event_replay_cursor,
+    _read_session_from_disk,
+    _should_forward_assistant_text,
+)
 from models import PiConfig
 from services.pi_manager import PiManager, PiProcess, _should_use_global_model
 
@@ -41,6 +46,29 @@ def _write_session(cwd, session_id: str):
     path = session_dir / f"{session_id}.jsonl"
     path.write_text(json.dumps({"type": "session", "id": session_id}) + "\n")
     return path
+
+
+def test_compatibility_stream_deduplicates_delta_and_text_end_per_content_block():
+    delta_keys: set[str] = set()
+    delta = {
+        "type": "message_update",
+        "message": {"id": "assistant-1"},
+        "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": "OK"},
+    }
+    duplicate_end = {
+        "type": "message_update",
+        "message": {"id": "assistant-1"},
+        "assistantMessageEvent": {"type": "text_end", "contentIndex": 0, "content": "OK"},
+    }
+    distinct_end = {
+        "type": "message_update",
+        "message": {"id": "assistant-1"},
+        "assistantMessageEvent": {"type": "text_end", "contentIndex": 1, "content": "second block"},
+    }
+
+    assert _should_forward_assistant_text(delta, delta_keys) is True
+    assert _should_forward_assistant_text(duplicate_end, delta_keys) is False
+    assert _should_forward_assistant_text(distinct_end, delta_keys) is True
 
 
 def test_find_session_file_uses_exact_session_id(tmp_path):
@@ -433,6 +461,27 @@ async def test_create_session_returns_busy_error_instead_of_old_id(client, temp_
 
     assert response.status_code == 409
     assert response.json()["code"] == "busy"
+
+
+@pytest.mark.anyio
+async def test_internal_auto_review_endpoint_schedules_exact_session(client, temp_workspace, monkeypatch):
+    import services.reviewer_service as reviewer_service
+
+    scheduled = []
+    monkeypatch.setattr(
+        reviewer_service,
+        "schedule_auto_review",
+        lambda cwd, session_id: scheduled.append((cwd, session_id)),
+    )
+
+    response = await client.post(
+        "/api/sessions/session-review/auto-review",
+        params={"cwd": str(temp_workspace)},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert scheduled == [(str(temp_workspace.resolve()), "session-review")]
 
 
 @pytest.mark.anyio

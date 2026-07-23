@@ -1,0 +1,57 @@
+name: quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Python dependencies
+        run: uv sync --directory backend --extra dev
+
+      - name: Typecheck contracts and control plane
+        run: pnpm typecheck
+
+      - name: Test contracts, control plane and frontend
+        run: pnpm test
+
+      - name: Build all JavaScript packages
+        run: pnpm build
+
+      - name: Test Python scientific runtime
+        run: uv run --directory backend pytest -q
+
+      - name: Run control-plane smoke test
+        run: bash scripts/smoke-control-plane.sh

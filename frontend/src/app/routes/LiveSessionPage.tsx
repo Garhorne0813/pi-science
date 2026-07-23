@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } fr
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowUp, Loader2, Square, Paperclip, Sparkles, X, File, FolderOpen } from "lucide-react";
 import { clampThinkingLevel, getSessionName, setSessionName, type AvailableModel } from "../../lib/pi-science-client";
-import { useRuntimeStore, type PendingInteraction } from "../../lib/runtime-store";
+import { applySessionReplacements, useRuntimeStore, type PendingInteraction, type SessionReplacement } from "../../lib/runtime-store";
 import { useUiStore } from "../../lib/store";
 import { cn } from "../../lib/cn";
 import type { ThreadBlock, ToolCallBlock } from "../../types/thread";
@@ -25,7 +25,7 @@ export function LiveSessionPage() {
   const navigate = useNavigate();
   const {
     status, thread, sessions, working, connect, disconnect,
-    sendPrompt, abort, activeSessionId, setModel: setRuntimeModel, createNewSession,
+    sendPrompt, abort, activeSessionId, createNewSession,
     model: runtimeModel, thinking: runtimeThinking,
     pendingInteraction, respondToInteraction,
     draft: input, setDraft: setInput,
@@ -56,13 +56,13 @@ export function LiveSessionPage() {
   const clearWorkspaceReferences = useUiStore((state) => state.clearWorkspaceReferences);
 
   useEffect(() => {
-    if (working && activeSessionId && activeSessionId !== (sessionId || null)) {
+    if (activeSessionId && activeSessionId !== (sessionId || null)) {
       navigate(
         `/workspace/${encodeURIComponent(workspaceCwd)}/session/${activeSessionId}`,
         { replace: true },
       );
     }
-  }, [activeSessionId, navigate, sessionId, working, workspaceCwd]);
+  }, [activeSessionId, navigate, sessionId, workspaceCwd]);
 
   useEffect(() => {
     setCurrentCwd(workspaceCwd);
@@ -89,19 +89,26 @@ export function LiveSessionPage() {
 
   useEffect(() => {
     fetch("/api/settings/config")
-      .then((res) => res.json())
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || data.detail || `Unable to load model list: ${res.statusText}`);
+        return data;
+      })
       .then((data) => {
         const runtime = useRuntimeStore.getState();
-        setModels(Array.isArray(data.available_models) ? data.available_models : []);
+        const availableModels = Array.isArray(data.available_models) ? data.available_models : [];
+        setModels(availableModels);
         const nextModel = runtime.model || data.model || "";
-        const nextModelInfo = (Array.isArray(data.available_models) ? data.available_models : [])
-          .find((model: AvailableModel) => model.id === nextModel);
+        const nextModelInfo = availableModels.find((model: AvailableModel) => model.id === nextModel);
         const supported = nextModelInfo?.thinking_levels || [];
         const configuredThinking = runtime.thinking || data.thinking || "high";
         setSelectedModel(nextModel);
         setThinking(supported.length > 0 ? clampThinkingLevel(configuredThinking, supported) : configuredThinking);
+        setModelError(availableModels.length === 0
+          ? "Configure a provider and model in Settings before sending a message."
+          : null);
       })
-      .catch(() => setModelError("Unable to load model list"));
+      .catch((cause) => setModelError(cause instanceof Error ? cause.message : "Unable to load model list"));
   }, []);
 
   useEffect(() => {
@@ -128,22 +135,11 @@ export function LiveSessionPage() {
   const applyModelConfig = async (model: string, nextThinking: string) => {
     const previousModel = selectedModel;
     const previousThinking = thinking;
-    let runtimeChanged = false;
     setSelectedModel(model);
     setThinking(nextThinking);
     setModelError(null);
     setConfiguringModel(true);
     try {
-      if (activeSessionId) {
-        const runtimeSessionId = await setRuntimeModel(model, nextThinking);
-        runtimeChanged = true;
-        if (runtimeSessionId && runtimeSessionId !== sessionId) {
-          navigate(
-            `/workspace/${encodeURIComponent(workspaceCwd)}/session/${runtimeSessionId}`,
-            { replace: true },
-          );
-        }
-      }
       const response = await fetch("/api/settings/model", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -151,29 +147,24 @@ export function LiveSessionPage() {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(data.detail || `Unable to save model: ${response.statusText}`);
+        throw new Error(data.error || data.detail || `Unable to save model: ${response.statusText}`);
       }
+      const replacementId = applySessionReplacements(
+        Array.isArray(data.session_replacements) ? data.session_replacements as SessionReplacement[] : [],
+      );
+      setSelectedModel(typeof data.model === "string" ? data.model : model);
       setThinking(typeof data.thinking === "string" ? data.thinking : nextThinking);
-    } catch (e) {
-      let rolledBack = !runtimeChanged;
-      if (runtimeChanged && previousModel) {
-        try {
-          const runtimeSessionId = await setRuntimeModel(previousModel, previousThinking);
-          if (runtimeSessionId && runtimeSessionId !== sessionId) {
-            navigate(
-              `/workspace/${encodeURIComponent(workspaceCwd)}/session/${runtimeSessionId}`,
-              { replace: true },
-            );
-          }
-          rolledBack = true;
-        } catch {
-          rolledBack = false;
-        }
+      if (replacementId && replacementId !== sessionId) {
+        navigate(
+          `/workspace/${encodeURIComponent(workspaceCwd)}/session/${replacementId}`,
+          { replace: true },
+        );
       }
-      setSelectedModel(rolledBack ? previousModel : model);
-      setThinking(rolledBack ? previousThinking : nextThinking);
+    } catch (e) {
+      setSelectedModel(previousModel);
+      setThinking(previousThinking);
       const message = e instanceof Error ? e.message : "Unable to set model";
-      setModelError(rolledBack ? message : `${message}; runtime rollback also failed`);
+      setModelError(message);
     } finally {
       setConfiguringModel(false);
     }
@@ -232,7 +223,10 @@ export function LiveSessionPage() {
     if (name === "compact") {
       if (!activeSessionId) return true;
       const response = await fetch(`/api/sessions/${encodeURIComponent(activeSessionId)}/compact?${new URLSearchParams({ cwd: workspaceCwd })}`, { method: "POST" });
-      if (!response.ok) throw new Error("Unable to compact the current session");
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.ok === false) {
+        throw new Error(data.error || data.detail || "Unable to compact the current session");
+      }
       setReviewNotice("Session compacted");
       return true;
     }
@@ -258,7 +252,7 @@ export function LiveSessionPage() {
 
   const handleSend = async () => {
     const text = input.trim();
-    if ((!text && files.length === 0 && workspaceReferences.length === 0) || working || reviewingProject) return;
+    if (!selectedModel || (!text && files.length === 0 && workspaceReferences.length === 0) || working || reviewingProject) return;
 
     if (text.startsWith("/") && files.length === 0 && workspaceReferences.length === 0 && await runSlashCommand(text)) {
       setInput("");
@@ -354,7 +348,7 @@ export function LiveSessionPage() {
           {thread.blocks.length === 0 && !working && (
             <ConversationWelcome
               onPick={(msg) => void sendPrompt(msg).catch(() => undefined)}
-              disabled={reviewingProject || (!activeSessionId && status === "connecting")}
+              disabled={!selectedModel || reviewingProject || (!activeSessionId && status === "connecting")}
             />
           )}
           {renderBlocks(thread.blocks)}
@@ -482,10 +476,10 @@ export function LiveSessionPage() {
               <button
                 aria-label="Send message"
                 onClick={handleSend}
-                disabled={reviewingProject || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
+                disabled={!selectedModel || reviewingProject || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
                 className={cn(
                   "h-7 w-7 rounded-input flex items-center justify-center",
-                  (!reviewingProject && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted cursor-default",
+                  (selectedModel && !reviewingProject && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted cursor-default",
                 )}
               >
                 <ArrowUp size={15} />

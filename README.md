@@ -18,6 +18,7 @@ The core interface: a streaming chat where AI agents write, execute, and visuali
 
 - **Streaming responses** — SSE-based real-time output, every tool call rendered as an expandable card
 - **LLM providers** — a built-in vendor catalog plus OpenAI-compatible and Anthropic-compatible custom providers, all switchable in Settings
+- **Local/custom endpoints** — custom providers without API keys are supported for trusted local services such as Ollama or LM Studio
 - **Model controls** — choose a default model from configured providers and expose only the reasoning levels supported by that model
 - **Tool visualization** — file writes, shell commands, and code execution expand inline with syntax-highlighted diffs
 - **Markdown rendering** — agent responses support tables, code blocks, LaTeX math, and file-path detection
@@ -26,7 +27,7 @@ The core interface: a streaming chat where AI agents write, execute, and visuali
 - **Slash commands** — type `/` in the composer to access built-in commands (`/new`, `/model`, `/compact`, `/copy`, `/export`, `/name`, `/session`) and dynamic ones from skills and extensions
 - **Skill commands** — skills installed in `.pi/skills/` register as `/skill:<name>` commands that invoke the skill through the agent
 - **Interactive prompts** — extension confirm/select/input/editor requests render as inline cards you can answer without leaving the chat
-- **Resilient streaming** — reconnecting SSE replays missed events (`Last-Event-ID` cursors), one runtime per workspace with a busy guard, and page reloads merge durable history with live output
+- **Resilient streaming** — durable cursors, bounded backpressure, replay/live de-duplication, stream-gap recovery, terminal Pi crash errors, and page reloads that merge durable history with live output
 
 ### Slash Commands · 斜杠命令
 
@@ -132,7 +133,7 @@ Every file the agent creates or edits is automatically recorded with full lineag
 | **pi-mcp-adapter** | Bridge to MCP servers — literature search (PubMed, arXiv), biomed, materials databases, weather |
 | **pi-subagents** | Multi-agent orchestration: scout, researcher, planner, worker, reviewer, oracle |
 | **pi-web-access** | Web search, URL fetching, YouTube/video understanding |
-| **context-mode** | Sandboxed code execution (12 languages) + FTS5 knowledge index for long scientific sessions |
+| **context-mode** | Optional sandboxed code execution + FTS5 knowledge index; disabled by default and enabled with `PI_SCIENCE_ENABLE_CONTEXT_MODE=1` |
 
 ### Skill-driven research runtime · 技能驱动科研运行时
 
@@ -164,9 +165,11 @@ The Settings → LLM page separates model selection from provider setup:
 - **Thinking Level** — the control is derived from the selected model's capabilities; unsupported levels are not offered
 - **Model Vendors** — configure keys for built-in vendors such as Anthropic, OpenAI, Google, DeepSeek, Groq, OpenRouter, Mistral, Z.AI, MiniMax, and others
 - **Custom** — discover models from OpenAI-compatible, OpenAI Responses, or Anthropic Messages endpoints
+- **Keyless custom providers** — local or trusted endpoints can be saved and selected without an API key
 - **Managed Model Endpoints** — register local or remote model services as an advanced integration
 
 API keys are stored in the Pi-Science configuration directory. Custom provider model discovery is kept separate from the built-in vendor catalog so the default model list remains predictable.
+If no provider/model is configured, the composer clearly explains what is missing and keeps Send disabled instead of starting an invalid request.
 
 ---
 
@@ -211,7 +214,7 @@ API keys are stored in the Pi-Science configuration directory. Custom provider m
 
 - **Python** ≥ 3.11 with `pip` (Conda is optional)
 - **Node.js** ≥ 22
-- **LLM API key** — e.g. `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, or `OPENAI_API_KEY`
+- **LLM provider** — either an API key such as `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`, or a trusted keyless local/custom endpoint
 
 ### One command · 一行命令
 
@@ -221,28 +224,34 @@ cd pi-science
 bash scripts/dev.sh
 ```
 
-This installs everything and starts both servers:
+This installs everything and starts the split runtime:
 - **Frontend** → `http://127.0.0.1:5173`
-- **Backend** → `http://127.0.0.1:8787`
+- **Node/TypeScript control plane** → `http://127.0.0.1:8787`
+- **Python scientific runtime (internal)** → `http://127.0.0.1:8788`
 - **API docs** → `http://127.0.0.1:8787/docs`
 
-Then open Settings → LLM, enter your API key, and start a conversation.
+Then open Settings → LLM, configure a provider and model, and start a conversation.
 
 Jupyter Lab is optional because `.ipynb` files can run directly in Pi-Science. To use the separate “Open Jupyter Lab” button, install it into the same Python environment with `python -m pip install jupyterlab`.
 
 ### Development checks · 开发检查
 
 ```bash
-cd backend && uv run pytest -q
-cd frontend && npm test -- --run
-cd frontend && npm run build
+pnpm --filter @pi-science/server typecheck
+pnpm --filter @pi-science/server test
+pnpm --filter frontend test
+pnpm build
+uv run pytest backend/tests -q
+pnpm smoke
+PI_CLI_PATH=/absolute/path/to/pi pnpm smoke:real-pi
 ```
 
-The frontend also includes focused UAT scripts:
+The frontend also includes focused UAT scripts. `uat:conversation` verifies the
+Node-owned session/SSE path and runs the prompt branch when a model is configured:
 
 ```bash
+pnpm uat:conversation
 cd frontend
-npm run test:uat:conversation
 npm run test:uat:knowledge
 npm run test:uat:notebook
 npm run test:uat:office
@@ -263,13 +272,18 @@ export DEEPSEEK_API_KEY=sk-...   # or ANTHROPIC_API_KEY, OPENAI_API_KEY
 | Layer · 层级 | Technology |
 |---|---|
 | **Frontend** | React 19, TypeScript 6, Vite 8, Tailwind CSS 3, Zustand 5, React Router 7 |
-| **Backend** | Python 3.11+, FastAPI, Uvicorn, Pydantic, sse-starlette |
+| **Public control plane** | Node.js 22+, TypeScript, Fastify, Zod, durable SSE/event store |
+| **Scientific runtime** | Python 3.11+, FastAPI, Uvicorn, Pydantic, kernels and scientific services |
 | **Agent Runtime** | pi (Node.js, JSONL RPC over stdin/stdout) |
 | **3D** | Three.js, 3Dmol.js |
 | **Chemistry** | OpenChemLib |
 | **Documents** | docx-preview, ExcelJS, pptx-preview |
 | **Code** | highlight.js |
 | **Fonts** | Inter, Source Serif 4, JetBrains Mono |
+
+Architecture and acceptance details are documented in
+[docs/node-control-plane.md](docs/node-control-plane.md) and
+[docs/node-typescript-backend-atomic-plan.md](docs/node-typescript-backend-atomic-plan.md).
 
 ## License
 

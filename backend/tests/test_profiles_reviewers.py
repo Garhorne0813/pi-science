@@ -8,6 +8,24 @@ from services.bookmarker import create_bookmarks
 from services.result_reviewer import review_session
 
 
+class _FakeReviewerPi:
+    def __init__(self, events):
+        self.events = events
+        self.shutdown_called = False
+
+    async def send_command(self, command, **params):
+        assert command == "prompt"
+        assert params["message"]
+        return {"success": True}
+
+    async def read_events(self):
+        for event in self.events:
+            yield event
+
+    async def shutdown(self):
+        self.shutdown_called = True
+
+
 def _session(workspace, session_id="session-1"):
     path = workspace / ".pi-science" / "sessions" / "session.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -57,3 +75,86 @@ async def test_agent_profile_crud_and_builtin_is_read_only(client, temp_config_d
     assert updated.status_code == 200
     forbidden = await client.put("/api/agent-profiles/RESULT_REVIEWER", json={"name": "RESULT_REVIEWER", "display_name": "Nope"})
     assert forbidden.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_reviewer_accepts_provider_that_only_emits_text_end(tmp_path, temp_config_dir, monkeypatch):
+    from services.pi_manager import PiProcess
+    from services.reviewer_service import ReviewerService
+
+    fake = _FakeReviewerPi([
+        {
+            "type": "message_update",
+            "message": {"id": "review-message"},
+            "assistantMessageEvent": {"type": "text_end", "contentIndex": 0, "content": '{"proposals": []}'},
+        },
+        {"type": "agent_settled"},
+    ])
+
+    async def fake_spawn(*_args, **_kwargs):
+        return fake
+
+    monkeypatch.setattr(PiProcess, "spawn", fake_spawn)
+
+    result = await ReviewerService._run_pi_model("review", tmp_path)
+
+    assert result == '{"proposals": []}'
+    assert fake.shutdown_called is True
+
+
+@pytest.mark.anyio
+async def test_reviewer_deduplicates_delta_and_final_text_per_content_block(tmp_path, temp_config_dir, monkeypatch):
+    from services.pi_manager import PiProcess
+    from services.reviewer_service import ReviewerService
+
+    fake = _FakeReviewerPi([
+        {
+            "type": "message_update",
+            "message": {"id": "review-message"},
+            "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": "first"},
+        },
+        {
+            "type": "message_update",
+            "message": {"id": "review-message"},
+            "assistantMessageEvent": {"type": "text_end", "contentIndex": 0, "content": "first"},
+        },
+        {
+            "type": "message_update",
+            "message": {"id": "review-message"},
+            "assistantMessageEvent": {"type": "text_end", "contentIndex": 1, "content": " second"},
+        },
+        {"type": "agent_settled"},
+    ])
+
+    async def fake_spawn(*_args, **_kwargs):
+        return fake
+
+    monkeypatch.setattr(PiProcess, "spawn", fake_spawn)
+
+    assert await ReviewerService._run_pi_model("review", tmp_path) == "first second"
+
+
+@pytest.mark.anyio
+async def test_reviewer_preserves_message_end_provider_error(tmp_path, temp_config_dir, monkeypatch):
+    from services.pi_manager import PiProcess
+    from services.reviewer_service import ReviewerError, ReviewerService
+
+    fake = _FakeReviewerPi([
+        {
+            "type": "message_end",
+            "message": {
+                "stopReason": "error",
+                "errorMessage": "OpenAI API error (401): Invalid API key",
+            },
+        },
+        {"type": "agent_settled"},
+    ])
+
+    async def fake_spawn(*_args, **_kwargs):
+        return fake
+
+    monkeypatch.setattr(PiProcess, "spawn", fake_spawn)
+
+    with pytest.raises(ReviewerError, match="Invalid API key"):
+        await ReviewerService._run_pi_model("review", tmp_path)
+    assert fake.shutdown_called is True

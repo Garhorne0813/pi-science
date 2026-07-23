@@ -7,6 +7,7 @@ import {
   PiScienceClient,
   getClient,
   getSessionName,
+  moveSessionName,
   setSessionName,
   type PiScienceEvent,
   type SessionInfo,
@@ -67,6 +68,12 @@ export interface RuntimeState {
   setDraft: (text: string) => void;
 }
 
+export interface SessionReplacement {
+  cwd: string;
+  oldId: string;
+  newId: string;
+}
+
 function emptyThread(): Thread {
   return { blocks: [], index: {}, loaded: false };
 }
@@ -105,7 +112,8 @@ function foldEvent(state: Thread, event: PiScienceEvent): Thread {
       } else if (eventPartId && !_currentTurnId) {
         _currentTurnId = eventPartId;
       }
-      _textBuffer += (event.text as string) || "";
+      const incomingText = (event.text as string) || "";
+      _textBuffer = event.replace === true ? incomingText : _textBuffer + incomingText;
       // Skip initial empty text events that create placeholder agent blocks
       // (DeepSeek sends empty text.updated between tool calls before real text)
       const hasText = _textBuffer.trim().length > 0;
@@ -204,6 +212,47 @@ function foldEvent(state: Thread, event: PiScienceEvent): Thread {
       };
       index[block.id] = blocks.length;
       blocks.push(block);
+      break;
+    }
+
+    case "compaction.updated": {
+      const status = String(event.status || "running");
+      const blockId = "compaction-status";
+      const block: ThreadBlock = {
+        kind: "status-line",
+        id: blockId,
+        text: status === "end"
+          ? "Conversation context compacted"
+          : status === "error"
+            ? `Context compaction failed${event.message ? `: ${String(event.message)}` : ""}`
+            : `Compacting conversation context${event.message ? `: ${String(event.message)}` : "…"}`,
+        level: status === "error" ? "error" : status === "end" ? "done" : "info",
+      };
+      const existing = index[blockId];
+      if (existing === undefined) {
+        index[blockId] = blocks.length;
+        blocks.push(block);
+      } else {
+        blocks[existing] = block;
+      }
+      break;
+    }
+
+    case "status.updated": {
+      const blockId = `runtime-status-${String(event.status || "status")}`;
+      const block: ThreadBlock = {
+        kind: "status-line",
+        id: blockId,
+        text: String(event.message || event.status || "Runtime status updated"),
+        level: "info",
+      };
+      const existing = index[blockId];
+      if (existing === undefined) {
+        index[blockId] = blocks.length;
+        blocks.push(block);
+      } else {
+        blocks[existing] = block;
+      }
       break;
     }
 
@@ -377,6 +426,85 @@ async function reconcilePromptAfterLateStream(
   }
 }
 
+export function applySessionReplacements(replacements: SessionReplacement[]): string | null {
+  const state = useRuntimeStore.getState();
+  const relevant = replacements.filter((replacement) => (
+    replacement.cwd === state.cwd
+    && replacement.oldId
+    && replacement.newId
+    && replacement.oldId !== replacement.newId
+  ));
+  if (relevant.length === 0) return state.activeSessionId;
+
+  const replacementById = new Map(relevant.map((item) => [item.oldId, item.newId]));
+  const resolveId = (initialId: string): string => {
+    let id = initialId;
+    const visited = new Set<string>();
+    while (replacementById.has(id) && !visited.has(id)) {
+      visited.add(id);
+      id = replacementById.get(id)!;
+    }
+    return id;
+  };
+
+  for (const replacement of relevant) {
+    moveSessionName(replacement.oldId, resolveId(replacement.oldId));
+  }
+
+  const sessionsById = new Map<string, SessionInfo>();
+  for (const session of state.sessions) {
+    const nextId = resolveId(session.id);
+    const storedName = getSessionName(nextId);
+    const next = {
+      ...session,
+      id: nextId,
+      name: storedName || session.name,
+    };
+    const existing = sessionsById.get(nextId);
+    sessionsById.set(nextId, existing ? { ...next, ...existing, name: existing.name || next.name } : next);
+  }
+
+  const previousActiveId = state.activeSessionId;
+  const nextActiveId = previousActiveId ? resolveId(previousActiveId) : null;
+  if (previousActiveId && nextActiveId && previousActiveId !== nextActiveId && !sessionsById.has(nextActiveId)) {
+    sessionsById.set(nextActiveId, {
+      id: nextActiveId,
+      cwd: state.cwd,
+      name: getSessionName(nextActiveId) || undefined,
+    });
+  }
+  useRuntimeStore.setState({ sessions: [...sessionsById.values()], activeSessionId: nextActiveId });
+  if (!previousActiveId || !nextActiveId || previousActiveId === nextActiveId) return nextActiveId;
+
+  ++_connectionGeneration;
+  ++_activityGeneration;
+  ++_localMutationGeneration;
+  _textBuffer = "";
+  _currentTurnId = "";
+  _turnErrored = false;
+  const client = getClient();
+  client.connect(nextActiveId, state.cwd);
+  useRuntimeStore.setState({
+    client,
+    thread: emptyThread(),
+    working: false,
+    status: "connecting",
+    pendingInteraction: null,
+  });
+
+  if (typeof window !== "undefined") {
+    const encodedOldId = encodeURIComponent(previousActiveId);
+    const encodedNewId = encodeURIComponent(nextActiveId);
+    const oldSuffix = `/session/${encodedOldId}`;
+    if (window.location.pathname.endsWith(oldSuffix)) {
+      window.history.replaceState(window.history.state, "", `${window.location.pathname.slice(0, -oldSuffix.length)}/session/${encodedNewId}${window.location.search}${window.location.hash}`);
+    }
+  }
+  void resyncCompletedHistory(nextActiveId, state.cwd);
+  void loadSessionsInternal();
+  return nextActiveId;
+}
+
 function _registerEventListener(client: PiScienceClient) {
   if (_listenerClient === client && _listenerUnsubscribe) return;
   _listenerUnsubscribe?.();
@@ -384,6 +512,41 @@ function _registerEventListener(client: PiScienceClient) {
   _listenerUnsubscribe = client.onEvent((event) => {
     const state = useRuntimeStore.getState();
     if (event.sessionId && state.activeSessionId && event.sessionId !== state.activeSessionId) {
+      return;
+    }
+
+    if (event.type === "session.replaced") {
+      const replacementSessionId = String(event.replacementSessionId || "");
+      if (!replacementSessionId) return;
+      applySessionReplacements([{
+        cwd: state.cwd,
+        oldId: String(event.sessionId || state.activeSessionId || ""),
+        newId: replacementSessionId,
+      }]);
+      return;
+    }
+
+    if (event.type === "stream.gap") {
+      ++_activityGeneration;
+      _textBuffer = "";
+      _currentTurnId = "";
+      _turnErrored = false;
+      useRuntimeStore.setState({
+        thread: emptyThread(),
+        working: false,
+        status: "connecting",
+        pendingInteraction: null,
+      });
+      if (state.activeSessionId) {
+        const sessionId = state.activeSessionId;
+        const cwd = state.cwd;
+        void resyncCompletedHistory(sessionId, cwd).finally(() => {
+          const current = useRuntimeStore.getState();
+          if (current.activeSessionId === sessionId && current.cwd === cwd && !current.working) {
+            useRuntimeStore.setState({ status: "ready" });
+          }
+        });
+      }
       return;
     }
 
@@ -458,6 +621,12 @@ function _registerEventListener(client: PiScienceClient) {
       ++_activityGeneration;
       _turnErrored = false;
       useRuntimeStore.setState({ working: true, status: "ready" });
+    } else if (event.type === "compaction.updated") {
+      ++_activityGeneration;
+      const status = String(event.status || "");
+      const failed = status === "error";
+      const finished = status === "end" || failed;
+      useRuntimeStore.setState({ working: !finished, status: failed ? "error" : "ready" });
     } else if (event.type === "agent_settled" || event.type === "session.idle") {
       ++_activityGeneration;
       const successful = !_turnErrored;
@@ -782,7 +951,12 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
           sessions: nextSessionId === activeSessionId
             ? current.sessions
             : [
-                { id: nextSessionId, cwd, name: "New Session" },
+                {
+                  ...(current.sessions.find((session) => session.id === activeSessionId) || { cwd }),
+                  id: nextSessionId,
+                  name: moveSessionName(activeSessionId, nextSessionId)
+                    || current.sessions.find((session) => session.id === activeSessionId)?.name,
+                },
                 ...current.sessions.filter((session) => session.id !== activeSessionId && session.id !== nextSessionId),
               ].slice(0, 50),
           model: result.model ?? model,
@@ -1002,7 +1176,10 @@ function appendRuntimeError(
 
 function isMissingSessionError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error ?? "");
-  return message.toLowerCase().includes("session not found in this workspace");
+  const normalized = message.toLowerCase();
+  return normalized.includes("session not found in this workspace")
+    || normalized.includes("session is not active in this workspace")
+    || normalized.includes("session not active in this workspace");
 }
 
 /**

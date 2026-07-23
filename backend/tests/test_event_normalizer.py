@@ -1,6 +1,6 @@
 """Event normalizer unit tests — pi JSONL → SSE event format."""
 
-from services.event_normalizer import normalize_event
+from services.event_normalizer import assistant_error_from_event, assistant_text_from_event, normalize_event
 
 
 class TestNormalizeEvent:
@@ -17,6 +17,44 @@ class TestNormalizeEvent:
         assert result["type"] == "text.updated"
         assert result["sessionId"] == "session-1"
         assert result["text"] == "Hello world"
+
+    def test_text_end_becomes_text_updated(self):
+        event = {
+            "type": "message_update",
+            "message": {"id": "msg-1", "role": "assistant"},
+            "assistantMessageEvent": {"type": "text_end", "content": "Final answer"},
+        }
+        assert assistant_text_from_event(event) == "Final answer"
+        result = normalize_event(event, "session-1")
+        assert result is not None
+        assert result["text"] == "Final answer"
+
+    def test_message_end_provider_error_is_preserved(self):
+        event = {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "stopReason": "error",
+                "errorMessage": "OpenAI API error (401): Invalid API key",
+            },
+        }
+        assert "Invalid API key" in assistant_error_from_event(event)
+        result = normalize_event(event, "session-1")
+        assert result == {
+            "type": "error",
+            "sessionId": "session-1",
+            "message": "OpenAI API error (401): Invalid API key",
+        }
+
+    def test_message_end_top_level_provider_error_is_preserved_exactly(self):
+        event = {
+            "type": "message_end",
+            "stopReason": "error",
+            "errorMessage": "upstream timeout: request id=req-17",
+        }
+
+        assert assistant_error_from_event(event) == "upstream timeout: request id=req-17"
+        assert normalize_event(event, "session-1")["message"] == "upstream timeout: request id=req-17"
 
     def test_message_start_user_returns_none(self):
         """User messages are already in the frontend, skip SSE."""

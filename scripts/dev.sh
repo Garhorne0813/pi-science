@@ -6,8 +6,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BACKEND_PID=""
+CONTROL_PLANE_PID=""
 FRONTEND_PID=""
 FRONTEND_REUSED=false
+CONTROL_PLANE_PORT="${PI_SCIENCE_CONTROL_PLANE_PORT:-8787}"
 
 # ── Colors ──
 RED='\033[0;31m'
@@ -18,6 +20,7 @@ NC='\033[0m'
 cleanup() {
     echo ""
     echo -e "${YELLOW}==> Shutting down...${NC}"
+    if [ -n "$CONTROL_PLANE_PID" ]; then kill "$CONTROL_PLANE_PID" 2>/dev/null || true; fi
     if [ -n "$BACKEND_PID" ]; then kill "$BACKEND_PID" 2>/dev/null || true; fi
     if [ -n "$FRONTEND_PID" ]; then kill "$FRONTEND_PID" 2>/dev/null || true; fi
     wait 2>/dev/null
@@ -37,6 +40,12 @@ if [ "$NODE_MAJOR" -lt 22 ]; then
     echo -e "${RED}Error: Node.js 22 or newer is required (found $(node --version)).${NC}"
     exit 1
 fi
+
+if ! command -v pnpm &>/dev/null; then
+    echo -e "${RED}Error: pnpm is required. Enable it with: corepack enable pnpm${NC}"
+    exit 1
+fi
+echo "  pnpm:   $(pnpm --version)"
 
 if command -v conda &>/dev/null; then
     # Some Conda installations print a requests/urllib3 compatibility warning
@@ -70,7 +79,15 @@ if [ ! -f "$PI_CLI" ]; then
     exit 1
 fi
 
-# ── Step 3: Install backend dependencies ──
+# ── Step 3: Install JavaScript workspace dependencies ──
+echo ""
+echo -e "${GREEN}==> Installing JavaScript workspace dependencies...${NC}"
+cd "$PROJECT_DIR"
+PNPM_STORE_DIR="${PNPM_STORE_DIR:-$PROJECT_DIR/.cache/pnpm-store}"
+mkdir -p "$PNPM_STORE_DIR"
+pnpm --config.store-dir="$PNPM_STORE_DIR" install --frozen-lockfile
+
+# ── Step 4: Install backend dependencies ──
 echo ""
 echo -e "${GREEN}==> Setting up backend Python environment...${NC}"
 
@@ -85,12 +102,21 @@ if command -v conda >/dev/null 2>&1; then
     CONDA_PYTHON="$(conda run -n "$CONDA_ENV" python -c 'import sys; print(sys.executable)' 2>/dev/null || true)"
 fi
 if [ -z "$CONDA_PYTHON" ]; then
-    CONDA_PYTHON="${PI_SCIENCE_PYTHON:-$(command -v python3 || command -v python || true)}"
-    if [ -z "$CONDA_PYTHON" ]; then
-        echo -e "${RED}Error: no usable Python interpreter found. Set PI_SCIENCE_PYTHON manually.${NC}"
-        exit 1
+    if command -v uv >/dev/null 2>&1; then
+        echo "  Using uv-managed backend environment."
+        UV_CACHE_DIR="${UV_CACHE_DIR:-$PROJECT_DIR/.cache/uv}"
+        mkdir -p "$UV_CACHE_DIR"
+        export UV_CACHE_DIR
+        (cd "$PROJECT_DIR/backend" && uv sync --extra dev)
+        CONDA_PYTHON="$PROJECT_DIR/backend/.venv/bin/python"
+    else
+        CONDA_PYTHON="${PI_SCIENCE_PYTHON:-$(command -v python3 || command -v python || true)}"
+        if [ -z "$CONDA_PYTHON" ]; then
+            echo -e "${RED}Error: no usable Python interpreter found. Set PI_SCIENCE_PYTHON manually.${NC}"
+            exit 1
+        fi
+        echo -e "${YELLOW}Warning: Conda env '$CONDA_ENV' is unavailable; using $CONDA_PYTHON.${NC}"
     fi
-    echo -e "${YELLOW}Warning: Conda env '$CONDA_ENV' is unavailable; using $CONDA_PYTHON.${NC}"
 else
     echo "  Conda environment: $CONDA_ENV"
 fi
@@ -127,17 +153,20 @@ mkdir -p "$PIP_CACHE_DIR"
 export PIP_CACHE_DIR
 
 cd "$PROJECT_DIR/backend"
-"$CONDA_PYTHON" -m pip install -e "$PROJECT_DIR/backend[dev]" --quiet 2>&1 | tail -1
+if [ ! -x "$PROJECT_DIR/backend/.venv/bin/python" ]; then
+    "$CONDA_PYTHON" -m pip install -e "$PROJECT_DIR/backend[dev]" --quiet 2>&1 | tail -1
+fi
 echo "  Backend dependencies installed."
 echo "  Python:  $CONDA_PYTHON"
 echo "  Package: pi-science $("$CONDA_PYTHON" -c 'from pi_science import __version__; print(__version__)' 2>/dev/null || echo '0.1.0')"
 
-# ── Step 4: Start backend ──
+# ── Step 5: Start Python scientific runtime ──
 echo ""
-echo -e "${GREEN}==> Starting backend on http://localhost:8787${NC}"
+SCIENTIFIC_RUNTIME_PORT="${PI_SCIENCE_RUNTIME_PORT:-8788}"
+echo -e "${GREEN}==> Starting Python scientific runtime on http://localhost:${SCIENTIFIC_RUNTIME_PORT}${NC}"
 
-if ! port_is_available 8787; then
-    echo -e "${RED}Error: port 8787 is already in use. Stop the existing Pi-Science backend first.${NC}"
+if ! port_is_available "$SCIENTIFIC_RUNTIME_PORT"; then
+    echo -e "${RED}Error: port ${SCIENTIFIC_RUNTIME_PORT} is already in use. Stop the existing scientific runtime first.${NC}"
     exit 1
 fi
 
@@ -148,8 +177,20 @@ export PI_CLI_PATH="$PI_CLI"
 export PI_NODE_PATH="$(which node)"
 # Use the standard user-level data & workspace locations so dev mode
 # shares the same config, sessions, and workspaces as the installed app.
-export PI_SCIENCE_HOME="${PI_SCIENCE_HOME:-$HOME/.pi-science}"
+if [ -z "${PI_SCIENCE_HOME:-}" ]; then
+    PI_DATA_PROBE="$HOME/.pi-science/.write-probe-$$"
+    if mkdir -p "$HOME/.pi-science" 2>/dev/null && : > "$PI_DATA_PROBE" 2>/dev/null; then
+        rm -f "$PI_DATA_PROBE" 2>/dev/null || true
+        export PI_SCIENCE_HOME="$HOME/.pi-science"
+    else
+        rm -f "$PI_DATA_PROBE" 2>/dev/null || true
+        export PI_SCIENCE_HOME="$PROJECT_DIR/.runtime/pi-science"
+        echo -e "  ${YELLOW}Home data directory is not writable; using project-local runtime data.${NC}"
+    fi
+fi
 export PI_SCIENCE_WORKSPACES="${PI_SCIENCE_WORKSPACES:-$HOME/pi-science-workspaces}"
+export PI_SCIENCE_INTERNAL_TOKEN="${PI_SCIENCE_INTERNAL_TOKEN:-$(openssl rand -hex 32 2>/dev/null || date +%s)}"
+export PI_SCIENCE_REQUIRE_INTERNAL_TOKEN="${PI_SCIENCE_REQUIRE_INTERNAL_TOKEN:-1}"
 
 mkdir -p "$PI_SCIENCE_HOME/sessions" "$PI_SCIENCE_WORKSPACES"
 
@@ -159,27 +200,65 @@ echo "  Node:     $PI_NODE_PATH"
 echo "  Pi CLI:   $PI_CLI_PATH"
 echo "  Data:     $PI_SCIENCE_HOME"
 
-"$CONDA_PYTHON" -m uvicorn main:app --host 127.0.0.1 --port 8787 --reload &
+PI_SCIENCE_PORT="$SCIENTIFIC_RUNTIME_PORT" "$CONDA_PYTHON" -m uvicorn main:app --host 127.0.0.1 --port "$SCIENTIFIC_RUNTIME_PORT" --reload &
 BACKEND_PID=$!
 
-# Wait for backend to be ready
-echo "  Waiting for backend..."
+# Wait for scientific runtime to be ready
+echo "  Waiting for scientific runtime..."
 BACKEND_READY=false
 for _ in $(seq 1 20); do
     if ! kill -0 "$BACKEND_PID" 2>/dev/null; then break; fi
-    if curl --fail --silent http://127.0.0.1:8787/api/health >/dev/null 2>&1; then
-        echo -e "  ${GREEN}Backend ready.${NC}"
+    if curl --fail --silent "http://127.0.0.1:${SCIENTIFIC_RUNTIME_PORT}/api/health" >/dev/null 2>&1; then
+        echo -e "  ${GREEN}Scientific runtime ready.${NC}"
         BACKEND_READY=true
         break
     fi
     sleep 0.5
 done
 if [ "$BACKEND_READY" != true ]; then
-    echo -e "${RED}Error: backend did not become ready on port 8787.${NC}"
+    echo -e "${RED}Error: scientific runtime did not become ready on port ${SCIENTIFIC_RUNTIME_PORT}.${NC}"
     exit 1
 fi
 
-# ── Step 5: Start frontend ──
+# ── Step 6: Start Node control plane ──
+echo ""
+echo -e "${GREEN}==> Starting Node control plane on http://localhost:${CONTROL_PLANE_PORT}${NC}"
+
+if ! port_is_available "$CONTROL_PLANE_PORT"; then
+    echo -e "${RED}Error: port ${CONTROL_PLANE_PORT} is already in use. Stop the existing control plane first.${NC}"
+    exit 1
+fi
+
+cd "$PROJECT_DIR"
+export PI_SCIENCE_PYTHON_ORIGIN="http://127.0.0.1:${SCIENTIFIC_RUNTIME_PORT}"
+export PI_SCIENCE_BACKEND_URL="${PI_SCIENCE_BACKEND_URL:-http://127.0.0.1:${CONTROL_PLANE_PORT}}"
+# Conversation ownership is Node-native in the migrated control plane. Python
+# remains the scientific runtime and compatibility target for non-conversation
+# routes.
+export PI_SCIENCE_NODE_SESSIONS="${PI_SCIENCE_NODE_SESSIONS:-1}"
+export PI_SCIENCE_NODE_SSE="${PI_SCIENCE_NODE_SSE:-1}"
+export PI_SCIENCE_NODE_PI_MANAGER="${PI_SCIENCE_NODE_PI_MANAGER:-1}"
+mkdir -p "$PNPM_STORE_DIR"
+PI_SCIENCE_PORT="$CONTROL_PLANE_PORT" pnpm --config.store-dir="$PNPM_STORE_DIR" --filter @pi-science/server dev &
+CONTROL_PLANE_PID=$!
+
+echo "  Waiting for control plane..."
+CONTROL_PLANE_READY=false
+for _ in $(seq 1 30); do
+    if ! kill -0 "$CONTROL_PLANE_PID" 2>/dev/null; then break; fi
+    if curl --fail --silent "http://127.0.0.1:${CONTROL_PLANE_PORT}/api/health" >/dev/null 2>&1; then
+        echo -e "  ${GREEN}Control plane ready.${NC}"
+        CONTROL_PLANE_READY=true
+        break
+    fi
+    sleep 0.5
+done
+if [ "$CONTROL_PLANE_READY" != true ]; then
+    echo -e "${RED}Error: control plane did not become ready on port ${CONTROL_PLANE_PORT}.${NC}"
+    exit 1
+fi
+
+# ── Step 7: Start frontend ──
 echo ""
 echo -e "${GREEN}==> Starting frontend on http://localhost:5173${NC}"
 
@@ -226,9 +305,10 @@ echo -e "${GREEN}============================================${NC}"
 echo -e "${GREEN}  Pi-Science is running!${NC}"
 echo ""
 echo "  Frontend:  http://localhost:5173"
-echo "  Backend:   http://localhost:8787"
-echo "  API docs:  http://localhost:8787/docs"
-echo "  Health:    http://localhost:8787/api/health"
+echo "  Node control plane: http://localhost:${CONTROL_PLANE_PORT}"
+echo "  Python runtime:     http://localhost:${SCIENTIFIC_RUNTIME_PORT} (internal)"
+echo "  API docs:  http://localhost:${CONTROL_PLANE_PORT}/docs"
+echo "  Health:    http://localhost:${CONTROL_PLANE_PORT}/api/health"
 echo ""
 echo -e "  ${YELLOW}Press Ctrl+C to stop.${NC}"
 echo -e "${GREEN}============================================${NC}"

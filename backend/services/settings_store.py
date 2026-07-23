@@ -6,11 +6,12 @@ import json
 import os
 from pathlib import Path
 
+from config import runtime_data_dir
 from services.workspace_journal import sync_journal_lock
 
 
 def config_file() -> Path:
-    return Path(os.environ.get("PI_SCIENCE_HOME", Path.home() / ".pi-science")) / "config.json"
+    return runtime_data_dir() / "config.json"
 
 
 def load_config() -> dict:

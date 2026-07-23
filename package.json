@@ -1,0 +1,18 @@
+{
+  "name": "pi-science",
+  "private": true,
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "pnpm --filter @pi-science/contracts build && pnpm --filter @pi-science/server build && pnpm --filter frontend build",
+    "dev:server": "pnpm --filter @pi-science/server dev",
+    "test": "pnpm --filter @pi-science/contracts test && pnpm --filter @pi-science/server test && pnpm --filter frontend test",
+    "typecheck": "pnpm --filter @pi-science/contracts typecheck && pnpm --filter @pi-science/server typecheck",
+    "smoke": "bash scripts/smoke-control-plane.sh",
+    "smoke:native-readonly": "bash scripts/smoke-control-plane.sh --native-readonly",
+    "smoke:real-pi": "bash scripts/smoke-control-plane.sh --real-pi",
+    "uat:conversation": "pnpm --filter frontend test:uat:conversation"
+  }
+}

@@ -324,6 +324,7 @@ organization_policy: {json.dumps(policy, ensure_ascii=False)}
         session_dir.mkdir(parents=True, exist_ok=True)
         process: PiProcess | None = None
         chunks: list[str] = []
+        delta_keys: set[str] = set()
         try:
             # Use the explicitly configured global model for the Reviewer,
             # including Custom API providers and the selected thinking level.
@@ -342,11 +343,27 @@ organization_policy: {json.dumps(policy, ensure_ascii=False)}
             async with asyncio.timeout(180):
                 async for event in process.read_events():
                     if event.get("type") == "message_update":
-                        assistant_event = event.get("assistantMessageEvent", {})
-                        if assistant_event.get("type") in {"text_delta", "text"}:
-                            text = assistant_event.get("text") or assistant_event.get("delta") or ""
-                            if text:
+                        from services.event_normalizer import assistant_text_from_event
+
+                        text = assistant_text_from_event(event)
+                        if text:
+                            # Some providers emit both deltas and a final full
+                            # text_end. De-duplicate per message content block,
+                            # while preserving providers that only emit text_end.
+                            assistant_event = event.get("assistantMessageEvent", {})
+                            message = event.get("message") or {}
+                            text_key = f"{message.get('id', '')}:{assistant_event.get('contentIndex', 0)}"
+                            if assistant_event.get("type") in {"text_delta", "text"}:
+                                delta_keys.add(text_key)
                                 chunks.append(text)
+                            elif assistant_event.get("type") == "text_end" and text_key not in delta_keys:
+                                chunks.append(text)
+                    elif event.get("type") == "message_end":
+                        from services.event_normalizer import assistant_error_from_event
+
+                        error = assistant_error_from_event(event)
+                        if error:
+                            raise ReviewerError(error)
                     elif event.get("type") == "agent_settled":
                         break
                     elif event.get("type") == "error":
