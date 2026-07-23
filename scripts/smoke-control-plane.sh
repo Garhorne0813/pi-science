@@ -131,7 +131,9 @@ assert_status() {
 assert_body_contains() {
     local needle="$1"
     local url="$2"
-    if ! curl --fail --silent --show-error "$url" | rg -q --fixed-strings "$needle"; then
+    local body
+    body="$(curl --fail --silent --show-error "$url")"
+    if ! grep -Fq -- "$needle" <<<"$body"; then
         echo "response from $url did not contain: $needle" >&2
         exit 40
     fi
@@ -140,7 +142,7 @@ assert_body_contains() {
 assert_header_file_contains() {
     local header_file="$1"
     local needle="$2"
-    if ! rg -qi --fixed-strings "$needle" "$header_file"; then
+    if ! grep -Fqi -- "$needle" "$header_file"; then
         echo "response headers did not contain: $needle" >&2
         sed -n '1,80p' "$header_file" >&2 || true
         exit 40
@@ -153,7 +155,7 @@ wait_for_file_match() {
     local attempts="${3:-100}"
     local count=0
     while [ "$count" -lt "$attempts" ]; do
-        if [ -f "$file" ] && rg -q "$pattern" "$file"; then return 0; fi
+        if [ -f "$file" ] && grep -Eq -- "$pattern" "$file"; then return 0; fi
         count=$((count + 1))
         sleep 0.1
     done
@@ -185,16 +187,16 @@ SETTINGS_JSON="$(curl --fail --silent --show-error -X PUT \
     -H 'Content-Type: application/json' \
     -d '{"provider":"openai","api_key":"smoke-secret"}' \
     "http://127.0.0.1:${NODE_PORT}/api/settings/api-key")"
-if ! echo "$SETTINGS_JSON" | rg -q '"ok":true'; then
+if ! echo "$SETTINGS_JSON" | grep -q '"ok":true'; then
     echo "settings api-key write failed" >&2
     exit 40
 fi
 CONFIG_JSON="$(curl --fail --silent --show-error "http://127.0.0.1:${NODE_PORT}/api/settings/config")"
-if ! echo "$CONFIG_JSON" | rg -q '"openai":true'; then
+if ! echo "$CONFIG_JSON" | grep -q '"openai":true'; then
     echo "settings key presence was not persisted" >&2
     exit 40
 fi
-if echo "$CONFIG_JSON" | rg -q 'smoke-secret'; then
+if echo "$CONFIG_JSON" | grep -q 'smoke-secret'; then
     echo "settings leaked an API key" >&2
     exit 40
 fi
@@ -203,11 +205,11 @@ CUSTOM_PROVIDER_JSON="$(curl --fail --silent --show-error -X PUT \
     -H 'Content-Type: application/json' \
     -d '{"name":"Smoke Provider","base_url":"https://llm.example.com/v1","api_key":"custom-secret","api":"openai-completions","models":["smoke-model"]}' \
     "http://127.0.0.1:${NODE_PORT}/api/settings/custom-providers/smoke-provider")"
-if ! echo "$CUSTOM_PROVIDER_JSON" | rg -q '"ok":true'; then
+if ! echo "$CUSTOM_PROVIDER_JSON" | grep -q '"ok":true'; then
     echo "custom provider write failed" >&2
     exit 40
 fi
-if echo "$CUSTOM_PROVIDER_JSON" | rg -q 'custom-secret'; then
+if echo "$CUSTOM_PROVIDER_JSON" | grep -q 'custom-secret'; then
     echo "custom provider API key leaked" >&2
     exit 40
 fi
@@ -217,7 +219,7 @@ KEYLESS_PROVIDER_JSON="$(curl --fail --silent --show-error -X PUT \
     -H 'Content-Type: application/json' \
     -d '{"name":"Local No-Key Provider","base_url":"http://127.0.0.1:11434/v1","api":"openai-completions","models":["local-model"]}' \
     "http://127.0.0.1:${NODE_PORT}/api/settings/custom-providers/local-no-key")"
-if ! echo "$KEYLESS_PROVIDER_JSON" | rg -q '"ok":true'; then
+if ! echo "$KEYLESS_PROVIDER_JSON" | grep -q '"ok":true'; then
     echo "keyless custom provider write failed" >&2
     exit 40
 fi
@@ -238,7 +240,7 @@ curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
 ARTIFACT_JSON="$(curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
     -d '{"path":"renamed.txt","session_id":"smoke-session"}' \
     "http://127.0.0.1:${NODE_PORT}/api/artifacts/publish?cwd=${WORKSPACE_Q}")"
-if ! echo "$ARTIFACT_JSON" | rg -q '"version":1'; then
+if ! echo "$ARTIFACT_JSON" | grep -q '"version":1'; then
     echo "artifact publication failed" >&2
     exit 40
 fi
@@ -250,10 +252,10 @@ JOB_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["job_id"])'
 JOB_STATE=''
 for _ in $(seq 1 30); do
     JOB_STATE="$(curl --fail --silent --show-error "http://127.0.0.1:${NODE_PORT}/api/jobs/${JOB_ID}?cwd=${WORKSPACE_Q}")"
-    if echo "$JOB_STATE" | rg -q '"status":"(succeeded|failed|cancelled|timed_out)"'; then break; fi
+    if echo "$JOB_STATE" | grep -Eq '"status":"(succeeded|failed|cancelled|timed_out)"'; then break; fi
     sleep 0.1
 done
-if ! echo "$JOB_STATE" | rg -q '"status":"succeeded"'; then
+if ! echo "$JOB_STATE" | grep -q '"status":"succeeded"'; then
     echo "job did not succeed: $JOB_STATE" >&2
     exit 40
 fi
@@ -271,15 +273,14 @@ curl --fail --silent --show-error -X DELETE \
     "http://127.0.0.1:${NODE_PORT}/api/files/renamed.txt?cwd=${WORKSPACE_Q}" >/dev/null
 
 echo "[smoke] CORS and request ID"
-if ! curl --fail --silent --dump-header - -H 'Origin: http://127.0.0.1:5173' \
-    "http://127.0.0.1:${NODE_PORT}/api/health" | rg -qi '^access-control-allow-origin: http://127.0.0.1:5173'; then
-    echo "allowed CORS origin was not returned" >&2
-    exit 40
-fi
+CORS_HEADERS="$TEMP_DIR/cors.headers"
+curl --fail --silent --show-error --dump-header "$CORS_HEADERS" --output /dev/null \
+    -H 'Origin: http://127.0.0.1:5173' "http://127.0.0.1:${NODE_PORT}/api/health"
+assert_header_file_contains "$CORS_HEADERS" 'access-control-allow-origin: http://127.0.0.1:5173'
 
 if [ "$GATEWAY_ONLY" = false ]; then
     echo "[smoke] frontend proxy configuration"
-    if ! rg -q '127\.0\.0\.1:8787' "$ROOT_DIR/frontend/vite.config.ts"; then
+    if ! grep -Eq '127\.0\.0\.1:8787' "$ROOT_DIR/frontend/vite.config.ts"; then
         echo "frontend default proxy is not configured for Node control plane" >&2
         exit 40
     fi
@@ -309,7 +310,7 @@ if [ "$REAL_PI" = true ]; then
     STATE_A_JSON="$(curl --fail --silent --show-error --dump-header "$STATE_A_HEADERS" \
         "http://127.0.0.1:${NODE_PORT}/api/sessions/${SESSION_A}/state?cwd=${WORKSPACE_Q}")"
     assert_header_file_contains "$STATE_A_HEADERS" 'x-pi-science-runtime: node-control-plane'
-    if ! echo "$STATE_A_JSON" | rg -q --fixed-strings "\"id\":\"${SESSION_A}\""; then
+    if ! echo "$STATE_A_JSON" | grep -Fq -- "\"id\":\"${SESSION_A}\""; then
         echo "state did not identify session A: $STATE_A_JSON" >&2
         exit 50
     fi
@@ -336,7 +337,7 @@ if [ "$REAL_PI" = true ]; then
             -d '{"message":"Reply with exactly NODE_NATIVE_SMOKE_OK"}' \
             "http://127.0.0.1:${NODE_PORT}/api/sessions/${SESSION_A}/prompt?cwd=${WORKSPACE_Q}")"
         assert_header_file_contains "$PROMPT_HEADERS" 'x-pi-science-runtime: node-control-plane'
-        if ! echo "$PROMPT_JSON" | rg -q '"ok":true'; then
+        if ! echo "$PROMPT_JSON" | grep -q '"ok":true'; then
             echo "prompt was not accepted: $PROMPT_JSON" >&2
             exit 50
         fi
@@ -421,7 +422,7 @@ if [ "$REAL_PI" = true ]; then
         DELETE_JSON="$(curl --fail --silent --show-error --dump-header "$DELETE_HEADERS" -X DELETE \
             "http://127.0.0.1:${NODE_PORT}/api/sessions/${session_id}?cwd=${WORKSPACE_Q}")"
         assert_header_file_contains "$DELETE_HEADERS" 'x-pi-science-runtime: node-control-plane'
-        if ! echo "$DELETE_JSON" | rg -q '"ok":true'; then
+        if ! echo "$DELETE_JSON" | grep -q '"ok":true'; then
             echo "delete failed for $session_id: $DELETE_JSON" >&2
             exit 50
         fi
