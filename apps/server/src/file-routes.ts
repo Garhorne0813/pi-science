@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { relative } from "node:path";
+import { dirname, relative } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "./workspace-security.js";
 import { appendJsonLine, workspaceFile } from "./persistence.js";
@@ -24,6 +24,37 @@ const contentTypes: Record<string, string> = {
 function queryValue(request: { query: unknown }, key: string, fallback = ""): string {
   const query = request.query as Record<string, unknown>;
   return typeof query[key] === "string" ? query[key] : fallback;
+}
+
+function parseMultipartUpload(body: Buffer, contentType: string): { filename: string; content?: Buffer } {
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  const boundaryValue = boundaryMatch?.[1] ?? boundaryMatch?.[2];
+  if (!boundaryValue) return { filename: "" };
+  const boundary = Buffer.from(`--${boundaryValue}`);
+  const headerSeparator = Buffer.from("\r\n\r\n");
+  let cursor = 0;
+  while (cursor < body.length) {
+    const partStart = body.indexOf(boundary, cursor);
+    if (partStart < 0) break;
+    const markerEnd = partStart + boundary.length;
+    if (body.subarray(markerEnd, markerEnd + 2).equals(Buffer.from("--"))) break;
+    let headerStart = markerEnd;
+    if (body[headerStart] === 13 && body[headerStart + 1] === 10) headerStart += 2;
+    const headerEnd = body.indexOf(headerSeparator, headerStart);
+    if (headerEnd < 0) break;
+    const header = body.subarray(headerStart, headerEnd).toString("utf8");
+    const nextBoundary = body.indexOf(boundary, headerEnd + headerSeparator.length);
+    if (nextBoundary < 0) break;
+    cursor = nextBoundary;
+    if (!/filename=/i.test(header)) continue;
+    let contentEnd = nextBoundary;
+    if (body[contentEnd - 2] === 13 && body[contentEnd - 1] === 10) contentEnd -= 2;
+    return {
+      filename: header.match(/filename="([^"]+)"/i)?.[1] ?? header.match(/filename=([^;\r\n]+)/i)?.[1]?.trim() ?? "",
+      content: body.subarray(headerEnd + headerSeparator.length, contentEnd),
+    };
+  }
+  return { filename: "" };
 }
 
 async function safeWorkspace(request: { query: unknown }): Promise<string> {
@@ -73,38 +104,28 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
     let root: string;
     try { root = await safeWorkspace(request); } catch (error) { return reply.code(403).send({ error: String(error) }); }
     const body = request.body as Buffer | Record<string, unknown> | undefined;
+    const queryPath = queryValue(request, "path", "");
     let filename = "";
     let content: Buffer | undefined;
     if (Buffer.isBuffer(body)) {
-      const contentType = String(request.headers["content-type"] ?? "");
-      const boundary = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i)?.[1] ?? contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i)?.[2];
-      if (boundary) {
-        const source = body.toString("latin1");
-        const part = source.split(`--${boundary}`).find((chunk) => /filename=/i.test(chunk));
-        if (part) {
-          const headerEnd = part.indexOf("\r\n\r\n");
-          const header = headerEnd >= 0 ? part.slice(0, headerEnd) : "";
-          filename = header.match(/filename="([^"]+)"/i)?.[1] ?? header.match(/filename=([^;\r\n]+)/i)?.[1]?.trim() ?? "";
-          const payload = headerEnd >= 0 ? part.slice(headerEnd + 4).replace(/\r\n--?$/, "") : "";
-          content = Buffer.from(payload, "latin1");
-        }
-      }
+      ({ filename, content } = parseMultipartUpload(body, String(request.headers["content-type"] ?? "")));
     } else if (body && typeof body === "object") {
       filename = typeof body.filename === "string" ? body.filename : "";
       if (typeof body.content_base64 === "string") content = Buffer.from(body.content_base64, "base64");
       else if (typeof body.content === "string") content = Buffer.from(body.content, "utf8");
     }
-    filename = filename.split(/[\\/]/).at(-1) ?? "";
-    if (!filename || filename === "." || filename === ".." || !content) return reply.code(400).send({ error: "Invalid upload" });
+    const bodyPath = body && typeof body === "object" && !Buffer.isBuffer(body) && typeof body.path === "string" ? body.path : "";
+    const relativePath = queryPath || bodyPath || (filename.split(/[\\/]/).at(-1) ?? "");
+    if (!relativePath || relativePath === "." || relativePath === ".." || !content) return reply.code(400).send({ error: "Invalid upload" });
     try {
-      const destination = await resolveWorkspaceFile(root, filename);
-      try { await stat(destination); return reply.code(409).send({ error: `File already exists: ${filename}` }); } catch { /* expected */ }
-      await mkdir(root, { recursive: true });
+      const destination = await resolveWorkspaceFile(root, relativePath);
+      try { await stat(destination); return reply.code(409).send({ error: `File already exists: ${relativePath}` }); } catch { /* expected */ }
+      await mkdir(dirname(destination), { recursive: true });
       const temporary = `${destination}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
       await writeFile(temporary, content, { flag: "wx" });
       await rename(temporary, destination);
-      await appendJsonLine(workspaceFile(root, "provenance.jsonl"), { path: filename, version: 1, ts: Date.now() / 1000, tool: "file_upload", sessionId: "", contentHash: "", content: null });
-      return { ok: true, path: filename, filename };
+      await appendJsonLine(workspaceFile(root, "provenance.jsonl"), { path: relativePath, version: 1, ts: Date.now() / 1000, tool: "file_upload", sessionId: "", contentHash: "", content: null });
+      return { ok: true, path: relativePath, filename: relativePath.split(/[\\/]/).at(-1) ?? relativePath };
     } catch (error) { return reply.code(403).send({ error: String(error) }); }
   });
 

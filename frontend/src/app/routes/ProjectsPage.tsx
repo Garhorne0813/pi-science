@@ -5,7 +5,7 @@ import { cn } from "../../lib/cn";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
-import { apiRequest, invalidateApiCache } from "../../lib/api";
+import { ApiError, apiRequest, invalidateApiCache } from "../../lib/api";
 
 interface Workspace {
   name: string;
@@ -37,6 +37,7 @@ export function ProjectsPage() {
   const [editingName, setEditingName] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [installingDemo, setInstallingDemo] = useState(false);
+  const [importingFolder, setImportingFolder] = useState(false);
   // Pinned paths stored server-side in ~/.pi-science/pinned.json — shared across browsers
   const [pinned, setPinned] = useState<Set<string>>(new Set());
   const [dismissedDemos, setDismissedDemos] = useState<Set<string>>(loadDismissedDemos);
@@ -177,13 +178,44 @@ export function ProjectsPage() {
     if (!files || files.length === 0) return;
     const relPath = (files[0] as any).webkitRelativePath || files[0].name;
     const folderName = relPath.split("/")[0];
-    const path = `~/pi-science-workspaces/${folderName}`;
+    const entries = Array.from(files).map((file) => {
+      const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+      return {
+        file,
+        relativePath: relativePath.startsWith(`${folderName}/`) ? relativePath.slice(folderName.length + 1) : file.name,
+      };
+    });
+    setImportingFolder(true);
     try {
-      const w = await apiRequest<Workspace>("/api/workspaces/open", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }),
-      });
+      let workspaceName = folderName || `Imported Workspace ${crypto.randomUUID().slice(0, 6)}`;
+      let suffix = 2;
+      let w: Workspace | null = null;
+      while (!w) {
+        try {
+          w = await apiRequest<Workspace>("/api/workspaces", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: workspaceName }),
+          });
+        } catch (error) {
+          if (!(error instanceof ApiError) || error.status !== 409) throw error;
+          workspaceName = `${folderName} (${suffix})`;
+          suffix += 1;
+        }
+      }
+      for (const entry of entries) {
+        const form = new FormData();
+        form.append("file", entry.file, entry.file.name);
+        await apiRequest(`/api/files/upload?${new URLSearchParams({ cwd: w.path, path: entry.relativePath })}`, {
+          method: "POST",
+          body: form,
+        });
+      }
+      invalidateApiCache("/api/workspaces");
+      await loadWorkspaces();
       navigate(`/workspace/${encodeURIComponent(w.path)}`);
     } catch { toast(t("projects.openError"), "error"); }
+    finally { setImportingFolder(false); }
   };
 
   const installDemo = async (name: string) => {
@@ -240,11 +272,11 @@ export function ProjectsPage() {
             </button>
             {dropdownOpen && (
               <div className="absolute right-0 top-full mt-1 z-20 w-56 rounded-card border border-border bg-surface p-1.5 shadow-pop">
-                <button onClick={handleCreate} disabled={creating} className="flex items-center gap-2.5 rounded-input px-3 py-2 text-[13px] text-text hover:bg-surface-2 w-full text-left">
+                <button onClick={handleCreate} disabled={creating || importingFolder} className="flex items-center gap-2.5 rounded-input px-3 py-2 text-[13px] text-text hover:bg-surface-2 w-full text-left disabled:opacity-60">
                   {creating ? <Loader2 size={15} className="animate-spin text-muted" /> : <Plus size={15} className="text-muted" />} {t("projects.newWorkspace")}
                 </button>
-                <button onClick={handleOpenFolder} className="flex items-center gap-2.5 rounded-input px-3 py-2 text-[13px] text-text hover:bg-surface-2 w-full text-left">
-                  <FolderInput size={15} className="text-muted" /> {t("projects.openFolder")}
+                <button onClick={handleOpenFolder} disabled={creating || importingFolder} className="flex items-center gap-2.5 rounded-input px-3 py-2 text-[13px] text-text hover:bg-surface-2 w-full text-left disabled:opacity-60">
+                  {importingFolder ? <Loader2 size={15} className="animate-spin text-muted" /> : <FolderInput size={15} className="text-muted" />} {t("projects.openFolder")}
                 </button>
               </div>
             )}

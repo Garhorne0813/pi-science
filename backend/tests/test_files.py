@@ -159,6 +159,14 @@ class TestFilesAPI:
         assert res.status_code == 200
         assert (temp_workspace / "uploaded.txt").read_text() == "hello"
 
+    async def test_upload_supports_relative_destination_path(self, client, temp_workspace):
+        res = await client.post(
+            f"/api/files/upload?cwd={temp_workspace}&path=data/nested/uploaded.txt",
+            files={"file": ("uploaded.txt", b"hello", "text/plain")},
+        )
+        assert res.status_code == 200
+        assert (temp_workspace / "data" / "nested" / "uploaded.txt").read_text() == "hello"
+
     async def test_list_rejects_sibling_prefix_traversal(self, client, temp_workspace):
         sibling = temp_workspace.parent / f"{temp_workspace.name}-evil"
         res = await client.get(

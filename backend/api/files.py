@@ -114,25 +114,27 @@ async def probe_file(
 async def upload_file(
     file: UploadFile = File(...),
     cwd: str = Query(".", description="Working directory"),
+    path: str | None = Query(None, description="Destination path relative to workspace"),
 ):
     """Upload a file to the workspace."""
     ws = _workspace_dir(cwd)
-    filename = Path(file.filename or "").name
-    if not filename or filename in {".", ".."}:
+    requested = path or Path(file.filename or "").name
+    if not requested or requested in {".", ".."}:
         raise HTTPException(status_code=400, detail="Invalid filename")
     try:
-        dest = resolve_workspace_path(ws, filename)
+        dest = resolve_workspace_path(ws, requested)
     except ValueError:
         raise HTTPException(status_code=403, detail="Path outside workspace")
     # Don't overwrite existing files
     if dest.exists():
-        raise HTTPException(status_code=409, detail=f"File already exists: {file.filename}")
+        raise HTTPException(status_code=409, detail=f"File already exists: {requested}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         with dest.open("wb") as f:
             shutil.copyfileobj(file.file, f)
     finally:
         file.file.close()
-    return {"ok": True, "path": str(dest.relative_to(ws)), "filename": file.filename}
+    return {"ok": True, "path": str(dest.relative_to(ws)), "filename": dest.name}
 
 
 def _workspace_dir(cwd: str = ".") -> Path:

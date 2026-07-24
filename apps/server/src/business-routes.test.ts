@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdir, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./app.js";
@@ -82,6 +82,43 @@ describe("native control-plane business routes", () => {
     expect((await app.inject({ method: "POST", url: `/api/project-memory/research-loops/${loopId}/cancel?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(200);
     const listed = await app.inject({ method: "GET", url: `/api/project-memory/research-loops?cwd=${encodeURIComponent(cwd)}` });
     expect(listed.json().loops[0]).toMatchObject({ loop_id: loopId, status: "cancelled" });
+  });
+
+  it("preserves exact multipart upload bytes and supports nested destination paths", async () => {
+    const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
+    const boundary = "----pi-science-upload-boundary";
+    const payload = Buffer.from(
+      [
+        `--${boundary}`,
+        'Content-Disposition: form-data; name="file"; filename="uploaded.txt"',
+        "Content-Type: text/plain",
+        "",
+        "hello",
+        `--${boundary}--`,
+        "",
+      ].join("\r\n"),
+      "utf8",
+    );
+    const upload = await app.inject({
+      method: "POST",
+      url: `/api/files/upload?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent("data/nested/uploaded.txt")}`,
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      payload,
+    });
+    expect(upload.statusCode).toBe(200);
+    expect(await readFile(join(cwd, "data", "nested", "uploaded.txt"), "utf8")).toBe("hello");
+  });
+
+  it("validates the requested skill directory instead of always scanning project skills", async () => {
+    const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
+    await mkdir(join(cwd, ".pi", "skills", "good"), { recursive: true });
+    await writeFile(join(cwd, ".pi", "skills", "good", "SKILL.md"), "---\nname: good\ndescription: Good skill\n---\n", "utf8");
+    await mkdir(join(cwd, "tmp-skill"), { recursive: true });
+    await writeFile(join(cwd, "tmp-skill", "SKILL.md"), "not front matter", "utf8");
+    const response = await app.inject({ method: "POST", url: `/api/skills/validate?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(join(cwd, "tmp-skill"))}` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ valid: false });
+    expect(response.json().validations).toHaveLength(1);
   });
 
   it("serializes concurrent settings updates without losing providers", async () => {
