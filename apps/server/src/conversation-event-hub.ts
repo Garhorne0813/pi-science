@@ -105,6 +105,10 @@ export class ConversationEventHub {
     this.expectedExits.add(process);
   }
 
+  hasSubscribers(cwd: string, sessionId: string): boolean {
+    return (this.subscribers.get(streamKey(cwd, sessionId))?.size ?? 0) > 0;
+  }
+
   bind(cwd: string, process: PiProcess, options: BindingOptions): void {
     if (this.bound.has(process)) return;
     this.bound.add(process);
@@ -167,6 +171,7 @@ export class ConversationEventHub {
     sessionId: string,
     lastEventId: string | undefined,
     deliver: (record: SseEventRecord) => unknown,
+    replay = true,
   ): Promise<() => void> {
     const key = streamKey(cwd, sessionId);
     const subscriber: Subscriber = { ready: false, pending: [], delivered: new Set(), cancelled: false, deliver };
@@ -191,8 +196,8 @@ export class ConversationEventHub {
       }
       return true;
     };
-    const replay = await this.eventStore.readAfter(cwd, sessionId, lastEventId);
-    for (const record of replay) {
+    const records = replay ? await this.eventStore.readAfter(cwd, sessionId, lastEventId) : [];
+    for (const record of records) {
       if (!send(record)) return unsubscribe;
     }
     subscriber.ready = true;

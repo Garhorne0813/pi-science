@@ -56,15 +56,6 @@ export function LiveSessionPage() {
   const clearWorkspaceReferences = useUiStore((state) => state.clearWorkspaceReferences);
 
   useEffect(() => {
-    if (activeSessionId && activeSessionId !== (sessionId || null)) {
-      navigate(
-        `/workspace/${encodeURIComponent(workspaceCwd)}/session/${activeSessionId}`,
-        { replace: true },
-      );
-    }
-  }, [activeSessionId, navigate, sessionId, workspaceCwd]);
-
-  useEffect(() => {
     setCurrentCwd(workspaceCwd);
     connect(workspaceCwd, sessionId || undefined);
     const workspacePrefix = `/workspace/${encodeURIComponent(workspaceCwd)}`;

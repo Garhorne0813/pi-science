@@ -13,9 +13,11 @@ export function registerSessionReadRoutes(app: FastifyInstance): void {
     try {
       const cwd = await validateWorkspaceCwd(queryCwd(request));
       const sessions = await sessionRepository.list(cwd);
-      const live = nodeSessionService.liveSession(cwd);
-      if (live && !sessions.some((session) => session.id === live.id)) {
-        sessions.unshift({ id: live.id, cwd, name: null, created_at: null, updated_at: new Date().toISOString() });
+      const live = nodeSessionService.liveSessions(cwd);
+      for (const runtime of live.reverse()) {
+        if (!sessions.some((session) => session.id === runtime.id)) {
+          sessions.unshift({ id: runtime.id, cwd, name: null, created_at: null, updated_at: new Date().toISOString() });
+        }
       }
       return sessions;
     } catch (error) {

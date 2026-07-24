@@ -14,6 +14,7 @@ interface JobRecord {
 }
 
 const children = new Map<string, ChildProcess>();
+const jobs = new Map<string, Promise<void>>();
 const cancelledJobs = new Set<string>();
 
 function cwdOf(request: { query: unknown }): string {
@@ -51,7 +52,13 @@ function capabilities(requirement: Requirement): { status: "ready" | "degraded" 
 async function save(record: JobRecord): Promise<void> { await writeJsonAtomic(jobPath(record.cwd, record.job_id), record); }
 
 async function run(record: JobRecord): Promise<void> {
-  if (cancelledJobs.has(record.job_id)) { record.status = "cancelled"; record.ended_at = new Date().toISOString(); await save(record); return; }
+  if (cancelledJobs.has(record.job_id)) {
+    record.status = "cancelled";
+    record.ended_at = new Date().toISOString();
+    await save(record);
+    cancelledJobs.delete(record.job_id);
+    return;
+  }
   record.status = "running"; record.started_at = new Date().toISOString(); await save(record);
   let child: ChildProcess | undefined;
   try {
@@ -99,12 +106,20 @@ export function registerJobRoutes(app: FastifyInstance): void {
     const requirement = (body.requirement && typeof body.requirement === "object" ? body.requirement : {}) as Requirement;
     const check = capabilities(requirement); if (check.status === "blocked") return reply.code(400).send({ error: check.reasons.join("; ") });
     const record: JobRecord = { job_id: `job_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`, command, cwd, surface: typeof body.surface === "string" ? body.surface : "local", status: "pending", created_at: new Date().toISOString(), stdout: "", stderr: "", artifact_ids: [], environment: { platform: process.platform, node: process.version }, requirement };
-    await save(record); void run(record);
+    await save(record);
+    const task = run(record);
+    jobs.set(record.job_id, task);
+    void task.catch(() => undefined).finally(() => {
+      if (jobs.get(record.job_id) === task) jobs.delete(record.job_id);
+    });
     return record;
   });
   app.get("/api/jobs", async (request, reply) => { const cwd = await workspace(request, reply); if (!cwd) return; const q = request.query as { limit?: string }; return { jobs: await loadJobs(cwd, Math.min(1000, Math.max(1, Number(q.limit ?? 100)))) }; });
   app.get<{ Params: { job_id: string } }>("/api/jobs/:job_id", async (request, reply) => { const cwd = await workspace(request, reply); if (!cwd) return; let path: string; try { path = jobPath(cwd, request.params.job_id); } catch (error) { return reply.code(400).send({ error: String(error) }); } const record = await readJson<JobRecord | null>(path, null); return record ? record : reply.code(404).send({ error: "Job not found" }); });
   app.delete<{ Params: { job_id: string } }>("/api/jobs/:job_id", async (request, reply) => { const cwd = await workspace(request, reply); if (!cwd) return; let path: string; try { path = jobPath(cwd, request.params.job_id); } catch (error) { return reply.code(400).send({ error: String(error) }); } const record = await readJson<JobRecord | null>(path, null); if (!record) return reply.code(404).send({ error: "Job not found" }); if (["succeeded", "failed", "cancelled", "timed_out"].includes(record.status)) return record; cancelledJobs.add(record.job_id); const child = children.get(record.job_id); if (child) child.kill("SIGTERM"); record.status = "cancelled"; record.ended_at = new Date().toISOString(); await save(record); return record; });
   app.get<{ Params: { job_id: string } }>("/api/jobs/:job_id/logs", async (request, reply) => { const cwd = await workspace(request, reply); if (!cwd) return; let path: string; try { path = jobPath(cwd, request.params.job_id); } catch (error) { return reply.code(400).send({ error: String(error) }); } const record = await readJson<JobRecord | null>(path, null); if (!record) return reply.code(404).send({ error: "Job not found" }); return { job_id: record.job_id, stdout: record.stdout, stderr: record.stderr }; });
-  app.addHook("onClose", async () => { for (const child of children.values()) child.kill("SIGTERM"); });
+  app.addHook("onClose", async () => {
+    for (const child of children.values()) child.kill("SIGTERM");
+    await Promise.allSettled([...jobs.values()]);
+  });
 }

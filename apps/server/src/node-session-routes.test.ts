@@ -89,9 +89,12 @@ describe("native Node conversation routes", () => {
     const created = await server.inject({ method: "POST", url: "/api/sessions", payload: { cwd } });
     expect(created.statusCode).toBe(200);
     const blankId = created.json().id as string;
+    const secondCreated = await server.inject({ method: "POST", url: "/api/sessions", payload: { cwd } });
+    expect(secondCreated.statusCode).toBe(200);
+    const secondBlankId = secondCreated.json().id as string;
 
     const listed = await server.inject({ method: "GET", url: `/api/sessions?cwd=${encodeURIComponent(cwd)}` });
-    expect(listed.json().map((item: { id: string }) => item.id)).toEqual(expect.arrayContaining([blankId, "session-a", "session-b"]));
+    expect(listed.json().map((item: { id: string }) => item.id)).toEqual(expect.arrayContaining([blankId, secondBlankId, "session-a", "session-b"]));
 
     for (const id of ["session-a", "session-b", "session-a"]) {
       const state = await server.inject({ method: "GET", url: `/api/sessions/${id}/state?cwd=${encodeURIComponent(cwd)}` });
@@ -131,7 +134,8 @@ describe("native Node conversation routes", () => {
     expect(compact.statusCode).toBe(409);
     expect(compact.json()).toMatchObject({ code: "busy" });
     const createWhileBusy = await server.inject({ method: "POST", url: "/api/sessions", payload: { cwd } });
-    expect(createWhileBusy.statusCode).toBe(409);
+    expect(createWhileBusy.statusCode).toBe(200);
+    expect(createWhileBusy.json().id).toEqual(expect.any(String));
     await server.inject({ method: "POST", url: `/api/sessions/${forked.json().id}/abort?${query}` });
 
     const deleted = await server.inject({ method: "DELETE", url: `/api/sessions/session-b?${query}` });

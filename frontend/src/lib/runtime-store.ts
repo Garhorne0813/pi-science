@@ -65,6 +65,7 @@ export interface RuntimeState {
   loadSession: (sessionId: string) => Promise<void>;
   forkSession: (sessionId: string) => Promise<string>;
   createNewSession: () => Promise<string>;
+  removeSession: (sessionId: string) => void;
   setDraft: (text: string) => void;
 }
 
@@ -83,6 +84,7 @@ function emptyThread(): Thread {
 let _textBuffer = ""; // Accumulates text deltas
 let _currentTurnId = ""; // Unique ID per agent turn, resets on agent_start
 const _createSessionPromises = new Map<string, Promise<string>>();
+const _optimisticSessionIds = new Set<string>();
 let _connectionGeneration = 0;
 let _activityGeneration = 0;
 let _localMutationGeneration = 0;
@@ -317,11 +319,9 @@ async function loadSessionsInternal() {
     // Preserve only the active, newly-created optimistic entry. Treating every
     // disk-missing item as optimistic resurrects sessions after deletion.
     const diskIds = new Set(named.map((s: SessionInfo) => s.id));
+    for (const id of diskIds) _optimisticSessionIds.delete(id);
     const optimistic = current.sessions.filter((session: SessionInfo) => (
-      !diskIds.has(session.id)
-      && session.id === current.activeSessionId
-      && !session.created_at
-      && !session.updated_at
+      _optimisticSessionIds.has(session.id) && !diskIds.has(session.id)
     ));
     const merged = [...optimistic, ...named];
     useRuntimeStore.setState({ sessions: merged.slice(0, 50) });
@@ -673,18 +673,6 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   draft: "",
 
   connect: async (cwd: string, sessionId?: string) => {
-    const existingState = get();
-    if (
-      existingState.cwd === cwd
-      && existingState.working
-      && existingState.activeSessionId
-      && existingState.activeSessionId !== (sessionId ?? null)
-    ) {
-      // Browser history/direct URL edits can bypass the disabled sidebar. Do
-      // not detach the only frontend control surface from a turn that is still
-      // running in this workspace.
-      return;
-    }
     const generation = ++_connectionGeneration;
     ++_promptMonitorGeneration;
     ++_activityGeneration;
@@ -1024,8 +1012,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   },
 
   forkSession: async (sessionId: string) => {
-    const { cwd, working } = get();
-    if (working) throw new Error("Stop the current task before forking this conversation");
+    const { cwd } = get();
     const client = getClient();
     const result = await client.forkSession(sessionId, cwd);
     if (get().cwd !== cwd) {
@@ -1034,6 +1021,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     ++_connectionGeneration;
     ++_activityGeneration;
     ++_localMutationGeneration;
+    _optimisticSessionIds.add(result.id);
     set({ activeSessionId: result.id, status: "connecting", pendingInteraction: null });
     _registerEventListener(client);
     client.connect(result.id, cwd);
@@ -1066,12 +1054,6 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     const requestCwd = get().cwd;
     const existing = _createSessionPromises.get(requestCwd);
     if (existing) return existing;
-    if (get().working) throw new Error("Stop the current task before creating a new conversation");
-    const previousActiveSessionId = get().activeSessionId;
-    const previousHadContent = get().thread.blocks.some((block) => (
-      block.kind === "user" || block.kind === "agent" || block.kind === "tool"
-    ));
-
     const promise = (async () => {
       const client = getClient();
       const result = await client.createSession(requestCwd);
@@ -1093,22 +1075,13 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         status: "connecting",
         pendingInteraction: null,
       });
+      _optimisticSessionIds.add(result.id);
       client.connect(result.id, requestCwd);
       const newSession: SessionInfo = { id: result.id, cwd: requestCwd, name: "New Session" };
       set((s) => ({
-        // Pi cannot persist more than the currently active blank conversation.
-        // Remove older optimistic blanks so the sidebar never offers an ID
-        // that disappeared when the runtime created this new empty session.
         sessions: [
           newSession,
-          ...s.sessions.filter((item) => (
-            item.id !== result.id
-            && (
-              item.created_at
-              || item.updated_at
-              || (previousHadContent && item.id === previousActiveSessionId)
-            )
-          )),
+          ...s.sessions.filter((item) => item.id !== result.id),
         ].slice(0, 50),
       }));
       return result.id;
@@ -1143,6 +1116,11 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         _createSessionPromises.delete(requestCwd);
       }
     }
+  },
+
+  removeSession: (sessionId: string) => {
+    _optimisticSessionIds.delete(sessionId);
+    set((state) => ({ sessions: state.sessions.filter((session) => session.id !== sessionId) }));
   },
 
   setDraft: (text: string) => set({ draft: text }),
