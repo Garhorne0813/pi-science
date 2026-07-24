@@ -258,9 +258,14 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
-    return this.withLock(cwd, async () => {
-      const runtime = this.runtimes.get(cwd);
-      if (!runtime) return { success: false, code: "not_found", error: "pi process not found" };
+    const runtime = [...this.runtimes.values()].find((candidate) => candidate.cwd === cwd && !candidate.closing);
+    if (!runtime?.activeSessionId) return { success: false, code: "not_found", error: "pi process not found" };
+    const key = runtimeKey(cwd, runtime.activeSessionId);
+    return this.withLock(key, async () => {
+      if (this.runtimes.get(key) !== runtime || runtime.closing) {
+        return { success: false, code: "not_found", error: "pi process not found" };
+      }
+      this.scheduleIdleCleanup(runtime);
       return runtime.process.sendCommand("get_available_models");
     });
   }
