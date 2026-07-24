@@ -162,7 +162,6 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
   const { t } = useTranslation();
   const sessions = useRuntimeStore((s) => s.sessions);
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
-  const working = useRuntimeStore((s) => s.working);
   const forkSession = useRuntimeStore((s) => s.forkSession);
   const createNewSession = useRuntimeStore((s) => s.createNewSession);
   const navigate = useNavigate();
@@ -199,10 +198,11 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
 
   const handleDelete = async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
-    if (deleting || working) return;
+    if (deleting) return;
     setDeleting(sessionId);
     try {
       await getClient().deleteSession(sessionId, cwd);
+      useRuntimeStore.getState().removeSession(sessionId);
       await useRuntimeStore.getState().loadSessions();
       if (activeSessionId === sessionId) {
         const newId = await createNewSession();
@@ -216,7 +216,6 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
   };
 
   const handleNew = async () => {
-    if (working) return;
     try {
       const newId = await createNewSession();
       if (newId) {
@@ -229,7 +228,7 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
 
   const handleFork = async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
-    if (forking || working) return;
+    if (forking) return;
     setForking(sessionId);
     try {
       const newId = await forkSession(sessionId);
@@ -247,9 +246,8 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
         <span className="text-xs font-medium uppercase tracking-wider text-muted">{t("conversation.sessions")}</span>
         <button
           onClick={handleNew}
-          disabled={working}
           className="rounded p-0.5 text-muted hover:text-text hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
-          title={working ? t("conversation.stopBeforeNew") : t("conversation.newSession")}
+          title={t("conversation.newSession")}
         >
           <Plus size={14} />
         </button>
@@ -264,11 +262,9 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
                 onClick={() => {
                   navigate(`/workspace/${encodeURIComponent(cwd)}/session/${s.id}`);
                 }}
-                disabled={working && activeSessionId !== s.id}
                 className={cn(
                   "flex items-center gap-2 min-w-0 flex-1 py-1 pl-2 pr-1 text-[13px] text-left",
                   activeSessionId === s.id ? "text-text font-medium" : "text-text/90",
-                  working && activeSessionId !== s.id && "cursor-not-allowed opacity-40",
                 )}
               >
                 <MessageSquare size={12} className="shrink-0 text-muted" />
@@ -281,7 +277,6 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
               </button>
               <button
                 onClick={(e) => handleFork(e, s.id)}
-                disabled={working}
                 className={cn(
                   "shrink-0 rounded p-1 text-muted hover:text-accent hover:bg-accent/10",
                   "hidden group-hover:block disabled:cursor-not-allowed disabled:opacity-40", forking === s.id && "block",
@@ -292,7 +287,6 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
               </button>
               <button
                 onClick={(e) => handleDelete(e, s.id)}
-                disabled={working}
                 className={cn(
                   "shrink-0 rounded p-1 mr-1 text-muted hover:text-error hover:bg-error/10",
                   "hidden group-hover:block disabled:cursor-not-allowed disabled:opacity-40", deleting === s.id && "block",

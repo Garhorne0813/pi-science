@@ -372,7 +372,7 @@ describe("runtime conversation state", () => {
     expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/sessions")).toHaveLength(1);
   });
 
-  it("removes an older unpersisted blank when another blank conversation is created", async () => {
+  it("keeps independent blank conversations when another blank conversation is created", async () => {
     let counter = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -388,7 +388,7 @@ describe("runtime conversation state", () => {
     await useRuntimeStore.getState().createNewSession();
 
     expect(useRuntimeStore.getState().activeSessionId).toBe("blank-2");
-    expect(useRuntimeStore.getState().sessions.map((session) => session.id)).toEqual(["blank-2"]);
+    expect(useRuntimeStore.getState().sessions.map((session) => session.id)).toEqual(["blank-2", "blank-1"]);
   });
 
   it("keeps durable history visible when runtime activation is busy", async () => {
@@ -617,9 +617,13 @@ describe("runtime conversation state", () => {
     expect(useRuntimeStore.getState().working).toBe(true);
   });
 
-  it("refuses to detach from a running conversation in the same workspace", async () => {
+  it("switches to another session while the previous session keeps running", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-      throw new Error(`Unexpected request: ${String(input)}`);
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-b"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
     }));
     useRuntimeStore.setState({
       cwd: "/workspace",
@@ -630,9 +634,9 @@ describe("runtime conversation state", () => {
 
     await useRuntimeStore.getState().connect("/workspace", "session-b");
 
-    expect(useRuntimeStore.getState().activeSessionId).toBe("session-a");
-    expect(useRuntimeStore.getState().working).toBe(true);
-    expect(FakeEventSource.instances).toHaveLength(0);
+    expect(useRuntimeStore.getState().activeSessionId).toBe("session-b");
+    expect(useRuntimeStore.getState().working).toBe(false);
+    expect(FakeEventSource.instances).toHaveLength(1);
   });
 
   it("treats live output as proof of acceptance when the prompt acknowledgement fails", async () => {

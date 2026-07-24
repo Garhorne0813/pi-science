@@ -56,6 +56,26 @@ describe("central conversation event hub", () => {
     expect(JSON.parse(received[0]!.data).text).toBe("once");
   });
 
+  it("can subscribe live without replaying the durable snapshot", async () => {
+    const cwd = await workspace();
+    let readCalled = false;
+    const store = {
+      append: async () => undefined,
+      readAfter: async () => { readCalled = true; return []; },
+    };
+    const hub = new ConversationEventHub(store);
+    const received: SseEventRecord[] = [];
+    const unsubscribe = await hub.subscribe(cwd, "session-live", undefined, (record) => received.push(record), false);
+    expect(hub.hasSubscribers(cwd, "session-live")).toBe(true);
+    await hub.publish(cwd, "session-live", { type: "session.idle", sessionId: "session-live" });
+
+    expect(readCalled).toBe(false);
+    expect(received).toHaveLength(1);
+    expect(JSON.parse(received[0]!.data)).toMatchObject({ type: "session.idle", sessionId: "session-live" });
+    unsubscribe();
+    expect(hub.hasSubscribers(cwd, "session-live")).toBe(false);
+  });
+
   it("preserves exact message_end errors and emits one durable event per Pi event", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();

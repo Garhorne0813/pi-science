@@ -180,6 +180,15 @@ cd pi-science
 bash scripts/dev.sh
 ```
 
+安装和启动也可以分开执行。安装只需要在首次部署或依赖变更后运行：
+
+```bash
+bash scripts/install.sh
+bash scripts/start.sh
+```
+
+之后再次启动时只运行 `bash scripts/start.sh`；如果希望保留旧的一键行为，继续运行 `bash scripts/dev.sh` 即可。也可以用 `PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh` 跳过安装步骤。
+
 启动脚本会准备运行时和依赖，并启动：
 
 - 前端：`http://127.0.0.1:5173`

@@ -1,4 +1,5 @@
 import type { CreateSessionRequest, PiConfig, SessionState } from "@pi-science/contracts";
+import { randomUUID } from "node:crypto";
 import { mkdir, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import { conversationEventHub } from "./conversation-event-hub.js";
@@ -13,6 +14,7 @@ type ServiceFailure = { success: false; error: string; code: string };
 type PendingOperation = "prompt" | "compact";
 type RuntimeRecord = {
   cwd: string;
+  managerKey: string;
   process: PiProcess;
   activeSessionId: string;
   config: PiConfig;
@@ -21,7 +23,15 @@ type RuntimeRecord = {
   operationDeadline?: number;
   restartPending: boolean;
   reconcileTimer?: NodeJS.Timeout;
+  idleTimer?: NodeJS.Timeout;
+  closing: boolean;
+  lastState?: Record<string, unknown>;
+  lastStateAt?: number;
 };
+
+function runtimeKey(cwd: string, sessionId: string): string {
+  return `${resolve(cwd)}\0${sessionId}`;
+}
 
 function reconciliationDelayMs(): number {
   const value = Number(process.env.PI_SCIENCE_RECONCILE_DELAY_MS ?? 0);
@@ -31,6 +41,13 @@ function reconciliationDelayMs(): number {
 function reconciliationDeadlineMs(): number {
   const value = Number(process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS ?? 0);
   return value > 0 ? value : 45_000;
+}
+
+function idleRuntimeMs(): number {
+  const configured = process.env.PI_SCIENCE_IDLE_RUNTIME_MS;
+  if (configured === undefined || configured === "") return 30 * 60_000;
+  const value = Number(configured);
+  return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
 function failure(result: PiResult | Record<string, unknown>, fallback: string): ServiceFailure {
@@ -50,7 +67,7 @@ function effectiveConfig(requested?: Partial<PiConfig>): PiConfig {
     api_key: requested?.api_key || null,
     // A thinking level has no stable meaning until a model is configured;
     // Pi may normalize it differently for its placeholder unknown model.
-    thinking: model ? (requested?.thinking || defaults.thinking || "high") : null,
+    thinking: model ? (requested?.thinking ?? defaults.thinking ?? "high") : null,
     skills: requested?.skills?.length ? requested.skills : defaults.skills,
     extensions: requested?.extensions?.length ? requested.extensions : defaults.extensions,
   };
@@ -70,54 +87,17 @@ export class NodeSessionService {
     try { cwd = await validateWorkspaceCwd(body.cwd); }
     catch (error) { return { error: String(error), code: "workspace_invalid" }; }
     await mkdir(resolve(cwd, ".pi-science", "sessions"), { recursive: true });
-    return this.withLock(cwd, async () => {
-      let runtime = this.runtimes.get(cwd);
-      const config = effectiveConfig(body.config);
-      if (!runtime) {
-        const started = this.startRuntime(cwd, config);
-        if ("error" in started) return started;
-        runtime = started;
-        const handshake = await this.refreshState(runtime);
-        if (!handshake.success || !runtime.activeSessionId) {
-          await this.cleanupRuntime(cwd, runtime);
-          return { error: String(handshake.error ?? "pi runtime did not return a session"), code: String(handshake.code ?? "spawn_failed") };
-        }
-      } else {
-        const ready = await this.reconcileForMutation(runtime);
-        if (!ready.success) return { error: String(ready.error), code: String(ready.code) };
-        const oldId = runtime.activeSessionId;
-        const oldPath = oldId ? await sessionRepository.findPath(cwd, oldId) : null;
-        const previousConfig = { ...runtime.config };
-        const fresh = await runtime.process.sendCommand("new_session");
-        if (!fresh.success) return { error: String(fresh.error ?? "unable to create a new session"), code: String(fresh.code ?? "runtime_error") };
-        const changed = await this.refreshState(runtime);
-        if (!changed.success || !runtime.activeSessionId || runtime.activeSessionId === oldId) {
-          return { error: String(changed.error ?? "new_session did not create a distinct session"), code: String(changed.code ?? "reconcile_failed"), sessionId: runtime.activeSessionId || undefined };
-        }
-        const configured = await this.applyConfig(runtime, config);
-        if (!configured.success) {
-          const committedId = runtime.activeSessionId;
-          if (oldPath) {
-            const switched = await runtime.process.sendCommand("switch_session", { sessionPath: oldPath });
-            const restored = switched.success ? await this.refreshState(runtime) : switched;
-            if (restored.success && runtime.activeSessionId === oldId) {
-              const configRestored = await this.rollbackConfig(runtime, previousConfig);
-              if (configRestored.success) {
-                return { error: String(configured.error ?? "unable to configure session"), code: String(configured.code ?? "runtime_error") };
-              }
-            }
-          }
-          return {
-            error: `${String(configured.error ?? "unable to configure session")}; the new session remains active because rollback failed`,
-            code: "partial_commit",
-            sessionId: committedId,
-          };
-        }
-        if (!oldPath && oldId && runtime.activeSessionId !== oldId) await this.publishReplacement(cwd, oldId, runtime.activeSessionId);
-      }
+    return this.withLock(`create:${cwd}`, async () => {
+      let runtime: RuntimeRecord | undefined;
+      const config = { ...effectiveConfig(), ...body.config };
+      const started = this.startRuntime(cwd, config);
+      if ("error" in started) return started;
+      runtime = started;
       const state = await this.refreshState(runtime);
-      if (!state.success || !runtime.activeSessionId) return { error: String(state.error ?? "pi runtime did not return a session"), code: String(state.code ?? "spawn_failed") };
-      runtime.config = config;
+      if (!state.success || !runtime.activeSessionId) { await this.cleanupRuntime(runtime); return { error: String(state.error ?? "pi runtime did not return a session"), code: String(state.code ?? "spawn_failed") }; }
+      const configured = await this.applyConfig(runtime, config);
+      if (!configured.success) { await this.cleanupRuntime(runtime); return { error: String(configured.error ?? "unable to configure session"), code: String(configured.code ?? "runtime_error") }; }
+      this.registerRuntime(runtime);
       return { id: runtime.activeSessionId, cwd };
     });
   }
@@ -126,7 +106,7 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
-    return this.withLock(cwd, async () => {
+    return this.withLock(`${cwd}\0${sessionId}`, async () => {
       const activated = await this.activateUnlocked(sessionId, cwd);
       if ("error" in activated) return activated;
       const runtime = activated;
@@ -150,7 +130,11 @@ export class NodeSessionService {
       if (type === "abort") this.clearPendingOperation(runtime);
       if (mutating.has(type)) {
         const state = await this.refreshState(runtime);
-        if (!state.success) return failure(state, `unable to confirm state after ${type}`);
+        if (!state.success) {
+          await this.cleanupRuntime(runtime);
+          return failure(state, `unable to confirm state after ${type}`);
+        }
+        if (runtime.activeSessionId !== oldId) this.registerRuntime(runtime, oldId);
         if (["new_session", "fork", "clone"].includes(type) && runtime.activeSessionId === oldId) {
           return { success: false, code: "reconcile_failed", error: `${type} did not create a distinct session` };
         }
@@ -166,7 +150,7 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
-    return this.withLock(cwd, async () => {
+    return this.withLock(`${cwd}\0${sessionId}`, async () => {
       const activated = await this.activateUnlocked(sessionId, cwd);
       if ("error" in activated) return activated;
       try {
@@ -182,10 +166,27 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
-    const command = entryId ? "fork" : "clone";
-    const result = await this.command(sessionId, cwd, command, entryId ? { entryId } : {});
-    if (!result.success) return result;
-    return { ...result, sessionId: this.runtimes.get(cwd)?.activeSessionId };
+    return this.withLock(`${cwd}\0${sessionId}`, async () => {
+      const source = await this.activateUnlocked(sessionId, cwd);
+      if ("error" in source) return source;
+      const ready = await this.reconcileForMutation(source);
+      if (!ready.success) return ready;
+      const sessionPath = await sessionRepository.findPath(cwd, sessionId);
+      if (!sessionPath) return { success: false, code: "not_found", error: "session not found" };
+      const started = this.startRuntime(cwd, { ...source.config });
+      if ("error" in started) return started;
+      const switched = await started.process.sendCommand("switch_session", { sessionPath });
+      if (!switched.success) { await this.cleanupRuntime(started); return failure(switched, "unable to resume session for fork"); }
+      const result = await started.process.sendCommand(entryId ? "fork" : "clone", entryId ? { entryId } : {});
+      if (!result.success) { await this.cleanupRuntime(started); return result; }
+      const state = await this.refreshState(started);
+      if (!state.success || !started.activeSessionId || started.activeSessionId === sessionId) {
+        await this.cleanupRuntime(started);
+        return { success: false, code: "reconcile_failed", error: "fork did not create a distinct session" };
+      }
+      this.registerRuntime(started);
+      return { ...result, sessionId: started.activeSessionId };
+    });
   }
 
   async configure(sessionId: string, cwdValue: string, model: string, thinking?: string): Promise<PiResult> {
@@ -193,7 +194,7 @@ export class NodeSessionService {
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
     if (!model.includes("/")) return { success: false, code: "invalid_request", error: "model must use provider/model notation" };
-    return this.withLock(cwd, async () => {
+    return this.withLock(`${cwd}\0${sessionId}`, async () => {
       const activated = await this.activateUnlocked(sessionId, cwd);
       if ("error" in activated) return activated;
       const ready = await this.reconcileForMutation(activated);
@@ -205,7 +206,7 @@ export class NodeSessionService {
       const modelResult = await activated.process.sendCommand("set_model", { provider, modelId });
       if (!modelResult.success && provider.startsWith("custom-")) {
         const oldSessionId = activated.activeSessionId;
-        const restarted = await this.restartWorkspaceUnlocked(cwd, { ...effectiveConfig(), model, thinking: thinking || previous.thinking });
+        const restarted = await this.restartRuntimeUnlocked(activated, { ...effectiveConfig(), model, thinking: thinking || previous.thinking });
         if ("error" in restarted) return restarted;
         const verified = await this.refreshState(restarted);
         if (!verified.success || !this.configMatches(restarted, model, thinking)) {
@@ -236,23 +237,28 @@ export class NodeSessionService {
   }
 
   activeSessionId(cwdValue: string): string | null {
-    try { return this.runtimes.get(resolve(cwdValue))?.activeSessionId ?? null; }
+    try { return [...this.runtimes.values()].find((runtime) => runtime.cwd === resolve(cwdValue))?.activeSessionId ?? null; }
     catch { return null; }
   }
 
   liveSession(cwdValue: string): { id: string; cwd: string } | null {
+    return this.liveSessions(cwdValue)[0] ?? null;
+  }
+
+  liveSessions(cwdValue: string): Array<{ id: string; cwd: string }> {
     try {
       const cwd = resolve(cwdValue);
-      const runtime = this.runtimes.get(cwd);
-      return runtime?.activeSessionId ? { id: runtime.activeSessionId, cwd } : null;
-    } catch { return null; }
+      return [...this.runtimes.values()]
+        .filter((runtime) => runtime.cwd === cwd && runtime.activeSessionId)
+        .map((runtime) => ({ id: runtime.activeSessionId, cwd }));
+    } catch { return []; }
   }
 
   async resume(sessionId: string, cwdValue: string): Promise<{ success: boolean; error?: string; code?: string }> {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
-    return this.withLock(cwd, async () => {
+    return this.withLock(`${cwd}\0${sessionId}`, async () => {
       const activated = await this.activateUnlocked(sessionId, cwd);
       return "error" in activated ? activated : { success: true };
     });
@@ -262,10 +268,12 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { error: String(error), code: "workspace_invalid" }; }
-    return this.withLock(cwd, async () => {
+    return this.withLock(`${cwd}\0${sessionId}`, async () => {
       const activated = await this.activateUnlocked(sessionId, cwd);
       if ("error" in activated) return { error: activated.error, code: activated.code };
-      const result = await this.refreshState(activated);
+      const result = activated.lastState && activated.lastStateAt && Date.now() - activated.lastStateAt < 500
+        ? { success: true, data: activated.lastState }
+        : await this.refreshState(activated);
       if (!result.success || !result.data || typeof result.data !== "object") return { error: String(result.error ?? "unable to read session state"), code: String(result.code ?? "runtime_error") };
       return this.toSessionState(activated, result.data as Record<string, unknown>);
     });
@@ -275,14 +283,12 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
-    return this.withLock(cwd, async () => {
-      const runtime = this.runtimes.get(cwd);
+    return this.withLock(`${cwd}\0${sessionId}`, async () => {
+      const runtime = this.runtimes.get(runtimeKey(cwd, sessionId));
       const path = await sessionRepository.findPath(cwd, sessionId);
       if (runtime?.activeSessionId === sessionId) {
         if (runtime.busy) return { success: false, code: "busy", error: "cannot delete a conversation while it is running" };
-        conversationEventHub.expectExit(runtime.process);
-        await piManager.stop(cwd);
-        this.runtimes.delete(cwd);
+        await this.cleanupRuntime(runtime);
       }
       if (!path) {
         return runtime?.activeSessionId === sessionId ? { success: true } : { success: false, code: "not_found", error: "session not found" };
@@ -296,16 +302,19 @@ export class NodeSessionService {
   async reloadConfiguration(): Promise<Array<{ cwd: string; oldId: string; newId: string }>> {
     const replacements: Array<{ cwd: string; oldId: string; newId: string }> = [];
     const failures: Array<{ cwd: string; code: string; error: string }> = [];
-    for (const cwd of [...this.runtimes.keys()]) {
-      const result = await this.withLock(cwd, async () => {
-        const runtime = this.runtimes.get(cwd);
+    for (const [key, snapshot] of [...this.runtimes.entries()]) {
+      const cwd = snapshot.cwd;
+      const result = await this.withLock(key, async () => {
+        const current = this.runtimes.get(key);
+        if (current !== snapshot) return {};
+        const runtime = current;
         if (!runtime) return {};
         if (runtime.busy) {
           runtime.restartPending = true;
           return {};
         }
         const oldId = runtime.activeSessionId;
-        const restarted = await this.restartWorkspaceUnlocked(cwd, effectiveConfig());
+        const restarted = await this.restartRuntimeUnlocked(runtime, effectiveConfig());
         if ("error" in restarted) return { failure: { cwd, code: restarted.code, error: restarted.error } };
         if (oldId && restarted.activeSessionId !== oldId) {
           return { replacement: { cwd, oldId, newId: restarted.activeSessionId } };
@@ -322,7 +331,11 @@ export class NodeSessionService {
   }
 
   async shutdownAll(): Promise<void> {
-    for (const runtime of this.runtimes.values()) conversationEventHub.expectExit(runtime.process);
+    for (const runtime of this.runtimes.values()) {
+      runtime.closing = true;
+      this.clearIdleTimer(runtime);
+      conversationEventHub.expectExit(runtime.process);
+    }
     await piManager.shutdownAll();
     this.runtimes.clear();
   }
@@ -330,22 +343,28 @@ export class NodeSessionService {
   get activeCount(): number { return this.runtimes.size; }
 
   private async activateUnlocked(sessionId: string, cwd: string): Promise<RuntimeRecord | ServiceFailure> {
-    let runtime = this.runtimes.get(cwd);
-    if (runtime?.activeSessionId === sessionId) return runtime;
+    const key = runtimeKey(cwd, sessionId);
+    let runtime = this.runtimes.get(key);
+    if (runtime) {
+      if (runtime.activeSessionId !== sessionId) {
+        await this.cleanupRuntime(runtime);
+        runtime = undefined;
+      } else {
+        this.scheduleIdleCleanup(runtime);
+        return runtime;
+      }
+    }
     const sessionPath = await sessionRepository.findPath(cwd, sessionId);
     if (!sessionPath) return { success: false, code: "not_found", error: "session not found in this workspace" };
-    if (!runtime) {
-      const started = this.startRuntime(cwd, effectiveConfig(), sessionPath);
-      if ("error" in started) return { success: false, ...started };
-      runtime = started;
-    } else {
-      if (runtime.busy) return { success: false, code: "busy", error: "another conversation in this workspace is still running" };
-      const switched = await runtime.process.sendCommand("switch_session", { sessionPath });
-      if (!switched.success) return failure(switched, "unable to switch session");
-    }
+    const started = this.startRuntime(cwd, effectiveConfig());
+    if ("error" in started) return { success: false, ...started };
+    runtime = started;
+    const switched = await runtime.process.sendCommand("switch_session", { sessionPath });
+    if (!switched.success) { await this.cleanupRuntime(runtime); return failure(switched, "unable to resume session"); }
     const state = await this.refreshState(runtime);
-    if (!state.success) return failure(state, "unable to resume session");
-    if (runtime.activeSessionId !== sessionId) return { success: false, code: "session_mismatch", error: "runtime switched to a different session" };
+    if (!state.success) { await this.cleanupRuntime(runtime); return failure(state, "unable to resume session"); }
+    if (runtime.activeSessionId !== sessionId) { await this.cleanupRuntime(runtime); return { success: false, code: "session_mismatch", error: "runtime resumed a different session" }; }
+    this.registerRuntime(runtime);
     return runtime;
   }
 
@@ -355,10 +374,10 @@ export class NodeSessionService {
     catch (error) { return { error: `unable to prepare Pi runtime configuration: ${String(error)}`, code: "configuration_failed" }; }
     if (!options) return { error: "PI_CLI_PATH is not configured", code: "spawn_failed" };
     let process: PiProcess;
-    try { process = piManager.start(cwd, options); }
+    const managerKey = randomUUID();
+    try { process = piManager.start(managerKey, options); }
     catch (error) { return { error: `unable to start Pi runtime: ${String(error)}`, code: "spawn_failed" }; }
-    const runtime: RuntimeRecord = { cwd, process, activeSessionId: "", config, busy: false, restartPending: false };
-    this.runtimes.set(cwd, runtime);
+    const runtime: RuntimeRecord = { cwd, managerKey, process, activeSessionId: "", config: { ...config }, busy: false, restartPending: false, closing: false };
     conversationEventHub.bind(cwd, process, {
       activeSessionId: () => runtime.activeSessionId || null,
       onBusy: (busy) => {
@@ -368,10 +387,18 @@ export class NodeSessionService {
         runtime.operationDeadline = undefined;
         runtime.busy = busy;
         if (!busy && runtime.restartPending) {
-          queueMicrotask(() => { void this.reloadWorkspaceAfterTurn(cwd, process); });
+          queueMicrotask(() => { void this.reloadRuntimeAfterTurn(runtime); });
+        } else if (!busy) {
+          this.scheduleIdleCleanup(runtime);
         }
       },
-      onExit: () => { if (this.runtimes.get(cwd)?.process === process) this.runtimes.delete(cwd); },
+      onExit: () => {
+        runtime.closing = true;
+        this.clearIdleTimer(runtime);
+        for (const [key, current] of this.runtimes) {
+          if (current === runtime && current.process === process) this.runtimes.delete(key);
+        }
+      },
       observe: async (event, sessionId) => {
         await observeNodePiEvent(cwd, runtime.config.model ?? null, event, sessionId, (payload) => conversationEventHub.publish(cwd, sessionId, payload));
         if (event.type === "agent_settled") this.scheduleAutoReview(cwd, sessionId);
@@ -380,14 +407,13 @@ export class NodeSessionService {
     return runtime;
   }
 
-  private async reloadWorkspaceAfterTurn(cwd: string, process: PiProcess): Promise<void> {
-    await this.withLock(cwd, async () => {
-      const runtime = this.runtimes.get(cwd);
-      if (!runtime || runtime.process !== process || runtime.busy) return;
+  private async reloadRuntimeAfterTurn(runtime: RuntimeRecord): Promise<void> {
+    await this.withLock(runtimeKey(runtime.cwd, runtime.activeSessionId), async () => {
+      if (this.runtimes.get(runtimeKey(runtime.cwd, runtime.activeSessionId)) !== runtime || runtime.busy) return;
       const oldId = runtime.activeSessionId;
-      const restarted = await this.restartWorkspaceUnlocked(cwd, effectiveConfig());
+      const restarted = await this.restartRuntimeUnlocked(runtime, effectiveConfig());
       if ("error" in restarted) {
-        if (oldId) await conversationEventHub.publish(cwd, oldId, { type: "error", sessionId: oldId, message: `Failed to reload Pi runtime after settings changed: ${restarted.error}` });
+        if (oldId) await conversationEventHub.publish(runtime.cwd, oldId, { type: "error", sessionId: oldId, message: `Failed to reload Pi runtime after settings changed: ${restarted.error}` });
       }
     });
   }
@@ -411,8 +437,8 @@ export class NodeSessionService {
   private scheduleOperationReconciliation(runtime: RuntimeRecord, immediate: boolean): void {
     if (runtime.reconcileTimer) clearTimeout(runtime.reconcileTimer);
     runtime.reconcileTimer = setTimeout(() => {
-      void this.withLock(runtime.cwd, async () => {
-        const current = this.runtimes.get(runtime.cwd);
+      void this.withLock(runtimeKey(runtime.cwd, runtime.activeSessionId), async () => {
+        const current = this.runtimes.get(runtimeKey(runtime.cwd, runtime.activeSessionId));
         if (current !== runtime || !runtime.operationPending) return;
         const state = await runtime.process.sendCommand("get_state");
         const data = state.data && typeof state.data === "object" ? state.data as Record<string, unknown> : {};
@@ -442,7 +468,7 @@ export class NodeSessionService {
         const sessionId = runtime.activeSessionId;
         const config = { ...runtime.config };
         this.clearPendingOperation(runtime);
-        const restarted = await this.restartWorkspaceUnlocked(runtime.cwd, config);
+        const restarted = await this.restartRuntimeUnlocked(runtime, config);
         if ("error" in restarted && sessionId) {
           await conversationEventHub.publish(runtime.cwd, sessionId, {
             type: "error",
@@ -467,30 +493,35 @@ export class NodeSessionService {
     }).catch(() => undefined);
   }
 
-  private async restartWorkspaceUnlocked(cwd: string, config: PiConfig): Promise<RuntimeRecord | ServiceFailure> {
-    const runtime = this.runtimes.get(cwd);
-    if (!runtime) return { success: false, code: "not_found", error: "pi process not found" };
+  private async restartRuntimeUnlocked(runtime: RuntimeRecord, config: PiConfig): Promise<RuntimeRecord | ServiceFailure> {
+    const cwd = runtime.cwd;
     if (runtime.busy) return { success: false, code: "busy", error: "agent is busy" };
     const oldId = runtime.activeSessionId;
     const oldConfig = { ...runtime.config };
     const restartPending = runtime.restartPending;
     const sessionPath = runtime.activeSessionId ? await sessionRepository.findPath(cwd, runtime.activeSessionId) : null;
     let options: PiProcessOptions | null;
-    try { options = buildPiProcessOptions(cwd, config, sessionPath ?? undefined); }
+    try { options = buildPiProcessOptions(cwd, config); }
     catch (error) { return { success: false, code: "configuration_failed", error: `unable to prepare Pi runtime configuration: ${String(error)}` }; }
     if (!options) return { success: false, code: "spawn_failed", error: "PI_CLI_PATH is not configured" };
     conversationEventHub.expectExit(runtime.process);
-    await piManager.stop(cwd);
-    this.runtimes.delete(cwd);
-    const started = this.startRuntime(cwd, config, sessionPath ?? undefined, options);
+    await piManager.stop(runtime.managerKey);
+    for (const [key, current] of this.runtimes) {
+      if (current === runtime) this.runtimes.delete(key);
+    }
+    const started = this.startRuntime(cwd, config, undefined, options);
     if (!("error" in started)) {
-      const state = await this.refreshState(started);
+      const switched = sessionPath
+        ? await started.process.sendCommand("switch_session", { sessionPath })
+        : { success: true };
+      const state = switched.success ? await this.refreshState(started) : switched;
       if (state.success && started.activeSessionId) {
         started.restartPending = false;
+        this.registerRuntime(started, oldId);
         if (oldId && started.activeSessionId !== oldId) await this.publishReplacement(cwd, oldId, started.activeSessionId);
         return started;
       }
-      await this.cleanupRuntime(cwd, started);
+      await this.cleanupRuntime(started);
       const originalFailure = failure(state, "unable to restart Pi runtime");
       await this.restoreRuntimeAfterFailedRestart(cwd, oldConfig, sessionPath, restartPending);
       return originalFailure;
@@ -550,30 +581,56 @@ export class NodeSessionService {
     return { success: true };
   }
 
-  private async cleanupRuntime(cwd: string, runtime: RuntimeRecord): Promise<void> {
+  private async cleanupRuntime(runtime: RuntimeRecord): Promise<void> {
+    if (runtime.closing) return;
+    runtime.closing = true;
     if (runtime.reconcileTimer) clearTimeout(runtime.reconcileTimer);
+    this.clearIdleTimer(runtime);
     conversationEventHub.expectExit(runtime.process);
-    if (this.runtimes.get(cwd) === runtime) {
-      await piManager.stop(cwd);
-      this.runtimes.delete(cwd);
+    const registeredKeys = [...this.runtimes.entries()]
+      .filter(([, current]) => current === runtime)
+      .map(([key]) => key);
+    if (registeredKeys.length > 0) {
+      await piManager.stop(runtime.managerKey);
     } else {
       await runtime.process.shutdown();
     }
+    for (const key of registeredKeys) this.runtimes.delete(key);
   }
 
   private async restoreRuntimeAfterFailedRestart(cwd: string, config: PiConfig, sessionPath: string | null, restartPending: boolean): Promise<void> {
     let options: PiProcessOptions | null;
-    try { options = buildPiProcessOptions(cwd, config, sessionPath ?? undefined); }
+    try { options = buildPiProcessOptions(cwd, config); }
     catch { return; }
     if (!options) return;
-    const restored = this.startRuntime(cwd, config, sessionPath ?? undefined, options);
+    const restored = this.startRuntime(cwd, config, undefined, options);
     if ("error" in restored) return;
-    const state = await this.refreshState(restored);
+    const switched = sessionPath
+      ? await restored.process.sendCommand("switch_session", { sessionPath })
+      : { success: true };
+    const state = switched.success ? await this.refreshState(restored) : switched;
     if (!state.success || !restored.activeSessionId) {
-      await this.cleanupRuntime(cwd, restored);
+      await this.cleanupRuntime(restored);
       return;
     }
     restored.restartPending = restartPending;
+    this.registerRuntime(restored);
+  }
+
+  private registerRuntime(runtime: RuntimeRecord, previousSessionId?: string): void {
+    const nextKey = runtime.activeSessionId ? runtimeKey(runtime.cwd, runtime.activeSessionId) : null;
+    if (previousSessionId) {
+      const previousKey = runtimeKey(runtime.cwd, previousSessionId);
+      if (this.runtimes.get(previousKey) === runtime) this.runtimes.delete(previousKey);
+    }
+    for (const [key, current] of this.runtimes) {
+      if (current === runtime && key !== nextKey) this.runtimes.delete(key);
+    }
+    if (nextKey) {
+      runtime.closing = false;
+      this.runtimes.set(nextKey, runtime);
+      this.scheduleIdleCleanup(runtime);
+    }
   }
 
   private async publishReplacement(cwd: string, oldId: string, newId: string): Promise<void> {
@@ -585,12 +642,51 @@ export class NodeSessionService {
     const state = await runtime.process.sendCommand("get_state");
     if (!state.success || !state.data || typeof state.data !== "object") return state;
     const data = state.data as Record<string, unknown>;
+    runtime.lastState = data;
+    runtime.lastStateAt = Date.now();
     if (typeof data.sessionId === "string") runtime.activeSessionId = data.sessionId;
     runtime.busy = Boolean(runtime.operationPending) || Boolean(data.isStreaming) || Boolean(data.isCompacting) || Number(data.pendingMessageCount ?? 0) > 0;
     const model = data.model as { provider?: unknown; id?: unknown } | undefined;
     if (model?.provider && model.id) runtime.config.model = `${model.provider}/${model.id}`;
     if (typeof data.thinkingLevel === "string") runtime.config.thinking = data.thinkingLevel;
+    if (runtime.busy) this.clearIdleTimer(runtime);
+    else this.scheduleIdleCleanup(runtime);
     return state;
+  }
+
+  private clearIdleTimer(runtime: RuntimeRecord): void {
+    if (runtime.idleTimer) clearTimeout(runtime.idleTimer);
+    runtime.idleTimer = undefined;
+  }
+
+  private scheduleIdleCleanup(runtime: RuntimeRecord): void {
+    this.clearIdleTimer(runtime);
+    const timeoutMs = idleRuntimeMs();
+    if (
+      timeoutMs <= 0
+      || runtime.closing
+      || runtime.busy
+      || runtime.operationPending
+      || runtime.restartPending
+      || !runtime.activeSessionId
+      || this.runtimes.get(runtimeKey(runtime.cwd, runtime.activeSessionId)) !== runtime
+    ) return;
+
+    const key = runtimeKey(runtime.cwd, runtime.activeSessionId);
+    runtime.idleTimer = setTimeout(() => {
+      runtime.idleTimer = undefined;
+      void this.withLock(key, async () => {
+        if (this.runtimes.get(key) !== runtime || runtime.closing) return;
+        if (runtime.busy || runtime.operationPending || conversationEventHub.hasSubscribers(runtime.cwd, runtime.activeSessionId)) {
+          this.scheduleIdleCleanup(runtime);
+          return;
+        }
+        await this.cleanupRuntime(runtime);
+      }).catch(() => {
+        if (this.runtimes.get(key) === runtime && !runtime.closing) this.scheduleIdleCleanup(runtime);
+      });
+    }, timeoutMs);
+    runtime.idleTimer.unref?.();
   }
 
   private async stateData(runtime: RuntimeRecord): Promise<SessionState> {

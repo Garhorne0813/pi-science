@@ -112,7 +112,13 @@ export function registerSseRoutes(app: FastifyInstance, config: ServerConfig): v
       if (pending.length < 100) enqueue(": ping\n\n");
     }, 15_000);
     request.raw.once("close", cleanup);
-    unsubscribe = await conversationEventHub.subscribe(cwd, sessionId, lastEventId, (record) => enqueue(serializeSseEvent(record)));
+    unsubscribe = await conversationEventHub.subscribe(
+      cwd,
+      sessionId,
+      lastEventId,
+      (record) => enqueue(serializeSseEvent(record)),
+      Boolean(lastEventId),
+    );
     if (closed) unsubscribe();
     // Emit an initial comment so Fastify flushes the SSE headers immediately.
     // Otherwise an idle session can leave clients waiting until the 15s

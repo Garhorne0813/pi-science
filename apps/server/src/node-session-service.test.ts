@@ -6,7 +6,7 @@ import { conversationEventHub } from "./conversation-event-hub.js";
 import { NodeSessionService } from "./node-session-service.js";
 
 const cleanup: string[] = [];
-const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, mode: process.env.FAKE_PI_MODE };
+const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE };
 
 beforeEach(async () => {
   const root = join(tmpdir(), `pi-science-node-service-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -36,7 +36,7 @@ beforeEach(async () => {
     '  const request = JSON.parse(line);',
     '  if (log) fs.appendFileSync(log, JSON.stringify(request) + "\\n");',
     '  if (!request.id) return;',
-    '  if (request.type === "get_state") { stateRequests++; if (process.env.FAKE_PI_MODE === "restart-fail-once" && startNumber === 2) return; if (Number(process.env.FAKE_PI_FAIL_STATE_AFTER || 0) > 0 && stateRequests > Number(process.env.FAKE_PI_FAIL_STATE_AFTER)) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); return respond(request, { data: { sessionId, isStreaming: busy, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }',
+    '  if (request.type === "get_state") { stateRequests++; if (process.env.FAKE_PI_MODE === "restart-fail-once" && startNumber === 2) return; if (process.env.FAKE_PI_MODE === "new-session-state-fails" && sessionId.startsWith("generated-")) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (Number(process.env.FAKE_PI_FAIL_STATE_AFTER || 0) > 0 && stateRequests > Number(process.env.FAKE_PI_FAIL_STATE_AFTER)) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); return respond(request, { data: { sessionId, isStreaming: busy, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }',
     '  if (request.type === "switch_session") { sessionId = JSON.parse(fs.readFileSync(request.sessionPath, "utf8").split("\\n")[0]).id; return respond(request); }',
     '  if (request.type === "new_session" || request.type === "clone" || request.type === "fork") { sessionId = `generated-${++counter}-${process.pid}`; return respond(request); }',
     '  if (request.type === "prompt") { if (process.env.FAKE_PI_MODE === "prompt-timeout") return; busy = true; respond(request); process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); return; }',
@@ -59,6 +59,7 @@ beforeEach(async () => {
   process.env.PI_SCIENCE_RPC_TIMEOUT_MS = "500";
   process.env.PI_SCIENCE_RECONCILE_DELAY_MS = "20";
   process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS = "700";
+  process.env.PI_SCIENCE_IDLE_RUNTIME_MS = "0";
   process.env.FAKE_PI_FAIL_START_FILE = join(root, "fail-start");
 });
 
@@ -69,6 +70,7 @@ afterEach(async () => {
   process.env.PI_SCIENCE_RPC_TIMEOUT_MS = original.timeout;
   process.env.PI_SCIENCE_RECONCILE_DELAY_MS = original.delay;
   process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS = original.deadline;
+  process.env.PI_SCIENCE_IDLE_RUNTIME_MS = original.idle;
   process.env.FAKE_PI_MODE = original.mode;
   delete process.env.FAKE_PI_LOG;
   delete process.env.FAKE_PI_STARTS;
@@ -92,7 +94,45 @@ describe("Node session lifecycle", () => {
     const cwd = await workspaceWithSessions("session-a", "session-b");
     await expect(service.state("session-a", cwd)).resolves.toMatchObject({ id: "session-a" });
     await expect(service.state("session-b", cwd)).resolves.toMatchObject({ id: "session-b" });
+    expect(service.activeCount).toBe(2);
+    await expect(Promise.all([
+      service.command("session-a", cwd, "prompt", { message: "a" }),
+      service.command("session-b", cwd, "prompt", { message: "b" }),
+    ])).resolves.toEqual([
+      expect.objectContaining({ success: true }),
+      expect.objectContaining({ success: true }),
+    ]);
     await expect(service.state("session-a", cwd)).resolves.toMatchObject({ id: "session-a" });
+    await service.shutdownAll();
+  });
+
+  it("keeps identical session IDs isolated across workspaces", async () => {
+    const service = new NodeSessionService();
+    const first = await workspaceWithSessions("same-session");
+    const second = await workspaceWithSessions("same-session");
+    await expect(service.resume("same-session", first)).resolves.toEqual({ success: true });
+    await expect(service.resume("same-session", second)).resolves.toEqual({ success: true });
+    expect(service.activeCount).toBe(2);
+    await expect(service.state("same-session", first)).resolves.toMatchObject({ id: "same-session", cwd: first });
+    await expect(service.state("same-session", second)).resolves.toMatchObject({ id: "same-session", cwd: second });
+    await service.shutdownAll();
+  });
+
+  it("reclaims an idle runtime without disrupting a subscribed conversation", async () => {
+    process.env.PI_SCIENCE_IDLE_RUNTIME_MS = "30";
+    const service = new NodeSessionService();
+    const cwd = await workspaceWithSessions("session-idle", "session-subscribed");
+    await service.resume("session-idle", cwd);
+    for (let attempt = 0; attempt < 200 && service.activeCount > 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(service.activeCount).toBe(0);
+
+    await service.resume("session-subscribed", cwd);
+    const unsubscribe = await conversationEventHub.subscribe(cwd, "session-subscribed", undefined, () => undefined, false);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(service.activeCount).toBe(1);
+    unsubscribe();
     await service.shutdownAll();
   });
 
@@ -109,12 +149,14 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
-  it("rejects disruptive operations while a turn is active and deletes exactly one session", async () => {
+  it("keeps other sessions independent while a turn is active and deletes exactly one session", async () => {
     const service = new NodeSessionService();
     const cwd = await workspaceWithSessions("session-a", "session-b");
     await service.resume("session-a", cwd);
     await expect(service.command("session-a", cwd, "prompt", { message: "hold" })).resolves.toMatchObject({ success: true });
-    await expect(service.create({ cwd, config: { skills: [], extensions: [] } })).resolves.toMatchObject({ code: "busy" });
+    const created = await service.create({ cwd, config: { skills: [], extensions: [] } });
+    expect(created).toHaveProperty("id");
+    expect(service.activeCount).toBe(2);
     await expect(service.command("session-a", cwd, "prompt", { message: "second" })).resolves.toMatchObject({ code: "busy" });
     await expect(service.delete("session-a", cwd)).resolves.toMatchObject({ code: "busy" });
     await service.command("session-a", cwd, "abort");
@@ -178,6 +220,19 @@ describe("Node session lifecycle", () => {
     await service.resume("session-a", cwd);
     await expect(service.fork("session-a", cwd)).resolves.toMatchObject({ success: false, code: "state_failed" });
     expect(await readFile(process.env.FAKE_PI_LOG!, "utf8")).not.toContain('"type":"clone"');
+    await service.shutdownAll();
+  });
+
+  it("drops stale runtime indexes when a session-changing command cannot be confirmed", async () => {
+    process.env.FAKE_PI_MODE = "new-session-state-fails";
+    const service = new NodeSessionService();
+    const cwd = await workspaceWithSessions("session-a");
+    await service.resume("session-a", cwd);
+    await expect(service.command("session-a", cwd, "new_session")).resolves.toMatchObject({ success: false, code: "state_failed" });
+    expect(service.activeCount).toBe(0);
+
+    process.env.FAKE_PI_MODE = "";
+    await expect(service.state("session-a", cwd)).resolves.toMatchObject({ id: "session-a" });
     await service.shutdownAll();
   });
 
