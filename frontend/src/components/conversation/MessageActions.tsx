@@ -27,11 +27,30 @@ export function MessageActions({ text, timestamp, align = "left" }: { text: stri
 
   return (
     <div className={cn("flex min-h-6 items-center gap-1.5 text-[10px] text-muted/70", align === "right" && "justify-end")}>
-      <button type="button" onClick={() => void copy()} className="flex items-center gap-1 rounded px-1.5 py-1 transition-colors hover:bg-surface-2 hover:text-text" aria-label={copied ? t("conversation.copied") : t("conversation.copy")} title={copied ? t("conversation.copied") : t("conversation.copy")}>
+      <button
+        type="button"
+        onClick={() => void copy()}
+        className={cn(
+          "flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-surface-2 hover:text-text",
+          align === "right" && "order-2",
+        )}
+        aria-label={copied ? t("conversation.copied") : t("conversation.copy")}
+        title={copied ? t("conversation.copied") : t("conversation.copy")}
+      >
         {copied ? <Check size={11} /> : <Copy size={11} />}
-        <span>{copied ? t("conversation.copied") : t("conversation.copy")}</span>
       </button>
-      {time && <time dateTime={timestamp} title={new Date(timestamp!).toLocaleString(i18n.resolvedLanguage)}>{time}</time>}
+      {time && (
+        <time
+          dateTime={timestamp}
+          title={new Date(timestamp!).toLocaleString(i18n.resolvedLanguage)}
+          className={cn(
+            "pointer-events-none opacity-0 transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100 [@media(hover:none)]:opacity-100",
+            align === "right" && "order-1",
+          )}
+        >
+          {time}
+        </time>
+      )}
     </div>
   );
 }

@@ -4,6 +4,8 @@ import { BookOpen, Play, Square, RefreshCw, ExternalLink } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { useUiStore } from "../../lib/store";
 import { fileInspectorForPath } from "../../lib/artifacts";
+import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "../../components/layout/WorkspacePage";
+import { useTranslation } from "react-i18next";
 
 interface Notebook {
   path: string; name: string; size: number; modified: string;
@@ -19,6 +21,7 @@ interface JupyterStatus {
 }
 
 export function NotebooksPage() {
+  const { t } = useTranslation();
   const { cwd: rawCwd } = useParams<{ cwd: string }>();
   const workspaceCwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
@@ -117,20 +120,17 @@ export function NotebooksPage() {
   };
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-[900px] px-8 py-8">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="font-serif text-xl text-text">Notebooks</h1>
-            <p className="mt-1 text-sm text-muted">{notebooks.length} notebook{notebooks.length !== 1 ? "s" : ""} in workspace</p>
-          </div>
-          <button onClick={() => void loadNotebooks()} className="rounded-input px-2 py-1 text-xs text-muted hover:text-text hover:bg-surface-2 flex items-center gap-1">
-            <RefreshCw size={12} className={loading ? "animate-spin" : ""} /> Refresh
-          </button>
-        </div>
+    <WorkspacePage>
+        <WorkspacePageHeader
+          title="Notebooks"
+          description={`${notebooks.length} notebook${notebooks.length !== 1 ? "s" : ""} in workspace`}
+          actions={
+          <WorkspacePageRefreshButton label={t("common.refresh")} loading={loading} onClick={() => void loadNotebooks()} />
+          }
+        />
 
         {/* Jupyter Server */}
-        <div className={cn("rounded-card border p-4 mb-6", jupyter.running && jupyter.matches_workspace ? "border-ok/40 bg-ok/5" : "border-border bg-surface")}>
+        <div className={cn("mt-6 rounded-card border p-4 mb-6", jupyter.running && jupyter.matches_workspace ? "border-ok/40 bg-ok/5" : "border-border bg-surface")}>
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-sm font-medium text-text">Jupyter Lab</h2>
@@ -201,7 +201,6 @@ export function NotebooksPage() {
             ))}
           </div>
         )}
-      </div>
-    </div>
+    </WorkspacePage>
   );
 }

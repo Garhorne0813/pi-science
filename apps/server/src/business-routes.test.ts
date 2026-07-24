@@ -14,6 +14,7 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
   await Promise.all(tempDirs.splice(0).map((path) => rm(path, { recursive: true, force: true })));
   delete process.env.PI_SCIENCE_HOME;
+  delete process.env.PI_SCIENCE_WORKSPACES;
 });
 
 function config(): ServerConfig {
@@ -26,6 +27,54 @@ async function workspace(): Promise<string> {
 }
 
 describe("native control-plane business routes", () => {
+  it("uses Pi runtime model capabilities for workspace settings", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME, "config.json"), JSON.stringify({ model: "openrouter/openai/gpt-5.1", thinking: "xhigh" }), "utf8");
+    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValueOnce({
+      success: true,
+      data: {
+        models: [
+          { provider: "openrouter", id: "openai/gpt-5.1", name: "GPT-5.1", reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: null } },
+          { provider: "openrouter", id: "openai/gpt-4o", name: "GPT-4o", reasoning: false },
+        ],
+      },
+    });
+    const app = buildApp(config()); apps.push(app);
+    const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
+    expect(settings.statusCode).toBe(200);
+    expect(settings.json()).toMatchObject({
+      model: "openrouter/openai/gpt-5.1",
+      model_catalog_source: "pi",
+      available_models: [
+        { id: "openrouter/openai/gpt-5.1", reasoning: true, thinking_levels: ["off", "minimal", "low", "medium", "high", "xhigh"] },
+        { id: "openrouter/openai/gpt-4o", reasoning: false, thinking_levels: ["off"] },
+      ],
+    });
+  });
+
+  it("reports the number of valid sessions on workspace cards", async () => {
+    const root = join(tmpdir(), `pi-science-workspaces-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const cwd = join(root, "counted-workspace");
+    tempDirs.push(root);
+    process.env.PI_SCIENCE_WORKSPACES = root;
+    await mkdir(join(cwd, ".pi-science", "sessions", "nested"), { recursive: true });
+    await writeFile(join(cwd, ".pi-science", "sessions", "one.jsonl"), `${JSON.stringify({ type: "session", id: "one", cwd, timestamp: "2026-07-24T00:00:00.000Z" })}\n`, "utf8");
+    await writeFile(join(cwd, ".pi-science", "sessions", "nested", "two.jsonl"), `${JSON.stringify({ type: "session", id: "two", cwd, timestamp: "2026-07-24T01:00:00.000Z" })}\n`, "utf8");
+    await writeFile(join(cwd, ".pi-science", "sessions", "invalid.jsonl"), "not a session\n", "utf8");
+
+    const app = buildApp(config());
+    apps.push(app);
+    const response = await app.inject({ method: "GET", url: "/api/workspaces" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual([
+      expect.objectContaining({ name: "counted-workspace", path: cwd, session_count: 2 }),
+    ]);
+    expect(response.json()[0].last_modified).not.toBe("");
+  });
+
   it("persists jobs, artifacts, provenance, and redacts settings secrets", async () => {
     const cwd = await workspace();
     const home = join(cwd, "control-home"); process.env.PI_SCIENCE_HOME = home;

@@ -15,7 +15,6 @@ import {
   Pencil,
   Play,
   Plus,
-  RefreshCw,
   RotateCcw,
   Save,
   Settings,
@@ -41,6 +40,7 @@ import { useRuntimeStore } from "../../lib/runtime-store";
 import { useUiStore } from "../../lib/store";
 import { fileInspectorForPath } from "../../lib/artifacts";
 import { KnowledgePageHeader, KnowledgePageTabs, type KnowledgePageTab } from "../../components/knowledge/KnowledgePageHeader";
+import { WorkspacePage } from "../../components/layout/WorkspacePage";
 import { projectMemoryApi, type ExperienceRecord, type ProjectMemoryOverview, type ResearchLoop } from "../../lib/project-memory";
 
 export function KnowledgePage() {
@@ -204,8 +204,7 @@ export function KnowledgePage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-bg [scrollbar-gutter:stable] [&_button]:!min-h-9 [&_button]:!text-xs">
-      <div className="mx-auto w-full max-w-[1120px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+    <WorkspacePage className="[&_button]:!min-h-9 [&_button]:!text-xs">
         <KnowledgePageHeader policy={policy} reviewing={reviewing} onToggleAutoReview={() => void toggleAutoReview()} onReview={() => void runReviewer()} />
 
         {(error || message) && (
@@ -220,7 +219,17 @@ export function KnowledgePage() {
           </div>
         )}
 
-        <KnowledgePageTabs tab={tab} pendingCount={pending.length} onChange={setTab} onRefreshHistory={() => void loadHistory()} />
+        <KnowledgePageTabs
+          tab={tab}
+          pendingCount={pending.length}
+          onChange={setTab}
+          onRefresh={() => {
+            if (tab === "research") void loadResearch();
+            else if (tab === "files") void loadFiles();
+            else if (tab === "history") void loadHistory();
+            else void loadCore();
+          }}
+        />
 
         <main className="py-6">
           {tab === "overview" && (
@@ -228,7 +237,6 @@ export function KnowledgePage() {
               document={projectDocument}
               summary={summary}
               memorySummary={memorySummary}
-              onRefresh={loadCore}
             />
           )}
           {tab === "inbox" && (
@@ -256,7 +264,6 @@ export function KnowledgePage() {
               cwd={cwd}
               views={files}
               policy={policy}
-              onRefresh={loadFiles}
               onPolicyChange={(next) => { setPolicy(next); setSummary((current) => current ? { ...current, auto_review: next.auto_review } : current); }}
               onError={setError}
             />
@@ -270,12 +277,11 @@ export function KnowledgePage() {
             />
           )}
         </main>
-      </div>
-    </div>
+    </WorkspacePage>
   );
 }
 
-function OverviewTab({ document, summary, memorySummary, onRefresh }: { document: string; summary: ProjectSummary | null; memorySummary: ProjectMemoryOverview | null; onRefresh: () => Promise<void> }) {
+function OverviewTab({ document, summary, memorySummary }: { document: string; summary: ProjectSummary | null; memorySummary: ProjectMemoryOverview | null }) {
   const { t } = useTranslation();
   const visibleDocument = document
     .replace(/<!--\s*pi-science:project-knowledge:(?:start|end)\s*-->/g, "")
@@ -288,9 +294,6 @@ function OverviewTab({ document, summary, memorySummary, onRefresh }: { document
             <p className="text-sm font-medium text-[#2b2620]">PROJECT.md</p>
             <p className="text-xs text-[#8c8174]">{t("knowledge.reviewedSource")}</p>
           </div>
-          <button type="button" onClick={() => void onRefresh()} aria-label={t("knowledge.refresh")} className="flex min-h-9 min-w-9 items-center justify-center rounded-input text-[#8c8174] hover:bg-[#f7f0ea] hover:text-[#2b2620]">
-            <RefreshCw size={15} />
-          </button>
         </div>
         <div className="px-5 py-7 sm:px-8">
           <MarkdownViewer variant="document">{visibleDocument}</MarkdownViewer>
@@ -821,14 +824,12 @@ function FilesTab({
   cwd,
   views,
   policy,
-  onRefresh,
   onPolicyChange,
   onError,
 }: {
   cwd: string;
   views: LogicalFileViews | null;
   policy: ProjectPolicy | null;
-  onRefresh: () => Promise<void>;
   onPolicyChange: (policy: ProjectPolicy) => void;
   onError: (message: string | null) => void;
 }) {
@@ -876,7 +877,6 @@ function FilesTab({
         </div>
         <div className="flex gap-2">
           <button type="button" onClick={() => setSettingsOpen((value) => !value)} className="flex min-h-11 items-center gap-1.5 rounded-input border border-border px-3 py-2 text-sm text-muted hover:text-text"><Settings size={14} /> {t("knowledge.policy")}</button>
-          <button type="button" onClick={() => void onRefresh()} className="flex min-h-11 items-center gap-1.5 rounded-input border border-border px-3 py-2 text-sm text-muted hover:text-text"><RefreshCw size={14} /> {t("knowledge.refresh")}</button>
         </div>
       </div>
 

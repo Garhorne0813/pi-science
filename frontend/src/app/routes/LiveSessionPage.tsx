@@ -15,7 +15,7 @@ import { SlashCommandMenu } from "../../components/SlashCommandMenu";
 import { injectWorkspaceReferences, referencesFromMessage, visibleUserMessage } from "../../lib/file-references";
 import { ConversationWelcome } from "../../components/conversation/ConversationWelcome";
 import { MessageActions } from "../../components/conversation/MessageActions";
-import { CompactSelect } from "../../components/conversation/CompactSelect";
+import { ModelControlMenu } from "../../components/conversation/ModelControlMenu";
 import { useTranslation } from "react-i18next";
 
 export function LiveSessionPage() {
@@ -88,7 +88,8 @@ export function LiveSessionPage() {
   };
 
   useEffect(() => {
-    fetch("/api/settings/config")
+    if (!activeSessionId) return;
+    fetch(`/api/settings/config?cwd=${encodeURIComponent(workspaceCwd)}`)
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || data.detail || `Unable to load model list: ${res.statusText}`);
@@ -96,7 +97,11 @@ export function LiveSessionPage() {
       })
       .then((data) => {
         const runtime = useRuntimeStore.getState();
-        const availableModels = Array.isArray(data.available_models) ? data.available_models : [];
+        const allAvailableModels: AvailableModel[] = Array.isArray(data.available_models) ? data.available_models : [];
+        const configuredProvider = typeof data.model === "string" ? data.model.split("/", 1)[0] : "";
+        const availableModels = configuredProvider
+          ? allAvailableModels.filter((model) => model.provider === configuredProvider)
+          : [];
         setModels(availableModels);
         const nextModel = runtime.model || data.model || "";
         const nextModelInfo = availableModels.find((model: AvailableModel) => model.id === nextModel);
@@ -109,7 +114,7 @@ export function LiveSessionPage() {
           : null);
       })
       .catch((cause) => setModelError(cause instanceof Error ? cause.message : "Unable to load model list"));
-  }, []);
+  }, [activeSessionId, workspaceCwd]);
 
   useEffect(() => {
     if (runtimeModel) setSelectedModel(runtimeModel);
@@ -140,7 +145,7 @@ export function LiveSessionPage() {
     setModelError(null);
     setConfiguringModel(true);
     try {
-      const response = await fetch("/api/settings/model", {
+      const response = await fetch(`/api/settings/model?cwd=${encodeURIComponent(workspaceCwd)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model, thinking: nextThinking }),
@@ -439,52 +444,40 @@ export function LiveSessionPage() {
                 {reviewingProject ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
                 Review
               </button>
-              {models.length > 0 && (
-                <CompactSelect
-                  label="Select model"
-                  value={selectedModel}
-                  onChange={handleModelChange}
-                  disabled={modelControlsDisabled}
-                  className="w-[220px] max-w-[min(300px,70vw)]"
-                  options={[
-                    ...(!selectedModel ? [{ value: "", label: "Select a model…" }] : []),
-                    ...(selectedModel && !models.some((model) => model.id === selectedModel) ? [{ value: selectedModel, label: selectedModel }] : []),
-                    ...models.map((model) => ({ value: model.id, label: model.label })),
-                  ]}
-                />
-              )}
-              {selectedModel && thinkingLevels.length > 0 && (
-                <CompactSelect
-                  label="Select thinking level"
-                  prefix="Think"
-                  value={thinking}
-                  onChange={handleThinkingChange}
-                  disabled={modelControlsDisabled || thinkingLevels.length <= 1}
-                  className="w-[108px]"
-                  options={thinkingLevels.map((level) => ({ value: level, label: level }))}
-                />
-              )}
               {modelError && <span className="max-w-[180px] truncate text-[10px] text-error" title={modelError}>{modelError}</span>}
               {reviewNotice && <span className="max-w-[220px] truncate text-[10px] text-muted" title={reviewNotice}>{reviewNotice}</span>}
             </div>
             <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFilePick} />
-            {working ? (
-              <button aria-label="Stop generation" onClick={() => void abort().catch(() => undefined)} className="h-7 w-7 rounded-input bg-accent text-accent-fg flex items-center justify-center hover:bg-error transition-colors">
-                <Square size={14} fill="currentColor" />
-              </button>
-            ) : (
-              <button
-                aria-label="Send message"
-                onClick={handleSend}
-                disabled={!selectedModel || reviewingProject || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
-                className={cn(
-                  "h-7 w-7 rounded-input flex items-center justify-center",
-                  (selectedModel && !reviewingProject && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted cursor-default",
-                )}
-              >
-                <ArrowUp size={15} />
-              </button>
-            )}
+            <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
+              {models.length > 0 && (
+                <ModelControlMenu
+                  models={models}
+                  selectedModel={selectedModel}
+                  thinking={thinking}
+                  thinkingLevels={thinkingLevels}
+                  disabled={modelControlsDisabled}
+                  onModelChange={handleModelChange}
+                  onThinkingChange={handleThinkingChange}
+                />
+              )}
+              {working ? (
+                <button aria-label="Stop generation" onClick={() => void abort().catch(() => undefined)} className="h-7 w-7 rounded-input bg-accent text-accent-fg flex items-center justify-center hover:bg-error transition-colors">
+                  <Square size={14} fill="currentColor" />
+                </button>
+              ) : (
+                <button
+                  aria-label="Send message"
+                  onClick={handleSend}
+                  disabled={!selectedModel || reviewingProject || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
+                  className={cn(
+                    "h-7 w-7 rounded-input flex items-center justify-center",
+                    (selectedModel && !reviewingProject && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted cursor-default",
+                  )}
+                >
+                  <ArrowUp size={15} />
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -627,7 +620,7 @@ function UserMessage({ text, timestamp }: { text: string; timestamp?: string }) 
   const references = referencesFromMessage(text);
   const copyText = visibleText || references.map((reference) => reference.path).join("\n");
   return (
-    <div className="ml-auto flex max-w-[85%] flex-col items-end gap-1.5">
+    <div className="group/message ml-auto flex max-w-[85%] flex-col items-end gap-1.5">
       {visibleText && (
         <div className="rounded-card bg-surface-2 px-4 py-3 text-[15px] leading-relaxed text-text whitespace-pre-wrap">
           {visibleText}
@@ -665,7 +658,7 @@ function AgentMessage({ parts, partial, timestamp }: { parts: { id: string; text
   };
 
   return (
-    <div>
+    <div className="group/message">
       <MarkdownViewer variant="chat">{text}</MarkdownViewer>
       {refs.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mt-2">

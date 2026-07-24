@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Package, Puzzle, Wrench, Check, X, ChevronRight, ShieldCheck, AlertTriangle, RotateCcw, Loader2 } from "lucide-react";
 import { applySessionReplacements, type SessionReplacement } from "../../lib/runtime-store";
+import { WorkspacePage, WorkspacePageHeader } from "../../components/layout/WorkspacePage";
 
 async function readResponse<T>(response: Response, fallback: string): Promise<T> {
   const data = await response.json().catch(() => ({})) as T & {
@@ -122,16 +123,16 @@ export function SkillsPage() {
   };
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-3xl px-8 py-8">
-        <h1 className="font-serif text-xl text-text">Skills</h1>
-        <p className="mt-1 text-sm text-muted">
+    <WorkspacePage>
+        <WorkspacePageHeader title="Skills" description={
+          <>
           Agent skills extend what the AI can do. Skills are loaded from{" "}
           <span className="font-mono text-xs">.pi/skills/</span> (project),{" "}
           <span className="font-mono text-xs">~/.pi/agent/skills/</span> (user),
           and bundled with pi-science.
-        </p>
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-card border border-border bg-surface px-4 py-3">
+          </>
+        } />
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-card border border-border bg-surface px-4 py-3">
           <div>
             <div className="flex items-center gap-2 text-xs font-medium text-text">
               <span className={configured ? "text-accent" : "text-ok"}>{configured ? "Custom skill selection" : "Auto-discovery enabled"}</span>
@@ -181,8 +182,7 @@ export function SkillsPage() {
         </Section>
 
         {selected && <SkillDetail skill={selected} onClose={() => setSelected(null)} />}
-      </div>
-    </div>
+    </WorkspacePage>
   );
 }
 

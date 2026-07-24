@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { FolderOpen, File, ChevronRight, RefreshCw, Trash2, ArrowUp } from "lucide-react";
+import { FolderOpen, File, ChevronRight, Trash2, ArrowUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useUiStore } from "../../lib/store";
 import { fileInspectorForPath } from "../../lib/artifacts";
 import { apiRequest, invalidateApiCache } from "../../lib/api";
 import { FileContextMenu, type ContextPoint, type FileListEntry } from "../../components/sidebar/FileContextMenu";
 import { useFeedback } from "../../components/feedback/feedback-context";
+import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "../../components/layout/WorkspacePage";
 
 interface Breadcrumb {
   name: string; path: string;
@@ -97,13 +98,11 @@ export function FilesPage() {
   };
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-[900px] px-8 py-8">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="font-serif text-xl text-text">{t("nav.files")}</h1>
-            {/* Breadcrumbs */}
-            <div className="flex items-center gap-1 mt-2 text-sm text-muted">
+    <WorkspacePage>
+      <WorkspacePageHeader
+        title={t("nav.files")}
+        description={
+          <div className="flex items-center gap-1">
               <button onClick={() => setSubdir("")} className="hover:text-text">{t("files.workspace")}</button>
               {breadcrumbs.map((bc) => (
                 <span key={bc.path} className="flex items-center gap-1">
@@ -111,13 +110,14 @@ export function FilesPage() {
                   <button onClick={() => setSubdir(bc.path)} className="hover:text-text">{bc.name}</button>
                 </span>
               ))}
-            </div>
           </div>
-          <button onClick={() => void loadFiles(subdir)} className="rounded-input px-2 py-1 text-xs text-muted hover:text-text hover:bg-surface-2 flex items-center gap-1">
-            <RefreshCw size={12} className={loading ? "animate-spin" : ""} /> {t("common.refresh")}
-          </button>
-        </div>
+        }
+        actions={
+          <WorkspacePageRefreshButton label={t("common.refresh")} loading={loading} onClick={() => void loadFiles(subdir)} />
+        }
+      />
 
+      <div className="mt-6">
         {/* Subdirectory navigation */}
         {subdir && (
           <button onClick={() => { const parts = subdir.split("/"); parts.pop(); setSubdir(parts.join("/")); }}
@@ -155,6 +155,6 @@ export function FilesPage() {
 
       {/* Context menu */}
       {contextMenu && <FileContextMenu entry={contextMenu.entry} point={contextMenu.point} onClose={() => setContextMenu(null)} onReference={() => referenceEntry(contextMenu.entry)} onCopy={(text) => void copyPath(text)} onDelete={() => void handleDelete(contextMenu.entry)} />}
-    </div>
+    </WorkspacePage>
   );
 }

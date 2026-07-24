@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "react-router-dom";
-import { Key, Trash2, Eye, EyeOff, Check, Loader2, Cpu, Puzzle, FlaskConical, Languages, Server, Globe2, Bot, Plus, Save, X } from "lucide-react";
+import { Key, Trash2, Eye, EyeOff, Check, Loader2, Cpu, Puzzle, FlaskConical, Languages, Server, Globe2, Bot, Plus, Save, X, ChevronDown } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { shippedLocales } from "../../i18n/config";
 import { useUiStore } from "../../lib/store";
 import { applySessionReplacements, type SessionReplacement } from "../../lib/runtime-store";
+import { clampThinkingLevel } from "../../lib/pi-science-client";
 import { useTranslation } from "react-i18next";
 
 type Tab = "general" | "llm" | "extensions" | "mcp" | "compute";
@@ -66,6 +67,7 @@ interface Config {
   providers: Provider[];
   custom_providers: CustomProvider[];
   available_models: AvailableModel[];
+  model_catalog_source?: "pi" | "fallback";
 }
 
 export async function readSettingsResponse<T>(response: Response, fallback: string): Promise<T> {
@@ -97,7 +99,8 @@ export function SettingsPage() {
 
   const loadConfig = useCallback(async () => {
     try {
-      const res = await fetch("/api/settings/config");
+      const query = workspaceCwd ? `?cwd=${encodeURIComponent(workspaceCwd)}` : "";
+      const res = await fetch(`/api/settings/config${query}`);
       setConfig(await readSettingsResponse<Config>(res, "Unable to load settings"));
       setError(null);
     } catch (e) {
@@ -107,7 +110,7 @@ export function SettingsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [workspaceCwd]);
 
   useEffect(() => {
     void loadConfig().catch(() => undefined);
@@ -152,7 +155,8 @@ export function SettingsPage() {
     setSaving("model");
     setError(null);
     try {
-      const response = await fetch("/api/settings/model", {
+      const query = workspaceCwd ? `?cwd=${encodeURIComponent(workspaceCwd)}` : "";
+      const response = await fetch(`/api/settings/model${query}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -178,15 +182,15 @@ export function SettingsPage() {
     );
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="settings-page h-full overflow-y-auto [&_button]:!min-h-9">
       <div className="mx-auto max-w-[720px] px-8 py-8">
         <h1 className="font-serif text-xl text-text mb-6">{t("nav.settings")}</h1>
         {error && <p role="alert" className="mb-4 rounded-input bg-error/10 px-3 py-2 text-[11px] text-error">{error}</p>}
 
         {/* Tab bar */}
-        <div className="flex gap-1 mb-6 rounded-input bg-surface-2 p-0.5 w-fit">
+        <div className="mb-7 flex flex-wrap border-b border-border" role="tablist" aria-label={t("nav.settings")}>
           {TABS.map((item) => (
-            <button key={item.id} onClick={() => setTab(item.id)} className={cn("flex items-center gap-1.5 rounded-input px-3 py-1.5 text-[13px] font-medium transition-colors", tab === item.id ? "bg-surface text-text shadow-sm" : "text-muted hover:text-text")}>
+            <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} onClick={() => setTab(item.id)} className={cn("-mb-px flex min-h-11 shrink-0 items-center gap-1.5 border-b-2 px-3 text-xs font-medium transition-colors", tab === item.id ? "border-accent text-text" : "border-transparent text-muted hover:border-border hover:text-text")}>
               {item.icon} {t(item.labelKey)}
             </button>
           ))}
@@ -195,7 +199,7 @@ export function SettingsPage() {
         {tab === "general" && <GeneralTab />}
         {tab === "llm" && <LLMTab config={config!} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} saveModel={saveModel} onConfigReload={loadConfig} />}
         {tab === "extensions" && <ExtensionsTab workspaceCwd={workspaceCwd} />}
-        {tab === "mcp" && <MCPTab />}
+        {tab === "mcp" && <MCPTab workspaceCwd={workspaceCwd} />}
         {tab === "compute" && <ComputeTab />}
       </div>
     </div>
@@ -249,13 +253,25 @@ function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKey, savi
     requestAnimationFrame(() => document.getElementById(providerSectionId)?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
   return (
-    <div className="space-y-6">
-      <Section title={t("settings.model.defaultTitle")}>
-        <div className="rounded-card border border-border bg-surface px-4 py-3">
-          <div className="grid gap-3 md:grid-cols-[minmax(0,1.4fr)_minmax(220px,1fr)] md:items-start">
+    <div className="space-y-4">
+      <Section title={t("settings.model.pageTitle")}>
+        <p className="text-[11px] text-muted">{t("settings.model.pageDescription")}</p>
+      </Section>
+      <section className="overflow-hidden rounded-card border border-border bg-surface">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-faint px-5 py-4">
+          <div>
+            <h2 className="text-sm font-semibold text-text">{t("settings.model.defaultTitle")}</h2>
+            <p className="mt-1 text-xs leading-relaxed text-muted">{t("settings.model.defaultDescription")}</p>
+          </div>
+          <span className={cn("rounded-full px-2.5 py-1 text-[11px] font-medium", config.model ? "bg-ok/10 text-ok" : "bg-surface-2 text-muted")}>
+            {config.model ? t("settings.model.active") : t("settings.model.notConfigured")}
+          </span>
+        </div>
+        <div className="px-5 py-4">
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1.35fr)_minmax(220px,1fr)] md:items-start">
             <label className="block">
-              <span className="mb-1.5 block text-[11px] font-medium text-muted">{t("settings.model.model")}</span>
-              <select aria-label={t("settings.model.defaultLabel")} value={config.model || ""} disabled={(config.available_models || []).length === 0 || saving === "model"} onChange={(event) => void saveModel(event.target.value)} className="min-h-11 w-full rounded-input border border-border bg-surface-2 px-3 py-2 font-mono text-[12px] text-text outline-none focus:border-accent disabled:cursor-not-allowed disabled:opacity-50">
+              <span className="mb-1.5 block text-xs font-medium text-muted">{t("settings.model.model")}</span>
+              <select aria-label={t("settings.model.defaultLabel")} value={config.model || ""} disabled={(config.available_models || []).length === 0 || saving === "model"} onChange={(event) => { const nextModel = (config.available_models || []).find((model: AvailableModel) => model.id === event.target.value); void saveModel(event.target.value, clampThinkingLevel(config.thinking, nextModel?.thinking_levels || [])); }} className="min-h-11 w-full rounded-input border border-border bg-bg px-3 py-2 font-mono text-xs text-text outline-none transition-colors focus:border-accent disabled:cursor-not-allowed disabled:opacity-50">
                 <option value="">{(config.available_models || []).length === 0 ? t("settings.model.configureFirst") : t("settings.model.select")}</option>
                 {(config.available_models || []).map((model: AvailableModel) => (
                   <option key={model.id} value={model.id}>
@@ -266,15 +282,14 @@ function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKey, savi
             </label>
             <div>
               <div className="mb-1.5 flex items-center justify-between gap-2">
-                <span className="text-[11px] font-medium text-muted">{t("settings.model.thinking")}</span>
-                {selectedModel && <span className="text-[10px] text-muted">{selectedModel.capability_source}</span>}
+                <span className="text-xs font-medium text-muted">{t("settings.model.thinking")}</span>
               </div>
-              {!selectedModel && <p className="text-[11px] text-muted">{t("settings.model.thinkingHint")}</p>}
-              {selectedModel && !selectedModel.reasoning && <p className="rounded-input bg-surface-2 px-3 py-2 text-[11px] text-muted">{t("settings.model.noReasoning")}</p>}
+              {!selectedModel && <p className="flex min-h-10 items-center rounded-input border border-border bg-surface px-3 text-xs text-muted">{t("settings.model.thinkingHint")}</p>}
+              {selectedModel && !selectedModel.reasoning && <p className="flex min-h-10 items-center rounded-input border border-border bg-surface px-3 text-xs text-muted">{t("settings.model.noReasoning")}</p>}
               {selectedModel?.reasoning && (
-                <div className="flex flex-wrap gap-2" role="group" aria-label={t("settings.model.thinking")}>
+                <div className="flex min-h-10 w-full flex-wrap items-center gap-1 rounded-input border border-border bg-surface p-0.5" role="group" aria-label={t("settings.model.thinking")}>
                   {thinkingLevels.map((level: string) => (
-                    <button key={level} disabled={saving === "model"} onClick={() => saveModel(config.model, level)} className={cn("min-h-9 rounded-input px-3 py-1.5 text-[11px] font-medium transition-colors disabled:cursor-wait disabled:opacity-50", config.thinking === level ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted hover:text-text")}>
+                    <button key={level} disabled={saving === "model"} onClick={() => saveModel(config.model, level)} className={cn("min-h-9 min-w-[3.5rem] flex-1 rounded-input px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-wait disabled:opacity-50", config.thinking === level ? "bg-surface-2 text-text shadow-sm ring-1 ring-border/70" : "text-muted hover:bg-surface-2/70 hover:text-text")}>
                       {level}
                     </button>
                   ))}
@@ -282,90 +297,81 @@ function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKey, savi
               )}
             </div>
           </div>
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-[10px] text-muted">
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-faint pt-3">
+            <span className="text-xs text-muted">
               {t("settings.model.availableCount", {
                 count: (config.available_models || []).length,
               })}
             </span>
-            <div className="flex items-center gap-2">
-              {(config.available_models || []).length === 0 && (
-                <button type="button" onClick={focusProviderConfiguration} className="min-h-9 rounded-input px-2.5 text-[11px] font-medium text-accent hover:bg-accent/10">
-                  {t("settings.provider.configure")}
-                </button>
-              )}
-              <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[10px] text-muted ring-1 ring-border">{config.model ? t("settings.model.active") : t("settings.model.notConfigured")}</span>
-            </div>
+            {selectedModel && <span className="text-[11px] text-muted">{selectedModel.capability_source}</span>}
+            {(config.available_models || []).length === 0 && (
+              <button type="button" onClick={focusProviderConfiguration} className="min-h-9 rounded-input px-2.5 text-xs font-medium text-accent hover:bg-accent/10">
+                {t("settings.provider.configure")}
+              </button>
+            )}
           </div>
         </div>
-      </Section>
+      </section>
 
-      <div id={providerSectionId}>
-        <Section title={t("settings.provider.title")}>
-          <p className="mb-3 text-[11px] text-muted">
-            {t("settings.provider.keysStored")} <code className="font-mono text-[11px] bg-surface-2 px-1 rounded">~/.pi-science/config.json</code>
-          </p>
-          <div className="mb-4 flex flex-wrap gap-1 rounded-input bg-surface-2 p-1" role="tablist" aria-label={t("settings.provider.views")}>
+      <section id={providerSectionId} className="overflow-hidden rounded-card border border-border bg-surface">
+        <div className="flex flex-wrap items-start justify-between gap-3 px-5 py-4">
+          <div>
+            <h2 className="text-sm font-semibold text-text">{t("settings.provider.title")}</h2>
+            <p className="mt-1 text-xs leading-relaxed text-muted">{t("settings.provider.description")}</p>
+          </div>
+          {providerView === "vendors" && (
+            <button type="button" disabled={availableVendors.length === 0} onClick={() => setShowVendorPicker((value) => !value)} className="flex min-h-9 items-center gap-1.5 rounded-input border border-border px-3 text-xs font-medium text-text hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50">
+              <Plus size={13} /> {t("settings.provider.addVendor")}
+            </button>
+          )}
+        </div>
+        <div className="flex border-y border-faint px-3" role="tablist" aria-label={t("settings.provider.views")}>
             {[
               { id: "vendors", label: t("settings.provider.vendors") },
               { id: "custom", label: t("settings.provider.custom") },
             ].map((view) => (
-              <button key={view.id} type="button" role="tab" aria-selected={providerView === view.id} aria-controls={`${providerSectionId}-${view.id}`} onClick={() => setProviderView(view.id as "vendors" | "custom")} className={cn("min-h-11 rounded-input px-3 text-[12px] font-medium", providerView === view.id ? "bg-surface text-text shadow-sm" : "text-muted hover:text-text")}>
+              <button key={view.id} type="button" role="tab" aria-selected={providerView === view.id} aria-controls={`${providerSectionId}-${view.id}`} onClick={() => setProviderView(view.id as "vendors" | "custom")} className={cn("-mb-px min-h-11 border-b-2 px-3 text-xs font-medium", providerView === view.id ? "border-accent text-text" : "border-transparent text-muted hover:text-text")}>
                 {view.label}
               </button>
             ))}
-          </div>
+        </div>
+        <div className="px-5 py-4">
           {providerView === "vendors" ? (
-            <div id={`${providerSectionId}-vendors`} role="tabpanel" aria-label={t("settings.provider.vendors")} className="space-y-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <button type="button" disabled={availableVendors.length === 0} onClick={() => setShowVendorPicker((value) => !value)} className="min-h-11 rounded-input border border-border bg-surface-2 px-3 text-[12px] font-medium text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-50">
-                  + {t("settings.provider.addVendor")}
-                </button>
-                {showVendorPicker && (
-                  <select
-                    autoFocus
-                    aria-label={t("settings.provider.chooseVendor")}
-                    value={providerToAdd}
-                    onChange={(event) => {
-                      setProviderToAdd(event.target.value);
-                      if (event.target.value) setShowVendorPicker(false);
-                    }}
-                    className="min-h-11 min-w-[200px] rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] text-text outline-none focus:border-accent"
-                  >
+            <div id={`${providerSectionId}-vendors`} role="tabpanel" aria-label={t("settings.provider.vendors")}>
+              {showVendorPicker && (
+                <div className="mb-4 flex flex-wrap items-center gap-2 rounded-input bg-surface-2 p-3">
+                  <select autoFocus aria-label={t("settings.provider.chooseVendor")} value={providerToAdd} onChange={(event) => { setProviderToAdd(event.target.value); if (event.target.value) setShowVendorPicker(false); }} className="min-h-10 min-w-[220px] rounded-input border border-border bg-surface px-3 py-2 text-xs text-text outline-none focus:border-accent">
                     <option value="">{t("settings.provider.chooseVendor")}</option>
-                    {availableVendors.map((provider: Provider) => (
-                      <option key={provider.id} value={provider.id}>
-                        {provider.name}
-                      </option>
-                    ))}
+                    {availableVendors.map((provider: Provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
                   </select>
-                )}
-                <span className="text-[11px] text-muted">{t("settings.provider.builtinOnly")}</span>
-              </div>
+                  <span className="text-xs text-muted">{t("settings.provider.builtinOnly")}</span>
+                </div>
+              )}
               {visibleProviders.length === 0 ? (
-                <p className="rounded-card border border-dashed border-border px-4 py-4 text-[12px] text-muted">{t("settings.provider.empty")}</p>
+                <p className="rounded-input border border-dashed border-border px-4 py-6 text-center text-xs text-muted">{t("settings.provider.empty")}</p>
               ) : (
-                visibleProviders.map((p: Provider) => (
-                  <div key={p.id} className={cn("rounded-card border px-4 py-2.5", p.has_key ? "border-ok/40 bg-ok/5" : "border-border bg-surface")}>
+                <div className="divide-y divide-faint rounded-input border border-border">
+                  {visibleProviders.map((p: Provider) => (
+                  <div key={p.id} className="px-4 py-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
-                        <span className="text-sm font-medium text-text">{p.name}</span>
+                        <span className="text-[13px] font-medium text-text">{p.name}</span>
                         <span className="ml-2 font-mono text-[11px] text-muted">{p.id}</span>
                       </div>
                       {p.has_key && (
-                        <span className="flex items-center gap-1 rounded-full bg-ok/15 px-2 py-0.5 text-[10px] font-medium text-ok ring-1 ring-ok/30">
+                        <span className="flex items-center gap-1 text-[11px] font-medium text-ok">
                           <Check size={10} /> {t("settings.provider.connected")}
                         </span>
                       )}
                     </div>
                     {p.has_key ? (
-                      <div className="mt-1.5 flex items-center justify-between gap-2">
-                        <span className="text-[10px] text-muted">
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <span className="text-xs text-muted">
                           {t("settings.provider.modelCount", {
                             count: p.models.length,
                           })}
                         </span>
-                        <button onClick={() => deleteKey(p.id)} disabled={saving === p.id} className="min-h-9 rounded-input px-2 text-[11px] text-error hover:bg-error/10 flex items-center gap-1">
+                        <button onClick={() => deleteKey(p.id)} disabled={saving === p.id} className="flex min-h-9 items-center gap-1 rounded-input px-2 text-xs text-error hover:bg-error/10">
                           <Trash2 size={11} /> {t("common.delete")}
                         </button>
                       </div>
@@ -383,7 +389,7 @@ function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKey, savi
                               }))
                             }
                             placeholder={p.id === "anthropic" ? "sk-ant-..." : "sk-..."}
-                            className="min-w-0 flex-1 bg-transparent text-[13px] text-text outline-none font-mono"
+                            className="min-w-0 flex-1 bg-transparent font-mono text-xs text-text outline-none"
                             onKeyDown={(e) => {
                               if (e.key === "Enter") saveKey(p.id);
                             }}
@@ -402,13 +408,14 @@ function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKey, savi
                             {showKey[p.id] ? <EyeOff size={13} /> : <Eye size={13} />}
                           </button>
                         </div>
-                        <button onClick={() => saveKey(p.id)} disabled={!apiKeyInput[p.id]?.trim() || saving === p.id} className="min-h-11 rounded-input bg-accent px-3 text-[12px] font-medium text-accent-fg disabled:opacity-40 flex items-center justify-center gap-1">
+                        <button onClick={() => saveKey(p.id)} disabled={!apiKeyInput[p.id]?.trim() || saving === p.id} className="flex min-h-11 items-center justify-center gap-1 rounded-input bg-accent px-3 text-xs font-medium text-accent-fg disabled:opacity-40">
                           {saving === p.id ? <Loader2 size={12} className="animate-spin" /> : <Key size={12} />} {t("settings.actions.save")}
                         </button>
                       </div>
                     )}
                   </div>
-                ))
+                  ))}
+                </div>
               )}
             </div>
           ) : (
@@ -416,11 +423,9 @@ function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKey, savi
               <CustomApiSection providers={config.custom_providers || []} onConfigReload={onConfigReload} isOpen={showCustomForm} onOpen={() => setShowCustomForm(true)} onClose={() => setShowCustomForm(false)} />
             </div>
           )}
-        </Section>
-      </div>
-      <div className="border-t border-faint pt-5">
-        <ModelEndpointSection />
-      </div>
+        </div>
+      </section>
+      <ModelEndpointSection />
     </div>
   );
 }
@@ -489,39 +494,44 @@ function ModelEndpointSection() {
   };
 
   return (
-    <Section title={t("settings.endpoints.title")}>
-      <p className="mb-3 text-[11px] text-muted">{t("settings.endpoints.description")}</p>
-      {error && <p className="mb-2 rounded-input bg-error/10 px-3 py-2 text-[11px] text-error">{error}</p>}
-      <div className="grid gap-2 sm:grid-cols-[1fr_1.5fr_auto]">
-        <input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("settings.endpoints.name")} className="rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] text-text outline-none" />
-        <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://host/v1" className="rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] font-mono text-text outline-none" />
-        <button type="button" onClick={() => void add()} className="rounded-input bg-accent px-3 py-2 text-[12px] font-medium text-accent-fg disabled:opacity-40" disabled={!name.trim() || !baseUrl.trim()}>
-          {t("settings.endpoints.register")}
-        </button>
+    <details className="group overflow-hidden rounded-card border border-border bg-surface">
+      <summary className="flex cursor-pointer list-none items-center gap-3 px-5 py-4 marker:content-none">
+        <div className="min-w-0 flex-1">
+          <h2 className="text-sm font-semibold text-text">{t("settings.endpoints.title")}</h2>
+          <p className="mt-1 text-xs leading-relaxed text-muted">{t("settings.endpoints.description")}</p>
+        </div>
+        {endpoints.length > 0 && <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-muted">{endpoints.length}</span>}
+        <ChevronDown size={15} className="shrink-0 text-muted transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="border-t border-faint px-5 py-4">
+        {error && <p className="mb-3 rounded-input bg-error/10 px-3 py-2 text-xs text-error">{error}</p>}
+        <div className="grid gap-2 sm:grid-cols-[1fr_1.5fr_auto]">
+          <input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("settings.endpoints.name")} className="min-h-10 rounded-input border border-border bg-bg px-3 py-2 text-xs text-text outline-none focus:border-accent" />
+          <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://host/v1" className="min-h-10 rounded-input border border-border bg-bg px-3 py-2 font-mono text-xs text-text outline-none focus:border-accent" />
+          <button type="button" onClick={() => void add()} className="min-h-10 rounded-input bg-accent px-3 py-2 text-xs font-medium text-accent-fg disabled:opacity-40" disabled={!name.trim() || !baseUrl.trim()}>
+            {t("settings.endpoints.register")}
+          </button>
+        </div>
+        <select value={protocol} onChange={(event) => setProtocol(event.target.value)} className="mt-2 min-h-10 rounded-input border border-border bg-bg px-3 py-2 text-xs text-text outline-none focus:border-accent">
+          <option value="openai">OpenAI-compatible</option>
+          <option value="anthropic">Anthropic-compatible</option>
+          <option value="native">Native HTTP</option>
+        </select>
+        <div className="mt-4 divide-y divide-faint rounded-input border border-border empty:hidden">
+          {endpoints.map((endpoint) => (
+            <div key={endpoint.endpoint_id} className="flex min-h-11 items-center gap-3 px-3 py-2 text-xs">
+              <span className="min-w-0 flex-1 truncate text-text">
+                {endpoint.name}
+                <span className="ml-2 font-mono text-[11px] text-muted">{endpoint.base_url}</span>
+              </span>
+              <span className={cn("text-[11px]", endpoint.health === "ready" ? "text-ok" : endpoint.health === "error" ? "text-error" : "text-muted")}>{endpoint.health}</span>
+              <button type="button" onClick={() => void health(endpoint.endpoint_id)} className="rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2">{t("settings.endpoints.check")}</button>
+              <button type="button" onClick={() => void toggle(endpoint)} className={cn("rounded-input px-2 py-1 text-xs", endpoint.enabled ? "bg-ok/10 text-ok" : "bg-surface-2 text-muted")}>{endpoint.enabled ? t("settings.actions.on") : t("settings.actions.off")}</button>
+            </div>
+          ))}
+        </div>
       </div>
-      <select value={protocol} onChange={(event) => setProtocol(event.target.value)} className="mt-2 rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] text-text outline-none">
-        <option value="openai">OpenAI-compatible</option>
-        <option value="anthropic">Anthropic-compatible</option>
-        <option value="native">Native HTTP</option>
-      </select>
-      <div className="mt-3 space-y-2">
-        {endpoints.map((endpoint) => (
-          <div key={endpoint.endpoint_id} className="flex items-center gap-3 border-t border-faint pt-2 text-xs">
-            <span className="min-w-0 flex-1 truncate text-text">
-              {endpoint.name}
-              <span className="ml-2 font-mono text-[10px] text-muted">{endpoint.base_url}</span>
-            </span>
-            <span className={cn("text-[10px]", endpoint.health === "ready" ? "text-ok" : endpoint.health === "error" ? "text-error" : "text-muted")}>{endpoint.health}</span>
-            <button type="button" onClick={() => void health(endpoint.endpoint_id)} className="rounded-input px-2 py-1 text-[10px] text-muted hover:bg-surface-2">
-              {t("settings.endpoints.check")}
-            </button>
-            <button type="button" onClick={() => void toggle(endpoint)} className={cn("rounded-input px-2 py-1 text-[10px]", endpoint.enabled ? "bg-ok/15 text-ok" : "bg-surface-2 text-muted")}>
-              {endpoint.enabled ? t("settings.actions.on") : t("settings.actions.off")}
-            </button>
-          </div>
-        ))}
-      </div>
-    </Section>
+    </details>
   );
 }
 
@@ -1194,8 +1204,9 @@ function AgentProfilesSection() {
     name: string;
     display_name: string;
     description: string;
-    read_scope: string[];
-    write_scope: string[];
+    read_scope?: string[];
+    write_scope?: string[];
+    unrestricted?: boolean;
     source: string;
   };
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -1258,7 +1269,9 @@ function AgentProfilesSection() {
               </span>
             </div>
             <p className="mt-1 text-[10px] text-muted">
-              {t("settings.profiles.read")}: {profile.read_scope.join(", ") || t("settings.profiles.none")} · {t("settings.profiles.write")}: {profile.write_scope.join(", ") || t("settings.profiles.none")}
+              {profile.unrestricted
+                ? t("settings.profiles.unrestricted")
+                : <>{t("settings.profiles.read")}: {(profile.read_scope || []).join(", ") || t("settings.profiles.none")} · {t("settings.profiles.write")}: {(profile.write_scope || []).join(", ") || t("settings.profiles.none")}</>}
             </p>
           </div>
         ))}
@@ -1292,7 +1305,7 @@ function ExtCard({ name, pkg, desc, checked }: { name: string; pkg: string; desc
 
 /* ── MCP Tab ── */
 
-function MCPTab() {
+function MCPTab({ workspaceCwd }: { workspaceCwd: string | null }) {
   const { t } = useTranslation();
   interface McpServer {
     id: string;
@@ -1313,7 +1326,14 @@ function MCPTab() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/mcp/catalog")
+    if (!workspaceCwd) {
+      setLoading(false);
+      setServers([]);
+      setError(null);
+      return;
+    }
+    setLoading(true);
+    fetch(`/api/mcp/catalog?cwd=${encodeURIComponent(workspaceCwd)}`)
       .then(async (response) => {
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || data.detail || t("settings.mcpPage.loadError"));
@@ -1321,7 +1341,7 @@ function MCPTab() {
       })
       .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
       .finally(() => setLoading(false));
-  }, [t]);
+  }, [t, workspaceCwd]);
 
   const toggle = async (id: string, on: boolean) => {
     const previous = servers.find((server) => server.id === id)?.enabled || false;
@@ -1351,7 +1371,9 @@ function MCPTab() {
       <Section title={t("settings.mcpPage.title")}>
         {error && <p className="mb-3 rounded-input bg-error/10 px-3 py-2 text-[11px] text-error">{error}</p>}
         <p className="text-[11px] text-muted mb-3">{t("settings.mcpPage.description")}</p>
-        {servers.length === 0 ? (
+        {!workspaceCwd ? (
+          <p className="rounded-input border border-dashed border-border px-3 py-3 text-xs text-muted">{t("settings.mcpPage.workspaceRequired")}</p>
+        ) : servers.length === 0 ? (
           <p className="text-xs text-muted">{t("settings.mcpPage.empty")}</p>
         ) : (
           <div className="space-y-2">

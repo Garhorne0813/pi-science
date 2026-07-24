@@ -43,6 +43,7 @@ beforeEach(async () => {
     '  if (request.type === "compact") { if (process.env.FAKE_PI_MODE === "compact-timeout") return; return respond(request); }',
     '  if (request.type === "abort") { busy = false; respond(request); process.stdout.write(JSON.stringify({ type: "agent_settled", handledWithoutTurn: true }) + "\\n"); return; }',
     '  if (request.type === "get_commands") return process.env.FAKE_PI_MODE === "cancel-commands" ? respond(request, { data: { cancelled: true } }) : respond(request, { data: { commands: [{ name: "review", source: "skill" }] } });',
+    '  if (request.type === "get_available_models") return respond(request, { data: { models: [{ provider: "openrouter", id: "openai/gpt-5.1", name: "GPT-5.1", reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: null } }] } });',
     '  if (request.type === "set_model") { modelProvider = request.provider; modelId = request.modelId; return respond(request); }',
     '  if (request.type === "set_thinking_level") { if (request.level === "ultra") return process.stdout.write(JSON.stringify({ id: request.id, success: false, code: "invalid_thinking", error: "unsupported thinking" }) + "\\n"); thinking = request.level; return respond(request); }',
     '  respond(request);',
@@ -127,6 +128,7 @@ describe("Node session lifecycle", () => {
     const service = new NodeSessionService();
     const cwd = await workspaceWithSessions("session-a");
     await service.resume("session-a", cwd);
+    await expect(service.availableModels(cwd)).resolves.toMatchObject({ data: { models: [expect.objectContaining({ id: "openai/gpt-5.1" })] } });
     await expect(service.configure("session-a", cwd, "openrouter/openai/gpt-5.1", "high")).resolves.toMatchObject({ success: true });
     await expect(service.command("session-a", cwd, "get_commands")).resolves.toMatchObject({ data: { commands: [{ name: "review" }] } });
     await expect(service.notify("session-a", cwd, "extension_ui_response", { id: "question-1", confirmed: true })).resolves.toMatchObject({ success: true });

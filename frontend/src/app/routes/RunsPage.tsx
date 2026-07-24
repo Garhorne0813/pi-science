@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { Play, Check, X, Loader2, RefreshCw, ChevronDown, ChevronRight } from "lucide-react";
+import { Play, Check, X, Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "../../lib/cn";
+import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "../../components/layout/WorkspacePage";
+import { useTranslation } from "react-i18next";
 
 interface Run {
   runId: string;
@@ -15,6 +17,7 @@ interface Run {
 }
 
 export function RunsPage() {
+  const { t } = useTranslation();
   const { cwd: rawCwd } = useParams<{ cwd: string }>();
   const workspaceCwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
   const [runs, setRuns] = useState<Run[]>([]);
@@ -57,18 +60,16 @@ export function RunsPage() {
   };
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-[900px] px-8 py-8">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="font-serif text-xl text-text">Runs</h1>
-            <p className="mt-1 text-sm text-muted">{runs.length} experiment run{runs.length !== 1 ? "s" : ""}</p>
-          </div>
-          <button onClick={() => void loadRuns()} className="rounded-input px-2 py-1 text-xs text-muted hover:text-text hover:bg-surface-2 flex items-center gap-1">
-            <RefreshCw size={12} className={loading ? "animate-spin" : ""} /> Refresh
-          </button>
-        </div>
+    <WorkspacePage>
+        <WorkspacePageHeader
+          title="Runs"
+          description={`${runs.length} experiment run${runs.length !== 1 ? "s" : ""}`}
+          actions={
+          <WorkspacePageRefreshButton label={t("common.refresh")} loading={loading} onClick={() => void loadRuns()} />
+          }
+        />
 
+        <div className="mt-6">
         {loading ? (
           <div className="text-sm text-muted py-8 text-center"><Loader2 size={18} className="animate-spin mx-auto mb-2" /> Loading…</div>
         ) : runs.length === 0 ? (
@@ -123,7 +124,7 @@ export function RunsPage() {
             ))}
           </div>
         )}
-      </div>
-    </div>
+        </div>
+    </WorkspacePage>
   );
 }
