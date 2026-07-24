@@ -2,13 +2,32 @@ import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises
 import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
+const writeQueues = new Map<string, Promise<void>>();
+
 export function metadataRoot(workspace: string): string {
   return join(resolve(workspace), ".pi-science");
 }
 
 export async function appendJsonLine(path: string, value: unknown): Promise<void> {
+  await withFileWriteLock(path, async () => {
+    await appendJsonLineUnlocked(path, value);
+  });
+}
+
+export async function appendJsonLineUnlocked(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   await appendFile(path, `${JSON.stringify(value)}\n`, "utf8");
+}
+
+export async function withFileWriteLock<T>(path: string, operation: () => Promise<T>): Promise<T> {
+  const key = resolve(path);
+  const previous = writeQueues.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+  const pending = previous.then(() => gate);
+  writeQueues.set(key, pending);
+  await previous;
+  try { return await operation(); } finally { release(); if (writeQueues.get(key) === pending) writeQueues.delete(key); }
 }
 
 export async function readJsonLines<T>(path: string): Promise<T[]> {

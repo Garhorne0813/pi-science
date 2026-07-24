@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { appendJsonLine, metadataRoot, readJson, writeJsonAtomic } from "./persistence.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
@@ -14,6 +14,7 @@ interface JobRecord {
 }
 
 const children = new Map<string, ChildProcess>();
+const cancelledJobs = new Set<string>();
 
 function cwdOf(request: { query: unknown }): string {
   const query = request.query as Record<string, unknown>;
@@ -26,7 +27,7 @@ async function workspace(request: { query: unknown }, reply: { code: (status: nu
 }
 
 function jobsDir(cwd: string): string { return join(metadataRoot(cwd), "jobs"); }
-function jobPath(cwd: string, id: string): string { return join(jobsDir(cwd), `${id}.json`); }
+function jobPath(cwd: string, id: string): string { if (!/^job_[A-Za-z0-9]{16}$/.test(id)) throw new Error("Invalid job id"); const root = resolve(jobsDir(cwd)); const target = resolve(root, `${id}.json`); const rel = relative(root, target); if (isAbsolute(rel) || rel.startsWith("..")) throw new Error("Job path escapes the workspace"); return target; }
 
 function parseCommand(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String).filter(Boolean);
@@ -50,6 +51,7 @@ function capabilities(requirement: Requirement): { status: "ready" | "degraded" 
 async function save(record: JobRecord): Promise<void> { await writeJsonAtomic(jobPath(record.cwd, record.job_id), record); }
 
 async function run(record: JobRecord): Promise<void> {
+  if (cancelledJobs.has(record.job_id)) { record.status = "cancelled"; record.ended_at = new Date().toISOString(); await save(record); return; }
   record.status = "running"; record.started_at = new Date().toISOString(); await save(record);
   let child: ChildProcess | undefined;
   try {
@@ -69,11 +71,11 @@ async function run(record: JobRecord): Promise<void> {
     record.stdout = Buffer.concat(stdout).toString("utf8").slice(-100_000);
     record.stderr = Buffer.concat(stderr).toString("utf8").slice(-100_000);
     record.return_code = result.code;
-    record.status = timedOut ? "timed_out" : result.code === 0 ? "succeeded" : "failed";
+    record.status = cancelledJobs.has(record.job_id) ? "cancelled" : timedOut ? "timed_out" : result.code === 0 ? "succeeded" : "failed";
   } catch (error) {
-    record.status = "failed"; record.stderr = String(error).slice(-100_000);
+    if (!cancelledJobs.has(record.job_id)) { record.status = "failed"; record.stderr = String(error).slice(-100_000); }
   } finally {
-    record.ended_at = new Date().toISOString(); children.delete(record.job_id); await save(record);
+    record.ended_at = new Date().toISOString(); children.delete(record.job_id); await save(record); cancelledJobs.delete(record.job_id);
   }
 }
 
@@ -101,8 +103,8 @@ export function registerJobRoutes(app: FastifyInstance): void {
     return record;
   });
   app.get("/api/jobs", async (request, reply) => { const cwd = await workspace(request, reply); if (!cwd) return; const q = request.query as { limit?: string }; return { jobs: await loadJobs(cwd, Math.min(1000, Math.max(1, Number(q.limit ?? 100)))) }; });
-  app.get<{ Params: { job_id: string } }>("/api/jobs/:job_id", async (request, reply) => { const cwd = await workspace(request, reply); if (!cwd) return; const record = await readJson<JobRecord | null>(jobPath(cwd, request.params.job_id), null); return record ? record : reply.code(404).send({ error: "Job not found" }); });
-  app.delete<{ Params: { job_id: string } }>("/api/jobs/:job_id", async (request, reply) => { const cwd = await workspace(request, reply); if (!cwd) return; const record = await readJson<JobRecord | null>(jobPath(cwd, request.params.job_id), null); if (!record) return reply.code(404).send({ error: "Job not found" }); const child = children.get(record.job_id); if (child) child.kill("SIGTERM"); record.status = "cancelled"; record.ended_at = new Date().toISOString(); await save(record); return record; });
-  app.get<{ Params: { job_id: string } }>("/api/jobs/:job_id/logs", async (request, reply) => { const cwd = await workspace(request, reply); if (!cwd) return; const record = await readJson<JobRecord | null>(jobPath(cwd, request.params.job_id), null); if (!record) return reply.code(404).send({ error: "Job not found" }); return { job_id: record.job_id, stdout: record.stdout, stderr: record.stderr }; });
+  app.get<{ Params: { job_id: string } }>("/api/jobs/:job_id", async (request, reply) => { const cwd = await workspace(request, reply); if (!cwd) return; let path: string; try { path = jobPath(cwd, request.params.job_id); } catch (error) { return reply.code(400).send({ error: String(error) }); } const record = await readJson<JobRecord | null>(path, null); return record ? record : reply.code(404).send({ error: "Job not found" }); });
+  app.delete<{ Params: { job_id: string } }>("/api/jobs/:job_id", async (request, reply) => { const cwd = await workspace(request, reply); if (!cwd) return; let path: string; try { path = jobPath(cwd, request.params.job_id); } catch (error) { return reply.code(400).send({ error: String(error) }); } const record = await readJson<JobRecord | null>(path, null); if (!record) return reply.code(404).send({ error: "Job not found" }); if (["succeeded", "failed", "cancelled", "timed_out"].includes(record.status)) return record; cancelledJobs.add(record.job_id); const child = children.get(record.job_id); if (child) child.kill("SIGTERM"); record.status = "cancelled"; record.ended_at = new Date().toISOString(); await save(record); return record; });
+  app.get<{ Params: { job_id: string } }>("/api/jobs/:job_id/logs", async (request, reply) => { const cwd = await workspace(request, reply); if (!cwd) return; let path: string; try { path = jobPath(cwd, request.params.job_id); } catch (error) { return reply.code(400).send({ error: String(error) }); } const record = await readJson<JobRecord | null>(path, null); if (!record) return reply.code(404).send({ error: "Job not found" }); return { job_id: record.job_id, stdout: record.stdout, stderr: record.stderr }; });
   app.addHook("onClose", async () => { for (const child of children.values()) child.kill("SIGTERM"); });
 }

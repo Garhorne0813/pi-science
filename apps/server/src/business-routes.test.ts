@@ -159,4 +159,55 @@ describe("native control-plane business routes", () => {
     expect(response.json()).toMatchObject({ ok: false, error: expect.stringContaining("forced reload failure") });
     expect((await app.inject({ method: "GET", url: "/api/settings/config" })).json().api_keys).toMatchObject({ openai: true });
   });
+
+  it("blocks SSRF targets and validates subagent workspace access", async () => {
+    const cwd = await workspace();
+    const app = buildApp(config()); apps.push(app);
+    await mkdir(join(cwd, ".pi", "agents"), { recursive: true });
+    await writeFile(join(cwd, ".pi", "agents", "reviewer.md"), "# reviewer", "utf8");
+
+    const blocked = await app.inject({ method: "POST", url: "/api/settings/custom-providers/discover", payload: { base_url: "http://127.0.0.1:11434/v1", api_key: "secret" } });
+    expect(blocked.statusCode).toBe(400);
+    expect(blocked.body).not.toContain("secret");
+
+    const agents = await app.inject({ method: "GET", url: `/api/settings/subagents?cwd=${encodeURIComponent(cwd)}` });
+    expect(agents.statusCode).toBe(200);
+    expect(agents.json()).toEqual({ agents: [{ name: "reviewer", path: ".pi/agents/reviewer.md" }] });
+
+    const outside = await app.inject({ method: "GET", url: "/api/settings/subagents?cwd=/tmp" });
+    expect(outside.statusCode).toBe(403);
+  });
+
+  it("rejects job path traversal and preserves cancellation", async () => {
+    const cwd = await workspace();
+    const app = buildApp(config()); apps.push(app);
+    const traversal = await app.inject({ method: "GET", url: `/api/jobs/${encodeURIComponent("../config")}?cwd=${encodeURIComponent(cwd)}` });
+    expect(traversal.statusCode).toBe(400);
+
+    const submitted = await app.inject({ method: "POST", url: `/api/jobs?cwd=${encodeURIComponent(cwd)}`, payload: { command: [process.execPath, "-e", "setTimeout(() => process.stdout.write('late'), 500)"], requirement: { timeout_seconds: 10 } } });
+    expect(submitted.statusCode).toBe(200);
+    const jobId = submitted.json().job_id as string;
+    const cancelled = await app.inject({ method: "DELETE", url: `/api/jobs/${jobId}?cwd=${encodeURIComponent(cwd)}` });
+    expect(cancelled.statusCode).toBe(200);
+    for (let attempt = 0; attempt < 30; attempt++) {
+      const current = (await app.inject({ method: "GET", url: `/api/jobs/${jobId}?cwd=${encodeURIComponent(cwd)}` })).json();
+      if (!["pending", "running"].includes(current.status)) { expect(current.status).toBe("cancelled"); return; }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error("cancelled job did not reach a terminal state");
+  });
+
+  it("rejects invalid claim-check bounds and serializes provenance versions", async () => {
+    const cwd = await workspace();
+    const app = buildApp(config()); apps.push(app);
+    const invalid = await app.inject({ method: "POST", url: "/api/artifacts/claim-check", payload: { claim: "x", values: [1], minimum: "not-a-number" } });
+    expect(invalid.statusCode).toBe(422);
+    const reversed = await app.inject({ method: "POST", url: "/api/artifacts/claim-check", payload: { claim: "x", values: [1], minimum: 3, maximum: 2 } });
+    expect(reversed.statusCode).toBe(422);
+
+    const results = await Promise.all(Array.from({ length: 8 }, (_, index) => app.inject({ method: "POST", url: `/api/provenance/record?cwd=${encodeURIComponent(cwd)}`, payload: { path: "result.txt", tool: `test-${index}` } })));
+    expect(results.every((response) => response.statusCode === 200)).toBe(true);
+    const versions = results.map((response) => response.json().version).sort((a: number, b: number) => a - b);
+    expect(versions).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
 });
