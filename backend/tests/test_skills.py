@@ -1,4 +1,4 @@
-"""Skill catalog, metadata validation, and API contract tests."""
+"""Skill catalog and metadata validation tests."""
 
 from pathlib import Path
 
@@ -72,32 +72,3 @@ def test_catalog_prefers_project_skill_over_duplicate_builtin(tmp_path, monkeypa
     same = next(item for item in records if item.name == "same")
     assert same.source == "project"
     assert same.description == "Project copy"
-
-
-@pytest.mark.anyio
-async def test_skills_api_lists_project_metadata(client, tmp_path):
-    (tmp_path / ".pi-science").mkdir()
-    (tmp_path / ".pi" / "skills" / "demo").mkdir(parents=True)
-    (tmp_path / ".pi" / "skills" / "demo" / "SKILL.md").write_text(
-        "---\nname: demo\ndescription: Demo skill\ncategory: test\n---\n", encoding="utf-8"
-    )
-    listed = await client.get("/api/skills", params={"cwd": str(tmp_path)})
-    assert listed.status_code == 200
-    demo = next(item for item in listed.json() if item["name"] == "demo")
-    assert demo["source"] == "project"
-    assert demo["category"] == "test"
-    assert demo["validation"]["valid"] is True
-    detail = await client.get(f"/api/skills/{demo['skill_id']}", params={"cwd": str(tmp_path)})
-    assert detail.status_code == 200
-    assert detail.json()["digest"] == demo["digest"]
-
-
-@pytest.mark.anyio
-async def test_skills_api_validation_reports_invalid_skill(client, tmp_path):
-    (tmp_path / ".pi-science").mkdir()
-    skill_dir = tmp_path / ".pi" / "skills" / "bad"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text("not front matter", encoding="utf-8")
-    response = await client.post("/api/skills/validate", params={"path": str(skill_dir)})
-    assert response.status_code == 200
-    assert response.json()["valid"] is False

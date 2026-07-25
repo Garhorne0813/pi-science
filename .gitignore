@@ -45,6 +45,9 @@ coverage/
 ARCHITECTURE.md
 CHANGELOG.md
 
+# Implementation planning documents (local only, not versioned)
+implementation-docs/
+
 # Dev-only runtime data
 .data/
 workspaces/
@@ -61,3 +64,9 @@ ATOMIC_IMPROVEMENT_PLAN.md
 .env.example
 CODE_REVIEW.md
 *.log
+
+# AI assistant local data
+.workbuddy/
+
+# Command-execution temp leftovers
+_tmp_*

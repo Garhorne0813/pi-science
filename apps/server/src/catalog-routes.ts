@@ -1,10 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
 import { access, readdir, readFile, realpath, stat, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { configPath, readJson, writeJsonAtomic } from "./persistence.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
 import { sessionRepository } from "./session-repository.js";
+import { catalog as skillCatalog, getSkillInfo, validateDirectory as validateSkillDir } from "./skill-catalog.js";
 
 function q(request: { query: unknown }, key: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[key]; return typeof value === "string" && value ? value : fallback; }
 async function ws(request: { query: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): Promise<string | null> { try { return await validateWorkspaceCwd(q(request, "cwd")); } catch (error) { reply.code(403).send({ error: String(error) }); return null; } }
@@ -24,24 +24,59 @@ async function workspaceInfo(path: string): Promise<Record<string, unknown>> {
 function inside(root: string, target: string): boolean { const rel = relative(root, target); return !rel.startsWith("..") && !isAbsolute(rel); }
 function expandUserPath(path: string): string { return path.startsWith("~/") ? resolve(process.env.HOME ?? ".", path.slice(2)) : resolve(path); }
 
-async function findSkills(directory: string, workspaceRoot = directory): Promise<Array<Record<string, unknown>>> {
-  const result: Array<Record<string, unknown>> = [];
-  const projectSkillRoot = `${join(workspaceRoot, ".pi", "skills")}${process.platform === "win32" ? "\\" : "/"}`;
-  async function walk(current: string): Promise<void> { let names: string[]; try { names = await readdir(current); } catch { return; } for (const name of names) { const path = join(current, name); let info; try { info = await stat(path); } catch { continue; } if (info.isDirectory()) await walk(path); else if (name === "SKILL.md") { const text = await readFile(path, "utf8"); const first = text.match(/^---\n([\s\S]*?)\n---/); const metadata: Record<string, string> = {}; for (const line of (first?.[1] ?? "").split(/\r?\n/)) { const index = line.indexOf(":"); if (index > 0) metadata[line.slice(0, index).trim()] = line.slice(index + 1).trim().replace(/^['"]|['"]$/g, ""); } const nameValue = metadata.name || path.split(/[\\/]/).at(-2) || "skill"; result.push({ skill_id: createHash("sha256").update(path).digest("hex").slice(0, 16), digest: createHash("sha256").update(text).digest("hex"), name: nameValue, description: metadata.description || "", version: metadata.version || "0.1.0", category: metadata.category || "general", license: metadata.license || "Apache-2.0", risk: metadata.risk || "low", quality: "draft", location: path, source: path.includes(projectSkillRoot) ? "project" : "builtin", enabled: true, requirements: [], third_party: [], entrypoints: [], required_tools: [], required_mcp_tools: [], files: [{ path: name, kind: "skill", size: Buffer.byteLength(text) }], validation: { valid: Boolean(metadata.name && metadata.description), errors: metadata.name && metadata.description ? [] : ["SKILL.md requires name and description"], warnings: [], checked_at: new Date().toISOString() }, shadowed: [] }); } } }
-  await walk(directory);
-  return result.sort((a, b) => String(a.name).localeCompare(String(b.name)));
-}
-
 export function registerCatalogRoutes(app: FastifyInstance): void {
-  app.get("/api/skills", async (request, reply) => { const root = await ws(request, reply); if (!root) return; return findSkills(join(root, ".pi", "skills"), root); });
-  app.get<{ Params: { skill_id: string } }>("/api/skills/:skill_id", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const item = (await findSkills(join(root, ".pi", "skills"), root)).find((skill) => skill.skill_id === request.params.skill_id || skill.name === request.params.skill_id); return item ?? reply.code(404).send({ error: "Skill not found" }); });
-  app.get("/api/skills/tools", async () => { const commands = [["python", "python3"], ["Node.js", "node"], ["Git", "git"], ["uv", "uv"]] as const; return Promise.all(commands.map(async ([name, command]) => { try { await access(resolve(process.env.PATH?.split(":").find((path) => path) ?? "/usr/bin", command)); return { name, found: true }; } catch { return { name, found: false }; } })); });
-  app.post("/api/skills/validate", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const pathValue = (request.query as { path?: string }).path; let target = pathValue ? (isAbsolute(pathValue) || pathValue.startsWith("~/") ? expandUserPath(pathValue) : resolve(root, pathValue)) : join(root, ".pi", "skills"); try { const info = await stat(target); target = info.isFile() ? dirname(await realpath(target)) : await realpath(target); } catch { /* let scanner return no skills */ } if (!inside(root, target) || target.split(/[\\/]/).includes(".pi-science")) return reply.code(403).send({ error: "Skill path must remain inside the workspace" }); const skills = await findSkills(target, root); return { valid: skills.length > 0 && skills.every((item) => Boolean((item.validation as { valid?: boolean }).valid)), validations: skills.map((item) => item.validation) }; });
+  // ── Skills (delegated to skill-catalog service) ──
+  app.get("/api/skills", async (request, reply) => {
+    const root = await ws(request, reply);
+    if (!root) return;
+    return skillCatalog(root);
+  });
+  app.get<{ Params: { skill_id: string } }>("/api/skills/:skill_id", async (request, reply) => {
+    const root = await ws(request, reply);
+    if (!root) return;
+    const item = await getSkillInfo(request.params.skill_id, root);
+    return item ?? reply.code(404).send({ error: "Skill not found" });
+  });
+  app.get("/api/skills/tools", async () => {
+    const commands = [["python", "python3"], ["Node.js", "node"], ["Git", "git"], ["uv", "uv"]] as const;
+    return Promise.all(commands.map(async ([name, command]) => {
+      try {
+        await access(resolve(process.env.PATH?.split(":").find((path) => path) ?? "/usr/bin", command));
+        return { name, found: true };
+      } catch {
+        return { name, found: false };
+      }
+    }));
+  });
+  app.post("/api/skills/validate", async (request, reply) => {
+    const root = await ws(request, reply);
+    if (!root) return;
+    const pathValue = (request.query as { path?: string }).path;
+    let target = pathValue
+      ? (isAbsolute(pathValue) || pathValue.startsWith("~/") ? expandUserPath(pathValue) : resolve(root, pathValue))
+      : join(root, ".pi", "skills");
+    try {
+      const info = await stat(target);
+      target = info.isFile() ? dirname(await realpath(target)) : await realpath(target);
+    } catch {
+      /* let scanner return no skills */
+    }
+    if (!inside(root, target) || target.split(/[\\/]/).includes(".pi-science")) {
+      return reply.code(403).send({ error: "Skill path must remain inside the workspace" });
+    }
+    const validations = await validateSkillDir(target);
+    return {
+      valid: validations.length > 0 && validations.every((v) => v.valid),
+      validations,
+    };
+  });
 
+  // ── MCP catalog ──
   app.get("/api/mcp/catalog", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const paths = [join(root, ".mcp.json"), join(root, ".pi", "mcp.json"), configPath("mcp.json")]; let source: string | undefined; let definitions: Record<string, unknown> = {}; for (const path of paths) { try { definitions = ((JSON.parse(await readFile(path, "utf8")) as { mcpServers?: unknown }).mcpServers ?? {}) as Record<string, unknown>; source = path; break; } catch { /* try next */ } } const config = await readJson<{ mcp_servers?: string[] }>(configPath("config.json"), {}); const ids = Object.keys(definitions); const enabled = Array.isArray(config.mcp_servers) ? new Set(config.mcp_servers) : new Set(ids); const servers = ids.sort().map((id) => { const definition = definitions[id] as Record<string, unknown> | undefined ?? {}; const remote = Boolean(definition.url); return { id, name: String(definition.name ?? id), description: String(definition.description ?? ""), transport: remote ? String(definition.transport ?? "http") : definition.command ? "stdio" : "unknown", enabled: enabled.has(id), auth: definition.required_env ? "missing" : "unknown", data_egress: remote ? "remote" : "local", terms_url: definition.terms_url ?? null, privacy_url: definition.privacy_url ?? null, license: definition.license ?? null, tags: Array.isArray(definition.tags) ? definition.tags : [], tools: Array.isArray(definition.tools) ? definition.tools : [] }; }); return { servers, config_path: source ?? null }; });
   app.get<{ Params: { server_id: string } }>("/api/mcp/health/:server_id", async (request, reply) => { const catalog = await app.inject({ method: "GET", url: `/api/mcp/catalog?cwd=${encodeURIComponent(q(request, "cwd"))}` }); const server = (catalog.json() as { servers: Array<Record<string, unknown>> }).servers.find((item) => item.id === request.params.server_id); if (!server) return reply.code(404).send({ error: "MCP server not found" }); return { ...server, health: server.enabled ? "unknown" : "blocked", error: server.enabled ? null : "server disabled" }; });
   app.get<{ Params: { server_id: string } }>("/api/mcp/egress/:server_id", async (request, reply) => { const catalog = await app.inject({ method: "GET", url: `/api/mcp/catalog?cwd=${encodeURIComponent(q(request, "cwd"))}` }); const server = (catalog.json() as { servers: Array<Record<string, unknown>> }).servers.find((item) => item.id === request.params.server_id); if (!server) return reply.code(404).send({ error: "MCP server not found" }); return { server: request.params.server_id, data_egress: server.data_egress, transport: server.transport, terms_url: server.terms_url, privacy_url: server.privacy_url, tools: server.tools, warning: server.data_egress === "remote" ? "Review the destination and data class before sending user files or sequences." : null }; });
 
+  // ── Workspaces ──
   app.get("/api/workspaces", async () => { const root = rootDir(); const result: Record<string, unknown>[] = []; try { for (const name of await readdir(root)) { const path = join(root, name); try { if ((await stat(join(path, ".pi-science"))).isDirectory()) result.push(await workspaceInfo(path)); } catch { /* skip */ } } } catch { /* root absent */ } return result.sort((left, right) => String(right.last_modified).localeCompare(String(left.last_modified))); });
   app.post("/api/workspaces", async (request, reply) => { const body = (request.body ?? {}) as { name?: unknown }; const name = String(body.name ?? "").trim().replace(/[\\/]/g, "-").slice(0, 100); if (!name) return reply.code(400).send({ error: "Invalid workspace name" }); const path = join(rootDir(), name); try { await stat(path); return reply.code(409).send({ error: "Workspace already exists" }); } catch { /* create */ } await import("node:fs/promises").then(({ mkdir }) => mkdir(join(path, ".pi-science"), { recursive: true })); return await workspaceInfo(path); });
   app.post("/api/workspaces/open", async (request, reply) => { const path = expandUserPath(String(((request.body ?? {}) as { path?: unknown }).path ?? "")); try { if (!(await stat(path)).isDirectory()) return reply.code(400).send({ error: "Not a directory" }); } catch { return reply.code(404).send({ error: "Folder not found" }); } await import("node:fs/promises").then(({ mkdir }) => mkdir(join(path, ".pi-science"), { recursive: true })); return await workspaceInfo(path); });
@@ -50,15 +85,18 @@ export function registerCatalogRoutes(app: FastifyInstance): void {
   app.post("/api/workspaces/unpin", async (request) => { const path = String(((request.body ?? {}) as { path?: unknown }).path ?? ""); const paths = (await readJson<string[]>(configPath("pinned.json"), [])).filter((item) => item !== path); await writeJsonAtomic(configPath("pinned.json"), paths); return { ok: true, pinned: false }; });
   app.delete("/api/workspaces/delete", async (request, reply) => { const path = resolve(String(((request.body ?? {}) as { path?: unknown }).path ?? "")); if (!path.startsWith(`${rootDir()}${process.platform === "win32" ? "\\" : "/"}`)) return reply.code(403).send({ error: "Cannot delete outside workspaces directory" }); try { await rm(path, { recursive: true }); return { ok: true }; } catch { return reply.code(404).send({ error: "Workspace not found" }); } });
 
+  // ── Compute machine registry ──
   app.get("/api/compute/machines", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const value = await readJson<{ machines?: unknown[] }>(join(root, ".pi-science", "compute.json"), {}); return { machines: Array.isArray(value.machines) ? value.machines : [] }; });
   app.post("/api/compute/machines", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const machine = (request.body ?? {}) as Record<string, unknown>; if (!machine.host) return reply.code(400).send({ error: "host is required" }); const path = join(root, ".pi-science", "compute.json"); const current = await readJson<{ machines?: Record<string, unknown>[] }>(path, {}); const machines = Array.isArray(current.machines) ? current.machines : []; const item = { ...machine, label: String(machine.label ?? machine.host) }; const next = [...machines.filter((row) => row.label !== item.label), item]; await writeJsonAtomic(path, { machines: next }); return { ok: true, machines: next }; });
   app.delete<{ Params: { label: string } }>("/api/compute/machines/:label", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const path = join(root, ".pi-science", "compute.json"); const current = await readJson<{ machines?: Record<string, unknown>[] }>(path, {}); await writeJsonAtomic(path, { machines: (current.machines ?? []).filter((row) => row.label !== request.params.label) }); return { ok: true }; });
   app.post("/api/compute/probe", async (request) => ({ host: String((request.query as { host?: unknown }).host ?? ""), reachable: false, error: "Node remote dispatch is not enabled for this host; configure an executor before probing." }));
   app.post("/api/compute/run", async () => ({ ok: false, error: "Remote dispatch requires a configured executor" }));
 
+  // ── Citations ──
   app.post("/api/citations/normalize", async (request) => { const identifiers = Array.isArray(((request.body ?? {}) as { identifiers?: unknown }).identifiers) ? ((request.body as { identifiers: unknown[] }).identifiers) : []; const citations = identifiers.map((value) => { const text = String(value).trim(); const doi = text.replace(/^https?:\/\/doi\.org\//i, ""); return { identifier: text, doi: doi.toLowerCase().startsWith("10.") ? doi : null, title: null, authors: [], year: null, source: text.includes("10.") ? "doi" : "unknown" }; }); return { citations, errors: [] }; });
   app.post("/api/citations/verify", async (request) => { const citation = ((request.body ?? {}) as { citation?: unknown }).citation; return { citation, status: "unverified", verified: false, message: "Verification is delegated to the literature runtime" }; });
 
+  // ── Agent profiles & reviews ──
   app.get("/api/agent-profiles", async () => ({ profiles: [
     { name: "SCIENCE", display_name: "Science Agent", description: "General scientific workbench agent", unrestricted: true, source: "builtin" },
     { name: "RESULT_REVIEWER", display_name: "Result Reviewer", description: "Read-only transcript and artifact consistency reviewer", skills: ["literature-review"], read_scope: ["workspace", "transcript", "artifacts"], write_scope: [], source: "builtin" },

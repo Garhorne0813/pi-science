@@ -1,4 +1,4 @@
-"""Provenance store and API tests."""
+"""Provenance store tests."""
 
 import asyncio
 import pytest
@@ -27,7 +27,6 @@ class TestProvenanceStore:
     @pytest.mark.anyio
     async def test_record_and_query(self, store):
         """Record provenance entries and query them back."""
-        # Record an entry
         rec1 = await store.record(
             path="output.csv",
             session_id="sess-1",
@@ -42,12 +41,10 @@ class TestProvenanceStore:
         assert rec1.contentHash is not None
         assert rec1.content == "a,b,c\n1,2,3\n"
 
-        # Query by path
         records = await store.query(path="output.csv")
         assert len(records) == 1
         assert records[0].version == 1
 
-        # Record a second version
         rec2 = await store.record(
             path="output.csv",
             session_id="sess-2",
@@ -57,7 +54,6 @@ class TestProvenanceStore:
         )
         assert rec2.version == 2
 
-        # Query versions
         versions = await store.get_versions("output.csv")
         assert len(versions) == 2
         assert versions[0].version == 2  # Newest first
@@ -141,64 +137,3 @@ class TestGetStore:
             store_a = get_store(a)
             store_b = get_store(b)
             assert store_a is not store_b
-
-
-@pytest.mark.anyio
-class TestProvenanceAPI:
-    async def test_query_empty(self, client, temp_workspace):
-        """GET /api/provenance returns empty when no records."""
-        res = await client.get(f"/api/provenance?cwd={temp_workspace}")
-        assert res.status_code == 200
-        data = res.json()
-        assert data["records"] == []
-        assert data["total"] == 0
-
-    async def test_record_and_query(self, client, temp_workspace):
-        """POST /api/provenance/record then GET /api/provenance."""
-        cwd = str(temp_workspace)
-        # Record
-        res = await client.post(
-            f"/api/provenance/record?cwd={cwd}&path=result.csv&session_id=sess-1&tool=write&content=hello"
-        )
-        assert res.status_code == 200
-        data = res.json()
-        assert data["path"] == "result.csv"
-        assert data["version"] == 1
-
-        # Query
-        res = await client.get(f"/api/provenance?cwd={cwd}")
-        data = res.json()
-        assert data["total"] == 1
-        assert data["records"][0]["path"] == "result.csv"
-
-    async def test_versions_endpoint(self, client, temp_workspace):
-        """GET /api/provenance/versions/{path} returns version history."""
-        cwd = str(temp_workspace)
-        # Record v1
-        await client.post(
-            f"/api/provenance/record?cwd={cwd}&path=data.csv&session_id=s1&tool=write&content=v1"
-        )
-        # Record v2
-        await client.post(
-            f"/api/provenance/record?cwd={cwd}&path=data.csv&session_id=s2&tool=edit&diff=-old+new"
-        )
-
-        res = await client.get(f"/api/provenance/versions/data.csv?cwd={cwd}")
-        data = res.json()
-        assert data["path"] == "data.csv"
-        assert len(data["versions"]) == 2
-
-    async def test_env_lockfile_rejects_path_like_hash(self, client, temp_workspace):
-        cwd = str(temp_workspace)
-        res = await client.get(f"/api/provenance/env/not-a-hash?cwd={cwd}")
-        assert res.status_code == 400
-
-    async def test_capture_environment(self, client, temp_workspace):
-        """POST /api/provenance/capture returns env snapshot."""
-        cwd = str(temp_workspace)
-        res = await client.post(f"/api/provenance/capture?cwd={cwd}")
-        assert res.status_code == 200
-        data = res.json()
-        assert "python" in data
-        assert "platform" in data
-        assert "ts" in data

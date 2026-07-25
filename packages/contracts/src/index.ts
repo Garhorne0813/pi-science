@@ -175,3 +175,81 @@ export type PiRuntimeEvent = z.infer<typeof piRuntimeEventSchema>;
 export type JobRecord = z.infer<typeof jobRecordSchema>;
 export type ArtifactManifest = z.infer<typeof artifactManifestSchema>;
 export type ProvenanceRecord = z.infer<typeof provenanceRecordSchema>;
+
+// ── Skill catalog contracts (aligned with backend/models/skill.py) ──
+
+export const skillThirdPartySchema = z.object({
+  kind: z.enum(["weights", "service", "dataset", "library", "other"]).default("other"),
+  name: z.string().min(1).max(200),
+  provider: z.string().max(200).nullish(),
+  license: z.string().max(120).nullish(),
+  terms_url: z.string().nullish(),
+  info_url: z.string().nullish(),
+  privacy_url: z.string().nullish(),
+}).passthrough();
+
+export const skillRequirementSchema = z.object({
+  name: z.string().min(1).max(120),
+  kind: z.enum(["command", "python", "node", "r", "gpu", "package", "service", "other"]).default("other"),
+  version: z.string().max(120).nullish(),
+  optional: z.boolean().default(false),
+  description: z.string().max(500).nullish(),
+}).passthrough();
+
+export const skillMetadataSchema = z.object({
+  name: z.string().min(1).max(80).regex(/^[a-z0-9][a-z0-9._-]*$/),
+  description: z.string().min(1).max(4000),
+  version: z.string().max(80).default("0.1.0"),
+  license: z.string().max(120).default("Apache-2.0"),
+  category: z.string().max(80).default("general"),
+  requirements: z.array(skillRequirementSchema).default([]),
+  third_party: z.array(skillThirdPartySchema).default([]),
+  risk: z.enum(["low", "medium", "high"]).default("low"),
+  entrypoints: z.array(z.string()).default([]),
+  required_tools: z.array(z.string()).default([]),
+  required_mcp_tools: z.array(z.string()).default([]),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+}).passthrough();
+
+export const skillValidationSchema = z.object({
+  valid: z.boolean(),
+  errors: z.array(z.string()).default([]),
+  warnings: z.array(z.string()).default([]),
+  checked_at: z.string(),
+});
+
+export const skillFileSchema = z.object({
+  path: z.string(),
+  kind: z.enum(["skill", "reference", "helper", "requirement", "other"]).default("other"),
+  size: z.number().int().nonnegative(),
+});
+
+export const skillInfoSchema = z.object({
+  skill_id: z.string(),
+  digest: z.string(),
+  name: z.string(),
+  description: z.string(),
+  version: z.string(),
+  category: z.string(),
+  license: z.string(),
+  risk: z.enum(["low", "medium", "high"]),
+  quality: z.enum(["draft", "validated", "verified", "deprecated"]).default("draft"),
+  location: z.string(),
+  source: z.enum(["builtin", "project", "user"]),
+  enabled: z.boolean().default(true),
+  requirements: z.array(skillRequirementSchema).default([]),
+  third_party: z.array(skillThirdPartySchema).default([]),
+  entrypoints: z.array(z.string()).default([]),
+  required_tools: z.array(z.string()).default([]),
+  required_mcp_tools: z.array(z.string()).default([]),
+  files: z.array(skillFileSchema).default([]),
+  validation: skillValidationSchema,
+  shadowed: z.array(z.string()).default([]),
+}).passthrough();
+
+export type SkillThirdParty = z.infer<typeof skillThirdPartySchema>;
+export type SkillRequirement = z.infer<typeof skillRequirementSchema>;
+export type SkillMetadata = z.infer<typeof skillMetadataSchema>;
+export type SkillValidation = z.infer<typeof skillValidationSchema>;
+export type SkillFile = z.infer<typeof skillFileSchema>;
+export type SkillInfo = z.infer<typeof skillInfoSchema>;
