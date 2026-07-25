@@ -17,6 +17,7 @@ function status(code: unknown): number {
     case "busy":
     case "cancelled": return 409;
     case "invalid_request": return 400;
+    case "environment_failed": return 500;
     case "spawn_failed":
     case "process_closed":
     case "process_exit": return 503;
@@ -101,6 +102,10 @@ export function registerNodeSessionRoutes(app: FastifyInstance, nodeSessionServi
 
   app.get<{ Params: { session_id: string } }>("/api/sessions/:session_id/commands", async (request, reply) => {
     const result = await nodeSessionService.command(request.params.session_id, cwd(request), "get_commands");
+    // Dynamic commands are optional composer metadata. A stale session URL can
+    // briefly survive session replacement or deletion, so match the legacy
+    // runtime behavior and keep built-in commands available without a red 404.
+    if (!result.success && result.code === "not_found") return { commands: [] };
     if (!result.success) return sendFailure(reply, result);
     const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
     return { commands: Array.isArray(data.commands) ? data.commands : [] };

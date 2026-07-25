@@ -10,6 +10,7 @@ import { setCurrentCwd } from "../../lib/files";
 import { cn } from "../../lib/cn";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { useTranslation } from "react-i18next";
+import { useFeedback } from "../../components/feedback/feedback-context";
 
 export function ProjectsLayout() {
   const { t } = useTranslation();
@@ -51,6 +52,9 @@ export function ProjectsLayout() {
 
   return (
     <div className="flex h-dvh w-screen overflow-hidden bg-bg text-text">
+      <a href="#main-content" className="fixed left-3 top-3 z-[200] -translate-y-20 rounded-input bg-accent px-3 py-2 text-sm text-accent-fg transition-transform focus:translate-y-0">
+        {t("common.skipToContent", { defaultValue: "Skip to content" })}
+      </a>
       {/* Sidebar */}
       {sidebarCollapsed ? (
         <aside className="h-full flex-col border-r border-border bg-surface flex shrink-0 overflow-hidden w-12 items-center py-3 gap-2">
@@ -136,7 +140,7 @@ export function ProjectsLayout() {
       )}
 
       {/* Main */}
-      <main className={cn(
+      <main id="main-content" tabIndex={-1} className={cn(
         "flex min-w-0 flex-1 flex-col overflow-hidden",
         sidebarCollapsed && "pt-12 md:pt-0 md:pl-12",
       )}>
@@ -159,6 +163,7 @@ export function ProjectsLayout() {
 
 function WorkspaceSessionList({ cwd }: { cwd: string }) {
   const { t } = useTranslation();
+  const { toast } = useFeedback();
   const sessions = useRuntimeStore((s) => s.sessions);
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
   const forkSession = useRuntimeStore((s) => s.forkSession);
@@ -183,10 +188,10 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
         }
       })
       .catch((error) => {
-        if (!cancelled) console.error("Failed to load workspace sessions:", error);
+        if (!cancelled) toast(error instanceof Error ? error.message : "Unable to load workspace sessions", "error");
       });
     return () => { cancelled = true; };
-  }, [cwd, loadSessions, navigate]);
+  }, [cwd, loadSessions, navigate, toast]);
 
   const handleDelete = async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
@@ -199,7 +204,7 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
         navigate(`/workspace/${encodeURIComponent(cwd)}/session/${newId}`);
       }
     } catch (err) {
-      console.error("Delete failed:", err);
+      toast(err instanceof Error ? err.message : "Unable to delete session", "error");
     } finally {
       setDeleting(null);
     }
@@ -212,7 +217,7 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
         navigate(`/workspace/${encodeURIComponent(cwd)}/session/${newId}`);
       }
     } catch (err) {
-      console.error("Create session failed:", err);
+      toast(err instanceof Error ? err.message : "Unable to create session", "error");
     }
   };
 
@@ -224,7 +229,7 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
       const newId = await forkSession(sessionId);
       navigate(`/workspace/${encodeURIComponent(cwd)}/session/${newId}`);
     } catch (err) {
-      console.error("Fork failed:", err);
+      toast(err instanceof Error ? err.message : "Unable to fork session", "error");
     } finally {
       setForking(null);
     }

@@ -89,6 +89,7 @@ beforeEach(() => {
     model: null,
     thinking: null,
     pendingInteraction: null,
+    fileRevision: 0,
     draft: "",
   });
 });
@@ -637,6 +638,24 @@ describe("runtime conversation state", () => {
     expect(useRuntimeStore.getState().activeSessionId).toBe("session-b");
     expect(useRuntimeStore.getState().working).toBe(false);
     expect(FakeEventSource.instances).toHaveLength(1);
+  });
+
+  it("increments the file revision when an agent turn settles", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+
+    FakeEventSource.instances[0].emit("session.idle", {
+      type: "session.idle",
+      sessionId: "session-a",
+    });
+
+    expect(useRuntimeStore.getState().fileRevision).toBe(1);
   });
 
   it("treats live output as proof of acceptance when the prompt acknowledgement fails", async () => {

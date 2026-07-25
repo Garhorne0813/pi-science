@@ -24,6 +24,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
+          if (id.includes("node_modules/echarts") || id.includes("node_modules/zrender")) return "vendor-echarts";
           if (id.includes("node_modules/3dmol") || id.includes("3Dmol")) return "vendor-3dmol";
           if (id.includes("node_modules/openchemlib")) return "vendor-openchemlib";
           if (id.includes("node_modules/three")) return "vendor-three";

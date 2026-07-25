@@ -7,6 +7,7 @@ import { useUiStore } from "../../lib/store";
 import { clampThinkingLevel } from "../../lib/pi-science-client";
 import { readSettingsResponse, settingsApi } from "../../lib/settings-api";
 import { useTranslation } from "react-i18next";
+import { ComputeSettings } from "../../components/settings/ComputeSettings";
 
 type Tab = "general" | "llm" | "extensions" | "mcp" | "compute";
 
@@ -168,7 +169,7 @@ export function SettingsPage() {
         {tab === "llm" && <LLMTab config={config!} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} saveModel={saveModel} onConfigReload={loadConfig} />}
         {tab === "extensions" && <ExtensionsTab workspaceCwd={workspaceCwd} />}
         {tab === "mcp" && <MCPTab workspaceCwd={workspaceCwd} />}
-        {tab === "compute" && <ComputeTab />}
+        {tab === "compute" && <ComputeSettings />}
       </div>
     </div>
   );
@@ -1429,154 +1430,5 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h2 className="text-xs font-semibold uppercase tracking-wider text-muted mb-3">{title}</h2>
       {children}
     </section>
-  );
-}
-
-interface Machine {
-  label: string;
-  host: string;
-  user: string;
-  port: number;
-  identity_file: string;
-  scheduler: string;
-}
-
-function ComputeTab() {
-  const { t } = useTranslation();
-  const [machines, setMachines] = useState<Machine[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [form, setForm] = useState({
-    host: "",
-    label: "",
-    user: "",
-    port: 22,
-    identity_file: "",
-    scheduler: "",
-  });
-  const [adding, setAdding] = useState(false);
-  const [probing, setProbing] = useState<Record<string, any>>({});
-  const [error, setError] = useState("");
-
-  const load = async () => {
-    try {
-      const res = await fetch("/api/compute/machines");
-      const d = await res.json();
-      setMachines(d.machines || []);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  const handleAdd = async () => {
-    if (!form.host.trim()) return;
-    setAdding(true);
-    setError("");
-    try {
-      await fetch("/api/compute/machines", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
-      });
-      setForm({
-        host: "",
-        label: "",
-        user: "",
-        port: 22,
-        identity_file: "",
-        scheduler: "",
-      });
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setAdding(false);
-    }
-  };
-
-  const handleDelete = async (label: string) => {
-    await fetch(`/api/compute/machines/${label}`, { method: "DELETE" });
-    await load();
-  };
-
-  const handleProbe = async (machine: Machine) => {
-    setProbing((p) => ({ ...p, [machine.label]: true }));
-    try {
-      const params = new URLSearchParams({
-        host: machine.host,
-        user: machine.user,
-        port: String(machine.port),
-        identity_file: machine.identity_file,
-      });
-      const res = await fetch(`/api/compute/probe?${params}`, {
-        method: "POST",
-      });
-      const info = await res.json();
-      setProbing((p) => ({ ...p, [machine.label]: info }));
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setProbing((p) => ({ ...p, [machine.label]: false }));
-    }
-  };
-
-  if (loading) return <div className="text-sm text-muted py-4">{t("common.loading")}</div>;
-
-  return (
-    <div className="space-y-6">
-      <Section title={t("settings.computePage.title")}>
-        <p className="text-[11px] text-muted mb-3">
-          {t("settings.computePage.description")} {t("settings.computePage.savedTo")} <code className="font-mono text-[11px] bg-surface-2 px-1 rounded">.pi-science/compute.json</code>.
-        </p>
-        <div className="rounded-card border border-border bg-surface p-4 mb-3">
-          <div className="grid grid-cols-3 gap-2 mb-2">
-            <input value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder={t("settings.computePage.label")} className="rounded-input border border-border bg-surface-2 px-2 py-1.5 text-xs text-text outline-none" />
-            <input value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} placeholder={t("settings.computePage.hostname")} className="rounded-input border border-border bg-surface-2 px-2 py-1.5 text-xs text-text outline-none font-mono" />
-            <input value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} placeholder={t("settings.computePage.user")} className="rounded-input border border-border bg-surface-2 px-2 py-1.5 text-xs text-text outline-none" />
-          </div>
-          <div className="flex items-center gap-2">
-            <select value={form.scheduler} onChange={(e) => setForm({ ...form, scheduler: e.target.value })} className="rounded-input border border-border bg-surface-2 px-2 py-1.5 text-xs text-text outline-none">
-              <option value="">{t("settings.computePage.directSsh")}</option>
-              <option value="slurm">Slurm</option>
-            </select>
-            <button onClick={handleAdd} disabled={!form.host.trim() || adding} className="rounded-input bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40">
-              {adding ? t("settings.computePage.adding") : t("settings.computePage.add")}
-            </button>
-            {error && <span className="text-xs text-error">{error}</span>}
-          </div>
-        </div>
-        {machines.length === 0 ? (
-          <p className="text-[12px] text-muted/60 italic">{t("settings.computePage.empty")}</p>
-        ) : (
-          machines.map((m) => (
-            <div key={m.label} className="rounded-card border border-border bg-surface px-4 py-3 mb-2">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-sm font-medium text-text">{m.label}</span>
-                  <span className="ml-2 font-mono text-[11px] text-muted">
-                    {m.user}@{m.host}:{m.port}
-                  </span>
-                  {m.scheduler && <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 text-[10px] uppercase text-accent">{m.scheduler}</span>}
-                </div>
-                <div className="flex items-center gap-2">
-                  <button onClick={() => handleProbe(m)} disabled={!!probing[m.label]} className="rounded-input px-2 py-1 text-[11px] text-link hover:bg-surface-2">
-                    {probing[m.label] === true ? <Loader2 size={12} className="animate-spin" /> : probing[m.label] ? t("settings.computePage.probed") : t("settings.computePage.probe")}
-                  </button>
-                  <button onClick={() => handleDelete(m.label)} className="rounded-input px-2 py-1 text-[11px] text-error hover:bg-error/10">
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              </div>
-              {probing[m.label] && typeof probing[m.label] === "object" && <div className="mt-2 rounded-input bg-surface-2 p-2 font-mono text-[10px] text-muted">{probing[m.label].reachable ? `Cores: ${probing[m.label].cores} · RAM: ${probing[m.label].memory} · GPUs: ${probing[m.label].gpus} · Slurm: ${probing[m.label].has_slurm ? "yes" : "no"}` : `Error: ${probing[m.label].error || "unreachable"}`}</div>}
-            </div>
-          ))
-        )}
-      </Section>
-    </div>
   );
 }

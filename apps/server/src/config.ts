@@ -8,6 +8,11 @@ const environmentSchema = z.object({
   PI_SCIENCE_MAX_BODY_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
   PI_SCIENCE_UPSTREAM_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   PI_SCIENCE_INTERNAL_TOKEN: z.string().optional(),
+  PI_SCIENCE_MANAGE_SCIENTIFIC_RUNTIME: z.enum(["0", "1"]).default("0"),
+  PI_SCIENCE_PYTHON_EXECUTABLE: z.string().optional(),
+  PI_SCIENCE_PYTHON_CWD: z.string().optional(),
+  PI_SCIENCE_SCIENTIFIC_IDLE_MS: z.coerce.number().int().nonnegative().default(5 * 60_000),
+  PI_SCIENCE_SCIENTIFIC_STARTUP_MS: z.coerce.number().int().positive().default(30_000),
   PI_SCIENCE_NODE_SESSIONS: z.enum(["0", "1"]).default("1"),
   PI_SCIENCE_NODE_SSE: z.enum(["0", "1"]).default("1"),
   PI_SCIENCE_NODE_FILES: z.enum(["0", "1"]).default("1"),
@@ -31,6 +36,11 @@ export interface ServerConfig {
   maxBodyBytes: number;
   upstreamTimeoutMs: number;
   internalToken?: string;
+  manageScientificRuntime?: boolean;
+  pythonExecutable?: string;
+  pythonCwd?: string;
+  scientificIdleMs?: number;
+  scientificStartupMs?: number;
   nodeSessions: boolean;
   nodeSse: boolean;
   nodeFiles: boolean;
@@ -56,6 +66,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Server
     maxBodyBytes: parsed.PI_SCIENCE_MAX_BODY_BYTES,
     upstreamTimeoutMs: parsed.PI_SCIENCE_UPSTREAM_TIMEOUT_MS,
     internalToken: parsed.PI_SCIENCE_INTERNAL_TOKEN,
+    manageScientificRuntime: parsed.PI_SCIENCE_MANAGE_SCIENTIFIC_RUNTIME === "1",
+    pythonExecutable: parsed.PI_SCIENCE_PYTHON_EXECUTABLE,
+    pythonCwd: parsed.PI_SCIENCE_PYTHON_CWD,
+    scientificIdleMs: parsed.PI_SCIENCE_SCIENTIFIC_IDLE_MS,
+    scientificStartupMs: parsed.PI_SCIENCE_SCIENTIFIC_STARTUP_MS,
     nodeSessions: parsed.PI_SCIENCE_NODE_SESSIONS === "1",
     nodeSse: parsed.PI_SCIENCE_NODE_SSE === "1",
     nodeFiles: parsed.PI_SCIENCE_NODE_FILES === "1",

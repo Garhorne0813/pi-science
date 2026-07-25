@@ -5,7 +5,7 @@ import type { PiConfig } from "@pi-science/contracts";
 import type { PiProcessOptions } from "./pi-process.js";
 import { configRoot } from "./persistence.js";
 
-export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: [], extensions: [] }, sessionPath?: string): PiProcessOptions | null {
+export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: [], extensions: [] }, sessionPath?: string, workspaceEnvironment: NodeJS.ProcessEnv = {}): PiProcessOptions | null {
   const cliPath = process.env.PI_CLI_PATH;
   if (!cliPath) return null;
   const nodePath = process.env.PI_NODE_PATH || process.execPath;
@@ -39,6 +39,7 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
   const storedKeys = settings.api_keys;
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    ...workspaceEnvironment,
     PI_CODING_AGENT_DIR: agentDir,
     PI_CONFIG_DIR: agentDir,
     PI_WORKSPACE_DIR: resolve(cwd),

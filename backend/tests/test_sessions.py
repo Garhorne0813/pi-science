@@ -17,6 +17,7 @@ from api.sessions import (
 )
 from models import PiConfig
 from services.pi_manager import PiManager, PiProcess, _should_use_global_model
+from services.session_repository import SessionRepository
 
 
 class FakePi:
@@ -76,6 +77,25 @@ def test_find_session_file_uses_exact_session_id(tmp_path):
     path = _write_session(tmp_path, "session-123")
     assert mgr._find_session_file("session-123", str(tmp_path)) == path.resolve()
     assert mgr._find_session_file("session-12", str(tmp_path)) is None
+
+
+def test_session_repository_reuses_its_short_lived_index(tmp_path):
+    _write_session(tmp_path, "session-indexed")
+    SessionRepository._index_cache.clear()
+    repository = SessionRepository(tmp_path)
+    with patch.object(repository, "_files", wraps=repository._files) as files:
+        assert [item.id for item in repository.list()] == ["session-indexed"]
+        assert repository.count() == 1
+        assert repository.latest_id() == "session-indexed"
+        assert files.call_count == 1
+
+
+def test_session_repository_refreshes_the_index_when_find_misses(tmp_path):
+    SessionRepository._index_cache.clear()
+    repository = SessionRepository(tmp_path)
+    assert repository.list() == []
+    path = _write_session(tmp_path, "new-session")
+    assert repository.find("new-session") == path.resolve()
 
 
 def test_unauthenticated_persisted_model_can_fall_back_to_configured_model(temp_config_dir):

@@ -8,6 +8,7 @@ import { workspaceFiles, type Breadcrumb } from "../../lib/workspace-files";
 import { FileContextMenu, type ContextPoint, type FileListEntry } from "../../components/sidebar/FileContextMenu";
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "../../components/layout/WorkspacePage";
+import { useRuntimeStore } from "../../lib/runtime-store";
 
 export function FilesPage() {
   const { t } = useTranslation();
@@ -21,6 +22,7 @@ export function FilesPage() {
   const [contextMenu, setContextMenu] = useState<{ entry: FileListEntry; point: ContextPoint } | null>(null);
   const openInspector = useUiStore((s) => s.openInspector);
   const addWorkspaceReference = useUiStore((s) => s.addWorkspaceReference);
+  const fileRevision = useRuntimeStore((s) => s.fileRevision);
 
   const loadFiles = useCallback(async (dir: string, signal?: AbortSignal) => {
     setLoading(true);
@@ -37,7 +39,12 @@ export function FilesPage() {
     const controller = new AbortController();
     void loadFiles(subdir, controller.signal);
     return () => controller.abort();
-  }, [loadFiles, subdir]);
+  }, [fileRevision, loadFiles, subdir]);
+
+  const refreshFiles = () => {
+    workspaceFiles.invalidate();
+    void loadFiles(subdir);
+  };
 
   const handleClick = (entry: FileListEntry) => {
     if (entry.isDir) {
@@ -97,7 +104,7 @@ export function FilesPage() {
           </div>
         }
         actions={
-          <WorkspacePageRefreshButton label={t("common.refresh")} loading={loading} onClick={() => void loadFiles(subdir)} />
+          <WorkspacePageRefreshButton label={t("common.refresh")} loading={loading} onClick={refreshFiles} />
         }
       />
 

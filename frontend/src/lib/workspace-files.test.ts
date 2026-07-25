@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { workspaceFiles } from "./workspace-files";
 
 afterEach(() => {
+  workspaceFiles.invalidate();
   vi.unstubAllGlobals();
 });
 
@@ -46,5 +47,23 @@ describe("workspace files", () => {
       breadcrumbs: [{ name: "reports" }],
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reloads directory data after invalidation", async () => {
+    let version = 1;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      const body = url.startsWith("/api/files/breadcrumbs")
+        ? []
+        : [{ name: `result-${version}.csv`, path: `result-${version}.csv`, isDir: false, size: 1, modified: version }];
+      return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect((await workspaceFiles.sidebar("/workspace"))[0]?.name).toBe("result-1.csv");
+    version = 2;
+    expect((await workspaceFiles.sidebar("/workspace"))[0]?.name).toBe("result-1.csv");
+    workspaceFiles.invalidate();
+    expect((await workspaceFiles.sidebar("/workspace"))[0]?.name).toBe("result-2.csv");
   });
 });

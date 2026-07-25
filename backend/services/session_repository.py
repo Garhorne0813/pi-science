@@ -3,16 +3,28 @@
 from __future__ import annotations
 
 import json
+import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import ClassVar, Iterator
 
 from config import get_sessions_dir
 from models import SessionInfo
 
 
+@dataclass(frozen=True)
+class _SessionRecord:
+    path: Path
+    modified: float
+    header: dict
+
+
 class SessionRepository:
     """One interface for the workspace-local JSONL session tree."""
+
+    _index_cache: ClassVar[dict[Path, tuple[float, tuple[_SessionRecord, ...]]]] = {}
+    _index_ttl_seconds: ClassVar[float] = 1.0
 
     def __init__(self, cwd: str | Path):
         self.cwd = Path(cwd).expanduser().resolve()
@@ -21,6 +33,25 @@ class SessionRepository:
     def _files(self) -> Iterator[Path]:
         if self.root.exists():
             yield from self.root.rglob("*.jsonl")
+
+    def _index(self, *, force: bool = False) -> tuple[_SessionRecord, ...]:
+        key = self.root.resolve()
+        now = time.monotonic()
+        cached = self._index_cache.get(key)
+        if not force and cached and cached[0] > now:
+            return cached[1]
+        records: list[_SessionRecord] = []
+        for path in self._files():
+            header = self._header(path)
+            if not header:
+                continue
+            try:
+                records.append(_SessionRecord(path.resolve(), path.stat().st_mtime, header))
+            except OSError:
+                continue
+        result = tuple(sorted(records, key=lambda record: record.modified, reverse=True))
+        self._index_cache[key] = (now + self._index_ttl_seconds, result)
+        return result
 
     @staticmethod
     def _header(path: Path) -> dict | None:
@@ -32,38 +63,40 @@ class SessionRepository:
             return None
 
     def find(self, session_id: str) -> Path | None:
-        for path in self._files():
-            header = self._header(path)
-            if header and header.get("id") == session_id:
-                return path.resolve()
+        cached = self._index_cache.get(self.root.resolve())
+        cache_was_fresh = bool(cached and cached[0] > time.monotonic())
+        for record in self._index():
+            if record.header.get("id") == session_id:
+                return record.path
+        # Pi writes session files outside this repository. Refresh immediately
+        # on a miss so the TTL never hides a newly persisted conversation.
+        if cache_was_fresh:
+            for record in self._index(force=True):
+                if record.header.get("id") == session_id:
+                    return record.path
         return None
 
     def latest_id(self) -> str | None:
-        paths = sorted(self._files(), key=lambda path: path.stat().st_mtime, reverse=True)
-        for path in paths:
-            header = self._header(path)
-            if header and header.get("id"):
-                return str(header["id"])
+        for record in self._index():
+            if record.header.get("id"):
+                return str(record.header["id"])
         return None
 
     def list(self) -> list[SessionInfo]:
         records: list[SessionInfo] = []
-        paths = sorted(self._files(), key=lambda path: path.stat().st_mtime, reverse=True)
-        for path in paths:
-            header = self._header(path)
-            if not header:
-                continue
+        for record in self._index():
+            path, header = record.path, record.header
             records.append(SessionInfo(
                 id=header.get("id", path.stem),
                 cwd=header.get("cwd", ""),
                 name=None,
                 created_at=header.get("timestamp"),
-                updated_at=datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc),
+                updated_at=datetime.fromtimestamp(record.modified, tz=timezone.utc),
             ))
         return records
 
     def count(self) -> int:
-        return sum(1 for path in self._files() if self._header(path))
+        return len(self._index())
 
     def messages(self, session_id: str, *, include_tool_fields: bool = False) -> list[dict]:
         path = self.find(session_id)

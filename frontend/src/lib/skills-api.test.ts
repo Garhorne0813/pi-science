@@ -15,6 +15,6 @@ describe("skills capability", () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
     await skillsApi.list("/tmp/lab");
-    expect(fetchMock).toHaveBeenCalledWith("/api/skills?cwd=%2Ftmp%2Flab");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/skills?cwd=%2Ftmp%2Flab");
   });
 });

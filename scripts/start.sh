@@ -17,7 +17,6 @@ PI_CLI="${PI_CLI_PATH:-${PI_SCIENCE_INSTALL_PI_CLI:-}}"
 [ -f "$PI_CLI" ] || { echo "Error: Pi runtime is not installed. Run: bash scripts/install.sh" >&2; exit 1; }
 command -v pnpm >/dev/null 2>&1 || { echo "Error: pnpm is required." >&2; exit 1; }
 
-BACKEND_PID=""
 CONTROL_PLANE_PID=""
 FRONTEND_PID=""
 FRONTEND_REUSED=false
@@ -30,7 +29,6 @@ cleanup() {
   echo ""
   echo "==> Shutting down..."
   [ -z "$CONTROL_PLANE_PID" ] || kill "$CONTROL_PLANE_PID" 2>/dev/null || true
-  [ -z "$BACKEND_PID" ] || kill "$BACKEND_PID" 2>/dev/null || true
   [ -z "$FRONTEND_PID" ] || kill "$FRONTEND_PID" 2>/dev/null || true
   wait 2>/dev/null || true
 }
@@ -69,22 +67,14 @@ if ! port_is_available "$CONTROL_PLANE_PORT"; then
   exit 1
 fi
 
-echo "==> Starting Python scientific runtime on http://127.0.0.1:$SCIENTIFIC_RUNTIME_PORT"
-cd "$PROJECT_DIR/backend"
-PI_SCIENCE_PORT="$SCIENTIFIC_RUNTIME_PORT" "$CONDA_PYTHON" -m uvicorn main:app --host 127.0.0.1 --port "$SCIENTIFIC_RUNTIME_PORT" --reload &
-BACKEND_PID=$!
-
-echo "  Waiting for scientific runtime..."
-for _ in $(seq 1 20); do
-  kill -0 "$BACKEND_PID" 2>/dev/null || break
-  curl --fail --silent "http://127.0.0.1:${SCIENTIFIC_RUNTIME_PORT}/api/health" >/dev/null 2>&1 && break
-  sleep 0.5
-done
-curl --fail --silent "http://127.0.0.1:${SCIENTIFIC_RUNTIME_PORT}/api/health" >/dev/null 2>&1 || { echo "Error: scientific runtime did not become ready." >&2; exit 1; }
-
 echo "==> Starting Node control plane on http://127.0.0.1:$CONTROL_PLANE_PORT"
 cd "$PROJECT_DIR"
 export PI_SCIENCE_PYTHON_ORIGIN="http://127.0.0.1:${SCIENTIFIC_RUNTIME_PORT}"
+export PI_SCIENCE_MANAGE_SCIENTIFIC_RUNTIME="${PI_SCIENCE_MANAGE_SCIENTIFIC_RUNTIME:-1}"
+export PI_SCIENCE_PYTHON_EXECUTABLE="${PI_SCIENCE_PYTHON_EXECUTABLE:-$CONDA_PYTHON}"
+export PI_SCIENCE_PYTHON_CWD="${PI_SCIENCE_PYTHON_CWD:-$PROJECT_DIR/backend}"
+export PI_SCIENCE_SCIENTIFIC_IDLE_MS="${PI_SCIENCE_SCIENTIFIC_IDLE_MS:-300000}"
+export PI_SCIENCE_SCIENTIFIC_STARTUP_MS="${PI_SCIENCE_SCIENTIFIC_STARTUP_MS:-30000}"
 export PI_SCIENCE_BACKEND_URL="${PI_SCIENCE_BACKEND_URL:-http://127.0.0.1:${CONTROL_PLANE_PORT}}"
 export PI_SCIENCE_NODE_SESSIONS="${PI_SCIENCE_NODE_SESSIONS:-1}"
 export PI_SCIENCE_NODE_SSE="${PI_SCIENCE_NODE_SSE:-1}"
@@ -129,7 +119,7 @@ echo ""
 echo "Pi-Science is running:"
 echo "  Frontend:          http://127.0.0.1:5173"
 echo "  Node control plane: http://127.0.0.1:$CONTROL_PLANE_PORT"
-echo "  Python runtime:     http://127.0.0.1:$SCIENTIFIC_RUNTIME_PORT"
+echo "  Python worker:      on demand at http://127.0.0.1:$SCIENTIFIC_RUNTIME_PORT"
 echo "  API docs:           http://127.0.0.1:$CONTROL_PLANE_PORT/docs"
 echo "Press Ctrl+C to stop."
 wait

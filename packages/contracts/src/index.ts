@@ -156,7 +156,7 @@ export const scientificRuntimeHealthSchema = z.object({
 export const gatewayHealthSchema = scientificRuntimeHealthSchema.extend({
   service: z.literal("pi-science-server"),
   control_plane: z.literal("node"),
-  scientific_runtime: z.literal("ok"),
+  scientific_runtime: z.enum(["idle", "starting", "ready", "stopping", "failed", "external"]),
 });
 
 export type GatewayHealth = z.infer<typeof gatewayHealthSchema>;

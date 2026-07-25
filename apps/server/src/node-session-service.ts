@@ -9,6 +9,7 @@ import type { PiProcess, PiProcessOptions, PiResult } from "./pi-process.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "./pi-runtime-launch.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
 import { SessionRepository, sessionRepository } from "./session-repository.js";
+import { WorkspaceEnvironmentService } from "./workspace-environment.js";
 
 type ServiceFailure = { success: false; error: string; code: string };
 type PendingOperation = "prompt" | "compact";
@@ -82,6 +83,7 @@ export class NodeSessionService {
     private readonly eventHub: ConversationEventHub = conversationEventHub,
     private readonly manager: PiManager = piManager,
     private readonly repository: SessionRepository = sessionRepository,
+    private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService(),
   ) {}
 
   configureScientificRuntime(origin: string, token?: string): void {
@@ -96,7 +98,7 @@ export class NodeSessionService {
     return this.withLock(`create:${cwd}`, async () => {
       let runtime: RuntimeRecord | undefined;
       const config = { ...effectiveConfig(), ...body.config };
-      const started = this.startRuntime(cwd, config);
+      const started = await this.startRuntime(cwd, config);
       if ("error" in started) return started;
       runtime = started;
       const state = await this.refreshState(runtime);
@@ -179,7 +181,7 @@ export class NodeSessionService {
       if (!ready.success) return ready;
       const sessionPath = await this.repository.findPath(cwd, sessionId);
       if (!sessionPath) return { success: false, code: "not_found", error: "session not found" };
-      const started = this.startRuntime(cwd, { ...source.config });
+      const started = await this.startRuntime(cwd, { ...source.config });
       if ("error" in started) return started;
       const switched = await started.process.sendCommand("switch_session", { sessionPath });
       if (!switched.success) { await this.cleanupRuntime(started); return failure(switched, "unable to resume session for fork"); }
@@ -379,7 +381,7 @@ export class NodeSessionService {
     }
     const sessionPath = await this.repository.findPath(cwd, sessionId);
     if (!sessionPath) return { success: false, code: "not_found", error: "session not found in this workspace" };
-    const started = this.startRuntime(cwd, effectiveConfig());
+    const started = await this.startRuntime(cwd, effectiveConfig());
     if ("error" in started) return { success: false, ...started };
     runtime = started;
     const switched = await runtime.process.sendCommand("switch_session", { sessionPath });
@@ -391,10 +393,16 @@ export class NodeSessionService {
     return runtime;
   }
 
-  private startRuntime(cwd: string, config: PiConfig, sessionPath?: string, preparedOptions?: PiProcessOptions): RuntimeRecord | { error: string; code: string } {
+  private async startRuntime(cwd: string, config: PiConfig, sessionPath?: string, preparedOptions?: PiProcessOptions): Promise<RuntimeRecord | { error: string; code: string }> {
     let options: PiProcessOptions | null;
-    try { options = preparedOptions ?? buildPiProcessOptions(cwd, config, sessionPath); }
-    catch (error) { return { error: `unable to prepare Pi runtime configuration: ${String(error)}`, code: "configuration_failed" }; }
+    if (preparedOptions) options = preparedOptions;
+    else {
+      let environment: NodeJS.ProcessEnv;
+      try { environment = await this.environments.environment(cwd); }
+      catch (error) { return { error: `unable to prepare isolated workspace environment: ${String(error)}`, code: "environment_failed" }; }
+      try { options = buildPiProcessOptions(cwd, config, sessionPath, environment); }
+      catch (error) { return { error: `unable to prepare Pi runtime configuration: ${String(error)}`, code: "configuration_failed" }; }
+    }
     if (!options) return { error: "PI_CLI_PATH is not configured", code: "spawn_failed" };
     let process: PiProcess;
     const managerKey = randomUUID();
@@ -524,7 +532,7 @@ export class NodeSessionService {
     const restartPending = runtime.restartPending;
     const sessionPath = runtime.activeSessionId ? await this.repository.findPath(cwd, runtime.activeSessionId) : null;
     let options: PiProcessOptions | null;
-    try { options = buildPiProcessOptions(cwd, config); }
+    try { options = buildPiProcessOptions(cwd, config, undefined, await this.environments.environment(cwd)); }
     catch (error) { return { success: false, code: "configuration_failed", error: `unable to prepare Pi runtime configuration: ${String(error)}` }; }
     if (!options) return { success: false, code: "spawn_failed", error: "PI_CLI_PATH is not configured" };
     this.eventHub.expectExit(runtime.process);
@@ -532,7 +540,7 @@ export class NodeSessionService {
     for (const [key, current] of this.runtimes) {
       if (current === runtime) this.runtimes.delete(key);
     }
-    const started = this.startRuntime(cwd, config, undefined, options);
+    const started = await this.startRuntime(cwd, config, undefined, options);
     if (!("error" in started)) {
       const switched = sessionPath
         ? await started.process.sendCommand("switch_session", { sessionPath })
@@ -623,10 +631,10 @@ export class NodeSessionService {
 
   private async restoreRuntimeAfterFailedRestart(cwd: string, config: PiConfig, sessionPath: string | null, restartPending: boolean): Promise<void> {
     let options: PiProcessOptions | null;
-    try { options = buildPiProcessOptions(cwd, config); }
+    try { options = buildPiProcessOptions(cwd, config, undefined, await this.environments.environment(cwd)); }
     catch { return; }
     if (!options) return;
-    const restored = this.startRuntime(cwd, config, undefined, options);
+    const restored = await this.startRuntime(cwd, config, undefined, options);
     if ("error" in restored) return;
     const switched = sessionPath
       ? await restored.process.sendCommand("switch_session", { sessionPath })

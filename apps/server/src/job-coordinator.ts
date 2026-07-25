@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { metadataRoot, readJson, writeJsonAtomic } from "./persistence.js";
+import { WorkspaceEnvironmentService } from "./workspace-environment.js";
 
 export type JobStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled" | "timed_out";
 export interface JobRequirement { cpu?: number; memory_mb?: number; gpu?: boolean; runtime?: string; packages?: string[]; timeout_seconds?: number; [key: string]: unknown }
@@ -12,6 +13,8 @@ export class JobCoordinator {
   private readonly children = new Map<string, ChildProcess>();
   private readonly jobs = new Map<string, Promise<void>>();
   private readonly cancelled = new Set<string>();
+
+  constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService()) {}
 
   capabilities(requirement: JobRequirement) {
     const runtime = { node: process.execPath, python: process.env.PYTHON ?? "python3", r: null };
@@ -29,9 +32,10 @@ export class JobCoordinator {
     const requirement = (body.requirement && typeof body.requirement === "object" ? body.requirement : {}) as JobRequirement;
     const check = this.capabilities(requirement);
     if (check.status === "blocked") throw new Error(check.reasons.join("; "));
-    const record: JobRecord = { job_id: `job_${randomUUID().replaceAll("-", "").slice(0, 16)}`, command, cwd, surface: typeof body.surface === "string" ? body.surface : "local", status: "pending", created_at: new Date().toISOString(), stdout: "", stderr: "", artifact_ids: [], environment: { platform: process.platform, node: process.version }, requirement };
+    const environment = await this.environments.environment(cwd);
+    const record: JobRecord = { job_id: `job_${randomUUID().replaceAll("-", "").slice(0, 16)}`, command, cwd, surface: typeof body.surface === "string" ? body.surface : "local", status: "pending", created_at: new Date().toISOString(), stdout: "", stderr: "", artifact_ids: [], environment: { platform: process.platform, node: process.version, virtual_env: environment.VIRTUAL_ENV, npm_prefix: environment.npm_config_prefix }, requirement };
     await this.save(record);
-    const task = this.run(record);
+    const task = this.run(record, environment);
     this.jobs.set(record.job_id, task);
     void task.catch(() => undefined).finally(() => { if (this.jobs.get(record.job_id) === task) this.jobs.delete(record.job_id); });
     return record;
@@ -63,12 +67,12 @@ export class JobCoordinator {
   private jobsDir(cwd: string) { return join(metadataRoot(cwd), "jobs"); }
   private jobPath(cwd: string, id: string) { if (!/^job_[A-Za-z0-9]{16}$/.test(id)) throw new Error("Invalid job id"); const root = resolve(this.jobsDir(cwd)); const target = resolve(root, `${id}.json`); const rel = relative(root, target); if (isAbsolute(rel) || rel.startsWith("..")) throw new Error("Job path escapes the workspace"); return target; }
   private async save(record: JobRecord) { await writeJsonAtomic(this.jobPath(record.cwd, record.job_id), record); }
-  private async run(record: JobRecord): Promise<void> {
+  private async run(record: JobRecord, environment: NodeJS.ProcessEnv): Promise<void> {
     if (this.cancelled.has(record.job_id)) { record.status = "cancelled"; record.ended_at = new Date().toISOString(); await this.save(record); this.cancelled.delete(record.job_id); return; }
     record.status = "running"; record.started_at = new Date().toISOString(); await this.save(record);
     let child: ChildProcess | undefined;
     try {
-      child = spawn(record.command[0]!, record.command.slice(1), { cwd: record.cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn(record.command[0]!, record.command.slice(1), { cwd: record.cwd, env: environment, stdio: ["ignore", "pipe", "pipe"] });
       this.children.set(record.job_id, child);
       const stdout: Buffer[] = []; const stderr: Buffer[] = [];
       child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk)); child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));

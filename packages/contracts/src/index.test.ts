@@ -10,7 +10,7 @@ describe("gateway contracts", () => {
         active_kernels: 2,
         service: "pi-science-server",
         control_plane: "node",
-        scientific_runtime: "ok",
+        scientific_runtime: "idle",
       }),
     ).toMatchObject({ service: "pi-science-server", control_plane: "node" });
   });

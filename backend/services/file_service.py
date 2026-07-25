@@ -9,8 +9,6 @@ logger = logging.getLogger(__name__)
 from models import FileContent, PreviewData
 from services.preview_registry import EXT_TO_KIND, detect_preview_kind
 
-logger = logging.getLogger(__name__)
-
 MAX_TEXT_SIZE = 50 * 1024 * 1024
 MAX_BINARY_PREVIEW_SIZE = 20 * 1024 * 1024
 

@@ -1,23 +1,10 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Package, Puzzle, Wrench, Check, X, ChevronRight, ShieldCheck, AlertTriangle, RotateCcw, Loader2 } from "lucide-react";
-import { applySessionReplacements, type SessionReplacement } from "../../lib/runtime-store";
 import { WorkspacePage, WorkspacePageHeader } from "../../components/layout/WorkspacePage";
 import { skillsApi } from "../../lib/skills-api";
-
-async function readResponse<T>(response: Response, fallback: string): Promise<T> {
-  const data = await response.json().catch(() => ({})) as T & {
-    ok?: boolean;
-    error?: string;
-    detail?: string;
-    session_replacements?: SessionReplacement[];
-  };
-  if (!response.ok || data.ok === false) throw new Error(data.error || data.detail || fallback);
-  if (Array.isArray(data.session_replacements)) {
-    applySessionReplacements(data.session_replacements as SessionReplacement[]);
-  }
-  return data;
-}
+import { apiRequest } from "../../lib/api";
+import { applySessionReplacements, type SessionReplacement } from "../../lib/runtime-store";
 
 interface Skill {
   skill_id: string;
@@ -59,12 +46,8 @@ export function SkillsPage() {
     let cancelled = false;
     Promise.all([
       skillsApi.list<Skill>(cwd),
-      fetch("/api/skills/tools").then(async (response) => {
-        return readResponse<Tool[]>(response, "Unable to detect tools");
-      }),
-      fetch("/api/settings/skills").then(async (response) => {
-        return readResponse<{ skills?: Array<{ name: string; enabled: boolean }>; configured?: boolean }>(response, "Unable to load skill settings");
-      }),
+      apiRequest<Tool[]>("/api/skills/tools", { cacheTtlMs: 3000 }),
+      apiRequest<{ skills?: Array<{ name: string; enabled: boolean }>; configured?: boolean }>("/api/settings/skills"),
     ]).then(([skillData, toolData, settingsData]) => {
       if (cancelled) return;
       const enabled = new Map<string, boolean>((settingsData.skills || []).map((item: { name: string; enabled: boolean }) => [item.name, item.enabled]));
@@ -76,6 +59,9 @@ export function SkillsPage() {
     }).finally(() => {
       if (!cancelled) setLoading(false);
     });
+    // StrictMode mounts, cleans up, and mounts effects again in development.
+    // Ignore the obsolete result instead of aborting these short, idempotent
+    // GETs, which otherwise leaves misleading red "cancelled" requests.
     return () => { cancelled = true; };
   }, [cwd]);
 
@@ -90,12 +76,12 @@ export function SkillsPage() {
     setError(null);
     setSkills((current) => current.map((item) => item.name === skill.name ? { ...item, enabled } : item));
     try {
-      const response = await fetch("/api/settings/skills/toggle", {
+      const result = await apiRequest<{ session_replacements?: SessionReplacement[] }>("/api/settings/skills/toggle", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: skill.name, enabled }),
       });
-      await readResponse<Record<string, unknown>>(response, "Unable to update skill settings");
+      if (result.session_replacements) applySessionReplacements(result.session_replacements);
       setConfigured(true);
     } catch (cause) {
       setSkills((current) => current.map((item) => item.name === skill.name ? { ...item, enabled: skill.enabled } : item));
@@ -109,8 +95,8 @@ export function SkillsPage() {
     setSaving("reset");
     setError(null);
     try {
-      const response = await fetch("/api/settings/skills", { method: "DELETE" });
-      await readResponse<Record<string, unknown>>(response, "Unable to reset skill settings");
+      const result = await apiRequest<{ session_replacements?: SessionReplacement[] }>("/api/settings/skills", { method: "DELETE" });
+      if (result.session_replacements) applySessionReplacements(result.session_replacements);
       setSkills((current) => current.map((item) => ({ ...item, enabled: true })));
       setConfigured(false);
     } catch (cause) {

@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from models import PiConfig
-from services.pi_manager import PiProcess, PiManager, pi_manager
+from services.pi_manager import PiProcess, PiManager, _model_has_credentials, pi_manager
 
 
 # ── Fixtures ──
@@ -93,6 +93,12 @@ def mock_pi_stdio(mock_popen):
 # ── Tests: PiManager ──
 
 class TestPiManager:
+    def test_credential_detection_fails_closed_when_settings_cannot_be_read(self, monkeypatch, caplog):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        with patch("services.settings_store.load_config", side_effect=OSError("unreadable settings")):
+            assert _model_has_credentials("anthropic/claude-sonnet") is False
+        assert "Unable to inspect model credentials" in caplog.text
+
     def test_singleton_exists(self):
         assert pi_manager is not None
         assert isinstance(pi_manager, PiManager)

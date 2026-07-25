@@ -6,6 +6,7 @@ import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { ApiError, apiRequest, invalidateApiCache } from "../../lib/api";
+import { timeAgo } from "../../lib/format";
 
 interface Workspace {
   name: string;
@@ -227,14 +228,6 @@ export function ProjectsPage() {
     finally { setInstallingDemo(false); }
   };
 
-  const timeAgo = (d: string) => {
-    const diff = Date.now() - new Date(d).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 60) return `${mins}m ago`;
-    if (mins < 1440) return `${Math.floor(mins / 60)}h ago`;
-    return `${Math.floor(mins / 1440)}d ago`;
-  };
-
   if (loading) return <div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin text-muted" /></div>;
 
   // Split into pinned & unpinned
@@ -424,7 +417,10 @@ function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingName, edit
           ref={nameInputRef}
           value={editValue}
           onChange={(e) => setEditValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") handleRename(w.path); if (e.key === "Escape") setEditingName(null); }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); }
+            if (e.key === "Escape") setEditingName(null);
+          }}
           onBlur={() => handleRename(w.path)}
           onClick={(e) => e.stopPropagation()}
           placeholder={w.name}

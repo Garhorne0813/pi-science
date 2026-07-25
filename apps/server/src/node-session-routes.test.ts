@@ -4,11 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerNodeSessionRoutes } from "./node-session-routes.js";
-import { nodeSessionService } from "./node-session-service.js";
+import { NodeSessionService } from "./node-session-service.js";
 import { registerSessionReadRoutes } from "./session-routes.js";
 import { sessionRepository } from "./session-repository.js";
 
 const cleanup: string[] = [];
+const nodeSessionService = new NodeSessionService(undefined, undefined, undefined, {
+  async environment(_cwd: string, inherited: NodeJS.ProcessEnv = process.env) { return { ...inherited }; },
+});
 const original = {
   home: process.env.PI_SCIENCE_HOME,
   cli: process.env.PI_CLI_PATH,
@@ -162,5 +165,17 @@ describe("native Node conversation routes", () => {
       await server.close();
       await nodeSessionService.shutdownAll();
     }
+  });
+
+  it("returns an empty optional command list for a stale session id", async () => {
+    const cwd = await workspaceWithSessions("session-current");
+    const server = app();
+    const response = await server.inject({
+      method: "GET",
+      url: `/api/sessions/session-stale/commands?cwd=${encodeURIComponent(cwd)}`,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ commands: [] });
+    await server.close();
   });
 });

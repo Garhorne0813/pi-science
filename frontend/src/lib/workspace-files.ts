@@ -27,6 +27,11 @@ function loadDirectory(cwd: string, subdir: string): Promise<DirectoryResult> {
 }
 
 export const workspaceFiles = {
+  invalidate(): void {
+    directoryLoads.clear();
+    invalidateApiCache("/api/files");
+  },
+
   async directory(cwd: string, subdir = "", signal?: AbortSignal): Promise<{ entries: FileListEntry[]; breadcrumbs: Breadcrumb[] }> {
     const result = await loadDirectory(cwd, subdir);
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
@@ -40,7 +45,7 @@ export const workspaceFiles = {
 
   async remove(cwd: string, path: string): Promise<void> {
     await apiRequest(`/api/files/${encodeURIComponent(path)}?cwd=${encodeURIComponent(cwd)}`, { method: "DELETE" });
-    invalidateApiCache("/api/files");
+    this.invalidate();
   },
 
   formatSize(bytes: number): string {

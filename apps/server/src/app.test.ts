@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./app.js";
@@ -17,10 +17,15 @@ async function startUpstream() {
   const upstream = Fastify();
   upstream.get("/api/health", async () => ({ status: "ok", active_pi_processes: 3, active_kernels: 2 }));
   upstream.get("/api/kernels/status", async () => ({ active: 2 }));
-  upstream.get("/api/request-id", async (request) => ({ request_id: request.headers["x-request-id"] ?? null }));
-  upstream.get("/api/slow", async () => {
+  upstream.get("/api/kernels/request-id", async (request) => ({ request_id: request.headers["x-request-id"] ?? null }));
+  upstream.get("/api/kernels/slow", async () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     return { ok: true };
+  });
+  upstream.post("/api/kernels/execute", async (request) => {
+    const cwd = String((request.query as { cwd?: unknown }).cwd ?? "");
+    try { await access(join(cwd, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python")); return { isolated: true }; }
+    catch { return { isolated: false }; }
   });
   upstream.post<{ Body: { cwd: string } }>("/api/sessions", async (request, reply) => reply.code(201).send({ id: "session-created", cwd: request.body.cwd }));
   upstream.get("/api/sessions/:id/events", async (request, reply) => {
@@ -56,7 +61,7 @@ describe("Node control plane", () => {
     expect((await app.inject({ method: "GET", url: "/internal/live" })).statusCode).toBe(200);
     const ready = await app.inject({ method: "GET", url: "/internal/ready" });
     expect(ready.statusCode).toBe(200);
-    expect(ready.json()).toMatchObject({ status: "ready", scientific_runtime: { status: "ok" } });
+    expect(ready.json()).toMatchObject({ status: "ready", scientific_runtime: { state: "external", managed: false } });
   });
 
   it("owns health while retaining scientific runtime fields", async () => {
@@ -64,15 +69,15 @@ describe("Node control plane", () => {
     openApps.push(app);
     const response = await app.inject({ method: "GET", url: "/api/health" });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ status: "ok", service: "pi-science-server", control_plane: "node", scientific_runtime: "ok", active_pi_processes: 3, active_kernels: 2 });
+    expect(response.json()).toEqual({ status: "ok", service: "pi-science-server", control_plane: "node", scientific_runtime: "external", active_pi_processes: 0, active_kernels: 0 });
   });
 
-  it("reports degraded health when Python is unavailable", async () => {
+  it("stays healthy when the scientific worker is unavailable or idle", async () => {
     const app = buildApp(config("http://127.0.0.1:1"));
     openApps.push(app);
     const response = await app.inject({ method: "GET", url: "/api/health" });
-    expect(response.statusCode).toBe(503);
-    expect(response.json()).toMatchObject({ status: "degraded", scientific_runtime: "unavailable" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: "ok", scientific_runtime: "external" });
   });
 
   it("proxies JSON, scientific routes, and Last-Event-ID", async () => {
@@ -90,14 +95,27 @@ describe("Node control plane", () => {
     expect(events.headers["content-type"]).toContain("text/event-stream");
     expect(events.body).toContain('"cursor":"7"');
 
-    const requestId = await app.inject({ method: "GET", url: "/api/request-id", headers: { "x-request-id": "smoke-123" } });
+    const requestId = await app.inject({ method: "GET", url: "/api/kernels/request-id", headers: { "x-request-id": "smoke-123" } });
     expect(requestId.json()).toEqual({ request_id: "smoke-123" });
   });
+
+  it("provisions the workspace environment before forwarding kernel execution", async () => {
+    const workspace = join(tmpdir(), `pi-science-kernel-environment-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    const app = buildApp(config(await startUpstream()));
+    openApps.push(app);
+
+    const response = await app.inject({ method: "POST", url: `/api/kernels/execute?cwd=${encodeURIComponent(workspace)}`, payload: { language: "python", code: "1+1" } });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ isolated: true });
+    await rm(workspace, { recursive: true, force: true });
+  }, 30_000);
 
   it("returns a bounded gateway timeout for an unavailable upstream", async () => {
     const app = buildApp(config(await startUpstream(), { upstreamTimeoutMs: 20 }));
     openApps.push(app);
-    const response = await app.inject({ method: "GET", url: "/api/slow" });
+    const response = await app.inject({ method: "GET", url: "/api/kernels/slow" });
     expect(response.statusCode).toBe(504);
     expect(response.json()).toMatchObject({ error: "scientific runtime unavailable" });
   });
@@ -161,6 +179,7 @@ describe("Node control plane", () => {
   it("enforces workspace boundaries for native file reads", async () => {
     const workspace = join(tmpdir(), `pi-science-files-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    await mkdir(join(workspace, "node_modules", "demo"), { recursive: true });
     await writeFile(join(workspace, "notes.txt"), "hello", "utf8");
     const outside = `${workspace}-outside.txt`;
     await writeFile(outside, "secret", "utf8");
@@ -170,9 +189,15 @@ describe("Node control plane", () => {
     const listed = await app.inject({ method: "GET", url: `/api/files?cwd=${encodeURIComponent(workspace)}` });
     expect(listed.statusCode).toBe(200);
     expect(listed.json()).toEqual(expect.arrayContaining([expect.objectContaining({ name: "notes.txt", isDir: false })]));
+    expect(listed.json()).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: "node_modules" })]));
     const served = await app.inject({ method: "GET", url: `/api/files/serve/notes.txt?cwd=${encodeURIComponent(workspace)}` });
     expect(served.statusCode).toBe(200);
     expect(served.body).toBe("hello");
+    const read = await app.inject({ method: "GET", url: `/api/files/notes.txt?cwd=${encodeURIComponent(workspace)}` });
+    expect(read.statusCode).toBe(200);
+    expect(read.json()).toMatchObject({ path: "notes.txt", encoding: "utf8", data: "hello", size: 5 });
+    const base64 = await app.inject({ method: "GET", url: `/api/files/notes.txt?cwd=${encodeURIComponent(workspace)}&format=base64` });
+    expect(base64.json()).toMatchObject({ encoding: "base64", data: "aGVsbG8=" });
     const escaped = await app.inject({ method: "GET", url: `/api/files/serve/../outside.txt?cwd=${encodeURIComponent(workspace)}` });
     expect(escaped.statusCode).toBeGreaterThanOrEqual(400);
     const symlinkEscape = await app.inject({ method: "GET", url: `/api/files/serve/escape.txt?cwd=${encodeURIComponent(workspace)}` });

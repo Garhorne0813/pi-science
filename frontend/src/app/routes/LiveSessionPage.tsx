@@ -18,9 +18,13 @@ import { ConversationWelcome } from "../../components/conversation/ConversationW
 import { MessageActions } from "../../components/conversation/MessageActions";
 import { ModelControlMenu } from "../../components/conversation/ModelControlMenu";
 import { useTranslation } from "react-i18next";
+import { useFeedback } from "../../components/feedback/feedback-context";
+import { apiRequest } from "../../lib/api";
+import { agentActionTextByBlock, lastCompletedAgentMessageText } from "../../lib/message-actions";
 
 export function LiveSessionPage() {
   const { t } = useTranslation();
+  const { toast } = useFeedback();
   const { sessionId, cwd: rawCwd } = useParams<{ sessionId: string; cwd: string }>();
   const workspaceCwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
   const navigate = useNavigate();
@@ -175,17 +179,16 @@ export function LiveSessionPage() {
       const form = new FormData();
       form.append("file", f);
       try {
-        const res = await fetch(`/api/files/upload?cwd=${encodeURIComponent(workspaceCwd)}`, {
+        await apiRequest(`/api/files/upload?cwd=${encodeURIComponent(workspaceCwd)}`, {
           method: "POST",
           body: form,
         });
-        if (!res.ok) throw new Error(`Upload failed: ${res.statusText}`);
         setFiles((prev) => [...prev, f]);
       } catch (err) {
-        console.error("Upload failed:", err);
+        toast(err instanceof Error ? err.message : "Upload failed", "error");
       }
     }
-  }, [workspaceCwd]);
+  }, [toast, workspaceCwd]);
 
   const runSlashCommand = async (value: string): Promise<boolean> => {
     const match = value.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
@@ -210,11 +213,7 @@ export function LiveSessionPage() {
     }
     if (name === "compact") {
       if (!activeSessionId) return true;
-      const response = await fetch(`/api/sessions/${encodeURIComponent(activeSessionId)}/compact?${new URLSearchParams({ cwd: workspaceCwd })}`, { method: "POST" });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || data.ok === false) {
-        throw new Error(data.error || data.detail || "Unable to compact the current session");
-      }
+      await apiRequest(`/api/sessions/${encodeURIComponent(activeSessionId)}/compact?${new URLSearchParams({ cwd: workspaceCwd })}`, { method: "POST" });
       setReviewNotice("Session compacted");
       return true;
     }
@@ -223,8 +222,7 @@ export function LiveSessionPage() {
       return true;
     }
     if (name === "copy") {
-      const lastAgent = [...thread.blocks].reverse().find((block) => block.kind === "agent");
-      const text = lastAgent?.kind === "agent" ? lastAgent.parts.map((part) => part.text).join("") : "";
+      const text = lastCompletedAgentMessageText(thread.blocks);
       if (text && navigator.clipboard) await navigator.clipboard.writeText(text);
       return true;
     }
@@ -333,10 +331,16 @@ export function LiveSessionPage() {
       {/* Thread */}
       <div ref={scrollRef} onScroll={handleThreadScroll} className="flex-1 overflow-y-auto [overflow-anchor:none]">
         <div className="mx-auto max-w-[760px] flex flex-col gap-4 px-8 py-6">
-          {thread.blocks.length === 0 && !working && (
+          {thread.blocks.length === 0 && !working && status === "connecting" && activeSessionId && (
+            <div className="flex items-center gap-2 py-4 text-sm text-muted">
+              <Loader2 size={14} className="animate-spin text-accent" />
+              Loading conversation…
+            </div>
+          )}
+          {thread.blocks.length === 0 && !working && status !== "connecting" && (
             <ConversationWelcome
               onPick={(msg) => void sendPrompt(msg).catch(() => undefined)}
-              disabled={!selectedModel || reviewingProject || (!activeSessionId && status === "connecting")}
+              disabled={!selectedModel || reviewingProject}
             />
           )}
           {renderBlocks(thread.blocks)}
@@ -537,6 +541,7 @@ function InteractionPrompt({
 function renderBlocks(blocks: ThreadBlock[]) {
   const result: React.ReactNode[] = [];
   let toolGroup: ToolCallBlock[] = [];
+  const actionTextByBlock = agentActionTextByBlock(blocks);
 
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i];
@@ -547,7 +552,7 @@ function renderBlocks(blocks: ThreadBlock[]) {
         result.push(<ToolGroup key={toolGroup[0].id} blocks={toolGroup} />);
         toolGroup = [];
       }
-      result.push(<BlockRenderer key={block.id} block={block} />);
+      result.push(<BlockRenderer key={block.id} block={block} actionText={actionTextByBlock.get(block.id)} />);
     }
   }
   if (toolGroup.length > 0) {
@@ -558,10 +563,10 @@ function renderBlocks(blocks: ThreadBlock[]) {
 
 /* ── Block Renderers ── */
 
-function BlockRenderer({ block }: { block: ThreadBlock }) {
+function BlockRenderer({ block, actionText }: { block: ThreadBlock; actionText?: string }) {
   switch (block.kind) {
     case "user": return <UserMessage text={block.text} timestamp={block.timestamp} />;
-    case "agent": return <AgentMessage parts={block.parts} partial={block.partial} timestamp={block.timestamp} />;
+    case "agent": return <AgentMessage parts={block.parts} partial={block.partial} timestamp={block.timestamp} actionText={actionText} />;
     case "tool": return <ToolCard block={block} />;
     case "status-line": return <StatusLine block={block} />;
     default: return null;
@@ -624,7 +629,7 @@ function UserMessage({ text, timestamp }: { text: string; timestamp?: string }) 
   );
 }
 
-function AgentMessage({ parts, partial, timestamp }: { parts: { id: string; text: string }[]; partial?: boolean; timestamp?: string }) {
+function AgentMessage({ parts, partial, timestamp, actionText }: { parts: { id: string; text: string }[]; partial?: boolean; timestamp?: string; actionText?: string }) {
   const text = parts.map((p) => p.text).join("");
   const openInspector = useUiStore((s) => s.openInspector);
   if (!text && partial) return null;
@@ -657,7 +662,7 @@ function AgentMessage({ parts, partial, timestamp }: { parts: { id: string; text
         </div>
       )}
       {citations.length > 0 && <CitationBadges identifiers={citations} />}
-      {!partial && <MessageActions text={text} timestamp={timestamp} />}
+      {actionText && <MessageActions text={actionText} timestamp={timestamp} />}
     </div>
   );
 }

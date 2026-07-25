@@ -1,5 +1,6 @@
 import { createReadStream } from "node:fs";
-import { mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { isUtf8 } from "node:buffer";
 import { dirname, relative } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "./workspace-security.js";
@@ -75,7 +76,7 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
       const entries = await readdir(target, { withFileTypes: true });
       const rows = [];
       for (const entry of entries) {
-        if (entry.name.startsWith(".")) continue;
+        if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
         const path = `${target}/${entry.name}`;
         const metadata = await stat(path);
         rows.push({ path: relative(root, path), name: entry.name, isDir: entry.isDirectory(), size: metadata.size, modified: metadata.mtimeMs / 1000 });
@@ -157,9 +158,38 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
   app.get<{ Params: { path: string } }>("/api/files/*", async (request, reply) => {
     const wildcard = (request.params as { path?: string; "*"?: string }).path ?? (request.params as { "*"?: string })["*"] ?? "";
     if (wildcard.endsWith("/preview")) return previewFile(request, reply, wildcard.slice(0, -"/preview".length));
-    if (!wildcard.endsWith("/raw")) return reply.code(404).send({ error: "File route not found" });
-    return serveFile(request, reply, "raw");
+    if (wildcard.endsWith("/raw")) return serveFile(request, reply, "raw");
+    return readWorkspaceFile(request, reply, wildcard);
   });
+}
+
+async function readWorkspaceFile(
+  request: { query: unknown },
+  reply: { code: (status: number) => { send: (body: unknown) => unknown } },
+  path: string,
+) {
+  let root: string;
+  try { root = await safeWorkspace(request); }
+  catch (error) { return reply.code(403).send({ error: String(error) }); }
+  let target: string;
+  try { target = await resolveWorkspaceFile(root, path); }
+  catch (error) { return reply.code(403).send({ error: String(error) }); }
+  try {
+    const metadata = await stat(target);
+    if (!metadata.isFile()) return reply.code(400).send({ error: `Not a file: ${path}` });
+    if (metadata.size > 50 * 1024 * 1024) return reply.code(400).send({ error: `File too large to read (${metadata.size} bytes). Use /api/files/probe for structure.` });
+    const data = await readFile(target);
+    const forceBase64 = queryValue(request, "format", "text") === "base64";
+    const encoding = !forceBase64 && isUtf8(data) ? "utf8" : "base64";
+    return {
+      path,
+      encoding,
+      data: encoding === "utf8" ? data.toString("utf8") : data.toString("base64"),
+      size: data.byteLength,
+    };
+  } catch (error) {
+    return reply.code(404).send({ error: String(error) });
+  }
 }
 
 async function previewFile(request: { query: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown } }, path: string) {

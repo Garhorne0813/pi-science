@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { BookOpen, Play, Square, RefreshCw, ExternalLink } from "lucide-react";
+import { BookOpen, Play, Square, RefreshCw, ExternalLink, CheckCircle2 } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { useUiStore } from "../../lib/store";
 import { fileInspectorForPath } from "../../lib/artifacts";
 import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "../../components/layout/WorkspacePage";
 import { useTranslation } from "react-i18next";
+import { timeAgo } from "../../lib/format";
+import { apiRequest } from "../../lib/api";
+import { useFeedback } from "../../components/feedback/feedback-context";
 
 interface Notebook {
   path: string; name: string; size: number; modified: string;
@@ -20,8 +23,16 @@ interface JupyterStatus {
   env_ready?: boolean;
 }
 
+interface WorkspaceEnvironment {
+  ready: boolean;
+  virtual_env: string;
+  python: string;
+  error?: string;
+}
+
 export function NotebooksPage() {
   const { t } = useTranslation();
+  const { toast } = useFeedback();
   const { cwd: rawCwd } = useParams<{ cwd: string }>();
   const workspaceCwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
@@ -35,29 +46,60 @@ export function NotebooksPage() {
     env_ready: false,
   });
   const [starting, setStarting] = useState(false);
+  const [environment, setEnvironment] = useState<WorkspaceEnvironment | null>(null);
+  const [provisioningEnvironment, setProvisioningEnvironment] = useState(false);
   const [jupyterError, setJupyterError] = useState<string | null>(null);
   const openInspector = useUiStore((state) => state.openInspector);
 
-  const loadNotebooks = useCallback(async () => {
+  const loadNotebooks = useCallback(async (isCurrent: () => boolean = () => true) => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/notebooks?cwd=${encodeURIComponent(workspaceCwd)}`);
-      setNotebooks(await res.json());
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
+      const data = await apiRequest<Notebook[]>(`/api/notebooks?cwd=${encodeURIComponent(workspaceCwd)}`);
+      if (isCurrent()) setNotebooks(data);
+    } catch (error) {
+      if (isCurrent()) toast(error instanceof Error ? error.message : "Unable to load notebooks", "error");
+    } finally { if (isCurrent()) setLoading(false); }
+  }, [toast, workspaceCwd]);
+
+  const loadJupyterStatus = useCallback(async (isCurrent: () => boolean = () => true) => {
+    try {
+      const data = await apiRequest<JupyterStatus>(`/api/notebooks/jupyter/status?cwd=${encodeURIComponent(workspaceCwd)}`);
+      if (isCurrent()) setJupyter(data);
+    } catch (error) {
+      if (isCurrent()) setJupyterError(error instanceof Error ? error.message : "Unable to inspect Jupyter status");
+    }
   }, [workspaceCwd]);
 
-  const loadJupyterStatus = useCallback(async () => {
+  const loadWorkspaceEnvironment = useCallback(async (isCurrent: () => boolean = () => true) => {
     try {
-      const res = await fetch(`/api/notebooks/jupyter/status?cwd=${encodeURIComponent(workspaceCwd)}`);
-      setJupyter(await res.json());
-    } catch { /* ignore */ }
-  }, [workspaceCwd]);
+      const data = await apiRequest<WorkspaceEnvironment>(`/api/environments/workspace?cwd=${encodeURIComponent(workspaceCwd)}`);
+      if (isCurrent()) setEnvironment(data);
+    } catch (error) {
+      if (isCurrent()) toast(error instanceof Error ? error.message : "Unable to inspect workspace environment", "error");
+    }
+  }, [toast, workspaceCwd]);
 
   useEffect(() => {
-    void loadNotebooks();
-    void loadJupyterStatus();
-  }, [loadJupyterStatus, loadNotebooks]);
+    let current = true;
+    const isCurrent = () => current;
+    void loadNotebooks(isCurrent);
+    void loadJupyterStatus(isCurrent);
+    void loadWorkspaceEnvironment(isCurrent);
+    return () => { current = false; };
+  }, [loadJupyterStatus, loadNotebooks, loadWorkspaceEnvironment]);
+
+  const provisionWorkspaceEnvironment = async () => {
+    setProvisioningEnvironment(true);
+    try {
+      const data = await apiRequest<WorkspaceEnvironment>(`/api/environments/workspace?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "POST" });
+      setEnvironment(data);
+      toast("Workspace Python environment is ready", "success");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Unable to create workspace environment", "error");
+    } finally {
+      setProvisioningEnvironment(false);
+    }
+  };
 
   const [setupProgress, setSetupProgress] = useState<string[]>([]);
   const [settingUp, setSettingUp] = useState(false);
@@ -85,18 +127,21 @@ export function NotebooksPage() {
       eventSource.onerror = () => {
         eventSource.close();
         setSettingUp(false);
+        toast("Jupyter environment setup connection failed", "error");
       };
-    } catch (e) { console.error(e); setSettingUp(false); }
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Unable to set up Jupyter environment", "error");
+      setSettingUp(false);
+    }
   };
 
   const startJupyter = async () => {
     setStarting(true);
     setJupyterError(null);
     try {
-      const res = await fetch(`/api/notebooks/jupyter/start?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "POST" });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || `Unable to start Jupyter Lab (${res.status})`);
+      const data = await apiRequest<JupyterStatus>(`/api/notebooks/jupyter/start?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "POST" });
       setJupyter({ ...data, matches_workspace: true });
+      void loadWorkspaceEnvironment();
     } catch (e) { setJupyterError(e instanceof Error ? e.message : String(e)); }
     finally { setStarting(false); }
   };
@@ -104,19 +149,9 @@ export function NotebooksPage() {
   const stopJupyter = async () => {
     setJupyterError(null);
     try {
-      const res = await fetch(`/api/notebooks/jupyter/stop?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "POST" });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || `Unable to stop Jupyter Lab (${res.status})`);
+      await apiRequest(`/api/notebooks/jupyter/stop?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "POST" });
       setJupyter({ running: false, port: null, url: null, cwd: null, matches_workspace: true });
     } catch (e) { setJupyterError(e instanceof Error ? e.message : String(e)); }
-  };
-
-  const timeAgo = (d: string) => {
-    const diff = Date.now() - new Date(d).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 60) return `${mins}m ago`;
-    if (mins < 1440) return `${Math.floor(mins / 60)}h ago`;
-    return `${Math.floor(mins / 1440)}d ago`;
   };
 
   return (
@@ -129,8 +164,26 @@ export function NotebooksPage() {
           }
         />
 
+        <div className="mt-6 flex items-center justify-between rounded-card border border-border bg-surface px-4 py-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-sm font-medium text-text">
+              {environment?.ready && <CheckCircle2 size={14} className="text-ok" />}
+              Workspace Python
+            </div>
+            <p className="mt-0.5 truncate font-mono text-[11px] text-muted">
+              {environment?.ready ? environment.python : environment?.error || "Isolated .venv has not been created yet"}
+            </p>
+          </div>
+          {!environment?.ready && (
+            <button type="button" onClick={() => void provisionWorkspaceEnvironment()} disabled={provisioningEnvironment} className="ml-3 flex shrink-0 items-center gap-1 rounded-input bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40">
+              {provisioningEnvironment && <RefreshCw size={12} className="animate-spin" />}
+              Initialize
+            </button>
+          )}
+        </div>
+
         {/* Jupyter Server */}
-        <div className={cn("mt-6 rounded-card border p-4 mb-6", jupyter.running && jupyter.matches_workspace ? "border-ok/40 bg-ok/5" : "border-border bg-surface")}>
+        <div className={cn("mt-3 rounded-card border p-4 mb-6", jupyter.running && jupyter.matches_workspace ? "border-ok/40 bg-ok/5" : "border-border bg-surface")}>
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-sm font-medium text-text">Jupyter Lab</h2>

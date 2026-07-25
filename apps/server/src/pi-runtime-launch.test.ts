@@ -37,6 +37,22 @@ async function obstructModelsFile(customProviders?: unknown[]): Promise<string> 
 }
 
 describe("Pi runtime custom provider materialization", () => {
+  it("passes workspace package isolation into the agent runtime", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-environment-${Date.now()}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    const isolated = {
+      PATH: join(cwd, ".venv", "bin"),
+      VIRTUAL_ENV: join(cwd, ".venv"),
+      PIP_REQUIRE_VIRTUALENV: "1",
+      npm_config_prefix: join(cwd, ".pi-science", "npm-global"),
+    };
+
+    const options = buildPiProcessOptions(cwd, undefined, undefined, isolated)!;
+
+    expect(options.env).toMatchObject(isolated);
+  });
+
   it("runs a source TypeScript CLI through the adjacent tsx runtime", async () => {
     const piRoot = join(tmpdir(), `pi-source-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(piRoot);

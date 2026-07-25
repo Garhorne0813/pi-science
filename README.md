@@ -64,7 +64,7 @@ PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 |---|---|---|
 | Web app | `http://127.0.0.1:5173` | Main research workspace |
 | Node control plane | `http://127.0.0.1:8787` | Sessions, SSE, files, jobs, settings, and project APIs |
-| Python runtime | `http://127.0.0.1:8788` | Internal scientific services and kernels |
+| Python worker | `http://127.0.0.1:8788` | On-demand internal scientific services and kernels |
 | API documentation | `http://127.0.0.1:8787/docs` | Interactive API reference |
 
 Open **Settings → LLM** after startup and configure a provider and default model.
@@ -105,14 +105,14 @@ flowchart LR
     CP --> P1[Pi process · session A]
     CP --> P2[Pi process · session B]
     CP --> PN[Pi process · session N]
-    CP --> PY[Python scientific runtime]
+    CP --> PY[Python scientific worker · on demand]
     PY --> K[Python / R kernels]
     CP --> WS[(Workspace files and .pi-science metadata)]
 ```
 
 - The **React frontend** provides chat, project memory, file inspection, notebooks, runs, skills, and settings.
 - The **Node control plane** owns conversation processes, session APIs, live SSE events, files, jobs, provenance, and application settings.
-- The **Python runtime** provides scientific services and computational kernels.
+- The **Python worker** starts when a scientific route is requested, provides scientific services and kernels, and is reclaimed after 5 minutes idle by default (`PI_SCIENCE_SCIENTIFIC_IDLE_MS`).
 - Each session is keyed by both workspace and session ID. Idle Pi processes are reclaimed after 30 minutes by default; set `PI_SCIENCE_IDLE_RUNTIME_MS=0` to disable cleanup.
 
 See [Node control-plane architecture](docs/node-control-plane.md) and the [scientific platform runtime](docs/science-platform-runtime.md) for deeper implementation details.
@@ -124,6 +124,8 @@ Every initialized project is a workspace. Project-local runtime state is kept un
 ```text
 project/
 ├── AGENTS.md
+├── .venv/                 # workspace-local Python packages
+├── node_modules/          # workspace-local JavaScript packages
 ├── .pi/
 │   ├── skills/
 │   └── agents/
@@ -136,6 +138,19 @@ project/
 ```
 
 Reviewed project memory is created lazily. Findings do not enter the formal project record until the user accepts them.
+
+### Workspace package isolation
+
+Pi-Science creates `.venv/` on the first Agent, Job, or Python Kernel use. The
+Agent process, local jobs, and notebook kernel all receive that environment at
+the front of `PATH`; `pip` is configured to refuse installation outside a
+virtual environment. `npm install` continues to write `node_modules/` in the
+workspace, while even explicit global npm/pnpm installs are redirected under
+`.pi-science/` instead of modifying the host installation.
+
+The environment can be inspected or initialized from the Notebooks page, or
+through `GET/POST /api/environments/workspace?cwd=...`. Existing malformed
+`.venv` directories are never overwritten automatically.
 
 ## Slash Commands
 

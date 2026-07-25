@@ -18,6 +18,7 @@ beforeEach(async () => {
     'if (process.env.FAKE_PI_FAIL_START_FILE && fs.existsSync(process.env.FAKE_PI_FAIL_START_FILE)) { process.stderr.write("forced startup failure\\n"); process.exit(1); }',
     'import readline from "node:readline";',
     'const args = process.argv.slice(2);',
+    'if (process.env.FAKE_PI_ENV_LOG) fs.writeFileSync(process.env.FAKE_PI_ENV_LOG, JSON.stringify({ PATH: process.env.PATH, VIRTUAL_ENV: process.env.VIRTUAL_ENV, PIP_REQUIRE_VIRTUALENV: process.env.PIP_REQUIRE_VIRTUALENV, npm_config_prefix: process.env.npm_config_prefix }));',
     'const sessionArg = args.indexOf("--session");',
     'let sessionId = sessionArg >= 0 ? JSON.parse(fs.readFileSync(args[sessionArg + 1], "utf8").split("\\n")[0]).id : `fresh-${process.pid}`;',
     'let counter = 0;',
@@ -77,6 +78,7 @@ afterEach(async () => {
   delete process.env.FAKE_PI_STARTS;
   delete process.env.FAKE_PI_FAIL_STATE_AFTER;
   delete process.env.FAKE_PI_FAIL_START_FILE;
+  delete process.env.FAKE_PI_ENV_LOG;
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -89,9 +91,34 @@ async function workspaceWithSessions(...ids: string[]): Promise<string> {
   return realpath(cwd);
 }
 
+const passthroughEnvironments = {
+  async environment(_cwd: string, inherited: NodeJS.ProcessEnv = process.env) { return { ...inherited }; },
+};
+
+function testService(): NodeSessionService {
+  return new NodeSessionService(undefined, undefined, undefined, passthroughEnvironments);
+}
+
 describe("Node session lifecycle", () => {
-  it("switches atomically between persisted sessions", async () => {
+  it("starts the agent inside the workspace package environment", async () => {
     const service = new NodeSessionService();
+    const cwd = await workspaceWithSessions("isolated-session");
+    process.env.FAKE_PI_ENV_LOG = join(cwd, "agent-environment.json");
+
+    await expect(service.resume("isolated-session", cwd)).resolves.toEqual({ success: true });
+
+    const environment = JSON.parse(await readFile(process.env.FAKE_PI_ENV_LOG, "utf8"));
+    expect(environment).toMatchObject({
+      VIRTUAL_ENV: join(cwd, ".venv"),
+      PIP_REQUIRE_VIRTUALENV: "1",
+      npm_config_prefix: join(cwd, ".pi-science", "npm-global"),
+    });
+    expect(environment.PATH.split(":" )[0]).toBe(join(cwd, ".venv", "bin"));
+    await service.shutdownAll();
+  }, 30_000);
+
+  it("switches atomically between persisted sessions", async () => {
+    const service = testService();
     const cwd = await workspaceWithSessions("session-a", "session-b");
     await expect(service.state("session-a", cwd)).resolves.toMatchObject({ id: "session-a" });
     await expect(service.state("session-b", cwd)).resolves.toMatchObject({ id: "session-b" });
@@ -108,7 +135,7 @@ describe("Node session lifecycle", () => {
   });
 
   it("keeps identical session IDs isolated across workspaces", async () => {
-    const service = new NodeSessionService();
+    const service = testService();
     const first = await workspaceWithSessions("same-session");
     const second = await workspaceWithSessions("same-session");
     await expect(service.resume("same-session", first)).resolves.toEqual({ success: true });
@@ -121,7 +148,7 @@ describe("Node session lifecycle", () => {
 
   it("reclaims an idle runtime without disrupting a subscribed conversation", async () => {
     process.env.PI_SCIENCE_IDLE_RUNTIME_MS = "30";
-    const service = new NodeSessionService();
+    const service = testService();
     const cwd = await workspaceWithSessions("session-idle", "session-subscribed");
     await service.resume("session-idle", cwd);
     for (let attempt = 0; attempt < 200 && service.activeCount > 0; attempt += 1) {
@@ -140,7 +167,7 @@ describe("Node session lifecycle", () => {
   it("creates consecutive blank sessions when no provider or model is configured", async () => {
     await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
     await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), JSON.stringify({ model: "", thinking: "off" }), "utf8");
-    const service = new NodeSessionService();
+    const service = testService();
     const cwd = await workspaceWithSessions();
     const first = await service.create({ cwd, config: { skills: [], extensions: [] } });
     const second = await service.create({ cwd, config: { skills: [], extensions: [] } });
@@ -151,7 +178,7 @@ describe("Node session lifecycle", () => {
   });
 
   it("keeps other sessions independent while a turn is active and deletes exactly one session", async () => {
-    const service = new NodeSessionService();
+    const service = testService();
     const cwd = await workspaceWithSessions("session-a", "session-b");
     await service.resume("session-a", cwd);
     await expect(service.command("session-a", cwd, "prompt", { message: "hold" })).resolves.toMatchObject({ success: true });
@@ -167,7 +194,7 @@ describe("Node session lifecycle", () => {
   });
 
   it("preserves nested model IDs and supports commands, fork, and interaction notifications", async () => {
-    const service = new NodeSessionService();
+    const service = testService();
     const cwd = await workspaceWithSessions("session-a");
     await service.resume("session-a", cwd);
     await expect(service.availableModels(cwd)).resolves.toMatchObject({ data: { models: [expect.objectContaining({ id: "openai/gpt-5.1" })] } });
@@ -185,7 +212,7 @@ describe("Node session lifecycle", () => {
   });
 
   it("reports configuration reload failures instead of silently succeeding", async () => {
-    const service = new NodeSessionService();
+    const service = testService();
     const cwd = await workspaceWithSessions("session-a");
     await expect(service.resume("session-a", cwd)).resolves.toEqual({ success: true });
     await writeFile(process.env.FAKE_PI_FAIL_START_FILE!, "fail", "utf8");
@@ -196,7 +223,7 @@ describe("Node session lifecycle", () => {
   it("reconciles timed-out prompt and compact operations without leaving the workspace permanently busy", async () => {
     for (const mode of ["prompt-timeout", "compact-timeout"]) {
       process.env.FAKE_PI_MODE = mode;
-      const service = new NodeSessionService();
+      const service = testService();
       const cwd = await workspaceWithSessions(`session-${mode}`);
       await service.resume(`session-${mode}`, cwd);
       await expect(service.command(`session-${mode}`, cwd, mode.startsWith("prompt") ? "prompt" : "compact", { message: "test" })).resolves.toMatchObject({ code: "timeout" });
@@ -207,7 +234,7 @@ describe("Node session lifecycle", () => {
   });
 
   it("rolls back a new session when configuration fails", async () => {
-    const service = new NodeSessionService();
+    const service = testService();
     const cwd = await workspaceWithSessions("session-a");
     await service.resume("session-a", cwd);
     await expect(service.create({ cwd, config: { model: "openrouter/openai/gpt-5.1", thinking: "ultra", skills: [], extensions: [] } })).resolves.toMatchObject({ code: "invalid_thinking" });
@@ -217,7 +244,7 @@ describe("Node session lifecycle", () => {
 
   it("does not execute a mutating command when preflight reconciliation fails", async () => {
     process.env.FAKE_PI_FAIL_STATE_AFTER = "1";
-    const service = new NodeSessionService();
+    const service = testService();
     const cwd = await workspaceWithSessions("session-a");
     await service.resume("session-a", cwd);
     await expect(service.fork("session-a", cwd)).resolves.toMatchObject({ success: false, code: "state_failed" });
@@ -227,7 +254,7 @@ describe("Node session lifecycle", () => {
 
   it("drops stale runtime indexes when a session-changing command cannot be confirmed", async () => {
     process.env.FAKE_PI_MODE = "new-session-state-fails";
-    const service = new NodeSessionService();
+    const service = testService();
     const cwd = await workspaceWithSessions("session-a");
     await service.resume("session-a", cwd);
     await expect(service.command("session-a", cwd, "new_session")).resolves.toMatchObject({ success: false, code: "state_failed" });
@@ -239,7 +266,7 @@ describe("Node session lifecycle", () => {
   });
 
   it("cleans a failed restart handshake, restores the old session, and publishes blank replacements", async () => {
-    const service = new NodeSessionService();
+    const service = testService();
     const cwd = await workspaceWithSessions("session-a");
     process.env.FAKE_PI_MODE = "restart-fail-once";
     await service.resume("session-a", cwd);
@@ -248,7 +275,7 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
 
     process.env.FAKE_PI_MODE = "";
-    const blankService = new NodeSessionService();
+    const blankService = testService();
     const blankCwd = await workspaceWithSessions();
     const publish = vi.spyOn(conversationEventHub, "publish");
     const created = await blankService.create({ cwd: blankCwd, config: { skills: [], extensions: [] } });

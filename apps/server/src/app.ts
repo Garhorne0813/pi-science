@@ -2,7 +2,7 @@ import cors from "@fastify/cors";
 import proxy from "@fastify/http-proxy";
 import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
-import { gatewayHealthSchema, scientificRuntimeHealthSchema } from "@pi-science/contracts";
+import { gatewayHealthSchema } from "@pi-science/contracts";
 import type { ServerConfig } from "./config.js";
 import { routeBoundary, runtimeOwner } from "./runtime-boundaries.js";
 import { registerSessionReadRoutes } from "./session-routes.js";
@@ -16,9 +16,11 @@ import { registerRunEndpointRoutes } from "./run-endpoint-routes.js";
 import { registerCatalogRoutes } from "./catalog-routes.js";
 import { registerProjectRoutes } from "./project-routes.js";
 import { createServerModules, type ServerModules } from "./server-modules.js";
+import { registerEnvironmentRoutes } from "./environment-routes.js";
+import { validateWorkspaceCwd } from "./workspace-security.js";
 
-export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules()): FastifyInstance {
-  const { sessions: nodeSessionService, events, sessionRepository, settings, jobs } = modules;
+export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
+  const { sessions: nodeSessionService, events, sessionRepository, settings, jobs, scientificRuntime, environments } = modules;
   nodeSessionService.configureScientificRuntime(config.pythonOrigin, config.internalToken);
   const app = Fastify({
     logger: { level: config.logLevel },
@@ -29,12 +31,49 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
 
   void app.register(cors, { credentials: true, origin: config.corsOrigins });
 
+  const runtimeReleases = new WeakMap<object, () => void>();
   app.addHook("onRequest", async (request, reply) => {
     reply.header("x-request-id", request.id);
-    if (request.url.startsWith("/api/") && !routeBoundary(request.url.split("?")[0] ?? request.url)) {
-      app.log.warn({ requestId: request.id, path: request.url }, "unregistered API route using compatibility proxy");
+    const pathname = request.url.split("?")[0] ?? request.url;
+    const boundary = routeBoundary(pathname);
+    if (request.url.startsWith("/api/") && !boundary) {
+      return reply.code(404).send({ error: `Unknown API route: ${request.method} ${pathname}` });
+    }
+    const needsScientificRuntime = boundary?.owner === "python-scientific-runtime"
+      || pathname === "/docs"
+      || pathname.startsWith("/docs/")
+      || pathname === "/openapi.json";
+    const needsWorkspaceEnvironment = request.method === "POST" && (
+      pathname === "/api/kernels/execute"
+      || pathname === "/api/notebooks/jupyter/start"
+    );
+    if (needsWorkspaceEnvironment) {
+      const cwdValue = new URL(request.url, "http://127.0.0.1").searchParams.get("cwd") ?? ".";
+      let cwd: string;
+      try { cwd = await validateWorkspaceCwd(cwdValue); }
+      catch (error) { return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) }); }
+      try { await environments.ensure(cwd); }
+      catch (error) {
+        app.log.error({ err: error, requestId: request.id, cwd }, "workspace environment provisioning failed");
+        return reply.code(500).send({ error: error instanceof Error ? error.message : String(error), request_id: request.id });
+      }
+    }
+    if (needsScientificRuntime) {
+      try {
+        runtimeReleases.set(request, await scientificRuntime.acquire());
+      } catch (error) {
+        app.log.error({ err: error, requestId: request.id, path: request.url }, "scientific worker startup failed");
+        return reply.code(503).send({ error: "scientific worker unavailable", request_id: request.id });
+      }
     }
   });
+
+  const releaseRuntime = (request: object) => {
+    runtimeReleases.get(request)?.();
+    runtimeReleases.delete(request);
+  };
+  app.addHook("onResponse", async (request) => releaseRuntime(request));
+  app.addHook("onError", async (request) => releaseRuntime(request));
 
   app.addHook("onSend", async (request, reply, payload) => {
     if (request.url.startsWith("/api/")) {
@@ -58,20 +97,20 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     control_plane: "node",
   }));
 
-  app.get("/api/health", async (_request, reply) => {
-    const runtime = await readRuntimeHealth(config);
-    if (!runtime) {
-      return reply.code(503).send({ status: "degraded", service: "pi-science-server", control_plane: "node", scientific_runtime: "unavailable" });
-    }
-    return gatewayHealthSchema.parse({ ...runtime, active_pi_processes: runtime.active_pi_processes + nodeSessionService.activeCount, service: "pi-science-server", control_plane: "node", scientific_runtime: "ok" });
+  app.get("/api/health", async () => {
+    const runtime = scientificRuntime.snapshot();
+    return gatewayHealthSchema.parse({
+      status: "ok",
+      active_pi_processes: nodeSessionService.activeCount,
+      active_kernels: 0,
+      service: "pi-science-server",
+      control_plane: "node",
+      scientific_runtime: runtime.state,
+    });
   });
 
-  app.get("/internal/ready", async (_request, reply) => {
-    const runtime = await readRuntimeHealth(config);
-    if (!runtime) {
-      return reply.code(503).send({ status: "not-ready", service: "pi-science-server", scientific_runtime: "unavailable" });
-    }
-    return { status: "ready", service: "pi-science-server", control_plane: "node", scientific_runtime: runtime };
+  app.get("/internal/ready", async () => {
+    return { status: "ready", service: "pi-science-server", control_plane: "node", scientific_runtime: scientificRuntime.snapshot() };
   });
 
   if (config.nodeSessions || config.nodePiManager) registerSessionReadRoutes(app, sessionRepository, nodeSessionService);
@@ -79,12 +118,14 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeFiles) registerFileReadRoutes(app);
   if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository);
   if (config.nodeJobs !== false) registerJobRoutes(app, jobs);
+  registerEnvironmentRoutes(app, environments);
   if (config.nodeArtifacts !== false) registerArtifactRoutes(app);
   if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings);
   if (config.nodeRuns !== false) registerRunEndpointRoutes(app);
   if (config.nodeCatalog !== false) registerCatalogRoutes(app);
   if (config.nodeProject !== false) registerProjectRoutes(app);
   if (config.nodePiManager) app.addHook("onClose", async () => nodeSessionService.shutdownAll());
+  app.addHook("onClose", async () => scientificRuntime.shutdown());
   if (config.nodePiManager) {
     app.all("/api/sessions/*", async (request, reply) => reply.code(404).send({
       ok: false,
@@ -143,15 +184,4 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   });
 
   return app;
-}
-
-async function readRuntimeHealth(config: ServerConfig) {
-  try {
-    const response = await fetch(`${config.pythonOrigin}/api/health`, { signal: AbortSignal.timeout(3_000) });
-    if (!response.ok) throw new Error(`scientific runtime returned ${response.status}`);
-    return scientificRuntimeHealthSchema.parse(await response.json());
-  } catch {
-    // Health endpoints are expected to be safe during startup and shutdown.
-    return null;
-  }
 }

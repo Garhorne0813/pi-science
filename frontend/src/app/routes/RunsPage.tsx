@@ -4,6 +4,9 @@ import { Play, Check, X, Loader2, ChevronDown, ChevronRight } from "lucide-react
 import { cn } from "../../lib/cn";
 import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "../../components/layout/WorkspacePage";
 import { useTranslation } from "react-i18next";
+import { timeAgo } from "../../lib/format";
+import { apiRequest } from "../../lib/api";
+import { useFeedback } from "../../components/feedback/feedback-context";
 
 interface Run {
   runId: string;
@@ -18,6 +21,7 @@ interface Run {
 
 export function RunsPage() {
   const { t } = useTranslation();
+  const { toast } = useFeedback();
   const { cwd: rawCwd } = useParams<{ cwd: string }>();
   const workspaceCwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
   const [runs, setRuns] = useState<Run[]>([]);
@@ -25,16 +29,20 @@ export function RunsPage() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [logs, setLogs] = useState<Record<string, string>>({});
 
-  const loadRuns = useCallback(async () => {
+  const loadRuns = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/runs?cwd=${encodeURIComponent(workspaceCwd)}`);
-      setRuns(await res.json());
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
-  }, [workspaceCwd]);
+      setRuns(await apiRequest<Run[]>(`/api/runs?cwd=${encodeURIComponent(workspaceCwd)}`, { signal }));
+    } catch (error) {
+      if (!signal?.aborted) toast(error instanceof Error ? error.message : "Unable to load runs", "error");
+    } finally { if (!signal?.aborted) setLoading(false); }
+  }, [toast, workspaceCwd]);
 
-  useEffect(() => { void loadRuns(); }, [loadRuns]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadRuns(controller.signal);
+    return () => controller.abort();
+  }, [loadRuns]);
 
   const toggleLog = async (runId: string) => {
     if (expanded[runId]) {
@@ -44,19 +52,13 @@ export function RunsPage() {
     setExpanded((p) => ({ ...p, [runId]: true }));
     if (!logs[runId]) {
       try {
-        const res = await fetch(`/api/runs/${runId}/log?cwd=${encodeURIComponent(workspaceCwd)}`);
-        const data = await res.json();
+        const data = await apiRequest<{ log?: string }>(`/api/runs/${runId}/log?cwd=${encodeURIComponent(workspaceCwd)}`);
         setLogs((p) => ({ ...p, [runId]: data.log || "(no log)" }));
-      } catch { setLogs((p) => ({ ...p, [runId]: "(error loading log)" })); }
+      } catch (error) {
+        setLogs((p) => ({ ...p, [runId]: "(error loading log)" }));
+        toast(error instanceof Error ? error.message : "Unable to load run log", "error");
+      }
     }
-  };
-
-  const timeAgo = (d: string) => {
-    const diff = Date.now() - new Date(d).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 60) return `${mins}m ago`;
-    if (mins < 1440) return `${Math.floor(mins / 60)}h ago`;
-    return `${Math.floor(mins / 1440)}d ago`;
   };
 
   return (

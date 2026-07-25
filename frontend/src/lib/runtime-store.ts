@@ -15,6 +15,7 @@ import {
 } from "./pi-science-client";
 import { visibleUserMessage } from "./file-references";
 import { replaceBrowserSessionRoute } from "./session-navigation";
+import { workspaceFiles } from "./workspace-files";
 
 export interface PendingInteraction {
   requestId: string;
@@ -51,6 +52,8 @@ export interface RuntimeState {
   model: string | null;
   thinking: string | null;
   pendingInteraction: PendingInteraction | null;
+  /** Increments after a turn settles so workspace file views can reload. */
+  fileRevision: number;
 
   // Draft (unsent message)
   draft: string;
@@ -630,10 +633,12 @@ function _registerEventListener(client: PiScienceClient) {
     } else if (event.type === "agent_settled" || event.type === "session.idle") {
       ++_activityGeneration;
       const successful = !_turnErrored;
+      workspaceFiles.invalidate();
       useRuntimeStore.setState({
         working: false,
         status: successful ? "ready" : "error",
         pendingInteraction: null,
+        fileRevision: (state.fileRevision ?? 0) + 1,
       });
       if (successful && state.activeSessionId && event.handledWithoutTurn !== true) {
         void resyncCompletedHistory(state.activeSessionId, state.cwd);
@@ -670,6 +675,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   model: null,
   thinking: null,
   pendingInteraction: null,
+  fileRevision: 0,
   draft: "",
 
   connect: async (cwd: string, sessionId?: string) => {

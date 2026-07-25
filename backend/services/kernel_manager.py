@@ -142,9 +142,34 @@ class KernelManager:
 
     async def _spawn(self, notebook_id: str, language: str, cwd: str = ".") -> KernelSession:
         """Spawn a new kernel subprocess."""
+        process_env = os.environ.copy()
         if language == "python":
             script = KERNEL_BRIDGE_DIR / "kernel_bridge.py"
-            exe = self._python_path or "python3"
+            venv_dir = Path(cwd) / ".venv"
+            venv_bin = venv_dir / ("Scripts" if os.name == "nt" else "bin")
+            workspace_python = venv_bin / ("python.exe" if os.name == "nt" else "python")
+            if workspace_python.is_file():
+                exe = str(workspace_python)
+                npm_prefix = Path(cwd) / ".pi-science" / "npm-global"
+                npm_cache = Path(cwd) / ".pi-science" / "cache" / "npm"
+                pnpm_home = Path(cwd) / ".pi-science" / "pnpm-global"
+                process_env.update({
+                    "VIRTUAL_ENV": str(venv_dir),
+                    "PATH": os.pathsep.join([str(venv_bin), str(npm_prefix / "bin"), str(pnpm_home), process_env.get("PATH", "")]),
+                    "PYTHONNOUSERSITE": "1",
+                    "PIP_REQUIRE_VIRTUALENV": "1",
+                    "PIP_USER": "0",
+                    "UV_PROJECT_ENVIRONMENT": str(venv_dir),
+                    "npm_config_prefix": str(npm_prefix),
+                    "NPM_CONFIG_PREFIX": str(npm_prefix),
+                    "npm_config_cache": str(npm_cache),
+                    "NPM_CONFIG_CACHE": str(npm_cache),
+                    "PNPM_HOME": str(pnpm_home),
+                })
+                process_env.pop("PYTHONHOME", None)
+                process_env.pop("PIP_PREFIX", None)
+            else:
+                exe = self._python_path or "python3"
         elif language == "r":
             script = KERNEL_BRIDGE_DIR / "kernel_bridge.R"
             exe = self._r_path or "Rscript"
@@ -162,6 +187,7 @@ class KernelManager:
             text=True,
             bufsize=1,
             cwd=cwd,  # Set CWD to workspace so relative paths work
+            env=process_env,
         )
 
         session = KernelSession(

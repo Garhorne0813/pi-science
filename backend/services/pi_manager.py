@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -24,6 +25,7 @@ from services.event_normalizer import assistant_text_from_event
 MAX_EVENT_STRING_CHARS = 20000
 MAX_EVENT_COLLECTION_ITEMS = 100
 PROMPT_START_RECONCILE_DELAY = 0.25
+logger = logging.getLogger(__name__)
 
 
 def _is_pi_process(pid: int) -> bool:
@@ -67,10 +69,9 @@ def _model_has_credentials(model: Optional[str]) -> bool:
                 item.get("id") == custom_id and bool(item.get("api_key"))
                 for item in custom_providers(config)
             )
-    except Exception:
-        # Credential detection is only a fallback guard. If settings cannot
-        # be read, preserve the session's own model rather than changing it.
-        return True
+    except Exception as exc:
+        logger.warning("Unable to inspect model credentials for %s: %s", model, exc)
+        return False
     return False
 
 

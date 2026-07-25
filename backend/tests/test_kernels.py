@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import subprocess
+import sys
 import time
 
 import pytest
@@ -252,6 +254,26 @@ class TestKernelAPI:
         )
         assert res.status_code == 200
         assert res.json()["result"] == "'workspace-ok'"
+
+    async def test_execute_python_uses_workspace_virtual_environment(self, client, temp_workspace):
+        subprocess.run(
+            [sys.executable, "-m", "venv", str(temp_workspace / ".venv")],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        res = await client.post(
+            f"/api/kernels/execute?cwd={temp_workspace}",
+            json={
+                "language": "python",
+                "code": "import sys; sys.prefix",
+                "notebook_id": "test-workspace-venv",
+            },
+        )
+
+        assert res.status_code == 200
+        assert res.json()["result"] == repr(str((temp_workspace / ".venv").resolve()))
 
     async def test_shutdown_notebook(self, client):
         """POST /api/kernels/{id}/shutdown kills a notebook session."""

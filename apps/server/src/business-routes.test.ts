@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./app.js";
@@ -28,6 +28,56 @@ async function workspace(): Promise<string> {
 }
 
 describe("native control-plane business routes", () => {
+  it("does not overwrite an existing incomplete workspace environment", async () => {
+    const cwd = await workspace();
+    await mkdir(join(cwd, ".venv"), { recursive: true });
+    await writeFile(join(cwd, ".venv", "keep.txt"), "user-owned", "utf8");
+    const app = buildApp(config());
+    apps.push(app);
+
+    const response = await app.inject({ method: "POST", url: `/api/environments/workspace?cwd=${encodeURIComponent(cwd)}` });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json().error).toContain("incomplete");
+    await expect(readFile(join(cwd, ".venv", "keep.txt"), "utf8")).resolves.toBe("user-owned");
+  });
+
+  it("provisions an isolated Python environment inside the workspace", async () => {
+    const cwd = await workspace();
+    const app = buildApp(config());
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/environments/workspace?cwd=${encodeURIComponent(cwd)}`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const environment = response.json();
+    expect(environment).toMatchObject({
+      ready: true,
+      workspace: expect.any(String),
+      virtual_env: join(environment.workspace, ".venv"),
+      python: expect.stringContaining(join(environment.workspace, ".venv")),
+      npm: { local_prefix: environment.workspace },
+    });
+    await expect(access(environment.python)).resolves.toBeUndefined();
+
+    const submitted = await app.inject({
+      method: "POST",
+      url: `/api/jobs?cwd=${encodeURIComponent(cwd)}`,
+      payload: { command: ["python", "-c", "import sys; print(sys.prefix)"] },
+    });
+    expect(submitted.statusCode).toBe(200);
+    let job = submitted.json();
+    for (let attempt = 0; attempt < 100 && ["pending", "running"].includes(job.status); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      job = (await app.inject({ method: "GET", url: `/api/jobs/${job.job_id}?cwd=${encodeURIComponent(cwd)}` })).json();
+    }
+    expect(job).toMatchObject({ status: "succeeded" });
+    expect(job.stdout.trim()).toBe(environment.virtual_env);
+  }, 30_000);
+
   it("uses Pi runtime model capabilities for workspace settings", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");

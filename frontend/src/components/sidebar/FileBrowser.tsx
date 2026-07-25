@@ -6,6 +6,7 @@ import { fileInspectorForPath } from "../../lib/artifacts";
 import { workspaceFiles } from "../../lib/workspace-files";
 import { useFeedback } from "../feedback/feedback-context";
 import { FileContextMenu, type ContextPoint, type FileListEntry } from "./FileContextMenu";
+import { useRuntimeStore } from "../../lib/runtime-store";
 
 export function FileBrowser({ cwd }: { cwd: string }) {
   const { t } = useTranslation();
@@ -16,6 +17,7 @@ export function FileBrowser({ cwd }: { cwd: string }) {
   const [contextMenu, setContextMenu] = useState<{ entry: FileListEntry; point: ContextPoint } | null>(null);
   const openInspector = useUiStore((s) => s.openInspector);
   const addWorkspaceReference = useUiStore((s) => s.addWorkspaceReference);
+  const fileRevision = useRuntimeStore((s) => s.fileRevision);
 
   const loadFiles = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -30,11 +32,16 @@ export function FileBrowser({ cwd }: { cwd: string }) {
     const controller = new AbortController();
     void loadFiles(controller.signal);
     return () => controller.abort();
-  }, [loadFiles]);
+  }, [fileRevision, loadFiles]);
 
   const handleClick = (entry: FileListEntry) => {
     if (entry.isDir) return;
     openInspector(fileInspectorForPath(entry.path, entry.name, undefined, cwd));
+  };
+
+  const refreshFiles = () => {
+    workspaceFiles.invalidate();
+    void loadFiles();
   };
 
   const handleContextMenu = (e: React.MouseEvent, entry: FileListEntry) => {
@@ -76,7 +83,7 @@ export function FileBrowser({ cwd }: { cwd: string }) {
           {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
           {t("nav.files")}
         </span>
-        <span onClick={(e) => { e.stopPropagation(); void loadFiles(); }} className="hover:text-text cursor-pointer">
+        <span onClick={(e) => { e.stopPropagation(); refreshFiles(); }} className="hover:text-text cursor-pointer">
           <RefreshCw size={10} className={loading ? "animate-spin" : ""} />
         </span>
       </div>

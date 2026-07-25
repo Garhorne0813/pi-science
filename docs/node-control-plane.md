@@ -4,12 +4,12 @@
 release-gated item is deleting the retained Python compatibility modules after
 a stable release cycle.
 
-Pi-Science now exposes a Node.js/TypeScript gateway as its public backend. The
-Python process remains the internal scientific runtime while services migrate
-incrementally.
+Pi-Science exposes a Node.js/TypeScript gateway as its only public backend.
+Python is an internal scientific worker that starts on the first scientific
+request and stops after an idle timeout.
 
 ```text
-React (5173) → Node control plane (8787) → Python scientific runtime (8788)
+React (5173) → Node control plane (8787) → Python worker (8788, on demand)
 ```
 
 The Node gateway owns the public listener, CORS, health response and the
@@ -20,6 +20,23 @@ control-plane API. Python remains the owner of the scientific routes:
 - `/api/pdfs`
 - `/api/figures`
 - `/api/literature`
+
+Concurrent requests during a cold start share one startup operation. Active
+requests prevent idle reclamation, and shutting down Node also terminates its
+managed worker. `/api/health` and `/internal/ready` describe Node readiness and
+do not start or require Python. The health payload reports the worker state as
+`idle`, `starting`, `ready`, `stopping`, `failed`, or `external`.
+
+The default development scripts enable managed mode. An externally managed
+runtime remains supported for integration and deployment environments:
+
+```text
+PI_SCIENCE_MANAGE_SCIENTIFIC_RUNTIME=0|1
+PI_SCIENCE_SCIENTIFIC_IDLE_MS=300000
+PI_SCIENCE_SCIENTIFIC_STARTUP_MS=30000
+PI_SCIENCE_PYTHON_EXECUTABLE=/absolute/path/to/python
+PI_SCIENCE_PYTHON_CWD=/absolute/path/to/backend
+```
 
 The remaining public scientific-control routes are retained behind the gateway
 as an internal compatibility fallback, but the default Node owner is now the
@@ -64,7 +81,7 @@ bash scripts/dev.sh
 Or run the Node gateway against an already-running Python runtime:
 
 ```bash
-PI_SCIENCE_PYTHON_ORIGIN=http://127.0.0.1:8788 pnpm dev:server
+PI_SCIENCE_MANAGE_SCIENTIFIC_RUNTIME=0 PI_SCIENCE_PYTHON_ORIGIN=http://127.0.0.1:8788 pnpm dev:server
 ```
 
 The remaining release work is to remove the legacy Python control-plane
@@ -77,6 +94,15 @@ Pi subprocesses use a workspace-scoped `PI_CODING_AGENT_DIR` under
 `~/.pi/agent` lockfile from breaking startup in managed environments.
 The optional `context-mode` Pi extension is disabled by default and can be
 enabled explicitly with `PI_SCIENCE_ENABLE_CONTEXT_MODE=1`.
+
+Workspace dependency isolation is also Node-owned. The gateway provisions
+`<workspace>/.venv` before starting a Pi process, local job, or Python kernel
+request. It injects `VIRTUAL_ENV`, a workspace-first `PATH`,
+`PIP_REQUIRE_VIRTUALENV=1`, and workspace-scoped npm/pnpm prefixes. The Python
+worker selects the same `.venv` interpreter when it launches a notebook
+kernel. `GET /api/environments/workspace` reports state without mutation;
+`POST` provisions it explicitly. Provisioning failures are returned to the
+caller and never fall back to a shared Python environment.
 
 Provider/model behavior:
 
