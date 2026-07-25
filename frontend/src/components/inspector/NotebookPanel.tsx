@@ -1,12 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import { kernelShutdownUrl } from "../notebook/notebook-model";
-
-interface CellResult {
-  ok: boolean;
-  stdout: string;
-  result: string | null;
-  error: string | null;
-}
+import { notebookRuntime, type CellResult } from "../../lib/notebook-runtime";
 
 interface Cell {
   id: string;
@@ -23,21 +16,13 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId }:
 
   // Check kernel availability on mount
   useEffect(() => {
-    fetch("/api/kernels/status")
-      .then((r) => r.json())
-      .then((d) => {
-        setInterpreters({
-          python: Boolean(d.interpreters?.python),
-          r: Boolean(d.interpreters?.r),
-        });
-      })
+    notebookRuntime.capabilities()
+      .then(setInterpreters)
       .catch(() => setInterpreters({ python: false, r: false }));
   }, []);
 
   useEffect(() => () => {
-    void fetch(kernelShutdownUrl(notebookId, cwd || "."), {
-      method: "POST",
-    }).catch(() => undefined);
+    void notebookRuntime.release(notebookId, cwd || ".").catch(() => undefined);
   }, [cwd, notebookId]);
 
   const addCell = useCallback((language: "python" | "r") => {
@@ -61,20 +46,9 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId }:
     if (!cell) return;
 
     try {
-      const params = new URLSearchParams({ cwd: cwd || "." });
-      const res = await fetch(`/api/kernels/execute?${params}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          language: cell.language,
-          code: cell.code,
-          notebook_id: notebookId,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || `Cell execution failed: ${res.statusText}`);
+      const data = await notebookRuntime.execute(notebookId, cwd || ".", cell.language, cell.code);
       setCells((prev) =>
-        prev.map((c) => (c.id === cellId ? { ...c, running: false, result: data as CellResult } : c))
+        prev.map((c) => (c.id === cellId ? { ...c, running: false, result: data } : c))
       );
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

@@ -9,15 +9,16 @@ import { registerSessionReadRoutes } from "./session-routes.js";
 import { registerSseRoutes } from "./sse-routes.js";
 import { registerFileReadRoutes } from "./file-routes.js";
 import { registerNodeSessionRoutes } from "./node-session-routes.js";
-import { nodeSessionService } from "./node-session-service.js";
 import { registerJobRoutes } from "./job-routes.js";
 import { registerArtifactRoutes } from "./artifact-routes.js";
 import { registerSettingsRoutes } from "./settings-routes.js";
 import { registerRunEndpointRoutes } from "./run-endpoint-routes.js";
 import { registerCatalogRoutes } from "./catalog-routes.js";
 import { registerProjectRoutes } from "./project-routes.js";
+import { createServerModules, type ServerModules } from "./server-modules.js";
 
-export function buildApp(config: ServerConfig): FastifyInstance {
+export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules()): FastifyInstance {
+  const { sessions: nodeSessionService, events, sessionRepository, settings, jobs } = modules;
   nodeSessionService.configureScientificRuntime(config.pythonOrigin, config.internalToken);
   const app = Fastify({
     logger: { level: config.logLevel },
@@ -73,13 +74,13 @@ export function buildApp(config: ServerConfig): FastifyInstance {
     return { status: "ready", service: "pi-science-server", control_plane: "node", scientific_runtime: runtime };
   });
 
-  if (config.nodeSessions || config.nodePiManager) registerSessionReadRoutes(app);
-  if (config.nodeSse || config.nodePiManager) registerSseRoutes(app, config);
+  if (config.nodeSessions || config.nodePiManager) registerSessionReadRoutes(app, sessionRepository, nodeSessionService);
+  if (config.nodeSse || config.nodePiManager) registerSseRoutes(app, config, nodeSessionService, events);
   if (config.nodeFiles) registerFileReadRoutes(app);
-  if (config.nodePiManager) registerNodeSessionRoutes(app);
-  if (config.nodeJobs !== false) registerJobRoutes(app);
+  if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository);
+  if (config.nodeJobs !== false) registerJobRoutes(app, jobs);
   if (config.nodeArtifacts !== false) registerArtifactRoutes(app);
-  if (config.nodeSettings !== false) registerSettingsRoutes(app);
+  if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings);
   if (config.nodeRuns !== false) registerRunEndpointRoutes(app);
   if (config.nodeCatalog !== false) registerCatalogRoutes(app);
   if (config.nodeProject !== false) registerProjectRoutes(app);

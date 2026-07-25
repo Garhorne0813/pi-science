@@ -1,9 +1,9 @@
 import { Readable, Transform } from "node:stream";
 import type { FastifyInstance } from "fastify";
 import type { ServerConfig } from "./config.js";
-import { conversationEventHub } from "./conversation-event-hub.js";
+import type { ConversationEventHub } from "./conversation-event-hub.js";
 import { durableEventStore, parseSseBlock, type SseEventRecord } from "./event-store.js";
-import { nodeSessionService } from "./node-session-service.js";
+import type { NodeSessionService } from "./node-session-service.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
 
 const MAX_SSE_PENDING_BYTES = 512 * 1024;
@@ -40,7 +40,7 @@ export class SseBackpressureBuffer {
   clear(): void { this.pending.length = 0; this.pendingBytes = 0; }
 }
 
-export function registerSseRoutes(app: FastifyInstance, config: ServerConfig): void {
+export function registerSseRoutes(app: FastifyInstance, config: ServerConfig, nodeSessionService: NodeSessionService, conversationEventHub: ConversationEventHub): void {
   app.get<{ Params: { session_id: string } }>("/api/sessions/:session_id/events", async (request, reply) => {
     const query = request.query as { cwd?: unknown };
     const requestedCwd = typeof query.cwd === "string" && query.cwd.length > 0 ? query.cwd : ".";

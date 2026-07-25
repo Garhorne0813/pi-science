@@ -4,14 +4,10 @@ import { FolderOpen, File, ChevronRight, Trash2, ArrowUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useUiStore } from "../../lib/store";
 import { fileInspectorForPath } from "../../lib/artifacts";
-import { apiRequest, invalidateApiCache } from "../../lib/api";
+import { workspaceFiles, type Breadcrumb } from "../../lib/workspace-files";
 import { FileContextMenu, type ContextPoint, type FileListEntry } from "../../components/sidebar/FileContextMenu";
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "../../components/layout/WorkspacePage";
-
-interface Breadcrumb {
-  name: string; path: string;
-}
 
 export function FilesPage() {
   const { t } = useTranslation();
@@ -29,14 +25,9 @@ export function FilesPage() {
   const loadFiles = useCallback(async (dir: string, signal?: AbortSignal) => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ cwd: workspaceCwd });
-      if (dir) params.set("subdir", dir);
-      const [files, nextBreadcrumbs] = await Promise.all([
-        apiRequest<FileListEntry[]>(`/api/files?${params}`, { signal, cacheTtlMs: 3000 }),
-        apiRequest<Breadcrumb[]>(`/api/files/breadcrumbs?cwd=${encodeURIComponent(workspaceCwd)}&subdir=${encodeURIComponent(dir)}`, { signal, cacheTtlMs: 3000 }),
-      ]);
-      setEntries(files);
-      setBreadcrumbs(nextBreadcrumbs);
+      const result = await workspaceFiles.directory(workspaceCwd, dir, signal);
+      setEntries(result.entries);
+      setBreadcrumbs(result.breadcrumbs);
     } catch (error) {
       if (!signal?.aborted) toast(error instanceof Error ? error.message : t("files.loadError"), "error");
     } finally { if (!signal?.aborted) setLoading(false); }
@@ -66,8 +57,7 @@ export function FilesPage() {
     });
     if (!approved) return;
     try {
-      await apiRequest(`/api/files/${encodeURIComponent(entry.path)}?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "DELETE" });
-      invalidateApiCache("/api/files");
+      await workspaceFiles.remove(workspaceCwd, entry.path);
       await loadFiles(subdir);
       toast(t("files.deleted", { name: entry.name }), "success");
     } catch (error) {
@@ -89,12 +79,6 @@ export function FilesPage() {
   const referenceEntry = (entry: FileListEntry) => {
     addWorkspaceReference({ cwd: workspaceCwd, path: entry.path, name: entry.name, isDir: entry.isDir });
     setContextMenu(null);
-  };
-
-  const humanSize = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / 1048576).toFixed(1)} MB`;
   };
 
   return (
@@ -141,7 +125,7 @@ export function FilesPage() {
                 <button onClick={() => handleClick(e)} className="flex items-center gap-3 flex-1 min-w-0 text-left">
                   {e.isDir ? <FolderOpen size={16} className="text-accent/60 shrink-0" /> : <File size={16} className="text-muted shrink-0" />}
                   <span className="truncate text-text">{e.name}</span>
-                  <span className="text-xs text-muted shrink-0 ml-auto">{e.isDir ? "—" : humanSize(e.size)}</span>
+                  <span className="text-xs text-muted shrink-0 ml-auto">{e.isDir ? "—" : workspaceFiles.formatSize(e.size)}</span>
                 </button>
                 <button onClick={(ev) => { ev.stopPropagation(); handleDelete(e); }}
                   className="shrink-0 rounded p-1 text-muted hover:text-error hover:bg-error/10 opacity-0 group-hover:opacity-100 transition-opacity">

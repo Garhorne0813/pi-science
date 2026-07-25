@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildPiProcessOptions } from "./pi-runtime-launch.js";
 
 const cleanup: string[] = [];
-const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH };
+const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, tsx: process.env.PI_TSX_PATH, tsconfig: process.env.PI_TSCONFIG_PATH };
 
 beforeEach(async () => {
   const root = join(tmpdir(), `pi-science-runtime-launch-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -19,6 +19,8 @@ beforeEach(async () => {
 afterEach(async () => {
   process.env.PI_SCIENCE_HOME = original.home;
   process.env.PI_CLI_PATH = original.cli;
+  process.env.PI_TSX_PATH = original.tsx;
+  process.env.PI_TSCONFIG_PATH = original.tsconfig;
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -35,6 +37,23 @@ async function obstructModelsFile(customProviders?: unknown[]): Promise<string> 
 }
 
 describe("Pi runtime custom provider materialization", () => {
+  it("runs a source TypeScript CLI through the adjacent tsx runtime", async () => {
+    const piRoot = join(tmpdir(), `pi-source-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(piRoot);
+    const cli = join(piRoot, "packages", "coding-agent", "src", "cli.ts");
+    const tsx = join(piRoot, "node_modules", ".bin", "tsx");
+    await mkdir(join(piRoot, "packages", "coding-agent", "src"), { recursive: true });
+    await mkdir(join(piRoot, "node_modules", ".bin"), { recursive: true });
+    await writeFile(cli, "export {};\n", "utf8");
+    await writeFile(tsx, "", "utf8");
+    process.env.PI_CLI_PATH = cli;
+    delete process.env.PI_TSX_PATH;
+    delete process.env.PI_TSCONFIG_PATH;
+
+    const options = buildPiProcessOptions(piRoot)!;
+    expect(options.args.slice(0, 2)).toEqual([tsx, cli]);
+  });
+
   it("surfaces models.json deletion failures except for a missing file", async () => {
     const cwd = await obstructModelsFile();
     expect(() => buildPiProcessOptions(cwd)).toThrow(/EISDIR|operation not permitted|permission denied/i);

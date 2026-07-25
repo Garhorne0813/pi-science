@@ -14,6 +14,7 @@ import {
   type HistoryMessage,
 } from "./pi-science-client";
 import { visibleUserMessage } from "./file-references";
+import { replaceBrowserSessionRoute } from "./session-navigation";
 
 export interface PendingInteraction {
   requestId: string;
@@ -61,10 +62,11 @@ export interface RuntimeState {
   abort: () => Promise<void>;
   setModel: (model: string, thinking?: string) => Promise<string | null>;
   respondToInteraction: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => Promise<void>;
-  loadSessions: () => Promise<void>;
+  loadSessions: (cwd?: string) => Promise<SessionInfo[]>;
   loadSession: (sessionId: string) => Promise<void>;
   forkSession: (sessionId: string) => Promise<string>;
   createNewSession: () => Promise<string>;
+  deleteSession: (sessionId: string) => Promise<void>;
   removeSession: (sessionId: string) => void;
   setDraft: (text: string) => void;
 }
@@ -303,14 +305,17 @@ function foldEvent(state: Thread, event: PiScienceEvent): Thread {
 
 // ── Helpers ──
 
-async function loadSessionsInternal() {
+async function loadSessionsInternal(cwdOverride?: string): Promise<SessionInfo[]> {
   const state = useRuntimeStore.getState();
-  const requestedCwd = state.cwd;
+  const requestedCwd = cwdOverride ?? state.cwd;
+  if (cwdOverride && state.cwd !== cwdOverride) {
+    useRuntimeStore.setState({ cwd: cwdOverride, sessions: [], activeSessionId: null });
+  }
   try {
     const client = getClient();
     const fromDisk = await client.listSessions(requestedCwd);
     const current = useRuntimeStore.getState();
-    if (current.cwd !== requestedCwd) return;
+    if (current.cwd !== requestedCwd) return [];
     // Inject names from localStorage
     const named = fromDisk.map((s: SessionInfo) => ({
       ...s,
@@ -325,8 +330,10 @@ async function loadSessionsInternal() {
     ));
     const merged = [...optimistic, ...named];
     useRuntimeStore.setState({ sessions: merged.slice(0, 50) });
+    return merged.slice(0, 50);
   } catch (err) {
     console.error("Failed to load sessions:", err);
+    return [];
   }
 }
 
@@ -492,14 +499,7 @@ export function applySessionReplacements(replacements: SessionReplacement[]): st
     pendingInteraction: null,
   });
 
-  if (typeof window !== "undefined") {
-    const encodedOldId = encodeURIComponent(previousActiveId);
-    const encodedNewId = encodeURIComponent(nextActiveId);
-    const oldSuffix = `/session/${encodedOldId}`;
-    if (window.location.pathname.endsWith(oldSuffix)) {
-      window.history.replaceState(window.history.state, "", `${window.location.pathname.slice(0, -oldSuffix.length)}/session/${encodedNewId}${window.location.search}${window.location.hash}`);
-    }
-  }
+  replaceBrowserSessionRoute(previousActiveId, nextActiveId);
   void resyncCompletedHistory(nextActiveId, state.cwd);
   void loadSessionsInternal();
   return nextActiveId;
@@ -1002,8 +1002,8 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     }
   },
 
-  loadSessions: async () => {
-    await loadSessionsInternal();
+  loadSessions: async (cwd) => {
+    return loadSessionsInternal(cwd);
   },
 
   loadSession: async (sessionId: string) => {
@@ -1116,6 +1116,14 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         _createSessionPromises.delete(requestCwd);
       }
     }
+  },
+
+  deleteSession: async (sessionId: string) => {
+    const { cwd } = get();
+    await getClient().deleteSession(sessionId, cwd);
+    _optimisticSessionIds.delete(sessionId);
+    set((state) => ({ sessions: state.sessions.filter((session) => session.id !== sessionId) }));
+    await loadSessionsInternal();
   },
 
   removeSession: (sessionId: string) => {

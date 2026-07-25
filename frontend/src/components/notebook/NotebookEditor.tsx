@@ -7,7 +7,6 @@ import { PaneTitlebarInset } from "../inspector/RightPane";
 import { cn } from "../../lib/cn";
 import {
   notebookKernel,
-  kernelShutdownUrl,
   outputText,
   parseNotebookDocument,
   sourceText,
@@ -15,13 +14,7 @@ import {
   type NotebookCell,
   type NotebookOutput,
 } from "./notebook-model";
-
-interface CellResult {
-  ok: boolean;
-  stdout: string;
-  result: string | null;
-  error: string | null;
-}
+import { notebookRuntime, type CellResult } from "../../lib/notebook-runtime";
 
 interface EditableCell extends NotebookCell {
   id: string;
@@ -87,9 +80,7 @@ export function NotebookEditor({
   }, [cwd, path, root]);
 
   useEffect(() => () => {
-    void fetch(kernelShutdownUrl(notebookId, cwd), {
-      method: "POST",
-    }).catch(() => undefined);
+    void notebookRuntime.release(notebookId, cwd).catch(() => undefined);
   }, [cwd, notebookId]);
 
   const updateCode = (cellId: string, code: string) => {
@@ -105,21 +96,10 @@ export function NotebookEditor({
       candidate.id === cellId ? { ...candidate, running: true, liveResult: null } : candidate
     )));
     try {
-      const params = new URLSearchParams({ cwd });
-      const response = await fetch(`/api/kernels/execute?${params}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          language,
-          code: cell.code,
-          notebook_id: notebookId,
-        }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.detail || `Cell execution failed: ${response.statusText}`);
+      const payload = await notebookRuntime.execute(notebookId, cwd, language, cell.code);
       setCells((current) => current.map((candidate) => (
         candidate.id === cellId
-          ? { ...candidate, running: false, liveResult: payload as CellResult }
+          ? { ...candidate, running: false, liveResult: payload }
           : candidate
       )));
     } catch (cause) {

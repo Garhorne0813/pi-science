@@ -8,7 +8,6 @@ import { RightPane } from "../../components/inspector/RightPane";
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
 import { setCurrentCwd } from "../../lib/files";
 import { cn } from "../../lib/cn";
-import { getClient, getSessionName } from "../../lib/pi-science-client";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { useTranslation } from "react-i18next";
 
@@ -164,24 +163,17 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
   const forkSession = useRuntimeStore((s) => s.forkSession);
   const createNewSession = useRuntimeStore((s) => s.createNewSession);
+  const loadSessions = useRuntimeStore((s) => s.loadSessions);
+  const deleteSession = useRuntimeStore((s) => s.deleteSession);
   const navigate = useNavigate();
   const [deleting, setDeleting] = useState<string | null>(null);
   const [forking, setForking] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    getClient().listSessions(cwd)
-      .then((list) => {
+    loadSessions(cwd)
+      .then((merged) => {
         if (cancelled) return;
-        const current = useRuntimeStore.getState();
-        const named = list.map((session) => ({
-          ...session,
-          name: session.name || getSessionName(session.id) || current.sessions.find((item) => item.id === session.id)?.name || undefined,
-        }));
-        const diskIds = new Set(named.map((session) => session.id));
-        const optimisticActive = current.sessions.filter((session) => session.id === current.activeSessionId && !diskIds.has(session.id) && !session.created_at && !session.updated_at);
-        const merged = [...optimisticActive, ...named].slice(0, 50);
-        useRuntimeStore.setState({ sessions: merged, cwd });
         // Auto-load most recent session if none active
         const state = useRuntimeStore.getState();
         const workspaceRoot = `/workspace/${encodeURIComponent(cwd)}`;
@@ -194,16 +186,14 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
         if (!cancelled) console.error("Failed to load workspace sessions:", error);
       });
     return () => { cancelled = true; };
-  }, [cwd, navigate]);
+  }, [cwd, loadSessions, navigate]);
 
   const handleDelete = async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
     if (deleting) return;
     setDeleting(sessionId);
     try {
-      await getClient().deleteSession(sessionId, cwd);
-      useRuntimeStore.getState().removeSession(sessionId);
-      await useRuntimeStore.getState().loadSessions();
+      await deleteSession(sessionId);
       if (activeSessionId === sessionId) {
         const newId = await createNewSession();
         navigate(`/workspace/${encodeURIComponent(cwd)}/session/${newId}`);

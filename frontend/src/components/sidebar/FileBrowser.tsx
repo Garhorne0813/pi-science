@@ -3,7 +3,7 @@ import { FolderOpen, File, ChevronRight, ChevronDown, RefreshCw } from "lucide-r
 import { useTranslation } from "react-i18next";
 import { useUiStore } from "../../lib/store";
 import { fileInspectorForPath } from "../../lib/artifacts";
-import { apiRequest, invalidateApiCache } from "../../lib/api";
+import { workspaceFiles } from "../../lib/workspace-files";
 import { useFeedback } from "../feedback/feedback-context";
 import { FileContextMenu, type ContextPoint, type FileListEntry } from "./FileContextMenu";
 
@@ -20,9 +20,7 @@ export function FileBrowser({ cwd }: { cwd: string }) {
   const loadFiles = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ cwd });
-      const data = await apiRequest<FileListEntry[]>(`/api/files?${params}`, { signal, cacheTtlMs: 3000 });
-      setEntries(Array.isArray(data) ? data.filter((entry) => !entry.name.startsWith(".")).slice(0, 30) : []);
+      setEntries(await workspaceFiles.sidebar(cwd, signal));
     } catch (error) {
       if (!signal?.aborted) toast(error instanceof Error ? error.message : t("files.loadError"), "error");
     } finally { if (!signal?.aborted) setLoading(false); }
@@ -60,8 +58,7 @@ export function FileBrowser({ cwd }: { cwd: string }) {
     const approved = await confirm({ title: entry.isDir ? t("files.deleteFolderTitle") : t("files.deleteFileTitle"), message: t("files.deleteConfirm", { name: entry.name }), confirmLabel: t("common.delete"), destructive: true });
     if (!approved) return;
     try {
-      await apiRequest(`/api/files/${encodeURIComponent(entry.path)}?cwd=${encodeURIComponent(cwd)}`, { method: "DELETE" });
-      invalidateApiCache("/api/files");
+      await workspaceFiles.remove(cwd, entry.path);
       await loadFiles();
       toast(t("files.deleted", { name: entry.name }), "success");
     } catch (error) {

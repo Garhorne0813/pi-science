@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { buildApp } from "./app.js";
 import type { ServerConfig } from "./config.js";
 import { nodeSessionService } from "./node-session-service.js";
+import { createServerModules } from "./server-modules.js";
 
 const apps: Array<{ close(): Promise<unknown> }> = [];
 const tempDirs: string[] = [];
@@ -41,7 +42,7 @@ describe("native control-plane business routes", () => {
         ],
       },
     });
-    const app = buildApp(config()); apps.push(app);
+    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
     const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
     expect(settings.statusCode).toBe(200);
     expect(settings.json()).toMatchObject({
@@ -78,7 +79,7 @@ describe("native control-plane business routes", () => {
   it("persists jobs, artifacts, provenance, and redacts settings secrets", async () => {
     const cwd = await workspace();
     const home = join(cwd, "control-home"); process.env.PI_SCIENCE_HOME = home;
-    const app = buildApp(config()); apps.push(app);
+    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
     const key = await app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "openai", api_key: "secret-value" } });
     expect(key.statusCode).toBe(200);
     const settings = await app.inject({ method: "GET", url: "/api/settings/config" });
@@ -202,7 +203,7 @@ describe("native control-plane business routes", () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     vi.spyOn(nodeSessionService, "reloadConfiguration").mockRejectedValueOnce(new Error("forced reload failure"));
-    const app = buildApp(config()); apps.push(app);
+    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
     const response = await app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "openai", api_key: "saved-secret" } });
     expect(response.statusCode).toBe(502);
     expect(response.json()).toMatchObject({ ok: false, error: expect.stringContaining("forced reload failure") });

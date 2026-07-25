@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { Package, Puzzle, Wrench, Check, X, ChevronRight, ShieldCheck, AlertTriangle, RotateCcw, Loader2 } from "lucide-react";
 import { applySessionReplacements, type SessionReplacement } from "../../lib/runtime-store";
 import { WorkspacePage, WorkspacePageHeader } from "../../components/layout/WorkspacePage";
+import { skillsApi } from "../../lib/skills-api";
 
 async function readResponse<T>(response: Response, fallback: string): Promise<T> {
   const data = await response.json().catch(() => ({})) as T & {
@@ -56,11 +57,8 @@ export function SkillsPage() {
 
   useEffect(() => {
     let cancelled = false;
-    const query = cwd ? `?${new URLSearchParams({ cwd })}` : "";
     Promise.all([
-      fetch(`/api/skills${query}`).then(async (response) => {
-        return readResponse<Skill[]>(response, "Unable to load skills");
-      }),
+      skillsApi.list<Skill>(cwd),
       fetch("/api/skills/tools").then(async (response) => {
         return readResponse<Tool[]>(response, "Unable to detect tools");
       }),

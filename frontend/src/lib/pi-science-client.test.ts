@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { clampThinkingLevel, PiScienceClient } from "./pi-science-client";
-import { readSettingsResponse } from "../app/routes/SettingsPage";
+import { readSettingsResponse } from "./settings-api";
 import { useRuntimeStore } from "./runtime-store";
 
 

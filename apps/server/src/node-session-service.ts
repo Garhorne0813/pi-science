@@ -2,13 +2,13 @@ import type { CreateSessionRequest, PiConfig, SessionState } from "@pi-science/c
 import { randomUUID } from "node:crypto";
 import { mkdir, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
-import { conversationEventHub } from "./conversation-event-hub.js";
+import { ConversationEventHub, conversationEventHub } from "./conversation-event-hub.js";
 import { observeNodePiEvent } from "./node-event-observer.js";
-import { piManager } from "./pi-manager.js";
+import { PiManager, piManager } from "./pi-manager.js";
 import type { PiProcess, PiProcessOptions, PiResult } from "./pi-process.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "./pi-runtime-launch.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
-import { sessionRepository } from "./session-repository.js";
+import { SessionRepository, sessionRepository } from "./session-repository.js";
 
 type ServiceFailure = { success: false; error: string; code: string };
 type PendingOperation = "prompt" | "compact";
@@ -77,6 +77,12 @@ export class NodeSessionService {
   private readonly runtimes = new Map<string, RuntimeRecord>();
   private readonly locks = new Map<string, Promise<void>>();
   private scientificRuntime: { origin: string; token?: string } | null = null;
+
+  constructor(
+    private readonly eventHub: ConversationEventHub = conversationEventHub,
+    private readonly manager: PiManager = piManager,
+    private readonly repository: SessionRepository = sessionRepository,
+  ) {}
 
   configureScientificRuntime(origin: string, token?: string): void {
     this.scientificRuntime = { origin: origin.replace(/\/$/, ""), ...(token ? { token } : {}) };
@@ -171,7 +177,7 @@ export class NodeSessionService {
       if ("error" in source) return source;
       const ready = await this.reconcileForMutation(source);
       if (!ready.success) return ready;
-      const sessionPath = await sessionRepository.findPath(cwd, sessionId);
+      const sessionPath = await this.repository.findPath(cwd, sessionId);
       if (!sessionPath) return { success: false, code: "not_found", error: "session not found" };
       const started = this.startRuntime(cwd, { ...source.config });
       if ("error" in started) return started;
@@ -301,7 +307,7 @@ export class NodeSessionService {
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
     return this.withLock(`${cwd}\0${sessionId}`, async () => {
       const runtime = this.runtimes.get(runtimeKey(cwd, sessionId));
-      const path = await sessionRepository.findPath(cwd, sessionId);
+      const path = await this.repository.findPath(cwd, sessionId);
       if (runtime?.activeSessionId === sessionId) {
         if (runtime.busy) return { success: false, code: "busy", error: "cannot delete a conversation while it is running" };
         await this.cleanupRuntime(runtime);
@@ -350,9 +356,10 @@ export class NodeSessionService {
     for (const runtime of this.runtimes.values()) {
       runtime.closing = true;
       this.clearIdleTimer(runtime);
-      conversationEventHub.expectExit(runtime.process);
+      this.eventHub.expectExit(runtime.process);
     }
-    await piManager.shutdownAll();
+    await this.manager.shutdownAll();
+    await this.eventHub.flush();
     this.runtimes.clear();
   }
 
@@ -370,7 +377,7 @@ export class NodeSessionService {
         return runtime;
       }
     }
-    const sessionPath = await sessionRepository.findPath(cwd, sessionId);
+    const sessionPath = await this.repository.findPath(cwd, sessionId);
     if (!sessionPath) return { success: false, code: "not_found", error: "session not found in this workspace" };
     const started = this.startRuntime(cwd, effectiveConfig());
     if ("error" in started) return { success: false, ...started };
@@ -391,10 +398,10 @@ export class NodeSessionService {
     if (!options) return { error: "PI_CLI_PATH is not configured", code: "spawn_failed" };
     let process: PiProcess;
     const managerKey = randomUUID();
-    try { process = piManager.start(managerKey, options); }
+    try { process = this.manager.start(managerKey, options); }
     catch (error) { return { error: `unable to start Pi runtime: ${String(error)}`, code: "spawn_failed" }; }
     const runtime: RuntimeRecord = { cwd, managerKey, process, activeSessionId: "", config: { ...config }, busy: false, restartPending: false, closing: false };
-    conversationEventHub.bind(cwd, process, {
+    this.eventHub.bind(cwd, process, {
       activeSessionId: () => runtime.activeSessionId || null,
       onBusy: (busy) => {
         if (runtime.reconcileTimer) clearTimeout(runtime.reconcileTimer);
@@ -416,7 +423,7 @@ export class NodeSessionService {
         }
       },
       observe: async (event, sessionId) => {
-        await observeNodePiEvent(cwd, runtime.config.model ?? null, event, sessionId, (payload) => conversationEventHub.publish(cwd, sessionId, payload));
+        await observeNodePiEvent(cwd, runtime.config.model ?? null, event, sessionId, (payload) => this.eventHub.publish(cwd, sessionId, payload));
         if (event.type === "agent_settled") this.scheduleAutoReview(cwd, sessionId);
       },
     });
@@ -429,7 +436,7 @@ export class NodeSessionService {
       const oldId = runtime.activeSessionId;
       const restarted = await this.restartRuntimeUnlocked(runtime, effectiveConfig());
       if ("error" in restarted) {
-        if (oldId) await conversationEventHub.publish(runtime.cwd, oldId, { type: "error", sessionId: oldId, message: `Failed to reload Pi runtime after settings changed: ${restarted.error}` });
+        if (oldId) await this.eventHub.publish(runtime.cwd, oldId, { type: "error", sessionId: oldId, message: `Failed to reload Pi runtime after settings changed: ${restarted.error}` });
       }
     });
   }
@@ -472,12 +479,12 @@ export class NodeSessionService {
         if (state.success && !active) {
           this.clearPendingOperation(runtime);
           if (operation === "prompt") {
-            await conversationEventHub.publish(runtime.cwd, runtime.activeSessionId, {
+            await this.eventHub.publish(runtime.cwd, runtime.activeSessionId, {
               type: "error",
               sessionId: runtime.activeSessionId,
               message: "The prompt was accepted but the Pi runtime did not start an agent turn.",
             });
-            await conversationEventHub.publish(runtime.cwd, runtime.activeSessionId, { type: "session.idle", sessionId: runtime.activeSessionId });
+            await this.eventHub.publish(runtime.cwd, runtime.activeSessionId, { type: "session.idle", sessionId: runtime.activeSessionId });
           }
           return;
         }
@@ -486,7 +493,7 @@ export class NodeSessionService {
         this.clearPendingOperation(runtime);
         const restarted = await this.restartRuntimeUnlocked(runtime, config);
         if ("error" in restarted && sessionId) {
-          await conversationEventHub.publish(runtime.cwd, sessionId, {
+          await this.eventHub.publish(runtime.cwd, sessionId, {
             type: "error",
             sessionId,
             message: `Unable to safely reconcile timed-out ${operation} operation: ${restarted.error}`,
@@ -515,13 +522,13 @@ export class NodeSessionService {
     const oldId = runtime.activeSessionId;
     const oldConfig = { ...runtime.config };
     const restartPending = runtime.restartPending;
-    const sessionPath = runtime.activeSessionId ? await sessionRepository.findPath(cwd, runtime.activeSessionId) : null;
+    const sessionPath = runtime.activeSessionId ? await this.repository.findPath(cwd, runtime.activeSessionId) : null;
     let options: PiProcessOptions | null;
     try { options = buildPiProcessOptions(cwd, config); }
     catch (error) { return { success: false, code: "configuration_failed", error: `unable to prepare Pi runtime configuration: ${String(error)}` }; }
     if (!options) return { success: false, code: "spawn_failed", error: "PI_CLI_PATH is not configured" };
-    conversationEventHub.expectExit(runtime.process);
-    await piManager.stop(runtime.managerKey);
+    this.eventHub.expectExit(runtime.process);
+    await this.manager.stop(runtime.managerKey);
     for (const [key, current] of this.runtimes) {
       if (current === runtime) this.runtimes.delete(key);
     }
@@ -602,12 +609,12 @@ export class NodeSessionService {
     runtime.closing = true;
     if (runtime.reconcileTimer) clearTimeout(runtime.reconcileTimer);
     this.clearIdleTimer(runtime);
-    conversationEventHub.expectExit(runtime.process);
+    this.eventHub.expectExit(runtime.process);
     const registeredKeys = [...this.runtimes.entries()]
       .filter(([, current]) => current === runtime)
       .map(([key]) => key);
     if (registeredKeys.length > 0) {
-      await piManager.stop(runtime.managerKey);
+      await this.manager.stop(runtime.managerKey);
     } else {
       await runtime.process.shutdown();
     }
@@ -651,7 +658,7 @@ export class NodeSessionService {
 
   private async publishReplacement(cwd: string, oldId: string, newId: string): Promise<void> {
     if (!oldId || !newId || oldId === newId) return;
-    await conversationEventHub.publish(cwd, oldId, { type: "session.replaced", sessionId: oldId, replacementSessionId: newId });
+    await this.eventHub.publish(cwd, oldId, { type: "session.replaced", sessionId: oldId, replacementSessionId: newId });
   }
 
   private async refreshState(runtime: RuntimeRecord): Promise<PiResult> {
@@ -693,7 +700,7 @@ export class NodeSessionService {
       runtime.idleTimer = undefined;
       void this.withLock(key, async () => {
         if (this.runtimes.get(key) !== runtime || runtime.closing) return;
-        if (runtime.busy || runtime.operationPending || conversationEventHub.hasSubscribers(runtime.cwd, runtime.activeSessionId)) {
+        if (runtime.busy || runtime.operationPending || this.eventHub.hasSubscribers(runtime.cwd, runtime.activeSessionId)) {
           this.scheduleIdleCleanup(runtime);
           return;
         }

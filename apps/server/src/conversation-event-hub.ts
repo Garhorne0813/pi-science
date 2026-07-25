@@ -101,6 +101,13 @@ export class ConversationEventHub {
 
   constructor(private readonly eventStore: EventStore = durableEventStore) {}
 
+  async flush(): Promise<void> {
+    // Process exit handlers append terminal records through their event queue.
+    // Yield once so those publishes are registered before taking the snapshot.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await Promise.allSettled([...this.publishing.values()]);
+  }
+
   expectExit(process: PiProcess): void {
     this.expectedExits.add(process);
   }

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { ArrowUp, Loader2, Square, Paperclip, Sparkles, X, File, FolderOpen } from "lucide-react";
 import { clampThinkingLevel, getSessionName, setSessionName, type AvailableModel } from "../../lib/pi-science-client";
 import { applySessionReplacements, useRuntimeStore, type PendingInteraction, type SessionReplacement } from "../../lib/runtime-store";
+import { settingsApi } from "../../lib/settings-api";
 import { useUiStore } from "../../lib/store";
 import { cn } from "../../lib/cn";
 import type { ThreadBlock, ToolCallBlock } from "../../types/thread";
@@ -80,12 +81,7 @@ export function LiveSessionPage() {
 
   useEffect(() => {
     if (!activeSessionId) return;
-    fetch(`/api/settings/config?cwd=${encodeURIComponent(workspaceCwd)}`)
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || data.detail || `Unable to load model list: ${res.statusText}`);
-        return data;
-      })
+    settingsApi.config<{ available_models?: AvailableModel[]; model?: string; thinking?: string }>(workspaceCwd)
       .then((data) => {
         const runtime = useRuntimeStore.getState();
         const allAvailableModels: AvailableModel[] = Array.isArray(data.available_models) ? data.available_models : [];
@@ -136,15 +132,11 @@ export function LiveSessionPage() {
     setModelError(null);
     setConfiguringModel(true);
     try {
-      const response = await fetch(`/api/settings/model?cwd=${encodeURIComponent(workspaceCwd)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model, thinking: nextThinking }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data.error || data.detail || `Unable to save model: ${response.statusText}`);
-      }
+      const data = await settingsApi.saveModel<{
+        model?: string;
+        thinking?: string;
+        session_replacements?: SessionReplacement[];
+      }>(model, nextThinking, workspaceCwd);
       const replacementId = applySessionReplacements(
         Array.isArray(data.session_replacements) ? data.session_replacements as SessionReplacement[] : [],
       );

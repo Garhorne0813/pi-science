@@ -75,7 +75,10 @@ export function extractArtifactRefs(markdown: string): string[] {
   for (const m of markdown.matchAll(REF_RE)) {
     const raw = m[0].replace(/^[`'"(]+|[`'".,)]+$/g, "");
     if (!raw || /^https?:\/\//i.test(raw) || raw.startsWith("//")) continue;
-    // Require a path-like token or a known ext; skip bare "a.md" sentence fragments only if no slash.
+    // A bare filename in prose may only be an example (for example main.py or
+    // SKILL.md). Tool events and the file browser surface real root-level files;
+    // chat text needs an explicit directory component before it is clickable.
+    if (!raw.includes("/")) continue;
     if (seen.has(raw)) continue;
     seen.add(raw);
     out.push(raw);

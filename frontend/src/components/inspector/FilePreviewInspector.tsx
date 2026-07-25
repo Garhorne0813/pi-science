@@ -34,6 +34,7 @@ import { PhaseView } from "./PhaseView";
 import { useScrollMemory } from "@/lib/scrollMemory";
 import { cn } from "@/lib/cn";
 import { PaneTitlebarInset } from "./RightPane";
+import { previewPolicy } from "@/lib/preview-policy";
 
 /**
  * Right-pane preview for any workspace file. Strategy (no format conversion):
@@ -55,21 +56,17 @@ export function FilePreviewInspector({
   cwd?: string;
 }) {
   const kind = previewKindForName(data.filename);
-  const needsUrl = kind === "pdf" || kind === "image" || kind === "html" || kind === "video";
-  const needsText =
-    kind === "table" || kind === "text" || kind === "html" || kind === "markdown" ||
-    kind === "molecule" || kind === "genome" || kind === "qcode" || kind === "anomaly" ||
-    kind === "phase";
-  const needsBytes =
-    kind === "docx" || kind === "xlsx" || kind === "pptx" || kind === "mesh" ||
-    kind === "fits" || kind === "dos" || kind === "bands";
+  const policy = previewPolicy(kind);
+  const needsUrl = policy.load.includes("url");
+  const needsText = policy.load.includes("text");
+  const needsBytes = policy.load.includes("bytes");
 
   const [url, setUrl] = useState<string | null>(null);
   const [text, setText] = useState<string | null>(data.content ?? null);
   const [bytes, setBytes] = useState<ArrayBuffer | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"preview" | "code">(kind === "text" ? "code" : "preview");
+  const [tab, setTab] = useState<"preview" | "code">(policy.defaultTab);
   const [showHistory, setShowHistory] = useState(false);
 
   useEffect(() => {
@@ -123,8 +120,7 @@ export function FilePreviewInspector({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cwd, data.path, data.content, data.root, kind, needsUrl, needsText, needsBytes]);
 
-  const canToggle =
-    kind === "html" || kind === "markdown" || kind === "molecule" || kind === "genome";
+  const canToggle = policy.supportsCode;
 
   // Where the user was in this file, restored when they come back to it —
   // history browsing keeps its own offset so the two don't clobber each other.

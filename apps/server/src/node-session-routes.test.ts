@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerNodeSessionRoutes } from "./node-session-routes.js";
 import { nodeSessionService } from "./node-session-service.js";
 import { registerSessionReadRoutes } from "./session-routes.js";
+import { sessionRepository } from "./session-repository.js";
 
 const cleanup: string[] = [];
 const original = {
@@ -77,8 +78,8 @@ async function workspaceWithSessions(...ids: string[]): Promise<string> {
 
 function app() {
   const server = Fastify({ logger: false });
-  registerSessionReadRoutes(server);
-  registerNodeSessionRoutes(server);
+  registerSessionReadRoutes(server, sessionRepository, nodeSessionService);
+  registerNodeSessionRoutes(server, nodeSessionService, sessionRepository);
   return server;
 }
 

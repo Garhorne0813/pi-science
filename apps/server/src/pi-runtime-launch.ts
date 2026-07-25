@@ -14,8 +14,10 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
   const effectiveModel = config.model || (typeof settings.model === "string" ? settings.model : "");
   const effectiveThinking = config.thinking || (typeof settings.thinking === "string" ? settings.thinking : "high");
   const args: string[] = [];
-  if (cliPath.endsWith(".ts") && process.env.PI_TSX_PATH) {
-    args.push(process.env.PI_TSX_PATH);
+  if (cliPath.endsWith(".ts")) {
+    const tsxPath = process.env.PI_TSX_PATH || findAdjacentRuntime(cliPath, join("node_modules", ".bin", "tsx"));
+    if (!tsxPath) throw new Error(`TypeScript Pi CLI requires tsx: ${cliPath}`);
+    args.push(tsxPath);
     if (process.env.PI_TSCONFIG_PATH) args.push("--tsconfig", process.env.PI_TSCONFIG_PATH);
   }
   args.push(cliPath, "--mode", "rpc", "--session-dir", join(cwd, ".pi-science", "sessions"), "--no-extensions");
@@ -59,6 +61,18 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
     args,
     env,
   };
+}
+
+function findAdjacentRuntime(sourcePath: string, relativePath: string): string | null {
+  let current = dirname(resolve(sourcePath));
+  for (let depth = 0; depth < 12; depth += 1) {
+    const candidate = join(current, relativePath);
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return null;
 }
 
 export function loadDefaultPiConfig(): PiConfig {

@@ -4,8 +4,8 @@ import { Key, Trash2, Eye, EyeOff, Check, Loader2, Cpu, Puzzle, FlaskConical, La
 import { cn } from "../../lib/cn";
 import { shippedLocales } from "../../i18n/config";
 import { useUiStore } from "../../lib/store";
-import { applySessionReplacements, type SessionReplacement } from "../../lib/runtime-store";
 import { clampThinkingLevel } from "../../lib/pi-science-client";
+import { readSettingsResponse, settingsApi } from "../../lib/settings-api";
 import { useTranslation } from "react-i18next";
 
 type Tab = "general" | "llm" | "extensions" | "mcp" | "compute";
@@ -70,21 +70,6 @@ interface Config {
   model_catalog_source?: "pi" | "fallback";
 }
 
-export async function readSettingsResponse<T>(response: Response, fallback: string): Promise<T> {
-  const data = await response.json().catch(() => ({})) as T & {
-    error?: string;
-    detail?: string;
-    session_replacements?: SessionReplacement[];
-  };
-  if (!response.ok || (data as { ok?: boolean }).ok === false) {
-    throw new Error(data.error || data.detail || fallback);
-  }
-  if (Array.isArray(data.session_replacements)) {
-    applySessionReplacements(data.session_replacements);
-  }
-  return data;
-}
-
 export function SettingsPage() {
   const { t } = useTranslation();
   const { cwd: rawCwd } = useParams<{ cwd: string }>();
@@ -99,9 +84,7 @@ export function SettingsPage() {
 
   const loadConfig = useCallback(async () => {
     try {
-      const query = workspaceCwd ? `?cwd=${encodeURIComponent(workspaceCwd)}` : "";
-      const res = await fetch(`/api/settings/config${query}`);
-      setConfig(await readSettingsResponse<Config>(res, "Unable to load settings"));
+      setConfig(await settingsApi.config<Config>(workspaceCwd));
       setError(null);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -122,12 +105,7 @@ export function SettingsPage() {
     setSaving(provider);
     setError(null);
     try {
-      const response = await fetch("/api/settings/api-key", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, api_key: key }),
-      });
-      await readSettingsResponse(response, "Unable to save API key");
+      await settingsApi.saveApiKey(provider, key);
       setApiKeyInput((prev) => ({ ...prev, [provider]: "" }));
       await loadConfig();
     } catch (e) {
@@ -141,8 +119,7 @@ export function SettingsPage() {
     setSaving(provider);
     setError(null);
     try {
-      const response = await fetch(`/api/settings/api-key/${provider}`, { method: "DELETE" });
-      await readSettingsResponse(response, "Unable to delete API key");
+      await settingsApi.deleteApiKey(provider);
       await loadConfig();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -155,16 +132,7 @@ export function SettingsPage() {
     setSaving("model");
     setError(null);
     try {
-      const query = workspaceCwd ? `?cwd=${encodeURIComponent(workspaceCwd)}` : "";
-      const response = await fetch(`/api/settings/model${query}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model,
-          thinking: thinking || config?.thinking || "high",
-        }),
-      });
-      await readSettingsResponse(response, "Unable to save default model");
+      await settingsApi.saveModel(model, thinking || config?.thinking || "high", workspaceCwd);
       await loadConfig();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

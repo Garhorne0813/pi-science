@@ -1,14 +1,14 @@
 import type { FastifyInstance } from "fastify";
-import { sessionRepository } from "./session-repository.js";
+import type { SessionRepository } from "./session-repository.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
-import { nodeSessionService } from "./node-session-service.js";
+import type { NodeSessionService } from "./node-session-service.js";
 
 function queryCwd(request: { query: unknown }): string {
   const query = request.query as { cwd?: unknown };
   return typeof query.cwd === "string" && query.cwd.length > 0 ? query.cwd : ".";
 }
 
-export function registerSessionReadRoutes(app: FastifyInstance): void {
+export function registerSessionReadRoutes(app: FastifyInstance, sessionRepository: SessionRepository, nodeSessionService: NodeSessionService): void {
   app.get("/api/sessions", async (request, reply) => {
     try {
       const cwd = await validateWorkspaceCwd(queryCwd(request));

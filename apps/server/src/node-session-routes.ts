@@ -1,7 +1,7 @@
 import { createSessionRequestSchema } from "@pi-science/contracts";
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { nodeSessionService } from "./node-session-service.js";
-import { sessionRepository } from "./session-repository.js";
+import type { NodeSessionService } from "./node-session-service.js";
+import type { SessionRepository } from "./session-repository.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
 
 function cwd(request: { query: unknown }): string {
@@ -29,7 +29,7 @@ function sendFailure(reply: FastifyReply, result: Record<string, unknown>) {
   return reply.code(status(result.code)).send({ ok: false, ...result });
 }
 
-export function registerNodeSessionRoutes(app: FastifyInstance): void {
+export function registerNodeSessionRoutes(app: FastifyInstance, nodeSessionService: NodeSessionService, sessionRepository: SessionRepository): void {
   app.post("/api/sessions", async (request, reply) => {
     const parsed = createSessionRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid session request", code: "invalid_request" });

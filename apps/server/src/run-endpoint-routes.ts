@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 import { configPath, readJson, readJsonLines, workspaceFile, writeJsonAtomic, appendJsonLine } from "./persistence.js";
-import { endpointId } from "./settings-routes.js";
+import { endpointId } from "./model-endpoint.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
 
 function cwd(request: { query: unknown }): string { const value = (request.query as Record<string, unknown>).cwd; return typeof value === "string" && value ? value : "."; }
