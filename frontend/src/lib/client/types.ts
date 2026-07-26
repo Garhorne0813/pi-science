@@ -1,0 +1,58 @@
+/** Wire types shared by the REST calls, the SSE transport and the runtime store. */
+
+export interface PiScienceEvent {
+  type: string;
+  sessionId?: string;
+  [key: string]: unknown;
+}
+
+export interface SessionInfo {
+  id: string;
+  cwd: string;
+  name?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AvailableModel {
+  id: string;
+  provider: string;
+  model: string;
+  label: string;
+  custom?: boolean;
+  reasoning?: boolean;
+  thinking_levels?: string[];
+  context_window?: number | null;
+  capability_source?: string;
+}
+
+export interface HistoryMessage {
+  id: string;
+  role: string;
+  content: Array<{ type: string; text?: string; [key: string]: unknown }>;
+  toolCallId?: string;
+  toolName?: string;
+  isError?: boolean;
+  timestamp?: string;
+}
+
+export interface SessionState {
+  id: string;
+  cwd: string;
+  is_streaming: boolean;
+  is_compacting: boolean;
+  pending_message_count: number;
+  model?: string;
+  thinking?: string;
+  context_tokens?: number | null;
+  context_window?: number | null;
+  context_percent?: number | null;
+  compaction_enabled?: boolean;
+  compaction_threshold_percent?: number | null;
+}
+
+export interface InteractionResponse {
+  value?: string;
+  confirmed?: boolean;
+  cancelled?: boolean;
+}

@@ -1,0 +1,120 @@
+import { describe, expect, it, vi } from "vitest";
+
+import { useRuntimeStore } from "../runtime-store";
+import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
+
+
+installRuntimeTestEnvironment();
+
+
+describe("runtime event subscription", () => {
+  it("renders a terminal runtime error and settles the active turn", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-a", { is_streaming: true }));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    source.emit("error", {
+      type: "error",
+      sessionId: "session-a",
+      message: "OpenAI API error (401): Invalid API key",
+      terminal: true,
+    });
+
+    const current = useRuntimeStore.getState();
+    expect(current.activeSessionId).toBe("session-a");
+    expect(current.working).toBe(false);
+    expect(current.status).toBe("error");
+    expect(current.thread.blocks).toContainEqual(expect.objectContaining({
+      kind: "status-line",
+      level: "error",
+      text: expect.stringContaining("Invalid API key"),
+    }));
+    expect(source.readyState).toBe(FakeEventSource.CLOSED);
+  });
+
+  it("shows work immediately, handles extension questions, and settles on idle", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      if (url.includes("/prompt")) return jsonResponse({ ok: true, id: "session-a" });
+      if (url.includes("/interactions/")) return jsonResponse({ ok: true });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    const source = FakeEventSource.instances[0];
+    source.open();
+
+    const sending = useRuntimeStore.getState().sendPrompt("research this");
+    expect(useRuntimeStore.getState().working).toBe(true);
+    await sending;
+    source.emit("question.asked", {
+      type: "question.asked",
+      sessionId: "session-a",
+      requestId: "question-1",
+      method: "select",
+      title: "Choose scope",
+      options: ["A", "B"],
+    });
+    expect(useRuntimeStore.getState().pendingInteraction?.requestId).toBe("question-1");
+
+    await useRuntimeStore.getState().respondToInteraction({ value: "B" });
+    expect(useRuntimeStore.getState().pendingInteraction).toBeNull();
+    source.emit("session.idle", { type: "session.idle", sessionId: "session-a" });
+    expect(useRuntimeStore.getState().working).toBe(false);
+    expect(useRuntimeStore.getState().status).toBe("ready");
+  });
+
+  it("keeps a locally rendered command when an extension handles it without an agent turn", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      if (url.includes("/prompt")) return jsonResponse({ ok: true, id: "session-a" });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+
+    await useRuntimeStore.getState().sendPrompt("/handled-command");
+    FakeEventSource.instances[0].emit("session.idle", {
+      type: "session.idle",
+      sessionId: "session-a",
+      handledWithoutTurn: true,
+    });
+    await Promise.resolve();
+
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
+      expect.objectContaining({ kind: "user", text: "/handled-command" }),
+    );
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/messages"))).toHaveLength(1);
+  });
+
+  it("increments the file revision when an agent turn settles", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+
+    FakeEventSource.instances[0].emit("session.idle", {
+      type: "session.idle",
+      sessionId: "session-a",
+    });
+
+    expect(useRuntimeStore.getState().fileRevision).toBe(1);
+  });
+});
