@@ -185,7 +185,8 @@ Pi-Science 是 **local-first 科学 AI 工作台**：对话式科研助手 + 可
 ### Phase 2 — 前端骨架（串行为主）
 
 **A3 数据层统一**
-- 【D4】单一 http 客户端：全部 30 处裸 fetch 收编进 apiRequest（或其薄封装）；统一错误解析与错误 i18n；统一 TTL 与失效策略（单层）；SettingsPage 的 4 个本地 DTO interface 改从 contracts 导入
+- 【D4 已裁定：TanStack Query】Query/Mutation 层接管 REST 的缓存/失效/重试/去重；统一错误解析与错误 i18n；废除 api.ts TTL 缓存与各 wrapper 的独立 TTL；research-events SSE 信号桥接为 queryClient.invalidateQueries；SSE 与 zustand store 不迁移
+- **边界修订（2026-07-26）**：SettingsPage 内部的 17 处裸 fetch 不在 A3 迁移——A6 拆分 SettingsPage 时一并迁移（避免同一文件两批各动一次）；A3 覆盖其余全部裸 fetch 调用点与 6 个 wrapper 模块
 - 验证：全套件 + UAT ×4（行为不变）
 
 **A4 cwd 单源 + 订阅规范**
