@@ -3,24 +3,17 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { metadataRoot, readJson, workspaceFile, writeJsonAtomic } from "./persistence.js";
+import { defaultPolicy, now, readState as state, source, statePath, type Item, type Proposal } from "./project-knowledge-store.js";
+import { ReviewerError, type ProjectReviewer } from "./project-reviewer.js";
+import { sessionRepository } from "./session-repository.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
 import type { ResearchLoopCoordinator } from "./research-loop/coordinator.js";
 import { subscribeResearchEvents } from "./research-loop/events.js";
 
-type Source = { session_id?: string | null; message_ids: string[]; files: string[]; run_ids: string[]; citations: string[] };
-type Policy = { auto_review: boolean; reminder_threshold: number; max_directory_depth: number; minimum_files_for_new_category: number; locked_paths: string[]; naming_pattern: string; accepted_counts: Record<string, number>; rejected_counts: Record<string, number>; external_services_allowed: boolean; allowed_egress_domains: string[]; blocked_data_classes: string[]; updated_at: string };
-type Item = { id: string; type: string; title: string; summary: string; confidence: string; importance: string; status: string; source: Source; related_files: string[]; conflicts_with: string[]; supersedes: string[]; proposal_id?: string; created_at: string; updated_at: string; [key: string]: unknown };
-type Proposal = Item & { proposal_type: "knowledge" | "file_operation"; knowledge_type?: string; reason: string; operations: unknown[]; decision_reason?: string | null; applied_history_id?: string | null };
-type ProjectState = { items: Item[]; proposals: Proposal[]; project_versions: Array<{ id: string; created_at: string; reason: string; knowledge_count: number; content: string }>; policy: Policy; history: Array<Record<string, unknown>> };
 
-const defaultPolicy = (): Policy => ({ auto_review: true, reminder_threshold: 5, max_directory_depth: 3, minimum_files_for_new_category: 3, locked_paths: [], naming_pattern: "{date}_{topic}_{kind}_{version}", accepted_counts: {}, rejected_counts: {}, external_services_allowed: true, allowed_egress_domains: [], blocked_data_classes: [], updated_at: new Date().toISOString() });
 function q(request: { query: unknown }, key: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[key]; return typeof value === "string" && value ? value : fallback; }
 async function ws(request: { query: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): Promise<string | null> { try { return await validateWorkspaceCwd(q(request, "cwd")); } catch (error) { reply.code(403).send({ error: String(error) }); return null; } }
-function statePath(cwd: string): string { return workspaceFile(cwd, "project-state.json"); }
-async function state(cwd: string): Promise<ProjectState> { const value = await readJson<Partial<ProjectState>>(statePath(cwd), {}); return { items: Array.isArray(value.items) ? value.items : [], proposals: Array.isArray(value.proposals) ? value.proposals : [], project_versions: Array.isArray(value.project_versions) ? value.project_versions : [], policy: { ...defaultPolicy(), ...(value.policy ?? {}) }, history: Array.isArray(value.history) ? value.history : [] }; }
 async function projectContent(cwd: string): Promise<string> { const path = join(cwd, "PROJECT.md"); try { return await readFile(path, "utf8"); } catch { return `# ${(cwd.split(/[\\/]/).at(-1) ?? "Project").replaceAll("-", " ")}\n\n## Project Goal / 项目目标\n\nDescribe the project goal, scope, and constraints here.\n`; } }
-function source(value: unknown): Source { const input = value && typeof value === "object" ? value as Record<string, unknown> : {}; return { session_id: typeof input.session_id === "string" ? input.session_id : null, message_ids: Array.isArray(input.message_ids) ? input.message_ids.map(String) : [], files: Array.isArray(input.files) ? input.files.map(String) : [], run_ids: Array.isArray(input.run_ids) ? input.run_ids.map(String) : [], citations: Array.isArray(input.citations) ? input.citations.map(String) : [] }; }
-function now(): string { return new Date().toISOString(); }
 
 function researchFailure(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -31,7 +24,26 @@ function researchFailure(reply: { code: (status: number) => { send: (body: unkno
   return reply.code(status).send({ error: message });
 }
 
-export function registerProjectRoutes(app: FastifyInstance, research: ResearchLoopCoordinator): void {
+export function registerProjectRoutes(app: FastifyInstance, research: ResearchLoopCoordinator, reviewer: ProjectReviewer): void {
+  // Takes cwd from the body, unlike the rest of this router: the reviewer is a
+  // POST with a JSON payload and the frontend has always sent it that way.
+  app.post("/api/project-knowledge/review", async (request, reply) => {
+    const body = (request.body ?? {}) as { cwd?: unknown; session_id?: unknown; include_files?: unknown; force_full_session?: unknown };
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(typeof body.cwd === "string" && body.cwd ? body.cwd : "."); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+    const requested = typeof body.session_id === "string" && body.session_id ? body.session_id : null;
+    const sessionId = requested ?? (await sessionRepository.list(cwd)).sort((left, right) => String(left.updated_at).localeCompare(String(right.updated_at))).at(-1)?.id;
+    if (!sessionId) return reply.code(404).send({ error: "No session available to review" });
+    if (!await sessionRepository.findPath(cwd, sessionId)) return reply.code(404).send({ error: "Session not found in this workspace" });
+    try {
+      return await reviewer.review({ cwd, sessionId, includeFiles: body.include_files !== false, forceFullSession: body.force_full_session === true });
+    } catch (error) {
+      if (error instanceof ReviewerError) return reply.code(502).send({ error: error.message });
+      throw error;
+    }
+  });
+
   app.get("/api/project-knowledge/summary", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); return { workspace: cwd, project_file: "PROJECT.md", pending_count: current.proposals.filter((item) => item.status === "pending").length, knowledge_count: current.items.filter((item) => item.status === "active").length, auto_review: current.policy.auto_review }; });
   app.post("/api/project-knowledge/initialize", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); await writeJsonAtomic(statePath(cwd), current); return { workspace: cwd, project_file: "PROJECT.md", pending_count: 0, knowledge_count: current.items.length, auto_review: current.policy.auto_review }; });
   app.get("/api/project-knowledge/project", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); return { workspace: cwd, project_file: "PROJECT.md", pending_count: current.proposals.filter((item) => item.status === "pending").length, knowledge_count: current.items.length, auto_review: current.policy.auto_review, content: await projectContent(cwd) }; });

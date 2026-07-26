@@ -122,13 +122,10 @@ describe("Node control plane", () => {
     process.on("uncaughtException", record);
     process.on("unhandledRejection", record);
     try {
-      // A node-owned prefix with no native handler falls through to the proxy,
-      // so this reaches the upstream without the scientific-runtime gate.
-      const response = await fetch(`${app.listeningOrigin}/api/project-knowledge/review`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ cwd: "." }),
-      });
+      // /api/bookmarks is a declared boundary with no native handler, so it
+      // falls through to the proxy without passing the scientific-runtime gate
+      // that would answer 503 before any upstream connection is attempted.
+      const response = await fetch(`${app.listeningOrigin}/api/bookmarks`);
       expect(response.status).toBe(504);
       expect(await response.json()).toMatchObject({ error: "scientific runtime unavailable" });
       // The duplicate onError lands a tick after the first reply is flushed.

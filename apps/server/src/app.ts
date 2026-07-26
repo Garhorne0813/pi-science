@@ -20,7 +20,7 @@ import { registerEnvironmentRoutes } from "./environment-routes.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
-  const { sessions: nodeSessionService, events, sessionRepository, settings, jobs, research, scientificRuntime, environments } = modules;
+  const { sessions: nodeSessionService, events, sessionRepository, settings, jobs, research, reviewer, scientificRuntime, environments } = modules;
   nodeSessionService.configureScientificRuntime(config.pythonOrigin, config.internalToken);
   const app = Fastify({
     logger: { level: config.logLevel },
@@ -123,7 +123,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings);
   if (config.nodeRuns !== false) registerRunEndpointRoutes(app);
   if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, research);
-  if (config.nodeProject !== false) registerProjectRoutes(app, research);
+  if (config.nodeProject !== false) registerProjectRoutes(app, research, reviewer);
   app.addHook("onReady", async () => {
     const results = await Promise.allSettled((await knownWorkspacePaths()).map((cwd) => research.reconcile(cwd)));
     for (const result of results) if (result.status === "rejected") app.log.error({ err: result.reason }, "research loop recovery failed");
