@@ -132,6 +132,52 @@ describe("native control-plane business routes", () => {
     expect(response.json()[0].last_modified).not.toBe("");
   });
 
+  it("installs a demo workspace from the shipped assets and reuses it on a repeat install", async () => {
+    const root = join(tmpdir(), `pi-science-demo-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    tempDirs.push(root);
+    process.env.PI_SCIENCE_WORKSPACES = root;
+    const home = `${root}-home`; tempDirs.push(home); process.env.PI_SCIENCE_HOME = home;
+    const app = buildApp(config());
+    apps.push(app);
+
+    const installed = await app.inject({ method: "POST", url: "/api/workspaces/demo?name=molecules" });
+    expect(installed.statusCode).toBe(200);
+    expect(installed.json()).toMatchObject({ name: "Molecular Playground", path: join(root, "Molecular Playground"), session_count: 0 });
+    const path = installed.json().path as string;
+    expect((await stat(join(path, ".pi-science"))).isDirectory()).toBe(true);
+    expect((await stat(join(path, "data", "1LYS.pdb"))).isFile()).toBe(true);
+    expect((await app.inject({ method: "GET", url: "/api/workspaces" })).json()).toEqual([
+      expect.objectContaining({ name: "Molecular Playground" }),
+    ]);
+
+    // A repeat click opens the existing workspace; user edits are never overwritten.
+    await writeFile(join(path, "data", "1LYS.pdb"), "edited by the user", "utf8");
+    const again = await app.inject({ method: "POST", url: "/api/workspaces/demo?name=molecules" });
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({ path });
+    await expect(readFile(join(path, "data", "1LYS.pdb"), "utf8")).resolves.toBe("edited by the user");
+
+    const climate = await app.inject({ method: "POST", url: "/api/workspaces/demo?name=climate" });
+    expect(climate.statusCode).toBe(200);
+    expect(climate.json()).toMatchObject({ name: "Climate Trends" });
+    expect((await stat(join(root, "Climate Trends", "monthly_global_anomalies.csv"))).isFile()).toBe(true);
+  });
+
+  it("rejects a demo name that is not on the allowlist", async () => {
+    const root = join(tmpdir(), `pi-science-demo-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    tempDirs.push(root);
+    process.env.PI_SCIENCE_WORKSPACES = root;
+    const app = buildApp(config());
+    apps.push(app);
+
+    for (const name of ["", "unknown", "../../etc", "..%2F..%2Fetc", "demo-molecules"]) {
+      const response = await app.inject({ method: "POST", url: `/api/workspaces/demo?name=${encodeURIComponent(name)}` });
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error).toBe("Unknown demo");
+    }
+    await expect(stat(root)).rejects.toThrow();
+  });
+
   it("persists jobs, artifacts, provenance, and redacts settings secrets", async () => {
     const cwd = await workspace();
     const home = join(cwd, "control-home"); process.env.PI_SCIENCE_HOME = home;

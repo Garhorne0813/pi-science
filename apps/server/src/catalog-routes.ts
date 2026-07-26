@@ -1,5 +1,6 @@
-import { access, readdir, readFile, realpath, rename, stat, rm } from "node:fs/promises";
+import { access, cp, mkdir, readdir, readFile, realpath, rename, stat, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 import { configPath, readJson, writeJsonAtomic } from "./persistence.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
@@ -39,6 +40,14 @@ async function workspaceInfo(path: string): Promise<Record<string, unknown>> {
 }
 function inside(root: string, target: string): boolean { const rel = relative(root, target); return !rel.startsWith("..") && !isAbsolute(rel); }
 function expandUserPath(path: string): string { return path.startsWith("~/") ? resolve(process.env.HOME ?? ".", path.slice(2)) : resolve(path); }
+
+// src/ (or dist/) -> apps/server/ -> apps/ -> project root, where the shipped demo assets live.
+const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+/** The two demo cards the projects page offers; the request name is an allowlist key, never a path. */
+const DEMOS: Record<string, { source: string; workspace: string }> = {
+  molecules: { source: "demo-molecules", workspace: "Molecular Playground" },
+  climate: { source: "demo", workspace: "Climate Trends" },
+};
 
 export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinator, research?: ResearchLoopCoordinator): void {
   // ── Skills (delegated to skill-catalog service) ──
@@ -96,6 +105,22 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
   app.get("/api/workspaces", async () => { const result = await Promise.all((await knownWorkspacePaths()).map((path) => workspaceInfo(path))); return result.sort((left, right) => String(right.last_modified).localeCompare(String(left.last_modified))); });
   app.post("/api/workspaces", async (request, reply) => { const body = (request.body ?? {}) as { name?: unknown }; const name = String(body.name ?? "").trim().replace(/[\\/]/g, "-").slice(0, 100); if (!name) return reply.code(400).send({ error: "Invalid workspace name" }); const path = join(rootDir(), name); try { await stat(path); return reply.code(409).send({ error: "Workspace already exists" }); } catch { /* create */ } await import("node:fs/promises").then(({ mkdir }) => mkdir(join(path, ".pi-science"), { recursive: true })); return await workspaceInfo(path); });
   app.post("/api/workspaces/open", async (request, reply) => { const path = expandUserPath(String(((request.body ?? {}) as { path?: unknown }).path ?? "")); try { if (!(await stat(path)).isDirectory()) return reply.code(400).send({ error: "Not a directory" }); } catch { return reply.code(404).send({ error: "Folder not found" }); } await import("node:fs/promises").then(({ mkdir }) => mkdir(join(path, ".pi-science"), { recursive: true })); return await workspaceInfo(path); });
+  app.post("/api/workspaces/demo", async (request, reply) => {
+    const demo = DEMOS[String((request.query as { name?: unknown }).name ?? "")];
+    if (!demo) return reply.code(400).send({ error: "Unknown demo" });
+    const root = rootDir();
+    const target = resolve(root, demo.workspace);
+    if (!inside(root, target) || target === root) return reply.code(403).send({ error: "Demo target escapes the workspaces directory" });
+    const source = join(PROJECT_ROOT, demo.source);
+    try { if (!(await stat(source)).isDirectory()) throw new Error("not a directory"); }
+    catch { return reply.code(500).send({ error: `Demo content is missing from this installation (${demo.source})` }); }
+    // A repeat install opens the workspace the user already has instead of overwriting their edits.
+    let installed = true;
+    try { await stat(target); } catch { installed = false; }
+    if (!installed) await cp(source, target, { recursive: true });
+    await mkdir(join(target, ".pi-science"), { recursive: true });
+    return await workspaceInfo(target);
+  });
   app.post("/api/workspaces/rename", async (request, reply) => {
     const body = (request.body ?? {}) as { path?: unknown; name?: unknown };
     const source = resolve(String(body.path ?? ""));
