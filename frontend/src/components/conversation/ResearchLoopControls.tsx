@@ -7,9 +7,9 @@ export type ResearchStarter = "research_loop" | "optimize" | "compare" | "evalua
 
 const modes: ResearchStarter[] = ["research_loop", "optimize", "compare", "evaluate", "reproduce"];
 
-export function ResearchModePicker({ selected, disabled, onSelect }: { selected: ResearchStarter | null; disabled?: boolean; onSelect: (mode: ResearchStarter, prompt: string) => void }) {
+export function ResearchModePicker({ selected, disabled, onSelect, className }: { selected: ResearchStarter | null; disabled?: boolean; onSelect: (mode: ResearchStarter, prompt: string) => void; className?: string }) {
   const { t } = useTranslation();
-  return <div className="flex flex-wrap gap-2 px-1 pb-2" aria-label={t("research.conversationMode")}>{modes.map((mode) => <button key={mode} type="button" disabled={disabled} aria-pressed={selected === mode} onClick={() => onSelect(mode, t(`research.mode.${mode}.prompt`))} className={cn("flex min-h-9 items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors disabled:opacity-50", selected === mode ? "border-accent bg-accent text-accent-fg" : "border-border bg-surface text-muted hover:text-text")}><FlaskConical size={13} /> {t(`research.mode.${mode}.label`)}</button>)}</div>;
+  return <div className={cn("flex flex-wrap gap-2 px-1 pb-2", className)} aria-label={t("research.conversationMode")}>{modes.map((mode) => <button key={mode} type="button" disabled={disabled} aria-pressed={selected === mode} onClick={() => onSelect(mode, t(`research.mode.${mode}.prompt`))} className={cn("flex min-h-9 items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors disabled:opacity-50", selected === mode ? "border-accent bg-accent text-accent-fg" : "border-border bg-surface text-muted hover:text-text")}><FlaskConical size={13} /> {t(`research.mode.${mode}.label`)}</button>)}</div>;
 }
 
 export interface ResearchLoopDraft { title: string; objective: string; metric: string; direction: "maximize" | "minimize"; target?: number; maxCandidates: number; maxWallSeconds: number }

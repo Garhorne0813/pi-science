@@ -139,6 +139,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     }));
   }
 
+  const answeredProxyErrors = new WeakSet<object>();
   const proxyOptions = {
     upstream: config.pythonOrigin,
     rewritePrefix: "/api",
@@ -154,7 +155,14 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
         ...headers,
         "x-pi-science-upstream": "python",
       }),
-      onError: (reply: { code: (statusCode: number) => { send: (body: unknown) => unknown } }) => {
+      // A refused upstream connection makes @fastify/http-proxy invoke onError
+      // twice for the same reply. Both calls land in the same tick, so
+      // headersSent is still false on the second one; letting it through queues
+      // a second send whose onSend chain throws ERR_HTTP_HEADERS_SENT
+      // asynchronously — an uncaught exception that takes the process down.
+      onError: (reply: object & { code: (statusCode: number) => { send: (body: unknown) => unknown } }) => {
+        if (answeredProxyErrors.has(reply)) return;
+        answeredProxyErrors.add(reply);
         reply.code(504).send({ error: "scientific runtime unavailable" });
       },
     },
