@@ -60,6 +60,19 @@ bash scripts/install.sh
 bash scripts/start.sh
 ```
 
+### `pi-science` 命令
+
+`scripts/install.sh` 会在 `~/.local/bin` 生成 `pi-science` 启动器（可用 `PI_SCIENCE_BIN_DIR` 指定其它目录）。只要该目录在 `PATH` 中：
+
+```bash
+pi-science                  # 启动全部服务并打开浏览器
+pi-science start --detach   # 改为后台常驻
+pi-science status           # 查看当前运行状态
+pi-science stop             # 停止本仓库启动的服务
+```
+
+不加 `--detach` 时，`pi-science` 会占用当前终端，Ctrl+C 停止，与 `bash scripts/start.sh` 完全一致。启动器只是转发到本仓库，`git pull` 后无需重装；但仓库移动位置后需要重新运行 `scripts/install.sh`。
+
 后续只需运行 `bash scripts/start.sh`。如果继续使用 `dev.sh`，但希望跳过安装：
 
 ```bash
