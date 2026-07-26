@@ -2,8 +2,7 @@
 
 The control plane (sessions, SSE, Pi subprocess management, files, settings,
 jobs, artifacts, project knowledge, etc.) is owned by the Node gateway.
-Python now serves only the scientific runtime: kernels, notebooks, PDFs,
-figures, and literature.
+Python now serves only the scientific runtime: kernels, notebooks, and PDFs.
 """
 
 from contextlib import asynccontextmanager
@@ -17,8 +16,6 @@ from config import CORS_ORIGINS, HOST, PORT, ensure_dirs
 from api.kernels import router as kernels_router
 from api.notebooks import router as notebooks_router, shutdown_jupyter_server
 from api.pdfs import router as pdfs_router
-from api.figures import router as figures_router
-from api.literature import router as literature_router
 from services.kernel_manager import kernel_manager
 
 
@@ -38,7 +35,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Pi-Science Scientific Runtime",
-    description="Scientific runtime for pi-science: kernels, notebooks, PDFs, figures, and literature",
+    description="Scientific runtime for pi-science: kernels, notebooks, and PDFs",
     version="0.2.0",
     lifespan=lifespan,
 )
@@ -69,8 +66,6 @@ app.add_middleware(
 app.include_router(kernels_router)
 app.include_router(notebooks_router)
 app.include_router(pdfs_router)
-app.include_router(figures_router)
-app.include_router(literature_router)
 
 
 @app.get("/api/health")
