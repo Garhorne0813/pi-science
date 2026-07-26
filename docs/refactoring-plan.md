@@ -120,6 +120,11 @@ Pi-Science 是 **local-first 科学 AI 工作台**：对话式科研助手 + 可
 
 **B-9 远期**：Git 工作区版本化（每轮次自动 commit + provenance 关联 message、时间旅行）、评估器库 + 跨循环排行榜、定时/文件监听重跑、研究模式差异化（optimize/compare/evaluate/reproduce 现仅改 placeholder）、并行候选（ADR 预留）、LLM-judged metrics。
 
+### 4.0 评测基准存档（2026-07-26 调研；用户裁定：暂不实施，仅归档备查）
+
+若未来要对外出数字，行动顺序已定：① 写一个 Inspect AI solver 桥接层（`sandbox_agent_bridge` 就是为 CLI agent 设计的，照抄 inspect_swe 的 claude_code 模板）——一次投入解锁 AstaBench + inspect_evals 内的 core_bench/scicode/lab_bench/mle_bench 等一整批；② AlgoTune（CPU-only，~$150）本地打通「基准 grader → `evaluator.command` → Pareto 循环」；③ SUPER Expert（2-3 美分/题）验证可复现性面；④ DABstep 验证对话式数据分析；⑤ 有算力再上 RE-Bench（其 intermediate_score/取历史最优的协议与我们的预算+frontier 模型天然同构）与 MLE-bench Lite。
+关键结构性优势（可用于叙事）：`evaluatorSpecSchema.command` 可直接装载任意基准的 grader——研究循环即插即用地变成基准优化器。避坑名单：GUI 类（ScienceBoard/Spider2-V/OSWorld，无 computer-use 通道）、CURIE（已归档且纯长上下文）、GAIA/GAIA2（浏览器依赖/强制 Python 基类）、RepliBench（同名陷阱：测的是自我复制安全）、MLR-Bench（纯 LLM rubric 无确定性）。完整报告见会话记录（40+ 基准横评）。
+
 ### 4.1 调研修正（2026-07-26 R1 科研工作流实证调研，证据见调研报告）
 
 **新增功能（证据直接支撑）：**
