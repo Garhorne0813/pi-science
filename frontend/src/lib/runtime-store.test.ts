@@ -392,6 +392,30 @@ describe("runtime conversation state", () => {
     expect(useRuntimeStore.getState().sessions.map((session) => session.id)).toEqual(["blank-2", "blank-1"]);
   });
 
+  it("settles a new conversation after the route reuses an already-open SSE connection", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/sessions" && init?.method === "POST") {
+        return jsonResponse({ id: "blank-route", cwd: "/workspace" });
+      }
+      if (url.includes("blank-route/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("blank-route/state")) return jsonResponse(state("blank-route"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    useRuntimeStore.setState({ cwd: "/workspace", status: "ready" });
+
+    const createPromise = useRuntimeStore.getState().createNewSession();
+    await vi.waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    FakeEventSource.instances[0].open();
+    await expect(createPromise).resolves.toBe("blank-route");
+
+    // LiveSessionPage calls connect again after navigation to the new route.
+    await useRuntimeStore.getState().connect("/workspace", "blank-route");
+
+    expect(useRuntimeStore.getState().status).toBe("ready");
+  });
+
   it("keeps durable history visible when runtime activation is busy", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

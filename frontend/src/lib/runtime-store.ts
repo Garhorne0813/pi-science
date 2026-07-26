@@ -811,6 +811,17 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
           nextState.working = false;
         }
       }
+      // A newly-created session may already have opened its SSE connection
+      // before the route effect calls connect() again. In that case
+      // PiScienceClient.connect() is intentionally a no-op, so the route
+      // effect must still settle the store back to ready after REST succeeds.
+      if (
+        messagesResult.status === "fulfilled"
+        && runtimeStateResult.status === "fulfilled"
+        && client.isOpenTo(targetSessionId, cwd)
+      ) {
+        nextState.status = "ready";
+      }
       set(nextState);
 
       const failure = messagesResult.status === "rejected"
