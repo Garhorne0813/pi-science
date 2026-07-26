@@ -62,6 +62,11 @@ function state(sessionId: string, overrides: Record<string, unknown> = {}) {
     pending_message_count: 0,
     model: "custom-custom-api/gpt-5.6-luna",
     thinking: "max",
+    context_tokens: 24000,
+    context_window: 128000,
+    context_percent: 18.75,
+    compaction_enabled: true,
+    compaction_threshold_percent: 85,
     ...overrides,
   };
 }
@@ -88,6 +93,11 @@ beforeEach(() => {
     working: false,
     model: null,
     thinking: null,
+    contextTokens: null,
+    contextWindow: null,
+    contextPercent: null,
+    compactionEnabled: true,
+    compactionThresholdPercent: null,
     pendingInteraction: null,
     fileRevision: 0,
     draft: "",
@@ -142,6 +152,10 @@ describe("runtime conversation state", () => {
     expect(current.working).toBe(true);
     expect(current.model).toBe("custom-custom-api/gpt-5.6-luna");
     expect(current.thinking).toBe("max");
+    expect(current.contextTokens).toBe(24000);
+    expect(current.contextWindow).toBe(128000);
+    expect(current.contextPercent).toBe(18.75);
+    expect(current.compactionThresholdPercent).toBe(85);
     expect(current.thread.blocks[0]).toMatchObject({ kind: "user", text: "hello" });
     expect(current.status).toBe("ready");
   });
@@ -670,6 +684,91 @@ describe("runtime conversation state", () => {
     await useRuntimeStore.getState().connect("/workspace", "gone");
 
     expect(getSessionName("/workspace", "gone")).toBe("");
+  });
+
+  it("backfills the session name from loaded history when none is stored", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) {
+        return jsonResponse({ messages: [
+          { id: "user-1", role: "user", content: [{ type: "text", text: "  Analyse   the\ndataset today" }] },
+          { id: "agent-1", role: "assistant", content: [{ type: "text", text: "done" }] },
+        ] });
+      }
+      if (url.includes("/state")) return jsonResponse(state("legacy-session"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([{ id: "legacy-session", cwd: "/workspace" }]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    useRuntimeStore.setState({ cwd: "/workspace", sessions: [{ id: "legacy-session", cwd: "/workspace" }] });
+
+    await useRuntimeStore.getState().connect("/workspace", "legacy-session");
+
+    expect(getSessionName("/workspace", "legacy-session")).toBe("Analyse the");
+    expect(useRuntimeStore.getState().sessions).toContainEqual(
+      expect.objectContaining({ id: "legacy-session", name: "Analyse the" }),
+    );
+  });
+
+  it("keeps an existing stored name when history loads", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) {
+        return jsonResponse({ messages: [
+          { id: "user-1", role: "user", content: [{ type: "text", text: "totally different text" }] },
+        ] });
+      }
+      if (url.includes("/state")) return jsonResponse(state("named-session"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([{ id: "named-session", cwd: "/workspace" }]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    setSessionName("/workspace", "named-session", "My experiment");
+    useRuntimeStore.setState({ cwd: "/workspace", sessions: [{ id: "named-session", cwd: "/workspace", name: "My experiment" }] });
+
+    await useRuntimeStore.getState().connect("/workspace", "named-session");
+
+    expect(getSessionName("/workspace", "named-session")).toBe("My experiment");
+    expect(useRuntimeStore.getState().sessions).toContainEqual(
+      expect.objectContaining({ id: "named-session", name: "My experiment" }),
+    );
+  });
+
+  it("backfills the name during gap recovery once history first contains a user block", async () => {
+    let messageReads = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) {
+        messageReads += 1;
+        return jsonResponse({ messages: messageReads === 1 ? [] : [
+          { id: "user-1", role: "user", content: [{ type: "text", text: "recovered question" }] },
+        ] });
+      }
+      if (url.includes("/state")) return jsonResponse(state("session-gap"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-gap");
+    // The empty-thread guard: no user block yet means no derived name.
+    expect(getSessionName("/workspace", "session-gap")).toBe("");
+
+    FakeEventSource.instances[0].emit("stream.gap", { type: "stream.gap", sessionId: "session-gap" });
+
+    await vi.waitFor(() => expect(getSessionName("/workspace", "session-gap")).toBe("recovered question"));
+  });
+
+  it("truncates a very long first message when storing the session name", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/sessions" && init?.method === "POST") {
+        return jsonResponse({ id: "session-long", cwd: "/workspace" });
+      }
+      if (url.includes("session-long/prompt")) return jsonResponse({ ok: true, id: "session-long" });
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    useRuntimeStore.setState({ cwd: "/workspace", status: "ready" });
+
+    await useRuntimeStore.getState().sendPrompt("x".repeat(100));
+
+    expect(getSessionName("/workspace", "session-long")).toBe(`${"x".repeat(48)}…`);
   });
 
   it("does not let a stale state snapshot clear live working activity", async () => {

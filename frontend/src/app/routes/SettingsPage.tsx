@@ -6,6 +6,7 @@ import { shippedLocales } from "../../i18n/config";
 import { useUiStore } from "../../lib/store";
 import { clampThinkingLevel } from "../../lib/pi-science-client";
 import { readSettingsResponse, settingsApi } from "../../lib/settings-api";
+import { invalidateApiCache } from "../../lib/api";
 import { useTranslation } from "react-i18next";
 import { ComputeSettings } from "../../components/settings/ComputeSettings";
 
@@ -48,6 +49,8 @@ interface CustomProvider {
   api: string;
   models: string[];
   has_key: boolean;
+  reasoning?: boolean;
+  context_window?: number;
 }
 
 interface AvailableModel {
@@ -59,6 +62,7 @@ interface AvailableModel {
   reasoning: boolean;
   thinking_levels: string[];
   capability_source: string;
+  context_window?: number | null;
 }
 
 interface Config {
@@ -69,6 +73,8 @@ interface Config {
   custom_providers: CustomProvider[];
   available_models: AvailableModel[];
   model_catalog_source?: "pi" | "fallback";
+  compaction_enabled: boolean;
+  compaction_threshold_percent: number;
 }
 
 export function SettingsPage() {
@@ -142,6 +148,19 @@ export function SettingsPage() {
     }
   };
 
+  const saveCompaction = async (enabled: boolean, thresholdPercent: number) => {
+    setSaving("compaction");
+    setError(null);
+    try {
+      await settingsApi.saveCompaction(enabled, thresholdPercent, workspaceCwd);
+      await loadConfig();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(null);
+    }
+  };
+
   if (loading)
     return (
       <div className="flex items-center justify-center h-full text-sm text-muted">
@@ -166,7 +185,7 @@ export function SettingsPage() {
         </div>
 
         {tab === "general" && <GeneralTab />}
-        {tab === "llm" && <LLMTab config={config!} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} saveModel={saveModel} onConfigReload={loadConfig} />}
+        {tab === "llm" && <LLMTab config={config!} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} saveModel={saveModel} saveCompaction={saveCompaction} onConfigReload={loadConfig} />}
         {tab === "extensions" && <ExtensionsTab workspaceCwd={workspaceCwd} />}
         {tab === "mcp" && <MCPTab workspaceCwd={workspaceCwd} />}
         {tab === "compute" && <ComputeSettings />}
@@ -197,7 +216,7 @@ function GeneralTab() {
 
 /* ── LLM Tab ── */
 
-function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKey, saving, saveKey, deleteKey, saveModel, onConfigReload }: any) {
+function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKey, saving, saveKey, deleteKey, saveModel, saveCompaction, onConfigReload }: any) {
   const { t } = useTranslation();
   const [providerToAdd, setProviderToAdd] = useState("");
   const [showVendorPicker, setShowVendorPicker] = useState(false);
@@ -259,7 +278,7 @@ function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKey, savi
                 <div className="flex min-h-10 w-full flex-wrap items-center gap-1 rounded-input border border-border bg-surface p-0.5" role="group" aria-label={t("settings.model.thinking")}>
                   {thinkingLevels.map((level: string) => (
                     <button key={level} disabled={saving === "model"} onClick={() => saveModel(config.model, level)} className={cn("min-h-9 min-w-[3.5rem] flex-1 rounded-input px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-wait disabled:opacity-50", config.thinking === level ? "bg-surface-2 text-text shadow-sm ring-1 ring-border/70" : "text-muted hover:bg-surface-2/70 hover:text-text")}>
-                      {level}
+                      {t(`settings.thinking.${level}`, { defaultValue: level })}
                     </button>
                   ))}
                 </div>
@@ -281,6 +300,8 @@ function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKey, savi
           </div>
         </div>
       </section>
+
+      <ContextManagementSection config={config} saving={saving === "compaction"} onSave={saveCompaction} />
 
       <section id={providerSectionId} className="overflow-hidden rounded-card border border-border bg-surface">
         <div className="flex flex-wrap items-start justify-between gap-3 px-5 py-4">
@@ -399,6 +420,53 @@ function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKey, savi
   );
 }
 
+function clampCompactionThreshold(value: number): number { return Math.min(95, Math.max(50, value)); }
+
+function ContextManagementSection({ config, saving, onSave }: { config: Config; saving: boolean; onSave: (enabled: boolean, threshold: number) => Promise<void> }) {
+  const { t } = useTranslation();
+  const [enabled, setEnabled] = useState(config.compaction_enabled !== false);
+  const [threshold, setThreshold] = useState(clampCompactionThreshold(config.compaction_threshold_percent || 85));
+
+  useEffect(() => {
+    setEnabled(config.compaction_enabled !== false);
+    setThreshold(clampCompactionThreshold(config.compaction_threshold_percent || 85));
+  }, [config.compaction_enabled, config.compaction_threshold_percent]);
+
+  const selectedModel = config.available_models.find((model) => model.id === config.model);
+  const contextWindow = selectedModel?.context_window || null;
+  const thresholdTokens = contextWindow ? Math.round(contextWindow * threshold / 100) : null;
+
+  return (
+    <section className="overflow-hidden rounded-card border border-border bg-surface">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-faint px-5 py-4">
+        <div>
+          <h2 className="text-sm font-semibold text-text">{t("settings.context.title")}</h2>
+          <p className="mt-1 text-xs leading-relaxed text-muted">{t("settings.context.description")}</p>
+        </div>
+        <label className="flex min-h-11 cursor-pointer items-center gap-2 text-xs text-text">
+          <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} className="h-4 w-4 accent-[var(--color-accent)]" />
+          {t("settings.context.autoCompact")}
+        </label>
+      </div>
+      <div className="px-5 py-4">
+        <div className="flex items-center justify-between gap-3">
+          <label htmlFor="compaction-threshold" className="text-xs font-medium text-text">{t("settings.context.threshold")}</label>
+          <output className="font-mono text-xs text-text">{threshold}%</output>
+        </div>
+        <input id="compaction-threshold" type="range" min={50} max={95} step={1} value={threshold} disabled={!enabled || saving} onChange={(event) => setThreshold(Number(event.target.value))} className="mt-3 h-11 w-full cursor-pointer accent-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-50" />
+        <p className="text-[11px] leading-relaxed text-muted">
+          {t("settings.context.thresholdHelp", { threshold, tokens: thresholdTokens ? thresholdTokens.toLocaleString() : "—", window: contextWindow ? contextWindow.toLocaleString() : "—" })}
+        </p>
+        <div className="mt-4 flex justify-end">
+          <button type="button" disabled={saving} onClick={() => void onSave(enabled, threshold)} className="min-h-11 rounded-input bg-accent px-4 text-xs font-medium text-accent-fg disabled:cursor-wait disabled:opacity-50">
+            {saving ? t("settings.context.saving") : t("settings.context.save")}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ModelEndpointSection() {
   type Endpoint = {
     endpoint_id: string;
@@ -510,6 +578,8 @@ function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, onClose }
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [api, setApi] = useState("openai-completions");
+  const [reasoning, setReasoning] = useState(true);
+  const [contextWindow, setContextWindow] = useState(128000);
   const [discovered, setDiscovered] = useState<CustomProvider | null>(null);
   const [busy, setBusy] = useState<"discover" | "save" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -552,13 +622,18 @@ function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, onClose }
           api_key: apiKey,
           api: discovered.api,
           models: discovered.models,
+          reasoning,
+          context_window: contextWindow,
         }),
       });
       await readSettingsResponse(res, t("settings.custom.saveError"));
+      invalidateApiCache("/api/settings/");
       setDiscovered(null);
       setName("");
       setBaseUrl("");
       setApiKey("");
+      setReasoning(true);
+      setContextWindow(128000);
       await onConfigReload();
       onClose();
     } catch (e) {
@@ -573,6 +648,7 @@ function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, onClose }
     try {
       const res = await fetch(`/api/settings/custom-providers/${encodeURIComponent(id)}`, { method: "DELETE" });
       await readSettingsResponse(res, t("settings.custom.removeError"));
+      invalidateApiCache("/api/settings/");
       await onConfigReload();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -583,6 +659,8 @@ function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, onClose }
     setName("");
     setBaseUrl("");
     setApiKey("");
+    setReasoning(true);
+    setContextWindow(128000);
     setDiscovered(null);
     setError(null);
     onClose();
@@ -622,6 +700,16 @@ function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, onClose }
             </select>
           </div>
           <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" className="w-full rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] font-mono text-text outline-none" />
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-input border border-border bg-surface-2 px-3 text-xs text-text">
+              <input type="checkbox" checked={reasoning} onChange={(event) => setReasoning(event.target.checked)} className="h-4 w-4 accent-[var(--color-accent)]" />
+              {t("settings.custom.reasoning")}
+            </label>
+            <label className="flex min-h-11 items-center gap-2 rounded-input border border-border bg-surface-2 px-3">
+              <span className="shrink-0 text-xs text-muted">{t("settings.custom.contextWindow")}</span>
+              <input type="number" min={4096} step={1024} value={contextWindow} onChange={(event) => setContextWindow(Math.max(4096, Number(event.target.value) || 4096))} className="min-w-0 flex-1 bg-transparent text-right font-mono text-xs text-text outline-none" />
+            </label>
+          </div>
           <div className="flex gap-2">
             <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={t("settings.web.apiKey")} className="min-w-0 flex-1 rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] font-mono text-text outline-none" />
             <button onClick={discover} disabled={!baseUrl.trim() || busy !== null} className="rounded-input bg-accent px-3 py-2 text-[12px] font-medium text-accent-fg disabled:opacity-40">
@@ -663,6 +751,7 @@ function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, onClose }
                 </div>
                 <p className="truncate font-mono text-[10px] text-muted">{provider.base_url}</p>
                 <p className="mt-1 text-[10px] text-muted">{provider.models.join(", ")}</p>
+                <p className="mt-1 text-[10px] text-muted">{provider.reasoning ? t("settings.custom.reasoningEnabled") : t("settings.custom.reasoningDisabled")} · {(provider.context_window || 128000).toLocaleString()} tokens</p>
               </div>
               <button type="button" onClick={() => remove(provider.id)} className="min-h-9 shrink-0 rounded-input px-2 py-1 text-[11px] text-error hover:bg-error/10">
                 {t("common.delete")}

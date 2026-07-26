@@ -11,6 +11,7 @@ const FilesPage = lazy(() => import("./routes/FilesPage").then((m) => ({ default
 const NotebooksPage = lazy(() => import("./routes/NotebooksPage").then((m) => ({ default: m.NotebooksPage })));
 const RunsPage = lazy(() => import("./routes/RunsPage").then((m) => ({ default: m.RunsPage })));
 const KnowledgePage = lazy(() => import("./routes/KnowledgePage").then((m) => ({ default: m.KnowledgePage })));
+const ResearchPage = lazy(() => import("./routes/ResearchPage").then((m) => ({ default: m.ResearchPage })));
 
 const fallback = <div style={{ padding: "2rem", color: "#888" }}>Loading…</div>;
 const wrap = (element: ReactElement) => <Suspense fallback={fallback}>{element}</Suspense>;
@@ -30,6 +31,7 @@ export const router = createBrowserRouter([
       { path: "workspace/:cwd/notebooks", element: wrap(<NotebooksPage />) },
       { path: "workspace/:cwd/runs", element: wrap(<RunsPage />) },
       { path: "workspace/:cwd/knowledge", element: wrap(<KnowledgePage />) },
+      { path: "workspace/:cwd/research", element: wrap(<ResearchPage />) },
       { path: "workspace/:cwd/settings", element: wrap(<SettingsPage />) },
     ],
   },

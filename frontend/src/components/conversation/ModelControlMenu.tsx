@@ -1,5 +1,5 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { Check, ChevronDown, ChevronRight } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Gauge } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import type { AvailableModel } from "../../lib/pi-science-client";
@@ -32,6 +32,11 @@ export function ModelControlMenu({
   selectedModel,
   thinking,
   thinkingLevels,
+  contextTokens,
+  contextWindow,
+  contextPercent,
+  compactionEnabled,
+  compactionThresholdPercent,
   disabled = false,
   onModelChange,
   onThinkingChange,
@@ -40,6 +45,11 @@ export function ModelControlMenu({
   selectedModel: string;
   thinking: string;
   thinkingLevels: string[];
+  contextTokens?: number | null;
+  contextWindow?: number | null;
+  contextPercent?: number | null;
+  compactionEnabled?: boolean;
+  compactionThresholdPercent?: number | null;
   disabled?: boolean;
   onModelChange: (model: string) => void;
   onThinkingChange: (level: string) => void;
@@ -49,9 +59,11 @@ export function ModelControlMenu({
   const selectedModelInfo = models.find((model) => model.id === selectedModel);
   const modelLabel = selectedModelInfo?.model || selectedModel || (isChinese ? "选择模型" : "Select model");
   const thinkingLabel = formatThinkingLabel(thinking, isChinese);
+  const effectiveWindow = contextWindow || selectedModelInfo?.context_window || null;
+  const contextSummary = `${formatTokens(contextTokens)} / ${formatTokens(effectiveWindow)}`;
   const labels = isChinese
-    ? { model: "模型", thinking: "推理强度", trigger: "选择模型和推理强度" }
-    : { model: "Model", thinking: "Thinking", trigger: "Select model and thinking level" };
+    ? { model: "模型", thinking: "推理强度", context: "上下文", threshold: "自动压缩阈值", trigger: "选择模型、推理强度并查看上下文" }
+    : { model: "Model", thinking: "Thinking", context: "Context", threshold: "Auto-compaction threshold", trigger: "Select model and thinking level and view context" };
 
   return (
     <DropdownMenu.Root>
@@ -59,12 +71,12 @@ export function ModelControlMenu({
         <button
           type="button"
           aria-label={labels.trigger}
-          className="group flex min-h-7 min-w-0 max-w-[260px] items-center gap-1.5 rounded-full px-2.5 py-1 text-xs text-text outline-none transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-50"
+          className="group flex min-h-9 min-w-0 max-w-[320px] items-center gap-2 rounded-input px-2.5 py-1 text-left text-xs text-text outline-none transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <span className="min-w-0 truncate">{modelLabel}</span>
-          {selectedModel && thinkingLevels.length > 0 && (
-            <span className="shrink-0 text-muted">{thinkingLabel}</span>
-          )}
+          <span className="min-w-0 flex-1">
+            <span className="flex min-w-0 items-center gap-1.5"><span className="truncate">{modelLabel}</span><span className="shrink-0 text-muted">{thinkingLabel}</span></span>
+            <span className="mt-0.5 flex items-center gap-1 font-mono text-[10px] text-muted"><Gauge size={10} /> {contextSummary}{contextPercent != null ? ` · ${Math.round(contextPercent)}%` : ""}</span>
+          </span>
           <ChevronDown size={13} className="shrink-0 text-muted transition-transform duration-150 group-data-[state=open]:rotate-180" />
         </button>
       </DropdownMenu.Trigger>
@@ -118,10 +130,23 @@ export function ModelControlMenu({
               </DropdownMenu.SubContent>
             </DropdownMenu.Portal>
           </DropdownMenu.Sub>
+
+          <DropdownMenu.Separator className="my-1 h-px bg-faint" />
+          <div className="space-y-1 px-2.5 py-2 text-[11px] text-muted">
+            <div className="flex items-center justify-between gap-3"><span>{labels.context}</span><span className="font-mono text-text">{contextSummary}{contextPercent != null ? ` · ${Math.round(contextPercent)}%` : ""}</span></div>
+            <div className="flex items-center justify-between gap-3"><span>{labels.threshold}</span><span className="font-mono text-text">{compactionEnabled === false ? (isChinese ? "关闭" : "Off") : compactionThresholdPercent != null ? `${compactionThresholdPercent}%` : (isChinese ? "Pi 默认" : "Pi default")}</span></div>
+          </div>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
   );
+}
+
+function formatTokens(value?: number | null): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(value >= 100_000 ? 0 : 1)}K`;
+  return String(Math.round(value));
 }
 
 function formatThinkingLabel(level: string, isChinese: boolean) {

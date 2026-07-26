@@ -794,10 +794,10 @@ function ResearchTab({
                   ) : (
                     <div className="mt-2 grid gap-2 md:grid-cols-2">
                       {frontiers[loop.loop_id].map((experience) => (
-                        <div key={experience.experience_id} className="rounded-input bg-surface-2 p-3">
+                        <div key={experience.candidate_id} className="rounded-input bg-surface-2 p-3">
                           <div className="font-mono text-[10px] text-muted">{experience.candidate_id}</div>
-                          <p className="mt-1 text-sm text-text">{experience.approach_summary || experience.experience_id}</p>
-                          <pre className="mt-2 overflow-auto text-[10px] text-muted">{JSON.stringify(experience.evaluation.metrics ?? {}, null, 2)}</pre>
+                          <p className="mt-1 text-sm text-text">{experience.proposal.approach_summary}</p>
+                          <pre className="mt-2 overflow-auto text-[10px] text-muted">{JSON.stringify(experience.evaluation?.metrics ?? {}, null, 2)}</pre>
                         </div>
                       ))}
                     </div>

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { clampThinkingLevel, getSessionName, moveSessionName, PiScienceClient, setSessionName } from "./pi-science-client";
+import { clampThinkingLevel, conversationModelOptions, deriveSessionName, getSessionName, moveSessionName, PiScienceClient, setSessionName } from "./pi-science-client";
 import { readSettingsResponse } from "./settings-api";
 import { useRuntimeStore } from "./runtime-store";
 
@@ -73,6 +73,12 @@ describe("PiScienceClient conversation transport", () => {
     expect(clampThinkingLevel("high", ["minimal", "low", "medium", "high", "xhigh"])).toBe("high");
     expect(clampThinkingLevel("high", ["off"])).toBe("off");
     expect(clampThinkingLevel("unknown", ["minimal", "low"])).toBe("minimal");
+  });
+
+  it("keeps custom-provider models selectable in the conversation model menu", () => {
+    const builtin = { id: "openai/gpt-5", provider: "openai", model: "gpt-5", label: "OpenAI · GPT-5" };
+    const custom = { id: "custom-local/qwen3", provider: "custom-local", model: "qwen3", label: "Local · qwen3", custom: true };
+    expect(conversationModelOptions([builtin, custom, custom])).toEqual([builtin, custom]);
   });
 
   it("keeps listeners across reconnects and drops stale or cross-session events", () => {
@@ -383,6 +389,22 @@ describe("PiScienceClient SSE cursor resumption", () => {
 
     expect(FakeEventSource.instances).toHaveLength(1);
     expect(client.connectedSessionId).toBeNull();
+  });
+});
+
+describe("deriveSessionName", () => {
+  it("uses the first non-empty line and collapses internal whitespace", () => {
+    expect(deriveSessionName("\n   \n  fix\t\tthe   parser bug  \nmore detail")).toBe("fix the parser bug");
+  });
+
+  it("caps names at 48 characters and appends an ellipsis", () => {
+    expect(deriveSessionName("x".repeat(100))).toBe(`${"x".repeat(48)}…`);
+    expect(deriveSessionName("x".repeat(48))).toBe("x".repeat(48));
+  });
+
+  it("returns an empty string for empty or whitespace-only input", () => {
+    expect(deriveSessionName("")).toBe("");
+    expect(deriveSessionName(" \n\t \r\n ")).toBe("");
   });
 });
 

@@ -25,10 +25,16 @@ export interface AvailableModel {
   custom?: boolean;
   reasoning?: boolean;
   thinking_levels?: string[];
+  context_window?: number | null;
   capability_source?: string;
 }
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+/** Conversation model menus expose every configured provider, including custom providers. */
+export function conversationModelOptions(models: AvailableModel[]): AvailableModel[] {
+  return [...new Map(models.map((model) => [model.id, model])).values()];
+}
 
 /** Keep the current Think setting valid when the selected model changes. */
 export function clampThinkingLevel(requested: string, supported: string[]): string {
@@ -147,6 +153,16 @@ export function moveSessionName(cwd: string, previousSessionId: string, nextSess
   delete names[previousSessionId];
   saveNames(names);
   return typeof names[nextKey] === "string" ? names[nextKey] : "";
+}
+
+/** Derive a display name from message text: first non-empty line, trimmed,
+ *  internal whitespace collapsed, capped at 48 chars with "…" appended when
+ *  truncated (CJK counts as chars). Returns "" for text with no visible
+ *  content. */
+export function deriveSessionName(text: string): string {
+  const line = text.split("\n").map((candidate) => candidate.trim()).find(Boolean) ?? "";
+  const collapsed = line.replace(/\s+/g, " ");
+  return collapsed.length > 48 ? `${collapsed.slice(0, 48)}…` : collapsed;
 }
 
 // ── Message cache (localStorage) ──
@@ -325,6 +341,11 @@ export interface SessionState {
   pending_message_count: number;
   model?: string;
   thinking?: string;
+  context_tokens?: number | null;
+  context_window?: number | null;
+  context_percent?: number | null;
+  compaction_enabled?: boolean;
+  compaction_threshold_percent?: number | null;
 }
 
 export interface InteractionResponse {
