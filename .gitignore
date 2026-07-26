@@ -20,6 +20,14 @@ runtime/
 .pi-science/sessions/
 .pi-science/provenance.jsonl
 .pi-science/runs.jsonl
+.pi-science/research-records-v2.jsonl
+.pi-science/research-sessions/
+.pi-science/solutions/
+.pi-science/runs/
+.pi-science/jobs/
+
+# CodeGraph index
+.codegraph/
 
 # Environment
 .env

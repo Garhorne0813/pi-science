@@ -7,6 +7,7 @@ import {
   PiScienceClient,
   clearCachedMessages,
   clearSessionName,
+  deriveSessionName,
   getClient,
   getSessionName,
   moveSessionName,
@@ -53,6 +54,11 @@ export interface RuntimeState {
   working: boolean;
   model: string | null;
   thinking: string | null;
+  contextTokens: number | null;
+  contextWindow: number | null;
+  contextPercent: number | null;
+  compactionEnabled: boolean;
+  compactionThresholdPercent: number | null;
   pendingInteraction: PendingInteraction | null;
   /** Increments after a turn settles so workspace file views can reload. */
   fileRevision: number;
@@ -342,6 +348,23 @@ async function loadSessionsInternal(cwdOverride?: string): Promise<SessionInfo[]
   }
 }
 
+/** Backfill a display name from the first user block of freshly loaded
+ *  history. Sessions created before client-side naming existed (or whose
+ *  localStorage entry is missing) would otherwise show raw ids in the sidebar
+ *  forever. Never overwrites a stored name and no-ops on empty threads. */
+function backfillSessionName(cwd: string, sessionId: string, thread: Thread): void {
+  if (getSessionName(cwd, sessionId)) return;
+  const firstUser = thread.blocks.find(
+    (block): block is Extract<ThreadBlock, { kind: "user" }> => block.kind === "user",
+  );
+  const name = firstUser ? deriveSessionName(visibleUserMessage(firstUser.text)) : "";
+  if (!name) return;
+  setSessionName(cwd, sessionId, name);
+  useRuntimeStore.setState((state) => ({
+    sessions: state.sessions.map((session) => session.id === sessionId ? { ...session, name } : session),
+  }));
+}
+
 async function resyncCompletedHistory(sessionId: string, cwd: string): Promise<void> {
   const generation = _connectionGeneration;
   try {
@@ -381,6 +404,11 @@ async function reconcileWorkingState(
         || runtimeState.pending_message_count > 0,
       model: runtimeState.model ?? current.model,
       thinking: runtimeState.thinking ?? current.thinking,
+      contextTokens: runtimeState.context_tokens ?? current.contextTokens,
+      contextWindow: runtimeState.context_window ?? current.contextWindow,
+      contextPercent: runtimeState.context_percent ?? current.contextPercent,
+      compactionEnabled: runtimeState.compaction_enabled ?? current.compactionEnabled,
+      compactionThresholdPercent: runtimeState.compaction_threshold_percent ?? current.compactionThresholdPercent,
     });
   } catch {
     // Keep the current working state. A stream transport failure must not
@@ -416,6 +444,11 @@ async function reconcileAfterGap(
         || runtimeState.pending_message_count > 0,
       model: runtimeState.model ?? current.model,
       thinking: runtimeState.thinking ?? current.thinking,
+      contextTokens: runtimeState.context_tokens ?? current.contextTokens,
+      contextWindow: runtimeState.context_window ?? current.contextWindow,
+      contextPercent: runtimeState.context_percent ?? current.contextPercent,
+      compactionEnabled: runtimeState.compaction_enabled ?? current.compactionEnabled,
+      compactionThresholdPercent: runtimeState.compaction_threshold_percent ?? current.compactionThresholdPercent,
     });
   }
   // History recovery is independent from busy state. Merge the REST snapshot
@@ -424,6 +457,7 @@ async function reconcileAfterGap(
     useRuntimeStore.setState((state) => ({
       thread: mergeHistoryWithLive(threadFromMessages(messagesResult.value), state.thread),
     }));
+    backfillSessionName(cwd, sessionId, useRuntimeStore.getState().thread);
   }
   useRuntimeStore.setState({
     status: messagesResult.status === "fulfilled" && stateResult.status === "fulfilled" ? "ready" : "error",
@@ -719,6 +753,11 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   working: false,
   model: null,
   thinking: null,
+  contextTokens: null,
+  contextWindow: null,
+  contextPercent: null,
+  compactionEnabled: true,
+  compactionThresholdPercent: null,
   pendingInteraction: null,
   fileRevision: 0,
   draft: "",
@@ -742,6 +781,11 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         working: false,
         model: null,
         thinking: null,
+        contextTokens: null,
+        contextWindow: null,
+        contextPercent: null,
+        compactionEnabled: true,
+        compactionThresholdPercent: null,
         pendingInteraction: null,
       });
     }
@@ -805,6 +849,11 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         }
         nextState.model = runtimeState.model ?? null;
         nextState.thinking = runtimeState.thinking ?? null;
+        nextState.contextTokens = runtimeState.context_tokens ?? null;
+        nextState.contextWindow = runtimeState.context_window ?? null;
+        nextState.contextPercent = runtimeState.context_percent ?? null;
+        nextState.compactionEnabled = runtimeState.compaction_enabled ?? true;
+        nextState.compactionThresholdPercent = runtimeState.compaction_threshold_percent ?? null;
       } else {
         if (!liveActivityArrived) {
           nextState.status = "error";
@@ -823,6 +872,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         nextState.status = "ready";
       }
       set(nextState);
+      if (nextState.thread) backfillSessionName(cwd, targetSessionId, nextState.thread);
 
       const failure = messagesResult.status === "rejected"
         ? messagesResult.reason
@@ -892,7 +942,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 
     // Use first user message as session name
     if (!getSessionName(cwd, activeSessionId)) {
-      const sessionName = visibleUserMessage(message) || "Referenced files";
+      const sessionName = deriveSessionName(visibleUserMessage(message)) || "Referenced files";
       setSessionName(cwd, activeSessionId, sessionName);
       set((state) => ({
         sessions: state.sessions.map((session) => session.id === activeSessionId ? { ...session, name: sessionName } : session),
@@ -1291,6 +1341,11 @@ function recoverMissingSession(sessionId: string, cwd: string, client?: PiScienc
     status: "ready",
     model: null,
     thinking: null,
+    contextTokens: null,
+    contextWindow: null,
+    contextPercent: null,
+    compactionEnabled: true,
+    compactionThresholdPercent: null,
     pendingInteraction: null,
   });
 }

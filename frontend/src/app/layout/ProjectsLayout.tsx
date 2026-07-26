@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useParams, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
-import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Sun, Moon, Puzzle, FileText, BookOpen, Play, Inbox } from "lucide-react";
+import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Sun, Moon, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical } from "lucide-react";
 import { useUiStore } from "../../lib/store";
 import { useRuntimeStore } from "../../lib/runtime-store";
 import { InspectorShell } from "../../components/inspector/InspectorShell";
@@ -57,7 +57,7 @@ export function ProjectsLayout() {
       </a>
       {/* Sidebar */}
       {sidebarCollapsed ? (
-        <aside className="h-full flex-col border-r border-border bg-surface flex shrink-0 overflow-hidden w-12 items-center py-3 gap-2">
+        <aside className="h-full flex-col border-r border-border bg-bg flex shrink-0 overflow-hidden w-12 items-center py-3 gap-2">
           <button
             className="rounded p-1.5 text-muted hover:text-text hover:bg-surface-2"
             onClick={() => setSidebarCollapsed(false)}
@@ -65,6 +65,7 @@ export function ProjectsLayout() {
           >
             <PanelLeft size={16} />
           </button>
+          <ThemeToggle className="rounded p-1.5" />
           {/* Icon-only nav */}
           <CollapsedNavItem to="/" icon={isWorkspace ? <ArrowLeft size={16} /> : <FolderOpen size={16} />} label={t("nav.projects")} />
           {!isWorkspace && <CollapsedNavItem to="/skills" icon={<Puzzle size={16} />} label={t("nav.skills")} />}
@@ -74,6 +75,7 @@ export function ProjectsLayout() {
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} icon={<BookOpen size={16} />} label={t("nav.notebooks")} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/runs`} icon={<Play size={16} />} label={t("nav.runs")} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/knowledge`} icon={<Inbox size={16} />} label={t("nav.knowledge")} />
+              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/research`} icon={<FlaskConical size={16} />} label={t("nav.research")} />
             </>
           )}
           <div className="flex-1" />
@@ -82,20 +84,23 @@ export function ProjectsLayout() {
       ) : (
         <>
         <button type="button" aria-label="Close sidebar" onClick={() => setSidebarCollapsed(true)} className="fixed inset-0 z-20 bg-black/45 md:hidden" />
-        <aside className="absolute z-30 flex h-full shrink-0 flex-col overflow-hidden border-r border-border bg-surface md:relative" style={{ width: sidebarWidth, maxWidth: "86vw" }}>
+        <aside className="absolute z-30 flex h-full shrink-0 flex-col overflow-hidden border-r border-border bg-bg md:relative" style={{ width: sidebarWidth, maxWidth: "86vw" }}>
           <div className="flex flex-col h-full px-3 py-4">
             {/* Header */}
             <div className="flex items-center justify-between mb-4 px-2">
               <h1 className="font-serif text-[20px] font-semibold tracking-tight text-text">
                 Pi-Science
               </h1>
-              <button
-                className="flex h-10 w-10 items-center justify-center rounded-input text-muted hover:bg-surface-2 hover:text-text"
-                onClick={() => setSidebarCollapsed(true)}
-                aria-label="Close sidebar"
-              >
-                <PanelLeft size={16} />
-              </button>
+              <div className="flex items-center gap-0.5">
+                <ThemeToggle className="flex h-10 w-10 items-center justify-center rounded-input" />
+                <button
+                  className="flex h-10 w-10 items-center justify-center rounded-input text-muted hover:bg-surface-2 hover:text-text"
+                  onClick={() => setSidebarCollapsed(true)}
+                  aria-label="Close sidebar"
+                >
+                  <PanelLeft size={16} />
+                </button>
+              </div>
             </div>
 
             {/* Projects / Back to workspace list */}
@@ -112,6 +117,7 @@ export function ProjectsLayout() {
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} label={t("nav.files")} icon={<FileText size={16} />} active={location.pathname.endsWith("/files")} />
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/skills`} label={t("nav.skills")} icon={<Puzzle size={16} />} active={location.pathname.endsWith("/skills")} />
                   <KnowledgeNavItem cwd={activeCwd!} active={location.pathname.endsWith("/knowledge")} />
+                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/research`} label={t("nav.research")} icon={<FlaskConical size={16} />} active={location.pathname.endsWith("/research")} />
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} label={t("nav.notebooks")} icon={<BookOpen size={16} />} active={location.pathname.endsWith("/notebooks")} />
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/runs`} label={t("nav.runs")} icon={<Play size={16} />} active={location.pathname.endsWith("/runs")} />
                 </>
@@ -127,11 +133,8 @@ export function ProjectsLayout() {
             {/* Bottom */}
             <div className="mt-auto">
               <div className="border-t border-faint my-3" />
-              <div className="mt-2 flex items-center gap-1">
-                <div className="flex-1">
-                  <SettingsNavItem cwd={activeCwd} />
-                </div>
-                <ThemeToggle />
+              <div className="mt-2">
+                <SettingsNavItem cwd={activeCwd} />
               </div>
             </div>
           </div>
@@ -397,16 +400,16 @@ function KnowledgeNavItem({ cwd, active }: { cwd: string; active: boolean }) {
   return <SidebarNavItem to={`/workspace/${encodeURIComponent(cwd)}/knowledge`} label={t("nav.knowledge")} icon={<Inbox size={16} />} active={active} badge={pending} />;
 }
 
-function ThemeToggle() {
+function ThemeToggle({ className }: { className?: string }) {
   const theme = useUiStore((s) => s.theme);
   const setTheme = useUiStore((s) => s.setTheme);
   return (
     <button
       onClick={() => setTheme(theme === "light" ? "dark" : "light")}
-      className="rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2 hover:text-text shrink-0"
+      className={cn("text-muted hover:bg-surface-2 hover:text-text shrink-0", className ?? "rounded-input px-2 py-1 text-xs")}
       title="Toggle theme"
     >
-      {theme === "light" ? <Moon size={13} /> : <Sun size={13} />}
+      {theme === "light" ? <Moon size={15} /> : <Sun size={15} />}
     </button>
   );
 }

@@ -1,5 +1,8 @@
 [
   {"prompt": "Find and compare papers about kinase inhibitors", "expected_trigger": true, "trigger_terms": ["papers", "literature"]},
   {"prompt": "Rename result.csv", "expected_trigger": false, "trigger_terms": ["literature", "papers"]},
-  {"prompt": "What is a DOI?", "expected_trigger": false, "trigger_terms": ["literature", "papers"]}
+  {"prompt": "What is a DOI?", "expected_trigger": false, "trigger_terms": ["literature", "papers"]},
+  {"prompt": "Search arXiv and PubMed for recent diffusion model papers", "expected_trigger": true, "trigger_terms": ["arxiv", "pubmed", "papers", "literature"]},
+  {"prompt": "Summarize the published evidence for CRISPR off-target effects with DOIs", "expected_trigger": true, "trigger_terms": ["evidence", "dois", "literature", "papers"]},
+  {"prompt": "Convert this figure to PNG", "expected_trigger": false, "trigger_terms": ["literature", "papers", "doi"]}
 ]

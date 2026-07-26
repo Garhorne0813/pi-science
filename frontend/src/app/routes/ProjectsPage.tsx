@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, ChevronDown, Pin, PinOff, Pencil, Trash2, X } from "lucide-react";
+import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, ChevronDown, Pin, PinOff, Pencil, Trash2, X, Dna, Earth } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { useTranslation } from "react-i18next";
@@ -234,8 +234,8 @@ export function ProjectsPage() {
   const pinnedWs = workspaces.filter(w => pinned.has(w.path));
   const unpinnedWs = workspaces.filter(w => !pinned.has(w.path));
   const demos = [
-    { name: "molecules", icon: "🧬", title: "Molecular Playground", desc: "Lysozyme structure · Aspirin · Caffeine · Drug-likeness analysis" },
-    { name: "climate", icon: "🌍", title: "Climate Trends", desc: "Global temperature anomaly data (NASA GISTEMP v4) with guided analysis" },
+    { name: "molecules", icon: Dna, title: "Molecular Playground", desc: "Lysozyme structure · Aspirin · Caffeine · Drug-likeness analysis" },
+    { name: "climate", icon: Earth, title: "Climate Trends", desc: "Global temperature anomaly data (NASA GISTEMP v4) with guided analysis" },
   ];
 
   return (
@@ -284,7 +284,7 @@ export function ProjectsPage() {
                 <button type="button" onClick={() => void installDemo(d.name)} disabled={installingDemo}
                   className="flex w-full items-center gap-3 rounded-card border border-accent/30 bg-accent/5 p-4 pr-10 text-left transition-all hover:border-accent/50 hover:shadow-pop disabled:cursor-wait disabled:opacity-60"
                 >
-                  <span className="text-2xl">{d.icon}</span>
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent ring-1 ring-accent/20"><d.icon size={18} strokeWidth={1.75} /></span>
                   <span className="flex-1">
                     <span className="block font-medium text-text">{d.title}</span>
                     <span className="mt-0.5 block text-xs text-muted">{d.desc}</span>

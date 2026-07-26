@@ -22,10 +22,11 @@ export interface EvaluatorRef {
 
 export interface ResearchLoop {
   loop_id: string;
+  revision: number;
   title: string;
   objective: string;
-  status: "draft" | "ready" | "running" | "stopping" | "paused" | "completed" | "failed" | "cancelled";
-  mode: "serial" | "parallel";
+  status: "draft" | "ready" | "running" | "pausing" | "paused" | "cancelling" | "completed" | "failed" | "cancelled" | "needs_attention";
+  mode: "serial";
   evaluator_ref?: EvaluatorRef | null;
   budget: {
     max_candidates: number;
@@ -38,20 +39,25 @@ export interface ResearchLoop {
   created_at: string;
   updated_at: string;
   stop_reason?: string | null;
+  started_at?: string | null;
+  active_wall_ms?: number;
 }
 
 export interface ExperienceRecord {
-  experience_id: string;
-  loop_id?: string | null;
-  candidate_id?: string | null;
+  loop_id: string;
+  candidate_id: string;
   status: string;
-  approach_summary: string;
+  proposal: { approach_summary: string };
   execution: Record<string, unknown>;
-  artifacts: Array<Record<string, unknown>>;
-  evaluation: Record<string, unknown>;
-  knowledge_ids: string[];
-  provisional: boolean;
+  evaluation: { metrics?: Record<string, { value: number; direction: string }>; artifact_refs?: Array<Record<string, unknown>> } | null;
+  evaluation_status?: "passed" | "failed" | null;
   created_at: string;
+}
+
+export interface ResearchLoopDetail extends ResearchLoop {
+  candidates: ExperienceRecord[];
+  operations: Array<{ operation_id: string; phase: string; status: string; updated_at: string; error?: string }>;
+  frontier: ExperienceRecord[];
 }
 
 function query(cwd: string) {
@@ -79,7 +85,15 @@ export const projectMemoryApi = {
   loops(cwd: string) {
     return request<{ loops: ResearchLoop[] }>(`/api/project-memory/research-loops?${query(cwd)}`);
   },
-  createLoop(cwd: string, input: { title: string; objective: string; evaluator_ref?: EvaluatorRef; constraints?: string[] }) {
+  loop(cwd: string, loopId: string) {
+    return request<ResearchLoopDetail>(`/api/project-memory/research-loops/${loopId}?${query(cwd)}`);
+  },
+  intent(cwd: string, objective: string) {
+    return request<{ draft: { title: string; objective: string; budget: ResearchLoop["budget"] }; requires_confirmation: boolean }>(`/api/project-memory/research-loop-intents?${query(cwd)}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ objective }),
+    });
+  },
+  createLoop(cwd: string, input: { title: string; objective: string; evaluator_ref?: EvaluatorRef; constraints?: string[]; budget?: Partial<ResearchLoop["budget"]>; stop_conditions?: { target_metrics?: Record<string, number>; patience?: number; min_improvement?: number } }) {
     return request<ResearchLoop>(`/api/project-memory/research-loops?${query(cwd)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -91,8 +105,9 @@ export const projectMemoryApi = {
     version: number;
     digest: string;
     status: "approved";
-    metrics: Array<{ name: string; direction: "maximize" | "minimize"; weight: number }>;
+    metrics: Array<{ name: string; direction: "maximize" | "minimize"; weight: number; source?: "deterministic" | "llm_judged" }>;
     hard_checks: string[];
+    command?: string[];
   }) {
     return request<Record<string, unknown>>(`/api/project-memory/evaluators?${query(cwd)}`, {
       method: "POST",
@@ -101,7 +116,7 @@ export const projectMemoryApi = {
     });
   },
   preflight(cwd: string, loopId: string) {
-    return request<{ ok: boolean; blockers: string[] }>(`/api/project-memory/research-loops/${loopId}/preflight?${query(cwd)}`, { method: "POST" });
+    return request<{ ok: boolean; blockers: string[]; loop: ResearchLoop }>(`/api/project-memory/research-loops/${loopId}/preflight?${query(cwd)}`, { method: "POST" });
   },
   action(cwd: string, loopId: string, action: "start" | "pause" | "resume" | "cancel" | "complete") {
     return request<ResearchLoop>(`/api/project-memory/research-loops/${loopId}/${action}?${query(cwd)}`, { method: "POST" });

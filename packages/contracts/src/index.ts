@@ -5,6 +5,9 @@ export const piConfigSchema = z.object({
   provider: z.string().nullish(),
   api_key: z.string().nullish(),
   thinking: z.string().nullish(),
+  compaction_enabled: z.boolean().optional(),
+  compaction_threshold_percent: z.number().min(50).max(95).optional(),
+  model_context_window: z.number().int().positive().optional(),
   skills: z.array(z.string()).default([]),
   extensions: z.array(z.string()).default([]),
 });
@@ -35,6 +38,11 @@ export const sessionStateSchema = z.object({
   pending_message_count: z.number().int().nonnegative(),
   model: z.string().nullish(),
   thinking: z.string().nullish(),
+  context_tokens: z.number().int().nonnegative().nullable().optional(),
+  context_window: z.number().int().positive().nullable().optional(),
+  context_percent: z.number().nonnegative().nullable().optional(),
+  compaction_enabled: z.boolean().optional(),
+  compaction_threshold_percent: z.number().min(0).max(100).nullable().optional(),
 });
 
 export const historyMessageSchema = z.object({
@@ -175,6 +183,131 @@ export type PiRuntimeEvent = z.infer<typeof piRuntimeEventSchema>;
 export type JobRecord = z.infer<typeof jobRecordSchema>;
 export type ArtifactManifest = z.infer<typeof artifactManifestSchema>;
 export type ProvenanceRecord = z.infer<typeof provenanceRecordSchema>;
+
+// ── Durable subagent research loops ────────────────────────────────
+
+export const researchMetricSchema = z.object({
+  name: z.string().min(1).max(120),
+  direction: z.enum(["maximize", "minimize"]),
+  weight: z.number().finite().default(1),
+  source: z.enum(["deterministic", "llm_judged"]).default("deterministic"),
+});
+
+export const evaluatorRefSchema = z.object({
+  evaluator_id: z.string().min(1).max(120),
+  version: z.number().int().positive(),
+  digest: z.string().min(8).max(128),
+});
+
+export const evaluatorSpecSchema = evaluatorRefSchema.extend({
+  status: z.enum(["draft", "approved", "deprecated"]).default("draft"),
+  metrics: z.array(researchMetricSchema).min(1),
+  hard_checks: z.array(z.string().min(1).max(120)).default([]),
+  command: z.array(z.string().min(1)).min(1).default(["builtin:result-json"]),
+  created_at: z.string().optional(),
+});
+
+export const researchBudgetSchema = z.object({
+  max_candidates: z.number().int().min(1).max(10_000).default(20),
+  max_wall_seconds: z.number().int().min(1).max(31_536_000).default(7200),
+  max_model_tokens: z.number().int().positive().nullable().optional(),
+  max_cost_usd: z.number().nonnegative().nullable().optional(),
+  max_parallel: z.literal(1).default(1),
+});
+
+export const researchStopConditionsSchema = z.object({
+  target_metrics: z.record(z.string(), z.number().finite()).default({}),
+  patience: z.number().int().min(1).max(10_000).default(5),
+  min_improvement: z.number().nonnegative().default(0),
+});
+
+export const researchLoopStatusSchema = z.enum([
+  "draft", "ready", "running", "pausing", "paused", "cancelling",
+  "completed", "failed", "cancelled", "needs_attention",
+]);
+
+export const researchLoopSchema = z.object({
+  schema_version: z.literal(2).default(2),
+  loop_id: z.string().min(1),
+  revision: z.number().int().nonnegative().default(0),
+  title: z.string().min(1).max(200),
+  objective: z.string().min(1).max(4000),
+  status: researchLoopStatusSchema,
+  mode: z.literal("serial").default("serial"),
+  evaluator_ref: evaluatorRefSchema.nullable().default(null),
+  budget: researchBudgetSchema,
+  stop_conditions: researchStopConditionsSchema,
+  constraints: z.array(z.string().max(1000)).max(100).default([]),
+  created_by: z.string().default("user"),
+  created_at: z.string(),
+  updated_at: z.string(),
+  started_at: z.string().nullable().default(null),
+  active_wall_ms: z.number().int().nonnegative().default(0),
+  stop_reason: z.string().nullable().default(null),
+  current_operation_id: z.string().nullable().default(null),
+});
+
+export const createResearchLoopSchema = z.object({
+  title: z.string().min(1).max(200),
+  objective: z.string().min(1).max(4000),
+  evaluator_ref: evaluatorRefSchema.nullable().optional(),
+  budget: researchBudgetSchema.partial().optional(),
+  stop_conditions: researchStopConditionsSchema.partial().optional(),
+  constraints: z.array(z.string().max(1000)).max(100).default([]),
+  created_by: z.string().default("user"),
+});
+
+export const candidateProposalSchema = z.object({
+  approach_summary: z.string().min(1).max(4000),
+  rationale: z.string().max(8000).default(""),
+  files: z.record(z.string(), z.string()).refine(
+    (files) => Object.keys(files).length > 0 && Object.keys(files).length <= 100,
+    "files must contain 1-100 entries",
+  ),
+  entrypoint: z.string().min(1).max(500).default("solve.sh"),
+  parent_candidate_ids: z.array(z.string()).max(100).default([]),
+  expected_artifacts: z.array(z.object({ path: z.string(), kind: z.string().default("data") })).default([]),
+});
+
+export const metricValueSchema = z.object({
+  value: z.number().finite(),
+  direction: z.enum(["maximize", "minimize"]),
+  source: z.enum(["deterministic", "llm_judged"]).default("deterministic"),
+});
+
+export const candidateEvaluationSchema = z.object({
+  metrics: z.record(z.string(), metricValueSchema).default({}),
+  hard_checks: z.record(z.string(), z.enum(["passed", "failed"])).default({}),
+  artifact_refs: z.array(z.object({
+    path: z.string().min(1),
+    sha256: z.string().min(16).max(128).optional(),
+    kind: z.string().default("data"),
+  })).default([]),
+  findings: z.array(z.record(z.string(), z.unknown())).default([]),
+  model_tokens: z.number().int().nonnegative().default(0),
+  cost_usd: z.number().nonnegative().default(0),
+});
+
+export const researchAgentResultSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("candidate"), proposal: candidateProposalSchema }),
+  z.object({
+    kind: z.literal("analysis"),
+    findings: z.array(z.record(z.string(), z.unknown())).default([]),
+    next_strategy: z.string().max(8000).default(""),
+  }),
+]);
+
+export type ResearchMetric = z.infer<typeof researchMetricSchema>;
+export type EvaluatorRef = z.infer<typeof evaluatorRefSchema>;
+export type EvaluatorSpec = z.infer<typeof evaluatorSpecSchema>;
+export type ResearchBudget = z.infer<typeof researchBudgetSchema>;
+export type ResearchStopConditions = z.infer<typeof researchStopConditionsSchema>;
+export type ResearchLoopStatus = z.infer<typeof researchLoopStatusSchema>;
+export type ResearchLoop = z.infer<typeof researchLoopSchema>;
+export type CreateResearchLoop = z.infer<typeof createResearchLoopSchema>;
+export type CandidateProposal = z.infer<typeof candidateProposalSchema>;
+export type CandidateEvaluation = z.infer<typeof candidateEvaluationSchema>;
+export type ResearchAgentResult = z.infer<typeof researchAgentResultSchema>;
 
 // ── Skill catalog contracts (aligned with backend/models/skill.py) ──
 

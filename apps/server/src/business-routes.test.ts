@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { access, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./app.js";
 import type { ServerConfig } from "./config.js";
 import { nodeSessionService } from "./node-session-service.js";
+import { ResearchRepository } from "./research-loop/repository.js";
 import { createServerModules } from "./server-modules.js";
 
 const apps: Array<{ close(): Promise<unknown> }> = [];
@@ -87,7 +88,7 @@ describe("native control-plane business routes", () => {
       success: true,
       data: {
         models: [
-          { provider: "openrouter", id: "openai/gpt-5.1", name: "GPT-5.1", reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: null } },
+          { provider: "openrouter", id: "openai/gpt-5.1", name: "GPT-5.1", reasoning: true, contextWindow: 200000, thinkingLevelMap: { xhigh: "xhigh", max: null } },
           { provider: "openrouter", id: "openai/gpt-4o", name: "GPT-4o", reasoning: false },
         ],
       },
@@ -99,7 +100,7 @@ describe("native control-plane business routes", () => {
       model: "openrouter/openai/gpt-5.1",
       model_catalog_source: "pi",
       available_models: [
-        { id: "openrouter/openai/gpt-5.1", reasoning: true, thinking_levels: ["off", "minimal", "low", "medium", "high", "xhigh"] },
+        { id: "openrouter/openai/gpt-5.1", reasoning: true, thinking_levels: ["off", "minimal", "low", "medium", "high", "xhigh"], context_window: 200000 },
         { id: "openrouter/openai/gpt-4o", reasoning: false, thinking_levels: ["off"] },
       ],
     });
@@ -184,6 +185,33 @@ describe("native control-plane business routes", () => {
     expect(listed.json().loops[0]).toMatchObject({ loop_id: loopId, status: "cancelled" });
   });
 
+  it("streams research record invalidation events over SSE", async () => {
+    const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
+    const response = await app.inject({ method: "GET", url: `/api/project-memory/research-events?cwd=${encodeURIComponent(cwd)}`, payloadAsStream: true });
+    try {
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-type"]).toBe("text/event-stream");
+      let text = ""; let notify: (() => void) | null = null;
+      response.stream().on("data", (chunk: Buffer) => { text += String(chunk); notify?.(); });
+      const readUntil = async (marker: string) => {
+        const deadline = Date.now() + 8_000;
+        while (!text.includes(marker)) {
+          if (Date.now() > deadline) throw new Error(`timed out waiting for ${JSON.stringify(marker)}; received: ${JSON.stringify(text)}`);
+          await new Promise<void>((resolve) => { notify = resolve; setTimeout(resolve, 50); });
+        }
+        return text;
+      };
+      await readUntil(": connected\n\n");
+      // The route subscribes under the realpath'd workspace (validateWorkspaceCwd),
+      // so emit through a repository keyed the same way.
+      await new ResearchRepository(await realpath(cwd)).append("loop.created", { title: "SSE smoke" }, { loop_id: "loop-sse" });
+      const received = await readUntil("research.record");
+      expect(received).toContain(`data: ${JSON.stringify({ type: "research.record", loop_id: "loop-sse", record_type: "loop.created" })}\n\n`);
+    } finally {
+      response.raw.res.destroy();
+    }
+  }, 15_000);
+
   it("preserves exact multipart upload bytes and supports nested destination paths", async () => {
     const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
     const boundary = "----pi-science-upload-boundary";
@@ -239,14 +267,45 @@ describe("native control-plane business routes", () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     const app = buildApp(config()); apps.push(app);
-    const payload = { name: "Local Provider", base_url: "http://127.0.0.1:11434/v1", api: "openai-completions", models: ["local-model"] };
+    const payload = { name: "Local Provider", base_url: "http://127.0.0.1:11434/v1", api: "openai-completions", models: ["local-model"], reasoning: true, context_window: 64000 };
     expect((await app.inject({ method: "PUT", url: "/api/settings/custom-providers/local-provider", payload })).statusCode).toBe(200);
     const settings = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
     expect(settings.available_models).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "custom-local-provider/local-model" }),
+      expect.objectContaining({ id: "custom-local-provider/local-model", reasoning: true, context_window: 64000, thinking_levels: expect.arrayContaining(["high", "xhigh"]) }),
     ]));
+    const compaction = await app.inject({ method: "PUT", url: "/api/settings/compaction", payload: { enabled: true, threshold_percent: 82 } });
+    expect(compaction.statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/settings/config" })).json()).toMatchObject({ compaction_enabled: true, compaction_threshold_percent: 82 });
+    expect((await app.inject({ method: "PUT", url: "/api/settings/compaction", payload: { enabled: true, threshold_percent: 99 } })).statusCode).toBe(400);
     expect((await app.inject({ method: "PUT", url: "/api/settings/custom-providers/Local%20Provider", payload })).statusCode).toBe(409);
     expect((await app.inject({ method: "PUT", url: "/api/settings/custom-providers/local-provider", payload: { ...payload, models: ["updated-model"] } })).statusCode).toBe(200);
+  });
+
+  it("toggles compaction enabled without a threshold while keeping strict threshold validation", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    const app = buildApp(config()); apps.push(app);
+    expect((await app.inject({ method: "PUT", url: "/api/settings/compaction", payload: { enabled: true, threshold_percent: 82 } })).statusCode).toBe(200);
+    const disabled = await app.inject({ method: "PUT", url: "/api/settings/compaction", payload: { enabled: false } });
+    expect(disabled.statusCode).toBe(200);
+    expect(disabled.json()).toMatchObject({ ok: true, compaction_enabled: false, compaction_threshold_percent: 82 });
+    expect((await app.inject({ method: "GET", url: "/api/settings/config" })).json()).toMatchObject({ compaction_enabled: false, compaction_threshold_percent: 82 });
+    expect((await app.inject({ method: "PUT", url: "/api/settings/compaction", payload: { enabled: true, threshold_percent: 98 } })).statusCode).toBe(400);
+  });
+
+  it("clamps the derived compaction threshold for large context windows", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME, "config.json"), JSON.stringify({ model: "google/gemini-2.5-pro" }), "utf8");
+    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValueOnce({
+      success: true,
+      data: { models: [{ provider: "google", id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", reasoning: true, contextWindow: 1_000_000, thinkingLevelMap: {} }] },
+    });
+    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
+    const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
+    expect(settings.statusCode).toBe(200);
+    expect(settings.json()).toMatchObject({ model: "google/gemini-2.5-pro", compaction_threshold_percent: 95 });
   });
 
   it("returns a non-ok response when persisted settings cannot reload Pi runtimes", async () => {

@@ -1,6 +1,9 @@
+import { isValidElement } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/cn";
+import { fenceLanguage, runnableLanguage } from "@/lib/runnable-code";
+import { RunnableCodeBlock } from "../conversation/RunnableCodeBlock";
 
 /** Two contexts render markdown: chat bubbles (theme colors, compact) and the
  *  file-preview "paper" (document-neutral black-on-white, editorial scale —
@@ -9,7 +12,9 @@ type Variant = "chat" | "document";
 
 const STYLES: Record<Variant, Record<string, string>> = {
   chat: {
-    root: "text-[15px] leading-relaxed text-text",
+    // Assistant prose reads in a serif (Claude-style response typography);
+    // UI chrome and code stay sans/mono. CJK falls back to system serif.
+    root: "text-[15.5px] leading-[1.75] text-text [font-family:'Source_Serif_4','Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
     p: "my-2 first:mt-0 last:mb-0",
     a: "text-link underline underline-offset-2",
     code: "rounded bg-surface-2 px-1 py-0.5 font-mono text-[13px] text-link",
@@ -57,14 +62,28 @@ const STYLES: Record<Variant, Record<string, string>> = {
   },
 };
 
+/** Workspace context that lets chat python fences execute on the kernel bridge. */
+export type CodeRunner = { cwd: string; sessionId: string };
+
+/** Flatten a rendered code element's children back into the fence's source text. */
+function reactText(node: React.ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(reactText).join("");
+  if (isValidElement(node)) return reactText((node.props as { children?: React.ReactNode }).children);
+  return "";
+}
+
 export function MarkdownViewer({
   children,
   className,
   variant = "chat",
+  codeRunner,
 }: {
   children: string;
   className?: string;
   variant?: Variant;
+  /** When set (chat variant only), python fences get a Run affordance. */
+  codeRunner?: CodeRunner;
 }) {
   const s = STYLES[variant];
   return (
@@ -80,7 +99,21 @@ export function MarkdownViewer({
           ),
           code: ({ children }) => <code className={s.code}>{children}</code>,
           // Block code: the plain wrapper — its inner <code> is restyled via [&_code].
-          pre: ({ children }) => <pre className={s.pre}>{children}</pre>,
+          // In chat with a codeRunner, python fences become executable blocks.
+          pre: ({ children }) => {
+            const codeEl = Array.isArray(children) ? children[0] : children;
+            if (codeRunner && variant === "chat" && isValidElement(codeEl)) {
+              const codeProps = codeEl.props as { className?: string; children?: React.ReactNode };
+              if (runnableLanguage(fenceLanguage(codeProps.className))) {
+                return (
+                  <RunnableCodeBlock code={reactText(codeProps.children)} cwd={codeRunner.cwd} sessionId={codeRunner.sessionId} preClassName={s.pre}>
+                    {children}
+                  </RunnableCodeBlock>
+                );
+              }
+            }
+            return <pre className={s.pre}>{children}</pre>;
+          },
           ul: ({ children }) => <ul className={s.ul}>{children}</ul>,
           ol: ({ children }) => <ol className={s.ol}>{children}</ol>,
           li: ({ children }) => <li>{children}</li>,

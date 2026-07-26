@@ -10,6 +10,8 @@ import {
   type ScientificRuntimeController,
 } from "./scientific-runtime-manager.js";
 import { WorkspaceEnvironmentService } from "./workspace-environment.js";
+import { ResearchLoopCoordinator } from "./research-loop/coordinator.js";
+import { PiResearchSubagentRunner } from "./research-loop/subagent-runner.js";
 
 export interface ServerModules {
   readonly sessions: NodeSessionService;
@@ -20,6 +22,7 @@ export interface ServerModules {
   readonly jobs: JobCoordinator;
   readonly scientificRuntime: ScientificRuntimeController;
   readonly environments: WorkspaceEnvironmentService;
+  readonly research: ResearchLoopCoordinator;
 }
 
 /** Creates an app-owned module graph. No mutable runtime state is shared across apps. */
@@ -31,6 +34,7 @@ export function createServerModules(config?: ServerConfig): ServerModules {
   const sessions = new NodeSessionService(events, piManager, sessionRepository, environments);
   const settings = new SettingsStore();
   const jobs = new JobCoordinator(environments);
+  const research = new ResearchLoopCoordinator(jobs, new PiResearchSubagentRunner(environments));
   const scientificRuntime = new ScientificRuntimeManager({
     origin: config?.pythonOrigin ?? "http://127.0.0.1:8788",
     managed: config?.manageScientificRuntime,
@@ -40,5 +44,5 @@ export function createServerModules(config?: ServerConfig): ServerModules {
     idleTimeoutMs: config?.scientificIdleMs,
     startupTimeoutMs: config?.scientificStartupMs,
   });
-  return { sessions, events, sessionRepository, piManager, settings, jobs, scientificRuntime, environments };
+  return { sessions, events, sessionRepository, piManager, settings, jobs, research, scientificRuntime, environments };
 }

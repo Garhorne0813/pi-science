@@ -55,6 +55,8 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
     }
   }
   materializeCustomProviders(agentDir, settings.custom_providers, env);
+  materializeRuntimeSettings(agentDir, settings, config);
+  materializeFollowUpGuidance(agentDir);
 
   return {
     cwd,
@@ -82,6 +84,9 @@ export function loadDefaultPiConfig(): PiConfig {
   return {
     model: typeof settings.model === "string" && settings.model ? settings.model : null,
     thinking: typeof settings.thinking === "string" && settings.thinking ? settings.thinking : null,
+    compaction_enabled: settings.compaction_enabled !== false,
+    compaction_threshold_percent: validThreshold(settings.compaction_threshold_percent),
+    model_context_window: positiveInteger(settings.model_context_window),
     provider: null,
     api_key: null,
     skills: Array.isArray(settings.skill_paths) ? settings.skill_paths.map(String).filter(Boolean) : [],
@@ -162,12 +167,17 @@ function materializeCustomProviders(agentDir: string, raw: unknown, env: NodeJS.
     const id = slug(String(provider.id ?? provider.name ?? "custom-api"));
     const providerId = `custom-${id}`;
     const models = Array.isArray(provider.models) ? provider.models.map(String).filter(Boolean) : [];
+    const configuredReasoning = typeof provider.reasoning === "boolean" ? provider.reasoning : undefined;
+    const configuredContextWindow = positiveInteger(provider.context_window) ?? 128000;
     const envName = `PI_SCIENCE_CUSTOM_${id.toUpperCase().replaceAll("-", "_")}_API_KEY`;
-    const modelDefinitions = models.map((model) => ({
-      id: model, name: model, reasoning: /gpt-5|thinking|reasoning|qwen3|deepseek-r1/i.test(model),
-      input: ["text"], contextWindow: 128000, maxTokens: 16384,
-      ...( /gpt-5|thinking|reasoning|qwen3|deepseek-r1/i.test(model) ? { thinkingLevelMap: { off: "none", xhigh: "xhigh" } } : {}),
-    }));
+    const modelDefinitions = models.map((model) => {
+      const reasoning = configuredReasoning ?? /gpt-5|thinking|reasoning|qwen3|deepseek-r1/i.test(model);
+      return {
+        id: model, name: model, reasoning,
+        input: ["text"], contextWindow: configuredContextWindow, maxTokens: 16384,
+        ...(reasoning ? { thinkingLevelMap: { off: "none", minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "xhigh" } } : {}),
+      };
+    });
     const apiKey = typeof provider.api_key === "string" ? provider.api_key : "";
     if (apiKey) env[envName] = apiKey;
     providers[providerId] = {
@@ -177,6 +187,43 @@ function materializeCustomProviders(agentDir: string, raw: unknown, env: NodeJS.
     };
   }
   writeFileSync(path, `${JSON.stringify({ providers }, null, 2)}\n`, "utf8");
+}
+
+function materializeRuntimeSettings(agentDir: string, settings: Record<string, any>, config: PiConfig): void {
+  const path = join(agentDir, "settings.json");
+  let current: Record<string, unknown> = {};
+  try { current = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>; }
+  catch { /* create a scoped runtime settings file */ }
+  const contextWindow = positiveInteger(config.model_context_window) ?? positiveInteger(settings.model_context_window);
+  const threshold = validThreshold(config.compaction_threshold_percent) ?? validThreshold(settings.compaction_threshold_percent);
+  const reserveTokens = contextWindow && threshold
+    ? Math.max(1024, Math.round(contextWindow * (1 - threshold / 100)))
+    : 16384;
+  current.compaction = {
+    ...(current.compaction && typeof current.compaction === "object" ? current.compaction as Record<string, unknown> : {}),
+    enabled: config.compaction_enabled ?? (settings.compaction_enabled !== false),
+    reserveTokens,
+    keepRecentTokens: 20000,
+  };
+  writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, "utf8");
+}
+
+// Pi appends <agentDir>/APPEND_SYSTEM.md to its system prompt; the frontend
+// parses the emitted comment into follow-up suggestion chips.
+const FOLLOW_UP_GUIDANCE = "After completing a response, append an HTML comment on the final line: <!--suggest: q1 | q2 | q3--> with up to 3 short, concrete follow-up questions in the user's language. Omit when nothing meaningful remains.\n";
+
+function materializeFollowUpGuidance(agentDir: string): void {
+  writeFileSync(join(agentDir, "APPEND_SYSTEM.md"), FOLLOW_UP_GUIDANCE, "utf8");
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function validThreshold(value: unknown): number | undefined {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 50 && parsed <= 95 ? parsed : undefined;
 }
 
 function slug(value: string): string {

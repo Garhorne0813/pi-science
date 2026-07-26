@@ -3,7 +3,14 @@
     "prompt": "Review the evidence for kinase inhibitors",
     "expected_trigger": true,
     "trigger_terms": ["review", "evidence"],
-    "required_outputs": ["search_record", "evidence_table", "limitations"],
-    "produced_outputs": ["search_record", "evidence_table", "limitations"]
+    "required_outputs": ["search_record", "evidence_table", "limitations", "references_section", "inline_identifier_citations"],
+    "produced_outputs": ["search_record", "evidence_table", "limitations", "references_section", "inline_identifier_citations"]
+  },
+  {
+    "prompt": "Find recent papers on perovskite stability without any literature connector configured",
+    "expected_trigger": true,
+    "trigger_terms": ["papers", "literature"],
+    "required_outputs": ["direct_api_search_record", "provider_and_retrieval_date", "references_section", "inline_identifier_citations"],
+    "produced_outputs": ["direct_api_search_record", "provider_and_retrieval_date", "references_section", "inline_identifier_citations"]
   }
 ]

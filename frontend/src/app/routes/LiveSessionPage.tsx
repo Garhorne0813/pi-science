@@ -1,14 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowUp, Loader2, Square, Paperclip, Sparkles, X, File, FolderOpen } from "lucide-react";
-import { clampThinkingLevel, getSessionName, setSessionName, type AvailableModel } from "../../lib/pi-science-client";
+import { ArrowUp, Loader2, Square, Plus, Sparkles, X, File, FolderOpen } from "lucide-react";
+import { clampThinkingLevel, conversationModelOptions, getSessionName, setSessionName, type AvailableModel } from "../../lib/pi-science-client";
 import { applySessionReplacements, useRuntimeStore, type PendingInteraction, type SessionReplacement } from "../../lib/runtime-store";
 import { settingsApi } from "../../lib/settings-api";
 import { useUiStore } from "../../lib/store";
 import { cn } from "../../lib/cn";
 import type { ThreadBlock, ToolCallBlock } from "../../types/thread";
-import { MarkdownViewer } from "../../components/markdown-viewer/MarkdownViewer";
+import { MarkdownViewer, type CodeRunner } from "../../components/markdown-viewer/MarkdownViewer";
 import { extractArtifactRefs, refToArtifactBlock, fileInspectorFromBlock } from "../../lib/artifacts";
+import { pickAutoPreviewArtifact } from "../../lib/artifact-autopreview";
 import { setCurrentCwd } from "../../lib/files";
 import { projectKnowledgeApi } from "../../lib/project-knowledge";
 import { fetchDynamicCommands, resetDynamicCommands } from "../../lib/slash-commands";
@@ -19,8 +20,14 @@ import { MessageActions } from "../../components/conversation/MessageActions";
 import { ModelControlMenu } from "../../components/conversation/ModelControlMenu";
 import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
-import { apiRequest } from "../../lib/api";
+import { apiRequest, invalidateApiCache } from "../../lib/api";
+import { subscribeResearchEvents } from "../../lib/research-events";
 import { agentActionTextByBlock, lastCompletedAgentMessageText } from "../../lib/message-actions";
+import { extractCitations } from "../../lib/citations";
+import { parseSuggestions } from "../../lib/suggestions";
+import { projectMemoryApi, type ResearchLoopDetail } from "../../lib/project-memory";
+import { contentDigest, randomIdSuffix } from "../../lib/research-identity";
+import { ResearchLoopDraftCard, ResearchLoopStatusCard, ResearchModePicker, type ResearchLoopDraft, type ResearchStarter } from "../../components/conversation/ResearchLoopControls";
 
 export function LiveSessionPage() {
   const { t } = useTranslation();
@@ -32,6 +39,8 @@ export function LiveSessionPage() {
     status, thread, sessions, working, connect, disconnect,
     sendPrompt, abort, activeSessionId, createNewSession,
     model: runtimeModel, thinking: runtimeThinking,
+    contextTokens, contextWindow, contextPercent,
+    compactionEnabled, compactionThresholdPercent,
     pendingInteraction, respondToInteraction,
     draft: input, setDraft: setInput,
   } = useRuntimeStore();
@@ -52,6 +61,13 @@ export function LiveSessionPage() {
   const [configuringModel, setConfiguringModel] = useState(false);
   const [reviewingProject, setReviewingProject] = useState(false);
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
+  const [researchMode, setResearchMode] = useState<ResearchStarter | null>(null);
+  const [researchPrompt, setResearchPrompt] = useState(() => t("conversation.defaultPrompt"));
+  const [researchDraft, setResearchDraft] = useState<ResearchLoopDraft | null>(null);
+  const [activeResearchLoop, setActiveResearchLoop] = useState<ResearchLoopDetail | null>(null);
+  const [researchBusy, setResearchBusy] = useState(false);
+  const [researchError, setResearchError] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
   const allWorkspaceReferences = useUiStore((state) => state.workspaceReferences);
   const workspaceReferences = useMemo(
     () => allWorkspaceReferences.filter((item) => item.cwd === workspaceCwd),
@@ -83,16 +99,36 @@ export function LiveSessionPage() {
     followOutputRef.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 96;
   };
 
+  // Artifacts auto-preview + follow-up suggestions: when a live turn completes
+  // (working true→false in this mount) with a NEW agent message, open the
+  // newest previewable file in the inspector — same path as clicking the file
+  // chip — and surface any `<!--suggest: …-->` follow-up chips it carries.
+  // History replay never flips `working`, so it never triggers.
+  const wasWorkingRef = useRef(false);
+  const turnStartAgentIdRef = useRef<string | null>(null);
+  const autoPreviewedAgentIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const wasWorking = wasWorkingRef.current;
+    wasWorkingRef.current = working;
+    if (working === wasWorking) return;
+    const lastAgent = thread.blocks.findLast((block): block is Extract<ThreadBlock, { kind: "agent" }> => block.kind === "agent");
+    if (working) { turnStartAgentIdRef.current = lastAgent?.id ?? null; setSuggestions([]); return; }
+    if (!lastAgent || lastAgent.partial || lastAgent.id === turnStartAgentIdRef.current || lastAgent.id === autoPreviewedAgentIdRef.current) return;
+    autoPreviewedAgentIdRef.current = lastAgent.id;
+    const agentText = lastAgent.parts.map((part) => part.text).join("");
+    setSuggestions(parseSuggestions(agentText).suggestions);
+    const ui = useUiStore.getState();
+    const pick = pickAutoPreviewArtifact(extractArtifactRefs(agentText), { inspectorOpen: ui.inspectorOpen });
+    if (pick) ui.openInspector(fileInspectorFromBlock(refToArtifactBlock(pick) as any) as any);
+  }, [working, thread.blocks]);
+
   useEffect(() => {
     if (!activeSessionId) return;
     settingsApi.config<{ available_models?: AvailableModel[]; model?: string; thinking?: string }>(workspaceCwd)
       .then((data) => {
         const runtime = useRuntimeStore.getState();
         const allAvailableModels: AvailableModel[] = Array.isArray(data.available_models) ? data.available_models : [];
-        const configuredProvider = typeof data.model === "string" ? data.model.split("/", 1)[0] : "";
-        const availableModels = configuredProvider
-          ? allAvailableModels.filter((model) => model.provider === configuredProvider)
-          : [];
+        const availableModels = conversationModelOptions(allAvailableModels);
         setModels(availableModels);
         const nextModel = runtime.model || data.model || "";
         const nextModelInfo = availableModels.find((model: AvailableModel) => model.id === nextModel);
@@ -222,7 +258,7 @@ export function LiveSessionPage() {
       return true;
     }
     if (name === "copy") {
-      const text = lastCompletedAgentMessageText(thread.blocks);
+      const text = parseSuggestions(lastCompletedAgentMessageText(thread.blocks)).clean;
       if (text && navigator.clipboard) await navigator.clipboard.writeText(text);
       return true;
     }
@@ -238,6 +274,16 @@ export function LiveSessionPage() {
 
   const handleSend = async () => {
     const text = input.trim();
+    if (researchMode && !researchDraft && text && !working && !reviewingProject) {
+      setResearchBusy(true); setResearchError(null);
+      try {
+        const result = await projectMemoryApi.intent(workspaceCwd, text);
+        setResearchDraft({ title: result.draft.title, objective: result.draft.objective, metric: "score", direction: "maximize", maxCandidates: result.draft.budget.max_candidates, maxWallSeconds: result.draft.budget.max_wall_seconds });
+        setInput("");
+      } catch (cause) { setResearchError(cause instanceof Error ? cause.message : t("research.prepareError")); }
+      finally { setResearchBusy(false); }
+      return;
+    }
     if (!selectedModel || (!text && files.length === 0 && workspaceReferences.length === 0) || working || reviewingProject) return;
 
     if (text.startsWith("/") && files.length === 0 && workspaceReferences.length === 0 && await runSlashCommand(text)) {
@@ -309,6 +355,56 @@ export function LiveSessionPage() {
     }
   };
 
+  const refreshResearchLoop = useCallback(async (loopId: string) => {
+    setActiveResearchLoop(await projectMemoryApi.loop(workspaceCwd, loopId));
+  }, [workspaceCwd]);
+
+  useEffect(() => {
+    void projectMemoryApi.loops(workspaceCwd).then((result) => {
+      const active = result.loops.find((loop) => !["completed", "failed", "cancelled"].includes(loop.status));
+      if (active) void refreshResearchLoop(active.loop_id);
+    }).catch(() => undefined);
+  }, [workspaceCwd, refreshResearchLoop]);
+
+  const activeResearchLoopId = activeResearchLoop?.loop_id;
+  const activeResearchLoopDone = !activeResearchLoop || ["completed", "failed", "cancelled"].includes(activeResearchLoop.status);
+  useEffect(() => {
+    if (!activeResearchLoopId || activeResearchLoopDone) return;
+    // SSE invalidation signal with a slow fallback poll; keyed on loop_id (not the
+    // detail object) so refetches don't churn the EventSource via identity changes.
+    const refresh = () => { invalidateApiCache("/api/project-memory/"); void refreshResearchLoop(activeResearchLoopId).catch(() => undefined); };
+    const unsubscribe = subscribeResearchEvents(workspaceCwd, refresh);
+    const timer = window.setInterval(refresh, 30_000);
+    return () => { unsubscribe(); window.clearInterval(timer); };
+  }, [activeResearchLoopId, activeResearchLoopDone, workspaceCwd, refreshResearchLoop]);
+
+  const confirmResearchLoop = async () => {
+    if (!researchDraft || researchBusy) return;
+    setResearchBusy(true); setResearchError(null);
+    try {
+      const evaluatorId = `eval-${randomIdSuffix()}`;
+      const evaluatorContent = JSON.stringify({ evaluatorId, metric: researchDraft.metric, direction: researchDraft.direction, source: "deterministic" });
+      const digest = await contentDigest(evaluatorContent);
+      await projectMemoryApi.registerEvaluator(workspaceCwd, { evaluator_id: evaluatorId, version: 1, digest, status: "approved", metrics: [{ name: researchDraft.metric.trim(), direction: researchDraft.direction, weight: 1, source: "deterministic" }], hard_checks: ["artifact_verified"] });
+      const targetMetrics = researchDraft.target == null ? {} : { [researchDraft.metric.trim()]: researchDraft.target };
+      const loop = await projectMemoryApi.createLoop(workspaceCwd, { title: researchDraft.title.trim(), objective: researchDraft.objective.trim(), evaluator_ref: { evaluator_id: evaluatorId, version: 1, digest }, budget: { max_candidates: researchDraft.maxCandidates, max_wall_seconds: researchDraft.maxWallSeconds, max_parallel: 1 }, stop_conditions: { target_metrics: targetMetrics, patience: 5, min_improvement: 0 } });
+      const preflight = await projectMemoryApi.preflight(workspaceCwd, loop.loop_id);
+      if (!preflight.ok) throw new Error(preflight.blockers.join("; "));
+      await projectMemoryApi.action(workspaceCwd, loop.loop_id, "start");
+      await refreshResearchLoop(loop.loop_id);
+      setResearchDraft(null); setResearchMode(null); setResearchPrompt(t("conversation.defaultPrompt"));
+    } catch (cause) { setResearchError(cause instanceof Error ? cause.message : t("research.startError")); }
+    finally { setResearchBusy(false); }
+  };
+
+  const researchAction = async (action: "pause" | "resume" | "cancel") => {
+    if (!activeResearchLoop || researchBusy) return;
+    setResearchBusy(true); setResearchError(null);
+    try { await projectMemoryApi.action(workspaceCwd, activeResearchLoop.loop_id, action); await refreshResearchLoop(activeResearchLoop.loop_id); }
+    catch (cause) { setResearchError(cause instanceof Error ? cause.message : t("research.actionError")); }
+    finally { setResearchBusy(false); }
+  };
+
   const hasUserMessage = thread.blocks.some((block) => block.kind === "user");
   const activeSession = sessions.find((session) => session.id === activeSessionId);
   const isNewSession = !hasUserMessage && (activeSession?.name === "New Session" || thread.loaded);
@@ -334,16 +430,16 @@ export function LiveSessionPage() {
           {thread.blocks.length === 0 && !working && status === "connecting" && activeSessionId && (
             <div className="flex items-center gap-2 py-4 text-sm text-muted">
               <Loader2 size={14} className="animate-spin text-accent" />
-              Loading conversation…
+              {t("conversation.loading")}
             </div>
           )}
-          {thread.blocks.length === 0 && !working && status !== "connecting" && (
-            <ConversationWelcome
-              onPick={(msg) => void sendPrompt(msg).catch(() => undefined)}
-              disabled={!selectedModel || reviewingProject}
-            />
+          {thread.blocks.length === 0 && !working && status !== "connecting" && !researchDraft && !activeResearchLoop && (
+            <ConversationWelcome />
           )}
-          {renderBlocks(thread.blocks)}
+          {researchDraft && <ResearchLoopDraftCard draft={researchDraft} busy={researchBusy} onChange={setResearchDraft} onCancel={() => { setResearchDraft(null); setResearchMode(null); setResearchError(null); }} onConfirm={() => void confirmResearchLoop()} />}
+          {activeResearchLoop && <ResearchLoopStatusCard loop={activeResearchLoop} candidates={activeResearchLoop.candidates} busy={researchBusy} onRefresh={() => void refreshResearchLoop(activeResearchLoop.loop_id)} onAction={(action) => void researchAction(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
+          {researchError && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error">{researchError}</div>}
+          {renderBlocks(thread.blocks, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" })}
           {pendingInteraction && (
             <InteractionPrompt
               interaction={pendingInteraction}
@@ -361,6 +457,22 @@ export function LiveSessionPage() {
 
       {/* Composer */}
       <div className="px-8 pb-5 pt-2 shrink-0">
+        {isNewSession && !researchDraft && !activeResearchLoop && <div className="mx-auto max-w-[760px]"><ResearchModePicker selected={researchMode} disabled={working || reviewingProject || researchBusy} onSelect={(mode, prompt) => { const selected = researchMode === mode ? null : mode; setResearchMode(selected); setResearchPrompt(selected ? prompt : t("conversation.defaultPrompt")); inputRef.current?.focus(); }} /></div>}
+        {suggestions.length > 0 && !working && !researchDraft && !activeResearchLoop && !input.trim() && (
+          <div className="mx-auto flex max-w-[760px] flex-wrap gap-2 px-1 pb-2" aria-label={t("conversation.suggestions")}>
+            {suggestions.map((suggestion) => (
+              <button
+                key={suggestion}
+                type="button"
+                disabled={!selectedModel || reviewingProject}
+                onClick={() => { setSuggestions([]); void sendPrompt(suggestion).catch(() => undefined); }}
+                className="min-h-9 rounded-full border border-border bg-surface px-3 py-1 text-left text-xs text-muted transition-colors hover:text-text disabled:opacity-50"
+              >
+                {suggestion}
+              </button>
+            ))}
+          </div>
+        )}
         <div
           className={cn(
             "relative mx-auto max-w-[760px] rounded-card border bg-surface shadow-card transition-colors",
@@ -409,7 +521,7 @@ export function LiveSessionPage() {
             onKeyDown={handleKeyDown}
             onCompositionStart={() => { composingRef.current = true; }}
             onCompositionEnd={() => { setTimeout(() => { composingRef.current = false; }, 0); }}
-            placeholder={dragOver ? "Drop files here…" : "Ask anything — analyze data, run code, explore results"}
+            placeholder={dragOver ? "Drop files here…" : researchPrompt}
             rows={2}
             className="max-h-[160px] w-full resize-none bg-transparent px-3 py-2 text-sm leading-6 text-text outline-none placeholder:text-muted"
           />
@@ -417,9 +529,11 @@ export function LiveSessionPage() {
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="rounded-input px-2 py-1 text-xs text-muted hover:text-text hover:bg-surface-2 flex items-center gap-1"
+                aria-label={t("conversation.attach")}
+                title={t("conversation.attach")}
+                className="flex h-7 w-7 items-center justify-center rounded-full border border-border text-muted hover:text-text hover:bg-surface-2"
               >
-                <Paperclip size={13} /> Attach
+                <Plus size={15} />
               </button>
               <button
                 type="button"
@@ -442,6 +556,11 @@ export function LiveSessionPage() {
                   selectedModel={selectedModel}
                   thinking={thinking}
                   thinkingLevels={thinkingLevels}
+                  contextTokens={contextTokens}
+                  contextWindow={contextWindow || selectedModelInfo?.context_window}
+                  contextPercent={contextPercent}
+                  compactionEnabled={compactionEnabled}
+                  compactionThresholdPercent={compactionThresholdPercent}
                   disabled={modelControlsDisabled}
                   onModelChange={handleModelChange}
                   onThinkingChange={handleThinkingChange}
@@ -455,10 +574,10 @@ export function LiveSessionPage() {
                 <button
                   aria-label="Send message"
                   onClick={handleSend}
-                  disabled={!selectedModel || reviewingProject || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
+                  disabled={(!selectedModel && !researchMode) || reviewingProject || researchBusy || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
                   className={cn(
                     "h-7 w-7 rounded-input flex items-center justify-center",
-                    (selectedModel && !reviewingProject && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted cursor-default",
+                    ((selectedModel || researchMode) && !reviewingProject && !researchBusy && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted cursor-default",
                   )}
                 >
                   <ArrowUp size={15} />
@@ -538,7 +657,7 @@ function InteractionPrompt({
 }
 
 /** Render blocks, grouping consecutive tool cards together. */
-function renderBlocks(blocks: ThreadBlock[]) {
+function renderBlocks(blocks: ThreadBlock[], codeRunner: CodeRunner) {
   const result: React.ReactNode[] = [];
   let toolGroup: ToolCallBlock[] = [];
   const actionTextByBlock = agentActionTextByBlock(blocks);
@@ -552,7 +671,7 @@ function renderBlocks(blocks: ThreadBlock[]) {
         result.push(<ToolGroup key={toolGroup[0].id} blocks={toolGroup} />);
         toolGroup = [];
       }
-      result.push(<BlockRenderer key={block.id} block={block} actionText={actionTextByBlock.get(block.id)} />);
+      result.push(<BlockRenderer key={block.id} block={block} actionText={actionTextByBlock.get(block.id)} codeRunner={codeRunner} />);
     }
   }
   if (toolGroup.length > 0) {
@@ -563,10 +682,10 @@ function renderBlocks(blocks: ThreadBlock[]) {
 
 /* ── Block Renderers ── */
 
-function BlockRenderer({ block, actionText }: { block: ThreadBlock; actionText?: string }) {
+function BlockRenderer({ block, actionText, codeRunner }: { block: ThreadBlock; actionText?: string; codeRunner: CodeRunner }) {
   switch (block.kind) {
     case "user": return <UserMessage text={block.text} timestamp={block.timestamp} />;
-    case "agent": return <AgentMessage parts={block.parts} partial={block.partial} timestamp={block.timestamp} actionText={actionText} />;
+    case "agent": return <AgentMessage parts={block.parts} partial={block.partial} timestamp={block.timestamp} actionText={actionText} codeRunner={codeRunner} />;
     case "tool": return <ToolCard block={block} />;
     case "status-line": return <StatusLine block={block} />;
     default: return null;
@@ -629,15 +748,17 @@ function UserMessage({ text, timestamp }: { text: string; timestamp?: string }) 
   );
 }
 
-function AgentMessage({ parts, partial, timestamp, actionText }: { parts: { id: string; text: string }[]; partial?: boolean; timestamp?: string; actionText?: string }) {
-  const text = parts.map((p) => p.text).join("");
+function AgentMessage({ parts, partial, timestamp, actionText, codeRunner }: { parts: { id: string; text: string }[]; partial?: boolean; timestamp?: string; actionText?: string; codeRunner?: CodeRunner }) {
+  const { t } = useTranslation();
+  const rawText = parts.map((p) => p.text).join("");
   const openInspector = useUiStore((s) => s.openInspector);
-  if (!text && partial) return null;
-  if (!text) return null;
+  if (!rawText && partial) return null;
+  if (!rawText) return null;
 
+  const text = parseSuggestions(rawText).clean;
   // Detect file references and make them clickable
   const refs = extractArtifactRefs(text);
-  const citations = [...new Set(text.match(/10\.\d{4,9}\/[^\s)\]}>]+/gi) || [])];
+  const citations = extractCitations(text);
 
   const handleFileClick = (filePath: string) => {
     const block = refToArtifactBlock(filePath);
@@ -647,7 +768,7 @@ function AgentMessage({ parts, partial, timestamp, actionText }: { parts: { id: 
 
   return (
     <div className="group/message">
-      <MarkdownViewer variant="chat">{text}</MarkdownViewer>
+      <MarkdownViewer variant="chat" codeRunner={codeRunner}>{text}</MarkdownViewer>
       {refs.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mt-2">
           {refs.map((ref) => (
@@ -661,35 +782,30 @@ function AgentMessage({ parts, partial, timestamp, actionText }: { parts: { id: 
           ))}
         </div>
       )}
-      {citations.length > 0 && <CitationBadges identifiers={citations} />}
-      {actionText && <MessageActions text={actionText} timestamp={timestamp} />}
+      {citations.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="text-[10px] text-muted">{t("conversation.sources")} ({citations.length})</span>
+          {citations.map((citation, index) => (
+            <a
+              key={`${citation.kind}:${citation.id}`}
+              href={citation.url}
+              target="_blank"
+              rel="noreferrer"
+              title={citation.id}
+              className="rounded-full border border-border bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-muted hover:text-text"
+            >
+              {index + 1} · {shortCitationId(citation.id)}
+            </a>
+          ))}
+        </div>
+      )}
+      {actionText && <MessageActions text={parseSuggestions(actionText).clean} timestamp={timestamp} />}
     </div>
   );
 }
 
-function CitationBadges({ identifiers }: { identifiers: string[] }) {
-  const [states, setStates] = useState<Record<string, string>>(() => Object.fromEntries(identifiers.map((id) => [id, "unverified"])));
-  const verify = async (identifier: string) => {
-    setStates((current) => ({ ...current, [identifier]: "checking" }));
-    try {
-      const normalized = await fetch("/api/citations/normalize", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ identifiers: [identifier] }) }).then((response) => response.json());
-      const citation = normalized.citations?.[0];
-      if (!citation) throw new Error("not found");
-      const result = await fetch("/api/citations/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ citation }) }).then((response) => response.json());
-      setStates((current) => ({ ...current, [identifier]: result.verification || "unverified" }));
-    } catch {
-      setStates((current) => ({ ...current, [identifier]: "network_error" }));
-    }
-  };
-  return (
-    <div className="mt-2 flex flex-wrap gap-1.5">
-      {identifiers.map((identifier) => (
-        <button key={identifier} type="button" onClick={() => void verify(identifier)} className="rounded-input border border-border bg-surface px-2 py-1 font-mono text-[10px] text-muted hover:bg-surface-2" title="Verify citation against a provider">
-          DOI · {states[identifier]}
-        </button>
-      ))}
-    </div>
-  );
+function shortCitationId(id: string): string {
+  return id.length <= 24 ? id : `${id.slice(0, 14)}…${id.slice(-8)}`;
 }
 
 function ToolCard({ block }: { block: ToolCallBlock }) {
