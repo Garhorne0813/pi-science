@@ -115,6 +115,12 @@ if [ "$FRONTEND_REUSED" != true ]; then
   curl --fail --silent http://127.0.0.1:5173 >/dev/null 2>&1 || { echo "Error: frontend did not become ready." >&2; exit 1; }
 fi
 
+if [ "${PI_SCIENCE_OPEN_BROWSER:-0}" = "1" ]; then
+  if command -v open >/dev/null 2>&1; then open http://127.0.0.1:5173 >/dev/null 2>&1 || true
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open http://127.0.0.1:5173 >/dev/null 2>&1 || true
+  fi
+fi
+
 echo ""
 echo "Pi-Science is running:"
 echo "  Frontend:          http://127.0.0.1:5173"

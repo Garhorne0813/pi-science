@@ -60,6 +60,19 @@ bash scripts/install.sh
 bash scripts/start.sh
 ```
 
+### The `pi-science` command
+
+`scripts/install.sh` also puts a `pi-science` launcher in `~/.local/bin` (override with `PI_SCIENCE_BIN_DIR`). Once that directory is on your `PATH`:
+
+```bash
+pi-science                  # start everything and open the browser
+pi-science start --detach   # keep it running in the background instead
+pi-science status           # report what is currently running
+pi-science stop             # stop the services started from this checkout
+```
+
+Without `--detach`, `pi-science` holds the terminal and Ctrl+C stops it, exactly like `bash scripts/start.sh`. The launcher only forwards to this checkout, so a `git pull` needs no reinstall — but re-run `scripts/install.sh` if you move the checkout.
+
 After the first installation, use only `bash scripts/start.sh`. To keep using `dev.sh` without reinstalling, run:
 
 ```bash
