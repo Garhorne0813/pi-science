@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { conversationEventHub } from "./conversation-event-hub.js";
 import { NodeSessionService } from "./node-session-service.js";
+import { ProjectReviewService } from "./project-review/service.js";
+import { parseReviewResult, type ReviewRunRequest, type ReviewRunResult, type ReviewSubagentRunner } from "./project-review/types.js";
 
 const cleanup: string[] = [];
 const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE };
@@ -291,5 +293,116 @@ describe("Node session lifecycle", () => {
     expect(publish).toHaveBeenCalledWith(blankCwd, (created as { id: string }).id, expect.objectContaining({ type: "session.replaced" }));
     publish.mockRestore();
     await blankService.shutdownAll();
+  });
+});
+
+class FakeReviewRunner implements ReviewSubagentRunner {
+  calls: ReviewRunRequest[] = [];
+  gate: Promise<void> = Promise.resolve();
+  failure: Error | null = null;
+
+  async run(request: ReviewRunRequest): Promise<ReviewRunResult> {
+    this.calls.push(request);
+    await this.gate;
+    if (this.failure) throw this.failure;
+    return { run_id: request.run_id, output: parseReviewResult(JSON.stringify([{ knowledge_type: "finding", title: `finding ${this.calls.length}`, summary: "A durable observation about the workspace." }])) };
+  }
+
+  async shutdown(): Promise<void> {}
+}
+
+async function workspaceWithConversation(sessionId: string): Promise<string> {
+  const cwd = join(tmpdir(), `pi-science-auto-review-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  cleanup.push(cwd);
+  await mkdir(join(cwd, ".pi-science", "sessions"), { recursive: true });
+  const rows = [
+    JSON.stringify({ type: "session", id: sessionId, cwd, timestamp: new Date().toISOString() }),
+    JSON.stringify({ type: "message", id: "message-0", timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "text", text: "why does the buffer drift?" }] } }),
+    JSON.stringify({ type: "message", id: "message-1", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "because it warms above 20C" }] } }),
+  ];
+  await writeFile(join(cwd, ".pi-science", "sessions", `${sessionId}.jsonl`), `${rows.join("\n")}\n`, "utf8");
+  return realpath(cwd);
+}
+
+async function proposals(cwd: string): Promise<Array<Record<string, unknown>>> {
+  try { return JSON.parse(await readFile(join(cwd, ".pi-science", "project-state.json"), "utf8")).proposals; }
+  catch { return []; }
+}
+
+async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("condition was not met before the timeout");
+}
+
+describe("automatic project review", () => {
+  it("appends proposals once per settled turn and drops a settle while one is in flight", async () => {
+    const runner = new FakeReviewRunner();
+    const gate = { release: () => {} };
+    runner.gate = new Promise<void>((resolve) => { gate.release = resolve; });
+    const logged: string[] = [];
+    const service = new NodeSessionService(undefined, undefined, undefined, passthroughEnvironments, new ProjectReviewService(runner));
+    service.configureLogging((level, message) => { logged.push(`${level}:${message}`); });
+    const cwd = await workspaceWithConversation("session-a");
+    await service.resume("session-a", cwd);
+
+    await service.command("session-a", cwd, "abort");
+    await waitFor(() => runner.calls.length === 1);
+    await service.command("session-a", cwd, "abort");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(runner.calls).toHaveLength(1);
+    // Dropped before the reviewer is asked, so the workspace single-flight guard
+    // never rejects and nothing is logged.
+    expect(logged).toEqual([]);
+    gate.release();
+    await waitFor(async () => (await proposals(cwd)).length === 1);
+
+    expect(runner.calls[0]).toMatchObject({ cwd, session_id: "session-a" });
+    expect((await proposals(cwd))[0]).toMatchObject({ status: "pending", proposal_type: "knowledge", source: { session_id: "session-a" } });
+
+    await service.command("session-a", cwd, "abort");
+    await waitFor(async () => (await proposals(cwd)).length === 2);
+    expect(runner.calls).toHaveLength(2);
+    await service.shutdownAll();
+  });
+
+  it("does not run the reviewer when policy.auto_review is disabled", async () => {
+    const runner = new FakeReviewRunner();
+    const service = new NodeSessionService(undefined, undefined, undefined, passthroughEnvironments, new ProjectReviewService(runner));
+    const cwd = await workspaceWithConversation("session-a");
+    await writeFile(join(cwd, ".pi-science", "project-state.json"), JSON.stringify({ items: [], proposals: [], project_versions: [], policy: { auto_review: false }, history: [] }), "utf8");
+    await service.resume("session-a", cwd);
+
+    await service.command("session-a", cwd, "abort");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(runner.calls).toHaveLength(0);
+    expect(await proposals(cwd)).toHaveLength(0);
+    await service.shutdownAll();
+  });
+
+  it("logs a reviewer failure without poisoning the next turn", async () => {
+    const runner = new FakeReviewRunner();
+    runner.failure = new Error("Pi CLI is not configured");
+    const logged: string[] = [];
+    const service = new NodeSessionService(undefined, undefined, undefined, passthroughEnvironments, new ProjectReviewService(runner));
+    service.configureLogging((level, message) => { logged.push(`${level}:${message}`); });
+    const cwd = await workspaceWithConversation("session-a");
+    await service.resume("session-a", cwd);
+
+    await service.command("session-a", cwd, "abort");
+    await waitFor(() => logged.length === 1);
+    expect(logged[0]).toContain("warn:automatic project review failed for session session-a");
+    expect(logged[0]).toContain("Pi CLI is not configured");
+    expect(await proposals(cwd)).toHaveLength(0);
+
+    runner.failure = null;
+    await service.command("session-a", cwd, "abort");
+    await waitFor(async () => (await proposals(cwd)).length === 1);
+    expect(await service.state("session-a", cwd)).toMatchObject({ id: "session-a" });
+    await service.shutdownAll();
   });
 });

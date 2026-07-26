@@ -2,25 +2,17 @@ import { randomUUID } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
-import { metadataRoot, readJson, workspaceFile, writeJsonAtomic } from "./persistence.js";
+import { writeJsonAtomic } from "./persistence.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
+import { ProjectReviewBusyError, type ProjectReviewService } from "./project-review/service.js";
+import { readProjectState as state, statePath, timestamp as now, type Item, type Source } from "./project-review/project-state.js";
 import type { ResearchLoopCoordinator } from "./research-loop/coordinator.js";
 import { subscribeResearchEvents } from "./research-loop/events.js";
 
-type Source = { session_id?: string | null; message_ids: string[]; files: string[]; run_ids: string[]; citations: string[] };
-type Policy = { auto_review: boolean; reminder_threshold: number; max_directory_depth: number; minimum_files_for_new_category: number; locked_paths: string[]; naming_pattern: string; accepted_counts: Record<string, number>; rejected_counts: Record<string, number>; external_services_allowed: boolean; allowed_egress_domains: string[]; blocked_data_classes: string[]; updated_at: string };
-type Item = { id: string; type: string; title: string; summary: string; confidence: string; importance: string; status: string; source: Source; related_files: string[]; conflicts_with: string[]; supersedes: string[]; proposal_id?: string; created_at: string; updated_at: string; [key: string]: unknown };
-type Proposal = Item & { proposal_type: "knowledge" | "file_operation"; knowledge_type?: string; reason: string; operations: unknown[]; decision_reason?: string | null; applied_history_id?: string | null };
-type ProjectState = { items: Item[]; proposals: Proposal[]; project_versions: Array<{ id: string; created_at: string; reason: string; knowledge_count: number; content: string }>; policy: Policy; history: Array<Record<string, unknown>> };
-
-const defaultPolicy = (): Policy => ({ auto_review: true, reminder_threshold: 5, max_directory_depth: 3, minimum_files_for_new_category: 3, locked_paths: [], naming_pattern: "{date}_{topic}_{kind}_{version}", accepted_counts: {}, rejected_counts: {}, external_services_allowed: true, allowed_egress_domains: [], blocked_data_classes: [], updated_at: new Date().toISOString() });
 function q(request: { query: unknown }, key: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[key]; return typeof value === "string" && value ? value : fallback; }
 async function ws(request: { query: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): Promise<string | null> { try { return await validateWorkspaceCwd(q(request, "cwd")); } catch (error) { reply.code(403).send({ error: String(error) }); return null; } }
-function statePath(cwd: string): string { return workspaceFile(cwd, "project-state.json"); }
-async function state(cwd: string): Promise<ProjectState> { const value = await readJson<Partial<ProjectState>>(statePath(cwd), {}); return { items: Array.isArray(value.items) ? value.items : [], proposals: Array.isArray(value.proposals) ? value.proposals : [], project_versions: Array.isArray(value.project_versions) ? value.project_versions : [], policy: { ...defaultPolicy(), ...(value.policy ?? {}) }, history: Array.isArray(value.history) ? value.history : [] }; }
 async function projectContent(cwd: string): Promise<string> { const path = join(cwd, "PROJECT.md"); try { return await readFile(path, "utf8"); } catch { return `# ${(cwd.split(/[\\/]/).at(-1) ?? "Project").replaceAll("-", " ")}\n\n## Project Goal / 项目目标\n\nDescribe the project goal, scope, and constraints here.\n`; } }
 function source(value: unknown): Source { const input = value && typeof value === "object" ? value as Record<string, unknown> : {}; return { session_id: typeof input.session_id === "string" ? input.session_id : null, message_ids: Array.isArray(input.message_ids) ? input.message_ids.map(String) : [], files: Array.isArray(input.files) ? input.files.map(String) : [], run_ids: Array.isArray(input.run_ids) ? input.run_ids.map(String) : [], citations: Array.isArray(input.citations) ? input.citations.map(String) : [] }; }
-function now(): string { return new Date().toISOString(); }
 
 function researchFailure(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -31,7 +23,18 @@ function researchFailure(reply: { code: (status: number) => { send: (body: unkno
   return reply.code(status).send({ error: message });
 }
 
-export function registerProjectRoutes(app: FastifyInstance, research: ResearchLoopCoordinator): void {
+export function registerProjectRoutes(app: FastifyInstance, research: ResearchLoopCoordinator, review: ProjectReviewService): void {
+  // The ✨ Review button posts cwd in the body; the query form stays accepted so
+  // the route matches the rest of this file.
+  app.post("/api/project-knowledge/review", async (request, reply) => {
+    const body = (request.body ?? {}) as { cwd?: unknown; session_id?: unknown; force_full_session?: unknown };
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(typeof body.cwd === "string" && body.cwd ? body.cwd : q(request, "cwd")); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+    if (review.isRunning(cwd)) return reply.code(409).send({ error: "A project review is already running for this workspace" });
+    try { return await review.run(cwd, { sessionId: typeof body.session_id === "string" ? body.session_id : null, forceFullSession: body.force_full_session === true, trigger: "manual" }); }
+    catch (error) { return reply.code(error instanceof ProjectReviewBusyError ? 409 : 500).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
   app.get("/api/project-knowledge/summary", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); return { workspace: cwd, project_file: "PROJECT.md", pending_count: current.proposals.filter((item) => item.status === "pending").length, knowledge_count: current.items.filter((item) => item.status === "active").length, auto_review: current.policy.auto_review }; });
   app.post("/api/project-knowledge/initialize", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); await writeJsonAtomic(statePath(cwd), current); return { workspace: cwd, project_file: "PROJECT.md", pending_count: 0, knowledge_count: current.items.length, auto_review: current.policy.auto_review }; });
   app.get("/api/project-knowledge/project", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); return { workspace: cwd, project_file: "PROJECT.md", pending_count: current.proposals.filter((item) => item.status === "pending").length, knowledge_count: current.items.length, auto_review: current.policy.auto_review, content: await projectContent(cwd) }; });

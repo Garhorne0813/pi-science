@@ -12,6 +12,8 @@ import {
 import { WorkspaceEnvironmentService } from "./workspace-environment.js";
 import { ResearchLoopCoordinator } from "./research-loop/coordinator.js";
 import { PiResearchSubagentRunner } from "./research-loop/subagent-runner.js";
+import { ProjectReviewService } from "./project-review/service.js";
+import { PiReviewSubagentRunner } from "./project-review/subagent-runner.js";
 
 export interface ServerModules {
   readonly sessions: NodeSessionService;
@@ -23,6 +25,7 @@ export interface ServerModules {
   readonly scientificRuntime: ScientificRuntimeController;
   readonly environments: WorkspaceEnvironmentService;
   readonly research: ResearchLoopCoordinator;
+  readonly projectReview: ProjectReviewService;
 }
 
 /** Creates an app-owned module graph. No mutable runtime state is shared across apps. */
@@ -31,7 +34,8 @@ export function createServerModules(config?: ServerConfig): ServerModules {
   const sessionRepository = new SessionRepository();
   const piManager = new PiManager();
   const environments = new WorkspaceEnvironmentService(config?.pythonExecutable);
-  const sessions = new NodeSessionService(events, piManager, sessionRepository, environments);
+  const projectReview = new ProjectReviewService(new PiReviewSubagentRunner(environments), sessionRepository);
+  const sessions = new NodeSessionService(events, piManager, sessionRepository, environments, projectReview);
   const settings = new SettingsStore();
   const jobs = new JobCoordinator(environments);
   const research = new ResearchLoopCoordinator(jobs, new PiResearchSubagentRunner(environments));
@@ -44,5 +48,5 @@ export function createServerModules(config?: ServerConfig): ServerModules {
     idleTimeoutMs: config?.scientificIdleMs,
     startupTimeoutMs: config?.scientificStartupMs,
   });
-  return { sessions, events, sessionRepository, piManager, settings, jobs, research, scientificRuntime, environments };
+  return { sessions, events, sessionRepository, piManager, settings, jobs, research, projectReview, scientificRuntime, environments };
 }

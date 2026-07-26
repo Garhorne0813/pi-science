@@ -13,8 +13,6 @@ export const routeBoundaries: readonly RouteBoundary[] = [
   { prefix: "/api/kernels", owner: "python-scientific-runtime", availability: "compatibility-proxy" },
   { prefix: "/api/notebooks", owner: "python-scientific-runtime", availability: "compatibility-proxy" },
   { prefix: "/api/pdfs", owner: "python-scientific-runtime", availability: "compatibility-proxy" },
-  { prefix: "/api/figures", owner: "python-scientific-runtime", availability: "compatibility-proxy" },
-  { prefix: "/api/literature", owner: "python-scientific-runtime", availability: "compatibility-proxy" },
   { prefix: "/api/sessions", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/files", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/provenance", owner: "node-control-plane", availability: "native" },

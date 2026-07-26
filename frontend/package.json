@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "test:bundle": "node scripts/check-bundle-budget.mjs",
     "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.app.json --noEmit",
     "test:uat:conversation": "node scripts/uat-conversation.mjs",
     "test:uat:knowledge": "node scripts/uat-project-knowledge.mjs",
     "test:uat:notebook": "node scripts/uat-notebook.mjs",
@@ -49,6 +50,9 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
