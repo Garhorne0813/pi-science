@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
 import { Package, Puzzle, Wrench, Check, X, ChevronRight, ShieldCheck, AlertTriangle, RotateCcw, Loader2 } from "lucide-react";
 import { WorkspacePage, WorkspacePageHeader } from "../../components/layout/WorkspacePage";
 import { skillsApi, skillsKey } from "../../lib/skills-api";
@@ -7,6 +6,7 @@ import { settingsApi, invalidateSettings } from "../../lib/settings-api";
 import { apiRequest } from "../../lib/api";
 import { queryClient } from "../../lib/query-client";
 import { applySessionReplacements, type SessionReplacement } from "../../lib/runtime-store";
+import { useWorkspaceCwd } from "../../lib/workspace-context";
 
 interface Skill {
   skill_id: string;
@@ -40,8 +40,8 @@ function invalidateSkillSelection() {
 }
 
 export function SkillsPage() {
-  const { cwd: encodedCwd } = useParams<{ cwd: string }>();
-  const cwd = encodedCwd ? decodeURIComponent(encodedCwd) : undefined;
+  // Also routed at /skills (no workspace): the APIs below take `cwd?: string`.
+  const cwd = useWorkspaceCwd() ?? undefined;
   const [skills, setSkills] = useState<Skill[]>([]);
   const [tools, setTools] = useState<Tool[]>([]);
   const [selected, setSelected] = useState<Skill | null>(null);

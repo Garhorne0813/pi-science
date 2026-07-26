@@ -39,6 +39,7 @@ vi.mock("../../components/conversation/ModelControlMenu", () => ({
 }));
 
 import { LiveSessionPage } from "./LiveSessionPage";
+import { WorkspaceProvider } from "../../lib/workspace-context";
 import { FeedbackContext } from "../../components/feedback/feedback-context";
 import { useRuntimeStore } from "../../lib/runtime-store";
 import { useUiStore } from "../../lib/store";
@@ -105,7 +106,8 @@ function renderPage() {
     <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
       <MemoryRouter initialEntries={[`/workspace/${CWD}/session/${SESSION_ID}`]}>
         <Routes>
-          <Route path="/workspace/:cwd/session/:sessionId" element={<LiveSessionPage />} />
+          {/* The app mounts WorkspaceProvider around the route tree (app/router.tsx). */}
+          <Route path="/workspace/:cwd/session/:sessionId" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
         </Routes>
       </MemoryRouter>
     </FeedbackContext.Provider>,

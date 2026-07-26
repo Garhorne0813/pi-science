@@ -1,4 +1,4 @@
-import { Outlet, useNavigate, useParams, useLocation } from "react-router-dom";
+import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Sun, Moon, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical } from "lucide-react";
 import { useUiStore } from "../../lib/store";
@@ -6,7 +6,7 @@ import { useRuntimeStore } from "../../lib/runtime-store";
 import { InspectorShell } from "../../components/inspector/InspectorShell";
 import { RightPane } from "../../components/inspector/RightPane";
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
-import { setCurrentCwd } from "../../lib/files";
+import { useWorkspaceCwd } from "../../lib/workspace-context";
 import { usePendingProposalCount } from "../../lib/project-knowledge";
 import { cn } from "../../lib/cn";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
@@ -22,15 +22,8 @@ export function ProjectsLayout() {
   const inspectorData = useUiStore((s) => s.inspectorData);
   const closeInspector = useUiStore((s) => s.closeInspector);
   const location = useLocation();
-  const { cwd: workspaceCwd } = useParams<{ cwd: string }>();
-
-  // Decode workspace cwd from URL
-  const activeCwd = workspaceCwd ? decodeURIComponent(workspaceCwd) : null;
+  const activeCwd = useWorkspaceCwd();
   const isWorkspace = !!activeCwd;
-
-  useEffect(() => {
-    if (activeCwd) setCurrentCwd(activeCwd);
-  }, [activeCwd]);
 
   // Close the inspector when switching workspaces — stale inspector
   // data from workspace A makes no sense after navigating to workspace B.

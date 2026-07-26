@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { BookOpen, Play, Square, RefreshCw, ExternalLink, CheckCircle2 } from "lucide-react";
 import { cn } from "../../lib/cn";
@@ -11,6 +10,7 @@ import { timeAgo } from "../../lib/format";
 import { apiRequest } from "../../lib/api";
 import { queryClient } from "../../lib/query-client";
 import { useFeedback } from "../../components/feedback/feedback-context";
+import { useRequiredWorkspaceCwd } from "../../lib/workspace-context";
 
 interface Notebook {
   path: string; name: string; size: number; modified: string;
@@ -41,8 +41,7 @@ const environmentQuery = (cwd: string) => ({ queryKey: ["environments", cwd], qu
 export function NotebooksPage() {
   const { t } = useTranslation();
   const { toast } = useFeedback();
-  const { cwd: rawCwd } = useParams<{ cwd: string }>();
-  const workspaceCwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
+  const workspaceCwd = useRequiredWorkspaceCwd();
   // Jupyter status and the workspace environment are also written by the start/stop
   // and provision actions, so the cache — not local state — holds the current value.
   const notebooksResult = useQuery(notebooksQuery(workspaceCwd));

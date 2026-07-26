@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
   BarChart3,
@@ -42,11 +42,11 @@ import { fileInspectorForPath } from "../../lib/artifacts";
 import { KnowledgePageHeader, KnowledgePageTabs, type KnowledgePageTab } from "../../components/knowledge/KnowledgePageHeader";
 import { WorkspacePage } from "../../components/layout/WorkspacePage";
 import { projectMemoryApi, type ExperienceRecord, type ProjectMemoryOverview, type ResearchLoop } from "../../lib/project-memory";
+import { useRequiredWorkspaceCwd } from "../../lib/workspace-context";
 
 export function KnowledgePage() {
   const { t } = useTranslation();
-  const { cwd: rawCwd } = useParams<{ cwd: string }>();
-  const cwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
+  const cwd = useRequiredWorkspaceCwd();
   const activeSessionId = useRuntimeStore((state) => state.activeSessionId);
   const [tab, setTab] = useState<KnowledgePageTab>("overview");
   const [summary, setSummary] = useState<ProjectSummary | null>(null);

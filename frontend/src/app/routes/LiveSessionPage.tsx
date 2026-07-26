@@ -10,7 +10,7 @@ import type { ThreadBlock, ToolCallBlock } from "../../types/thread";
 import { MarkdownViewer, type CodeRunner } from "../../components/markdown-viewer/MarkdownViewer";
 import { extractArtifactRefs, refToArtifactBlock, fileInspectorFromBlock } from "../../lib/artifacts";
 import { pickAutoPreviewArtifact } from "../../lib/artifact-autopreview";
-import { setCurrentCwd } from "../../lib/files";
+import { useRequiredWorkspaceCwd } from "../../lib/workspace-context";
 import { projectKnowledgeApi } from "../../lib/project-knowledge";
 import { fetchDynamicCommands, resetDynamicCommands } from "../../lib/slash-commands";
 import { SlashCommandMenu } from "../../components/SlashCommandMenu";
@@ -33,18 +33,32 @@ import { ResearchLoopDraftCard, ResearchLoopStatusCard, ResearchModePicker, type
 export function LiveSessionPage() {
   const { t } = useTranslation();
   const { toast } = useFeedback();
-  const { sessionId, cwd: rawCwd } = useParams<{ sessionId: string; cwd: string }>();
-  const workspaceCwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
+  const { sessionId } = useParams<{ sessionId: string }>();
+  const workspaceCwd = useRequiredWorkspaceCwd();
   const navigate = useNavigate();
-  const {
-    status, thread, sessions, working, connect, disconnect,
-    sendPrompt, abort, activeSessionId, createNewSession,
-    model: runtimeModel, thinking: runtimeThinking,
-    contextTokens, contextWindow, contextPercent,
-    compactionEnabled, compactionThresholdPercent,
-    pendingInteraction, respondToInteraction,
-    draft: input, setDraft: setInput,
-  } = useRuntimeStore();
+  // Field-level selectors, not a whole-store subscription: a streamed token only
+  // touches `thread`/`working`, so nothing that reads the other fields re-renders.
+  const status = useRuntimeStore((s) => s.status);
+  const thread = useRuntimeStore((s) => s.thread);
+  const sessions = useRuntimeStore((s) => s.sessions);
+  const working = useRuntimeStore((s) => s.working);
+  const connect = useRuntimeStore((s) => s.connect);
+  const disconnect = useRuntimeStore((s) => s.disconnect);
+  const sendPrompt = useRuntimeStore((s) => s.sendPrompt);
+  const abort = useRuntimeStore((s) => s.abort);
+  const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
+  const createNewSession = useRuntimeStore((s) => s.createNewSession);
+  const runtimeModel = useRuntimeStore((s) => s.model);
+  const runtimeThinking = useRuntimeStore((s) => s.thinking);
+  const contextTokens = useRuntimeStore((s) => s.contextTokens);
+  const contextWindow = useRuntimeStore((s) => s.contextWindow);
+  const contextPercent = useRuntimeStore((s) => s.contextPercent);
+  const compactionEnabled = useRuntimeStore((s) => s.compactionEnabled);
+  const compactionThresholdPercent = useRuntimeStore((s) => s.compactionThresholdPercent);
+  const pendingInteraction = useRuntimeStore((s) => s.pendingInteraction);
+  const respondToInteraction = useRuntimeStore((s) => s.respondToInteraction);
+  const input = useRuntimeStore((s) => s.draft);
+  const setInput = useRuntimeStore((s) => s.setDraft);
   const [files, setFiles] = useState<File[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -78,7 +92,6 @@ export function LiveSessionPage() {
   const clearWorkspaceReferences = useUiStore((state) => state.clearWorkspaceReferences);
 
   useEffect(() => {
-    setCurrentCwd(workspaceCwd);
     connect(workspaceCwd, sessionId || undefined);
     const workspacePrefix = `/workspace/${encodeURIComponent(workspaceCwd)}`;
     return () => {

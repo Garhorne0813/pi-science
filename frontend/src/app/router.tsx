@@ -2,6 +2,7 @@ import { createBrowserRouter } from "react-router-dom";
 import { Suspense, lazy, type ReactElement } from "react";
 import { ProjectsLayout } from "./layout/ProjectsLayout";
 import { RoutedErrorBoundary } from "../components/ErrorBoundary";
+import { WorkspaceProvider } from "../lib/workspace-context";
 
 const ProjectsPage = lazy(() => import("./routes/ProjectsPage").then((m) => ({ default: m.ProjectsPage })));
 const LiveSessionPage = lazy(() => import("./routes/LiveSessionPage").then((m) => ({ default: m.LiveSessionPage })));
@@ -19,7 +20,7 @@ const wrap = (element: ReactElement) => <Suspense fallback={fallback}>{element}<
 export const router = createBrowserRouter([
   {
     path: "/",
-    element: <RoutedErrorBoundary><ProjectsLayout /></RoutedErrorBoundary>,
+    element: <RoutedErrorBoundary><WorkspaceProvider><ProjectsLayout /></WorkspaceProvider></RoutedErrorBoundary>,
     children: [
       { index: true, element: wrap(<ProjectsPage />) },
       { path: "settings", element: wrap(<SettingsPage />) },

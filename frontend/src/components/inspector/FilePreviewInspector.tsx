@@ -53,7 +53,7 @@ export function FilePreviewInspector({
   onClose: () => void;
   /** Pane-level header buttons (e.g. maximize), rendered before Close. */
   controls?: React.ReactNode;
-  cwd?: string;
+  cwd: string;
 }) {
   const kind = previewKindForName(data.filename);
   const policy = previewPolicy(kind);
@@ -479,7 +479,7 @@ export function PreviewError({
   filename: string;
   path?: string;
   root?: FileRoot;
-  cwd?: string;
+  cwd: string;
   onOpenExternally: () => void;
 }) {
   const { t } = useTranslation();

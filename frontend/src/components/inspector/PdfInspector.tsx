@@ -17,7 +17,7 @@ export function PdfInspector({
   onClose: () => void;
   /** Pane-level header buttons (e.g. maximize), rendered before Close. */
   controls?: React.ReactNode;
-  cwd?: string;
+  cwd: string;
 }) {
   const { t } = useTranslation();
   const title = data.filename ?? data.path?.split("/").pop() ?? "PDF";

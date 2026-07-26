@@ -26,13 +26,13 @@ interface EditableCell extends NotebookCell {
 export function NotebookEditor({
   path,
   root,
-  cwd = ".",
+  cwd,
   onClose,
   controls,
 }: {
   path: string;
   root?: FileRoot;
-  cwd?: string;
+  cwd: string;
   onClose: () => void;
   controls?: React.ReactNode;
 }) {

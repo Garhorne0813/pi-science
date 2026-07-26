@@ -24,8 +24,11 @@ export function RightPane({
   children: React.ReactNode;
   onClose: () => void;
 }) {
-  const { inspectorWidth, inspectorMaximized, setInspectorWidth, setInspectorMaximized } =
-    useUiStore();
+  // Field-level selectors so unrelated UI-store writes do not re-render the pane.
+  const inspectorWidth = useUiStore((s) => s.inspectorWidth);
+  const inspectorMaximized = useUiStore((s) => s.inspectorMaximized);
+  const setInspectorWidth = useUiStore((s) => s.setInspectorWidth);
+  const setInspectorMaximized = useUiStore((s) => s.setInspectorMaximized);
   // While dragging, the live width lives here; the store (and localStorage)
   // are only written on pointer-up.
   const [dragWidth, setDragWidth] = useState<number | null>(null);

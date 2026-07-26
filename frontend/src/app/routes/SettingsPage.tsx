@@ -1,5 +1,4 @@
 import { useEffect, useState, useCallback } from "react";
-import { useParams } from "react-router-dom";
 import { Key, Trash2, Eye, EyeOff, Check, Loader2, Cpu, Puzzle, FlaskConical, Languages, Server, Globe2, Bot, Plus, Save, X, ChevronDown } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { shippedLocales } from "../../i18n/config";
@@ -8,6 +7,7 @@ import { clampThinkingLevel } from "../../lib/pi-science-client";
 import { invalidateSettings, readSettingsResponse, settingsApi } from "../../lib/settings-api";
 import { useTranslation } from "react-i18next";
 import { ComputeSettings } from "../../components/settings/ComputeSettings";
+import { useWorkspaceCwd } from "../../lib/workspace-context";
 
 type Tab = "general" | "llm" | "extensions" | "mcp" | "compute";
 
@@ -78,8 +78,7 @@ interface Config {
 
 export function SettingsPage() {
   const { t } = useTranslation();
-  const { cwd: rawCwd } = useParams<{ cwd: string }>();
-  const workspaceCwd = rawCwd ? decodeURIComponent(rawCwd) : null;
+  const workspaceCwd = useWorkspaceCwd();
   const [tab, setTab] = useState<Tab>("general");
   const [config, setConfig] = useState<Config | null>(null);
   const [loading, setLoading] = useState(true);

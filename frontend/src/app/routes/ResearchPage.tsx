@@ -1,15 +1,16 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { FlaskConical, Loader2, Pause, Play, X } from "lucide-react";
 import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "../../components/layout/WorkspacePage";
 import { projectMemoryApi, useResearchLoopDetail, useResearchLoops } from "../../lib/project-memory";
 import { subscribeResearchInvalidation } from "../../lib/research-events";
 import { cn } from "../../lib/cn";
 import { useTranslation } from "react-i18next";
+import { useRequiredWorkspaceCwd } from "../../lib/workspace-context";
 
 export function ResearchPage() {
   const { t } = useTranslation();
-  const { cwd: rawCwd } = useParams<{ cwd: string }>(); const cwd = rawCwd ? decodeURIComponent(rawCwd) : "."; const navigate = useNavigate();
+  const cwd = useRequiredWorkspaceCwd(); const navigate = useNavigate();
   const [pick, setPick] = useState<string | null>(null); const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null);
   const loopsResult = useResearchLoops(cwd); const loops = loopsResult.data?.loops ?? []; const loading = loopsResult.isFetching;
   // The selection follows the list: an explicit pick wins while it still exists, otherwise the first loop.

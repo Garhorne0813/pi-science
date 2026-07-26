@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Play, Check, X, Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "../../lib/cn";
@@ -9,12 +8,12 @@ import { timeAgo } from "../../lib/format";
 import { queryClient } from "../../lib/query-client";
 import { runLogQuery, runsQuery } from "../../lib/runs";
 import { useFeedback } from "../../components/feedback/feedback-context";
+import { useRequiredWorkspaceCwd } from "../../lib/workspace-context";
 
 export function RunsPage() {
   const { t } = useTranslation();
   const { toast } = useFeedback();
-  const { cwd: rawCwd } = useParams<{ cwd: string }>();
-  const workspaceCwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
+  const workspaceCwd = useRequiredWorkspaceCwd();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [logs, setLogs] = useState<Record<string, string>>({});
 
