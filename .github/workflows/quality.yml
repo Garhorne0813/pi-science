@@ -41,10 +41,10 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --directory backend --extra dev
 
-      - name: Typecheck contracts and control plane
+      - name: Typecheck contracts, control plane and frontend
         run: pnpm typecheck
 
-      - name: Test contracts, control plane and frontend
+      - name: Test contracts, control plane, frontend and skills
         run: pnpm test
 
       - name: Build all JavaScript packages
