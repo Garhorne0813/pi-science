@@ -232,7 +232,7 @@ Pi-Science 是 **local-first 科学 AI 工作台**：对话式科研助手 + 可
 
 ### Phase 4 — Track B 功能（§4，另立计划，逐项）
 
-**并行规则**：A2 与 A3 文件不相交可并行；A5→A6→A7 串行（共享 characterization 测试面）；A8 与 A9 可并行。
+**并行规则（2026-07-26 修订，按文件所有权重排）**：A9 为纯服务端批次，与任何前端批次并行（其原 NotebooksPage SSE 内联迁移项移交 A10）；A4 落地后 A5∥A6∥A7 三路并行——所有权规则：i18n/index.ts 只归 A6、A7 必须保持 runtime-store/pi-science-client 公共导出稳定（新模块 + re-export）、characterization 测试文件只归 A5；A8（i18n 资源化，触碰全前端）严格最后，可与 A10 的 lib/viewers 测试部分并行。
 
 ## 6. 执行模式（Opus 5 subagents）
 
