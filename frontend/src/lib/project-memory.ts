@@ -92,6 +92,13 @@ export function useResearchLoops(cwd: string) {
   return useQuery(loopsQuery(cwd));
 }
 
+const timelineQuery = (cwd: string) => read<{ timeline: Array<Record<string, unknown>> }>(projectMemoryKey("timeline", cwd), `/api/project-memory/timeline?${query(cwd)}`);
+
+/** Project history: mounted only by the history tab, refetched by its own mutations. */
+export function useProjectTimeline(cwd: string) {
+  return useQuery(timelineQuery(cwd));
+}
+
 export function useResearchLoopDetail(cwd: string, loopId: string | null) {
   // keepPreviousData: switching loops keeps the previous detail on screen until the
   // new one arrives, which is what the manual `setDetail(await …)` flow did.
@@ -103,7 +110,7 @@ export const projectMemoryApi = {
     return get<ProjectMemoryOverview>(projectMemoryKey("overview", cwd), `/api/project-memory/overview?${query(cwd)}`);
   },
   timeline(cwd: string) {
-    return get<{ timeline: Array<Record<string, unknown>> }>(projectMemoryKey("timeline", cwd), `/api/project-memory/timeline?${query(cwd)}`);
+    return queryClient.fetchQuery(timelineQuery(cwd));
   },
   experiences(cwd: string, loopId?: string) {
     const params = new URLSearchParams({ cwd });

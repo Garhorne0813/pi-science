@@ -1,6 +1,7 @@
 import { applySessionReplacements, type SessionReplacement } from "./runtime-store";
 import { apiRequest } from "./api";
 import { queryClient } from "./query-client";
+import type { AgentProfile, CustomProvider, McpServer, ModelEndpoint, ProjectSubagent, RuntimeExtension, WebAccessConfig } from "./settings-types";
 
 export const settingsKey = (...selector: Array<string | null>) => ["settings", ...selector];
 
@@ -15,7 +16,7 @@ function unwrapSettings<T>(data: T & SettingsEnvelope, fallback: string): T {
   return data;
 }
 
-/** Raw-Response variant for the settings page's own `fetch` call sites (A6 migrates those). */
+/** Raw-Response variant kept for `pi-science-client.test.ts`, which pins `error` over `detail`. */
 export async function readSettingsResponse<T>(response: Response, fallback: string): Promise<T> {
   const data = await response.json().catch(() => ({})) as T & SettingsEnvelope;
   if (!response.ok) throw new Error(data.error || data.detail || fallback);
@@ -30,10 +31,63 @@ function json(method: string, body?: unknown): RequestInit {
   };
 }
 
+/** Routes that answer through `respondWithReload` need the envelope check plus the
+ *  session-replacement side effect; everything else only needs the transport. */
+async function writeSettings<T>(path: string, init: RequestInit, fallback: string): Promise<T> {
+  return unwrapSettings(await apiRequest<T & SettingsEnvelope>(path, { ...init, errorFallback: fallback }), fallback);
+}
+
 /** Config is read often and changes rarely — it kept a 3s TTL, now the client default. */
 const configQuery = <T,>(cwd?: string | null) => ({
   queryKey: settingsKey("config", cwd ?? null),
   queryFn: () => apiRequest<T & SettingsEnvelope>(`/api/settings/config${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`),
+});
+
+/* ── Query definitions for the settings page's own reads ──────────────────────
+ * None of these were cached before A6 migrated them off raw `fetch`, so they all
+ * pin `staleTime: 0`: every mount is a fresh read, the shared client only adds
+ * in-flight deduplication and the 5xx retry. Only `/api/settings/*` resources sit
+ * under the `settings` key so `invalidateSettings()` keeps its existing blast radius. */
+
+export const extensionsQuery = (errorFallback: string) => ({
+  queryKey: settingsKey("extensions"),
+  queryFn: () => apiRequest<{ extensions?: RuntimeExtension[] }>("/api/settings/extensions", { errorFallback }),
+  staleTime: 0,
+});
+
+export const subagentsKey = (cwd: string) => settingsKey("subagents", cwd);
+export const subagentsQuery = (cwd: string, errorFallback: string) => ({
+  queryKey: subagentsKey(cwd),
+  queryFn: () => apiRequest<{ agents?: ProjectSubagent[] }>(`/api/settings/subagents?cwd=${encodeURIComponent(cwd)}`, { errorFallback }),
+  staleTime: 0,
+});
+
+export const webAccessKey = settingsKey("web-access");
+export const webAccessQuery = (errorFallback: string) => ({
+  queryKey: webAccessKey,
+  queryFn: () => apiRequest<WebAccessConfig>("/api/settings/web-access", { errorFallback }),
+  staleTime: 0,
+});
+
+export const modelEndpointsKey = ["model-endpoints"];
+export const modelEndpointsQuery = (errorFallback: string) => ({
+  queryKey: modelEndpointsKey,
+  queryFn: () => apiRequest<{ endpoints?: ModelEndpoint[] }>("/api/endpoints", { errorFallback }),
+  staleTime: 0,
+});
+
+export const agentProfilesKey = ["agent-profiles"];
+export const agentProfilesQuery = (errorFallback: string) => ({
+  queryKey: agentProfilesKey,
+  queryFn: () => apiRequest<{ profiles?: AgentProfile[] }>("/api/agent-profiles", { errorFallback }),
+  staleTime: 0,
+});
+
+export const mcpCatalogKey = (cwd: string) => ["mcp", "catalog", cwd];
+export const mcpCatalogQuery = (cwd: string, errorFallback: string) => ({
+  queryKey: mcpCatalogKey(cwd),
+  queryFn: () => apiRequest<{ servers?: McpServer[] }>(`/api/mcp/catalog?cwd=${encodeURIComponent(cwd)}`, { errorFallback }),
+  staleTime: 0,
 });
 
 export const settingsApi = {
@@ -70,6 +124,71 @@ export const settingsApi = {
     const result = unwrapSettings(await apiRequest<T & SettingsEnvelope>(`/api/settings/compaction${query}`, json("PUT", { enabled, threshold_percent: thresholdPercent })), "Unable to save context management settings");
     invalidateSettings();
     return result;
+  },
+
+  /* ── Custom API providers ── */
+
+  discoverCustomProvider(input: { name: string; base_url: string; api_key: string; api: string }, fallback: string) {
+    return writeSettings<{ provider: CustomProvider }>("/api/settings/custom-providers/discover", json("POST", input), fallback);
+  },
+
+  async saveCustomProvider(id: string, body: Record<string, unknown>, fallback: string): Promise<void> {
+    await writeSettings(`/api/settings/custom-providers/${encodeURIComponent(id)}`, json("PUT", body), fallback);
+    invalidateSettings();
+  },
+
+  async deleteCustomProvider(id: string, fallback: string): Promise<void> {
+    await writeSettings(`/api/settings/custom-providers/${encodeURIComponent(id)}`, { method: "DELETE" }, fallback);
+    invalidateSettings();
+  },
+
+  /* ── Web access ── */
+
+  saveWebAccess(body: { provider: string; workflow: string; api_keys: Record<string, string>; remove_keys: string[] }, fallback: string) {
+    return writeSettings<WebAccessConfig>("/api/settings/web-access", json("PUT", body), fallback);
+  },
+
+  /* ── Project subagents ── */
+
+  async saveSubagent(cwd: string, name: string, body: ProjectSubagent, fallback: string): Promise<void> {
+    await apiRequest(`/api/settings/subagents/${encodeURIComponent(name)}?cwd=${encodeURIComponent(cwd)}`, { ...json("PUT", body), errorFallback: fallback });
+    void queryClient.invalidateQueries({ queryKey: subagentsKey(cwd) });
+  },
+
+  async deleteSubagent(cwd: string, name: string, fallback: string): Promise<void> {
+    await apiRequest(`/api/settings/subagents/${encodeURIComponent(name)}?cwd=${encodeURIComponent(cwd)}`, { method: "DELETE", errorFallback: fallback });
+    void queryClient.invalidateQueries({ queryKey: subagentsKey(cwd) });
+  },
+
+  /* ── MCP catalog ── */
+
+  setMcpEnabled(id: string, enabled: boolean, fallback: string) {
+    return writeSettings(`/api/settings/mcp/${id}?enabled=${enabled}`, { method: "PUT" }, fallback);
+  },
+
+  /* ── Model endpoints ── */
+
+  async registerEndpoint(body: { name: string; base_url: string; protocol: string; data_egress: string }, fallback: string): Promise<void> {
+    await apiRequest("/api/endpoints", { ...json("POST", body), errorFallback: fallback });
+    void queryClient.invalidateQueries({ queryKey: modelEndpointsKey });
+  },
+
+  /** The two toggles never checked their response before A6; they still don't. */
+  async checkEndpointHealth(endpointId: string): Promise<void> {
+    await apiRequest(`/api/endpoints/${encodeURIComponent(endpointId)}/health`, { method: "POST" }).catch(() => undefined);
+    void queryClient.invalidateQueries({ queryKey: modelEndpointsKey });
+  },
+
+  async setEndpointEnabled(endpointId: string, enabled: boolean): Promise<void> {
+    await apiRequest(`/api/endpoints/${encodeURIComponent(endpointId)}/enabled?enabled=${enabled}`, { method: "PUT" }).catch(() => undefined);
+    void queryClient.invalidateQueries({ queryKey: modelEndpointsKey });
+  },
+
+  /* ── Agent profiles ── */
+
+  async createAgentProfile(body: Record<string, unknown>, fallback: string): Promise<void> {
+    await apiRequest("/api/agent-profiles", { ...json("POST", body), errorFallback: fallback });
+    void queryClient.invalidateQueries({ queryKey: agentProfilesKey });
   },
 };
 

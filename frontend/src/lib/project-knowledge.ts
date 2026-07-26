@@ -146,6 +146,13 @@ function query(cwd: string, extra?: Record<string, string>) {
 
 const proposalCountQuery = (cwd: string) => read<{ pending_count: number }>(projectKnowledgeKey("proposals-count", cwd), `/api/project-knowledge/proposals/count?${query(cwd)}`);
 
+const fileViewsQuery = (cwd: string) => read<LogicalFileViews>(projectKnowledgeKey("file-views", cwd), `/api/project-knowledge/files/views?${query(cwd)}`);
+
+/** Logical file views: mounted only by the files tab, refreshed by the write invalidation. */
+export function useLogicalFileViews(cwd: string) {
+  return useQuery(fileViewsQuery(cwd));
+}
+
 /** Pending-proposal badge: polled, not pushed — the server has no signal for it. */
 export function usePendingProposalCount(cwd: string, refetchIntervalMs: number) {
   return useQuery({ ...proposalCountQuery(cwd), refetchInterval: refetchIntervalMs });
@@ -236,7 +243,7 @@ export const projectKnowledgeApi = {
     });
   },
   files(cwd: string) {
-    return get<LogicalFileViews>(projectKnowledgeKey("file-views", cwd), `/api/project-knowledge/files/views?${query(cwd)}`);
+    return queryClient.fetchQuery(fileViewsQuery(cwd));
   },
   history(cwd: string) {
     return get<{ history: Array<Record<string, unknown>> }>(projectKnowledgeKey("history", cwd), `/api/project-knowledge/history?${query(cwd)}`);
