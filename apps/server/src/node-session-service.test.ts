@@ -324,6 +324,11 @@ async function workspaceWithConversation(sessionId: string): Promise<string> {
   return realpath(cwd);
 }
 
+/** `policy.auto_review` ships off, so every test that expects the reviewer to fire opts in first. */
+async function enableAutoReview(cwd: string): Promise<void> {
+  await writeFile(join(cwd, ".pi-science", "project-state.json"), JSON.stringify({ items: [], proposals: [], project_versions: [], policy: { auto_review: true }, history: [] }), "utf8");
+}
+
 async function proposals(cwd: string): Promise<Array<Record<string, unknown>>> {
   try { return JSON.parse(await readFile(join(cwd, ".pi-science", "project-state.json"), "utf8")).proposals; }
   catch { return []; }
@@ -347,6 +352,7 @@ describe("automatic project review", () => {
     const service = new NodeSessionService(undefined, undefined, undefined, passthroughEnvironments, new ProjectReviewService(runner));
     service.configureLogging((level, message) => { logged.push(`${level}:${message}`); });
     const cwd = await workspaceWithConversation("session-a");
+    await enableAutoReview(cwd);
     await service.resume("session-a", cwd);
 
     await service.command("session-a", cwd, "abort");
@@ -384,6 +390,20 @@ describe("automatic project review", () => {
     await service.shutdownAll();
   });
 
+  it("does not run the reviewer on a workspace that never opted in", async () => {
+    const runner = new FakeReviewRunner();
+    const service = new NodeSessionService(undefined, undefined, undefined, passthroughEnvironments, new ProjectReviewService(runner));
+    const cwd = await workspaceWithConversation("session-a");
+    await service.resume("session-a", cwd);
+
+    await service.command("session-a", cwd, "abort");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(runner.calls).toHaveLength(0);
+    expect(await proposals(cwd)).toHaveLength(0);
+    await service.shutdownAll();
+  });
+
   it("logs a reviewer failure without poisoning the next turn", async () => {
     const runner = new FakeReviewRunner();
     runner.failure = new Error("Pi CLI is not configured");
@@ -391,6 +411,7 @@ describe("automatic project review", () => {
     const service = new NodeSessionService(undefined, undefined, undefined, passthroughEnvironments, new ProjectReviewService(runner));
     service.configureLogging((level, message) => { logged.push(`${level}:${message}`); });
     const cwd = await workspaceWithConversation("session-a");
+    await enableAutoReview(cwd);
     await service.resume("session-a", cwd);
 
     await service.command("session-a", cwd, "abort");

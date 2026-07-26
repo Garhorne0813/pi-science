@@ -6,7 +6,7 @@ import { useRuntimeStore } from "../../lib/runtime-store";
 import { useUiStore } from "../../lib/store";
 import { cn } from "../../lib/cn";
 import { useRequiredWorkspaceCwd } from "../../lib/workspace-context";
-import { projectKnowledgeApi } from "../../lib/project-knowledge";
+import { projectKnowledgeApi, useReviewPolicy } from "../../lib/project-knowledge";
 import { fetchDynamicCommands, resetDynamicCommands } from "../../lib/slash-commands";
 import { SlashCommandMenu } from "../../components/SlashCommandMenu";
 import { ConversationWelcome } from "../../components/conversation/ConversationWelcome";
@@ -93,6 +93,10 @@ export function LiveSessionPage() {
   });
   const { input, setInput, files, setFiles, workspaceReferences } = composer;
   const modelControlsDisabled = working || reviewingProject || model.configuringModel;
+  // The reviewer already runs on every settled turn when the workspace opted in, so the manual
+  // button would only duplicate it. Until the policy is known, show the manual button: it is the
+  // shipped default and the only control that does something when auto review is off.
+  const autoReviewOn = useReviewPolicy(workspaceCwd).data?.auto_review === true;
 
   const handleProjectReview = async () => {
     if (reviewingProject || working) return;
@@ -253,16 +257,28 @@ export function LiveSessionPage() {
                 >
                   <Plus size={15} />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => void handleProjectReview()}
-                  disabled={working || reviewingProject}
-                  className="flex min-h-7 items-center gap-1 rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2 hover:text-text disabled:cursor-wait disabled:opacity-50"
-                  title="Review this conversation for durable project knowledge"
-                >
-                  {reviewingProject ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                  Review
-                </button>
+                {autoReviewOn ? (
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/knowledge`)}
+                    className="flex min-h-7 items-center gap-1 rounded-input border border-ok/40 bg-ok/10 px-2 py-1 text-xs text-ok hover:bg-ok/15"
+                    title={t("conversation.autoReviewOnTitle")}
+                  >
+                    <Sparkles size={13} />
+                    {t("conversation.autoReviewOn")}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void handleProjectReview()}
+                    disabled={working || reviewingProject}
+                    className="flex min-h-7 items-center gap-1 rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2 hover:text-text disabled:cursor-wait disabled:opacity-50"
+                    title={t("conversation.reviewTitle")}
+                  >
+                    {reviewingProject ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                    Review
+                  </button>
+                )}
                 {model.modelError && <span className="max-w-[180px] truncate text-[10px] text-error" title={model.modelError}>{model.modelError}</span>}
                 {reviewNotice && <span className="max-w-[220px] truncate text-[10px] text-muted" title={reviewNotice}>{reviewNotice}</span>}
               </div>

@@ -153,6 +153,13 @@ export function useLogicalFileViews(cwd: string) {
   return useQuery(fileViewsQuery(cwd));
 }
 
+/** Composer review control: reads the workspace policy to decide badge vs manual button.
+ *  Bound to the exported client rather than context — the same singleton `main.tsx` provides,
+ *  so the cache is shared, but the composer stays mountable without a QueryClientProvider. */
+export function useReviewPolicy(cwd: string) {
+  return useQuery(read<ProjectPolicy>(projectKnowledgeKey("policy", cwd), `/api/project-knowledge/policy?${query(cwd)}`), queryClient);
+}
+
 /** Pending-proposal badge: polled, not pushed — the server has no signal for it. */
 export function usePendingProposalCount(cwd: string, refetchIntervalMs: number) {
   return useQuery({ ...proposalCountQuery(cwd), refetchInterval: refetchIntervalMs });
