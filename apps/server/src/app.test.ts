@@ -106,6 +106,37 @@ describe("Node control plane", () => {
     expect(response.json()).toMatchObject({ error: "scientific runtime unavailable" });
   });
 
+  it("survives a refused upstream connection instead of replying twice", async () => {
+    // Bind and immediately release a port so the proxy connection is refused.
+    const closed = Fastify();
+    await closed.listen({ host: "127.0.0.1", port: 0 });
+    const origin = closed.listeningOrigin;
+    await closed.close();
+
+    const app = buildApp(config(origin));
+    openApps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+
+    const uncaught: unknown[] = [];
+    const record = (error: unknown) => uncaught.push(error);
+    process.on("uncaughtException", record);
+    process.on("unhandledRejection", record);
+    try {
+      // /api/bookmarks is a declared boundary with no native handler, so it
+      // falls through to the proxy without passing the scientific-runtime gate
+      // that would answer 503 before any upstream connection is attempted.
+      const response = await fetch(`${app.listeningOrigin}/api/bookmarks`);
+      expect(response.status).toBe(504);
+      expect(await response.json()).toMatchObject({ error: "scientific runtime unavailable" });
+      // The duplicate onError lands a tick after the first reply is flushed.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally {
+      process.off("uncaughtException", record);
+      process.off("unhandledRejection", record);
+    }
+    expect(uncaught).toEqual([]);
+  });
+
   it("can serve read-only session data from the existing JSONL format", async () => {
     const workspace = join(tmpdir(), `pi-science-session-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     const sessionDir = join(workspace, ".pi-science", "sessions", "encoded");

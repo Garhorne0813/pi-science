@@ -111,6 +111,11 @@ describe("native control-plane business routes", () => {
     const cwd = join(root, "counted-workspace");
     tempDirs.push(root);
     process.env.PI_SCIENCE_WORKSPACES = root;
+    // The workspace listing also includes pinned paths from the control home,
+    // so an unisolated home leaks the developer's own pinned workspaces here.
+    const home = `${root}-home`;
+    tempDirs.push(home);
+    process.env.PI_SCIENCE_HOME = home;
     await mkdir(join(cwd, ".pi-science", "sessions", "nested"), { recursive: true });
     await writeFile(join(cwd, ".pi-science", "sessions", "one.jsonl"), `${JSON.stringify({ type: "session", id: "one", cwd, timestamp: "2026-07-24T00:00:00.000Z" })}\n`, "utf8");
     await writeFile(join(cwd, ".pi-science", "sessions", "nested", "two.jsonl"), `${JSON.stringify({ type: "session", id: "two", cwd, timestamp: "2026-07-24T01:00:00.000Z" })}\n`, "utf8");

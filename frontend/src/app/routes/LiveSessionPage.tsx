@@ -406,11 +406,20 @@ export function LiveSessionPage() {
   };
 
   const hasUserMessage = thread.blocks.some((block) => block.kind === "user");
+  // Empty new conversation: welcome copy sits directly above a vertically centered composer.
+  const showWelcome = thread.blocks.length === 0 && !working && status !== "connecting" && !researchDraft && !activeResearchLoop;
   const activeSession = sessions.find((session) => session.id === activeSessionId);
   const isNewSession = !hasUserMessage && (activeSession?.name === "New Session" || thread.loaded);
   const title = isNewSession || !activeSessionId
     ? t("conversation.newSession")
     : getSessionName(workspaceCwd, activeSessionId) || activeSession?.name || activeSessionId.slice(0, 8);
+
+  // Rendered above the composer card in both layouts, so it lives in a variable:
+  // in the welcome layout it belongs to the growing top region (otherwise its
+  // height would push the composer card off the vertical centre).
+  const modePicker = isNewSession && !researchDraft && !activeResearchLoop
+    ? <ResearchModePicker className={showWelcome ? "px-0 pb-0" : undefined} selected={researchMode} disabled={working || reviewingProject || researchBusy} onSelect={(mode, prompt) => { const selected = researchMode === mode ? null : mode; setResearchMode(selected); setResearchPrompt(selected ? prompt : t("conversation.defaultPrompt")); inputRef.current?.focus(); }} />
+    : null;
 
   return (
     <div className="flex flex-col h-full">
@@ -424,168 +433,177 @@ export function LiveSessionPage() {
         </div>
       </header>
 
-      {/* Thread */}
-      <div ref={scrollRef} onScroll={handleThreadScroll} className="flex-1 overflow-y-auto [overflow-anchor:none]">
-        <div className="mx-auto max-w-[760px] flex flex-col gap-4 px-8 py-6">
-          {thread.blocks.length === 0 && !working && status === "connecting" && activeSessionId && (
-            <div className="flex items-center gap-2 py-4 text-sm text-muted">
-              <Loader2 size={14} className="animate-spin text-accent" />
-              {t("conversation.loading")}
-            </div>
-          )}
-          {thread.blocks.length === 0 && !working && status !== "connecting" && !researchDraft && !activeResearchLoop && (
-            <ConversationWelcome />
-          )}
-          {researchDraft && <ResearchLoopDraftCard draft={researchDraft} busy={researchBusy} onChange={setResearchDraft} onCancel={() => { setResearchDraft(null); setResearchMode(null); setResearchError(null); }} onConfirm={() => void confirmResearchLoop()} />}
-          {activeResearchLoop && <ResearchLoopStatusCard loop={activeResearchLoop} candidates={activeResearchLoop.candidates} busy={researchBusy} onRefresh={() => void refreshResearchLoop(activeResearchLoop.loop_id)} onAction={(action) => void researchAction(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
-          {researchError && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error">{researchError}</div>}
-          {renderBlocks(thread.blocks, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" })}
-          {pendingInteraction && (
-            <InteractionPrompt
-              interaction={pendingInteraction}
-              onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
-            />
-          )}
-          {working && !pendingInteraction && (
-            <div className="flex items-center gap-2 text-sm text-muted py-4">
-              <Loader2 size={14} className="animate-spin text-accent" />
-              Working…
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Composer */}
-      <div className="px-8 pb-5 pt-2 shrink-0">
-        {isNewSession && !researchDraft && !activeResearchLoop && <div className="mx-auto max-w-[760px]"><ResearchModePicker selected={researchMode} disabled={working || reviewingProject || researchBusy} onSelect={(mode, prompt) => { const selected = researchMode === mode ? null : mode; setResearchMode(selected); setResearchPrompt(selected ? prompt : t("conversation.defaultPrompt")); inputRef.current?.focus(); }} /></div>}
-        {suggestions.length > 0 && !working && !researchDraft && !activeResearchLoop && !input.trim() && (
-          <div className="mx-auto flex max-w-[760px] flex-wrap gap-2 px-1 pb-2" aria-label={t("conversation.suggestions")}>
-            {suggestions.map((suggestion) => (
-              <button
-                key={suggestion}
-                type="button"
-                disabled={!selectedModel || reviewingProject}
-                onClick={() => { setSuggestions([]); void sendPrompt(suggestion).catch(() => undefined); }}
-                className="min-h-9 rounded-full border border-border bg-surface px-3 py-1 text-left text-xs text-muted transition-colors hover:text-text disabled:opacity-50"
-              >
-                {suggestion}
-              </button>
-            ))}
+      {/* Welcome layout: this top region and the spacer below the composer both
+          grow equally, so the composer card lands on the vertical centre while
+          the welcome copy hangs off its bottom edge. */}
+      <div className="flex min-h-0 flex-1 flex-col">
+        {/* Thread */}
+        <div ref={scrollRef} onScroll={handleThreadScroll} className={cn("flex-1 overflow-y-auto [overflow-anchor:none]", showWelcome && "flex flex-col justify-end")}>
+          {/* 824 = 760 composer column + the px-8 gutters, so thread content lines up with the composer's edges.
+              w-full is required: an auto horizontal margin on a flex item suppresses the stretch,
+              which would shrink this column to its widest child and centre it. */}
+          <div className={cn("mx-auto w-full max-w-[824px] flex flex-col px-8", showWelcome ? "gap-3 pt-6 pb-3" : "gap-4 py-6")}>
+            {thread.blocks.length === 0 && !working && status === "connecting" && activeSessionId && (
+              <div className="flex items-center gap-2 py-4 text-sm text-muted">
+                <Loader2 size={14} className="animate-spin text-accent" />
+                {t("conversation.loading")}
+              </div>
+            )}
+            {showWelcome && <ConversationWelcome />}
+            {showWelcome && modePicker}
+            {researchDraft && <ResearchLoopDraftCard draft={researchDraft} busy={researchBusy} onChange={setResearchDraft} onCancel={() => { setResearchDraft(null); setResearchMode(null); setResearchError(null); }} onConfirm={() => void confirmResearchLoop()} />}
+            {activeResearchLoop && <ResearchLoopStatusCard loop={activeResearchLoop} candidates={activeResearchLoop.candidates} busy={researchBusy} onRefresh={() => void refreshResearchLoop(activeResearchLoop.loop_id)} onAction={(action) => void researchAction(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
+            {researchError && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error">{researchError}</div>}
+            {renderBlocks(thread.blocks, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" })}
+            {pendingInteraction && (
+              <InteractionPrompt
+                interaction={pendingInteraction}
+                onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
+              />
+            )}
+            {working && !pendingInteraction && (
+              <div className="flex items-center gap-2 text-sm text-muted py-4">
+                <Loader2 size={14} className="animate-spin text-accent" />
+                Working…
+              </div>
+            )}
           </div>
-        )}
-        <div
-          className={cn(
-            "relative mx-auto max-w-[760px] rounded-card border bg-surface shadow-card transition-colors",
-            dragOver ? "border-accent bg-accent/5" : "border-border",
+        </div>
+
+        {/* Composer */}
+        <div className={cn("px-8 shrink-0", showWelcome ? "py-0" : "pb-5 pt-2")}>
+          {!showWelcome && modePicker && <div className="mx-auto max-w-[760px]">{modePicker}</div>}
+          {suggestions.length > 0 && !working && !researchDraft && !activeResearchLoop && !input.trim() && (
+            <div className="mx-auto flex max-w-[760px] flex-wrap gap-2 px-1 pb-2" aria-label={t("conversation.suggestions")}>
+              {suggestions.map((suggestion) => (
+                <button
+                  key={suggestion}
+                  type="button"
+                  disabled={!selectedModel || reviewingProject}
+                  onClick={() => { setSuggestions([]); void sendPrompt(suggestion).catch(() => undefined); }}
+                  className="min-h-9 rounded-full border border-border bg-surface px-3 py-1 text-left text-xs text-muted transition-colors hover:text-text disabled:opacity-50"
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
           )}
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={handleDrop}
-        >
-          {workspaceReferences.length > 0 && (
-            <div className="border-b border-faint px-3 py-2">
-              <div className="flex flex-wrap gap-1.5">
-                {workspaceReferences.map((reference) => (
-                  <span key={reference.path} className="flex max-w-full items-center gap-1 rounded-input bg-accent/5 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-accent/20" title={reference.path}>
-                    {reference.isDir ? <FolderOpen size={11} className="shrink-0 text-accent" /> : <File size={11} className="shrink-0 text-accent" />}
-                    <span className="truncate">{reference.path}</span>
-                    <button type="button" aria-label={`Remove reference ${reference.name}`} onClick={() => removeWorkspaceReference(workspaceCwd, reference.path)} className="shrink-0 text-muted hover:text-error">
+          <div
+            className={cn(
+              "relative mx-auto max-w-[760px] rounded-card border bg-surface shadow-card transition-colors",
+              dragOver ? "border-accent bg-accent/5" : "border-border",
+            )}
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleDrop}
+          >
+            {workspaceReferences.length > 0 && (
+              <div className="border-b border-faint px-3 py-2">
+                <div className="flex flex-wrap gap-1.5">
+                  {workspaceReferences.map((reference) => (
+                    <span key={reference.path} className="flex max-w-full items-center gap-1 rounded-input bg-accent/5 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-accent/20" title={reference.path}>
+                      {reference.isDir ? <FolderOpen size={11} className="shrink-0 text-accent" /> : <File size={11} className="shrink-0 text-accent" />}
+                      <span className="truncate">{reference.path}</span>
+                      <button type="button" aria-label={`Remove reference ${reference.name}`} onClick={() => removeWorkspaceReference(workspaceCwd, reference.path)} className="shrink-0 text-muted hover:text-error">
+                        <X size={11} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {files.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 px-3 pt-2">
+                {files.map((f, i) => (
+                  <span key={i} className="flex items-center gap-1 rounded-input bg-surface-2 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-border">
+                    {f.name}
+                    <button onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))} className="text-muted hover:text-error">
                       <X size={11} />
                     </button>
                   </span>
                 ))}
               </div>
-            </div>
-          )}
-          {files.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 px-3 pt-2">
-              {files.map((f, i) => (
-                <span key={i} className="flex items-center gap-1 rounded-input bg-surface-2 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-border">
-                  {f.name}
-                  <button onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))} className="text-muted hover:text-error">
-                    <X size={11} />
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-          <SlashCommandMenu
-            input={input}
-            onSelect={setInput}
-            onDismiss={() => setInput("")}
-          />
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onCompositionStart={() => { composingRef.current = true; }}
-            onCompositionEnd={() => { setTimeout(() => { composingRef.current = false; }, 0); }}
-            placeholder={dragOver ? "Drop files here…" : researchPrompt}
-            rows={2}
-            className="max-h-[160px] w-full resize-none bg-transparent px-3 py-2 text-sm leading-6 text-text outline-none placeholder:text-muted"
-          />
-          <div className="flex items-center justify-between gap-2 px-3 pb-2">
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                aria-label={t("conversation.attach")}
-                title={t("conversation.attach")}
-                className="flex h-7 w-7 items-center justify-center rounded-full border border-border text-muted hover:text-text hover:bg-surface-2"
-              >
-                <Plus size={15} />
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleProjectReview()}
-                disabled={working || reviewingProject}
-                className="flex min-h-7 items-center gap-1 rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2 hover:text-text disabled:cursor-wait disabled:opacity-50"
-                title="Review this conversation for durable project knowledge"
-              >
-                {reviewingProject ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                Review
-              </button>
-              {modelError && <span className="max-w-[180px] truncate text-[10px] text-error" title={modelError}>{modelError}</span>}
-              {reviewNotice && <span className="max-w-[220px] truncate text-[10px] text-muted" title={reviewNotice}>{reviewNotice}</span>}
-            </div>
-            <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFilePick} />
-            <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
-              {models.length > 0 && (
-                <ModelControlMenu
-                  models={models}
-                  selectedModel={selectedModel}
-                  thinking={thinking}
-                  thinkingLevels={thinkingLevels}
-                  contextTokens={contextTokens}
-                  contextWindow={contextWindow || selectedModelInfo?.context_window}
-                  contextPercent={contextPercent}
-                  compactionEnabled={compactionEnabled}
-                  compactionThresholdPercent={compactionThresholdPercent}
-                  disabled={modelControlsDisabled}
-                  onModelChange={handleModelChange}
-                  onThinkingChange={handleThinkingChange}
-                />
-              )}
-              {working ? (
-                <button aria-label="Stop generation" onClick={() => void abort().catch(() => undefined)} className="h-7 w-7 rounded-input bg-accent text-accent-fg flex items-center justify-center hover:bg-error transition-colors">
-                  <Square size={14} fill="currentColor" />
-                </button>
-              ) : (
+            )}
+            <SlashCommandMenu
+              input={input}
+              onSelect={setInput}
+              onDismiss={() => setInput("")}
+            />
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onCompositionStart={() => { composingRef.current = true; }}
+              onCompositionEnd={() => { setTimeout(() => { composingRef.current = false; }, 0); }}
+              placeholder={dragOver ? "Drop files here…" : researchPrompt}
+              rows={2}
+              className="max-h-[160px] w-full resize-none bg-transparent px-3 py-2 text-sm leading-6 text-text outline-none placeholder:text-muted"
+            />
+            <div className="flex items-center justify-between gap-2 px-3 pb-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <button
-                  aria-label="Send message"
-                  onClick={handleSend}
-                  disabled={(!selectedModel && !researchMode) || reviewingProject || researchBusy || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
-                  className={cn(
-                    "h-7 w-7 rounded-input flex items-center justify-center",
-                    ((selectedModel || researchMode) && !reviewingProject && !researchBusy && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted cursor-default",
-                  )}
+                  onClick={() => fileInputRef.current?.click()}
+                  aria-label={t("conversation.attach")}
+                  title={t("conversation.attach")}
+                  className="flex h-7 w-7 items-center justify-center rounded-full border border-border text-muted hover:text-text hover:bg-surface-2"
                 >
-                  <ArrowUp size={15} />
+                  <Plus size={15} />
                 </button>
-              )}
+                <button
+                  type="button"
+                  onClick={() => void handleProjectReview()}
+                  disabled={working || reviewingProject}
+                  className="flex min-h-7 items-center gap-1 rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2 hover:text-text disabled:cursor-wait disabled:opacity-50"
+                  title="Review this conversation for durable project knowledge"
+                >
+                  {reviewingProject ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                  Review
+                </button>
+                {modelError && <span className="max-w-[180px] truncate text-[10px] text-error" title={modelError}>{modelError}</span>}
+                {reviewNotice && <span className="max-w-[220px] truncate text-[10px] text-muted" title={reviewNotice}>{reviewNotice}</span>}
+              </div>
+              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFilePick} />
+              <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
+                {models.length > 0 && (
+                  <ModelControlMenu
+                    models={models}
+                    selectedModel={selectedModel}
+                    thinking={thinking}
+                    thinkingLevels={thinkingLevels}
+                    contextTokens={contextTokens}
+                    contextWindow={contextWindow || selectedModelInfo?.context_window}
+                    contextPercent={contextPercent}
+                    compactionEnabled={compactionEnabled}
+                    compactionThresholdPercent={compactionThresholdPercent}
+                    disabled={modelControlsDisabled}
+                    onModelChange={handleModelChange}
+                    onThinkingChange={handleThinkingChange}
+                  />
+                )}
+                {working ? (
+                  <button aria-label="Stop generation" onClick={() => void abort().catch(() => undefined)} className="h-7 w-7 rounded-input bg-accent text-accent-fg flex items-center justify-center hover:bg-error transition-colors">
+                    <Square size={14} fill="currentColor" />
+                  </button>
+                ) : (
+                  <button
+                    aria-label="Send message"
+                    onClick={handleSend}
+                    disabled={(!selectedModel && !researchMode) || reviewingProject || researchBusy || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
+                    className={cn(
+                      "h-7 w-7 rounded-input flex items-center justify-center",
+                      ((selectedModel || researchMode) && !reviewingProject && !researchBusy && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted cursor-default",
+                    )}
+                  >
+                    <ArrowUp size={15} />
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
+
+        {showWelcome && <div className="flex-1" aria-hidden />}
       </div>
     </div>
   );
