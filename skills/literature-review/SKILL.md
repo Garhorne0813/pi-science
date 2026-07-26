@@ -1,29 +1,94 @@
 ---
 name: literature-review
-description: Find, verify, and synthesize scientific literature with traceable citations. Use for literature searches, evidence tables, paper comparisons, and review-ready summaries.
-version: 0.1.0
+description: Find, verify, and synthesize scientific literature with traceable citations. Works with zero configuration by querying the public Crossref, arXiv, and PubMed APIs directly via curl, and prefers configured literature MCP connectors when they are available. Use for literature searches, evidence tables, paper comparisons, and review-ready summaries.
+version: 0.2.0
 license: Apache-2.0
 category: research
 requirements:
   - name: network
     kind: service
+    description: Outbound HTTPS access to public literature APIs (api.crossref.org, export.arxiv.org, eutils.ncbi.nlm.nih.gov), or a configured literature MCP connector that performs retrieval.
+  - name: curl
+    kind: command
     optional: true
-    description: A configured literature connector such as Crossref, OpenAlex, PubMed, or arXiv.
-required_mcp_tools:
-  - literature.search
-  - literature.fetch
+    description: Used for the zero-configuration direct API path. Not needed when a literature MCP connector handles retrieval.
 risk: low
 third_party:
   - kind: service
-    name: Literature metadata provider
+    name: Crossref REST API
+    provider: Crossref
     license: provider-terms
-    info_url: https://www.crossref.org/documentation/retrieve-metadata/
+    info_url: https://www.crossref.org/documentation/retrieve-metadata/rest-api/
     privacy_url: https://www.crossref.org/operations-and-sustainability/privacy/
+  - kind: service
+    name: arXiv API
+    provider: arXiv (Cornell University)
+    license: provider-terms
+    info_url: https://info.arxiv.org/help/api/index.html
+    terms_url: https://info.arxiv.org/help/api/tou.html
+  - kind: service
+    name: PubMed E-utilities
+    provider: NCBI / U.S. National Library of Medicine
+    license: provider-terms
+    info_url: https://www.ncbi.nlm.nih.gov/books/NBK25501/
+    privacy_url: https://www.nlm.nih.gov/web_policies.html
 ---
 
 # Literature review
 
-Use real retrieval results as the source of truth. Normalize identifiers, deduplicate records, preserve the provider and retrieval time, and label each claim with its evidence strength. Never invent a DOI, PMID, accession, author-year citation, or result that was not returned by a configured source.
+Ground every claim in retrieval results from a live provider. Never answer from memory, and never invent a DOI, PMID, arXiv id, accession, author-year citation, or search result that was not returned by a provider in this session.
 
-For each review, produce a compact search record, an evidence table, explicit inclusion/exclusion criteria, and a limitations section. Distinguish retrieved facts from synthesis and unresolved questions. If a provider is unavailable, report the failure and do not silently replace it with memory.
+## Retrieval strategy
 
+1. Preferred path: if literature MCP tools are configured in this session (for example `literature.search` / `literature.fetch`, or another literature connector), use them first.
+2. Zero-configuration fallback: if no literature MCP tool is available, query the public HTTP APIs below directly with `curl` from the shell. No credentials or setup are required.
+3. Failure handling: if a provider fails (non-2xx status, timeout, malformed payload), report that provider's failure explicitly and continue with the remaining providers. Never silently substitute memory for a failed or missing provider; if all providers fail, say so and stop.
+
+## Direct API cheatsheet (curl)
+
+URL-encode query terms (spaces as `+` or `%20`). Replace `<terms>` with the encoded query.
+
+Crossref (DOI-registered articles, books, preprints; JSON, records under `message.items`):
+
+    curl -s "https://api.crossref.org/works?query=<terms>&rows=10&select=DOI,title,author,issued,container-title,is-referenced-by-count"
+
+Append `&mailto=<contact-email>` to join Crossref's polite pool (the conventional way to get more reliable service), e.g. `&mailto=you@example.org`.
+
+arXiv (preprints; response is Atom XML — parse `<entry>` elements for `id`, `title`, `author`, `published`):
+
+    curl -s "https://export.arxiv.org/api/query?search_query=all:<terms>&max_results=10"
+
+Use `https://` (or add `-L`): plain `http://export.arxiv.org` answers with an empty 301 redirect body. Sorting: `&sortBy=relevance` (default) or `&sortBy=submittedDate&sortOrder=descending` for the newest work. Field prefixes narrow the search: `ti:`, `au:`, `abs:`, `cat:` (e.g. `search_query=ti:<terms>+AND+cat:cs.LG`).
+
+PubMed E-utilities (biomedical literature; two-step — search for ids, then fetch metadata):
+
+    curl -s "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=<terms>&retmode=json&retmax=10"
+
+then, with the returned `idlist`:
+
+    curl -s "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=<id1>,<id2>&retmode=json"
+    curl -s "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=<id1>&rettype=abstract&retmode=text"
+
+Rate limit: without an API key NCBI allows about 3 requests/second — space out calls; with `&api_key=...` the limit rises to 10/second.
+
+## Result handling
+
+- Normalize identifiers before comparing: lowercase DOIs and strip any `https://doi.org/` or `doi:` prefix; reduce arXiv ids to the canonical `NNNN.NNNNN` form (strip the `arXiv:` prefix, the `http://arxiv.org/abs/` prefix, and any `vN` version suffix, e.g. `http://arxiv.org/abs/2301.01234v2` becomes `2301.01234`).
+- Deduplicate across providers: match by normalized DOI first, then by normalized title plus year.
+- For every kept record, preserve: identifier(s), title, authors, year, venue, provider name, and retrieval timestamp (ISO 8601 UTC).
+
+## Output format (mandatory)
+
+The frontend auto-detects DOI strings in assistant messages and renders citations from this exact convention. Every response produced with this skill must follow it:
+
+1. Inline citations: immediately after each claim, cite the bare identifier — `doi:10.xxxx/yyyy` for DOI-registered works, `arXiv:NNNN.NNNNN` for arXiv-only works. Keep sentence punctuation off the identifier: wrap the citation in parentheses, e.g. "... first demonstrated in dye-sensitized cells (doi:10.1021/ja809598r).", or leave a space before the punctuation.
+2. References section: end the response with a `## References` heading followed by one numbered entry per cited source: authors (year), title, venue, a resolvable link (`https://doi.org/<doi>` or `https://arxiv.org/abs/<id>`), the provider the record came from, and the retrieval date. Example:
+
+       ## References
+       1. Kojima et al. (2009). Organometal halide perovskites as visible-light sensitizers for photovoltaic cells. Journal of the American Chemical Society. https://doi.org/10.1021/ja809598r — Crossref, retrieved 2026-07-26.
+
+3. Unsourced claims: any claim without a retrieved source must be explicitly labeled as synthesis, e.g. "(synthesis, unverified)". Never attach an invented identifier to make a claim look sourced.
+
+## Review artifacts
+
+For each review also produce (condensed is fine): a search record (provider, exact query, date, hit count per search), an evidence table linking claims to identifiers and evidence strength, explicit inclusion/exclusion criteria, and a limitations section (coverage gaps, provider failures, screening depth). Distinguish retrieved facts from synthesis and unresolved questions.
