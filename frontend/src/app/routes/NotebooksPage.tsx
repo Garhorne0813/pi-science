@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { BookOpen, Play, Square, RefreshCw, ExternalLink, CheckCircle2 } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { useUiStore } from "../../lib/store";
@@ -8,6 +9,7 @@ import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "
 import { useTranslation } from "react-i18next";
 import { timeAgo } from "../../lib/format";
 import { apiRequest } from "../../lib/api";
+import { queryClient } from "../../lib/query-client";
 import { useFeedback } from "../../components/feedback/feedback-context";
 
 interface Notebook {
@@ -30,72 +32,46 @@ interface WorkspaceEnvironment {
   error?: string;
 }
 
+const IDLE_JUPYTER: JupyterStatus = { running: false, port: null, url: null, cwd: null, matches_workspace: true, env_ready: false };
+
+const notebooksQuery = (cwd: string) => ({ queryKey: ["notebooks", cwd], queryFn: () => apiRequest<Notebook[]>(`/api/notebooks?cwd=${encodeURIComponent(cwd)}`), staleTime: 0 });
+const jupyterQuery = (cwd: string) => ({ queryKey: ["notebooks", "jupyter", cwd], queryFn: () => apiRequest<JupyterStatus>(`/api/notebooks/jupyter/status?cwd=${encodeURIComponent(cwd)}`), staleTime: 0 });
+const environmentQuery = (cwd: string) => ({ queryKey: ["environments", cwd], queryFn: () => apiRequest<WorkspaceEnvironment>(`/api/environments/workspace?cwd=${encodeURIComponent(cwd)}`), staleTime: 0 });
+
 export function NotebooksPage() {
   const { t } = useTranslation();
   const { toast } = useFeedback();
   const { cwd: rawCwd } = useParams<{ cwd: string }>();
   const workspaceCwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
-  const [notebooks, setNotebooks] = useState<Notebook[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [jupyter, setJupyter] = useState<JupyterStatus>({
-    running: false,
-    port: null,
-    url: null,
-    cwd: null,
-    matches_workspace: true,
-    env_ready: false,
-  });
+  // Jupyter status and the workspace environment are also written by the start/stop
+  // and provision actions, so the cache — not local state — holds the current value.
+  const notebooksResult = useQuery(notebooksQuery(workspaceCwd));
+  const jupyterResult = useQuery(jupyterQuery(workspaceCwd));
+  const environmentResult = useQuery(environmentQuery(workspaceCwd));
+  const notebooks = notebooksResult.data ?? [];
+  const loading = notebooksResult.isFetching;
+  const jupyter = jupyterResult.data ?? IDLE_JUPYTER;
+  const environment = environmentResult.data ?? null;
   const [starting, setStarting] = useState(false);
-  const [environment, setEnvironment] = useState<WorkspaceEnvironment | null>(null);
   const [provisioningEnvironment, setProvisioningEnvironment] = useState(false);
   const [jupyterError, setJupyterError] = useState<string | null>(null);
   const openInspector = useUiStore((state) => state.openInspector);
 
-  const loadNotebooks = useCallback(async (isCurrent: () => boolean = () => true) => {
-    setLoading(true);
-    try {
-      const data = await apiRequest<Notebook[]>(`/api/notebooks?cwd=${encodeURIComponent(workspaceCwd)}`);
-      if (isCurrent()) setNotebooks(data);
-    } catch (error) {
-      if (isCurrent()) toast(error instanceof Error ? error.message : "Unable to load notebooks", "error");
-    } finally { if (isCurrent()) setLoading(false); }
-  }, [toast, workspaceCwd]);
-
-  const loadJupyterStatus = useCallback(async (isCurrent: () => boolean = () => true) => {
-    try {
-      const data = await apiRequest<JupyterStatus>(`/api/notebooks/jupyter/status?cwd=${encodeURIComponent(workspaceCwd)}`);
-      if (isCurrent()) setJupyter(data);
-    } catch (error) {
-      if (isCurrent()) setJupyterError(error instanceof Error ? error.message : "Unable to inspect Jupyter status");
-    }
-  }, [workspaceCwd]);
-
-  const loadWorkspaceEnvironment = useCallback(async (isCurrent: () => boolean = () => true) => {
-    try {
-      const data = await apiRequest<WorkspaceEnvironment>(`/api/environments/workspace?cwd=${encodeURIComponent(workspaceCwd)}`);
-      if (isCurrent()) setEnvironment(data);
-    } catch (error) {
-      if (isCurrent()) toast(error instanceof Error ? error.message : "Unable to inspect workspace environment", "error");
-    }
-  }, [toast, workspaceCwd]);
-
-  useEffect(() => {
-    let current = true;
-    const isCurrent = () => current;
-    void loadNotebooks(isCurrent);
-    void loadJupyterStatus(isCurrent);
-    void loadWorkspaceEnvironment(isCurrent);
-    return () => { current = false; };
-  }, [loadJupyterStatus, loadNotebooks, loadWorkspaceEnvironment]);
+  const notebooksError = notebooksResult.error;
+  const jupyterStatusError = jupyterResult.error;
+  const environmentError = environmentResult.error;
+  useEffect(() => { if (notebooksError) toast(notebooksError instanceof Error ? notebooksError.message : t("notebooks.loadError"), "error"); }, [notebooksError, t, toast]);
+  useEffect(() => { if (jupyterStatusError) setJupyterError(jupyterStatusError instanceof Error ? jupyterStatusError.message : t("notebooks.jupyterStatusError")); }, [jupyterStatusError, t]);
+  useEffect(() => { if (environmentError) toast(environmentError instanceof Error ? environmentError.message : t("notebooks.environmentError"), "error"); }, [environmentError, t, toast]);
 
   const provisionWorkspaceEnvironment = async () => {
     setProvisioningEnvironment(true);
     try {
       const data = await apiRequest<WorkspaceEnvironment>(`/api/environments/workspace?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "POST" });
-      setEnvironment(data);
+      queryClient.setQueryData(environmentQuery(workspaceCwd).queryKey, data);
       toast("Workspace Python environment is ready", "success");
     } catch (error) {
-      toast(error instanceof Error ? error.message : "Unable to create workspace environment", "error");
+      toast(error instanceof Error ? error.message : t("notebooks.environmentCreateError"), "error");
     } finally {
       setProvisioningEnvironment(false);
     }
@@ -115,7 +91,7 @@ export function NotebooksPage() {
           setSetupProgress((p) => [...p, "✅ " + d.text]);
           eventSource.close();
           setSettingUp(false);
-          loadJupyterStatus();
+          void jupyterResult.refetch();
         } else if (d.status === "error") {
           setSetupProgress((p) => [...p, "❌ " + d.text]);
           eventSource.close();
@@ -140,8 +116,8 @@ export function NotebooksPage() {
     setJupyterError(null);
     try {
       const data = await apiRequest<JupyterStatus>(`/api/notebooks/jupyter/start?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "POST" });
-      setJupyter({ ...data, matches_workspace: true });
-      void loadWorkspaceEnvironment();
+      queryClient.setQueryData(jupyterQuery(workspaceCwd).queryKey, { ...data, matches_workspace: true });
+      void environmentResult.refetch();
     } catch (e) { setJupyterError(e instanceof Error ? e.message : String(e)); }
     finally { setStarting(false); }
   };
@@ -150,7 +126,7 @@ export function NotebooksPage() {
     setJupyterError(null);
     try {
       await apiRequest(`/api/notebooks/jupyter/stop?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "POST" });
-      setJupyter({ running: false, port: null, url: null, cwd: null, matches_workspace: true });
+      queryClient.setQueryData(jupyterQuery(workspaceCwd).queryKey, { ...IDLE_JUPYTER, env_ready: undefined });
     } catch (e) { setJupyterError(e instanceof Error ? e.message : String(e)); }
   };
 
@@ -160,7 +136,7 @@ export function NotebooksPage() {
           title="Notebooks"
           description={`${notebooks.length} notebook${notebooks.length !== 1 ? "s" : ""} in workspace`}
           actions={
-          <WorkspacePageRefreshButton label={t("common.refresh")} loading={loading} onClick={() => void loadNotebooks()} />
+          <WorkspacePageRefreshButton label={t("common.refresh")} loading={loading} onClick={() => void notebooksResult.refetch()} />
           }
         />
 

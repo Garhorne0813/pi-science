@@ -5,8 +5,7 @@ import { cn } from "../../lib/cn";
 import { shippedLocales } from "../../i18n/config";
 import { useUiStore } from "../../lib/store";
 import { clampThinkingLevel } from "../../lib/pi-science-client";
-import { readSettingsResponse, settingsApi } from "../../lib/settings-api";
-import { invalidateApiCache } from "../../lib/api";
+import { invalidateSettings, readSettingsResponse, settingsApi } from "../../lib/settings-api";
 import { useTranslation } from "react-i18next";
 import { ComputeSettings } from "../../components/settings/ComputeSettings";
 
@@ -627,7 +626,7 @@ function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, onClose }
         }),
       });
       await readSettingsResponse(res, t("settings.custom.saveError"));
-      invalidateApiCache("/api/settings/");
+      invalidateSettings();
       setDiscovered(null);
       setName("");
       setBaseUrl("");
@@ -648,7 +647,7 @@ function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, onClose }
     try {
       const res = await fetch(`/api/settings/custom-providers/${encodeURIComponent(id)}`, { method: "DELETE" });
       await readSettingsResponse(res, t("settings.custom.removeError"));
-      invalidateApiCache("/api/settings/");
+      invalidateSettings();
       await onConfigReload();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));

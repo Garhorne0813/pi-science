@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { apiRequest } from "../../lib/api";
+import { queryClient } from "../../lib/query-client";
 
 interface Machine {
   label: string;
@@ -23,6 +24,10 @@ interface ProbeResult {
 
 const EMPTY_FORM = { host: "", label: "", user: "", port: 22, identity_file: "", scheduler: "" };
 
+// The machine list was never cached; staleTime 0 keeps every load a fresh read while
+// the shared client still deduplicates concurrent calls and retries 5xx.
+const machinesQuery = { queryKey: ["compute", "machines"], queryFn: () => apiRequest<{ machines?: Machine[] }>("/api/compute/machines"), staleTime: 0 };
+
 export function ComputeSettings() {
   const { t } = useTranslation();
   const [machines, setMachines] = useState<Machine[]>([]);
@@ -34,7 +39,8 @@ export function ComputeSettings() {
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const data = await apiRequest<{ machines?: Machine[] }>("/api/compute/machines", { signal });
+      const data = await queryClient.fetchQuery(machinesQuery);
+      if (signal?.aborted) return;
       setMachines(data.machines || []);
       setError("");
     } catch (cause) {

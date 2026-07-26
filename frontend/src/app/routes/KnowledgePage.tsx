@@ -87,37 +87,37 @@ export function KnowledgePage() {
         return new Set([...current].filter((id) => valid.has(id)));
       });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to load project knowledge");
+      setError(cause instanceof Error ? cause.message : t("knowledge.loadError"));
     } finally {
       setLoading(false);
     }
-  }, [cwd]);
+  }, [cwd, t]);
 
   const loadFiles = useCallback(async () => {
     try {
       setFiles(await projectKnowledgeApi.files(cwd));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to load file views");
+      setError(cause instanceof Error ? cause.message : t("knowledge.fileViewsError"));
     }
-  }, [cwd]);
+  }, [cwd, t]);
 
   const loadHistory = useCallback(async () => {
     try {
       const data = await projectMemoryApi.timeline(cwd);
       setHistoryRows(data.timeline);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to load history");
+      setError(cause instanceof Error ? cause.message : t("knowledge.historyError"));
     }
-  }, [cwd]);
+  }, [cwd, t]);
 
   const loadResearch = useCallback(async () => {
     try {
       const data = await projectMemoryApi.loops(cwd);
       setResearchLoops(data.loops);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to load research loops");
+      setError(cause instanceof Error ? cause.message : t("research.loadError"));
     }
-  }, [cwd]);
+  }, [cwd, t]);
 
   useEffect(() => { void loadCore(); }, [loadCore]);
   useEffect(() => {
@@ -138,7 +138,7 @@ export function KnowledgePage() {
       await loadCore();
       if (result.created > 0) setTab("inbox");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Reviewer failed");
+      setError(cause instanceof Error ? cause.message : t("knowledge.reviewerError"));
     } finally {
       setReviewing(false);
     }
@@ -160,7 +160,7 @@ export function KnowledgePage() {
         await loadHistory();
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to update proposal");
+      setError(cause instanceof Error ? cause.message : t("knowledge.proposalUpdateError"));
       throw cause;
     }
   };
@@ -184,7 +184,7 @@ export function KnowledgePage() {
       setFiles(null);
       await Promise.all([loadCore(), loadHistory()]);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Batch update failed");
+      setError(cause instanceof Error ? cause.message : t("knowledge.batchError"));
     }
   };
 
@@ -195,7 +195,7 @@ export function KnowledgePage() {
       setPolicy(updated);
       setSummary((current) => current ? { ...current, auto_review: updated.auto_review } : current);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to update Reviewer settings");
+      setError(cause instanceof Error ? cause.message : t("knowledge.policyUpdateError"));
     }
   };
 
@@ -421,7 +421,7 @@ function ProposalCard({
       await onUpdate(proposal, { title, summary, operations });
       setEditing(false);
     } catch (cause) {
-      setLocalError(cause instanceof Error ? cause.message : "Unable to save proposal");
+      setLocalError(cause instanceof Error ? cause.message : t("knowledge.proposalSaveError"));
     } finally {
       setBusy(null);
     }
@@ -434,7 +434,7 @@ function ProposalCard({
       if (editing) await onUpdate(proposal, { title, summary, operations });
       await onDecide(proposal, action, { title, summary });
     } catch (cause) {
-      setLocalError(cause instanceof Error ? cause.message : "Unable to update proposal");
+      setLocalError(cause instanceof Error ? cause.message : t("knowledge.proposalUpdateError"));
     } finally {
       setBusy(null);
     }
@@ -447,7 +447,7 @@ function ProposalCard({
       setPreview(await projectKnowledgeApi.previewProposal(cwd, proposal.id));
       setExpanded(true);
     } catch (cause) {
-      setLocalError(cause instanceof Error ? cause.message : "Unable to preview proposal");
+      setLocalError(cause instanceof Error ? cause.message : t("knowledge.proposalPreviewError"));
     } finally {
       setBusy(null);
     }
@@ -857,7 +857,7 @@ function FilesTab({
       onPolicyChange(updated);
       setSettingsOpen(false);
     } catch (cause) {
-      onError(cause instanceof Error ? cause.message : "Unable to save file policy");
+      onError(cause instanceof Error ? cause.message : t("knowledge.filePolicyError"));
     } finally {
       setSaving(false);
     }
@@ -944,7 +944,7 @@ function HistoryTab({
       await projectKnowledgeApi.undo(cwd, historyId);
       await onChanged();
     } catch (cause) {
-      onError(cause instanceof Error ? cause.message : "Unable to undo file operation");
+      onError(cause instanceof Error ? cause.message : t("knowledge.undoError"));
     } finally {
       setUndoing(null);
     }
@@ -956,7 +956,7 @@ function HistoryTab({
       await projectKnowledgeApi.restoreProjectVersion(cwd, versionId);
       await onChanged();
     } catch (cause) {
-      onError(cause instanceof Error ? cause.message : "Unable to restore project document version");
+      onError(cause instanceof Error ? cause.message : t("knowledge.restoreError"));
     } finally {
       setUndoing(null);
     }

@@ -1,3 +1,6 @@
+import { ApiError, apiRequest } from "./api";
+import { queryClient } from "./query-client";
+
 export interface SlashCommand {
   name: string;
   description: string;
@@ -21,10 +24,11 @@ let dynamicCommands: SlashCommand[] = [];
 
 export async function fetchDynamicCommands(sessionId: string, cwd: string): Promise<void> {
   try {
-    const params = new URLSearchParams({ cwd });
-    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/commands?${params}`);
-    if (!response.ok) return;
-    const data = await response.json();
+    const data = await queryClient.fetchQuery({
+      queryKey: ["slash-commands", cwd, sessionId],
+      queryFn: () => apiRequest<{ commands?: SlashCommand[] }>(`/api/sessions/${encodeURIComponent(sessionId)}/commands?${new URLSearchParams({ cwd })}`),
+      staleTime: 0,
+    });
     dynamicCommands = (Array.isArray(data.commands) ? data.commands : []).map((command: SlashCommand) => ({
       name: command.name,
       description: command.description || "",
@@ -32,8 +36,10 @@ export async function fetchDynamicCommands(sessionId: string, cwd: string): Prom
       source: command.source,
       group: command.source === "skill" ? "skill" : command.source === "extension" ? "extension" : "prompt",
     }));
-  } catch {
-    dynamicCommands = [];
+  } catch (error) {
+    // An HTTP error means the session has no command list to offer yet — keep the
+    // ones already loaded, as the pre-Query code did by returning on `!response.ok`.
+    if (!(error instanceof ApiError)) dynamicCommands = [];
   }
 }
 

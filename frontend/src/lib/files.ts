@@ -2,6 +2,7 @@
  *  Same API surface but calls the FastAPI backend instead of Tauri IPC. */
 
 import type { FileRoot } from "../types/thread";
+import { apiRequest } from "./api";
 
 export type { FileRoot };
 
@@ -31,9 +32,7 @@ export async function readArtifact(
   try {
     const params = new URLSearchParams({ cwd: cwd || _currentCwd });
     if (root) params.set("root", root);
-    const res = await fetch(`${API}/files/${encodeURIComponent(path)}?${params}`);
-    if (!res.ok) return null;
-    return res.json();
+    return await apiRequest<ArtifactFile>(`${API}/files/${encodeURIComponent(path)}?${params}`);
   } catch {
     return null;
   }
@@ -109,9 +108,7 @@ export async function listDir(rel: string, root?: FileRoot, cwd?: string): Promi
     const params = new URLSearchParams({ cwd: cwd || _currentCwd });
     if (rel) params.set("subdir", rel);
     if (root) params.set("root", root);
-    const res = await fetch(`${API}/files?${params}`);
-    if (!res.ok) return [];
-    return res.json();
+    return await apiRequest<DirEntry[]>(`${API}/files?${params}`);
   } catch {
     return [];
   }
@@ -148,9 +145,7 @@ export async function probeLargeFile(
   try {
     const params = new URLSearchParams({ cwd: cwd || _currentCwd });
     if (root) params.set("root", root);
-    const res = await fetch(`${API}/files/probe/${encodeURIComponent(path)}?${params}`);
-    if (!res.ok) return null;
-    return res.json();
+    return await apiRequest<LargeFilePointer>(`${API}/files/probe/${encodeURIComponent(path)}?${params}`);
   } catch {
     return null;
   }

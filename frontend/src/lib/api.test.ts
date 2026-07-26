@@ -1,9 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { apiRequest, invalidateApiCache } from "./api";
+import { apiErrorMessage, apiRequest } from "./api";
 
 afterEach(() => {
-  invalidateApiCache();
   vi.unstubAllGlobals();
+});
+
+describe("apiErrorMessage", () => {
+  it("prefers detail, then error, then message", () => {
+    expect(apiErrorMessage({ detail: "d", error: "e", message: "m" })).toBe("d");
+    expect(apiErrorMessage({ error: "e", message: "m" })).toBe("e");
+    expect(apiErrorMessage({ message: "m" })).toBe("m");
+  });
+
+  it("falls back when the payload carries no message at all", () => {
+    expect(apiErrorMessage({}, "Not Found")).toBe("Not Found");
+    expect(apiErrorMessage("plain text body")).toBe("Request failed");
+    expect(apiErrorMessage({ detail: "" }, "Not Found")).toBe("Request failed");
+  });
 });
 
 describe("apiRequest", () => {
@@ -13,22 +26,24 @@ describe("apiRequest", () => {
       { status: 403, headers: { "Content-Type": "application/json" } },
     )));
 
-    await expect(apiRequest("/api/example", { retries: 0 })).rejects.toMatchObject({
+    await expect(apiRequest("/api/example")).rejects.toMatchObject({
       message: "Workspace access denied",
       status: 403,
     });
   });
 
-  it("shares identical in-flight GET requests", async () => {
-    let resolveFetch!: (response: Response) => void;
-    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => { resolveFetch = resolve; }));
-    vi.stubGlobal("fetch", fetchMock);
+  it("uses the caller's fallback instead of the status text when the body says nothing", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", {
+      status: 409,
+      headers: { "Content-Type": "application/json" },
+    })));
 
-    const first = apiRequest<{ ok: boolean }>("/api/skills", { retries: 0 });
-    const second = apiRequest<{ ok: boolean }>("/api/skills", { retries: 0 });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await expect(apiRequest("/api/kernels/execute", { method: "POST", errorFallback: "Cell execution failed" }))
+      .rejects.toThrow("Cell execution failed");
+  });
 
-    resolveFetch(new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } }));
-    await expect(Promise.all([first, second])).resolves.toEqual([{ ok: true }, { ok: true }]);
+  it("returns text for non-JSON responses", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("plain", { status: 200 })));
+    await expect(apiRequest("/api/example")).resolves.toBe("plain");
   });
 });

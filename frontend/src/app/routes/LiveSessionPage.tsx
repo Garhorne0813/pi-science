@@ -20,12 +20,13 @@ import { MessageActions } from "../../components/conversation/MessageActions";
 import { ModelControlMenu } from "../../components/conversation/ModelControlMenu";
 import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
-import { apiRequest, invalidateApiCache } from "../../lib/api";
-import { subscribeResearchEvents } from "../../lib/research-events";
+import { apiRequest } from "../../lib/api";
+import { subscribeResearchInvalidation } from "../../lib/research-events";
 import { agentActionTextByBlock, lastCompletedAgentMessageText } from "../../lib/message-actions";
 import { extractCitations } from "../../lib/citations";
 import { parseSuggestions } from "../../lib/suggestions";
-import { projectMemoryApi, type ResearchLoopDetail } from "../../lib/project-memory";
+import { projectMemoryApi, projectMemoryKey, type ResearchLoopDetail } from "../../lib/project-memory";
+import { queryClient } from "../../lib/query-client";
 import { contentDigest, randomIdSuffix } from "../../lib/research-identity";
 import { ResearchLoopDraftCard, ResearchLoopStatusCard, ResearchModePicker, type ResearchLoopDraft, type ResearchStarter } from "../../components/conversation/ResearchLoopControls";
 
@@ -137,11 +138,11 @@ export function LiveSessionPage() {
         setSelectedModel(nextModel);
         setThinking(supported.length > 0 ? clampThinkingLevel(configuredThinking, supported) : configuredThinking);
         setModelError(availableModels.length === 0
-          ? "Configure a provider and model in Settings before sending a message."
+          ? t("conversation.configureProvider")
           : null);
       })
-      .catch((cause) => setModelError(cause instanceof Error ? cause.message : "Unable to load model list"));
-  }, [activeSessionId, workspaceCwd]);
+      .catch((cause) => setModelError(cause instanceof Error ? cause.message : t("conversation.modelListError")));
+  }, [activeSessionId, workspaceCwd, t]);
 
   useEffect(() => {
     if (runtimeModel) setSelectedModel(runtimeModel);
@@ -191,7 +192,7 @@ export function LiveSessionPage() {
     } catch (e) {
       setSelectedModel(previousModel);
       setThinking(previousThinking);
-      const message = e instanceof Error ? e.message : "Unable to set model";
+      const message = e instanceof Error ? e.message : t("conversation.modelSetError");
       setModelError(message);
     } finally {
       setConfiguringModel(false);
@@ -221,10 +222,10 @@ export function LiveSessionPage() {
         });
         setFiles((prev) => [...prev, f]);
       } catch (err) {
-        toast(err instanceof Error ? err.message : "Upload failed", "error");
+        toast(err instanceof Error ? err.message : t("conversation.uploadError"), "error");
       }
     }
-  }, [toast, workspaceCwd]);
+  }, [t, toast, workspaceCwd]);
 
   const runSlashCommand = async (value: string): Promise<boolean> => {
     const match = value.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
@@ -349,7 +350,7 @@ export function LiveSessionPage() {
       const result = await projectKnowledgeApi.review(workspaceCwd, activeSessionId);
       setReviewNotice(result.created > 0 ? `${result.created} update proposal${result.created === 1 ? "" : "s"} added` : result.message);
     } catch (cause) {
-      setReviewNotice(cause instanceof Error ? cause.message : "Project review failed");
+      setReviewNotice(cause instanceof Error ? cause.message : t("conversation.reviewError"));
     } finally {
       setReviewingProject(false);
     }
@@ -372,9 +373,9 @@ export function LiveSessionPage() {
     if (!activeResearchLoopId || activeResearchLoopDone) return;
     // SSE invalidation signal with a slow fallback poll; keyed on loop_id (not the
     // detail object) so refetches don't churn the EventSource via identity changes.
-    const refresh = () => { invalidateApiCache("/api/project-memory/"); void refreshResearchLoop(activeResearchLoopId).catch(() => undefined); };
-    const unsubscribe = subscribeResearchEvents(workspaceCwd, refresh);
-    const timer = window.setInterval(refresh, 30_000);
+    const refresh = () => { void refreshResearchLoop(activeResearchLoopId).catch(() => undefined); };
+    const unsubscribe = subscribeResearchInvalidation(workspaceCwd, refresh);
+    const timer = window.setInterval(() => { void queryClient.invalidateQueries({ queryKey: projectMemoryKey() }); refresh(); }, 30_000);
     return () => { unsubscribe(); window.clearInterval(timer); };
   }, [activeResearchLoopId, activeResearchLoopDone, workspaceCwd, refreshResearchLoop]);
 

@@ -7,6 +7,7 @@ import { InspectorShell } from "../../components/inspector/InspectorShell";
 import { RightPane } from "../../components/inspector/RightPane";
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
 import { setCurrentCwd } from "../../lib/files";
+import { usePendingProposalCount } from "../../lib/project-knowledge";
 import { cn } from "../../lib/cn";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { useTranslation } from "react-i18next";
@@ -386,18 +387,8 @@ function SettingsNavItem({ cwd, collapsed = false }: { cwd: string | null; colla
 
 function KnowledgeNavItem({ cwd, active }: { cwd: string; active: boolean }) {
   const { t } = useTranslation();
-  const [pending, setPending] = useState(0);
-  useEffect(() => {
-    let cancelled = false;
-    const poll = () => fetch(`/api/project-knowledge/proposals/count?cwd=${encodeURIComponent(cwd)}`)
-      .then((response) => response.ok ? response.json() : { pending_count: 0 })
-      .then((data) => { if (!cancelled) setPending(Number(data.pending_count) || 0); })
-      .catch(() => { if (!cancelled) setPending(0); });
-    void poll();
-    const interval = setInterval(poll, 8000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [cwd]);
-  return <SidebarNavItem to={`/workspace/${encodeURIComponent(cwd)}/knowledge`} label={t("nav.knowledge")} icon={<Inbox size={16} />} active={active} badge={pending} />;
+  const { data } = usePendingProposalCount(cwd, 8000);
+  return <SidebarNavItem to={`/workspace/${encodeURIComponent(cwd)}/knowledge`} label={t("nav.knowledge")} icon={<Inbox size={16} />} active={active} badge={Number(data?.pending_count) || 0} />;
 }
 
 function ThemeToggle({ className }: { className?: string }) {

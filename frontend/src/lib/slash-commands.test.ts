@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { allCommands, matchCommands, resetDynamicCommands } from "./slash-commands";
+import { queryClient } from "./query-client";
 
 afterEach(() => {
   resetDynamicCommands();
+  queryClient.clear();
   vi.unstubAllGlobals();
 });
 
@@ -24,7 +26,7 @@ describe("slash commands", () => {
         { name: "new", description: "shadow" },
         { name: "review", description: "Review files", source: "skill" },
       ],
-    }), { status: 200 })));
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
     const { fetchDynamicCommands } = await import("./slash-commands");
     await fetchDynamicCommands("session-a", "/workspace");
     expect(allCommands().map((command) => command.name)).toContain("review");
