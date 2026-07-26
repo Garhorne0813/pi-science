@@ -1,13 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowUp, Loader2, Square, Paperclip, Sparkles, X, File, FolderOpen } from "lucide-react";
+import { ArrowUp, Loader2, Square, Plus, Sparkles, X, File, FolderOpen } from "lucide-react";
 import { clampThinkingLevel, conversationModelOptions, getSessionName, setSessionName, type AvailableModel } from "../../lib/pi-science-client";
 import { applySessionReplacements, useRuntimeStore, type PendingInteraction, type SessionReplacement } from "../../lib/runtime-store";
 import { settingsApi } from "../../lib/settings-api";
 import { useUiStore } from "../../lib/store";
 import { cn } from "../../lib/cn";
 import type { ThreadBlock, ToolCallBlock } from "../../types/thread";
-import { MarkdownViewer } from "../../components/markdown-viewer/MarkdownViewer";
+import { MarkdownViewer, type CodeRunner } from "../../components/markdown-viewer/MarkdownViewer";
 import { extractArtifactRefs, refToArtifactBlock, fileInspectorFromBlock } from "../../lib/artifacts";
 import { pickAutoPreviewArtifact } from "../../lib/artifact-autopreview";
 import { setCurrentCwd } from "../../lib/files";
@@ -20,7 +20,8 @@ import { MessageActions } from "../../components/conversation/MessageActions";
 import { ModelControlMenu } from "../../components/conversation/ModelControlMenu";
 import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
-import { apiRequest } from "../../lib/api";
+import { apiRequest, invalidateApiCache } from "../../lib/api";
+import { subscribeResearchEvents } from "../../lib/research-events";
 import { agentActionTextByBlock, lastCompletedAgentMessageText } from "../../lib/message-actions";
 import { extractCitations } from "../../lib/citations";
 import { parseSuggestions } from "../../lib/suggestions";
@@ -365,11 +366,17 @@ export function LiveSessionPage() {
     }).catch(() => undefined);
   }, [workspaceCwd, refreshResearchLoop]);
 
+  const activeResearchLoopId = activeResearchLoop?.loop_id;
+  const activeResearchLoopDone = !activeResearchLoop || ["completed", "failed", "cancelled"].includes(activeResearchLoop.status);
   useEffect(() => {
-    if (!activeResearchLoop || ["completed", "failed", "cancelled"].includes(activeResearchLoop.status)) return;
-    const timer = window.setInterval(() => void refreshResearchLoop(activeResearchLoop.loop_id).catch(() => undefined), 1500);
-    return () => window.clearInterval(timer);
-  }, [activeResearchLoop, refreshResearchLoop]);
+    if (!activeResearchLoopId || activeResearchLoopDone) return;
+    // SSE invalidation signal with a slow fallback poll; keyed on loop_id (not the
+    // detail object) so refetches don't churn the EventSource via identity changes.
+    const refresh = () => { invalidateApiCache("/api/project-memory/"); void refreshResearchLoop(activeResearchLoopId).catch(() => undefined); };
+    const unsubscribe = subscribeResearchEvents(workspaceCwd, refresh);
+    const timer = window.setInterval(refresh, 30_000);
+    return () => { unsubscribe(); window.clearInterval(timer); };
+  }, [activeResearchLoopId, activeResearchLoopDone, workspaceCwd, refreshResearchLoop]);
 
   const confirmResearchLoop = async () => {
     if (!researchDraft || researchBusy) return;
@@ -427,15 +434,12 @@ export function LiveSessionPage() {
             </div>
           )}
           {thread.blocks.length === 0 && !working && status !== "connecting" && !researchDraft && !activeResearchLoop && (
-            <ConversationWelcome
-              onPick={(msg) => void sendPrompt(msg).catch(() => undefined)}
-              disabled={!selectedModel || reviewingProject}
-            />
+            <ConversationWelcome />
           )}
           {researchDraft && <ResearchLoopDraftCard draft={researchDraft} busy={researchBusy} onChange={setResearchDraft} onCancel={() => { setResearchDraft(null); setResearchMode(null); setResearchError(null); }} onConfirm={() => void confirmResearchLoop()} />}
           {activeResearchLoop && <ResearchLoopStatusCard loop={activeResearchLoop} candidates={activeResearchLoop.candidates} busy={researchBusy} onRefresh={() => void refreshResearchLoop(activeResearchLoop.loop_id)} onAction={(action) => void researchAction(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
           {researchError && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error">{researchError}</div>}
-          {renderBlocks(thread.blocks)}
+          {renderBlocks(thread.blocks, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" })}
           {pendingInteraction && (
             <InteractionPrompt
               interaction={pendingInteraction}
@@ -525,9 +529,11 @@ export function LiveSessionPage() {
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="rounded-input px-2 py-1 text-xs text-muted hover:text-text hover:bg-surface-2 flex items-center gap-1"
+                aria-label={t("conversation.attach")}
+                title={t("conversation.attach")}
+                className="flex h-7 w-7 items-center justify-center rounded-full border border-border text-muted hover:text-text hover:bg-surface-2"
               >
-                <Paperclip size={13} /> Attach
+                <Plus size={15} />
               </button>
               <button
                 type="button"
@@ -651,7 +657,7 @@ function InteractionPrompt({
 }
 
 /** Render blocks, grouping consecutive tool cards together. */
-function renderBlocks(blocks: ThreadBlock[]) {
+function renderBlocks(blocks: ThreadBlock[], codeRunner: CodeRunner) {
   const result: React.ReactNode[] = [];
   let toolGroup: ToolCallBlock[] = [];
   const actionTextByBlock = agentActionTextByBlock(blocks);
@@ -665,7 +671,7 @@ function renderBlocks(blocks: ThreadBlock[]) {
         result.push(<ToolGroup key={toolGroup[0].id} blocks={toolGroup} />);
         toolGroup = [];
       }
-      result.push(<BlockRenderer key={block.id} block={block} actionText={actionTextByBlock.get(block.id)} />);
+      result.push(<BlockRenderer key={block.id} block={block} actionText={actionTextByBlock.get(block.id)} codeRunner={codeRunner} />);
     }
   }
   if (toolGroup.length > 0) {
@@ -676,10 +682,10 @@ function renderBlocks(blocks: ThreadBlock[]) {
 
 /* ── Block Renderers ── */
 
-function BlockRenderer({ block, actionText }: { block: ThreadBlock; actionText?: string }) {
+function BlockRenderer({ block, actionText, codeRunner }: { block: ThreadBlock; actionText?: string; codeRunner: CodeRunner }) {
   switch (block.kind) {
     case "user": return <UserMessage text={block.text} timestamp={block.timestamp} />;
-    case "agent": return <AgentMessage parts={block.parts} partial={block.partial} timestamp={block.timestamp} actionText={actionText} />;
+    case "agent": return <AgentMessage parts={block.parts} partial={block.partial} timestamp={block.timestamp} actionText={actionText} codeRunner={codeRunner} />;
     case "tool": return <ToolCard block={block} />;
     case "status-line": return <StatusLine block={block} />;
     default: return null;
@@ -742,7 +748,7 @@ function UserMessage({ text, timestamp }: { text: string; timestamp?: string }) 
   );
 }
 
-function AgentMessage({ parts, partial, timestamp, actionText }: { parts: { id: string; text: string }[]; partial?: boolean; timestamp?: string; actionText?: string }) {
+function AgentMessage({ parts, partial, timestamp, actionText, codeRunner }: { parts: { id: string; text: string }[]; partial?: boolean; timestamp?: string; actionText?: string; codeRunner?: CodeRunner }) {
   const { t } = useTranslation();
   const rawText = parts.map((p) => p.text).join("");
   const openInspector = useUiStore((s) => s.openInspector);
@@ -762,7 +768,7 @@ function AgentMessage({ parts, partial, timestamp, actionText }: { parts: { id: 
 
   return (
     <div className="group/message">
-      <MarkdownViewer variant="chat">{text}</MarkdownViewer>
+      <MarkdownViewer variant="chat" codeRunner={codeRunner}>{text}</MarkdownViewer>
       {refs.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mt-2">
           {refs.map((ref) => (

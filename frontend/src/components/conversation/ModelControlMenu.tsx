@@ -2,6 +2,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronDown, ChevronRight, Gauge } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { cn } from "../../lib/cn";
 import type { AvailableModel } from "../../lib/pi-science-client";
 
 const EN_THINKING_LABELS: Record<string, string> = {
@@ -64,6 +65,9 @@ export function ModelControlMenu({
   const labels = isChinese
     ? { model: "模型", thinking: "推理强度", context: "上下文", threshold: "自动压缩阈值", trigger: "选择模型、推理强度并查看上下文" }
     : { model: "Model", thinking: "Thinking", context: "Context", threshold: "Auto-compaction threshold", trigger: "Select model and thinking level and view context" };
+  // Warn shortly before Pi's auto-compaction kicks in (within 10% of the threshold).
+  const nearCompaction = Boolean(compactionEnabled) && compactionThresholdPercent != null && contextPercent != null
+    && contextPercent >= compactionThresholdPercent - 10;
 
   return (
     <DropdownMenu.Root>
@@ -71,11 +75,20 @@ export function ModelControlMenu({
         <button
           type="button"
           aria-label={labels.trigger}
-          className="group flex min-h-9 min-w-0 max-w-[320px] items-center gap-2 rounded-input px-2.5 py-1 text-left text-xs text-text outline-none transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-50"
+          className="group flex min-h-9 min-w-0 max-w-[420px] items-center gap-2 rounded-input px-2.5 py-1 text-left text-xs text-text outline-none transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <span className="min-w-0 flex-1">
-            <span className="flex min-w-0 items-center gap-1.5"><span className="truncate">{modelLabel}</span><span className="shrink-0 text-muted">{thinkingLabel}</span></span>
-            <span className="mt-0.5 flex items-center gap-1 font-mono text-[10px] text-muted"><Gauge size={10} /> {contextSummary}{contextPercent != null ? ` · ${Math.round(contextPercent)}%` : ""}</span>
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <span className="truncate">{modelLabel}</span>
+            <span className="shrink-0 text-muted">{thinkingLabel}</span>
+            {contextPercent != null && (
+              <span
+                title={nearCompaction ? `${labels.threshold}: ${compactionThresholdPercent}%` : undefined}
+                className={cn("ml-1 flex shrink-0 items-center gap-1 border-l border-faint pl-2 font-mono text-[10px]", nearCompaction ? "text-warn" : "text-muted")}
+              >
+                <Gauge size={10} />
+                {formatTokens(contextTokens)}/{formatTokens(effectiveWindow)} · {Math.round(contextPercent)}%{nearCompaction ? ` → ${compactionThresholdPercent}%` : ""}
+              </span>
+            )}
           </span>
           <ChevronDown size={13} className="shrink-0 text-muted transition-transform duration-150 group-data-[state=open]:rotate-180" />
         </button>
