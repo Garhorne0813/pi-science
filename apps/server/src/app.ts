@@ -13,14 +13,14 @@ import { registerJobRoutes } from "./job-routes.js";
 import { registerArtifactRoutes } from "./artifact-routes.js";
 import { registerSettingsRoutes } from "./settings-routes.js";
 import { registerRunEndpointRoutes } from "./run-endpoint-routes.js";
-import { registerCatalogRoutes } from "./catalog-routes.js";
+import { knownWorkspacePaths, registerCatalogRoutes } from "./catalog-routes.js";
 import { registerProjectRoutes } from "./project-routes.js";
 import { createServerModules, type ServerModules } from "./server-modules.js";
 import { registerEnvironmentRoutes } from "./environment-routes.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
-  const { sessions: nodeSessionService, events, sessionRepository, settings, jobs, scientificRuntime, environments } = modules;
+  const { sessions: nodeSessionService, events, sessionRepository, settings, jobs, research, scientificRuntime, environments } = modules;
   nodeSessionService.configureScientificRuntime(config.pythonOrigin, config.internalToken);
   const app = Fastify({
     logger: { level: config.logLevel },
@@ -122,10 +122,15 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeArtifacts !== false) registerArtifactRoutes(app);
   if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings);
   if (config.nodeRuns !== false) registerRunEndpointRoutes(app);
-  if (config.nodeCatalog !== false) registerCatalogRoutes(app);
-  if (config.nodeProject !== false) registerProjectRoutes(app);
+  if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, research);
+  if (config.nodeProject !== false) registerProjectRoutes(app, research);
+  app.addHook("onReady", async () => {
+    const results = await Promise.allSettled((await knownWorkspacePaths()).map((cwd) => research.reconcile(cwd)));
+    for (const result of results) if (result.status === "rejected") app.log.error({ err: result.reason }, "research loop recovery failed");
+  });
   if (config.nodePiManager) app.addHook("onClose", async () => nodeSessionService.shutdownAll());
   app.addHook("onClose", async () => scientificRuntime.shutdown());
+  app.addHook("onClose", async () => research.shutdown());
   if (config.nodePiManager) {
     app.all("/api/sessions/*", async (request, reply) => reply.code(404).send({
       ok: false,
