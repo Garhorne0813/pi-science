@@ -1,3 +1,6 @@
+import { projectMemoryKey } from "./project-memory";
+import { queryClient } from "./query-client";
+
 const SIGNAL_DEBOUNCE_MS = 500;
 
 // Lossy invalidation channel for research-loop progress: the server pushes
@@ -21,4 +24,13 @@ export function subscribeResearchEvents(cwd: string, onSignal: () => void): () =
     if (timer !== null) clearTimeout(timer);
     timer = null;
   };
+}
+
+/** The bridge from the SSE channel to the REST cache: a server signal marks every
+ *  project-memory query stale, so whatever is mounted refetches itself. */
+export function subscribeResearchInvalidation(cwd: string, onSignal?: () => void): () => void {
+  return subscribeResearchEvents(cwd, () => {
+    void queryClient.invalidateQueries({ queryKey: projectMemoryKey() });
+    onSignal?.();
+  });
 }

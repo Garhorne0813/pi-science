@@ -1,4 +1,6 @@
 import { kernelShutdownUrl } from "../components/notebook/notebook-model";
+import { apiRequest } from "./api";
+import { queryClient } from "./query-client";
 
 export interface CellResult {
   ok: boolean;
@@ -12,28 +14,28 @@ export interface KernelCapabilities {
   r: boolean;
 }
 
-async function responseJson<T>(response: Response, fallback: string): Promise<T> {
-  const payload = await response.json().catch(() => ({})) as T & { detail?: string; error?: string };
-  if (!response.ok) throw new Error(payload.detail || payload.error || fallback);
-  return payload;
-}
-
 export const notebookRuntime = {
   async capabilities(): Promise<KernelCapabilities> {
-    const data = await responseJson<{ interpreters?: Partial<KernelCapabilities> }>(await fetch("/api/kernels/status"), "Unable to inspect kernels");
+    const data = await queryClient.fetchQuery({
+      queryKey: ["kernels", "status"],
+      queryFn: () => apiRequest<{ interpreters?: Partial<KernelCapabilities> }>("/api/kernels/status", { errorFallback: "Unable to inspect kernels" }),
+      staleTime: 0,
+    });
     return { python: Boolean(data.interpreters?.python), r: Boolean(data.interpreters?.r) };
   },
 
+  /** Cell execution is a mutation with side effects in the kernel — never cached. */
   async execute(notebookId: string, cwd: string, language: "python" | "r", code: string): Promise<CellResult> {
     const query = new URLSearchParams({ cwd });
-    return responseJson<CellResult>(await fetch(`/api/kernels/execute?${query}`, {
+    return apiRequest<CellResult>(`/api/kernels/execute?${query}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ language, code, notebook_id: notebookId }),
-    }), "Cell execution failed");
+      errorFallback: "Cell execution failed",
+    });
   },
 
   async release(notebookId: string, cwd: string): Promise<void> {
-    await fetch(kernelShutdownUrl(notebookId, cwd), { method: "POST" });
+    await apiRequest(kernelShutdownUrl(notebookId, cwd), { method: "POST" });
   },
 };

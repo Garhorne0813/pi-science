@@ -1,4 +1,4 @@
-import { Outlet, useNavigate, useParams, useLocation } from "react-router-dom";
+import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Sun, Moon, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical } from "lucide-react";
 import { useUiStore } from "../../lib/store";
@@ -6,7 +6,8 @@ import { useRuntimeStore } from "../../lib/runtime-store";
 import { InspectorShell } from "../../components/inspector/InspectorShell";
 import { RightPane } from "../../components/inspector/RightPane";
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
-import { setCurrentCwd } from "../../lib/files";
+import { useWorkspaceCwd } from "../../lib/workspace-context";
+import { usePendingProposalCount } from "../../lib/project-knowledge";
 import { cn } from "../../lib/cn";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { useTranslation } from "react-i18next";
@@ -21,15 +22,8 @@ export function ProjectsLayout() {
   const inspectorData = useUiStore((s) => s.inspectorData);
   const closeInspector = useUiStore((s) => s.closeInspector);
   const location = useLocation();
-  const { cwd: workspaceCwd } = useParams<{ cwd: string }>();
-
-  // Decode workspace cwd from URL
-  const activeCwd = workspaceCwd ? decodeURIComponent(workspaceCwd) : null;
+  const activeCwd = useWorkspaceCwd();
   const isWorkspace = !!activeCwd;
-
-  useEffect(() => {
-    if (activeCwd) setCurrentCwd(activeCwd);
-  }, [activeCwd]);
 
   // Close the inspector when switching workspaces — stale inspector
   // data from workspace A makes no sense after navigating to workspace B.
@@ -386,18 +380,8 @@ function SettingsNavItem({ cwd, collapsed = false }: { cwd: string | null; colla
 
 function KnowledgeNavItem({ cwd, active }: { cwd: string; active: boolean }) {
   const { t } = useTranslation();
-  const [pending, setPending] = useState(0);
-  useEffect(() => {
-    let cancelled = false;
-    const poll = () => fetch(`/api/project-knowledge/proposals/count?cwd=${encodeURIComponent(cwd)}`)
-      .then((response) => response.ok ? response.json() : { pending_count: 0 })
-      .then((data) => { if (!cancelled) setPending(Number(data.pending_count) || 0); })
-      .catch(() => { if (!cancelled) setPending(0); });
-    void poll();
-    const interval = setInterval(poll, 8000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [cwd]);
-  return <SidebarNavItem to={`/workspace/${encodeURIComponent(cwd)}/knowledge`} label={t("nav.knowledge")} icon={<Inbox size={16} />} active={active} badge={pending} />;
+  const { data } = usePendingProposalCount(cwd, 8000);
+  return <SidebarNavItem to={`/workspace/${encodeURIComponent(cwd)}/knowledge`} label={t("nav.knowledge")} icon={<Inbox size={16} />} active={active} badge={Number(data?.pending_count) || 0} />;
 }
 
 function ThemeToggle({ className }: { className?: string }) {

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { subscribeResearchEvents } from "./research-events";
+import { subscribeResearchEvents, subscribeResearchInvalidation } from "./research-events";
+import { projectMemoryKey } from "./project-memory";
+import { queryClient } from "./query-client";
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
@@ -34,6 +36,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  queryClient.clear();
 });
 
 describe("subscribeResearchEvents", () => {
@@ -79,5 +82,31 @@ describe("subscribeResearchEvents", () => {
     expect(source.closed).toBe(true);
     vi.advanceTimersByTime(1_000);
     expect(onSignal).not.toHaveBeenCalled();
+  });
+});
+
+describe("subscribeResearchInvalidation", () => {
+  it("marks every project-memory query stale on a debounced server signal", () => {
+    const key = projectMemoryKey("research-loops", "/workspace/demo");
+    queryClient.setQueryData(key, { loops: [] });
+    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
+
+    const cleanup = subscribeResearchInvalidation("/workspace/demo");
+    const source = FakeEventSource.instances[0]!;
+    source.message();
+    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
+
+    vi.advanceTimersByTime(500);
+    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+    cleanup();
+  });
+
+  it("still runs the caller's own refresh alongside the invalidation", () => {
+    const onSignal = vi.fn();
+    const cleanup = subscribeResearchInvalidation(".", onSignal);
+    FakeEventSource.instances[0]!.message();
+    vi.advanceTimersByTime(500);
+    expect(onSignal).toHaveBeenCalledTimes(1);
+    cleanup();
   });
 });

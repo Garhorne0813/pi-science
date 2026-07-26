@@ -17,10 +17,11 @@ export function stopReason(snapshot: ResearchSnapshot, now = Date.now()): string
   if (activeWallMs(loop, now) >= loop.budget.max_wall_seconds * 1000) return "wall_time_budget_exhausted";
 
   const evaluated = snapshot.candidates.filter((candidate) => candidate.evaluation_status === "passed" && candidate.evaluation);
-  const completedAgentRuns = snapshot.records.filter((record) => record.record_type === "agent.run_completed");
-  const tokens = completedAgentRuns.reduce((sum, record) => sum + Number(record.payload.model_tokens ?? 0), 0)
+  // Failed runs still spent tokens; leaving them out under-counts the budget.
+  const agentRuns = snapshot.records.filter((record) => ["agent.run_completed", "agent.run_failed"].includes(record.record_type));
+  const tokens = agentRuns.reduce((sum, record) => sum + Number(record.payload.model_tokens ?? 0), 0)
     + evaluated.reduce((sum, candidate) => sum + Number(candidate.evaluation?.model_tokens ?? 0), 0);
-  const cost = completedAgentRuns.reduce((sum, record) => sum + Number(record.payload.cost_usd ?? 0), 0)
+  const cost = agentRuns.reduce((sum, record) => sum + Number(record.payload.cost_usd ?? 0), 0)
     + evaluated.reduce((sum, candidate) => sum + Number(candidate.evaluation?.cost_usd ?? 0), 0);
   if (loop.budget.max_model_tokens != null && tokens >= loop.budget.max_model_tokens) return "model_token_budget_exhausted";
   if (loop.budget.max_cost_usd != null && cost >= loop.budget.max_cost_usd) return "cost_budget_exhausted";

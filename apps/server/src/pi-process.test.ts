@@ -37,7 +37,7 @@ describe("Node Pi JSONL adapter", () => {
     await expect(manager.sendCommand("workspace", "get_state")).resolves.toMatchObject({ success: true, data: { type: "get_state" } });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(events).toContain("session.idle");
-    await rm(runtime.cwd, { recursive: true, force: true });
+    await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("returns a stable error when the process exits", async () => {
@@ -47,6 +47,6 @@ describe("Node Pi JSONL adapter", () => {
     const process = manager.start("workspace", runtime);
     await process.shutdown();
     await expect(manager.sendCommand("workspace", "get_state")).resolves.toMatchObject({ code: "not_found" });
-    await rm(runtime.cwd, { recursive: true, force: true });
+    await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 });

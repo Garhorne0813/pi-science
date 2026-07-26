@@ -1,4 +1,6 @@
-import { apiRequest, invalidateApiCache } from "./api";
+import { useQuery } from "@tanstack/react-query";
+import { apiRequest } from "./api";
+import { queryClient } from "./query-client";
 
 export type KnowledgeType =
   | "finding"
@@ -116,9 +118,25 @@ export interface LogicalFileViews {
   by_month: Record<string, IndexedFile[]>;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const data = await apiRequest<T>(path, { ...init, cacheTtlMs: init?.method ? 0 : 5000 });
-  if (init?.method && init.method !== "GET") invalidateApiCache("/api/project-knowledge/");
+/** Every project-knowledge read shares this prefix so one mutation invalidates them all. */
+export const projectKnowledgeKey = (...selector: Array<string | null>) => ["project-knowledge", ...selector];
+
+// This resource kept a 5s TTL where the rest of the app used 3s; preserved here.
+const KNOWLEDGE_STALE_MS = 5_000;
+
+function read<T>(queryKey: Array<string | null>, path: string) {
+  return { queryKey, queryFn: () => apiRequest<T>(path), staleTime: KNOWLEDGE_STALE_MS };
+}
+
+/** Imperative read for non-component callers; shares the cache with the hooks below. */
+function get<T>(queryKey: Array<string | null>, path: string): Promise<T> {
+  return queryClient.fetchQuery(read<T>(queryKey, path));
+}
+
+/** Writes go straight to the transport, then drop the whole resource from cache. */
+async function write<T>(path: string, init: RequestInit): Promise<T> {
+  const data = await apiRequest<T>(path, init);
+  void queryClient.invalidateQueries({ queryKey: projectKnowledgeKey() });
   return data;
 }
 
@@ -126,33 +144,47 @@ function query(cwd: string, extra?: Record<string, string>) {
   return new URLSearchParams({ cwd, ...(extra ?? {}) }).toString();
 }
 
+const proposalCountQuery = (cwd: string) => read<{ pending_count: number }>(projectKnowledgeKey("proposals-count", cwd), `/api/project-knowledge/proposals/count?${query(cwd)}`);
+
+const fileViewsQuery = (cwd: string) => read<LogicalFileViews>(projectKnowledgeKey("file-views", cwd), `/api/project-knowledge/files/views?${query(cwd)}`);
+
+/** Logical file views: mounted only by the files tab, refreshed by the write invalidation. */
+export function useLogicalFileViews(cwd: string) {
+  return useQuery(fileViewsQuery(cwd));
+}
+
+/** Pending-proposal badge: polled, not pushed — the server has no signal for it. */
+export function usePendingProposalCount(cwd: string, refetchIntervalMs: number) {
+  return useQuery({ ...proposalCountQuery(cwd), refetchInterval: refetchIntervalMs });
+}
+
 export const projectKnowledgeApi = {
   summary(cwd: string) {
-    return request<ProjectSummary>(`/api/project-knowledge/summary?${query(cwd)}`);
+    return get<ProjectSummary>(projectKnowledgeKey("summary", cwd), `/api/project-knowledge/summary?${query(cwd)}`);
   },
   project(cwd: string) {
-    return request<ProjectSummary & { content: string }>(`/api/project-knowledge/project?${query(cwd)}`);
+    return get<ProjectSummary & { content: string }>(projectKnowledgeKey("project", cwd), `/api/project-knowledge/project?${query(cwd)}`);
   },
   projectVersions(cwd: string) {
-    return request<{ versions: Array<{ id: string; created_at: string; reason: string; knowledge_count: number }> }>(`/api/project-knowledge/project/versions?${query(cwd)}`);
+    return get<{ versions: Array<{ id: string; created_at: string; reason: string; knowledge_count: number }> }>(projectKnowledgeKey("project-versions", cwd), `/api/project-knowledge/project/versions?${query(cwd)}`);
   },
   restoreProjectVersion(cwd: string, versionId: string) {
-    return request<Record<string, unknown>>(`/api/project-knowledge/project/versions/${versionId}/restore?${query(cwd)}`, {
+    return write<Record<string, unknown>>(`/api/project-knowledge/project/versions/${versionId}/restore?${query(cwd)}`, {
       method: "POST",
     });
   },
   proposals(cwd: string, status?: ProposalStatus) {
     const extra = status ? { status } : undefined;
-    return request<{ proposals: Proposal[]; pending_count: number }>(`/api/project-knowledge/proposals?${query(cwd, extra)}`);
+    return get<{ proposals: Proposal[]; pending_count: number }>(projectKnowledgeKey("proposals", cwd, status ?? null), `/api/project-knowledge/proposals?${query(cwd, extra)}`);
   },
   proposalCount(cwd: string) {
-    return request<{ pending_count: number }>(`/api/project-knowledge/proposals/count?${query(cwd)}`);
+    return queryClient.fetchQuery(proposalCountQuery(cwd));
   },
   items(cwd: string) {
-    return request<{ items: KnowledgeItem[] }>(`/api/project-knowledge/items?${query(cwd)}`);
+    return get<{ items: KnowledgeItem[] }>(projectKnowledgeKey("items", cwd), `/api/project-knowledge/items?${query(cwd)}`);
   },
   review(cwd: string, sessionId?: string | null, forceFullSession = false) {
-    return request<{ run_id: string; created: number; skipped: number; proposal_ids: string[]; message: string }>(
+    return write<{ run_id: string; created: number; skipped: number; proposal_ids: string[]; message: string }>(
       "/api/project-knowledge/review",
       {
         method: "POST",
@@ -167,31 +199,31 @@ export const projectKnowledgeApi = {
     );
   },
   updateProposal(cwd: string, proposalId: string, changes: Partial<Proposal>) {
-    return request<{ proposal: Proposal }>(`/api/project-knowledge/proposals/${proposalId}?${query(cwd)}`, {
+    return write<{ proposal: Proposal }>(`/api/project-knowledge/proposals/${proposalId}?${query(cwd)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(changes),
     });
   },
   previewProposal(cwd: string, proposalId: string) {
-    return request<Record<string, unknown>>(`/api/project-knowledge/proposals/${proposalId}/preview?${query(cwd)}`);
+    return get<Record<string, unknown>>(projectKnowledgeKey("proposal-preview", cwd, proposalId), `/api/project-knowledge/proposals/${proposalId}/preview?${query(cwd)}`);
   },
   accept(cwd: string, proposalId: string, edits?: { title?: string; summary?: string }) {
-    return request<Record<string, unknown>>(`/api/project-knowledge/proposals/${proposalId}/accept?${query(cwd)}`, {
+    return write<Record<string, unknown>>(`/api/project-knowledge/proposals/${proposalId}/accept?${query(cwd)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(edits ?? {}),
     });
   },
   reject(cwd: string, proposalId: string, reason?: string) {
-    return request<Record<string, unknown>>(`/api/project-knowledge/proposals/${proposalId}/reject?${query(cwd)}`, {
+    return write<Record<string, unknown>>(`/api/project-knowledge/proposals/${proposalId}/reject?${query(cwd)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ reason }),
     });
   },
   batch(cwd: string, proposalIds: string[], action: "accept" | "reject") {
-    return request<{ ok: boolean; failures: Array<{ proposal_id: string; detail: string }> }>(
+    return write<{ ok: boolean; failures: Array<{ proposal_id: string; detail: string }> }>(
       `/api/project-knowledge/proposals/batch?${query(cwd)}`,
       {
         method: "POST",
@@ -201,23 +233,23 @@ export const projectKnowledgeApi = {
     );
   },
   policy(cwd: string) {
-    return request<ProjectPolicy>(`/api/project-knowledge/policy?${query(cwd)}`);
+    return get<ProjectPolicy>(projectKnowledgeKey("policy", cwd), `/api/project-knowledge/policy?${query(cwd)}`);
   },
   updatePolicy(cwd: string, changes: Partial<ProjectPolicy>) {
-    return request<ProjectPolicy>(`/api/project-knowledge/policy?${query(cwd)}`, {
+    return write<ProjectPolicy>(`/api/project-knowledge/policy?${query(cwd)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(changes),
     });
   },
   files(cwd: string) {
-    return request<LogicalFileViews>(`/api/project-knowledge/files/views?${query(cwd)}`);
+    return queryClient.fetchQuery(fileViewsQuery(cwd));
   },
   history(cwd: string) {
-    return request<{ history: Array<Record<string, unknown>> }>(`/api/project-knowledge/history?${query(cwd)}`);
+    return get<{ history: Array<Record<string, unknown>> }>(projectKnowledgeKey("history", cwd), `/api/project-knowledge/history?${query(cwd)}`);
   },
   undo(cwd: string, historyId: string) {
-    return request<Record<string, unknown>>(`/api/project-knowledge/file-operations/${historyId}/undo?${query(cwd)}`, {
+    return write<Record<string, unknown>>(`/api/project-knowledge/file-operations/${historyId}/undo?${query(cwd)}`, {
       method: "POST",
     });
   },

@@ -95,7 +95,7 @@ describe("Node control plane", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ isolated: true });
-    await rm(workspace, { recursive: true, force: true });
+    await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }, 30_000);
 
   it("returns a bounded gateway timeout for an unavailable upstream", async () => {
@@ -158,7 +158,7 @@ describe("Node control plane", () => {
     expect(listed.json()).toMatchObject([{ id: "session-1", cwd: workspace }]);
     const messages = await app.inject({ method: "GET", url: `/api/sessions/session-1/messages?cwd=${encodeURIComponent(workspace)}` });
     expect(messages.json()).toMatchObject({ messages: [{ id: "m1", role: "user" }, { id: "m2", role: "assistant" }] });
-    await rm(workspace, { recursive: true, force: true });
+    await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("enforces workspace boundaries for native file reads", async () => {
@@ -187,7 +187,7 @@ describe("Node control plane", () => {
     expect(escaped.statusCode).toBeGreaterThanOrEqual(400);
     const symlinkEscape = await app.inject({ method: "GET", url: `/api/files/serve/escape.txt?cwd=${encodeURIComponent(workspace)}` });
     expect(symlinkEscape.statusCode).toBeGreaterThanOrEqual(400);
-    await rm(workspace, { recursive: true, force: true });
+    await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     await rm(outside, { force: true });
   });
 
@@ -199,6 +199,6 @@ describe("Node control plane", () => {
     const response = await app.inject({ method: "POST", url: "/api/sessions", payload: { cwd: workspace } });
     expect(response.statusCode).toBe(503);
     expect(response.json()).toMatchObject({ code: "spawn_failed" });
-    await rm(workspace, { recursive: true, force: true });
+    await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 });

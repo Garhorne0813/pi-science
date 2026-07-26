@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
 import { Package, Puzzle, Wrench, Check, X, ChevronRight, ShieldCheck, AlertTriangle, RotateCcw, Loader2 } from "lucide-react";
 import { WorkspacePage, WorkspacePageHeader } from "../../components/layout/WorkspacePage";
-import { skillsApi } from "../../lib/skills-api";
+import { skillsApi, skillsKey } from "../../lib/skills-api";
+import { settingsApi, invalidateSettings } from "../../lib/settings-api";
 import { apiRequest } from "../../lib/api";
+import { queryClient } from "../../lib/query-client";
 import { applySessionReplacements, type SessionReplacement } from "../../lib/runtime-store";
+import { useWorkspaceCwd } from "../../lib/workspace-context";
 
 interface Skill {
   skill_id: string;
@@ -31,9 +33,15 @@ interface Tool {
   version?: string | null;
 }
 
+/** Enabling a skill changes both the skill catalog and the settings that record the choice. */
+function invalidateSkillSelection() {
+  void queryClient.invalidateQueries({ queryKey: skillsKey() });
+  invalidateSettings();
+}
+
 export function SkillsPage() {
-  const { cwd: encodedCwd } = useParams<{ cwd: string }>();
-  const cwd = encodedCwd ? decodeURIComponent(encodedCwd) : undefined;
+  // Also routed at /skills (no workspace): the APIs below take `cwd?: string`.
+  const cwd = useWorkspaceCwd() ?? undefined;
   const [skills, setSkills] = useState<Skill[]>([]);
   const [tools, setTools] = useState<Tool[]>([]);
   const [selected, setSelected] = useState<Skill | null>(null);
@@ -46,8 +54,8 @@ export function SkillsPage() {
     let cancelled = false;
     Promise.all([
       skillsApi.list<Skill>(cwd),
-      apiRequest<Tool[]>("/api/skills/tools", { cacheTtlMs: 3000 }),
-      apiRequest<{ skills?: Array<{ name: string; enabled: boolean }>; configured?: boolean }>("/api/settings/skills"),
+      skillsApi.tools<Tool>(),
+      settingsApi.skills<{ skills?: Array<{ name: string; enabled: boolean }>; configured?: boolean }>(),
     ]).then(([skillData, toolData, settingsData]) => {
       if (cancelled) return;
       const enabled = new Map<string, boolean>((settingsData.skills || []).map((item: { name: string; enabled: boolean }) => [item.name, item.enabled]));
@@ -82,6 +90,7 @@ export function SkillsPage() {
         body: JSON.stringify({ name: skill.name, enabled }),
       });
       if (result.session_replacements) applySessionReplacements(result.session_replacements);
+      invalidateSkillSelection();
       setConfigured(true);
     } catch (cause) {
       setSkills((current) => current.map((item) => item.name === skill.name ? { ...item, enabled: skill.enabled } : item));
@@ -97,6 +106,7 @@ export function SkillsPage() {
     try {
       const result = await apiRequest<{ session_replacements?: SessionReplacement[] }>("/api/settings/skills", { method: "DELETE" });
       if (result.session_replacements) applySessionReplacements(result.session_replacements);
+      invalidateSkillSelection();
       setSkills((current) => current.map((item) => ({ ...item, enabled: true })));
       setConfigured(false);
     } catch (cause) {

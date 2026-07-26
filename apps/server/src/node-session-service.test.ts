@@ -82,7 +82,7 @@ afterEach(async () => {
   delete process.env.FAKE_PI_FAIL_STATE_AFTER;
   delete process.env.FAKE_PI_FAIL_START_FILE;
   delete process.env.FAKE_PI_ENV_LOG;
-  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
 });
 
 async function workspaceWithSessions(...ids: string[]): Promise<string> {

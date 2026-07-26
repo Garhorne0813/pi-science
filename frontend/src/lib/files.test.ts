@@ -1,16 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { previewUrl, readArtifact, setCurrentCwd } from "./files";
+import { previewUrl, readArtifact } from "./files";
 
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  setCurrentCwd(".");
 });
 
 
 describe("workspace file context", () => {
-  it("uses the inspector's explicit cwd instead of stale global route state", async () => {
-    setCurrentCwd("/wrong/workspace");
+  it("uses the inspector's explicit cwd — the module keeps no ambient workspace state", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       path: "report.docx",
       encoding: "base64",

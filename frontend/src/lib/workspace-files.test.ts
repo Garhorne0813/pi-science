@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { workspaceFiles } from "./workspace-files";
+import { queryClient } from "./query-client";
 
 afterEach(() => {
-  workspaceFiles.invalidate();
+  queryClient.clear();
   vi.unstubAllGlobals();
 });
 

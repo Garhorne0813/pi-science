@@ -2,6 +2,7 @@
  *  Same API surface but calls the FastAPI backend instead of Tauri IPC. */
 
 import type { FileRoot } from "../types/thread";
+import { apiRequest } from "./api";
 
 export type { FileRoot };
 
@@ -15,25 +16,16 @@ export interface ArtifactFile {
   size: number;
 }
 
-// Current workspace CWD (set by LiveSessionPage on mount)
-let _currentCwd = ".";
-
-export function setCurrentCwd(cwd: string) {
-  _currentCwd = cwd;
-}
-
 /** Read a workspace file. Uses REST API. */
 export async function readArtifact(
   path: string,
-  root?: FileRoot,
-  cwd?: string,
+  root: FileRoot | undefined,
+  cwd: string,
 ): Promise<ArtifactFile | null> {
   try {
-    const params = new URLSearchParams({ cwd: cwd || _currentCwd });
+    const params = new URLSearchParams({ cwd });
     if (root) params.set("root", root);
-    const res = await fetch(`${API}/files/${encodeURIComponent(path)}?${params}`);
-    if (!res.ok) return null;
-    return res.json();
+    return await apiRequest<ArtifactFile>(`${API}/files/${encodeURIComponent(path)}?${params}`);
   } catch {
     return null;
   }
@@ -45,8 +37,8 @@ export async function readArtifact(
  *  Each path segment is encoded individually so / separators stay
  *  literal — otherwise the browser sees %2F as part of a single
  *  filename and relative resolution breaks. */
-export function previewUrl(path: string, root?: FileRoot, cwd?: string): string {
-  const params = new URLSearchParams({ cwd: cwd || _currentCwd });
+export function previewUrl(path: string, root: FileRoot | undefined, cwd: string): string {
+  const params = new URLSearchParams({ cwd });
   if (root) params.set("root", root);
   const encodedPath = path.split("/").map(encodeURIComponent).join("/");
   return `${API}/files/serve/${encodedPath}?${params}`;
@@ -55,15 +47,15 @@ export function previewUrl(path: string, root?: FileRoot, cwd?: string): string 
 /** Open a file in the OS default app — web fallback: open in new tab. */
 export async function openArtifactExternally(
   path: string,
-  root?: FileRoot,
-  cwd?: string,
+  root: FileRoot | undefined,
+  cwd: string,
 ): Promise<void> {
   const url = previewUrl(path, root, cwd);
   window.open(url, "_blank");
 }
 
 /** Download a file through the browser. */
-export async function saveWorkspaceFile(path: string, root?: FileRoot, cwd?: string): Promise<void> {
+export async function saveWorkspaceFile(path: string, root: FileRoot | undefined, cwd: string): Promise<void> {
   const url = previewUrl(path, root, cwd);
   const a = document.createElement("a");
   a.href = url;
@@ -104,14 +96,12 @@ export interface DirEntry {
   modified: number;
 }
 
-export async function listDir(rel: string, root?: FileRoot, cwd?: string): Promise<DirEntry[]> {
+export async function listDir(rel: string, root: FileRoot | undefined, cwd: string): Promise<DirEntry[]> {
   try {
-    const params = new URLSearchParams({ cwd: cwd || _currentCwd });
+    const params = new URLSearchParams({ cwd });
     if (rel) params.set("subdir", rel);
     if (root) params.set("root", root);
-    const res = await fetch(`${API}/files?${params}`);
-    if (!res.ok) return [];
-    return res.json();
+    return await apiRequest<DirEntry[]>(`${API}/files?${params}`);
   } catch {
     return [];
   }
@@ -142,15 +132,13 @@ export interface LargeFilePointer {
 
 export async function probeLargeFile(
   path: string,
-  root?: FileRoot,
-  cwd?: string,
+  root: FileRoot | undefined,
+  cwd: string,
 ): Promise<LargeFilePointer | null> {
   try {
-    const params = new URLSearchParams({ cwd: cwd || _currentCwd });
+    const params = new URLSearchParams({ cwd });
     if (root) params.set("root", root);
-    const res = await fetch(`${API}/files/probe/${encodeURIComponent(path)}?${params}`);
-    if (!res.ok) return null;
-    return res.json();
+    return await apiRequest<LargeFilePointer>(`${API}/files/probe/${encodeURIComponent(path)}?${params}`);
   } catch {
     return null;
   }

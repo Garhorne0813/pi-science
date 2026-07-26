@@ -136,7 +136,7 @@ flowchart LR
 - **Python 运行时**提供科学服务和计算内核。
 - session 同时按 workspace 和 session ID 隔离。空闲 Pi 进程默认在 30 分钟后回收；设置 `PI_SCIENCE_IDLE_RUNTIME_MS=0` 可关闭回收。
 
-深入设计说明见 [Node 控制面架构](docs/node-control-plane.md) 和 [科学平台运行时](docs/science-platform-runtime.md)。
+深入设计说明见[研究循环架构（ADR）](docs/adr-research-loop-subagents.md)。
 
 ## 项目与工作区
 

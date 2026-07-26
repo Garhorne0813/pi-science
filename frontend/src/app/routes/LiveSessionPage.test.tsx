@@ -39,10 +39,11 @@ vi.mock("../../components/conversation/ModelControlMenu", () => ({
 }));
 
 import { LiveSessionPage } from "./LiveSessionPage";
+import { WorkspaceProvider } from "../../lib/workspace-context";
 import { FeedbackContext } from "../../components/feedback/feedback-context";
 import { useRuntimeStore } from "../../lib/runtime-store";
 import { useUiStore } from "../../lib/store";
-import { invalidateApiCache } from "../../lib/api";
+import { queryClient } from "../../lib/query-client";
 import { getSessionName } from "../../lib/pi-science-client";
 import { resetDynamicCommands } from "../../lib/slash-commands";
 import i18n from "../../i18n";
@@ -105,7 +106,8 @@ function renderPage() {
     <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
       <MemoryRouter initialEntries={[`/workspace/${CWD}/session/${SESSION_ID}`]}>
         <Routes>
-          <Route path="/workspace/:cwd/session/:sessionId" element={<LiveSessionPage />} />
+          {/* The app mounts WorkspaceProvider around the route tree (app/router.tsx). */}
+          <Route path="/workspace/:cwd/session/:sessionId" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
         </Routes>
       </MemoryRouter>
     </FeedbackContext.Provider>,
@@ -134,7 +136,7 @@ beforeEach(() => {
     removeItem: (key: string) => storage.delete(key),
     clear: () => storage.clear(),
   });
-  invalidateApiCache();
+  queryClient.clear();
   resetDynamicCommands();
   useUiStore.setState({ inspectorOpen: false, inspectorData: null, workspaceReferences: [] });
   useRuntimeStore.setState({

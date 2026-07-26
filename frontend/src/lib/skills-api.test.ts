@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { skillsApi } from "./skills-api";
+import { queryClient } from "./query-client";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  queryClient.clear();
+  vi.unstubAllGlobals();
+});
 
 describe("skills capability", () => {
   it("does not request project skills without a workspace", async () => {
