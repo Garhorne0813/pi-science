@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SseBackpressureBuffer } from "./sse-routes.js";
+import { resolveLastEventId, SseBackpressureBuffer } from "./sse-routes.js";
 
 describe("SSE backpressure buffer", () => {
   it("stays bounded by item count and byte size", () => {
@@ -22,5 +22,15 @@ describe("SSE backpressure buffer", () => {
     buffer.drain((text) => { secondDrain.push(text); return true; });
     expect(secondDrain).toEqual(["second"]);
     expect(buffer.length).toBe(0);
+  });
+});
+
+describe("SSE cursor selection", () => {
+  it("accepts an explicit query cursor for a newly-created EventSource", () => {
+    expect(resolveLastEventId(undefined, "epoch:42")).toBe("epoch:42");
+  });
+
+  it("prefers the standard Last-Event-ID header on browser reconnect", () => {
+    expect(resolveLastEventId("epoch:43", "epoch:42")).toBe("epoch:43");
   });
 });

@@ -114,7 +114,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   });
 
   if (config.nodeSessions || config.nodePiManager) registerSessionReadRoutes(app, sessionRepository, nodeSessionService);
-  if (config.nodeSse || config.nodePiManager) registerSseRoutes(app, config, nodeSessionService, events);
+  if (config.nodeSse || config.nodePiManager) registerSseRoutes(app, nodeSessionService, events);
   if (config.nodeFiles) registerFileReadRoutes(app);
   if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository);
   if (config.nodeJobs !== false) registerJobRoutes(app, jobs);

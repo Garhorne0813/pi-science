@@ -5,6 +5,8 @@ import { create } from "zustand";
 import type { ThreadBlock } from "../types/thread";
 import {
   PiScienceClient,
+  clearCachedMessages,
+  clearSessionName,
   getClient,
   getSessionName,
   moveSessionName,
@@ -322,7 +324,7 @@ async function loadSessionsInternal(cwdOverride?: string): Promise<SessionInfo[]
     // Inject names from localStorage
     const named = fromDisk.map((s: SessionInfo) => ({
       ...s,
-      name: s.name || getSessionName(s.id) || undefined,
+      name: s.name || getSessionName(requestedCwd, s.id) || undefined,
     }));
     // Preserve only the active, newly-created optimistic entry. Treating every
     // disk-missing item as optimistic resurrects sessions after deletion.
@@ -384,6 +386,49 @@ async function reconcileWorkingState(
     // Keep the current working state. A stream transport failure must not
     // re-enable Send while the backend may still be executing the turn.
   }
+}
+
+/** Recover the authoritative conversation snapshot after a `stream.gap`:
+ *  re-read both the message history and the runtime state in parallel, and
+ *  base `working` on the authoritative state rather than blindly clearing it.
+ *  The new SSE subscription (rebuilt by the client transport) only carries
+ *  future events, so this REST snapshot is what restores the visible history. */
+async function reconcileAfterGap(
+  sessionId: string,
+  cwd: string,
+): Promise<void> {
+  const client = getClient();
+  const [messagesResult, stateResult] = await Promise.allSettled([
+    client.getMessages(sessionId, cwd),
+    client.getSessionState(sessionId, cwd),
+  ]);
+  const current = useRuntimeStore.getState();
+  if (current.activeSessionId !== sessionId || current.cwd !== cwd) return;
+
+  // Apply the authoritative runtime state BEFORE the history snapshot so we do
+  // not clobber a busy flag the backend still holds. A gap during a long tool
+  // call must keep Send disabled until the backend reports idle.
+  if (stateResult.status === "fulfilled") {
+    const runtimeState = stateResult.value;
+    useRuntimeStore.setState({
+      working: runtimeState.is_streaming
+        || runtimeState.is_compacting
+        || runtimeState.pending_message_count > 0,
+      model: runtimeState.model ?? current.model,
+      thinking: runtimeState.thinking ?? current.thinking,
+    });
+  }
+  // History recovery is independent from busy state. Merge the REST snapshot
+  // with live blocks so a text.updated arriving during this request is kept.
+  if (messagesResult.status === "fulfilled") {
+    useRuntimeStore.setState((state) => ({
+      thread: mergeHistoryWithLive(threadFromMessages(messagesResult.value), state.thread),
+    }));
+  }
+  useRuntimeStore.setState({
+    status: messagesResult.status === "fulfilled" && stateResult.status === "fulfilled" ? "ready" : "error",
+  });
+  void loadSessionsInternal();
 }
 
 async function reconcilePromptAfterLateStream(
@@ -458,13 +503,18 @@ export function applySessionReplacements(replacements: SessionReplacement[]): st
   };
 
   for (const replacement of relevant) {
-    moveSessionName(replacement.oldId, resolveId(replacement.oldId));
+    moveSessionName(state.cwd, replacement.oldId, resolveId(replacement.oldId));
+    // The old session id is gone — drop its message cache and SSE cursor so
+    // they can't resurface or cause a stale resume on a reused id.
+    clearCachedMessages(state.cwd, replacement.oldId);
+    getClient().clearCursor(state.cwd, replacement.oldId);
+    clearSessionName(state.cwd, replacement.oldId);
   }
 
   const sessionsById = new Map<string, SessionInfo>();
   for (const session of state.sessions) {
     const nextId = resolveId(session.id);
-    const storedName = getSessionName(nextId);
+    const storedName = getSessionName(state.cwd, nextId);
     const next = {
       ...session,
       id: nextId,
@@ -480,7 +530,7 @@ export function applySessionReplacements(replacements: SessionReplacement[]): st
     sessionsById.set(nextActiveId, {
       id: nextActiveId,
       cwd: state.cwd,
-      name: getSessionName(nextActiveId) || undefined,
+      name: getSessionName(state.cwd, nextActiveId) || undefined,
     });
   }
   useRuntimeStore.setState({ sessions: [...sessionsById.values()], activeSessionId: nextActiveId });
@@ -535,20 +585,15 @@ function _registerEventListener(client: PiScienceClient) {
       _currentTurnId = "";
       _turnErrored = false;
       useRuntimeStore.setState({
-        thread: emptyThread(),
-        working: false,
         status: "connecting",
-        pendingInteraction: null,
       });
+      // Recover the authoritative snapshot from REST (messages + state). We do
+      // NOT clear `working` here: if the backend is still mid-turn, Send must
+      // stay disabled until the authoritative state read reports idle.
       if (state.activeSessionId) {
         const sessionId = state.activeSessionId;
         const cwd = state.cwd;
-        void resyncCompletedHistory(sessionId, cwd).finally(() => {
-          const current = useRuntimeStore.getState();
-          if (current.activeSessionId === sessionId && current.cwd === cwd && !current.working) {
-            useRuntimeStore.setState({ status: "ready" });
-          }
-        });
+        void reconcileAfterGap(sessionId, cwd);
       }
       return;
     }
@@ -718,6 +763,16 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       const targetSessionId = sessionId;
       set({ activeSessionId: targetSessionId });
 
+      // Optimistic render: if we have a cached message snapshot for this
+      // session, render it immediately so the user sees the conversation
+      // while the network request is still in flight.
+      const cachedMessages = client.getCachedMessages(targetSessionId, cwd);
+      if (cachedMessages && cachedMessages.length > 0) {
+        if (localMutationGeneration === _localMutationGeneration && generation === _connectionGeneration) {
+          set({ thread: threadFromMessages(cachedMessages) });
+        }
+      }
+
       client.connect(targetSessionId, cwd);
       const [messagesResult, runtimeStateResult] = await Promise.allSettled([
         client.getMessages(targetSessionId, cwd),
@@ -825,9 +880,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     set({ thread: { blocks, index, loaded: true }, working: true, client });
 
     // Use first user message as session name
-    if (!getSessionName(activeSessionId)) {
+    if (!getSessionName(cwd, activeSessionId)) {
       const sessionName = visibleUserMessage(message) || "Referenced files";
-      setSessionName(activeSessionId, sessionName);
+      setSessionName(cwd, activeSessionId, sessionName);
       set((state) => ({
         sessions: state.sessions.map((session) => session.id === activeSessionId ? { ...session, name: sessionName } : session),
       }));
@@ -937,7 +992,26 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
           _textBuffer = "";
           _currentTurnId = "";
           _turnErrored = false;
+          clearCachedMessages(cwd, activeSessionId);
+          client.clearCursor(cwd, activeSessionId);
+          const movedName = moveSessionName(cwd, activeSessionId, nextSessionId);
           client.connect(nextSessionId, cwd);
+          set({
+            client,
+            activeSessionId: nextSessionId,
+            model: result.model ?? model,
+            thinking: result.thinking ?? thinking ?? current.thinking,
+            status: result.restarted ? "connecting" : "ready",
+            sessions: [
+              {
+                ...(current.sessions.find((session) => session.id === activeSessionId) || { cwd }),
+                id: nextSessionId,
+                name: movedName || current.sessions.find((session) => session.id === activeSessionId)?.name,
+              },
+              ...current.sessions.filter((session) => session.id !== activeSessionId && session.id !== nextSessionId),
+            ].slice(0, 50),
+          });
+          return nextSessionId;
         }
         set({
           client,
@@ -948,8 +1022,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
                 {
                   ...(current.sessions.find((session) => session.id === activeSessionId) || { cwd }),
                   id: nextSessionId,
-                  name: moveSessionName(activeSessionId, nextSessionId)
-                    || current.sessions.find((session) => session.id === activeSessionId)?.name,
+                  name: current.sessions.find((session) => session.id === activeSessionId)?.name,
                 },
                 ...current.sessions.filter((session) => session.id !== activeSessionId && session.id !== nextSessionId),
               ].slice(0, 50),
@@ -1194,6 +1267,11 @@ function recoverMissingSession(sessionId: string, cwd: string, client?: PiScienc
   _currentTurnId = "";
   _turnErrored = false;
   client?.disconnect();
+  // The session's on-disk record is gone; purge its cached messages and SSE
+  // cursor so a later connect to a reused id starts from a clean slate.
+  clearCachedMessages(cwd, sessionId);
+  client?.clearCursor(cwd, sessionId);
+  clearSessionName(cwd, sessionId);
   useRuntimeStore.setState({
     activeSessionId: null,
     sessions: current.sessions.filter((session) => session.id !== sessionId),

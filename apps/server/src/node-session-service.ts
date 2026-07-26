@@ -8,7 +8,7 @@ import { PiManager, piManager } from "./pi-manager.js";
 import type { PiProcess, PiProcessOptions, PiResult } from "./pi-process.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "./pi-runtime-launch.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
-import { SessionRepository, sessionRepository } from "./session-repository.js";
+import { SessionRepository, invalidateSessionFileCache, sessionRepository } from "./session-repository.js";
 import { WorkspaceEnvironmentService } from "./workspace-environment.js";
 
 type ServiceFailure = { success: false; error: string; code: string };
@@ -106,6 +106,7 @@ export class NodeSessionService {
       const configured = await this.applyConfig(runtime, config);
       if (!configured.success) { await this.cleanupRuntime(runtime); return { error: String(configured.error ?? "unable to configure session"), code: String(configured.code ?? "runtime_error") }; }
       this.registerRuntime(runtime);
+      invalidateSessionFileCache(cwd);
       return { id: runtime.activeSessionId, cwd };
     });
   }
@@ -193,6 +194,7 @@ export class NodeSessionService {
         return { success: false, code: "reconcile_failed", error: "fork did not create a distinct session" };
       }
       this.registerRuntime(started);
+      invalidateSessionFileCache(cwd);
       return { ...result, sessionId: started.activeSessionId };
     });
   }
@@ -319,6 +321,7 @@ export class NodeSessionService {
       }
       try { await unlink(path); }
       catch (error) { return { success: false, code: "delete_failed", error: String(error) }; }
+      invalidateSessionFileCache(cwd);
       return { success: true };
     });
   }

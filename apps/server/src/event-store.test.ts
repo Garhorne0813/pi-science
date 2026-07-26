@@ -117,4 +117,36 @@ describe("durable conversation event replay", () => {
     expect(primary).toHaveLength(1);
     await expect(readFile(target.fallback, "utf8")).rejects.toThrow();
   });
+
+  it("serves repeated cursor reads consistently and sees events appended after a cached read", async () => {
+    const cwd = await workspace();
+    const store = new DurableEventStore();
+    const sessionId = "session-cache";
+    await store.append(cwd, sessionId, record("epoch-c:1", "2026-07-23T00:00:01.000Z", "one"));
+    await store.append(cwd, sessionId, record("epoch-c:2", "2026-07-23T00:00:02.000Z", "two"));
+
+    const first = await store.readAfter(cwd, sessionId, "epoch-c:1");
+    expect(first.map((item) => item.id)).toEqual(["epoch-c:2"]);
+
+    // A second read with the same cursor returns the same tail (may hit cache).
+    const second = await store.readAfter(cwd, sessionId, "epoch-c:1");
+    expect(second.map((item) => item.id)).toEqual(["epoch-c:2"]);
+
+    // Appending a new event must invalidate the stale parse and be visible.
+    await store.append(cwd, sessionId, record("epoch-c:3", "2026-07-23T00:00:03.000Z", "three"));
+    const third = await store.readAfter(cwd, sessionId, "epoch-c:1");
+    expect(third.map((item) => item.id)).toEqual(["epoch-c:2", "epoch-c:3"]);
+  });
+
+  it("does not expose mutable cached event objects to callers", async () => {
+    const cwd = await workspace();
+    const store = new DurableEventStore();
+    await store.append(cwd, "session-mutation", record("epoch-m:1", "2026-07-23T00:00:00.000Z", "original"));
+
+    const first = await store.readAfter(cwd, "session-mutation");
+    first[0]!.data = "mutated";
+    const second = await store.readAfter(cwd, "session-mutation");
+
+    expect(second[0]!.data).toContain("original");
+  });
 });

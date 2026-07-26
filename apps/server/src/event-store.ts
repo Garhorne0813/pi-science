@@ -13,6 +13,52 @@ export interface SseEventRecord {
 const MAX_EVENT_FILE_BYTES = 20 * 1024 * 1024;
 const RETAIN_EVENT_LINES = 5_000;
 
+// Bounded LRU cache of parsed event logs. A file-count cap is unsafe because
+// each file may be close to the compaction threshold. Use the on-disk byte
+// size as a conservative memory budget and evict one old file at a time.
+const MAX_EVENT_CACHE_BYTES = 64 * 1024 * 1024;
+type EventCacheEntry = { mtimeMs: number; size: number; records: SseEventRecord[] };
+const eventFileCache = new Map<string, EventCacheEntry>();
+let eventFileCacheBytes = 0;
+
+function removeCachedEvents(path: string): void {
+  const previous = eventFileCache.get(path);
+  if (!previous) return;
+  eventFileCache.delete(path);
+  eventFileCacheBytes -= previous.size;
+}
+
+function cacheParsedEvents(path: string, entry: EventCacheEntry): void {
+  removeCachedEvents(path);
+  if (entry.size > MAX_EVENT_CACHE_BYTES) return;
+  while (eventFileCacheBytes + entry.size > MAX_EVENT_CACHE_BYTES) {
+    const oldest = eventFileCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    removeCachedEvents(oldest);
+  }
+  eventFileCache.set(path, entry);
+  eventFileCacheBytes += entry.size;
+}
+
+async function readParsedEvents(path: string): Promise<SseEventRecord[]> {
+  let meta;
+  try {
+    meta = await stat(path);
+  } catch {
+    return [];
+  }
+  const cached = eventFileCache.get(path);
+  if (cached && cached.mtimeMs === meta.mtimeMs && cached.size === meta.size) {
+    // Map insertion order is the LRU order.
+    eventFileCache.delete(path);
+    eventFileCache.set(path, cached);
+    return cached.records;
+  }
+  const records = parseRecords(await readFile(path, "utf8"));
+  cacheParsedEvents(path, { mtimeMs: meta.mtimeMs, size: meta.size, records });
+  return records;
+}
+
 function eventPath(cwd: string, sessionId: string): string {
   const safeId = createHash("sha256").update(sessionId).digest("hex");
   return join(resolve(cwd), ".pi-science", "events", `${safeId}.jsonl`);
@@ -74,9 +120,7 @@ export class DurableEventStore {
 
   async readAfter(cwd: string, sessionId: string, lastEventId?: string | null): Promise<SseEventRecord[]> {
     const paths = [eventPath(cwd, sessionId), fallbackEventPath(cwd, sessionId)];
-    const batches = await Promise.all(paths.map(async (path) => {
-      try { return parseRecords(await readFile(path, "utf8")); } catch { return []; }
-    }));
+    const batches = await Promise.all(paths.map((path) => readParsedEvents(path)));
     const unique = new Map<string, SseEventRecord>();
     for (const record of batches.flat()) {
       const key = record.id ?? `${record.created_at}:${record.event}:${record.data}`;
@@ -97,9 +141,9 @@ export class DurableEventStore {
       if (time) return time;
       return String(left.id ?? "").localeCompare(String(right.id ?? ""));
     });
-    if (!lastEventId) return events;
+    if (!lastEventId) return events.map((event) => ({ ...event }));
     const index = events.findIndex((event) => event.id === lastEventId);
-    if (index !== -1) return events.slice(index + 1);
+    if (index !== -1) return events.slice(index + 1).map((event) => ({ ...event }));
     return [{
       event: "stream.gap",
       id: null,
@@ -122,6 +166,8 @@ export class DurableEventStore {
       target = fallbackEventPath(cwd, sessionId);
       await this.appendRecord(target, event);
     }
+    // The file's size/mtime changed, so any cached parse is stale.
+    removeCachedEvents(target);
     await this.compactIfNeeded(target).catch(() => undefined);
   }
 

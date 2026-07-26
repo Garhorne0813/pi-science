@@ -536,6 +536,118 @@ describe("runtime conversation state", () => {
     expect(useRuntimeStore.getState().status).toBe("ready");
   });
 
+  it("keeps Send disabled after a gap when the backend is still busy", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) {
+        return jsonResponse({ messages: [{ id: "u", role: "user", content: [{ type: "text", text: "hi" }] }] });
+      }
+      if (url.includes("/state")) return jsonResponse(state("session-a", { is_streaming: true }));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    FakeEventSource.instances[0].open();
+    expect(useRuntimeStore.getState().working).toBe(true);
+
+    FakeEventSource.instances[0].emit("stream.gap", { type: "stream.gap", sessionId: "session-a" });
+    await vi.waitFor(() => expect(useRuntimeStore.getState().status).toBe("ready"));
+
+    // The authoritative state read reported the backend still streaming, so
+    // working must stay true — Send must not be re-enabled mid-turn.
+    expect(useRuntimeStore.getState().working).toBe(true);
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
+      expect.objectContaining({ kind: "user", text: "hi" }),
+    );
+  });
+
+  it("merges history with live output that arrives while gap recovery is in flight", async () => {
+    let gapRead = false;
+    let releaseMessages: (() => void) | undefined;
+    const delayedMessages = new Promise<Response>((resolve) => { releaseMessages = () => resolve(jsonResponse({ messages: [
+      { id: "durable", role: "assistant", content: [{ type: "text", text: "durable" }] },
+    ] })); });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) {
+        if (gapRead) return delayedMessages;
+        return jsonResponse({ messages: [] });
+      }
+      if (url.includes("/state")) return jsonResponse(state("session-a", { is_streaming: true }));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    gapRead = true;
+    const source = FakeEventSource.instances[0];
+    source.emit("stream.gap", { type: "stream.gap", sessionId: "session-a" });
+    FakeEventSource.instances.at(-1)!.emit("text.updated", { type: "text.updated", sessionId: "session-a", partId: "live", text: "live" });
+    releaseMessages!();
+
+    await vi.waitFor(() => expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
+      expect.objectContaining({ kind: "agent", id: "durable" }),
+    ));
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
+      expect.objectContaining({ kind: "agent", parts: [expect.objectContaining({ id: "live", text: "live" })] }),
+    );
+    expect(useRuntimeStore.getState().working).toBe(true);
+  });
+
+  it("does not report ready when gap snapshot requests fail", async () => {
+    let reads = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) {
+        reads += 1;
+        if (reads > 1) return jsonResponse({ error: "unavailable" }, 503);
+        return jsonResponse({ messages: [] });
+      }
+      if (url.includes("/state")) {
+        if (reads > 1) return jsonResponse({ error: "unavailable" }, 503);
+        return jsonResponse(state("session-a"));
+      }
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    FakeEventSource.instances[0].emit("stream.gap", { type: "stream.gap", sessionId: "session-a" });
+    await vi.waitFor(() => expect(useRuntimeStore.getState().status).toBe("error"));
+  });
+
+  it("clears the session name from local storage when a session is deleted", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/sessions/del-me")) return jsonResponse({ ok: true });
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url} ${init?.method}`);
+    }));
+    useRuntimeStore.setState({ cwd: "/workspace" });
+    setSessionName("/workspace", "del-me", "Secret experiment");
+    expect(getSessionName("/workspace", "del-me")).toBe("Secret experiment");
+
+    await useRuntimeStore.getState().deleteSession("del-me");
+
+    expect(getSessionName("/workspace", "del-me")).toBe("");
+  });
+
+  it("clears the session name when a missing session is recovered", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) {
+        return jsonResponse({ ok: false, error: "session not found in this workspace" }, 404);
+      }
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    setSessionName("/workspace", "gone", "Phantom");
+    expect(getSessionName("/workspace", "gone")).toBe("Phantom");
+
+    await useRuntimeStore.getState().connect("/workspace", "gone");
+
+    expect(getSessionName("/workspace", "gone")).toBe("");
+  });
+
   it("does not let a stale state snapshot clear live working activity", async () => {
     let resolveMessages!: (response: Response) => void;
     let resolveState!: (response: Response) => void;
@@ -880,7 +992,7 @@ describe("runtime conversation state", () => {
       if (url.startsWith("/api/sessions?")) return jsonResponse([{ id: "replacement", cwd: "/workspace" }]);
       throw new Error(`Unexpected request: ${url}`);
     }));
-    setSessionName("original", "My experiment");
+    setSessionName("/workspace", "original", "My experiment");
     useRuntimeStore.setState({
       cwd: "/workspace",
       activeSessionId: "original",
@@ -897,8 +1009,8 @@ describe("runtime conversation state", () => {
     expect(useRuntimeStore.getState().sessions).toContainEqual(
       expect.objectContaining({ id: "replacement", name: "My experiment" }),
     );
-    expect(getSessionName("replacement")).toBe("My experiment");
-    expect(getSessionName("original")).toBe("");
+    expect(getSessionName("/workspace", "replacement")).toBe("My experiment");
+    expect(getSessionName("/workspace", "original")).toBe("");
     expect(FakeEventSource.instances.at(-1)?.url).toContain("/api/sessions/replacement/events");
   });
 

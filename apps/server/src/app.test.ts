@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./app.js";
 import type { ServerConfig } from "./config.js";
-import { durableEventStore } from "./event-store.js";
 
 const openApps: Array<{ close(): Promise<unknown> }> = [];
 
@@ -26,11 +25,6 @@ async function startUpstream() {
     const cwd = String((request.query as { cwd?: unknown }).cwd ?? "");
     try { await access(join(cwd, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python")); return { isolated: true }; }
     catch { return { isolated: false }; }
-  });
-  upstream.post<{ Body: { cwd: string } }>("/api/sessions", async (request, reply) => reply.code(201).send({ id: "session-created", cwd: request.body.cwd }));
-  upstream.get("/api/sessions/:id/events", async (request, reply) => {
-    const lastEventId = request.headers["last-event-id"] ?? "";
-    return reply.type("text/event-stream").send(`id: 8\nevent: session.idle\ndata: {"cursor":"${lastEventId}"}\n\n`);
   });
   await upstream.listen({ host: "127.0.0.1", port: 0 });
   openApps.push(upstream);
@@ -80,20 +74,12 @@ describe("Node control plane", () => {
     expect(response.json()).toMatchObject({ status: "ok", scientific_runtime: "external" });
   });
 
-  it("proxies JSON, scientific routes, and Last-Event-ID", async () => {
+  it("proxies scientific routes and request IDs", async () => {
     const app = buildApp(config(await startUpstream()));
     openApps.push(app);
     const scientific = await app.inject({ method: "GET", url: "/api/kernels/status" });
     expect(scientific.json()).toEqual({ active: 2 });
     expect(scientific.headers["x-pi-science-runtime"]).toBe("python-scientific-runtime");
-
-    const created = await app.inject({ method: "POST", url: "/api/sessions", payload: { cwd: "/tmp/project" } });
-    expect(created.statusCode).toBe(201);
-    expect(created.json()).toEqual({ id: "session-created", cwd: "/tmp/project" });
-
-    const events = await app.inject({ method: "GET", url: "/api/sessions/session-1/events", headers: { "last-event-id": "7" } });
-    expect(events.headers["content-type"]).toContain("text/event-stream");
-    expect(events.body).toContain('"cursor":"7"');
 
     const requestId = await app.inject({ method: "GET", url: "/api/kernels/request-id", headers: { "x-request-id": "smoke-123" } });
     expect(requestId.json()).toEqual({ request_id: "smoke-123" });
@@ -141,38 +127,6 @@ describe("Node control plane", () => {
     expect(listed.json()).toMatchObject([{ id: "session-1", cwd: workspace }]);
     const messages = await app.inject({ method: "GET", url: `/api/sessions/session-1/messages?cwd=${encodeURIComponent(workspace)}` });
     expect(messages.json()).toMatchObject({ messages: [{ id: "m1", role: "user" }, { id: "m2", role: "assistant" }] });
-    await rm(workspace, { recursive: true, force: true });
-  });
-
-  it("can bridge SSE through Node and preserve framing", async () => {
-    const workspace = join(tmpdir(), `pi-science-sse-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-    await mkdir(join(workspace, ".pi-science"), { recursive: true });
-    const app = buildApp(config(await startUpstream(), { nodeSse: true }));
-    openApps.push(app);
-    const response = await app.inject({
-      method: "GET",
-      url: `/api/sessions/session-1/events?cwd=${encodeURIComponent(workspace)}`,
-      headers: { "last-event-id": "7" },
-    });
-    expect(response.statusCode).toBe(200);
-    expect(response.headers["content-type"]).toContain("text/event-stream");
-    expect(response.headers["x-pi-science-sse"]).toBe("node");
-    expect(response.body).toContain('"cursor":"7"');
-    await rm(workspace, { recursive: true, force: true });
-  });
-
-  it("replays durable SSE events when the scientific runtime is unavailable", async () => {
-    const workspace = join(tmpdir(), `pi-science-sse-replay-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-    await mkdir(join(workspace, ".pi-science"), { recursive: true });
-    await durableEventStore.append(workspace, "session-1", { event: "text.updated", id: "1", data: '{"text":"hello"}', created_at: new Date().toISOString() });
-    await durableEventStore.append(workspace, "session-1", { event: "session.idle", id: "2", data: '{"sessionId":"session-1"}', created_at: new Date().toISOString() });
-    const app = buildApp(config("http://127.0.0.1:1", { nodeSse: true }));
-    openApps.push(app);
-    const response = await app.inject({ method: "GET", url: `/api/sessions/session-1/events?cwd=${encodeURIComponent(workspace)}`, headers: { "last-event-id": "1" } });
-    expect(response.statusCode).toBe(200);
-    expect(response.headers["x-pi-science-sse"]).toBe("node-replay");
-    expect(response.body).toContain("id: 2");
-    expect(response.body).not.toContain('"text":"hello"');
     await rm(workspace, { recursive: true, force: true });
   });
 

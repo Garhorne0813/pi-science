@@ -202,7 +202,7 @@ export function LiveSessionPage() {
     }
     if (name === "name") {
       if (activeSessionId && args) {
-        setSessionName(activeSessionId, args);
+        setSessionName(workspaceCwd, activeSessionId, args);
         setReviewNotice(`Session renamed to ${args}`);
       }
       return true;
@@ -314,7 +314,7 @@ export function LiveSessionPage() {
   const isNewSession = !hasUserMessage && (activeSession?.name === "New Session" || thread.loaded);
   const title = isNewSession || !activeSessionId
     ? t("conversation.newSession")
-    : getSessionName(activeSessionId) || activeSession?.name || activeSessionId.slice(0, 8);
+    : getSessionName(workspaceCwd, activeSessionId) || activeSession?.name || activeSessionId.slice(0, 8);
 
   return (
     <div className="flex flex-col h-full">

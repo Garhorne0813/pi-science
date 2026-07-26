@@ -1,15 +1,12 @@
-import { Readable, Transform } from "node:stream";
+import { Readable } from "node:stream";
 import type { FastifyInstance } from "fastify";
-import type { ServerConfig } from "./config.js";
 import type { ConversationEventHub } from "./conversation-event-hub.js";
-import { durableEventStore, parseSseBlock, type SseEventRecord } from "./event-store.js";
+import type { SseEventRecord } from "./event-store.js";
 import type { NodeSessionService } from "./node-session-service.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
 
 const MAX_SSE_PENDING_BYTES = 512 * 1024;
 const MAX_SSE_PENDING_ITEMS = 512;
-const COMPATIBILITY_DEDUPE_LIMIT = 10_000;
-const compatibilityRecorded = new Map<string, Set<string>>();
 
 export class SseBackpressureBuffer {
   private readonly pending: string[] = [];
@@ -40,22 +37,21 @@ export class SseBackpressureBuffer {
   clear(): void { this.pending.length = 0; this.pendingBytes = 0; }
 }
 
-export function registerSseRoutes(app: FastifyInstance, config: ServerConfig, nodeSessionService: NodeSessionService, conversationEventHub: ConversationEventHub): void {
+export function resolveLastEventId(headerValue: unknown, queryValue: unknown): string | undefined {
+  const headerCursor = typeof headerValue === "string" && headerValue.length > 0 ? headerValue : undefined;
+  const queryCursor = typeof queryValue === "string" && queryValue.length > 0 ? queryValue : undefined;
+  return headerCursor || queryCursor;
+}
+
+export function registerSseRoutes(app: FastifyInstance, nodeSessionService: NodeSessionService, conversationEventHub: ConversationEventHub): void {
   app.get<{ Params: { session_id: string } }>("/api/sessions/:session_id/events", async (request, reply) => {
-    const query = request.query as { cwd?: unknown };
+    const query = request.query as { cwd?: unknown; lastEventId?: unknown };
     const requestedCwd = typeof query.cwd === "string" && query.cwd.length > 0 ? query.cwd : ".";
     let cwd: string;
     try {
       cwd = await validateWorkspaceCwd(requestedCwd);
     } catch (error) {
       return reply.code(403).send({ error: String(error) });
-    }
-
-    // In compatibility mode Python owns both the Pi process and its event
-    // stream. Keep the old bridge for that mode; native Node mode must never
-    // send prompts to Node and then look for events in Python.
-    if (!config.nodePiManager) {
-      return bridgeScientificSse(request, reply, config.pythonOrigin, cwd);
     }
 
     const sessionId = request.params.session_id;
@@ -77,7 +73,7 @@ export function registerSseRoutes(app: FastifyInstance, config: ServerConfig, no
         }));
     }
 
-    const lastEventId = request.headers["last-event-id"]?.toString();
+    const lastEventId = resolveLastEventId(request.headers["last-event-id"]?.toString(), query.lastEventId);
     const pending = new SseBackpressureBuffer();
     let blocked = false;
     const flush = () => {
@@ -130,77 +126,6 @@ export function registerSseRoutes(app: FastifyInstance, config: ServerConfig, no
     return reply.type("text/event-stream").send(stream);
   });
 }
-
-async function bridgeScientificSse(
-  request: any,
-  reply: any,
-  pythonOrigin: string,
-  cwd: string,
-) {
-  const sessionId = request.params.session_id as string;
-  const lastEventId = request.headers["last-event-id"]?.toString();
-  const target = new URL(`${pythonOrigin}/api/sessions/${encodeURIComponent(sessionId)}/events`);
-  target.searchParams.set("cwd", cwd);
-  const controller = new AbortController();
-  request.raw.once("close", () => controller.abort());
-  let upstream: Response;
-  try {
-    upstream = await fetch(target, {
-      headers: lastEventId ? { "last-event-id": lastEventId } : undefined,
-      signal: controller.signal,
-    });
-  } catch {
-    if (lastEventId) {
-      const replay = await durableEventStore.readAfter(cwd, sessionId, lastEventId);
-      if (replay.length > 0) {
-        reply.header("cache-control", "no-cache");
-        reply.header("x-pi-science-sse", "node-replay");
-        return reply.type("text/event-stream").send(replay.map(serializeSseEvent).join(""));
-      }
-    }
-    return reply.code(503).send({ error: "scientific runtime unavailable" });
-  }
-  if (!upstream.ok || !upstream.body) {
-    return reply.code(upstream.status || 502).send({ error: "session event stream unavailable" });
-  }
-  let pending = "";
-  const recorder = new Transform({
-    transform(chunk: Buffer, _encoding, callback) {
-      const text = pending + chunk.toString("utf8");
-      const blocks = text.split(/\r?\n\r?\n/);
-      pending = blocks.pop() ?? "";
-      for (const block of blocks) {
-        const parsed = parseSseBlock(block);
-        if (parsed) recordCompatibilityEvent(cwd, sessionId, parsed);
-      }
-      callback(null, chunk);
-    },
-    flush(callback) {
-      const parsed = parseSseBlock(pending);
-      if (parsed) recordCompatibilityEvent(cwd, sessionId, parsed);
-      callback();
-    },
-  });
-  const stream = Readable.fromWeb(upstream.body as any).pipe(recorder);
-  reply.header("cache-control", "no-cache");
-  reply.header("x-accel-buffering", "no");
-  reply.header("x-pi-science-sse", "node");
-  return reply.type("text/event-stream").send(stream);
-}
-
-function recordCompatibilityEvent(cwd: string, sessionId: string, event: SseEventRecord): void {
-  const stream = `${cwd}\0${sessionId}`;
-  const identity = event.id ?? `${event.event ?? ""}\0${event.data}`;
-  const recorded = compatibilityRecorded.get(stream) ?? new Set<string>();
-  if (recorded.has(identity)) return;
-  recorded.add(identity);
-  if (recorded.size > COMPATIBILITY_DEDUPE_LIMIT) recorded.delete(recorded.values().next().value!);
-  compatibilityRecorded.set(stream, recorded);
-  void durableEventStore.append(cwd, sessionId, event).catch(() => {
-    recorded.delete(identity);
-  });
-}
-
 
 function serializeSseEvent(event: SseEventRecord): string {
   const lines: string[] = [];
