@@ -9,7 +9,9 @@ type Variant = "chat" | "document";
 
 const STYLES: Record<Variant, Record<string, string>> = {
   chat: {
-    root: "text-[15px] leading-relaxed text-text",
+    // Assistant prose reads in a serif (Claude-style response typography);
+    // UI chrome and code stay sans/mono. CJK falls back to system serif.
+    root: "text-[15.5px] leading-[1.75] text-text [font-family:'Source_Serif_4','Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
     p: "my-2 first:mt-0 last:mb-0",
     a: "text-link underline underline-offset-2",
     code: "rounded bg-surface-2 px-1 py-0.5 font-mono text-[13px] text-link",
