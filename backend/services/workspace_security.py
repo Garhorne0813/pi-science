@@ -3,82 +3,45 @@
 The frontend intentionally sends absolute workspace paths.  Every API that
 uses one must validate it before reading or writing files; otherwise a caller
 could point ``cwd`` at an arbitrary directory on the host.
+
+This mirrors ``apps/server/src/workspace-security.ts``: the Node control plane
+is the authority for workspace security, and Python must reach the same verdict
+for every path.  A path is accepted when it resolves to a directory that either
+contains the ``.pi-science`` marker directory or lives strictly below the
+managed workspaces root named by ``PI_SCIENCE_WORKSPACES``.
+
+Two mirrored details are deliberate rather than accidental:
+
+* The candidate is resolved through symlinks but the managed root is only
+  normalised lexically, exactly as Node does (``realpath`` vs ``path.resolve``).
+* Without ``PI_SCIENCE_WORKSPACES`` there is no managed root at all, so
+  ``config.WORKSPACES_DIR``'s ``~/pi-science-workspaces`` default grants nothing
+  on its own -- such workspaces are accepted via their marker directory.
 """
 
-import json
 import os
 from pathlib import Path
 
-from config import BASE_DIR, WORKSPACES_DIR
 
-
-_REGISTRY_FILE = BASE_DIR / "workspaces.json"
-
-
-def _load_registry() -> set[str]:
-    if not _REGISTRY_FILE.exists():
-        return set()
-    try:
-        payload = json.loads(_REGISTRY_FILE.read_text())
-    except (json.JSONDecodeError, OSError):
-        return set()
-    paths = payload.get("paths", []) if isinstance(payload, dict) else []
-    return {
-        str(Path(path).expanduser().resolve())
-        for path in paths
-        if isinstance(path, str) and path.strip()
-    }
-
-
-def _save_registry(paths: set[str]) -> None:
-    _REGISTRY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _REGISTRY_FILE.with_name(
-        f".{_REGISTRY_FILE.name}.{os.getpid()}.{os.urandom(4).hex()}.tmp"
-    )
-    tmp.write_text(json.dumps({"paths": sorted(paths)}, indent=2) + "\n")
-    os.replace(tmp, _REGISTRY_FILE)
-
-
-def register_workspace(path: str | Path) -> None:
-    """Register an explicitly opened or created workspace."""
-    try:
-        resolved = str(Path(path).expanduser().resolve())
-    except (OSError, RuntimeError):
-        return
-    if resolved == str(WORKSPACES_DIR.expanduser().resolve()):
-        raise ValueError(f"Path is not a registered workspace: {path}")
-    paths = _load_registry()
-    if resolved not in paths:
-        paths.add(resolved)
-        _save_registry(paths)
+def _managed_root() -> Path | None:
+    raw = os.environ.get("PI_SCIENCE_WORKSPACES")
+    return Path(os.path.abspath(raw)) if raw else None
 
 
 def validate_workspace_cwd(cwd: str) -> Path:
-    """Resolve and validate a workspace path.
-
-    A path is accepted when it is registered, lives below the managed
-    workspaces directory, or contains the workspace marker created by
-    Pi-Science.  The final directory check also prevents a file from being
-    used as a working directory.
-    """
+    """Resolve and validate a workspace path."""
     if not cwd:
         raise ValueError("Workspace path is required")
-    root = Path(cwd).expanduser().resolve()
-    if not root.exists():
-        raise ValueError(f"Workspace does not exist: {cwd}")
+    try:
+        root = Path(cwd).resolve(strict=True)
+    except OSError as exc:
+        raise ValueError(f"Workspace does not exist: {cwd}") from exc
     if not root.is_dir():
         raise ValueError(f"Not a directory: {cwd}")
-    if root == WORKSPACES_DIR.expanduser().resolve():
-        raise ValueError(f"Path is not a registered workspace: {cwd}")
-
-    if str(root) in _load_registry():
-        return root
-    try:
-        if root.is_relative_to(WORKSPACES_DIR.expanduser().resolve()):
-            return root
-    except (OSError, RuntimeError, ValueError):
-        pass
     if (root / ".pi-science").is_dir():
+        return root
+    managed = _managed_root()
+    if managed is not None and root != managed and root.is_relative_to(managed):
         return root
     raise ValueError(f"Path is not a registered workspace: {cwd}")
 
@@ -98,20 +61,3 @@ def resolve_workspace_file(workspace: str | Path, relative_path: str, *, allow_m
     if not allow_metadata and ".pi-science" in relative.parts:
         raise ValueError("Artifact metadata paths are not publishable")
     return candidate
-
-
-def scan_and_register_workspaces() -> None:
-    """Register existing managed workspaces during backend startup."""
-    root = WORKSPACES_DIR.expanduser()
-    if not root.exists():
-        return
-    paths = _load_registry()
-    changed = False
-    for entry in root.iterdir():
-        if entry.is_dir() and not entry.name.startswith(".") and (entry / ".pi-science").is_dir():
-            resolved = str(entry.resolve())
-            if resolved not in paths:
-                paths.add(resolved)
-                changed = True
-    if changed:
-        _save_registry(paths)
