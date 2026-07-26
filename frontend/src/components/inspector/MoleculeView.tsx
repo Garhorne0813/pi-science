@@ -12,10 +12,10 @@ import {
 } from "@/lib/viewers/molecule";
 import { cn } from "@/lib/cn";
 
-const STYLE_OPTIONS: Array<{ value: MoleculeStyleMode; label: string }> = [
-  { value: "stick", label: "Stick" },
-  { value: "sphere", label: "Sphere" },
-  { value: "cartoon", label: "Cartoon" },
+const STYLE_OPTIONS: Array<{ value: MoleculeStyleMode; key: string }> = [
+  { value: "stick", key: "molecule.style.stick" },
+  { value: "sphere", key: "molecule.style.sphere" },
+  { value: "cartoon", key: "molecule.style.cartoon" },
 ];
 
 /**
@@ -76,7 +76,7 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
         const model = isSmilesFile(filename) ? await smilesToMolblock(text) : text;
         if (cancelled) return;
         if (!model) {
-          setError("No structures found");
+          setError(t("molecule.noStructures"));
           return;
         }
 
@@ -89,7 +89,7 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
         viewer.addModel(model, format);
         const count = viewer.selectedAtoms({}).length;
         if (count === 0) {
-          setError("Failed to load structure — file may be empty or in an unsupported format");
+          setError(t("molecule.loadFailed"));
           return;
         }
         applyStyle(viewer, styleMode, isMacromolecule);
@@ -103,7 +103,7 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
           }
         });
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setError(t("molecule.loadFailed"));
       } finally {
         if (!cancelled) setRendering(false);
       }
@@ -166,7 +166,7 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
     v.render();
   }, []);
 
-  if (!format) return <div className="p-4 text-sm text-muted">{"Not a chemical file"}</div>;
+  if (!format) return <div className="p-4 text-sm text-muted">{t("molecule.notChemical")}</div>;
 
   return (
     <div
@@ -181,7 +181,7 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
       onPointerCancelCapture={endDrag}
       onWheel={onWheel}
     >
-      <div ref={containerRef} className="absolute inset-0" aria-label={"3D molecule viewer"} />
+      <div ref={containerRef} className="absolute inset-0" aria-label={t("molecule.viewerLabel")} />
 
       <div
         className="absolute left-3 top-3 flex items-center gap-2 rounded-input border border-border/70 bg-surface/90 p-1 shadow-card backdrop-blur"
@@ -201,15 +201,15 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
                 styleMode === o.value ? "bg-surface text-text shadow-sm" : "text-muted hover:text-text",
               )}
             >
-              {o.label}
+              {t(o.key)}
             </button>
           ))}
         </div>
         <button
           type="button"
           onClick={resetView}
-          aria-label={"Reset view"}
-          title={"Reset view"}
+          aria-label={t("molecule.resetView")}
+          title={t("molecule.resetView")}
           className="flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-text"
         >
           <RotateCcw size={13} />
@@ -218,12 +218,12 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
 
       <div className="pointer-events-none absolute bottom-3 right-3 rounded-input border border-border/70 bg-surface/90 px-3 py-1.5 text-xs text-muted shadow-card backdrop-blur">
         <span className="font-medium text-text">{format.toUpperCase()}</span>
-        {atomCount !== null && <span className="ml-2">{`${atomCount} atoms`}</span>}
+        {atomCount !== null && <span className="ml-2">{t("molecule.atomCount", { count: atomCount })}</span>}
       </div>
 
       {(rendering || error) && (
         <div className="pointer-events-none absolute bottom-3 left-3 max-w-[70%] rounded-input border border-border/70 bg-surface/95 px-3 py-1.5 text-xs text-muted shadow-card backdrop-blur">
-          {rendering ? "Rendering..." : error}
+          {rendering ? t("molecule.rendering") : error}
         </div>
       )}
     </div>

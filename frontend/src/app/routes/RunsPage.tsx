@@ -35,9 +35,9 @@ export function RunsPage() {
     if (!logs[runId]) {
       try {
         const data = await queryClient.fetchQuery(runLogQuery(workspaceCwd, runId));
-        setLogs((p) => ({ ...p, [runId]: data.log || "(no log)" }));
+        setLogs((p) => ({ ...p, [runId]: data.log || t("runs.noLog") }));
       } catch (error) {
-        setLogs((p) => ({ ...p, [runId]: "(error loading log)" }));
+        setLogs((p) => ({ ...p, [runId]: t("runs.logLoadFailed") }));
         toast(error instanceof Error ? error.message : t("runs.logError"), "error");
       }
     }
@@ -46,8 +46,8 @@ export function RunsPage() {
   return (
     <WorkspacePage>
         <WorkspacePageHeader
-          title="Runs"
-          description={`${runs.length} experiment run${runs.length !== 1 ? "s" : ""}`}
+          title={t("runs.title")}
+          description={t("runs.count", { count: runs.length })}
           actions={
           <WorkspacePageRefreshButton label={t("common.refresh")} loading={loading} onClick={() => void runsResult.refetch()} />
           }
@@ -55,12 +55,12 @@ export function RunsPage() {
 
         <div className="mt-6">
         {loading ? (
-          <div className="text-sm text-muted py-8 text-center"><Loader2 size={18} className="animate-spin mx-auto mb-2" /> Loading…</div>
+          <div className="text-sm text-muted py-8 text-center"><Loader2 size={18} className="animate-spin mx-auto mb-2" /> {t("common.loading")}</div>
         ) : runs.length === 0 ? (
           <div className="text-center py-16">
             <Play size={40} className="mx-auto text-muted/30 mb-3" />
-            <p className="text-sm text-muted">No runs yet</p>
-            <p className="text-xs text-muted mt-1">Runs are recorded automatically when the agent executes commands.</p>
+            <p className="text-sm text-muted">{t("runs.empty")}</p>
+            <p className="text-xs text-muted mt-1">{t("runs.emptyHint")}</p>
           </div>
         ) : (
           <div className="flex flex-col gap-2">
@@ -78,23 +78,23 @@ export function RunsPage() {
                       <span className="uppercase font-semibold tracking-wide text-accent">{r.surface}</span>
                       {r.host && <span>{r.host}</span>}
                       <span>{timeAgo(r.startedAt ?? "")}</span>
-                      {!!r.outputs?.length && <span>{r.outputs.length} output{r.outputs.length !== 1 ? "s" : ""}</span>}
+                      {!!r.outputs?.length && <span>{t("runs.outputCount", { count: r.outputs.length })}</span>}
                     </div>
                   </div>
                   <button onClick={() => toggleLog(r.runId)}
                     className="rounded-input px-2 py-1 text-xs text-muted hover:text-text hover:bg-surface-2 flex items-center gap-1">
                     {expanded[r.runId] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                    Log
+                    {t("runs.log")}
                   </button>
                 </div>
                 {expanded[r.runId] && (
                   <div className="border-t border-faint px-4 py-3">
                     <pre className="max-h-64 overflow-auto font-mono text-[11px] leading-relaxed text-text whitespace-pre-wrap">
-                      {logs[r.runId] || "Loading…"}
+                      {logs[r.runId] || t("common.loading")}
                     </pre>
                     {!!r.outputs?.length && (
                       <div className="mt-2 flex flex-wrap gap-1">
-                        <span className="text-[10px] text-muted mr-1">Outputs:</span>
+                        <span className="text-[10px] text-muted mr-1">{t("runs.outputs")}:</span>
                         {r.outputs.map((o, i) => (
                           <span key={i} className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-text">
                             {o.path}

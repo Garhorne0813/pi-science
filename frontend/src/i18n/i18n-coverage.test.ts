@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import i18n from "./index";
 import { useUiStore } from "../lib/store";
+import en from "./locales/en.json";
+import zhHans from "./locales/zh-Hans.json";
 
 
 const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -20,7 +22,7 @@ function sourceFiles(directory: string): string[] {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const fullPath = path.join(directory, entry.name);
     if (entry.isDirectory()) files.push(...sourceFiles(fullPath));
-    else if (/\.(ts|tsx)$/.test(entry.name) && !entry.name.endsWith(".test.ts")) files.push(fullPath);
+    else if (/\.(ts|tsx)$/.test(entry.name) && !/\.test\.(ts|tsx)$/.test(entry.name)) files.push(fullPath);
   }
   return files;
 }
@@ -28,7 +30,7 @@ function sourceFiles(directory: string): string[] {
 
 function literalTranslationKeys(): string[] {
   const keys = new Set<string>();
-  const pattern = /\bt\(\s*"([^"]+)"/g;
+  const pattern = /\b(?:t|i18n\.t)\(\s*["']([^"']+)["']/g;
   for (const file of sourceFiles(srcRoot)) {
     const source = readFileSync(file, "utf8");
     for (const match of source.matchAll(pattern)) keys.add(match[1]);
@@ -43,12 +45,26 @@ function literalTranslationKeys(): string[] {
     "tableChart.chartType.line",
     "tableChart.chartType.bar",
     "tableChart.chartType.scatter",
+    "molecule.style.stick",
+    "molecule.style.sphere",
+    "molecule.style.cartoon",
   ]) keys.add(key);
   return [...keys].sort();
 }
 
 
 describe("i18n resource coverage", () => {
+  it("keeps locale JSON files in exact key parity", () => {
+    expect(Object.keys(zhHans).sort()).toEqual(Object.keys(en).sort());
+  });
+
+  it("keeps translation resources outside the initialization module", () => {
+    const source = readFileSync(path.join(srcRoot, "i18n", "index.ts"), "utf8");
+    expect(source.split("\n").length).toBeLessThan(50);
+    expect(source).toContain('./locales/en.json');
+    expect(source).toContain('./locales/zh-Hans.json');
+  });
+
   it("translates every literal UI key in English and Simplified Chinese", () => {
     const missing: string[] = [];
     for (const language of ["en", "zh-Hans"]) {
