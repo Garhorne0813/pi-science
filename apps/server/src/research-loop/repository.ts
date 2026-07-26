@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { appendJsonLineUnlocked, metadataRoot, readJsonLines, withFileWriteLock } from "../persistence.js";
+import { emitResearchEvent } from "./events.js";
 import { listReducedLoops, reduceResearchRecords } from "./reducer.js";
 import type { ResearchRecord, ResearchSnapshot } from "./types.js";
 
@@ -38,6 +39,7 @@ export class ResearchRepository {
       ...extra,
     };
     await appendJsonLineUnlocked(this.path(), record);
+    emitResearchEvent(this.cwd, { type: "research.record", loop_id: record.loop_id, record_type: recordType });
     return record;
   }
 

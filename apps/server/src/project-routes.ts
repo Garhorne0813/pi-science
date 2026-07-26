@@ -5,6 +5,7 @@ import type { FastifyInstance } from "fastify";
 import { metadataRoot, readJson, workspaceFile, writeJsonAtomic } from "./persistence.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
 import type { ResearchLoopCoordinator } from "./research-loop/coordinator.js";
+import { subscribeResearchEvents } from "./research-loop/events.js";
 
 type Source = { session_id?: string | null; message_ids: string[]; files: string[]; run_ids: string[]; citations: string[] };
 type Policy = { auto_review: boolean; reminder_threshold: number; max_directory_depth: number; minimum_files_for_new_category: number; locked_paths: string[]; naming_pattern: string; accepted_counts: Record<string, number>; rejected_counts: Record<string, number>; external_services_allowed: boolean; allowed_egress_domains: string[]; blocked_data_classes: string[]; updated_at: string };
@@ -53,6 +54,21 @@ export function registerProjectRoutes(app: FastifyInstance, research: ResearchLo
   app.get("/api/project-memory/overview", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; await research.reconcile(cwd); const current = await state(cwd); const repository = research.repository(cwd); const rows = await repository.records(); const researchLoops = await repository.loops(); const details = await Promise.all(researchLoops.map((loop) => research.detail(cwd, loop.loop_id))); const candidates = details.flatMap((detail) => detail?.candidates ?? []); return { workspace: cwd, project_file: "PROJECT.md", pending_count: current.proposals.filter((item) => item.status === "pending").length, knowledge_count: current.items.length, auto_review: current.policy.auto_review, run_count: candidates.filter((item) => Object.keys(item.execution).length).length, artifact_count: candidates.reduce((sum, item) => sum + (item.evaluation?.artifact_refs.length ?? 0), 0), result_review_count: candidates.filter((item) => item.evaluation).length, research_record_count: rows.length, research_loop_count: researchLoops.length, active_research_loop_count: researchLoops.filter((item) => ["ready", "running", "pausing", "paused", "cancelling", "needs_attention"].includes(item.status)).length }; });
   app.get("/api/project-memory/timeline", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; return { timeline: (await research.repository(cwd).records()).reverse().slice(0, Number((request.query as { limit?: string }).limit ?? 200)) }; });
   app.post("/api/project-memory/index/rebuild", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const count = (await research.repository(cwd).records()).length; return { ok: true, indexed_at: now(), records: count }; });
+  app.get("/api/project-memory/research-events", async (request, reply) => {
+    const cwd = await ws(request, reply); if (!cwd) return;
+    // Lossy invalidation channel: clients refetch full state on every signal, so
+    // no replay or backpressure buffering is needed (compare sse-routes.ts).
+    reply.hijack();
+    reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+    const push = (text: string) => { if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.write(text); };
+    push(": connected\n\n");
+    const unsubscribe = subscribeResearchEvents(cwd, (event) => push(`data: ${JSON.stringify(event)}\n\n`));
+    const heartbeat = setInterval(() => push(": ping\n\n"), 15_000);
+    let closed = false;
+    const cleanup = () => { if (closed) return; closed = true; clearInterval(heartbeat); unsubscribe(); };
+    request.raw.once("close", cleanup);
+    reply.raw.once("close", cleanup);
+  });
   app.post("/api/project-memory/research-loop-intents", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const body = (request.body ?? {}) as Record<string, unknown>; const objective = String(body.objective ?? body.message ?? "").trim(); if (!objective) return reply.code(400).send({ error: "research objective is required" }); return { requires_confirmation: true, missing_fields: ["metric"], draft: { title: objective.slice(0, 200), objective, budget: { max_candidates: 10, max_wall_seconds: 7200, max_parallel: 1 }, stop_conditions: { target_metrics: {}, patience: 5, min_improvement: 0 } } }; });
   app.get("/api/project-memory/research-loops", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; await research.reconcile(cwd); return { loops: await research.list(cwd) }; });
   app.post("/api/project-memory/research-loops", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; try { return await research.create(cwd, request.body); } catch (error) { return researchFailure(reply, error); } });

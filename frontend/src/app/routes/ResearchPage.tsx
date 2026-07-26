@@ -3,6 +3,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import { FlaskConical, Loader2, Pause, Play, X } from "lucide-react";
 import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "../../components/layout/WorkspacePage";
 import { projectMemoryApi, type ResearchLoop, type ResearchLoopDetail } from "../../lib/project-memory";
+import { invalidateApiCache } from "../../lib/api";
+import { subscribeResearchEvents } from "../../lib/research-events";
 import { cn } from "../../lib/cn";
 import { useTranslation } from "react-i18next";
 
@@ -13,7 +15,17 @@ export function ResearchPage() {
   const load = useCallback(async () => { setLoading(true); setError(null); try { const data = await projectMemoryApi.loops(cwd); setLoops(data.loops); setSelected((current) => current && data.loops.some((loop) => loop.loop_id === current) ? current : data.loops[0]?.loop_id ?? null); } catch (cause) { setError(cause instanceof Error ? cause.message : t("research.loadError")); } finally { setLoading(false); } }, [cwd, t]);
   const loadDetail = useCallback(async (id: string) => { try { setDetail(await projectMemoryApi.loop(cwd, id)); } catch (cause) { setError(cause instanceof Error ? cause.message : t("research.detailError")); } }, [cwd, t]);
   useEffect(() => { void load(); }, [load]); useEffect(() => { if (selected) void loadDetail(selected); else setDetail(null); }, [selected, loadDetail]);
-  useEffect(() => { if (!detail || ["completed", "failed", "cancelled"].includes(detail.status)) return; const timer = window.setInterval(() => void loadDetail(detail.loop_id), 1500); return () => window.clearInterval(timer); }, [detail, loadDetail]);
+  // SSE invalidation channel instead of fast polling: refetch on server signal, with a slow
+  // fallback poll for environments where SSE dies silently. Keyed on loop_id + terminal flag
+  // (not the detail object) so refetches do not churn the EventSource connection.
+  const detailId = detail?.loop_id ?? null; const detailTerminal = !detail || ["completed", "failed", "cancelled"].includes(detail.status);
+  useEffect(() => {
+    if (!detailId || detailTerminal) return;
+    const refresh = () => { invalidateApiCache("/api/project-memory/"); void loadDetail(detailId); void load(); };
+    const unsubscribe = subscribeResearchEvents(cwd, refresh);
+    const fallback = window.setInterval(refresh, 30_000);
+    return () => { unsubscribe(); window.clearInterval(fallback); };
+  }, [detailId, detailTerminal, cwd, load, loadDetail]);
   const action = async (name: "pause" | "resume" | "cancel") => { if (!selected || busy) return; setBusy(true); try { await projectMemoryApi.action(cwd, selected, name); await Promise.all([load(), loadDetail(selected)]); } catch (cause) { setError(cause instanceof Error ? cause.message : t("research.actionError")); } finally { setBusy(false); } };
   return <WorkspacePage><WorkspacePageHeader title={t("nav.research")} description={t("research.pageDescription")} actions={<><button type="button" onClick={() => navigate(`/workspace/${encodeURIComponent(cwd)}`)} className="min-h-9 rounded-input bg-accent px-3 text-xs text-accent-fg">{t("research.startFromConversation")}</button><WorkspacePageRefreshButton label={t("common.refresh")} loading={loading} onClick={() => void load()} /></>} />
     {error && <div className="mt-4 rounded-input border border-error/30 bg-error/5 px-3 py-2 text-sm text-error">{error}</div>}

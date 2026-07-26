@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { access, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./app.js";
 import type { ServerConfig } from "./config.js";
 import { nodeSessionService } from "./node-session-service.js";
+import { ResearchRepository } from "./research-loop/repository.js";
 import { createServerModules } from "./server-modules.js";
 
 const apps: Array<{ close(): Promise<unknown> }> = [];
@@ -183,6 +184,33 @@ describe("native control-plane business routes", () => {
     const listed = await app.inject({ method: "GET", url: `/api/project-memory/research-loops?cwd=${encodeURIComponent(cwd)}` });
     expect(listed.json().loops[0]).toMatchObject({ loop_id: loopId, status: "cancelled" });
   });
+
+  it("streams research record invalidation events over SSE", async () => {
+    const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
+    const response = await app.inject({ method: "GET", url: `/api/project-memory/research-events?cwd=${encodeURIComponent(cwd)}`, payloadAsStream: true });
+    try {
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-type"]).toBe("text/event-stream");
+      let text = ""; let notify: (() => void) | null = null;
+      response.stream().on("data", (chunk: Buffer) => { text += String(chunk); notify?.(); });
+      const readUntil = async (marker: string) => {
+        const deadline = Date.now() + 8_000;
+        while (!text.includes(marker)) {
+          if (Date.now() > deadline) throw new Error(`timed out waiting for ${JSON.stringify(marker)}; received: ${JSON.stringify(text)}`);
+          await new Promise<void>((resolve) => { notify = resolve; setTimeout(resolve, 50); });
+        }
+        return text;
+      };
+      await readUntil(": connected\n\n");
+      // The route subscribes under the realpath'd workspace (validateWorkspaceCwd),
+      // so emit through a repository keyed the same way.
+      await new ResearchRepository(await realpath(cwd)).append("loop.created", { title: "SSE smoke" }, { loop_id: "loop-sse" });
+      const received = await readUntil("research.record");
+      expect(received).toContain(`data: ${JSON.stringify({ type: "research.record", loop_id: "loop-sse", record_type: "loop.created" })}\n\n`);
+    } finally {
+      response.raw.res.destroy();
+    }
+  }, 15_000);
 
   it("preserves exact multipart upload bytes and supports nested destination paths", async () => {
     const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
