@@ -22,7 +22,7 @@ function messageLine(id: string, role: string, text: string, timestamp = "2026-0
 }
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
 });
 
 describe("SessionRepository cache", () => {

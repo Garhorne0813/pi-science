@@ -14,7 +14,7 @@ const tempDirs: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(apps.splice(0).map((app) => app.close()));
-  await Promise.all(tempDirs.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+  await Promise.all(tempDirs.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
   delete process.env.PI_SCIENCE_HOME;
   delete process.env.PI_SCIENCE_WORKSPACES;
 });

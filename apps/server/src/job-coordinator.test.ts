@@ -10,7 +10,7 @@ const TERMINAL: JobStatus[] = ["succeeded", "failed", "cancelled", "timed_out"];
 
 afterEach(async () => {
   await Promise.allSettled(jobs.splice(0).map((coordinator) => coordinator.shutdown()));
-  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
 });
 
 async function workspace(): Promise<string> {

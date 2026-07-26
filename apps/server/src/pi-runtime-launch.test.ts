@@ -21,7 +21,7 @@ afterEach(async () => {
   process.env.PI_CLI_PATH = original.cli;
   process.env.PI_TSX_PATH = original.tsx;
   process.env.PI_TSCONFIG_PATH = original.tsconfig;
-  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
 });
 
 async function obstructModelsFile(customProviders?: unknown[]): Promise<string> {

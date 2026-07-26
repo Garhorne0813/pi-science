@@ -18,7 +18,7 @@ afterEach(async () => {
   await Promise.allSettled(jobs.splice(0).map((coordinator) => coordinator.shutdown()));
   await Promise.all(cleanup.splice(0).map(async (path) => {
     await makeWritable(path).catch(() => undefined);
-    await rm(path, { recursive: true, force: true });
+    await rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }));
 });
 

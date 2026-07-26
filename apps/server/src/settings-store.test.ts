@@ -10,7 +10,7 @@ const originalHome = process.env.PI_SCIENCE_HOME;
 afterEach(async () => {
   if (originalHome === undefined) delete process.env.PI_SCIENCE_HOME;
   else process.env.PI_SCIENCE_HOME = originalHome;
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
 });
 
 describe("SettingsStore", () => {
