@@ -69,6 +69,9 @@ function effectiveConfig(requested?: Partial<PiConfig>): PiConfig {
     // A thinking level has no stable meaning until a model is configured;
     // Pi may normalize it differently for its placeholder unknown model.
     thinking: model ? (requested?.thinking ?? defaults.thinking ?? "high") : null,
+    compaction_enabled: requested?.compaction_enabled ?? defaults.compaction_enabled ?? true,
+    compaction_threshold_percent: requested?.compaction_threshold_percent ?? defaults.compaction_threshold_percent,
+    model_context_window: requested?.model_context_window ?? defaults.model_context_window,
     skills: requested?.skills?.length ? requested.skills : defaults.skills,
     extensions: requested?.extensions?.length ? requested.extensions : defaults.extensions,
   };
@@ -301,7 +304,12 @@ export class NodeSessionService {
         ? { success: true, data: activated.lastState }
         : await this.refreshState(activated);
       if (!result.success || !result.data || typeof result.data !== "object") return { error: String(result.error ?? "unable to read session state"), code: String(result.code ?? "runtime_error") };
-      return this.toSessionState(activated, result.data as Record<string, unknown>);
+      const stats = await activated.process.sendCommand("get_session_stats");
+      return this.toSessionState(
+        activated,
+        result.data as Record<string, unknown>,
+        stats.success && stats.data && typeof stats.data === "object" ? stats.data as Record<string, unknown> : undefined,
+      );
     });
   }
 
@@ -728,8 +736,14 @@ export class NodeSessionService {
     return this.toSessionState(runtime, result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {});
   }
 
-  private toSessionState(runtime: RuntimeRecord, data: Record<string, unknown>): SessionState {
+  private toSessionState(runtime: RuntimeRecord, data: Record<string, unknown>, stats?: Record<string, unknown>): SessionState {
     const model = data.model as { provider?: unknown; id?: unknown } | undefined;
+    const contextUsage = stats?.contextUsage && typeof stats.contextUsage === "object"
+      ? stats.contextUsage as Record<string, unknown>
+      : undefined;
+    const contextWindow = Number(contextUsage?.contextWindow ?? (data.model as Record<string, unknown> | undefined)?.contextWindow ?? runtime.config.model_context_window ?? 0);
+    const contextTokens = contextUsage?.tokens === null ? null : Number(contextUsage?.tokens ?? NaN);
+    const contextPercent = contextUsage?.percent === null ? null : Number(contextUsage?.percent ?? NaN);
     return {
       id: runtime.activeSessionId,
       cwd: runtime.cwd,
@@ -738,6 +752,12 @@ export class NodeSessionService {
       pending_message_count: Number(data.pendingMessageCount ?? 0),
       model: model?.provider && model.id ? `${model.provider}/${model.id}` : runtime.config.model ?? null,
       thinking: typeof data.thinkingLevel === "string" ? data.thinkingLevel : runtime.config.thinking ?? null,
+      context_tokens: contextTokens === null || Number.isFinite(contextTokens) ? contextTokens : null,
+      context_window: Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : null,
+      context_percent: contextPercent === null || Number.isFinite(contextPercent) ? contextPercent : null,
+      compaction_enabled: data.autoCompactionEnabled !== false && runtime.config.compaction_enabled !== false,
+      compaction_threshold_percent: runtime.config.compaction_threshold_percent
+        ?? (Number.isFinite(contextWindow) && contextWindow > 16384 ? Math.min(95, Math.round((1 - 16384 / contextWindow) * 100)) : null),
     };
   }
 

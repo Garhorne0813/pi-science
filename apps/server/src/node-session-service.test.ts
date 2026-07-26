@@ -45,6 +45,7 @@ beforeEach(async () => {
     '  if (request.type === "abort") { busy = false; respond(request); process.stdout.write(JSON.stringify({ type: "agent_settled", handledWithoutTurn: true }) + "\\n"); return; }',
     '  if (request.type === "get_commands") return process.env.FAKE_PI_MODE === "cancel-commands" ? respond(request, { data: { cancelled: true } }) : respond(request, { data: { commands: [{ name: "review", source: "skill" }] } });',
     '  if (request.type === "get_available_models") return respond(request, { data: { models: [{ provider: "openrouter", id: "openai/gpt-5.1", name: "GPT-5.1", reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: null } }] } });',
+    '  if (request.type === "get_session_stats") return respond(request, { data: { contextUsage: { tokens: 32000, contextWindow: 128000, percent: 25 } } });',
     '  if (request.type === "set_model") { modelProvider = request.provider; modelId = request.modelId; return respond(request); }',
     '  if (request.type === "set_thinking_level") { if (request.level === "ultra") return process.stdout.write(JSON.stringify({ id: request.id, success: false, code: "invalid_thinking", error: "unsupported thinking" }) + "\\n"); thinking = request.level; return respond(request); }',
     '  respond(request);',
@@ -120,7 +121,13 @@ describe("Node session lifecycle", () => {
   it("switches atomically between persisted sessions", async () => {
     const service = testService();
     const cwd = await workspaceWithSessions("session-a", "session-b");
-    await expect(service.state("session-a", cwd)).resolves.toMatchObject({ id: "session-a" });
+    await expect(service.state("session-a", cwd)).resolves.toMatchObject({
+      id: "session-a",
+      context_tokens: 32000,
+      context_window: 128000,
+      context_percent: 25,
+      compaction_enabled: true,
+    });
     await expect(service.state("session-b", cwd)).resolves.toMatchObject({ id: "session-b" });
     expect(service.activeCount).toBe(2);
     await expect(Promise.all([

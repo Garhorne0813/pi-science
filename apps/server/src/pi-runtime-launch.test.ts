@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -37,6 +37,35 @@ async function obstructModelsFile(customProviders?: unknown[]): Promise<string> 
 }
 
 describe("Pi runtime custom provider materialization", () => {
+  it("materializes custom reasoning metadata and percentage-based compaction settings", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-settings-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    buildPiProcessOptions(cwd, {
+      model: "custom-local/model-a",
+      thinking: "high",
+      compaction_enabled: true,
+      compaction_threshold_percent: 80,
+      model_context_window: 100000,
+      skills: [],
+      extensions: [],
+    });
+    const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
+    const settings = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", workspaceKey, "settings.json"), "utf8"));
+    expect(settings.compaction).toMatchObject({ enabled: true, reserveTokens: 20000, keepRecentTokens: 20000 });
+  });
+
+  it("materializes follow-up suggestion guidance as the agent append system prompt", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-append-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    buildPiProcessOptions(cwd);
+    const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
+    const guidance = await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", workspaceKey, "APPEND_SYSTEM.md"), "utf8");
+    expect(guidance).toContain("<!--suggest: q1 | q2 | q3-->");
+    expect(guidance).toContain("follow-up questions in the user's language");
+  });
+
   it("passes workspace package isolation into the agent runtime", async () => {
     const cwd = join(tmpdir(), `pi-runtime-environment-${Date.now()}`);
     cleanup.push(cwd);

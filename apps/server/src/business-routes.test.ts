@@ -87,7 +87,7 @@ describe("native control-plane business routes", () => {
       success: true,
       data: {
         models: [
-          { provider: "openrouter", id: "openai/gpt-5.1", name: "GPT-5.1", reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: null } },
+          { provider: "openrouter", id: "openai/gpt-5.1", name: "GPT-5.1", reasoning: true, contextWindow: 200000, thinkingLevelMap: { xhigh: "xhigh", max: null } },
           { provider: "openrouter", id: "openai/gpt-4o", name: "GPT-4o", reasoning: false },
         ],
       },
@@ -99,7 +99,7 @@ describe("native control-plane business routes", () => {
       model: "openrouter/openai/gpt-5.1",
       model_catalog_source: "pi",
       available_models: [
-        { id: "openrouter/openai/gpt-5.1", reasoning: true, thinking_levels: ["off", "minimal", "low", "medium", "high", "xhigh"] },
+        { id: "openrouter/openai/gpt-5.1", reasoning: true, thinking_levels: ["off", "minimal", "low", "medium", "high", "xhigh"], context_window: 200000 },
         { id: "openrouter/openai/gpt-4o", reasoning: false, thinking_levels: ["off"] },
       ],
     });
@@ -239,14 +239,45 @@ describe("native control-plane business routes", () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     const app = buildApp(config()); apps.push(app);
-    const payload = { name: "Local Provider", base_url: "http://127.0.0.1:11434/v1", api: "openai-completions", models: ["local-model"] };
+    const payload = { name: "Local Provider", base_url: "http://127.0.0.1:11434/v1", api: "openai-completions", models: ["local-model"], reasoning: true, context_window: 64000 };
     expect((await app.inject({ method: "PUT", url: "/api/settings/custom-providers/local-provider", payload })).statusCode).toBe(200);
     const settings = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
     expect(settings.available_models).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "custom-local-provider/local-model" }),
+      expect.objectContaining({ id: "custom-local-provider/local-model", reasoning: true, context_window: 64000, thinking_levels: expect.arrayContaining(["high", "xhigh"]) }),
     ]));
+    const compaction = await app.inject({ method: "PUT", url: "/api/settings/compaction", payload: { enabled: true, threshold_percent: 82 } });
+    expect(compaction.statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/settings/config" })).json()).toMatchObject({ compaction_enabled: true, compaction_threshold_percent: 82 });
+    expect((await app.inject({ method: "PUT", url: "/api/settings/compaction", payload: { enabled: true, threshold_percent: 99 } })).statusCode).toBe(400);
     expect((await app.inject({ method: "PUT", url: "/api/settings/custom-providers/Local%20Provider", payload })).statusCode).toBe(409);
     expect((await app.inject({ method: "PUT", url: "/api/settings/custom-providers/local-provider", payload: { ...payload, models: ["updated-model"] } })).statusCode).toBe(200);
+  });
+
+  it("toggles compaction enabled without a threshold while keeping strict threshold validation", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    const app = buildApp(config()); apps.push(app);
+    expect((await app.inject({ method: "PUT", url: "/api/settings/compaction", payload: { enabled: true, threshold_percent: 82 } })).statusCode).toBe(200);
+    const disabled = await app.inject({ method: "PUT", url: "/api/settings/compaction", payload: { enabled: false } });
+    expect(disabled.statusCode).toBe(200);
+    expect(disabled.json()).toMatchObject({ ok: true, compaction_enabled: false, compaction_threshold_percent: 82 });
+    expect((await app.inject({ method: "GET", url: "/api/settings/config" })).json()).toMatchObject({ compaction_enabled: false, compaction_threshold_percent: 82 });
+    expect((await app.inject({ method: "PUT", url: "/api/settings/compaction", payload: { enabled: true, threshold_percent: 98 } })).statusCode).toBe(400);
+  });
+
+  it("clamps the derived compaction threshold for large context windows", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME, "config.json"), JSON.stringify({ model: "google/gemini-2.5-pro" }), "utf8");
+    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValueOnce({
+      success: true,
+      data: { models: [{ provider: "google", id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", reasoning: true, contextWindow: 1_000_000, thinkingLevelMap: {} }] },
+    });
+    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
+    const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
+    expect(settings.statusCode).toBe(200);
+    expect(settings.json()).toMatchObject({ model: "google/gemini-2.5-pro", compaction_threshold_percent: 95 });
   });
 
   it("returns a non-ok response when persisted settings cannot reload Pi runtimes", async () => {
