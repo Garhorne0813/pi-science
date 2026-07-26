@@ -120,6 +120,35 @@ Pi-Science 是 **local-first 科学 AI 工作台**：对话式科研助手 + 可
 
 **B-9 远期**：Git 工作区版本化（每轮次自动 commit + provenance 关联 message、时间旅行）、评估器库 + 跨循环排行榜、定时/文件监听重跑、研究模式差异化（optimize/compare/evaluate/reproduce 现仅改 placeholder）、并行候选（ADR 预留）、LLM-judged metrics。
 
+### 4.1 调研修正（2026-07-26 R1 科研工作流实证调研，证据见调研报告）
+
+**新增功能（证据直接支撑）：**
+- **论文结论复算器（Claim Verifier）** → 并入 B-2 并使其成为主打：从论文表格/补充材料抽数据→生成分析代码→本地内核复算→输出「与作者结论一致/不一致」。这是唯一 Elicit/NotebookLM 在架构上无法跟进的能力（它们没有执行引擎），也是最大空白（HN 实证："LLM 对作者主张过于轻信"）。
+- **AI 方法学附录自动生成** → 并入 B-2：从 provenance 日志一键生成「本研究中 AI 的使用方式」章节。对应 AI 污名恐惧（实证）+ 73% 研究者要规范；可能是转化率最高的单一功能——把 AI 从合规风险变成方法学加分项。
+- **PRISMA-ready 检索记录** → 并入 B-2/文献侧：每次文献检索自动落库检索式/数据源/时间戳/纳入排除决策，可导出检索附录。三家图书馆对 Elicit/Consensus/ResearchRabbit 的一致否定结论 = 无人满足的合规刚需；复用 research-records 基建，工程量小。
+
+**Hyra-1.0 借鉴（2026-07-26 调研；腾讯混元 Research Agent，2026-07-20 发布——无人值守优化引擎，与我们的研究循环骨架同构但无 UI/文献/知识库/本地部署，不构成产品竞争；证据一手 README + 多源交叉）：**
+- **Experience Bank** → 并入 B-3 提升为核心项：在 event-sourced run 记录之上加检索型经验层（方案/代码/日志片段/得分/成败标签/失败根因），propose 阶段注入跨 run 跨项目 top-k 相关经验（**含负例**）。数据已在 provenance 里，缺的只是索引层——借鉴性价比第一
+- **异步生产者-消费者并行 proposal 池** → 替代 B-9 的"并行候选"条目并前移到 B-3 档：Context/Proposer 产提案入队，N 个 Executor 并发（各自 kernel 沙箱，本地默认 2-4），事件溯源架构与队列天然同构；风险点：并发写 workspace 需每 proposal 一个工作副本
+- **评估器共进化双层循环** → 新增 B-3 子项：无 deterministic evaluator 的任务由 agent 起草/升级评估器——**我们的落地比 Hyra 保守**：evaluator 升级走已有 review inbox 人工确认（复用人工审阅闭环，防 reward hacking，Hyra 官方承认弱评估器会被 hack）
+- **Rubric 化 LLM/VLM 评估器** → 上一条的具体形态：结构化多维评分卡（可复现/可 diff/可版本化），补齐图表/图像/文本产物的自动评估
+- **研究结果卡** → 并入 B-4：`指标精确定义 | prev-best 数值+出处(DOI 自动检索) | 本次结果 | 快照日期 | 自包含复现脚本 | 全链路 sha256`——把我们已有的 provenance × 文献检索两个能力相乘，做出 Hyra 做不到的「自动带文献对标的可复现结果卡」
+- 小项：自主判停（marginal-gain 停止，补预算之外的第二停止维度）；Hyra-results 仓库（Apache-2.0）的任务集可作研究循环的回归自检题库
+
+**外部内容接入设计（2026-07-26 三轮调研定稿；深度裁定：Zotero L2 薄实现 / Obsidian「打开而非导入」）：**
+- **Obsidian = 就地打开**：vault 就是文件夹、我们的工作区就是文件夹——检测到 `.obsidian/` 即进入 vault 模式（默认只读），**零复制零转换**（file-over-app 是该社群的共识文本，「导入」对 local-first 用户是反向信任信号；Obsidian 官方连自家导入器都不亲自维护）。配「Obsidian 感知」派生索引：frontmatter(gray-matter) + wikilink 图(remark-wiki-link) + 块锚点表 + Dataview inline fields(自写小解析器) + `.canvas` 图谱(JSON Canvas 1.0，20 行 TS 自解析)。一次性导入只留一个窄场景：选中若干笔记摘进知识库（走 review inbox）。**⚠️ 前置条件：vault 模式下 `.pi-science/` 派生数据必须移出 workspace 根**（否则高频 JSON 落进用户的 iCloud/Dropbox 同步目录 → 冲突文件污染 vault）——这是接入前必须做的架构小改
+- **杀手细节——vault 里的 Zotero 文献笔记可精确识别**：科研用户的 vault 笔记多由 Zotero Integration/Citations 插件按模板生成，启发式（frontmatter `citekey`/`zoteroKey`、`@` 前缀文件名、`zotero://` URI、`%% begin notes %%` 区段）可打标后与 Crossref join → 用户既有文献库直接变成我们的文献图谱种子。**红线：`%%...%%` 注释区是插件的「重导入不覆盖」保护区，写回时绝不可剥离（会静默毁掉用户手写笔记）；默认不写回文献笔记**
+- **Zotero**（前述裁定不变）：L1/L2 走本地 HTTP API + BBT 增强，设置页连接卡片按 collection 授权；L3 只做「综述写回子笔记」（Web API）；MCP 预设推荐 cookjohn/54yyyu；sqlite 永不直读
+- **Notion**：有损 zip 解析、如实告知（官方自认单向；Include Subpages 是 Business+ 专属；官方本地 MCP 已预告可能停服——不押注）；**Overleaf**：zip 拖入为默认（git 集成是付费墙），**只 pull 绝不 push**（官方承认 push 会毁 track changes/批注）；`.tex` 不转 markdown，建结构索引（章节树 + `\cite`→`.bib`→DOI join，复用 unified-latex 生态）；**Jupyter**：无需导入，索引时剥 base64 outputs + 用 `cell.id` 做锚点（@jupyterlab/nbformat）
+- 库选型（实测数据在案）：gray-matter/remark-wiki-link/@unified-latex/citation-js/@jupyterlab/nbformat 为生产依赖；全 OFM 库（obsidian-ext）只借鉴不依赖；Obsidian MCP 只对接官方 Local REST API 插件内建者（第三方桥接前三名：一个 archived、一个停更 17 月、一个有 HIGH 安全告警）
+
+**战略约束（路线图优先级层面）：**
+- 关键数据：84% 研究者已用 AI，但对专用科研工具知晓率仅 11%，80% 在用 ChatGPT——**真正的对手是一个开着的 ChatGPT 标签页**。首次体验必须 5 分钟内展示 ChatGPT 做不到的事（复算/重跑），而非「我也能总结论文」。
+- 「agent 进 notebook」是红海（marimo 等多个开源玩家）——内核执行是基建不是叙事；差异化必须落在 provenance + 研究循环 + 项目知识库。
+- 隐私顾虑 47%→58% 上升、NotebookLM 云端条款劝退高校——**local-first 应升格为一等营销主张**（UI 可见的数据流向标注、Ollama/本地端点支持）。
+- **MCP 反向分发**：把 pi-science 的执行/复算/provenance 能力作为 MCP server 暴露给 Claude/ChatGPT 用户——获客通道而非集成清单项（远期，B-9 档）。
+- 佐证既有决策：57% 愿让 AI agent 自主执行科研任务（研究循环有需求基础）；Zotero+Obsidian 栈「组装痛/升级断裂」实证（薄集成方向正确——用户已有语料 BYO-corpus 优先，对出版商收窄公共索引免疫）。
+
 ## 5. 分批执行计划
 
 > 每批模板：目标 / 允许修改文件 / 方法 / 风险 / 验证命令 / 完成标准。回滚 = git revert 单 commit。
@@ -139,6 +168,12 @@ Pi-Science 是 **local-first 科学 AI 工作台**：对话式科研助手 + 可
 - P0-1 auto-review：【D2】Node 原生实现或明确删除（含 UI/设置残留清理）
 - P0-2 workspace 安全统一：Python 侧对齐 Node 的 marker 规则，删除 registry 依赖；两侧共享测试夹具验证判定一致
 - 验证：针对性回归测试先红后绿；全套件
+- **A1 执行结果（2026-07-26）**：P0-2 已完成（13 场景双侧 parity 夹具，先红后绿）。P0-1 调查熔断触发：**手动 Review 按钮的 `/api/project-knowledge/review` 端点在 Node 和 Python 中都不存在**（NCP-029 连 reviewer 一起删了，请求落进代理返回 404/504）——无"触发链路"可修，整个 reviewer 需要重建 → 拉出独立批次 A1b。发现新 P2 缺陷：Node workspace-security 对 managed root 只做词法解析而对候选路径做 realpath，**managed root 在符号链接后面时未打标工作区会被误拒**——已由双侧 parity 测试钉住现状，修复必须两侧同步改（独立 ticket，勿在无关批次顺手修）。
+
+**A1b 项目 reviewer 重建**（消化 Track B-6 前半，因 P0-1 调查提前）
+- 一次实现、两处触发：`project-review` 模块 + `ReviewSubagentRunner`（subagent-runner 的轻量同款：buildPiProcessOptions、独立 session-dir、30s 请求超时、硬墙钟超时、响应字节上限、Zod 解析提案数组）+ Node 原生 `POST /api/project-knowledge/review`（手动按钮与 scheduleAutoReview 共用）+ 每会话每轮次防抖 + 失败记日志不再吞
+- 测试：FakeRunner 模式（仿 research-loop.test.ts）——启用出提案/停用无动作/失败有日志无崩溃；路由测试
+- 预计 1–1.5 天量级
 
 **A2 Python 收缩**
 - 删除 §3 P1 所列死 Python（models 裁剪至 kernels 所需 5 类型 + literature.py 若 D3 保留）、skill 服务、CLI、孤儿脚本、空目录、backend/package.json
