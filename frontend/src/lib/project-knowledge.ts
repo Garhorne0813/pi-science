@@ -249,9 +249,6 @@ export const projectKnowledgeApi = {
       body: JSON.stringify(changes),
     });
   },
-  files(cwd: string) {
-    return queryClient.fetchQuery(fileViewsQuery(cwd));
-  },
   history(cwd: string) {
     return get<{ history: Array<Record<string, unknown>> }>(projectKnowledgeKey("history", cwd), `/api/project-knowledge/history?${query(cwd)}`);
   },

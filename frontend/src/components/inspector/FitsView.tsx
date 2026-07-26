@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { parseFits, pixelToWorld, type FitsImage, type FitsResult } from "@/lib/fits";
+import { parseFits, pixelToWorld, type FitsImage, type FitsResult } from "@/lib/viewers/fits";
 import { cn } from "@/lib/cn";
 
 /**
@@ -230,7 +230,7 @@ function Colorbar({
   );
 }
 
-function SpectrumView({ filename, spec }: { filename: string; spec: import("@/lib/fits").FitsSpectrum }) {
+function SpectrumView({ filename, spec }: { filename: string; spec: import("@/lib/viewers/fits").FitsSpectrum }) {
   const { t } = useTranslation();
   const { data, x0, dx, length, ctype1, bunit } = spec;
   const W = 640;

@@ -54,15 +54,6 @@ export async function openArtifactExternally(
   window.open(url, "_blank");
 }
 
-/** Download a file through the browser. */
-export async function saveWorkspaceFile(path: string, root: FileRoot | undefined, cwd: string): Promise<void> {
-  const url = previewUrl(path, root, cwd);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = path.split("/").pop() || path;
-  a.click();
-}
-
 /** Get the absolute path — web fallback: return the path as-is. */
 export async function absoluteArtifactPath(
   path: string,
@@ -86,25 +77,6 @@ export function base64ToBytes(b64: string): ArrayBuffer {
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return bytes.buffer;
-}
-
-export interface DirEntry {
-  path: string;
-  name: string;
-  isDir: boolean;
-  size: number;
-  modified: number;
-}
-
-export async function listDir(rel: string, root: FileRoot | undefined, cwd: string): Promise<DirEntry[]> {
-  try {
-    const params = new URLSearchParams({ cwd });
-    if (rel) params.set("subdir", rel);
-    if (root) params.set("root", root);
-    return await apiRequest<DirEntry[]>(`${API}/files?${params}`);
-  } catch {
-    return [];
-  }
 }
 
 export interface LargeFilePointer {

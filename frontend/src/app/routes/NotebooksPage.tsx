@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { BookOpen, Play, Square, RefreshCw, ExternalLink, CheckCircle2 } from "lucide-react";
 import { cn } from "../../lib/cn";
@@ -11,6 +11,7 @@ import { apiRequest } from "../../lib/api";
 import { queryClient } from "../../lib/query-client";
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { useRequiredWorkspaceCwd } from "../../lib/workspace-context";
+import { openJsonEventStream } from "../../lib/event-stream";
 
 interface Notebook {
   path: string; name: string; size: number; modified: string;
@@ -30,6 +31,11 @@ interface WorkspaceEnvironment {
   virtual_env: string;
   python: string;
   error?: string;
+}
+
+interface JupyterSetupEvent {
+  status: "done" | "error" | string;
+  text: string;
 }
 
 const IDLE_JUPYTER: JupyterStatus = { running: false, port: null, url: null, cwd: null, matches_workspace: true, env_ready: false };
@@ -78,32 +84,37 @@ export function NotebooksPage() {
 
   const [setupProgress, setSetupProgress] = useState<string[]>([]);
   const [settingUp, setSettingUp] = useState(false);
+  const closeSetupStreamRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => closeSetupStreamRef.current?.(), []);
 
   const setupJupyterEnv = async () => {
+    closeSetupStreamRef.current?.();
     setSettingUp(true);
     setSetupProgress([]);
     try {
-      const eventSource = new EventSource("/api/notebooks/jupyter/setup");
-      eventSource.onmessage = (e) => {
-        const d = JSON.parse(e.data);
+      closeSetupStreamRef.current = openJsonEventStream<JupyterSetupEvent>("/api/notebooks/jupyter/setup", {
+        onMessage: (d) => {
         if (d.status === "done") {
           setSetupProgress((p) => [...p, "✅ " + d.text]);
-          eventSource.close();
+          closeSetupStreamRef.current?.();
+          closeSetupStreamRef.current = null;
           setSettingUp(false);
           void jupyterResult.refetch();
         } else if (d.status === "error") {
           setSetupProgress((p) => [...p, "❌ " + d.text]);
-          eventSource.close();
+          closeSetupStreamRef.current?.();
+          closeSetupStreamRef.current = null;
           setSettingUp(false);
         } else {
           setSetupProgress((p) => [...p, d.text]);
         }
-      };
-      eventSource.onerror = () => {
-        eventSource.close();
-        setSettingUp(false);
-        toast("Jupyter environment setup connection failed", "error");
-      };
+        },
+        onError: () => {
+          closeSetupStreamRef.current = null;
+          setSettingUp(false);
+          toast("Jupyter environment setup connection failed", "error");
+        },
+      });
     } catch (error) {
       toast(error instanceof Error ? error.message : "Unable to set up Jupyter environment", "error");
       setSettingUp(false);

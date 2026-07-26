@@ -9,7 +9,7 @@ import {
   moleculeFormatFor,
   smilesToMolblock,
   type MoleculeStyleMode,
-} from "@/lib/molecule";
+} from "@/lib/viewers/molecule";
 import { cn } from "@/lib/cn";
 
 const STYLE_OPTIONS: Array<{ value: MoleculeStyleMode; label: string }> = [

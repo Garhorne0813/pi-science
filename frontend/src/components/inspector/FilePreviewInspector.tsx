@@ -18,7 +18,7 @@ import { MarkdownViewer } from "@/components/markdown-viewer/MarkdownViewer";
 import { ProvenancePanel } from "./ProvenancePanel";
 import { TablePreview } from "./TablePreview";
 import { TableChart } from "./TableChart";
-import { canChart } from "@/lib/tableChart";
+import { canChart } from "@/lib/chart";
 const DocxView = lazy(() => import("./OfficePreview").then((module) => ({ default: module.DocxView })));
 const PptxView = lazy(() => import("./OfficePreview").then((module) => ({ default: module.PptxView })));
 const XlsxView = lazy(() => import("./OfficePreview").then((module) => ({ default: module.XlsxView })));
@@ -33,7 +33,6 @@ import { AnomalyMapView } from "./AnomalyMapView";
 import { PhaseView } from "./PhaseView";
 import { useScrollMemory } from "@/lib/scrollMemory";
 import { cn } from "@/lib/cn";
-import { PaneTitlebarInset } from "./RightPane";
 import { previewPolicy } from "@/lib/preview-policy";
 
 /**
@@ -134,7 +133,6 @@ export function FilePreviewInspector({
   return (
     <div className="flex h-full flex-col">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
-        <PaneTitlebarInset />
         <span className="truncate text-sm font-medium text-text">{data.filename}</span>
         <span className="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">
           {data.artifact || "File"}

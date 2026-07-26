@@ -109,9 +109,6 @@ export const projectMemoryApi = {
   overview(cwd: string) {
     return get<ProjectMemoryOverview>(projectMemoryKey("overview", cwd), `/api/project-memory/overview?${query(cwd)}`);
   },
-  timeline(cwd: string) {
-    return queryClient.fetchQuery(timelineQuery(cwd));
-  },
   experiences(cwd: string, loopId?: string) {
     const params = new URLSearchParams({ cwd });
     if (loopId) params.set("loop_id", loopId);

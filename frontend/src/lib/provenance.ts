@@ -13,17 +13,6 @@ function read<T>(queryKey: string[], path: string): Promise<T> {
   return queryClient.fetchQuery({ queryKey, queryFn: () => apiRequest<T>(path), staleTime: 0 });
 }
 
-/** Load all provenance records for a session. */
-export async function loadProvenance(cwd: string, sessionId: string): Promise<ProvenanceRecord[]> {
-  try {
-    const params = new URLSearchParams({ cwd, session_id: sessionId, limit: "200" });
-    const data = await read<{ records?: ProvenanceRecord[] }>(provenanceKey(cwd, "session", sessionId), `${API}?${params}`);
-    return data.records ?? [];
-  } catch {
-    return [];
-  }
-}
-
 /** List all recorded versions of a file. */
 export async function listProvenance(cwd: string, path: string): Promise<ProvenanceRecord[]> {
   try {

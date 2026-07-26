@@ -19,7 +19,7 @@ export interface ParsedTable {
 const OPENERS: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
 const CLOSERS = new Set([")", "]", "}"]);
 
-export function parseDelimited(text: string, delimiter: "," | "\t", maxRows = 500): ParsedTable {
+function parseDelimited(text: string, delimiter: "," | "\t", maxRows = 500): ParsedTable {
   const rows: string[][] = [];
   let field = "";
   let row: string[] = [];

@@ -4,7 +4,6 @@ import type { ArtifactInspector as ArtifactInspectorT, ArtifactTab } from "../..
 import { useScrollMemory } from "@/lib/scrollMemory";
 import { cn } from "@/lib/cn";
 import { CodeViewer } from "@/components/code-viewer/CodeViewer";
-import { PaneTitlebarInset } from "./RightPane";
 import { resolveArtifactContent } from "@/lib/artifacts";
 import { saveTextWithFeedback } from "@/lib/download";
 
@@ -52,7 +51,6 @@ export function ArtifactInspector({
   return (
     <div className="flex h-full flex-col">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
-        <PaneTitlebarInset />
         <span className="truncate text-sm font-medium text-text">{data.title}</span>
         <div className="ml-2 flex items-center gap-1 text-text">
           <button

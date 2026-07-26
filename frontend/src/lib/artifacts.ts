@@ -15,12 +15,6 @@ import type {
 // Re-export so existing imports from artifacts.ts keep working
 export type { ArtifactKind, ArtifactBlock, ArtifactVersion, ArtifactInspector, FilePreviewInspector, NotebookFileInspector };
 
-interface ToolUpdatedEvent {
-  status: string;
-  tool: string;
-  input?: Record<string, unknown>;
-}
-
 const EXT_KIND: Record<string, ArtifactKind> = {
   png: "figure", jpg: "figure", jpeg: "figure", gif: "figure", webp: "figure", svg: "figure",
   fits: "figure", fit: "figure", fts: "figure",
@@ -40,15 +34,7 @@ const EXT_LANG: Record<string, string> = {
   tex: "latex", md: "markdown", csv: "plaintext", tsv: "plaintext",
 };
 
-/** Tools whose input names a file path we can surface as an artifact. */
-const WRITE_TOOLS = new Set(["write", "edit", "create", "str_replace_editor", "apply_patch"]);
-
-/** Input keys that carry the target file path, in priority order. */
-const PATH_KEYS = ["filePath", "path", "file", "filename", "file_path"];
-/** Input keys that carry the written text content. */
-const CONTENT_KEYS = ["content", "new_str", "text"];
-
-export function extToKind(ext: string): ArtifactKind {
+function extToKind(ext: string): ArtifactKind {
   return EXT_KIND[ext.toLowerCase()] ?? "data";
 }
 
@@ -86,35 +72,9 @@ export function extractArtifactRefs(markdown: string): string[] {
   return out;
 }
 
-const MIME: Record<string, string> = {
-  pdf: "application/pdf",
-  html: "text/html", htm: "text/html",
-  svg: "image/svg+xml",
-  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
-  mp4: "video/mp4", m4v: "video/mp4", webm: "video/webm", mov: "video/quicktime", ogv: "video/ogg",
-  csv: "text/csv", tsv: "text/tab-separated-values",
-  md: "text/markdown", tex: "text/x-tex", json: "application/json",
-  py: "text/x-python", r: "text/x-r", txt: "text/plain",
-  bed: "text/plain", bedgraph: "text/plain", bdg: "text/plain",
-  gff: "text/plain", gff3: "text/plain", gtf: "text/plain", vcf: "text/plain",
-  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  docm: "application/vnd.ms-word.document.macroEnabled.12",
-  dotx: "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
-  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  xlsm: "application/vnd.ms-excel.sheet.macroEnabled.12",
-  xltx: "application/vnd.openxmlformats-officedocument.spreadsheetml.template",
-  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  pptm: "application/vnd.ms-powerpoint.presentation.macroEnabled.12",
-  potx: "application/vnd.openxmlformats-officedocument.presentationml.template",
-};
-
 export function extOf(filename: string): string {
   const dot = filename.lastIndexOf(".");
   return dot >= 0 ? filename.slice(dot + 1).toLowerCase() : "";
-}
-
-export function mimeForExt(ext: string): string {
-  return MIME[ext.toLowerCase()] ?? "application/octet-stream";
 }
 
 export type PreviewKind =
@@ -139,10 +99,10 @@ export type PreviewKind =
   | "phase";
 
 /** 3D mesh / CAD formats rendered by the three.js viewer. */
-export const MESH_EXTS = ["stl", "obj", "ply", "gltf", "glb"];
+const MESH_EXTS = ["stl", "obj", "ply", "gltf", "glb"];
 
 /** FITS astronomy formats rendered by the native FITS viewer. */
-export const FITS_EXTS = ["fits", "fit", "fts"];
+const FITS_EXTS = ["fits", "fit", "fts"];
 
 /** How a file should be previewed, from its extension. This is the previewer
  *  registry: native webview viewers first (pdf/html/image via the local file
@@ -231,53 +191,6 @@ export function refToArtifactBlock(path: string): ArtifactBlock {
   };
 }
 
-function firstString(input: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const k of keys) {
-    const v = input[k];
-    if (typeof v === "string" && v.trim()) return v.trim();
-  }
-  return undefined;
-}
-
-/**
- * Derive an artifact from a completed file-writing tool call, or `null` when the
- * event is not a successful write we can trace to a path.
- */
-export function deriveArtifact(event: ToolUpdatedEvent): ArtifactBlock | null {
-  // Accept both "success" (legacy pi events) and "done" (ToolStatus type)
-  if (event.status !== "success" && event.status !== "done") return null;
-  const tool = (event.tool ?? "").toLowerCase();
-  const input = event.input ?? {};
-
-  // Jupyter MCP tools name the notebook they operate on — surface it live.
-  if (tool.includes("jupyter")) {
-    const nb = firstString(input, ["notebook_path", "path", "document_id"]);
-    if (!nb || !nb.endsWith(".ipynb")) return null;
-    const filename = nb.split(/[\\/]/).pop() || nb;
-    return { kind: "artifact", id: `artifact-${nb}`, path: nb, filename, artifact: "notebook", tool: event.tool };
-  }
-
-  if (!WRITE_TOOLS.has(tool)) return null;
-
-  const path = firstString(input, PATH_KEYS);
-  if (!path) return null;
-
-  const filename = path.split(/[\\/]/).pop() || path;
-  const dot = filename.lastIndexOf(".");
-  const ext = dot >= 0 ? filename.slice(dot + 1) : "";
-
-  return {
-    kind: "artifact",
-    id: `artifact-${path}`,
-    path,
-    filename,
-    artifact: extToKind(ext),
-    tool: event.tool,
-    content: firstString(input, CONTENT_KEYS),
-    language: EXT_LANG[ext.toLowerCase()],
-  };
-}
-
 /** Resolve the content shown for the active version, falling back to inspector-level fields. */
 export function resolveArtifactContent(
   data: ArtifactInspector,
@@ -298,23 +211,5 @@ export function resolveArtifactContent(
     messages: v?.messages ?? data.messages,
     environment: v?.environment ?? data.environment,
     reviewPassed: v?.reviewPassed ?? data.reviewPassed,
-  };
-}
-
-/** Build an inspector view for an artifact surfaced live in the thread. */
-export function artifactBlockToInspector(a: ArtifactBlock): ArtifactInspector {
-  const hasText = typeof a.content === "string";
-  return {
-    variant: "artifact",
-    title: a.filename,
-    filename: a.filename,
-    versions: [{ label: "v1" }],
-    activeVersion: "v1",
-    inputs: [],
-    language: a.language ?? "plaintext",
-    code: hasText
-      ? (a.content as string)
-      : `# ${a.filename}\n# Binary artifact (${a.artifact}) written to ${a.path}.\n# Open it from the workspace to view.`,
-    executionLog: `wrote ${a.path} · via ${a.tool}`,
   };
 }

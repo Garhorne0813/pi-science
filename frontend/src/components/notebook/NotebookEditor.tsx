@@ -3,7 +3,6 @@ import { AlertCircle, Loader2, Play, X } from "lucide-react";
 import type { FileRoot } from "../../types/thread";
 import { readArtifact } from "../../lib/files";
 import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
-import { PaneTitlebarInset } from "../inspector/RightPane";
 import { cn } from "../../lib/cn";
 import {
   notebookKernel,
@@ -126,7 +125,6 @@ export function NotebookEditor({
   return (
     <div className="flex h-full flex-col bg-surface">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
-        <PaneTitlebarInset />
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-text">{filename}</span>
         <span className={cn(
           "rounded-full px-2 py-0.5 text-[11px] ring-1",
