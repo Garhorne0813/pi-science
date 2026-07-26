@@ -22,7 +22,15 @@
 
 ---
 
-Pi-Science 将科研工作的核心流程整合到浏览器中。每个项目独立保存对话、文件、实验运行、产物谱系和审核后的项目知识；每个对话使用独立 Pi 进程，因此多个 session 可以并行执行，互不阻塞。
+大多数 AI 科研工具止步于阅读和总结论文。Pi-Science 围绕「一个聊天窗口做不到的事」构建：
+
+- **执行，而不只是解释。**回答里的 Python 代码块一键在真实的工作区内核上运行——状态跨代码块保持，一场对话同时就是一次可交互的分析会话。
+- **可复现是副作用，不是美德。**每次运行进入事件日志、产物带 sha256 摘要、每个工作区拥有隔离环境，结论可以追溯到产生它的代码与数据——不需要你改变工作方式。
+- **自主研究循环，人保持掌控。**描述目标和确定性指标；受监督的智能体提出候选方案、在不可变快照中执行、评估、分析并迭代——带预算控制、暂停恢复和崩溃自愈。
+- **文献引用真实可验证。**零配置直连 Crossref/arXiv/PubMed 检索，内联 DOI 渲染为可点击的来源——绝不编造参考文献。
+- **架构级 local-first。**工作区就是你机器上的普通文件夹。除了你配置的 LLM 调用（也支持 Ollama、LM Studio 等纯本地端点），任何数据不离开本机。未发表的数据始终属于你。
+
+每个项目独立保存对话、文件、实验运行、产物谱系和审核后的项目知识；每个对话使用独立 Pi 进程，因此多个 session 可以并行执行，互不阻塞。
 
 ## 快速开始
 
@@ -131,7 +139,7 @@ project/
 │   ├── sessions/
 │   ├── artifacts.jsonl
 │   ├── provenance.jsonl
-│   └── research-records.jsonl
+│   └── research-records-v2.jsonl
 └── 你的科研文件
 ```
 
@@ -176,7 +184,7 @@ pnpm typecheck
 pnpm build
 
 # Python 测试
-uv run pytest backend/tests -q
+uv run --directory backend pytest -q
 ```
 
 补充端到端检查：
@@ -198,10 +206,8 @@ npm run test:uat:office
 
 ## 文档
 
-- [Skill 规范](docs/skill-schema.md)
-- [科学平台运行时](docs/science-platform-runtime.md)
-- [Node 控制面架构](docs/node-control-plane.md)
-- [TypeScript 后端迁移计划](docs/node-typescript-backend-atomic-plan.md)
+- [研究循环架构（ADR）](docs/adr-research-loop-subagents.md)
+- 运行栈启动后访问 `http://127.0.0.1:8787/docs` 查看交互式 API 参考
 
 ## 参与贡献
 

@@ -39,15 +39,12 @@ science = [
     "Pillow>=10.0",
 ]
 
-[project.scripts]
-pi-science = "pi_science.cli:main"
-
 [build-system]
 requires = ["setuptools>=75.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["api*", "services*", "models*", "pi_science*"]
+include = ["api*", "services*", "models*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

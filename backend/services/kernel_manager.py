@@ -13,15 +13,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from models import CellResult
+
 KERNEL_BRIDGE_DIR = Path(__file__).parent
-
-
-@dataclass
-class CellResult:
-    ok: bool
-    stdout: str = ""
-    result: Optional[str] = None
-    error: Optional[str] = None
 
 
 @dataclass

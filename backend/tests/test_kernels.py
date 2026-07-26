@@ -204,6 +204,37 @@ class TestKernelAPI:
         assert data["ok"] is True
         assert data["result"] == "84"
 
+    async def test_execute_response_shape_is_stable(self, client):
+        """The execute response carries exactly the CellResult fields."""
+        res = await client.post(
+            "/api/kernels/execute",
+            json={"language": "python", "code": "'shape'", "notebook_id": "test-shape"},
+        )
+        assert res.status_code == 200
+        assert res.json() == {"ok": True, "stdout": "", "result": "'shape'", "error": None}
+
+    async def test_execute_rejects_invalid_body(self, client):
+        """Request validation runs before any kernel is spawned."""
+        assert (await client.post("/api/kernels/execute", json={"language": "python"})).status_code == 422
+        assert (await client.post("/api/kernels/execute", json={"language": "julia", "code": "1"})).status_code == 422
+        assert (await client.post("/api/kernels/execute", json={"language": "python", "code": "1", "timeout_seconds": 0})).status_code == 422
+        assert (await client.post("/api/kernels/execute", json={"language": "python", "code": "1", "timeout_seconds": 601})).status_code == 422
+
+    async def test_execute_rejects_unregistered_workspace(self, client, tmp_path, monkeypatch):
+        """A cwd outside any registered workspace is refused with 403."""
+        monkeypatch.delenv("PI_SCIENCE_WORKSPACES", raising=False)
+        res = await client.post(
+            f"/api/kernels/execute?cwd={tmp_path}",
+            json={"language": "python", "code": "1", "notebook_id": "test-forbidden"},
+        )
+        assert res.status_code == 403
+        assert "not a registered workspace" in res.json()["detail"]
+
+    async def test_shutdown_notebook_rejects_unregistered_workspace(self, client, tmp_path, monkeypatch):
+        monkeypatch.delenv("PI_SCIENCE_WORKSPACES", raising=False)
+        res = await client.post(f"/api/kernels/test-shutdown/shutdown?cwd={tmp_path}")
+        assert res.status_code == 403
+
     async def test_execute_python_namespace_persists(self, client):
         """Cells in the same notebook share namespace."""
         # Execute first cell

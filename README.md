@@ -22,7 +22,15 @@
 
 ---
 
-Pi-Science brings the core research workflow into one browser-based workspace. Each project keeps its own conversations, files, runs, provenance, and reviewed knowledge. Each conversation runs in an independent Pi process, so multiple sessions can continue concurrently without blocking one another.
+Most AI research tools stop at reading and summarizing papers. Pi-Science is built around the things an open chat tab **cannot** do:
+
+- **Execute, don't just explain.** Python code blocks in any answer run on a real workspace kernel with one click — state persists across blocks, so a conversation is also a live analysis session.
+- **Reproducibility as a side effect, not a virtue.** Every run lands in an event log, artifacts carry sha256 digests, each workspace gets an isolated environment, and results trace back to the code and data that produced them — without changing how you work.
+- **Autonomous research loops with a human in charge.** Describe an objective and a deterministic metric; a supervised agent proposes candidates, executes them in immutable snapshots, evaluates, analyzes, and iterates — with budgets, pause/resume, and crash recovery.
+- **Literature with real, verifiable citations.** Zero-config Crossref/arXiv/PubMed retrieval with inline DOIs rendered as clickable sources — never invented references.
+- **Local-first by architecture.** Workspaces are plain folders on your machine. Nothing leaves it except the LLM calls you configure — including fully local endpoints such as Ollama or LM Studio. Unpublished data stays yours.
+
+Each project keeps its own conversations, files, runs, provenance, and reviewed knowledge. Each conversation runs in an independent Pi process, so multiple sessions continue concurrently without blocking one another.
 
 ## Quick Start
 
@@ -133,7 +141,7 @@ project/
 │   ├── sessions/
 │   ├── artifacts.jsonl
 │   ├── provenance.jsonl
-│   └── research-records.jsonl
+│   └── research-records-v2.jsonl
 └── your research files
 ```
 
@@ -191,7 +199,7 @@ pnpm typecheck
 pnpm build
 
 # Python tests
-uv run pytest backend/tests -q
+uv run --directory backend pytest -q
 ```
 
 Additional end-to-end checks:
@@ -213,10 +221,8 @@ npm run test:uat:office
 
 ## Documentation
 
-- [Skill schema](docs/skill-schema.md)
-- [Scientific platform runtime](docs/science-platform-runtime.md)
-- [Node control-plane architecture](docs/node-control-plane.md)
-- [TypeScript backend migration plan](docs/node-typescript-backend-atomic-plan.md)
+- [Research loop architecture (ADR)](docs/adr-research-loop-subagents.md)
+- Interactive API reference at `http://127.0.0.1:8787/docs` while the stack is running
 
 ## Contributing
 
