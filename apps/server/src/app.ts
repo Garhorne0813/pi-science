@@ -20,14 +20,15 @@ import { registerEnvironmentRoutes } from "./environment-routes.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
-  const { sessions: nodeSessionService, events, sessionRepository, settings, jobs, research, scientificRuntime, environments } = modules;
-  nodeSessionService.configureScientificRuntime(config.pythonOrigin, config.internalToken);
+  const { sessions: nodeSessionService, events, sessionRepository, settings, jobs, research, projectReview, scientificRuntime, environments } = modules;
   const app = Fastify({
     logger: { level: config.logLevel },
     bodyLimit: config.maxBodyBytes,
     requestIdHeader: "x-request-id",
     genReqId: (request) => request.headers["x-request-id"]?.toString() || randomUUID(),
   });
+
+  nodeSessionService.configureLogging((level, message) => app.log[level](message));
 
   void app.register(cors, { credentials: true, origin: config.corsOrigins });
 
@@ -123,7 +124,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings);
   if (config.nodeRuns !== false) registerRunEndpointRoutes(app);
   if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, research);
-  if (config.nodeProject !== false) registerProjectRoutes(app, research);
+  if (config.nodeProject !== false) registerProjectRoutes(app, research, projectReview);
   app.addHook("onReady", async () => {
     const results = await Promise.allSettled((await knownWorkspacePaths()).map((cwd) => research.reconcile(cwd)));
     for (const result of results) if (result.status === "rejected") app.log.error({ err: result.reason }, "research loop recovery failed");
@@ -131,6 +132,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodePiManager) app.addHook("onClose", async () => nodeSessionService.shutdownAll());
   app.addHook("onClose", async () => scientificRuntime.shutdown());
   app.addHook("onClose", async () => research.shutdown());
+  app.addHook("onClose", async () => projectReview.shutdown());
   if (config.nodePiManager) {
     app.all("/api/sessions/*", async (request, reply) => reply.code(404).send({
       ok: false,

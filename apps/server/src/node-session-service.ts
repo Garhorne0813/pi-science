@@ -7,6 +7,7 @@ import { observeNodePiEvent } from "./node-event-observer.js";
 import { PiManager, piManager } from "./pi-manager.js";
 import type { PiProcess, PiProcessOptions, PiResult } from "./pi-process.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "./pi-runtime-launch.js";
+import type { ProjectReviewService } from "./project-review/service.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
 import { SessionRepository, invalidateSessionFileCache, sessionRepository } from "./session-repository.js";
 import { WorkspaceEnvironmentService } from "./workspace-environment.js";
@@ -80,17 +81,19 @@ function effectiveConfig(requested?: Partial<PiConfig>): PiConfig {
 export class NodeSessionService {
   private readonly runtimes = new Map<string, RuntimeRecord>();
   private readonly locks = new Map<string, Promise<void>>();
-  private scientificRuntime: { origin: string; token?: string } | null = null;
+  private readonly autoReviews = new Set<string>();
+  private log: (level: "info" | "warn" | "error", message: string) => void = () => {};
 
   constructor(
     private readonly eventHub: ConversationEventHub = conversationEventHub,
     private readonly manager: PiManager = piManager,
     private readonly repository: SessionRepository = sessionRepository,
     private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService(),
+    private readonly projectReview: Pick<ProjectReviewService, "run"> | null = null,
   ) {}
 
-  configureScientificRuntime(origin: string, token?: string): void {
-    this.scientificRuntime = { origin: origin.replace(/\/$/, ""), ...(token ? { token } : {}) };
+  configureLogging(log: (level: "info" | "warn" | "error", message: string) => void): void {
+    this.log = log;
   }
 
   async create(body: CreateSessionRequest): Promise<{ id: string; cwd: string } | { error: string; code: string; sessionId?: string }> {
@@ -523,16 +526,18 @@ export class NodeSessionService {
     }, immediate ? 0 : reconciliationDelayMs());
   }
 
+  /** One auto review per settled turn: a second settle for a session whose
+   *  review is still in flight is dropped, and the reviewer itself is
+   *  single-flight per workspace and gated on policy.auto_review. */
   private scheduleAutoReview(cwd: string, sessionId: string): void {
-    const runtime = this.scientificRuntime;
-    if (!runtime) return;
-    const target = new URL(`${runtime.origin}/api/sessions/${encodeURIComponent(sessionId)}/auto-review`);
-    target.searchParams.set("cwd", cwd);
-    void fetch(target, {
-      method: "POST",
-      headers: runtime.token ? { "x-pi-science-internal-token": runtime.token } : undefined,
-      signal: AbortSignal.timeout(5_000),
-    }).catch(() => undefined);
+    const review = this.projectReview;
+    if (!review || !sessionId) return;
+    const key = runtimeKey(cwd, sessionId);
+    if (this.autoReviews.has(key)) return;
+    this.autoReviews.add(key);
+    void review.run(cwd, { sessionId, trigger: "auto" })
+      .catch((error: unknown) => this.log("warn", `automatic project review failed for session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => this.autoReviews.delete(key));
   }
 
   private async restartRuntimeUnlocked(runtime: RuntimeRecord, config: PiConfig): Promise<RuntimeRecord | ServiceFailure> {
