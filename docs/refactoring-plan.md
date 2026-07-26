@@ -111,8 +111,22 @@ Pi-Science 是 **local-first 科学 AI 工作台**：对话式科研助手 + 可
 **B-5 数据集画像**：拖入 CSV/NetCDF/FITS 自动跑 kernel 出画像卡（schema/分布/缺失值/快速图表），复用检查器 12 种预览器。
 
 **B-6 Subagent 评审家族**（与 D2 的 auto-review 同构）：
-- auto-review 知识回流闭环（A1 修触发，此处做完整体验）
+- auto-review 知识回流闭环（A1b 已重建触发链，此处做完整体验）
 - **统计审查工作流**：stats-integrity 技能做成一键动作——报告/知识入库前独立 subagent 审统计有效性（p-hacking/样本量/多重比较）。
+
+**B-DL 双循环架构（2026-07-26 与用户定稿；快循环×慢循环×晋升闸门）** — 排期提前，B-DL-1 在 Phase 2 波落地后立即执行：
+
+设计不变量（所有相关批次必须遵守）：
+1. 作用域隔离：经验库只注入研究循环的提案上下文，永不进普通对话；知识库是唯一跨对话记忆
+2. 单一写入通道：进知识库只能以提案身份走收件箱管道（T1 自动放行也走同一管道，只是闸门自动开）
+3. 矛盾处理：同指标新结果自动用既有 `supersedes` 字段标记取代旧知识条目
+4. 自主度跟着可验证性走：有确定性评估器的领域放全自主；无评分领域由人或 provenance 闭环
+5. 评估器变更是快慢循环唯一交汇点：评估器升级永远过收件箱人审（人审一次标准，机器用它审万次候选）
+
+- **B-DL-1 审查状态化 + 默认关**（小批，~半天）：`policy.auto_review` 默认值改 false（每轮烧额度不应是默认行为）；composer 按钮状态化——开启时显示「自动 Review 已开启」徽章（点击跳知识收件箱），关闭时显示「手动 Review」按钮
+- **B-DL-2 阶梯审核 T1/T2/T3**：提案增加分级——T1（事实性+带可机器核验来源：run id/artifact sha256/DOI）自动接受并标记 provisional 可撤销；T2（解释性/结论性无评估背书）人审；T3（改变 agent 行为：PROJECT.md 指令/constraints）强制人审。信任累积：用既有 `accepted_counts/rejected_counts` 按历史精确率逐步放宽 T1 范围
+- **B-DL-3 晋升通道（最小版）**：研究循环完成时自动生成知识提案——最优候选+指标+artifact 引用+frontier 摘要（provenance 完整 → 走 T1），分析 findings（解释性 → 走 T2）。复用 reviewer 管道；这是 B-2 Claim Ledger 与 B-4 报告生成的交点，也是「循环成果不再躺在事件日志里」的第一步
+- B-DL-4+：经验库/并行提案池/评估器共进化 = 既有 B-3 的 Hyra 借鉴条目，受上述不变量约束执行
 
 **B-7 基础体验补完**：会话管理（重命名/置顶/搜索/删除）、文献 MCP 连接器 + 引用验证真实现（现恒 unverified stub）、知识 file views 真实现（现空 stub）、file-operation undo 真实现。
 
@@ -218,11 +232,12 @@ Pi-Science 是 **local-first 科学 AI 工作台**：对话式科研助手 + 可
 **A8 i18n 资源化**
 - locales/en.json + zh-Hans.json（【D6】暂不做按需加载）；13 个未接文件补 t()；§3 硬编码清单全量落 i18n（含 lib 层 throw 的用户可见错误改错误码→UI 翻译）；覆盖测试强化
 
-**A9 耐久性**
+**A9 耐久性**（范围修订：仅服务端；NotebooksPage SSE 内联迁移移交 A10）
 - 真跨进程文件锁（O_EXCL lockfile + 陈旧检测，或既有轻量库，倾向零依赖实现）
 - 研究事件日志：按 offset 增量读 + 定期 snapshot 压实；drive 等待期轮询退避
 - JobCoordinator detached spawn + 进程组 kill（修 28s shutdown 拖挂）
-- 失败 run 计费入账；SSE 实现收敛（NotebooksPage 内联迁移到统一 helper）
+- 失败 run 计费入账
+- **A9 执行结果（2026-07-26）**：四项均已落地并有测试。①`acquireFileLock` 零依赖 advisory lockfile（`<path>.lock`，`wx` 独占创建；陈旧接管要求「>30s 且 pid 已死」双条件，rename 作为并发接管仲裁），层叠在 `withFileWriteLock` 内部，进程内队列仍是快路径；`ResearchRepository` 的锁键从未被创建的 `.research-loop-lock` 改为事件日志本身。②事件日志改为 (size, mtimeMs, ino) + 尾锚字节校验的增量读缓存，仅解析新增字节；**本批不做 snapshot/压实——事件日志保持 append-only 唯一真相源**，压实留待日志体量成为实测瓶颈时另立批次。③drive 轮询 100ms→2s 指数退避，日志有新记录即复位（实测同一 3s 窗口读取次数 29→<12）。④失败 agent run 通过 `ResearchSubagentRunner.usage()` 回报已花费用量，写入 `agent.run_failed` 并由 stop-policy 计入预算；project-review runner 无任何用量记账与预算消费方，无同类缺口。
 
 **A10 死代码清理 + 科学解析器测试**
 - §3 P2 前端死代码清单逐项删除（动态 import 的 pptx/xlsx 先验证再动）
