@@ -6,9 +6,9 @@ import { metadataRoot } from "../persistence.js";
 import { PiProcess, type PiEvent } from "../pi-process.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "../pi-runtime-launch.js";
 import type { WorkspaceEnvironmentService } from "../workspace-environment.js";
-import type { AgentRunRequest, AgentRunResult, ResearchSubagentRunner } from "./types.js";
+import type { AgentRunRequest, AgentRunResult, AgentRunUsage, ResearchSubagentRunner } from "./types.js";
 
-type ActiveRun = { process: PiProcess; state: "running" | "completed" | "failed" };
+type ActiveRun = { process: PiProcess; state: "running" | "completed" | "failed"; usage: AgentRunUsage };
 
 export class PiResearchSubagentRunner implements ResearchSubagentRunner {
   private readonly active = new Map<string, ActiveRun>();
@@ -28,11 +28,9 @@ export class PiResearchSubagentRunner implements ResearchSubagentRunner {
     options.requestTimeoutMs = 30_000;
 
     const process = PiProcess.start(options);
-    const active: ActiveRun = { process, state: "running" };
+    const active: ActiveRun = { process, state: "running", usage: { model_tokens: 0, cost_usd: 0 } };
     this.active.set(runId, active);
     let text = "";
-    let modelTokens = 0;
-    let costUsd = 0;
     let settle: (() => void) | null = null;
     let rejectCycle: ((error: Error) => void) | null = null;
     process.on("event", (event: PiEvent) => {
@@ -47,8 +45,9 @@ export class PiResearchSubagentRunner implements ResearchSubagentRunner {
       if (event.type === "message_end") {
         const message = event.message as Record<string, unknown> | undefined;
         const usage = message?.usage as Record<string, unknown> | undefined;
-        modelTokens += Number(usage?.input ?? 0) + Number(usage?.output ?? 0);
-        costUsd += Number((usage?.cost as Record<string, unknown> | undefined)?.total ?? 0);
+        // Accumulated on the run itself so a failure still reports what it spent.
+        active.usage.model_tokens += Number(usage?.input ?? 0) + Number(usage?.output ?? 0);
+        active.usage.cost_usd += Number((usage?.cost as Record<string, unknown> | undefined)?.total ?? 0);
       }
       if (event.type === "agent_settled") settle?.();
     });
@@ -96,7 +95,7 @@ export class PiResearchSubagentRunner implements ResearchSubagentRunner {
       }
       if (!output) throw parseError instanceof Error ? parseError : new Error("research supervisor returned invalid JSON");
       active.state = "completed";
-      return { run_id: runId, output, model_tokens: modelTokens, cost_usd: costUsd };
+      return { run_id: runId, output, model_tokens: active.usage.model_tokens, cost_usd: active.usage.cost_usd };
     } catch (error) {
       active.state = "failed";
       throw error;
@@ -110,6 +109,11 @@ export class PiResearchSubagentRunner implements ResearchSubagentRunner {
 
   async status(runId: string): Promise<"running" | "completed" | "failed" | "lost"> {
     return this.active.get(runId)?.state ?? "lost";
+  }
+
+  usage(runId: string): AgentRunUsage | null {
+    const run = this.active.get(runId);
+    return run ? { ...run.usage } : null;
   }
 
   async cancel(runId: string): Promise<void> {

@@ -83,6 +83,21 @@ describe("job coordinator", () => {
     expect(finished?.return_code).toBe(0);
   });
 
+  it("cancels a shell grandchild with the process group instead of stalling shutdown", async () => {
+    const cwd = await workspace();
+    const coordinator = jobCoordinator();
+    // `sleep 30; exit 0` keeps bash from exec-ing sleep in place, so the sleep is a
+    // real grandchild holding the inherited stdout/stderr pipes open.
+    const submitted = await coordinator.submit(cwd, { command: ["bash", "-c", "sleep 30; exit 0"] });
+    await waitFor(() => coordinator.get(cwd, submitted.job_id), (record) => record?.status === "running");
+
+    const started = Date.now();
+    await coordinator.cancel(cwd, submitted.job_id);
+    await coordinator.shutdown();
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect((await coordinator.get(cwd, submitted.job_id))?.status).toBe("cancelled");
+  }, 20_000);
+
   it("restricts research surface jobs to an allowlisted environment", async () => {
     const cwd = await workspace();
     const coordinator = jobCoordinator({ PATH: process.env.PATH, HOME: "/tmp", SECRET_TOKEN: "leak-me" });

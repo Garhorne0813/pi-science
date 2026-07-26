@@ -16,10 +16,12 @@ import { snapshotCandidate, within } from "./candidate-snapshot.js";
 import { listReducedLoops, reduceResearchRecords } from "./reducer.js";
 import { ResearchRepository } from "./repository.js";
 import { activeWallMs, stopReason } from "./stop-policy.js";
-import type { ResearchCandidate, ResearchSnapshot, ResearchSubagentRunner } from "./types.js";
+import type { AgentRunUsage, ResearchCandidate, ResearchSnapshot, ResearchSubagentRunner } from "./types.js";
 
 const terminalLoops = new Set(["completed", "failed", "cancelled"]);
 const terminalJobs = new Set(["succeeded", "failed", "cancelled", "timed_out"]);
+const DRIVE_POLL_MIN_MS = 100;
+const DRIVE_POLL_MAX_MS = 2_000;
 
 export class ResearchLoopCoordinator {
   private readonly driving = new Set<string>();
@@ -155,14 +157,21 @@ export class ResearchLoopCoordinator {
   }
 
   private async drive(cwd: string, loopId: string): Promise<void> {
+    // Waiting for an external job can last hours; back off while the event log is
+    // quiet and snap back to a tight poll the moment it records anything.
+    let wait = DRIVE_POLL_MIN_MS;
+    let watermark = "";
+    const idle = async () => { await delay(wait); wait = Math.min(wait * 2, DRIVE_POLL_MAX_MS); };
     for (;;) {
       if (this.closed) return;
       const snapshot = await this.repository(cwd).snapshot(loopId);
+      const progress = `${snapshot.records.length}:${snapshot.records.at(-1)?.record_id ?? ""}`;
+      if (progress !== watermark) { watermark = progress; wait = DRIVE_POLL_MIN_MS; }
       const loop = snapshot.loop;
       if (!loop || terminalLoops.has(loop.status) || loop.status === "paused" || loop.status === "needs_attention") return;
       if (loop.status === "cancelling") {
         if (await this.finishCancellation(cwd, snapshot)) return;
-        await delay(100);
+        await idle();
         continue;
       }
       if (loop.status === "pausing" && !hasActiveWork(snapshot)) { await this.finishPause(cwd, loop); return; }
@@ -170,11 +179,11 @@ export class ResearchLoopCoordinator {
       try {
         if (await this.recoverInterruptedWork(cwd, snapshot)) continue;
         if (snapshot.operations.some((operation) => ["reserved", "started"].includes(operation.status))) {
-          await delay(100);
+          await idle();
           continue;
         }
         const progressed = await this.advance(cwd, snapshot);
-        if (!progressed) await delay(250);
+        if (!progressed) await idle();
       } catch (error) {
         const latest = (await this.repository(cwd).snapshot(loopId)).loop;
         if (latest?.status === "cancelling" || latest?.status === "pausing") continue;
@@ -239,7 +248,7 @@ export class ResearchLoopCoordinator {
         await repository.appendUnlocked("candidate.proposed", manifest, { loop_id: loop.loop_id, candidate_id: manifest.candidate_id, causation_id: operationId });
       });
     } catch (error) {
-      await repository.append("agent.run_failed", { phase: "candidate", error: String(error) }, { loop_id: loop.loop_id, operation_id: operationId, run_id: operationId });
+      await repository.append("agent.run_failed", { phase: "candidate", error: String(error), ...this.spent(operationId) }, { loop_id: loop.loop_id, operation_id: operationId, run_id: operationId });
       throw error;
     }
   }
@@ -363,9 +372,15 @@ export class ResearchLoopCoordinator {
         }
       });
     } catch (error) {
-      await repository.append("agent.run_failed", { phase: "analysis", error: String(error) }, { loop_id: loop.loop_id, candidate_id: candidate.candidate_id, operation_id: operationId, run_id: operationId });
+      await repository.append("agent.run_failed", { phase: "analysis", error: String(error), ...this.spent(operationId) }, { loop_id: loop.loop_id, candidate_id: candidate.candidate_id, operation_id: operationId, run_id: operationId });
       throw error;
     }
+  }
+
+  /** Usage a failed agent run already burned, so the budget still accounts for it. */
+  private spent(operationId: string): AgentRunUsage {
+    const usage = this.runner.usage?.(operationId);
+    return { model_tokens: Number(usage?.model_tokens ?? 0), cost_usd: Number(usage?.cost_usd ?? 0) };
   }
 
   private async cancelActive(cwd: string, loopId: string): Promise<void> {
