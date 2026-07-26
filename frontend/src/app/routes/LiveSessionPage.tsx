@@ -21,6 +21,15 @@ import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { apiRequest } from "../../lib/api";
 import { agentActionTextByBlock, lastCompletedAgentMessageText } from "../../lib/message-actions";
+import { projectMemoryApi, type ExperienceRecord, type ResearchLoop } from "../../lib/project-memory";
+import { isNewConversation } from "../../lib/session-navigation";
+import {
+  ResearchLoopDraftCard,
+  ResearchLoopStatusCard,
+  ResearchModePicker,
+  type ResearchLoopDraft,
+  type ResearchStarter,
+} from "../../components/conversation/ResearchLoopControls";
 
 export function LiveSessionPage() {
   const { t } = useTranslation();
@@ -52,6 +61,13 @@ export function LiveSessionPage() {
   const [configuringModel, setConfiguringModel] = useState(false);
   const [reviewingProject, setReviewingProject] = useState(false);
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
+  const [researchMode, setResearchMode] = useState<ResearchStarter | null>(null);
+  const [researchPrompt, setResearchPrompt] = useState("Ask anything — analyze data, run code, explore results");
+  const [researchDraft, setResearchDraft] = useState<ResearchLoopDraft | null>(null);
+  const [activeResearchLoop, setActiveResearchLoop] = useState<ResearchLoop | null>(null);
+  const [researchExperiences, setResearchExperiences] = useState<ExperienceRecord[]>([]);
+  const [researchBusy, setResearchBusy] = useState(false);
+  const [researchError, setResearchError] = useState<string | null>(null);
   const allWorkspaceReferences = useUiStore((state) => state.workspaceReferences);
   const workspaceReferences = useMemo(
     () => allWorkspaceReferences.filter((item) => item.cwd === workspaceCwd),
@@ -84,7 +100,6 @@ export function LiveSessionPage() {
   };
 
   useEffect(() => {
-    if (!activeSessionId) return;
     settingsApi.config<{ available_models?: AvailableModel[]; model?: string; thinking?: string }>(workspaceCwd)
       .then((data) => {
         const runtime = useRuntimeStore.getState();
@@ -238,6 +253,27 @@ export function LiveSessionPage() {
 
   const handleSend = async () => {
     const text = input.trim();
+    if (researchMode && !researchDraft && text && !working && !reviewingProject) {
+      setResearchBusy(true);
+      setResearchError(null);
+      try {
+        const result = await projectMemoryApi.intent(workspaceCwd, text);
+        setResearchDraft({
+          title: result.draft.title,
+          objective: result.draft.objective,
+          metric: "score",
+          direction: "maximize",
+          maxCandidates: result.draft.budget.max_candidates,
+          maxWallSeconds: result.draft.budget.max_wall_seconds,
+        });
+        setInput("");
+      } catch (cause) {
+        setResearchError(cause instanceof Error ? cause.message : "Unable to prepare research loop");
+      } finally {
+        setResearchBusy(false);
+      }
+      return;
+    }
     if (!selectedModel || (!text && files.length === 0 && workspaceReferences.length === 0) || working || reviewingProject) return;
 
     if (text.startsWith("/") && files.length === 0 && workspaceReferences.length === 0 && await runSlashCommand(text)) {
@@ -309,17 +345,86 @@ export function LiveSessionPage() {
     }
   };
 
+  const refreshResearchLoop = useCallback(async (loopId: string) => {
+    const detail = await projectMemoryApi.loop(workspaceCwd, loopId);
+    setActiveResearchLoop(detail);
+    setResearchExperiences(detail.experiences ?? []);
+  }, [workspaceCwd]);
+
+  useEffect(() => {
+    if (!activeResearchLoop || ["completed", "failed", "cancelled"].includes(activeResearchLoop.status)) return;
+    const timer = window.setInterval(() => { void refreshResearchLoop(activeResearchLoop.loop_id).catch(() => undefined); }, 2000);
+    return () => window.clearInterval(timer);
+  }, [activeResearchLoop, refreshResearchLoop]);
+
+  const confirmResearchLoop = async () => {
+    if (!researchDraft || researchBusy) return;
+    setResearchBusy(true);
+    setResearchError(null);
+    try {
+      const evaluatorId = `eval-${Date.now().toString(36)}`;
+      const evaluatorContent = JSON.stringify({ evaluatorId, metric: researchDraft.metric, direction: researchDraft.direction });
+      const digestBytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(evaluatorContent));
+      const digest = `sha256:${[...new Uint8Array(digestBytes)].map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+      await projectMemoryApi.registerEvaluator(workspaceCwd, {
+        evaluator_id: evaluatorId,
+        version: 1,
+        digest,
+        status: "approved",
+        metrics: [{ name: researchDraft.metric.trim(), direction: researchDraft.direction, weight: 1 }],
+        hard_checks: ["artifact_verified"],
+      });
+      const loop = await projectMemoryApi.createLoop(workspaceCwd, {
+        title: researchDraft.title.trim(),
+        objective: researchDraft.objective.trim(),
+        evaluator_ref: { evaluator_id: evaluatorId, version: 1, digest },
+        budget: { max_candidates: researchDraft.maxCandidates, max_wall_seconds: researchDraft.maxWallSeconds, max_parallel: 1 },
+      });
+      const preflight = await projectMemoryApi.preflight(workspaceCwd, loop.loop_id);
+      if (!preflight.ok) throw new Error(preflight.blockers.join("; "));
+      const running = await projectMemoryApi.action(workspaceCwd, loop.loop_id, "start");
+      setActiveResearchLoop(running);
+      setResearchExperiences([]);
+      setResearchDraft(null);
+      setResearchMode(null);
+      setResearchPrompt("Ask anything — analyze data, run code, explore results");
+    } catch (cause) {
+      setResearchError(cause instanceof Error ? cause.message : "Unable to start research loop");
+    } finally {
+      setResearchBusy(false);
+    }
+  };
+
+  const researchAction = async (action: "pause" | "resume" | "cancel") => {
+    if (!activeResearchLoop || researchBusy) return;
+    setResearchBusy(true);
+    setResearchError(null);
+    try {
+      const updated = await projectMemoryApi.action(workspaceCwd, activeResearchLoop.loop_id, action);
+      setActiveResearchLoop(updated);
+      await refreshResearchLoop(updated.loop_id);
+    } catch (cause) {
+      setResearchError(cause instanceof Error ? cause.message : "Unable to update research loop");
+    } finally {
+      setResearchBusy(false);
+    }
+  };
+
   const hasUserMessage = thread.blocks.some((block) => block.kind === "user");
   const activeSession = sessions.find((session) => session.id === activeSessionId);
-  const isNewSession = !hasUserMessage && (activeSession?.name === "New Session" || thread.loaded);
+  const isNewSession = isNewConversation(hasUserMessage, activeSessionId, activeSession?.name, thread.loaded);
+  const shouldCenterComposer = isNewSession && !researchDraft && !activeResearchLoop;
   const title = isNewSession || !activeSessionId
     ? t("conversation.newSession")
     : getSessionName(activeSessionId) || activeSession?.name || activeSessionId.slice(0, 8);
 
   return (
-    <div className="flex flex-col h-full">
+    <div className={cn("relative flex h-full flex-col", shouldCenterComposer && "justify-center")}>
       {/* Header */}
-      <header className="flex items-center justify-between h-12 px-6 border-b border-faint shrink-0">
+      <header className={cn(
+        "flex h-12 shrink-0 items-center justify-between border-b border-faint px-6",
+        shouldCenterComposer && "absolute inset-x-0 top-0",
+      )}>
         <div className="flex items-center gap-2.5 min-w-0">
           <span className={cn("h-2 w-2 rounded-full shrink-0",
             status === "ready" ? "bg-ok" : status === "connecting" ? "bg-warn animate-pulse" : status === "error" ? "bg-error" : "bg-muted"
@@ -329,20 +434,43 @@ export function LiveSessionPage() {
       </header>
 
       {/* Thread */}
-      <div ref={scrollRef} onScroll={handleThreadScroll} className="flex-1 overflow-y-auto [overflow-anchor:none]">
-        <div className="mx-auto max-w-[760px] flex flex-col gap-4 px-8 py-6">
+      <div ref={scrollRef} onScroll={handleThreadScroll} className={cn(
+        "flex-1 overflow-y-auto [overflow-anchor:none]",
+        shouldCenterComposer && "flex-none overflow-visible",
+      )}>
+        <div className={cn(
+          "mx-auto flex max-w-[760px] flex-col gap-4 px-8 py-6",
+          shouldCenterComposer && "max-w-[824px] py-0",
+        )}>
           {thread.blocks.length === 0 && !working && status === "connecting" && activeSessionId && (
             <div className="flex items-center gap-2 py-4 text-sm text-muted">
               <Loader2 size={14} className="animate-spin text-accent" />
               Loading conversation…
             </div>
           )}
-          {thread.blocks.length === 0 && !working && status !== "connecting" && (
-            <ConversationWelcome
-              onPick={(msg) => void sendPrompt(msg).catch(() => undefined)}
-              disabled={!selectedModel || reviewingProject}
+          {thread.blocks.length === 0 && !working && status !== "connecting" && !researchDraft && !activeResearchLoop && (
+            <ConversationWelcome />
+          )}
+          {researchDraft && (
+            <ResearchLoopDraftCard
+              draft={researchDraft}
+              busy={researchBusy}
+              onChange={setResearchDraft}
+              onCancel={() => { setResearchDraft(null); setResearchMode(null); setResearchError(null); }}
+              onConfirm={() => void confirmResearchLoop()}
             />
           )}
+          {activeResearchLoop && (
+            <ResearchLoopStatusCard
+              loop={activeResearchLoop}
+              experiences={researchExperiences}
+              busy={researchBusy}
+              onRefresh={() => void refreshResearchLoop(activeResearchLoop.loop_id)}
+              onAction={(action) => void researchAction(action)}
+              onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)}
+            />
+          )}
+          {researchError && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error">{researchError}</div>}
           {renderBlocks(thread.blocks)}
           {pendingInteraction && (
             <InteractionPrompt
@@ -360,7 +488,20 @@ export function LiveSessionPage() {
       </div>
 
       {/* Composer */}
-      <div className="px-8 pb-5 pt-2 shrink-0">
+      <div className="shrink-0 px-8 pb-5 pt-2">
+        {isNewSession && !researchDraft && !activeResearchLoop && (
+          <div className="mx-auto max-w-[760px]">
+            <ResearchModePicker
+              selected={researchMode}
+              disabled={working || reviewingProject || researchBusy}
+              onSelect={(mode, prompt) => {
+                setResearchMode((current) => current === mode ? null : mode);
+                setResearchPrompt(researchMode === mode ? "Ask anything — analyze data, run code, explore results" : prompt);
+                inputRef.current?.focus();
+              }}
+            />
+          </div>
+        )}
         <div
           className={cn(
             "relative mx-auto max-w-[760px] rounded-card border bg-surface shadow-card transition-colors",
@@ -409,7 +550,7 @@ export function LiveSessionPage() {
             onKeyDown={handleKeyDown}
             onCompositionStart={() => { composingRef.current = true; }}
             onCompositionEnd={() => { setTimeout(() => { composingRef.current = false; }, 0); }}
-            placeholder={dragOver ? "Drop files here…" : "Ask anything — analyze data, run code, explore results"}
+            placeholder={dragOver ? "Drop files here…" : researchPrompt}
             rows={2}
             className="max-h-[160px] w-full resize-none bg-transparent px-3 py-2 text-sm leading-6 text-text outline-none placeholder:text-muted"
           />
@@ -436,17 +577,15 @@ export function LiveSessionPage() {
             </div>
             <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFilePick} />
             <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
-              {models.length > 0 && (
-                <ModelControlMenu
-                  models={models}
-                  selectedModel={selectedModel}
-                  thinking={thinking}
-                  thinkingLevels={thinkingLevels}
-                  disabled={modelControlsDisabled}
-                  onModelChange={handleModelChange}
-                  onThinkingChange={handleThinkingChange}
-                />
-              )}
+              <ModelControlMenu
+                models={models}
+                selectedModel={selectedModel}
+                thinking={thinking}
+                thinkingLevels={thinkingLevels}
+                disabled={modelControlsDisabled || models.length === 0}
+                onModelChange={handleModelChange}
+                onThinkingChange={handleThinkingChange}
+              />
               {working ? (
                 <button aria-label="Stop generation" onClick={() => void abort().catch(() => undefined)} className="h-7 w-7 rounded-input bg-accent text-accent-fg flex items-center justify-center hover:bg-error transition-colors">
                   <Square size={14} fill="currentColor" />
@@ -455,10 +594,10 @@ export function LiveSessionPage() {
                 <button
                   aria-label="Send message"
                   onClick={handleSend}
-                  disabled={!selectedModel || reviewingProject || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
+                  disabled={(!selectedModel && !researchMode) || reviewingProject || researchBusy || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
                   className={cn(
                     "h-7 w-7 rounded-input flex items-center justify-center",
-                    (selectedModel && !reviewingProject && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted cursor-default",
+                    ((selectedModel || researchMode) && !reviewingProject && !researchBusy && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted cursor-default",
                   )}
                 >
                   <ArrowUp size={15} />

@@ -7,7 +7,7 @@ import { WorkspaceEnvironmentService } from "./workspace-environment.js";
 
 export type JobStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled" | "timed_out";
 export interface JobRequirement { cpu?: number; memory_mb?: number; gpu?: boolean; runtime?: string; packages?: string[]; timeout_seconds?: number; [key: string]: unknown }
-export interface JobRecord { job_id: string; command: string[]; cwd: string; surface: string; status: JobStatus; created_at: string; started_at?: string; ended_at?: string; return_code?: number | null; stdout: string; stderr: string; artifact_ids: string[]; environment: Record<string, unknown>; requirement: JobRequirement }
+export interface JobRecord { job_id: string; command: string[]; cwd: string; execution_cwd?: string; surface: string; status: JobStatus; created_at: string; started_at?: string; ended_at?: string; return_code?: number | null; stdout: string; stderr: string; artifact_ids: string[]; environment: Record<string, unknown>; requirement: JobRequirement }
 
 export class JobCoordinator {
   private readonly children = new Map<string, ChildProcess>();
@@ -32,8 +32,15 @@ export class JobCoordinator {
     const requirement = (body.requirement && typeof body.requirement === "object" ? body.requirement : {}) as JobRequirement;
     const check = this.capabilities(requirement);
     if (check.status === "blocked") throw new Error(check.reasons.join("; "));
-    const environment = await this.environments.environment(cwd);
-    const record: JobRecord = { job_id: `job_${randomUUID().replaceAll("-", "").slice(0, 16)}`, command, cwd, surface: typeof body.surface === "string" ? body.surface : "local", status: "pending", created_at: new Date().toISOString(), stdout: "", stderr: "", artifact_ids: [], environment: { platform: process.platform, node: process.version, virtual_env: environment.VIRTUAL_ENV, npm_prefix: environment.npm_config_prefix }, requirement };
+    const baseEnvironment = await this.environments.environment(cwd);
+    const requestedEnvironment = body.env && typeof body.env === "object"
+      ? Object.fromEntries(Object.entries(body.env as Record<string, unknown>).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+      : {};
+    const environment = { ...baseEnvironment, ...requestedEnvironment };
+    const executionCwd = typeof body.execution_cwd === "string" ? resolve(body.execution_cwd) : resolve(cwd);
+    const executionRelative = relative(resolve(cwd), executionCwd);
+    if (isAbsolute(executionRelative) || executionRelative === ".." || executionRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) throw new Error("execution cwd escapes the workspace");
+    const record: JobRecord = { job_id: `job_${randomUUID().replaceAll("-", "").slice(0, 16)}`, command, cwd, ...(executionCwd !== resolve(cwd) ? { execution_cwd: executionCwd } : {}), surface: typeof body.surface === "string" ? body.surface : "local", status: "pending", created_at: new Date().toISOString(), stdout: "", stderr: "", artifact_ids: [], environment: { platform: process.platform, node: process.version, virtual_env: environment.VIRTUAL_ENV, npm_prefix: environment.npm_config_prefix }, requirement };
     await this.save(record);
     const task = this.run(record, environment);
     this.jobs.set(record.job_id, task);
@@ -72,7 +79,7 @@ export class JobCoordinator {
     record.status = "running"; record.started_at = new Date().toISOString(); await this.save(record);
     let child: ChildProcess | undefined;
     try {
-      child = spawn(record.command[0]!, record.command.slice(1), { cwd: record.cwd, env: environment, stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn(record.command[0]!, record.command.slice(1), { cwd: record.execution_cwd ?? record.cwd, env: environment, stdio: ["ignore", "pipe", "pipe"] });
       this.children.set(record.job_id, child);
       const stdout: Buffer[] = []; const stderr: Buffer[] = [];
       child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk)); child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));

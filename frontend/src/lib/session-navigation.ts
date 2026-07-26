@@ -4,6 +4,19 @@ export interface SessionLocation {
   hash: string;
 }
 
+export function isNewConversation(
+  hasUserMessage: boolean,
+  activeSessionId: string | null,
+  activeSessionName: string | undefined,
+  threadLoaded: boolean,
+): boolean {
+  return !hasUserMessage && (
+    !activeSessionId
+    || activeSessionName === "New Session"
+    || threadLoaded
+  );
+}
+
 export function replacementSessionUrl(location: SessionLocation, oldId: string, newId: string): string | null {
   const oldSuffix = `/session/${encodeURIComponent(oldId)}`;
   if (!location.pathname.endsWith(oldSuffix)) return null;

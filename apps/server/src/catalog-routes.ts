@@ -1,4 +1,4 @@
-import { access, readdir, readFile, realpath, stat, rm } from "node:fs/promises";
+import { access, readdir, readFile, realpath, rename, stat, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { configPath, readJson, writeJsonAtomic } from "./persistence.js";
@@ -80,6 +80,34 @@ export function registerCatalogRoutes(app: FastifyInstance): void {
   app.get("/api/workspaces", async () => { const root = rootDir(); const result: Record<string, unknown>[] = []; try { for (const name of await readdir(root)) { const path = join(root, name); try { if ((await stat(join(path, ".pi-science"))).isDirectory()) result.push(await workspaceInfo(path)); } catch { /* skip */ } } } catch { /* root absent */ } return result.sort((left, right) => String(right.last_modified).localeCompare(String(left.last_modified))); });
   app.post("/api/workspaces", async (request, reply) => { const body = (request.body ?? {}) as { name?: unknown }; const name = String(body.name ?? "").trim().replace(/[\\/]/g, "-").slice(0, 100); if (!name) return reply.code(400).send({ error: "Invalid workspace name" }); const path = join(rootDir(), name); try { await stat(path); return reply.code(409).send({ error: "Workspace already exists" }); } catch { /* create */ } await import("node:fs/promises").then(({ mkdir }) => mkdir(join(path, ".pi-science"), { recursive: true })); return await workspaceInfo(path); });
   app.post("/api/workspaces/open", async (request, reply) => { const path = expandUserPath(String(((request.body ?? {}) as { path?: unknown }).path ?? "")); try { if (!(await stat(path)).isDirectory()) return reply.code(400).send({ error: "Not a directory" }); } catch { return reply.code(404).send({ error: "Folder not found" }); } await import("node:fs/promises").then(({ mkdir }) => mkdir(join(path, ".pi-science"), { recursive: true })); return await workspaceInfo(path); });
+  app.post("/api/workspaces/rename", async (request, reply) => {
+    const body = (request.body ?? {}) as { path?: unknown; name?: unknown };
+    const root = rootDir();
+    const source = resolve(String(body.path ?? ""));
+    const name = String(body.name ?? "").trim();
+    if (!name || name.length > 100 || name === "." || name === ".." || /[\\/]/.test(name)) {
+      return reply.code(400).send({ error: "Invalid workspace name" });
+    }
+    if (dirname(source) !== root) return reply.code(403).send({ error: "Cannot rename outside workspaces directory" });
+    try {
+      if (!(await stat(join(source, ".pi-science"))).isDirectory()) return reply.code(400).send({ error: "Not a Pi-Science workspace" });
+    } catch {
+      return reply.code(404).send({ error: "Workspace not found" });
+    }
+    const target = join(root, name);
+    if (target === source) return workspaceInfo(source);
+    try {
+      await stat(target);
+      return reply.code(409).send({ error: "Workspace already exists" });
+    } catch { /* target is available */ }
+    await rename(source, target);
+    const pinnedPath = configPath("pinned.json");
+    const pinned = await readJson<string[]>(pinnedPath, []);
+    if (pinned.includes(source)) {
+      await writeJsonAtomic(pinnedPath, [...new Set(pinned.map((item) => item === source ? target : item))]);
+    }
+    return workspaceInfo(target);
+  });
   app.get("/api/workspaces/pinned", async () => ({ paths: await readJson<string[]>(configPath("pinned.json"), []) }));
   app.post("/api/workspaces/pin", async (request) => { const path = String(((request.body ?? {}) as { path?: unknown }).path ?? ""); const paths = await readJson<string[]>(configPath("pinned.json"), []); if (!paths.includes(path)) paths.push(path); await writeJsonAtomic(configPath("pinned.json"), paths); return { ok: true, pinned: true }; });
   app.post("/api/workspaces/unpin", async (request) => { const path = String(((request.body ?? {}) as { path?: unknown }).path ?? ""); const paths = (await readJson<string[]>(configPath("pinned.json"), [])).filter((item) => item !== path); await writeJsonAtomic(configPath("pinned.json"), paths); return { ok: true, pinned: false }; });

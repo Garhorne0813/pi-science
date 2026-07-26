@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { PiConfig } from "@pi-science/contracts";
 import type { PiProcessOptions } from "./pi-process.js";
 import { configRoot } from "./persistence.js";
 
 export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: [], extensions: [] }, sessionPath?: string, workspaceEnvironment: NodeJS.ProcessEnv = {}): PiProcessOptions | null {
-  const cliPath = process.env.PI_CLI_PATH;
+  const cliPath = resolvePiCliPath();
   if (!cliPath) return null;
   const nodePath = process.env.PI_NODE_PATH || process.execPath;
   const dataRoot = configRoot();
@@ -64,6 +65,31 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
   };
 }
 
+export function resolvePiCliPath(environment: NodeJS.ProcessEnv = process.env): string | null {
+  const configured = environment.PI_CLI_PATH || environment.PI_SCIENCE_INSTALL_PI_CLI;
+  if (configured) return configured;
+  const installStatePath = environment.PI_SCIENCE_INSTALL_STATE_FILE
+    || join(resolve(dirname(fileURLToPath(import.meta.url)), "../../.."), ".runtime", "pi-science", "install.env");
+  try {
+    const line = readFileSync(installStatePath, "utf8")
+      .split(/\r?\n/)
+      .find((entry) => entry.startsWith("PI_SCIENCE_INSTALL_PI_CLI="));
+    if (!line) return null;
+    const value = decodeShellWord(line.slice("PI_SCIENCE_INSTALL_PI_CLI=".length));
+    return value && existsSync(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function decodeShellWord(value: string): string {
+  const trimmed = value.trim();
+  if ((trimmed.startsWith("'") && trimmed.endsWith("'")) || (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed.replace(/\\(.)/g, "$1");
+}
+
 function findAdjacentRuntime(sourcePath: string, relativePath: string): string | null {
   let current = dirname(resolve(sourcePath));
   for (let depth = 0; depth < 12; depth += 1) {
@@ -98,7 +124,7 @@ const EXTENSIONS = [
   { id: "context-mode", name: "Context Mode", description: "Optional sandboxed context index.", entrypoints: ["build/adapters/pi/extension.js"] },
 ] as const;
 
-export function runtimeExtensionStatus(cliPath = process.env.PI_CLI_PATH ?? ""): Array<{ id: string; name: string; description: string; installed: boolean; path: string | null }> {
+export function runtimeExtensionStatus(cliPath = resolvePiCliPath() ?? ""): Array<{ id: string; name: string; description: string; installed: boolean; path: string | null }> {
   return EXTENSIONS.map((extension) => {
     const path = findRuntimeExtension(extension.id, cliPath, "entrypoints" in extension ? [...extension.entrypoints] : []);
     return { id: extension.id, name: extension.name, description: extension.description, installed: Boolean(path), path };

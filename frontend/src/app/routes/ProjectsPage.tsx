@@ -107,7 +107,9 @@ export function ProjectsPage() {
       });
       invalidateApiCache("/api/workspaces");
       toast(t("projects.renamed"), "success");
-    } catch { toast(t("projects.renameError"), "error"); }
+    } catch (error) {
+      toast(error instanceof ApiError ? error.message : t("projects.renameError"), "error");
+    }
     await loadWorkspaces();
   };
 

@@ -209,11 +209,25 @@ describe("Node control plane", () => {
   it("fails closed when Node Pi management has no runtime configured", async () => {
     const workspace = join(tmpdir(), `pi-science-pi-route-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
-    const app = buildApp(config("http://127.0.0.1:1", { nodePiManager: true }));
-    openApps.push(app);
-    const response = await app.inject({ method: "POST", url: "/api/sessions", payload: { cwd: workspace } });
-    expect(response.statusCode).toBe(503);
-    expect(response.json()).toMatchObject({ code: "spawn_failed" });
-    await rm(workspace, { recursive: true, force: true });
+    const previous = {
+      cli: process.env.PI_CLI_PATH,
+      installedCli: process.env.PI_SCIENCE_INSTALL_PI_CLI,
+      installState: process.env.PI_SCIENCE_INSTALL_STATE_FILE,
+    };
+    delete process.env.PI_CLI_PATH;
+    delete process.env.PI_SCIENCE_INSTALL_PI_CLI;
+    process.env.PI_SCIENCE_INSTALL_STATE_FILE = join(workspace, "missing-install.env");
+    try {
+      const app = buildApp(config("http://127.0.0.1:1", { nodePiManager: true }));
+      openApps.push(app);
+      const response = await app.inject({ method: "POST", url: "/api/sessions", payload: { cwd: workspace } });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ code: "spawn_failed" });
+    } finally {
+      process.env.PI_CLI_PATH = previous.cli;
+      process.env.PI_SCIENCE_INSTALL_PI_CLI = previous.installedCli;
+      process.env.PI_SCIENCE_INSTALL_STATE_FILE = previous.installState;
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 });

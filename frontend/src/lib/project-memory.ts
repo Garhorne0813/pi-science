@@ -24,7 +24,7 @@ export interface ResearchLoop {
   loop_id: string;
   title: string;
   objective: string;
-  status: "draft" | "ready" | "running" | "stopping" | "paused" | "completed" | "failed" | "cancelled";
+  status: "draft" | "configuring" | "ready" | "running" | "paused" | "completed" | "failed" | "cancelled";
   mode: "serial" | "parallel";
   evaluator_ref?: EvaluatorRef | null;
   budget: {
@@ -79,7 +79,21 @@ export const projectMemoryApi = {
   loops(cwd: string) {
     return request<{ loops: ResearchLoop[] }>(`/api/project-memory/research-loops?${query(cwd)}`);
   },
-  createLoop(cwd: string, input: { title: string; objective: string; evaluator_ref?: EvaluatorRef; constraints?: string[] }) {
+  loop(cwd: string, loopId: string) {
+    return request<ResearchLoop & { experiences: ExperienceRecord[]; frontier: ExperienceRecord[] }>(`/api/project-memory/research-loops/${loopId}?${query(cwd)}`);
+  },
+  intent(cwd: string, objective: string) {
+    return request<{
+      draft: { title: string; objective: string; mode: "serial"; budget: ResearchLoop["budget"] };
+      missing_fields: string[];
+      requires_confirmation: boolean;
+    }>(`/api/project-memory/research-loop-intents?${query(cwd)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ objective }),
+    });
+  },
+  createLoop(cwd: string, input: { title: string; objective: string; evaluator_ref?: EvaluatorRef; constraints?: string[]; budget?: Partial<ResearchLoop["budget"]>; stop_conditions?: { target_metrics?: Record<string, number>; patience?: number; min_improvement?: number } }) {
     return request<ResearchLoop>(`/api/project-memory/research-loops?${query(cwd)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

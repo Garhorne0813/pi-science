@@ -57,7 +57,6 @@ export function KnowledgePage() {
   const [policy, setPolicy] = useState<ProjectPolicy | null>(null);
   const [files, setFiles] = useState<LogicalFileViews | null>(null);
   const [historyRows, setHistoryRows] = useState<Array<Record<string, unknown>>>([]);
-  const [researchLoops, setResearchLoops] = useState<ResearchLoop[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [reviewing, setReviewing] = useState(false);
@@ -110,21 +109,10 @@ export function KnowledgePage() {
     }
   }, [cwd]);
 
-  const loadResearch = useCallback(async () => {
-    try {
-      const data = await projectMemoryApi.loops(cwd);
-      setResearchLoops(data.loops);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to load research loops");
-    }
-  }, [cwd]);
-
   useEffect(() => { void loadCore(); }, [loadCore]);
   useEffect(() => {
-    if (tab === "files" && files === null) void loadFiles();
     if (tab === "history") void loadHistory();
-    if (tab === "research") void loadResearch();
-  }, [tab, files, loadFiles, loadHistory, loadResearch]);
+  }, [tab, files, loadFiles, loadHistory]);
 
   const runReviewer = async () => {
     setReviewing(true);
@@ -224,9 +212,7 @@ export function KnowledgePage() {
           pendingCount={pending.length}
           onChange={setTab}
           onRefresh={() => {
-            if (tab === "research") void loadResearch();
-            else if (tab === "files") void loadFiles();
-            else if (tab === "history") void loadHistory();
+            if (tab === "history") void loadHistory();
             else void loadCore();
           }}
         />
@@ -251,23 +237,6 @@ export function KnowledgePage() {
             />
           )}
           {tab === "knowledge" && <KnowledgeTab items={items} />}
-          {tab === "research" && (
-            <ResearchTab
-              cwd={cwd}
-              loops={researchLoops}
-              onChanged={async () => { await Promise.all([loadResearch(), loadCore(), loadHistory()]); }}
-              onError={setError}
-            />
-          )}
-          {tab === "files" && (
-            <FilesTab
-              cwd={cwd}
-              views={files}
-              policy={policy}
-              onPolicyChange={(next) => { setPolicy(next); setSummary((current) => current ? { ...current, auto_review: next.auto_review } : current); }}
-              onError={setError}
-            />
-          )}
           {tab === "history" && (
             <HistoryTab
               cwd={cwd}
@@ -302,8 +271,6 @@ function OverviewTab({ document, summary, memorySummary }: { document: string; s
       <aside className="space-y-3">
         <MetricCard label={t("knowledge.acceptedKnowledge")} value={summary?.knowledge_count ?? 0} />
         <MetricCard label={t("knowledge.pendingReview")} value={summary?.pending_count ?? 0} emphasis={(summary?.pending_count ?? 0) > 0} />
-        <MetricCard label={t("knowledge.researchRuns")} value={memorySummary?.run_count ?? 0} />
-        <MetricCard label={t("knowledge.researchArtifacts")} value={memorySummary?.artifact_count ?? 0} />
         <MetricCard label={t("knowledge.researchLoops")} value={memorySummary?.research_loop_count ?? 0} emphasis={(memorySummary?.active_research_loop_count ?? 0) > 0} />
         <div className="rounded-card border border-border bg-surface p-4 text-xs leading-5 text-muted">
           <Lock size={15} className="mb-2 text-accent" />
@@ -627,7 +594,7 @@ function KnowledgeTab({ items }: { items: KnowledgeItem[] }) {
   );
 }
 
-function ResearchTab({
+export function ResearchTab({
   cwd,
   loops,
   onChanged,
@@ -820,7 +787,7 @@ function LoopActionButton({ busy, onClick, icon, label }: { busy: boolean; onCli
   );
 }
 
-function FilesTab({
+export function FilesTab({
   cwd,
   views,
   policy,

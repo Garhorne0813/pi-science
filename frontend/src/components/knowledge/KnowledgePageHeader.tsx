@@ -1,11 +1,11 @@
-import { BookOpen, FileText, FlaskConical, FolderOpen, History, Inbox, Loader2, Sparkles } from "lucide-react";
+import { BookOpen, FileText, History, Inbox, Loader2, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "../../lib/cn";
 import type { ProjectPolicy } from "../../lib/project-knowledge";
 import { WorkspacePageHeader, WorkspacePageRefreshButton } from "../layout/WorkspacePage";
 
-export type KnowledgePageTab = "overview" | "inbox" | "knowledge" | "research" | "files" | "history";
+export type KnowledgePageTab = "overview" | "inbox" | "knowledge" | "history";
 
 export function KnowledgePageHeader({
   policy,
@@ -50,8 +50,6 @@ export function KnowledgePageTabs({ tab, pendingCount, onChange, onRefresh }: {
       <TabButton active={tab === "overview"} onClick={() => onChange("overview")} icon={<BookOpen size={15} />} label={t("knowledge.overview")} />
       <TabButton active={tab === "inbox"} onClick={() => onChange("inbox")} icon={<Inbox size={15} />} label={t("knowledge.inbox")} badge={pendingCount} />
       <TabButton active={tab === "knowledge"} onClick={() => onChange("knowledge")} icon={<FileText size={15} />} label={t("knowledge.knowledge")} />
-      <TabButton active={tab === "research"} onClick={() => onChange("research")} icon={<FlaskConical size={15} />} label={t("knowledge.research")} />
-      <TabButton active={tab === "files"} onClick={() => onChange("files")} icon={<FolderOpen size={15} />} label={t("knowledge.files")} />
       <TabButton active={tab === "history"} onClick={() => onChange("history")} icon={<History size={15} />} label={t("knowledge.history")} />
       <div className="ml-auto">
         <WorkspacePageRefreshButton label={t("common.refresh")} onClick={onRefresh} />

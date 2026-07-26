@@ -3,10 +3,10 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildPiProcessOptions } from "./pi-runtime-launch.js";
+import { buildPiProcessOptions, resolvePiCliPath } from "./pi-runtime-launch.js";
 
 const cleanup: string[] = [];
-const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, tsx: process.env.PI_TSX_PATH, tsconfig: process.env.PI_TSCONFIG_PATH };
+const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, installedCli: process.env.PI_SCIENCE_INSTALL_PI_CLI, installState: process.env.PI_SCIENCE_INSTALL_STATE_FILE, tsx: process.env.PI_TSX_PATH, tsconfig: process.env.PI_TSCONFIG_PATH };
 
 beforeEach(async () => {
   const root = join(tmpdir(), `pi-science-runtime-launch-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -19,6 +19,8 @@ beforeEach(async () => {
 afterEach(async () => {
   process.env.PI_SCIENCE_HOME = original.home;
   process.env.PI_CLI_PATH = original.cli;
+  process.env.PI_SCIENCE_INSTALL_PI_CLI = original.installedCli;
+  process.env.PI_SCIENCE_INSTALL_STATE_FILE = original.installState;
   process.env.PI_TSX_PATH = original.tsx;
   process.env.PI_TSCONFIG_PATH = original.tsconfig;
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
@@ -37,6 +39,22 @@ async function obstructModelsFile(customProviders?: unknown[]): Promise<string> 
 }
 
 describe("Pi runtime custom provider materialization", () => {
+  it("discovers the installed Pi CLI when PI_CLI_PATH is not exported", async () => {
+    const root = join(tmpdir(), `pi-runtime-install-state-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(root);
+    const cli = join(root, "pi source", "cli.mjs");
+    const state = join(root, "install.env");
+    await mkdir(join(root, "pi source"), { recursive: true });
+    await writeFile(cli, "export {};\n", "utf8");
+    await writeFile(state, `PI_SCIENCE_INSTALL_PI_CLI=${cli.replaceAll(" ", "\\ ")}\n`, "utf8");
+    delete process.env.PI_CLI_PATH;
+    delete process.env.PI_SCIENCE_INSTALL_PI_CLI;
+    process.env.PI_SCIENCE_INSTALL_STATE_FILE = state;
+
+    expect(resolvePiCliPath()).toBe(cli);
+    expect(buildPiProcessOptions(root)?.args).toContain(cli);
+  });
+
   it("passes workspace package isolation into the agent runtime", async () => {
     const cwd = join(tmpdir(), `pi-runtime-environment-${Date.now()}`);
     cleanup.push(cwd);

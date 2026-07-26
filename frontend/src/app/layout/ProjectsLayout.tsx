@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useParams, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
-import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Sun, Moon, Puzzle, FileText, BookOpen, Play, Inbox } from "lucide-react";
+import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Sun, Moon, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical } from "lucide-react";
 import { useUiStore } from "../../lib/store";
 import { useRuntimeStore } from "../../lib/runtime-store";
 import { InspectorShell } from "../../components/inspector/InspectorShell";
@@ -74,6 +74,7 @@ export function ProjectsLayout() {
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} icon={<BookOpen size={16} />} label={t("nav.notebooks")} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/runs`} icon={<Play size={16} />} label={t("nav.runs")} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/knowledge`} icon={<Inbox size={16} />} label={t("nav.knowledge")} />
+              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/research`} icon={<FlaskConical size={16} />} label={t("nav.research")} />
             </>
           )}
           <div className="flex-1" />
@@ -112,6 +113,7 @@ export function ProjectsLayout() {
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} label={t("nav.files")} icon={<FileText size={16} />} active={location.pathname.endsWith("/files")} />
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/skills`} label={t("nav.skills")} icon={<Puzzle size={16} />} active={location.pathname.endsWith("/skills")} />
                   <KnowledgeNavItem cwd={activeCwd!} active={location.pathname.endsWith("/knowledge")} />
+                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/research`} label={t("nav.research")} icon={<FlaskConical size={16} />} active={location.pathname.endsWith("/research")} />
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} label={t("nav.notebooks")} icon={<BookOpen size={16} />} active={location.pathname.endsWith("/notebooks")} />
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/runs`} label={t("nav.runs")} icon={<Play size={16} />} active={location.pathname.endsWith("/runs")} />
                 </>

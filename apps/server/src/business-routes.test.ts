@@ -126,6 +126,35 @@ describe("native control-plane business routes", () => {
     expect(response.json()[0].last_modified).not.toBe("");
   });
 
+  it("renames a workspace without overwriting another workspace and updates pinned paths", async () => {
+    const root = join(tmpdir(), `pi-science-workspaces-rename-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const source = join(root, "Untitled Workspace");
+    const target = join(root, "Named Project");
+    tempDirs.push(root);
+    process.env.PI_SCIENCE_WORKSPACES = root;
+    process.env.PI_SCIENCE_HOME = join(root, "control-home");
+    await mkdir(join(source, ".pi-science"), { recursive: true });
+    const app = buildApp(config());
+    apps.push(app);
+    expect((await app.inject({ method: "POST", url: "/api/workspaces/pin", payload: { path: source } })).statusCode).toBe(200);
+
+    const renamed = await app.inject({ method: "POST", url: "/api/workspaces/rename", payload: { path: source, name: "Named Project" } });
+
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json()).toMatchObject({ name: "Named Project", path: target });
+    await expect(access(source)).rejects.toThrow();
+    await expect(access(join(target, ".pi-science"))).resolves.toBeUndefined();
+    expect((await app.inject({ method: "GET", url: "/api/workspaces/pinned" })).json()).toEqual({ paths: [target] });
+
+    await mkdir(join(root, "Existing", ".pi-science"), { recursive: true });
+    const conflict = await app.inject({ method: "POST", url: "/api/workspaces/rename", payload: { path: target, name: "Existing" } });
+    expect(conflict.statusCode).toBe(409);
+    await expect(access(join(target, ".pi-science"))).resolves.toBeUndefined();
+
+    const outside = await app.inject({ method: "POST", url: "/api/workspaces/rename", payload: { path: join(root, "..", "outside"), name: "Escape" } });
+    expect(outside.statusCode).toBe(403);
+  });
+
   it("persists jobs, artifacts, provenance, and redacts settings secrets", async () => {
     const cwd = await workspace();
     const home = join(cwd, "control-home"); process.env.PI_SCIENCE_HOME = home;

@@ -123,7 +123,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings);
   if (config.nodeRuns !== false) registerRunEndpointRoutes(app);
   if (config.nodeCatalog !== false) registerCatalogRoutes(app);
-  if (config.nodeProject !== false) registerProjectRoutes(app);
+  if (config.nodeProject !== false) registerProjectRoutes(app, jobs);
   if (config.nodePiManager) app.addHook("onClose", async () => nodeSessionService.shutdownAll());
   app.addHook("onClose", async () => scientificRuntime.shutdown());
   if (config.nodePiManager) {
