@@ -8,7 +8,7 @@ import { ResearchRepository } from "./repository.js";
 const cleanup: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
 });
 
 describe("research events", () => {

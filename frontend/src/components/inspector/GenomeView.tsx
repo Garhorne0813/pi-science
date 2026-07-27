@@ -9,7 +9,7 @@ import {
   packRows,
   parseGenome,
   type GenomeFeature,
-} from "@/lib/genome";
+} from "@/lib/viewers/genome";
 import { cn } from "@/lib/cn";
 
 const ROW_H = 15;

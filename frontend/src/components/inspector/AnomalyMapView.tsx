@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { divergingColor, parseAnomaly, type AnomalyGrid } from "@/lib/anomaly";
+import { divergingColor, parseAnomaly, type AnomalyGrid } from "@/lib/viewers/anomaly";
 
 /**
  * Climate-anomaly map (P1-3, earth): renders a gridded `.anom` field on an

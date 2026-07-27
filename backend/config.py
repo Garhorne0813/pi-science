@@ -37,7 +37,7 @@ WORKSPACES_DIR = Path(os.environ.get("PI_SCIENCE_WORKSPACES", Path.home() / "pi-
 
 # Server
 HOST = os.environ.get("PI_SCIENCE_HOST", "127.0.0.1")
-PORT = int(os.environ.get("PI_SCIENCE_PORT", "8787"))
+PORT = int(os.environ.get("PI_SCIENCE_PORT", "8788"))
 CORS_ORIGINS = os.environ.get("PI_SCIENCE_CORS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
 
 

@@ -2,6 +2,8 @@ import { createBrowserRouter } from "react-router-dom";
 import { Suspense, lazy, type ReactElement } from "react";
 import { ProjectsLayout } from "./layout/ProjectsLayout";
 import { RoutedErrorBoundary } from "../components/ErrorBoundary";
+import { WorkspaceProvider } from "../lib/workspace-context";
+import { useTranslation } from "react-i18next";
 
 const ProjectsPage = lazy(() => import("./routes/ProjectsPage").then((m) => ({ default: m.ProjectsPage })));
 const LiveSessionPage = lazy(() => import("./routes/LiveSessionPage").then((m) => ({ default: m.LiveSessionPage })));
@@ -13,13 +15,16 @@ const RunsPage = lazy(() => import("./routes/RunsPage").then((m) => ({ default: 
 const KnowledgePage = lazy(() => import("./routes/KnowledgePage").then((m) => ({ default: m.KnowledgePage })));
 const ResearchPage = lazy(() => import("./routes/ResearchPage").then((m) => ({ default: m.ResearchPage })));
 
-const fallback = <div style={{ padding: "2rem", color: "#888" }}>Loading…</div>;
-const wrap = (element: ReactElement) => <Suspense fallback={fallback}>{element}</Suspense>;
+function LoadingFallback() {
+  const { t } = useTranslation();
+  return <div style={{ padding: "2rem", color: "#888" }}>{t("common.loading")}</div>;
+}
+const wrap = (element: ReactElement) => <Suspense fallback={<LoadingFallback />}>{element}</Suspense>;
 
 export const router = createBrowserRouter([
   {
     path: "/",
-    element: <RoutedErrorBoundary><ProjectsLayout /></RoutedErrorBoundary>,
+    element: <RoutedErrorBoundary><WorkspaceProvider><ProjectsLayout /></WorkspaceProvider></RoutedErrorBoundary>,
     children: [
       { index: true, element: wrap(<ProjectsPage />) },
       { path: "settings", element: wrap(<SettingsPage />) },

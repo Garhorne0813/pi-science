@@ -121,11 +121,3 @@ export async function workbookSheets(bytes: ArrayBuffer): Promise<SheetHtml[]> {
   await workbook.xlsx.load(bytes);
   return workbook.worksheets.map((worksheet) => renderSheet(worksheet));
 }
-
-// Kept for compatibility with older callers.
-export async function renderXlsx(bytes: ArrayBuffer): Promise<HTMLElement> {
-  const root = document.createElement("div");
-  const sheets = await workbookSheets(bytes);
-  root.innerHTML = sheets[0]?.html || "";
-  return root;
-}

@@ -136,7 +136,7 @@ flowchart LR
 - The **Python worker** starts when a scientific route is requested, provides scientific services and kernels, and is reclaimed after 5 minutes idle by default (`PI_SCIENCE_SCIENTIFIC_IDLE_MS`).
 - Each session is keyed by both workspace and session ID. Idle Pi processes are reclaimed after 30 minutes by default; set `PI_SCIENCE_IDLE_RUNTIME_MS=0` to disable cleanup.
 
-See [Node control-plane architecture](docs/node-control-plane.md) and the [scientific platform runtime](docs/science-platform-runtime.md) for deeper implementation details.
+See the [research loop architecture (ADR)](docs/adr-research-loop-subagents.md) for deeper implementation details.
 
 ## Project Model
 

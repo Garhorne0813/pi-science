@@ -38,7 +38,7 @@ else
     PI_REPO_PATH="$(cat "$PI_DEV_MARKER")"
     PI_CLI="$PI_REPO_PATH/packages/coding-agent/src/cli.ts"
   else
-    PI_CLI="$RUNTIME_DIR/cli.js"
+    PI_CLI="$RUNTIME_DIR/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"
   fi
 fi
 

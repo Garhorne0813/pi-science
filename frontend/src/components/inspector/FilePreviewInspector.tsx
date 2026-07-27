@@ -18,7 +18,7 @@ import { MarkdownViewer } from "@/components/markdown-viewer/MarkdownViewer";
 import { ProvenancePanel } from "./ProvenancePanel";
 import { TablePreview } from "./TablePreview";
 import { TableChart } from "./TableChart";
-import { canChart } from "@/lib/tableChart";
+import { canChart } from "@/lib/chart";
 const DocxView = lazy(() => import("./OfficePreview").then((module) => ({ default: module.DocxView })));
 const PptxView = lazy(() => import("./OfficePreview").then((module) => ({ default: module.PptxView })));
 const XlsxView = lazy(() => import("./OfficePreview").then((module) => ({ default: module.XlsxView })));
@@ -33,7 +33,6 @@ import { AnomalyMapView } from "./AnomalyMapView";
 import { PhaseView } from "./PhaseView";
 import { useScrollMemory } from "@/lib/scrollMemory";
 import { cn } from "@/lib/cn";
-import { PaneTitlebarInset } from "./RightPane";
 import { previewPolicy } from "@/lib/preview-policy";
 
 /**
@@ -53,8 +52,9 @@ export function FilePreviewInspector({
   onClose: () => void;
   /** Pane-level header buttons (e.g. maximize), rendered before Close. */
   controls?: React.ReactNode;
-  cwd?: string;
+  cwd: string;
 }) {
+  const { t } = useTranslation();
   const kind = previewKindForName(data.filename);
   const policy = previewPolicy(kind);
   const needsUrl = policy.load.includes("url");
@@ -88,22 +88,22 @@ export function FilePreviewInspector({
           setUrl(u);
           // Browser dev has no local server; html can still preview inline content.
           if (!u && kind !== "html") {
-            setError("File not found or inaccessible");
+            setError(t("filePreview.fileUnavailable"));
           }
         }
         if (needsText && data.content === undefined) {
           const f = await readArtifact(data.path, data.root, cwd);
           if (cancelled) return;
           if (f && f.encoding === "utf8") setText(f.data);
-          else if (f) setError("Binary file — cannot preview as text");
+          else if (f) setError(t("filePreview.binaryTextUnsupported"));
           else if (kind !== "html" && kind !== "markdown")
-            setError("File not found or inaccessible");
+            setError(t("filePreview.fileUnavailable"));
         }
         if (needsBytes) {
           const f = await readArtifact(data.path, data.root, cwd);
           if (cancelled) return;
           if (f && f.encoding === "base64") setBytes(base64ToBytes(f.data));
-          else setError("File not found or inaccessible");
+          else setError(t("filePreview.fileUnavailable"));
         }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -134,28 +134,27 @@ export function FilePreviewInspector({
   return (
     <div className="flex h-full flex-col">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
-        <PaneTitlebarInset />
         <span className="truncate text-sm font-medium text-text">{data.filename}</span>
         <span className="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">
-          {data.artifact || "File"}
+          {data.artifact || t("filePreview.file")}
         </span>
         {canToggle && (
           <div className="ml-2 flex items-center gap-1 rounded-input bg-surface-2 p-0.5">
             {/* eslint-disable-next-line i18next/no-literal-string -- "preview" is an internal tab id, not display text (the visible label is t("filePreview.tabs.preview")) */}
             <ToggleBtn active={tab === "preview"} onClick={() => setTab("preview")}>
-              <Eye size={13} /> Preview
+              <Eye size={13} /> {t("filePreview.tabs.preview")}
             </ToggleBtn>
             {/* eslint-disable-next-line i18next/no-literal-string -- "code" is an internal tab id, not display text (the visible label is t("filePreview.tabs.code")) */}
             <ToggleBtn active={tab === "code"} onClick={() => setTab("code")}>
-              <Code2 size={13} /> Code
+              <Code2 size={13} /> {t("filePreview.tabs.code")}
             </ToggleBtn>
           </div>
         )}
         <div className="flex-1" />
         <button
           className={cn(showHistory ? "text-accent" : "text-text hover:opacity-60")}
-          aria-label="Version history"
-          title="Version history"
+          aria-label={t("filePreview.versionHistory")}
+          title={t("filePreview.versionHistory")}
           aria-pressed={showHistory}
           onClick={() => setShowHistory((v) => !v)}
         >
@@ -163,14 +162,14 @@ export function FilePreviewInspector({
         </button>
         <button
           className="text-text hover:opacity-60"
-          aria-label={"Open"}
-          title={"Open externally"}
+          aria-label={t("common.open")}
+          title={t("filePreview.openExternally")}
           onClick={() => void openArtifactExternally(data.path, data.root, cwd)}
         >
           <ExternalLink size={14} strokeWidth={1.5} />
         </button>
         {controls}
-        <button className="text-text hover:opacity-60" aria-label="Close" onClick={onClose}>
+        <button className="text-text hover:opacity-60" aria-label={t("common.close")} onClick={onClose}>
           <X size={14} strokeWidth={1.5} />
         </button>
       </header>
@@ -179,7 +178,7 @@ export function FilePreviewInspector({
         {showHistory && <ProvenancePanel path={data.path} language={data.language} cwd={cwd} />}
         {!showHistory && loading && (
           <div className="flex items-center gap-2 p-4 text-sm text-muted">
-            <Loader2 size={15} className="animate-spin" /> {`Loading ${data.filename}...`}
+            <Loader2 size={15} className="animate-spin" /> {t("filePreview.loadingFile", { filename: data.filename })}
           </div>
         )}
         {!showHistory && !loading && error && (
@@ -193,7 +192,7 @@ export function FilePreviewInspector({
           />
         )}
         {!showHistory && !loading && !error && (
-          <Suspense fallback={<Note text="Loading scientific viewer…" />}>
+          <Suspense fallback={<Note text={t("filePreview.loadingScientificViewer")} />}>
             <Body
               kind={kind}
               url={url}
@@ -230,63 +229,64 @@ function Body({
   path: string;
   language?: string;
 }) {
+  const { t } = useTranslation();
   if (kind === "docx" || kind === "xlsx" || kind === "pptx") {
     // Office views scroll internally (the outer pane never does), so they
     // carry their own scroll memory, keyed apart from the outer container's.
-    if (!bytes) return <Note text={"Preview loading…"} />;
+    if (!bytes) return <Note text={t("filePreview.loading")} />;
     if (kind === "docx") return <DocxView bytes={bytes} scrollKey={`office:${path}`} />;
     if (kind === "xlsx") return <XlsxView bytes={bytes} scrollKey={`office:${path}`} />;
     return <PptxView bytes={bytes} scrollKey={`office:${path}`} />;
   }
   if (kind === "mesh") {
     return bytes !== null ? (
-      <Suspense fallback={<div className="p-4 text-sm text-muted">Loading 3D viewer…</div>}>
+      <Suspense fallback={<div className="p-4 text-sm text-muted">{t("filePreview.loading3dViewer")}</div>}>
         <MeshView filename={filename} bytes={bytes} />
       </Suspense>
     ) : (
-      <Note text={"Preview loading…"} />
+      <Note text={t("filePreview.loading")} />
     );
   }
   if (kind === "fits") {
     return bytes !== null ? (
       <FitsView filename={filename} bytes={bytes} />
     ) : (
-      <Note text={"Preview loading…"} />
+      <Note text={t("filePreview.loading")} />
     );
   }
   if (kind === "dos") {
     return bytes !== null ? (
       <DosView filename={filename} bytes={bytes} />
     ) : (
-      <Note text={"Preview loading…"} />
+      <Note text={t("filePreview.loading")} />
     );
   }
   if (kind === "bands") {
     return bytes !== null ? (
       <BandView filename={filename} bytes={bytes} />
     ) : (
-      <Note text={"Preview loading…"} />
+      <Note text={t("filePreview.loading")} />
     );
   }
   if (kind === "qcode") {
     return text !== null ? (
       <QCodeView filename={filename} text={text} />
     ) : (
-      <Note text={"Preview loading…"} />
+      <Note text={t("filePreview.loading")} />
     );
   }
   if (kind === "anomaly") {
     return text !== null ? (
       <AnomalyMapView filename={filename} text={text} />
     ) : (
-      <Note text={"Preview loading…"} />
+      <Note text={t("filePreview.loading")} />
     );
   }
   if (kind === "phase") {
     return text !== null ? (
       <PhaseView filename={filename} text={text} />
     ) : (
-      <Note text={"Preview loading…"} />
+      <Note text={t("filePreview.loading")} />
     );
   }
   if (kind === "molecule") {
@@ -296,13 +296,13 @@ function Body({
           <CodeViewer code={text} language={language} />
         </div>
       ) : (
-        <Note text={"Open in desktop app"} />
+        <Note text={t("filePreview.openInDesktop")} />
       );
     }
     return text !== null ? (
       <MoleculeView filename={filename} text={text} />
     ) : (
-      <Note text={"Preview loading…"} />
+      <Note text={t("filePreview.loading")} />
     );
   }
   if (kind === "genome") {
@@ -312,13 +312,13 @@ function Body({
           <CodeViewer code={text} language={language} />
         </div>
       ) : (
-        <Note text={"Open in desktop app"} />
+        <Note text={t("filePreview.openInDesktop")} />
       );
     }
     return text !== null ? (
       <GenomeView filename={filename} text={text} />
     ) : (
-      <Note text={"Preview loading…"} />
+      <Note text={t("filePreview.loading")} />
     );
   }
   if (kind === "markdown") {
@@ -328,7 +328,7 @@ function Body({
           <CodeViewer code={text} language="markdown" />
         </div>
       ) : (
-        <Note text={"Open in desktop app"} />
+        <Note text={t("filePreview.openInDesktop")} />
       );
     }
     // A document reads as a page: white paper, black text, whatever the app
@@ -340,7 +340,7 @@ function Body({
         </div>
       </div>
     ) : (
-      <Note text={"Preview loading…"} />
+      <Note text={t("filePreview.loading")} />
     );
   }
   if (kind === "html" && showCode) {
@@ -349,7 +349,7 @@ function Body({
         <CodeViewer code={text} language="html" />
       </div>
     ) : (
-      <Note text={"Open in desktop app"} />
+      <Note text={t("filePreview.openInDesktop")} />
     );
   }
   if (kind === "html") {
@@ -361,7 +361,7 @@ function Body({
     if (url) {
       return (
         <iframe
-          title={"HTML preview"}
+          title={t("filePreview.htmlPreview")}
           src={url}
           sandbox="allow-scripts allow-same-origin"
           className="h-full min-h-[480px] w-full bg-white"
@@ -371,21 +371,21 @@ function Body({
     if (text !== null) {
       return (
         <iframe
-          title={"HTML preview"}
+          title={t("filePreview.htmlPreview")}
           srcDoc={text}
           sandbox="allow-scripts allow-same-origin"
           className="h-full min-h-[480px] w-full bg-white"
         />
       );
     }
-    return <Note text={"Preview loading…"} />;
+    return <Note text={t("filePreview.loading")} />;
   }
   if (kind === "pdf") {
     // The webview's native PDF viewer (WKWebView / WebView2) renders the served URL.
     return url ? (
-      <iframe title={"PDF preview"} src={url} className="h-full min-h-[480px] w-full" />
+      <iframe title={t("filePreview.pdfPreview")} src={url} className="h-full min-h-[480px] w-full" />
     ) : (
-      <Note text={"Preview loading…"} />
+      <Note text={t("filePreview.loading")} />
     );
   }
   if (kind === "image") {
@@ -394,7 +394,7 @@ function Body({
         <img src={url} alt={filename} className="max-w-full rounded-sm bg-white shadow-card" />
       </div>
     ) : (
-      <Note text={"Preview loading…"} />
+      <Note text={t("filePreview.loading")} />
     );
   }
   if (kind === "video") {
@@ -409,14 +409,14 @@ function Body({
         />
       </div>
     ) : (
-      <Note text={"Preview loading…"} />
+      <Note text={t("filePreview.loading")} />
     );
   }
   if (kind === "table") {
     return text !== null ? (
       <TableView table={parseTableFile(filename, text)} />
     ) : (
-      <Note text={"Preview loading…"} />
+      <Note text={t("filePreview.loading")} />
     );
   }
   return text !== null ? (
@@ -424,7 +424,7 @@ function Body({
       <CodeViewer code={text} language={language} />
     </div>
   ) : (
-    <Note text={"Preview loading…"} />
+    <Note text={t("filePreview.loading")} />
   );
 }
 
@@ -435,6 +435,7 @@ function Note({ text }: { text: string }) {
 /** Tabular file preview with a Table ↔ Chart toggle. The Chart tab appears only
  *  when the data has a numeric column to plot (P1-5 native chart surface). */
 function TableView({ table }: { table: import("@/lib/csv").ParsedTable }) {
+  const { t } = useTranslation();
   const [view, setView] = useState<"table" | "chart">("table");
   const chartable = canChart(table);
   return (
@@ -443,11 +444,11 @@ function TableView({ table }: { table: import("@/lib/csv").ParsedTable }) {
         <div className="flex items-center gap-1 border-b border-border px-3 py-1.5">
           {/* eslint-disable-next-line i18next/no-literal-string -- "table" is an internal view id, not display text (the visible label is t("filePreview.tableView.table")) */}
           <ToggleBtn active={view === "table"} onClick={() => setView("table")}>
-            {"Table"}
+            {t("filePreview.tableView.table")}
           </ToggleBtn>
           {/* eslint-disable-next-line i18next/no-literal-string -- "chart" is an internal view id, not display text (the visible label is t("filePreview.tableView.chart")) */}
           <ToggleBtn active={view === "chart"} onClick={() => setView("chart")}>
-            {"Chart"}
+            {t("filePreview.tableView.chart")}
           </ToggleBtn>
         </div>
       )}
@@ -479,7 +480,7 @@ export function PreviewError({
   filename: string;
   path?: string;
   root?: FileRoot;
-  cwd?: string;
+  cwd: string;
   onOpenExternally: () => void;
 }) {
   const { t } = useTranslation();
@@ -495,7 +496,7 @@ export function PreviewError({
     try {
       const result = await probeLargeFile(path, root, cwd);
       if (result) setPointer(result);
-      else setProbeError("Unable to inspect this file.");
+      else setProbeError(t("filePreview.inspectFailed"));
     } catch (e) {
       setProbeError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -507,8 +508,8 @@ export function PreviewError({
   return (
     <div className="p-4">
       <div className="rounded-card border border-border bg-surface p-4 text-sm text-muted">
-        <div className="mb-1 font-medium text-text">{`${filename} is too large`}</div>
-        <p className="mb-3">{"File is too large to preview in the browser."}</p>
+        <div className="mb-1 font-medium text-text">{t("filePreview.tooLargeTitle", { filename })}</div>
+        <p className="mb-3">{t("filePreview.tooLargeBody")}</p>
         <div className="flex flex-wrap gap-2">
           {path && (
             <button
@@ -524,7 +525,7 @@ export function PreviewError({
             className="inline-flex items-center gap-1.5 rounded-input border border-border bg-surface-2 px-2.5 py-1.5 text-[13px] text-text hover:bg-surface"
             onClick={onOpenExternally}
           >
-            <ExternalLink size={13} /> {"Open"}
+            <ExternalLink size={13} /> {t("common.open")}
           </button>
         </div>
         {probeError && <div className="mt-3 text-[13px] text-error">{probeError}</div>}

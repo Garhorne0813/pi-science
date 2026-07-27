@@ -9,7 +9,10 @@ export type Item = { id: string; type: string; title: string; summary: string; c
 export type Proposal = Item & { proposal_type: "knowledge" | "file_operation"; knowledge_type?: string; reason: string; operations: unknown[]; decision_reason?: string | null; applied_history_id?: string | null };
 export type ProjectState = { items: Item[]; proposals: Proposal[]; project_versions: Array<{ id: string; created_at: string; reason: string; knowledge_count: number; content: string }>; policy: Policy; history: Array<Record<string, unknown>> };
 
-export const defaultPolicy = (): Policy => ({ auto_review: true, reminder_threshold: 5, max_directory_depth: 3, minimum_files_for_new_category: 3, locked_paths: [], naming_pattern: "{date}_{topic}_{kind}_{version}", accepted_counts: {}, rejected_counts: {}, external_services_allowed: true, allowed_egress_domains: [], blocked_data_classes: [], updated_at: new Date().toISOString() });
+// `auto_review` defaults to false: an automatic model call after every settled turn spends the
+// user's budget, so it must be opted into. A workspace that already stored a policy keeps its own
+// value — readProjectState only falls back to these defaults for keys the state file does not have.
+export const defaultPolicy = (): Policy => ({ auto_review: false, reminder_threshold: 5, max_directory_depth: 3, minimum_files_for_new_category: 3, locked_paths: [], naming_pattern: "{date}_{topic}_{kind}_{version}", accepted_counts: {}, rejected_counts: {}, external_services_allowed: true, allowed_egress_domains: [], blocked_data_classes: [], updated_at: new Date().toISOString() });
 export function statePath(cwd: string): string { return workspaceFile(cwd, "project-state.json"); }
 export async function readProjectState(cwd: string): Promise<ProjectState> { const value = await readJson<Partial<ProjectState>>(statePath(cwd), {}); return { items: Array.isArray(value.items) ? value.items : [], proposals: Array.isArray(value.proposals) ? value.proposals : [], project_versions: Array.isArray(value.project_versions) ? value.project_versions : [], policy: { ...defaultPolicy(), ...(value.policy ?? {}) }, history: Array.isArray(value.history) ? value.history : [] }; }
 export function timestamp(): string { return new Date().toISOString(); }

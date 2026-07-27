@@ -10,6 +10,8 @@ export interface JobRequirement { cpu?: number; memory_mb?: number; gpu?: boolea
 export interface JobRecord { job_id: string; command: string[]; cwd: string; execution_cwd?: string; surface: string; status: JobStatus; created_at: string; started_at?: string; ended_at?: string; return_code?: number | null; stdout: string; stderr: string; artifact_ids: string[]; environment: Record<string, unknown>; requirement: JobRequirement }
 
 const ORPHAN_GRACE_MS = 15_000;
+const KILL_GRACE_MS = 2_000;
+const POSIX = process.platform !== "win32";
 const RESEARCH_ENVIRONMENT_KEYS = new Set(["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "VIRTUAL_ENV", "PYTHONNOUSERSITE", "PIP_REQUIRE_VIRTUALENV", "PIP_USER", "UV_PROJECT_ENVIRONMENT", "npm_config_prefix", "NPM_CONFIG_PREFIX", "npm_config_cache", "NPM_CONFIG_CACHE", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"]);
 
 export class JobCoordinator {
@@ -74,11 +76,12 @@ export class JobCoordinator {
     const record = await this.get(cwd, id);
     if (!record || ["succeeded", "failed", "cancelled", "timed_out"].includes(record.status)) return record;
     this.cancelled.add(id);
-    this.children.get(id)?.kill("SIGTERM");
+    const child = this.children.get(id);
+    if (child) terminate(child);
     record.status = "cancelled"; record.ended_at = new Date().toISOString(); await this.save(record);
     return record;
   }
-  async shutdown(): Promise<void> { for (const child of this.children.values()) child.kill("SIGTERM"); await Promise.allSettled([...this.jobs.values()]); }
+  async shutdown(): Promise<void> { for (const child of this.children.values()) terminate(child); await Promise.allSettled([...this.jobs.values()]); }
 
   private jobsDir(cwd: string) { return join(metadataRoot(cwd), "jobs"); }
   private jobPath(cwd: string, id: string) { if (!/^job_[A-Za-z0-9]{16}$/.test(id)) throw new Error("Invalid job id"); const root = resolve(this.jobsDir(cwd)); const target = resolve(root, `${id}.json`); const rel = relative(root, target); if (isAbsolute(rel) || rel.startsWith("..")) throw new Error("Job path escapes the workspace"); return target; }
@@ -97,19 +100,37 @@ export class JobCoordinator {
     record.status = "running"; record.started_at = new Date().toISOString(); await this.save(record);
     let child: ChildProcess | undefined;
     try {
-      child = spawn(record.command[0]!, record.command.slice(1), { cwd: record.execution_cwd ?? record.cwd, env: environment, stdio: ["ignore", "pipe", "pipe"] });
+      // detached: the child leads its own process group so a shell grandchild
+      // (which inherits the pipes and would otherwise keep `close` pending) dies
+      // with it. Windows has no process groups, so it keeps the plain child kill.
+      child = spawn(record.command[0]!, record.command.slice(1), { cwd: record.execution_cwd ?? record.cwd, env: environment, stdio: ["ignore", "pipe", "pipe"], detached: POSIX });
       this.children.set(record.job_id, child);
       let stdout = Buffer.alloc(0); let stderr = Buffer.alloc(0);
       const appendTail = (current: Buffer, chunk: Buffer) => Buffer.concat([current, chunk]).subarray(-100_000);
       child.stdout?.on("data", (chunk: Buffer) => { stdout = appendTail(stdout, chunk); });
       child.stderr?.on("data", (chunk: Buffer) => { stderr = appendTail(stderr, chunk); });
       const timeout = Math.max(1, Number(record.requirement.timeout_seconds ?? 3600)) * 1000; let timedOut = false;
-      const result = await new Promise<{ code: number | null }>((done) => { let timer: NodeJS.Timeout | undefined; const finish = (code: number | null) => { if (timer) clearTimeout(timer); done({ code }); }; child!.once("close", (code) => finish(code)); timer = setTimeout(() => { timedOut = true; child!.kill("SIGKILL"); finish(null); }, timeout); });
+      const result = await new Promise<{ code: number | null }>((done) => { let timer: NodeJS.Timeout | undefined; const finish = (code: number | null) => { if (timer) clearTimeout(timer); done({ code }); }; child!.once("close", (code) => finish(code)); timer = setTimeout(() => { timedOut = true; killGroup(child!, "SIGKILL"); finish(null); }, timeout); });
       record.stdout = stdout.toString("utf8"); record.stderr = stderr.toString("utf8"); record.return_code = result.code;
       record.status = this.cancelled.has(record.job_id) ? "cancelled" : timedOut ? "timed_out" : result.code === 0 ? "succeeded" : "failed";
     } catch (error) { if (!this.cancelled.has(record.job_id)) { record.status = "failed"; record.stderr = String(error).slice(-100_000); } }
     finally { record.ended_at = new Date().toISOString(); this.children.delete(record.job_id); await this.save(record); this.cancelled.delete(record.job_id); }
   }
+}
+
+/** Asks the whole job process group to stop, then forces it after a short grace. */
+function terminate(child: ChildProcess): void {
+  killGroup(child, "SIGTERM");
+  const timer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) killGroup(child, "SIGKILL"); }, KILL_GRACE_MS);
+  timer.unref();
+  child.once("close", () => clearTimeout(timer));
+}
+
+function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (POSIX && child.pid) {
+    try { process.kill(-child.pid, signal); return; } catch { /* the group is already gone or was never created */ }
+  }
+  child.kill(signal);
 }
 
 function restrictResearchEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {

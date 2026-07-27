@@ -1,5 +1,6 @@
 import { Component, useEffect, useRef, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
+import i18n from "../i18n";
 
 interface Props {
   children: ReactNode;
@@ -28,14 +29,14 @@ export class ErrorBoundary extends Component<Props, State> {
     return (
       this.props.fallback ?? (
         <div className="rounded-card border border-error/30 bg-error/5 p-4 text-sm text-text">
-          <p className="font-medium text-error">Something went wrong</p>
+          <p className="font-medium text-error">{i18n.t("errors.somethingWentWrong")}</p>
           <p className="mt-1 text-muted">{this.state.error.message}</p>
           <button
             type="button"
             onClick={() => this.setState({ error: null })}
             className="mt-2 rounded-input bg-surface-2 px-3 py-1 text-xs text-text hover:bg-surface"
           >
-            Try again
+            {i18n.t("common.tryAgain")}
           </button>
         </div>
       )

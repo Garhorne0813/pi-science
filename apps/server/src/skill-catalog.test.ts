@@ -20,8 +20,8 @@ describe("skill-catalog", () => {
   afterEach(async () => {
     if (oldSkillsDir === undefined) delete process.env.PI_SCIENCE_SKILLS_DIR;
     else process.env.PI_SCIENCE_SKILLS_DIR = oldSkillsDir;
-    await Promise.all(cleanupDirs.map((dir) => rm(dir, { recursive: true, force: true })));
-    await rm(tempDir, { recursive: true, force: true });
+    await Promise.all(cleanupDirs.map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
+    await rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("parses multiline front matter and nested metadata", async () => {

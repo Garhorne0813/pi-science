@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { parsePhaseDiagram, type PhaseDiagram } from "@/lib/phase";
+import { parsePhaseDiagram, type PhaseDiagram } from "@/lib/viewers/phase";
 
 /**
  * Binary phase-diagram viewer (P1-3, materials): plots formation energy per atom

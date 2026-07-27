@@ -171,7 +171,7 @@ function materializeCustomProviders(agentDir: string, raw: unknown, env: NodeJS.
     const configuredContextWindow = positiveInteger(provider.context_window) ?? 128000;
     const envName = `PI_SCIENCE_CUSTOM_${id.toUpperCase().replaceAll("-", "_")}_API_KEY`;
     const modelDefinitions = models.map((model) => {
-      const reasoning = configuredReasoning ?? /gpt-5|thinking|reasoning|qwen3|deepseek-r1/i.test(model);
+      const reasoning = configuredReasoning ?? /gpt-5|thinking|reasoning|qwen3|deepseek-r1|deepseek-v4/i.test(model);
       return {
         id: model, name: model, reasoning,
         input: ["text"], contextWindow: configuredContextWindow, maxTokens: 16384,

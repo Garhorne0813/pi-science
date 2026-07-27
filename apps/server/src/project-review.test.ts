@@ -13,7 +13,7 @@ const cleanup: string[] = [];
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
-  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
 });
 
 function config(): ServerConfig {
@@ -208,8 +208,36 @@ describe("project review policy gate", () => {
     expect((await readState(cwd)).proposals).toHaveLength(0);
   });
 
-  it("runs an automatic review when policy.auto_review is enabled by default", async () => {
+  it("skips an automatic review on a fresh workspace: auto_review defaults to off", async () => {
     const cwd = await workspace();
+    const runner = new FakeReviewRunner();
+    const review = new ProjectReviewService(runner);
+
+    await expect(review.run(cwd, { sessionId: "session-a", trigger: "auto" })).resolves.toMatchObject({ created: 0, proposal_ids: [] });
+    expect(runner.calls).toHaveLength(0);
+  });
+
+  it("reports auto_review false for an uninitialized workspace and keeps a stored true", async () => {
+    const fresh = await workspace();
+    const app = buildApp(config(), { ...createServerModules(config()), projectReview: new ProjectReviewService(new FakeReviewRunner()) });
+    apps.push(app);
+
+    const initial = await app.inject({ method: "GET", url: `/api/project-knowledge/policy?cwd=${encodeURIComponent(fresh)}` });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json().auto_review).toBe(false);
+
+    const optedIn = await workspace("session-b");
+    await writeFile(join(optedIn, ".pi-science", "project-state.json"), JSON.stringify({ items: [], proposals: [], project_versions: [], policy: { auto_review: true }, history: [] }), "utf8");
+    const stored = await app.inject({ method: "GET", url: `/api/project-knowledge/policy?cwd=${encodeURIComponent(optedIn)}` });
+    expect(stored.json().auto_review).toBe(true);
+    // The stored opt-in survives an unrelated policy write.
+    await app.inject({ method: "PATCH", url: `/api/project-knowledge/policy?cwd=${encodeURIComponent(optedIn)}`, payload: { reminder_threshold: 9 } });
+    expect((await readState(optedIn)).policy).toMatchObject({ auto_review: true, reminder_threshold: 9 });
+  });
+
+  it("runs an automatic review once the workspace has opted in", async () => {
+    const cwd = await workspace();
+    await writeFile(join(cwd, ".pi-science", "project-state.json"), JSON.stringify({ items: [], proposals: [], project_versions: [], policy: { auto_review: true }, history: [] }), "utf8");
     const runner = new FakeReviewRunner();
     const review = new ProjectReviewService(runner);
 

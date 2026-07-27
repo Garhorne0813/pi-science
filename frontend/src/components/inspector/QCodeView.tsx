@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { AlertTriangle, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { parseQCode, segmentsFor, type QCodeParsed } from "@/lib/qcode";
+import { parseQCode, segmentsFor, type QCodeParsed } from "@/lib/viewers/qcode";
 import { cn } from "@/lib/cn";
 
 /**

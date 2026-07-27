@@ -208,7 +208,7 @@ export function MeshView({ filename, bytes }: { filename: string; bytes: ArrayBu
         let drawn = 0;
         for (let i = 0; i < px.length; i += 4)
           if (!(px[i] > 250 && px[i + 1] < 5 && px[i + 2] > 250)) drawn++;
-        if (drawn < width * height * 0.0008) setNotice("No geometry data");
+        if (drawn < width * height * 0.0008) setNotice(t("mesh.noGeometry"));
 
         if (!cancelled) {
           setRendering(false);
@@ -216,7 +216,7 @@ export function MeshView({ filename, bytes }: { filename: string; bytes: ArrayBu
         }
       } catch (e) {
         if (!cancelled) {
-          setError(e instanceof Error ? e.message : String(e));
+          setError(t("mesh.loadFailed"));
           setRendering(false);
         }
       }
@@ -257,7 +257,7 @@ export function MeshView({ filename, bytes }: { filename: string; bytes: ArrayBu
 
   return (
     <div className="relative h-full min-h-[420px] w-full touch-none select-none overflow-hidden">
-      <div ref={mountRef} className="absolute inset-0" aria-label="3D model viewer" />
+      <div ref={mountRef} className="absolute inset-0" aria-label={t("mesh.viewerLabel")} />
 
       <div className="absolute left-3 top-3 flex items-center gap-2 rounded-input border border-border/70 bg-surface/90 p-1 shadow-card backdrop-blur">
         <div className="flex items-center gap-1 px-1.5 text-xs font-medium text-muted">
@@ -287,8 +287,8 @@ export function MeshView({ filename, bytes }: { filename: string; bytes: ArrayBu
         <button
           type="button"
           onClick={resetView}
-          aria-label={"Reset view"}
-          title={"Reset view"}
+          aria-label={t("mesh.resetView")}
+          title={t("mesh.resetView")}
           className="flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-text"
         >
           <RotateCcw size={13} />
@@ -306,7 +306,7 @@ export function MeshView({ filename, bytes }: { filename: string; bytes: ArrayBu
 
       {(rendering || error) && (
         <div className="pointer-events-none absolute bottom-3 left-3 max-w-[70%] rounded-input border border-border/70 bg-surface/95 px-3 py-1.5 text-xs text-muted shadow-card backdrop-blur">
-          {rendering ? "Rendering..." : error}
+          {rendering ? t("mesh.rendering") : error}
         </div>
       )}
 

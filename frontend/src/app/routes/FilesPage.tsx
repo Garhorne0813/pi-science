@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
 import { FolderOpen, File, ChevronRight, Trash2, ArrowUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useUiStore } from "../../lib/store";
@@ -9,12 +8,12 @@ import { FileContextMenu, type ContextPoint, type FileListEntry } from "../../co
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "../../components/layout/WorkspacePage";
 import { useRuntimeStore } from "../../lib/runtime-store";
+import { useRequiredWorkspaceCwd } from "../../lib/workspace-context";
 
 export function FilesPage() {
   const { t } = useTranslation();
   const { confirm, toast } = useFeedback();
-  const { cwd: rawCwd } = useParams<{ cwd: string }>();
-  const workspaceCwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
+  const workspaceCwd = useRequiredWorkspaceCwd();
   const [entries, setEntries] = useState<FileListEntry[]>([]);
   const [breadcrumbs, setBreadcrumbs] = useState<Breadcrumb[]>([]);
   const [subdir, setSubdir] = useState("");

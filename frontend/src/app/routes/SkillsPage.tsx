@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
 import { Package, Puzzle, Wrench, Check, X, ChevronRight, ShieldCheck, AlertTriangle, RotateCcw, Loader2 } from "lucide-react";
 import { WorkspacePage, WorkspacePageHeader } from "../../components/layout/WorkspacePage";
-import { skillsApi } from "../../lib/skills-api";
+import { skillsApi, skillsKey } from "../../lib/skills-api";
+import { settingsApi, invalidateSettings } from "../../lib/settings-api";
 import { apiRequest } from "../../lib/api";
+import { queryClient } from "../../lib/query-client";
 import { applySessionReplacements, type SessionReplacement } from "../../lib/runtime-store";
+import { useWorkspaceCwd } from "../../lib/workspace-context";
+import { useTranslation } from "react-i18next";
 
 interface Skill {
   skill_id: string;
@@ -31,9 +34,16 @@ interface Tool {
   version?: string | null;
 }
 
+/** Enabling a skill changes both the skill catalog and the settings that record the choice. */
+function invalidateSkillSelection() {
+  void queryClient.invalidateQueries({ queryKey: skillsKey() });
+  invalidateSettings();
+}
+
 export function SkillsPage() {
-  const { cwd: encodedCwd } = useParams<{ cwd: string }>();
-  const cwd = encodedCwd ? decodeURIComponent(encodedCwd) : undefined;
+  const { t } = useTranslation();
+  // Also routed at /skills (no workspace): the APIs below take `cwd?: string`.
+  const cwd = useWorkspaceCwd() ?? undefined;
   const [skills, setSkills] = useState<Skill[]>([]);
   const [tools, setTools] = useState<Tool[]>([]);
   const [selected, setSelected] = useState<Skill | null>(null);
@@ -46,8 +56,8 @@ export function SkillsPage() {
     let cancelled = false;
     Promise.all([
       skillsApi.list<Skill>(cwd),
-      apiRequest<Tool[]>("/api/skills/tools", { cacheTtlMs: 3000 }),
-      apiRequest<{ skills?: Array<{ name: string; enabled: boolean }>; configured?: boolean }>("/api/settings/skills"),
+      skillsApi.tools<Tool>(),
+      settingsApi.skills<{ skills?: Array<{ name: string; enabled: boolean }>; configured?: boolean }>(),
     ]).then(([skillData, toolData, settingsData]) => {
       if (cancelled) return;
       const enabled = new Map<string, boolean>((settingsData.skills || []).map((item: { name: string; enabled: boolean }) => [item.name, item.enabled]));
@@ -65,7 +75,7 @@ export function SkillsPage() {
     return () => { cancelled = true; };
   }, [cwd]);
 
-  if (loading) return <div className="flex items-center justify-center h-full text-sm text-muted">Loading…</div>;
+  if (loading) return <div className="flex items-center justify-center h-full text-sm text-muted">{t("common.loading")}</div>;
 
   const builtin = skills.filter(s => s.source === "builtin");
   const project = skills.filter(s => s.source === "project");
@@ -82,6 +92,7 @@ export function SkillsPage() {
         body: JSON.stringify({ name: skill.name, enabled }),
       });
       if (result.session_replacements) applySessionReplacements(result.session_replacements);
+      invalidateSkillSelection();
       setConfigured(true);
     } catch (cause) {
       setSkills((current) => current.map((item) => item.name === skill.name ? { ...item, enabled: skill.enabled } : item));
@@ -97,6 +108,7 @@ export function SkillsPage() {
     try {
       const result = await apiRequest<{ session_replacements?: SessionReplacement[] }>("/api/settings/skills", { method: "DELETE" });
       if (result.session_replacements) applySessionReplacements(result.session_replacements);
+      invalidateSkillSelection();
       setSkills((current) => current.map((item) => ({ ...item, enabled: true })));
       setConfigured(false);
     } catch (cause) {
@@ -108,35 +120,33 @@ export function SkillsPage() {
 
   return (
     <WorkspacePage>
-        <WorkspacePageHeader title="Skills" description={
+        <WorkspacePageHeader title={t("skills.title")} description={
           <>
-          Agent skills extend what the AI can do. Skills are loaded from{" "}
-          <span className="font-mono text-xs">.pi/skills/</span> (project),{" "}
-          <span className="font-mono text-xs">~/.pi/agent/skills/</span> (user),
-          and bundled with pi-science.
+          {t("skills.descriptionPrefix")} <span className="font-mono text-xs">.pi/skills/</span> {t("skills.projectSource")},{" "}
+          <span className="font-mono text-xs">~/.pi/agent/skills/</span> {t("skills.userSource")}, {t("skills.descriptionSuffix")}
           </>
         } />
         <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-card border border-border bg-surface px-4 py-3">
           <div>
             <div className="flex items-center gap-2 text-xs font-medium text-text">
-              <span className={configured ? "text-accent" : "text-ok"}>{configured ? "Custom skill selection" : "Auto-discovery enabled"}</span>
+              <span className={configured ? "text-accent" : "text-ok"}>{configured ? t("skills.customSelection") : t("skills.autoDiscovery")}</span>
             </div>
-            <p className="mt-1 text-[11px] text-muted">Use the switches below to control skills for newly started Pi processes. Existing conversations keep their current runtime.</p>
+            <p className="mt-1 text-[11px] text-muted">{t("skills.selectionHint")}</p>
           </div>
-          {configured && <button type="button" onClick={() => void resetSkills()} disabled={saving !== null} className="flex min-h-9 items-center gap-1.5 rounded-input border border-border px-3 text-[11px] text-muted hover:bg-surface-2 hover:text-text disabled:opacity-50">{saving === "reset" ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />} Reset to auto-discover</button>}
+          {configured && <button type="button" onClick={() => void resetSkills()} disabled={saving !== null} className="flex min-h-9 items-center gap-1.5 rounded-input border border-border px-3 text-[11px] text-muted hover:bg-surface-2 hover:text-text disabled:opacity-50">{saving === "reset" ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />} {t("skills.resetDiscovery")}</button>}
         </div>
         {error && <p role="alert" className="mt-3 rounded-input bg-error/10 px-3 py-2 text-xs text-error">{error}</p>}
 
-        <Section title="Scientific Environment" icon={<Wrench size={15} />} count={tools.length}>
+        <Section title={t("skills.scientificEnvironment")} icon={<Wrench size={15} />} count={tools.length}>
           {tools.length === 0 ? (
-            <Empty>Tool detection unavailable</Empty>
+            <Empty>{t("skills.toolDetectionUnavailable")}</Empty>
           ) : (
-            tools.map(t => (
-              <div key={t.name} className="flex items-center gap-3 px-4 py-2.5 text-sm">
-                {t.found ? <Check size={15} className="text-ok" /> : <X size={15} className="text-muted" />}
-                <span className="w-24 text-text">{t.name}</span>
+            tools.map((tool) => (
+              <div key={tool.name} className="flex items-center gap-3 px-4 py-2.5 text-sm">
+                {tool.found ? <Check size={15} className="text-ok" /> : <X size={15} className="text-muted" />}
+                <span className="w-24 text-text">{tool.name}</span>
                 <span className="flex-1 truncate font-mono text-xs text-muted">
-                  {t.found ? t.version || "installed" : "not found"}
+                  {tool.found ? tool.version || t("skills.installed") : t("skills.notFound")}
                 </span>
               </div>
             ))
@@ -144,24 +154,24 @@ export function SkillsPage() {
         </Section>
 
         {builtin.length > 0 && (
-          <Section title="Built-in Skills" icon={<Puzzle size={15} />} count={builtin.length}>
-            {builtin.map(s => <SkillRow key={s.skill_id || s.name} skill={s} tag="built-in" onSelect={setSelected} onToggle={toggleSkill} saving={saving === s.name} />)}
+          <Section title={t("skills.builtin")} icon={<Puzzle size={15} />} count={builtin.length}>
+            {builtin.map(s => <SkillRow key={s.skill_id || s.name} skill={s} tag={t("skills.tagBuiltin")} onSelect={setSelected} onToggle={toggleSkill} saving={saving === s.name} />)}
           </Section>
         )}
 
-        <Section title="Project Skills" icon={<Puzzle size={15} />} count={project.length}>
+        <Section title={t("skills.project")} icon={<Puzzle size={15} />} count={project.length}>
           {project.length === 0 ? (
-            <Empty>No project skills. Add SKILL.md files to .pi/skills/</Empty>
+            <Empty>{t("skills.noProject")}</Empty>
           ) : (
-            project.map(s => <SkillRow key={s.skill_id || s.name} skill={s} tag="project" onSelect={setSelected} onToggle={toggleSkill} saving={saving === s.name} />)
+            project.map(s => <SkillRow key={s.skill_id || s.name} skill={s} tag={t("skills.tagProject")} onSelect={setSelected} onToggle={toggleSkill} saving={saving === s.name} />)
           )}
         </Section>
 
-        <Section title="User Skills" icon={<Puzzle size={15} />} count={user.length}>
+        <Section title={t("skills.user")} icon={<Puzzle size={15} />} count={user.length}>
           {user.length === 0 ? (
-            <Empty>No user skills. Add SKILL.md files to ~/.pi/agent/skills/</Empty>
+            <Empty>{t("skills.noUser")}</Empty>
           ) : (
-            user.map(s => <SkillRow key={s.skill_id || s.name} skill={s} tag="user" onSelect={setSelected} onToggle={toggleSkill} saving={saving === s.name} />)
+            user.map(s => <SkillRow key={s.skill_id || s.name} skill={s} tag={t("skills.tagUser")} onSelect={setSelected} onToggle={toggleSkill} saving={saving === s.name} />)
           )}
         </Section>
 
@@ -184,6 +194,7 @@ function Section({ title, icon, count, children }: { title: string; icon: React.
 }
 
 function SkillRow({ skill, tag, onSelect, onToggle, saving }: { skill: Skill; tag: string; onSelect: (skill: Skill) => void; onToggle: (skill: Skill, enabled: boolean) => void; saving: boolean }) {
+  const { t } = useTranslation();
   const valid = skill.validation?.valid !== false;
   return (
     <div className="flex items-center hover:bg-surface-2">
@@ -201,36 +212,37 @@ function SkillRow({ skill, tag, onSelect, onToggle, saving }: { skill: Skill; ta
       </button>
       <label className="mr-4 flex shrink-0 items-center gap-2 text-[10px] text-muted">
         {saving && <Loader2 size={11} className="animate-spin" />}
-        <input type="checkbox" aria-label={`Enable ${skill.name}`} checked={skill.enabled !== false} disabled={saving} onChange={(event) => void onToggle(skill, event.target.checked)} className="h-4 w-4 accent-[var(--accent)]" />
+        <input type="checkbox" aria-label={t("skills.enable", { name: skill.name })} checked={skill.enabled !== false} disabled={saving} onChange={(event) => void onToggle(skill, event.target.checked)} className="h-4 w-4 accent-[var(--accent)]" />
       </label>
     </div>
   );
 }
 
 function SkillDetail({ skill, onClose }: { skill: Skill; onClose: () => void }) {
+  const { t } = useTranslation();
   const valid = skill.validation?.valid !== false;
   return (
-    <div className="mt-6 rounded-card border border-border bg-surface p-4" role="dialog" aria-label={`${skill.name} details`}>
+    <div className="mt-6 rounded-card border border-border bg-surface p-4" role="dialog" aria-label={t("skills.details", { name: skill.name })}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-text">{skill.name}</h2>
           <p className="mt-1 text-xs text-muted">{skill.description}</p>
         </div>
-        <button type="button" onClick={onClose} className="rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2">Close</button>
+        <button type="button" onClick={onClose} className="rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2">{t("common.close")}</button>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-muted sm:grid-cols-4">
         <span>v{skill.version}</span><span>{skill.category}</span><span>{skill.license}</span><span>{skill.source}</span>
       </div>
       <div className="mt-3 flex items-center gap-2 text-xs">
         {valid ? <ShieldCheck size={14} className="text-ok" /> : <AlertTriangle size={14} className="text-error" />}
-        <span className={valid ? "text-ok" : "text-error"}>{valid ? "Validated" : "Needs attention"}</span>
+        <span className={valid ? "text-ok" : "text-error"}>{valid ? t("skills.validated") : t("skills.needsAttention")}</span>
         <span className="ml-auto font-mono text-[10px] text-muted">{skill.digest}</span>
       </div>
       {(skill.requirements?.length || skill.third_party?.length || skill.files?.length) ? (
         <div className="mt-3 space-y-2 border-t border-faint pt-3 text-xs text-muted">
-          {!!skill.requirements?.length && <div><span className="font-medium text-text">Requirements:</span> {skill.requirements.map((item) => `${item.name}${item.version ? ` ${item.version}` : ""}`).join(", ")}</div>}
-          {!!skill.third_party?.length && <div><span className="font-medium text-text">Third-party:</span> {skill.third_party.map((item) => `${item.name}${item.license ? ` (${item.license})` : ""}`).join(", ")}</div>}
-          {!!skill.files?.length && <div><span className="font-medium text-text">Files:</span> {skill.files.length}</div>}
+          {!!skill.requirements?.length && <div><span className="font-medium text-text">{t("skills.requirements")}:</span> {skill.requirements.map((item) => `${item.name}${item.version ? ` ${item.version}` : ""}`).join(", ")}</div>}
+          {!!skill.third_party?.length && <div><span className="font-medium text-text">{t("skills.thirdParty")}:</span> {skill.third_party.map((item) => `${item.name}${item.license ? ` (${item.license})` : ""}`).join(", ")}</div>}
+          {!!skill.files?.length && <div><span className="font-medium text-text">{t("skills.files")}:</span> {skill.files.length}</div>}
         </div>
       ) : null}
       {!!skill.validation?.errors?.length && <ul className="mt-2 list-disc pl-4 text-xs text-error">{skill.validation.errors.map((item) => <li key={item}>{item}</li>)}</ul>}

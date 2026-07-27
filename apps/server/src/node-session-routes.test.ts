@@ -61,7 +61,7 @@ afterEach(async () => {
     if (value === undefined) delete process.env[environmentKey];
     else process.env[environmentKey] = value;
   }
-  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
 });
 
 async function workspaceWithSessions(...ids: string[]): Promise<string> {

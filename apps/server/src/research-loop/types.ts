@@ -61,13 +61,16 @@ export interface AgentRunRequest {
   context: Record<string, unknown>;
 }
 
-export interface AgentRunResult {
+export interface AgentRunUsage {
+  model_tokens: number;
+  cost_usd: number;
+}
+
+export interface AgentRunResult extends AgentRunUsage {
   run_id: string;
   session_id?: string;
   async_dir?: string;
   output: Record<string, unknown>;
-  model_tokens: number;
-  cost_usd: number;
 }
 
 export interface ResearchSubagentRunner {
@@ -75,4 +78,6 @@ export interface ResearchSubagentRunner {
   status(runId: string): Promise<"running" | "completed" | "failed" | "lost">;
   cancel(runId: string): Promise<void>;
   shutdown(): Promise<void>;
+  /** Usage a run burned before it failed; a successful run reports it in its result. */
+  usage?(runId: string): AgentRunUsage | null;
 }

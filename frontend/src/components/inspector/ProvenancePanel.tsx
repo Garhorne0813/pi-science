@@ -103,7 +103,7 @@ export function ProvenancePanel({ path, language, cwd: cwdOverride }: { path: st
   useEffect(() => {
     const controller = new AbortController();
     setRecords(null);
-    void listProvenance(cwd, path, controller.signal).then((r) => {
+    void listProvenance(cwd, path).then((r) => {
       if (controller.signal.aborted) return;
       setRecords(r); // backend returns newest first
       setExpanded(r.length > 0 ? r[0].version : null);

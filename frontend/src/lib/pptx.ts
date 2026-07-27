@@ -9,13 +9,3 @@
 export async function normalizePptxForPreview(bytes: ArrayBuffer): Promise<ArrayBuffer> {
   return bytes;
 }
-
-// Kept for compatibility with older callers.
-export async function renderPptx(bytes: ArrayBuffer): Promise<HTMLElement> {
-  const root = document.createElement("div");
-  const normalized = await normalizePptxForPreview(bytes);
-  const { init } = await import("pptx-preview");
-  const previewer = init(root, { width: 960, mode: "list" });
-  await previewer.preview(normalized);
-  return root;
-}

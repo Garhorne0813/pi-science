@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, ChevronDown, Pin, PinOff, Pencil, Trash2, X, Dna, Earth } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
-import { ApiError, apiRequest, invalidateApiCache } from "../../lib/api";
+import { useQuery } from "@tanstack/react-query";
+import { ApiError, apiRequest } from "../../lib/api";
+import { queryClient } from "../../lib/query-client";
 import { timeAgo } from "../../lib/format";
 
 interface Workspace {
@@ -28,45 +30,52 @@ function saveDismissedDemos(set: Set<string>) {
   localStorage.setItem("pi-science-dismissed-demos", JSON.stringify([...set]));
 }
 
+const workspacesKey = ["workspaces"];
+const workspacesQuery = { queryKey: workspacesKey, queryFn: () => apiRequest<Workspace[]>("/api/workspaces") };
+const pinnedQuery = { queryKey: ["workspaces", "pinned"], queryFn: () => apiRequest<{ paths?: string[] }>("/api/workspaces/pinned") };
+
+/** Every workspace write drops the whole list — the old invalidateApiCache("/api/workspaces").
+ *  The prefix covers the pinned list too, exactly as the URL-prefix cache did. */
+function invalidateWorkspaces() {
+  void queryClient.invalidateQueries({ queryKey: workspacesKey });
+}
+
+/** Optimistic pin update so the star flips before the list refetches. */
+function setPinnedPaths(paths: string[]) {
+  queryClient.setQueryData(pinnedQuery.queryKey, { paths });
+}
+
 export function ProjectsPage() {
   const { t } = useTranslation();
   const { toast, confirm: confirmAction } = useFeedback();
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [editingName, setEditingName] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [installingDemo, setInstallingDemo] = useState(false);
   const [importingFolder, setImportingFolder] = useState(false);
-  // Pinned paths stored server-side in ~/.pi-science/pinned.json — shared across browsers
-  const [pinned, setPinned] = useState<Set<string>>(new Set());
   const [dismissedDemos, setDismissedDemos] = useState<Set<string>>(loadDismissedDemos);
   const dirInputRef = useRef<HTMLInputElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
 
-  const loadWorkspaces = useCallback(async () => {
-    try {
-      setWorkspaces(await apiRequest<Workspace[]>("/api/workspaces", { cacheTtlMs: 3000 }));
-    } catch { toast(t("projects.loadError"), "error"); }
-    finally { setLoading(false); }
-  }, [t, toast]);
+  const workspacesResult = useQuery(workspacesQuery);
+  // Pinned paths stored server-side in ~/.pi-science/pinned.json — shared across browsers
+  const pinnedResult = useQuery(pinnedQuery);
+  const workspaces = useMemo(() => workspacesResult.data ?? [], [workspacesResult.data]);
+  const pinned = useMemo(() => new Set(pinnedResult.data?.paths ?? []), [pinnedResult.data]);
+  const loadWorkspaces = useCallback(async () => { await workspacesResult.refetch(); }, [workspacesResult]);
 
-  const loadPinned = useCallback(async () => {
-    try {
-      const data = await apiRequest<{ paths?: string[] }>("/api/workspaces/pinned", { cacheTtlMs: 3000 });
-      setPinned(new Set(data.paths || []));
-    } catch { /* ignore */ }
-  }, []);
+  const workspacesFailed = workspacesResult.isError;
+  useEffect(() => { if (workspacesFailed) toast(t("projects.loadError"), "error"); }, [workspacesFailed, t, toast]);
 
-  useEffect(() => { void loadWorkspaces(); void loadPinned(); }, [loadPinned, loadWorkspaces]);
-
-  // Safety: force loading off after 10s even if API never responds
+  // Safety: stop showing the spinner after 10s even if the API never responds
+  const [loadTimedOut, setLoadTimedOut] = useState(false);
   useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 10000);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setLoadTimedOut(true), 10000);
+    return () => clearTimeout(timer);
   }, []);
+  const loading = workspacesResult.isPending && !loadTimedOut;
 
   const handleCreate = async () => {
     setCreating(true); setDropdownOpen(false);
@@ -75,9 +84,8 @@ export function ProjectsPage() {
       await apiRequest("/api/workspaces", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }),
       });
-      invalidateApiCache("/api/workspaces");
-      await loadWorkspaces();
-      const updated = await apiRequest<Workspace[]>("/api/workspaces");
+      invalidateWorkspaces();
+      const updated = await queryClient.fetchQuery(workspacesQuery);
       const newest = updated.find((w: Workspace) => w.name === name);
       if (newest) {
         setEditingName(newest.path);
@@ -105,7 +113,7 @@ export function ProjectsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: oldPath, name: newName }),
       });
-      invalidateApiCache("/api/workspaces");
+      invalidateWorkspaces();
       toast(t("projects.renamed"), "success");
     } catch { toast(t("projects.renameError"), "error"); }
     await loadWorkspaces();
@@ -132,11 +140,9 @@ export function ProjectsPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path }),
         });
-        const next = new Set(pinned);
-        next.delete(path);
-        setPinned(next);
+        setPinnedPaths([...pinned].filter((item) => item !== path));
       }
-      invalidateApiCache("/api/workspaces");
+      invalidateWorkspaces();
       await loadWorkspaces();
       toast(t("projects.deleted", { name }), "success");
     } catch { toast(t("projects.deleteError"), "error"); }
@@ -153,8 +159,8 @@ export function ProjectsPage() {
       });
       const next = new Set(pinned);
       if (isPinned) next.delete(path); else next.add(path);
-      setPinned(next);
-      invalidateApiCache("/api/workspaces");
+      setPinnedPaths([...next]);
+      invalidateWorkspaces();
     } catch { toast(t("projects.pinError"), "error"); }
   };
 
@@ -212,7 +218,7 @@ export function ProjectsPage() {
           body: form,
         });
       }
-      invalidateApiCache("/api/workspaces");
+      invalidateWorkspaces();
       await loadWorkspaces();
       navigate(`/workspace/${encodeURIComponent(w.path)}`);
     } catch { toast(t("projects.openError"), "error"); }

@@ -1,48 +1,30 @@
-import { useCallback, useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Play, Check, X, Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "../../components/layout/WorkspacePage";
 import { useTranslation } from "react-i18next";
 import { timeAgo } from "../../lib/format";
-import { apiRequest } from "../../lib/api";
+import { queryClient } from "../../lib/query-client";
+import { runLogQuery, runsQuery } from "../../lib/runs";
 import { useFeedback } from "../../components/feedback/feedback-context";
-
-interface Run {
-  runId: string;
-  command: string;
-  surface: string;
-  host: string;
-  status: string;
-  startedAt: string;
-  outputs: { path: string; size?: number }[];
-  log?: string;
-}
+import { useRequiredWorkspaceCwd } from "../../lib/workspace-context";
 
 export function RunsPage() {
   const { t } = useTranslation();
   const { toast } = useFeedback();
-  const { cwd: rawCwd } = useParams<{ cwd: string }>();
-  const workspaceCwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
-  const [runs, setRuns] = useState<Run[]>([]);
-  const [loading, setLoading] = useState(true);
+  const workspaceCwd = useRequiredWorkspaceCwd();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [logs, setLogs] = useState<Record<string, string>>({});
 
-  const loadRuns = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true);
-    try {
-      setRuns(await apiRequest<Run[]>(`/api/runs?cwd=${encodeURIComponent(workspaceCwd)}`, { signal }));
-    } catch (error) {
-      if (!signal?.aborted) toast(error instanceof Error ? error.message : "Unable to load runs", "error");
-    } finally { if (!signal?.aborted) setLoading(false); }
-  }, [toast, workspaceCwd]);
+  const runsResult = useQuery(runsQuery(workspaceCwd));
+  const runs = runsResult.data ?? [];
+  const loading = runsResult.isFetching;
 
+  const runsError = runsResult.error;
   useEffect(() => {
-    const controller = new AbortController();
-    void loadRuns(controller.signal);
-    return () => controller.abort();
-  }, [loadRuns]);
+    if (runsError) toast(runsError instanceof Error ? runsError.message : t("runs.loadError"), "error");
+  }, [runsError, t, toast]);
 
   const toggleLog = async (runId: string) => {
     if (expanded[runId]) {
@@ -52,11 +34,11 @@ export function RunsPage() {
     setExpanded((p) => ({ ...p, [runId]: true }));
     if (!logs[runId]) {
       try {
-        const data = await apiRequest<{ log?: string }>(`/api/runs/${runId}/log?cwd=${encodeURIComponent(workspaceCwd)}`);
-        setLogs((p) => ({ ...p, [runId]: data.log || "(no log)" }));
+        const data = await queryClient.fetchQuery(runLogQuery(workspaceCwd, runId));
+        setLogs((p) => ({ ...p, [runId]: data.log || t("runs.noLog") }));
       } catch (error) {
-        setLogs((p) => ({ ...p, [runId]: "(error loading log)" }));
-        toast(error instanceof Error ? error.message : "Unable to load run log", "error");
+        setLogs((p) => ({ ...p, [runId]: t("runs.logLoadFailed") }));
+        toast(error instanceof Error ? error.message : t("runs.logError"), "error");
       }
     }
   };
@@ -64,21 +46,21 @@ export function RunsPage() {
   return (
     <WorkspacePage>
         <WorkspacePageHeader
-          title="Runs"
-          description={`${runs.length} experiment run${runs.length !== 1 ? "s" : ""}`}
+          title={t("runs.title")}
+          description={t("runs.count", { count: runs.length })}
           actions={
-          <WorkspacePageRefreshButton label={t("common.refresh")} loading={loading} onClick={() => void loadRuns()} />
+          <WorkspacePageRefreshButton label={t("common.refresh")} loading={loading} onClick={() => void runsResult.refetch()} />
           }
         />
 
         <div className="mt-6">
         {loading ? (
-          <div className="text-sm text-muted py-8 text-center"><Loader2 size={18} className="animate-spin mx-auto mb-2" /> Loading…</div>
+          <div className="text-sm text-muted py-8 text-center"><Loader2 size={18} className="animate-spin mx-auto mb-2" /> {t("common.loading")}</div>
         ) : runs.length === 0 ? (
           <div className="text-center py-16">
             <Play size={40} className="mx-auto text-muted/30 mb-3" />
-            <p className="text-sm text-muted">No runs yet</p>
-            <p className="text-xs text-muted mt-1">Runs are recorded automatically when the agent executes commands.</p>
+            <p className="text-sm text-muted">{t("runs.empty")}</p>
+            <p className="text-xs text-muted mt-1">{t("runs.emptyHint")}</p>
           </div>
         ) : (
           <div className="flex flex-col gap-2">
@@ -95,24 +77,24 @@ export function RunsPage() {
                     <div className="flex items-center gap-3 mt-0.5 text-[11px] text-muted">
                       <span className="uppercase font-semibold tracking-wide text-accent">{r.surface}</span>
                       {r.host && <span>{r.host}</span>}
-                      <span>{timeAgo(r.startedAt)}</span>
-                      {r.outputs.length > 0 && <span>{r.outputs.length} output{r.outputs.length !== 1 ? "s" : ""}</span>}
+                      <span>{timeAgo(r.startedAt ?? "")}</span>
+                      {!!r.outputs?.length && <span>{t("runs.outputCount", { count: r.outputs.length })}</span>}
                     </div>
                   </div>
                   <button onClick={() => toggleLog(r.runId)}
                     className="rounded-input px-2 py-1 text-xs text-muted hover:text-text hover:bg-surface-2 flex items-center gap-1">
                     {expanded[r.runId] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                    Log
+                    {t("runs.log")}
                   </button>
                 </div>
                 {expanded[r.runId] && (
                   <div className="border-t border-faint px-4 py-3">
                     <pre className="max-h-64 overflow-auto font-mono text-[11px] leading-relaxed text-text whitespace-pre-wrap">
-                      {logs[r.runId] || "Loading…"}
+                      {logs[r.runId] || t("common.loading")}
                     </pre>
-                    {r.outputs.length > 0 && (
+                    {!!r.outputs?.length && (
                       <div className="mt-2 flex flex-wrap gap-1">
-                        <span className="text-[10px] text-muted mr-1">Outputs:</span>
+                        <span className="text-[10px] text-muted mr-1">{t("runs.outputs")}:</span>
                         {r.outputs.map((o, i) => (
                           <span key={i} className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-text">
                             {o.path}

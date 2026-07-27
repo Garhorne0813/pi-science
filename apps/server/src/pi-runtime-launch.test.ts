@@ -21,7 +21,7 @@ afterEach(async () => {
   process.env.PI_CLI_PATH = original.cli;
   process.env.PI_TSX_PATH = original.tsx;
   process.env.PI_TSCONFIG_PATH = original.tsconfig;
-  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
 });
 
 async function obstructModelsFile(customProviders?: unknown[]): Promise<string> {
@@ -37,6 +37,26 @@ async function obstructModelsFile(customProviders?: unknown[]): Promise<string> 
 }
 
 describe("Pi runtime custom provider materialization", () => {
+  it("infers DeepSeek V4 custom models as reasoning-capable", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-deepseek-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), `${JSON.stringify({
+      custom_providers: [{ id: "deepseek", name: "DeepSeek", base_url: "https://api.deepseek.com", api: "openai-completions", models: ["deepseek-v4-flash"] }],
+    })}\n`, "utf8");
+
+    buildPiProcessOptions(cwd);
+
+    const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
+    const catalog = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", workspaceKey, "models.json"), "utf8"));
+    expect(catalog.providers["custom-deepseek"].models[0]).toMatchObject({
+      id: "deepseek-v4-flash",
+      reasoning: true,
+      thinkingLevelMap: expect.objectContaining({ low: "low", high: "high", xhigh: "xhigh" }),
+    });
+  });
+
   it("materializes custom reasoning metadata and percentage-based compaction settings", async () => {
     const cwd = join(tmpdir(), `pi-runtime-settings-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(cwd);

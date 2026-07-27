@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { BookOpen, Play, Square, RefreshCw, ExternalLink, CheckCircle2 } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { useUiStore } from "../../lib/store";
@@ -8,7 +8,10 @@ import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "
 import { useTranslation } from "react-i18next";
 import { timeAgo } from "../../lib/format";
 import { apiRequest } from "../../lib/api";
+import { queryClient } from "../../lib/query-client";
 import { useFeedback } from "../../components/feedback/feedback-context";
+import { useRequiredWorkspaceCwd } from "../../lib/workspace-context";
+import { openJsonEventStream } from "../../lib/event-stream";
 
 interface Notebook {
   path: string; name: string; size: number; modified: string;
@@ -30,72 +33,50 @@ interface WorkspaceEnvironment {
   error?: string;
 }
 
+interface JupyterSetupEvent {
+  status: "done" | "error" | string;
+  text: string;
+}
+
+const IDLE_JUPYTER: JupyterStatus = { running: false, port: null, url: null, cwd: null, matches_workspace: true, env_ready: false };
+
+const notebooksQuery = (cwd: string) => ({ queryKey: ["notebooks", cwd], queryFn: () => apiRequest<Notebook[]>(`/api/notebooks?cwd=${encodeURIComponent(cwd)}`), staleTime: 0 });
+const jupyterQuery = (cwd: string) => ({ queryKey: ["notebooks", "jupyter", cwd], queryFn: () => apiRequest<JupyterStatus>(`/api/notebooks/jupyter/status?cwd=${encodeURIComponent(cwd)}`), staleTime: 0 });
+const environmentQuery = (cwd: string) => ({ queryKey: ["environments", cwd], queryFn: () => apiRequest<WorkspaceEnvironment>(`/api/environments/workspace?cwd=${encodeURIComponent(cwd)}`), staleTime: 0 });
+
 export function NotebooksPage() {
   const { t } = useTranslation();
   const { toast } = useFeedback();
-  const { cwd: rawCwd } = useParams<{ cwd: string }>();
-  const workspaceCwd = rawCwd ? decodeURIComponent(rawCwd) : ".";
-  const [notebooks, setNotebooks] = useState<Notebook[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [jupyter, setJupyter] = useState<JupyterStatus>({
-    running: false,
-    port: null,
-    url: null,
-    cwd: null,
-    matches_workspace: true,
-    env_ready: false,
-  });
+  const workspaceCwd = useRequiredWorkspaceCwd();
+  // Jupyter status and the workspace environment are also written by the start/stop
+  // and provision actions, so the cache — not local state — holds the current value.
+  const notebooksResult = useQuery(notebooksQuery(workspaceCwd));
+  const jupyterResult = useQuery(jupyterQuery(workspaceCwd));
+  const environmentResult = useQuery(environmentQuery(workspaceCwd));
+  const notebooks = notebooksResult.data ?? [];
+  const loading = notebooksResult.isFetching;
+  const jupyter = jupyterResult.data ?? IDLE_JUPYTER;
+  const environment = environmentResult.data ?? null;
   const [starting, setStarting] = useState(false);
-  const [environment, setEnvironment] = useState<WorkspaceEnvironment | null>(null);
   const [provisioningEnvironment, setProvisioningEnvironment] = useState(false);
   const [jupyterError, setJupyterError] = useState<string | null>(null);
   const openInspector = useUiStore((state) => state.openInspector);
 
-  const loadNotebooks = useCallback(async (isCurrent: () => boolean = () => true) => {
-    setLoading(true);
-    try {
-      const data = await apiRequest<Notebook[]>(`/api/notebooks?cwd=${encodeURIComponent(workspaceCwd)}`);
-      if (isCurrent()) setNotebooks(data);
-    } catch (error) {
-      if (isCurrent()) toast(error instanceof Error ? error.message : "Unable to load notebooks", "error");
-    } finally { if (isCurrent()) setLoading(false); }
-  }, [toast, workspaceCwd]);
-
-  const loadJupyterStatus = useCallback(async (isCurrent: () => boolean = () => true) => {
-    try {
-      const data = await apiRequest<JupyterStatus>(`/api/notebooks/jupyter/status?cwd=${encodeURIComponent(workspaceCwd)}`);
-      if (isCurrent()) setJupyter(data);
-    } catch (error) {
-      if (isCurrent()) setJupyterError(error instanceof Error ? error.message : "Unable to inspect Jupyter status");
-    }
-  }, [workspaceCwd]);
-
-  const loadWorkspaceEnvironment = useCallback(async (isCurrent: () => boolean = () => true) => {
-    try {
-      const data = await apiRequest<WorkspaceEnvironment>(`/api/environments/workspace?cwd=${encodeURIComponent(workspaceCwd)}`);
-      if (isCurrent()) setEnvironment(data);
-    } catch (error) {
-      if (isCurrent()) toast(error instanceof Error ? error.message : "Unable to inspect workspace environment", "error");
-    }
-  }, [toast, workspaceCwd]);
-
-  useEffect(() => {
-    let current = true;
-    const isCurrent = () => current;
-    void loadNotebooks(isCurrent);
-    void loadJupyterStatus(isCurrent);
-    void loadWorkspaceEnvironment(isCurrent);
-    return () => { current = false; };
-  }, [loadJupyterStatus, loadNotebooks, loadWorkspaceEnvironment]);
+  const notebooksError = notebooksResult.error;
+  const jupyterStatusError = jupyterResult.error;
+  const environmentError = environmentResult.error;
+  useEffect(() => { if (notebooksError) toast(notebooksError instanceof Error ? notebooksError.message : t("notebooks.loadError"), "error"); }, [notebooksError, t, toast]);
+  useEffect(() => { if (jupyterStatusError) setJupyterError(jupyterStatusError instanceof Error ? jupyterStatusError.message : t("notebooks.jupyterStatusError")); }, [jupyterStatusError, t]);
+  useEffect(() => { if (environmentError) toast(environmentError instanceof Error ? environmentError.message : t("notebooks.environmentError"), "error"); }, [environmentError, t, toast]);
 
   const provisionWorkspaceEnvironment = async () => {
     setProvisioningEnvironment(true);
     try {
       const data = await apiRequest<WorkspaceEnvironment>(`/api/environments/workspace?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "POST" });
-      setEnvironment(data);
-      toast("Workspace Python environment is ready", "success");
+      queryClient.setQueryData(environmentQuery(workspaceCwd).queryKey, data);
+      toast(t("notebooks.environmentReady"), "success");
     } catch (error) {
-      toast(error instanceof Error ? error.message : "Unable to create workspace environment", "error");
+      toast(error instanceof Error ? error.message : t("notebooks.environmentCreateError"), "error");
     } finally {
       setProvisioningEnvironment(false);
     }
@@ -103,34 +84,39 @@ export function NotebooksPage() {
 
   const [setupProgress, setSetupProgress] = useState<string[]>([]);
   const [settingUp, setSettingUp] = useState(false);
+  const closeSetupStreamRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => closeSetupStreamRef.current?.(), []);
 
   const setupJupyterEnv = async () => {
+    closeSetupStreamRef.current?.();
     setSettingUp(true);
     setSetupProgress([]);
     try {
-      const eventSource = new EventSource("/api/notebooks/jupyter/setup");
-      eventSource.onmessage = (e) => {
-        const d = JSON.parse(e.data);
+      closeSetupStreamRef.current = openJsonEventStream<JupyterSetupEvent>("/api/notebooks/jupyter/setup", {
+        onMessage: (d) => {
         if (d.status === "done") {
           setSetupProgress((p) => [...p, "✅ " + d.text]);
-          eventSource.close();
+          closeSetupStreamRef.current?.();
+          closeSetupStreamRef.current = null;
           setSettingUp(false);
-          loadJupyterStatus();
+          void jupyterResult.refetch();
         } else if (d.status === "error") {
           setSetupProgress((p) => [...p, "❌ " + d.text]);
-          eventSource.close();
+          closeSetupStreamRef.current?.();
+          closeSetupStreamRef.current = null;
           setSettingUp(false);
         } else {
           setSetupProgress((p) => [...p, d.text]);
         }
-      };
-      eventSource.onerror = () => {
-        eventSource.close();
-        setSettingUp(false);
-        toast("Jupyter environment setup connection failed", "error");
-      };
+        },
+        onError: () => {
+          closeSetupStreamRef.current = null;
+          setSettingUp(false);
+          toast(t("notebooks.setupConnectionFailed"), "error");
+        },
+      });
     } catch (error) {
-      toast(error instanceof Error ? error.message : "Unable to set up Jupyter environment", "error");
+      toast(error instanceof Error ? error.message : t("notebooks.setupFailed"), "error");
       setSettingUp(false);
     }
   };
@@ -140,8 +126,8 @@ export function NotebooksPage() {
     setJupyterError(null);
     try {
       const data = await apiRequest<JupyterStatus>(`/api/notebooks/jupyter/start?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "POST" });
-      setJupyter({ ...data, matches_workspace: true });
-      void loadWorkspaceEnvironment();
+      queryClient.setQueryData(jupyterQuery(workspaceCwd).queryKey, { ...data, matches_workspace: true });
+      void environmentResult.refetch();
     } catch (e) { setJupyterError(e instanceof Error ? e.message : String(e)); }
     finally { setStarting(false); }
   };
@@ -150,17 +136,17 @@ export function NotebooksPage() {
     setJupyterError(null);
     try {
       await apiRequest(`/api/notebooks/jupyter/stop?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "POST" });
-      setJupyter({ running: false, port: null, url: null, cwd: null, matches_workspace: true });
+      queryClient.setQueryData(jupyterQuery(workspaceCwd).queryKey, { ...IDLE_JUPYTER, env_ready: undefined });
     } catch (e) { setJupyterError(e instanceof Error ? e.message : String(e)); }
   };
 
   return (
     <WorkspacePage>
         <WorkspacePageHeader
-          title="Notebooks"
-          description={`${notebooks.length} notebook${notebooks.length !== 1 ? "s" : ""} in workspace`}
+          title={t("notebooks.title")}
+          description={t("notebooks.count", { count: notebooks.length })}
           actions={
-          <WorkspacePageRefreshButton label={t("common.refresh")} loading={loading} onClick={() => void loadNotebooks()} />
+          <WorkspacePageRefreshButton label={t("common.refresh")} loading={loading} onClick={() => void notebooksResult.refetch()} />
           }
         />
 
@@ -168,16 +154,16 @@ export function NotebooksPage() {
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-medium text-text">
               {environment?.ready && <CheckCircle2 size={14} className="text-ok" />}
-              Workspace Python
+              {t("notebooks.workspacePython")}
             </div>
             <p className="mt-0.5 truncate font-mono text-[11px] text-muted">
-              {environment?.ready ? environment.python : environment?.error || "Isolated .venv has not been created yet"}
+              {environment?.ready ? environment.python : environment?.error || t("notebooks.environmentMissing")}
             </p>
           </div>
           {!environment?.ready && (
             <button type="button" onClick={() => void provisionWorkspaceEnvironment()} disabled={provisioningEnvironment} className="ml-3 flex shrink-0 items-center gap-1 rounded-input bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40">
               {provisioningEnvironment && <RefreshCw size={12} className="animate-spin" />}
-              Initialize
+              {t("notebooks.initialize")}
             </button>
           )}
         </div>
@@ -186,13 +172,13 @@ export function NotebooksPage() {
         <div className={cn("mt-3 rounded-card border p-4 mb-6", jupyter.running && jupyter.matches_workspace ? "border-ok/40 bg-ok/5" : "border-border bg-surface")}>
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-sm font-medium text-text">Jupyter Lab</h2>
+              <h2 className="text-sm font-medium text-text">{t("notebooks.jupyterLab")}</h2>
               <p className="text-xs text-muted mt-0.5">
                 {jupyter.running
                   ? jupyter.matches_workspace
-                    ? `Running on port ${jupyter.port}`
-                    : `Running for another workspace: ${jupyter.cwd}`
-                  : jupyter.env_ready ? "Environment ready" : "Environment not set up"}
+                    ? t("notebooks.runningPort", { port: jupyter.port })
+                    : t("notebooks.runningElsewhere", { cwd: jupyter.cwd })
+                  : jupyter.env_ready ? t("notebooks.environmentReadyShort") : t("notebooks.environmentNotSetUp")}
               </p>
               {jupyterError && <p role="alert" className="mt-1 text-xs text-error">{jupyterError}</p>}
             </div>
@@ -200,21 +186,21 @@ export function NotebooksPage() {
               {jupyter.running && jupyter.matches_workspace ? (
                 <>
                   <a href={jupyter.url!} target="_blank" className="rounded-input px-3 py-1.5 text-xs text-link hover:bg-surface-2 flex items-center gap-1">
-                    <ExternalLink size={12} /> Open
+                    <ExternalLink size={12} /> {t("common.open")}
                   </a>
                   <button onClick={stopJupyter} className="rounded-input px-3 py-1.5 text-xs text-error hover:bg-error/10 flex items-center gap-1">
-                    <Square size={12} /> Stop
+                    <Square size={12} /> {t("common.stop")}
                   </button>
                 </>
               ) : jupyter.env_ready ? (
                 <button onClick={startJupyter} disabled={starting}
                   className="rounded-input bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40 flex items-center gap-1">
-                  {starting ? <RefreshCw size={12} className="animate-spin" /> : <Play size={12} />} Start
+                  {starting ? <RefreshCw size={12} className="animate-spin" /> : <Play size={12} />} {t("common.start")}
                 </button>
               ) : (
                 <button onClick={setupJupyterEnv} disabled={settingUp}
                   className="rounded-input bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40 flex items-center gap-1">
-                  {settingUp ? <RefreshCw size={12} className="animate-spin" /> : "⚡"} Setup Jupyter
+                  {settingUp ? <RefreshCw size={12} className="animate-spin" /> : "⚡"} {t("notebooks.setupJupyter")}
                 </button>
               )}
             </div>
@@ -230,12 +216,12 @@ export function NotebooksPage() {
 
         {/* Notebook list */}
         {loading ? (
-          <div className="text-sm text-muted py-8 text-center">Loading…</div>
+          <div className="text-sm text-muted py-8 text-center">{t("common.loading")}</div>
         ) : notebooks.length === 0 ? (
           <div className="text-center py-16">
             <BookOpen size={40} className="mx-auto text-muted/30 mb-3" />
-            <p className="text-sm text-muted">No notebooks found</p>
-            <p className="text-xs text-muted mt-1">Create a .ipynb file or start Jupyter Lab to create one.</p>
+            <p className="text-sm text-muted">{t("notebooks.empty")}</p>
+            <p className="text-xs text-muted mt-1">{t("notebooks.emptyHint")}</p>
           </div>
         ) : (
           <div className="rounded-card border border-border bg-surface overflow-hidden">

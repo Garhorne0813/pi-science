@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { notebookRuntime, type CellResult } from "../../lib/notebook-runtime";
+import { useTranslation } from "react-i18next";
 
 interface Cell {
   id: string;
@@ -10,6 +11,7 @@ interface Cell {
 }
 
 export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId }: { onClose: () => void; cwd?: string; notebookId?: string }) {
+  const { t } = useTranslation();
   const [notebookId] = useState(() => requestedNotebookId || `nb-${Date.now()}`);
   const [cells, setCells] = useState<Cell[]>([]);
   const [interpreters, setInterpreters] = useState<{ python: boolean; r: boolean } | null>(null);
@@ -81,17 +83,17 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId }:
         backgroundColor: "var(--surface)",
       }}>
         <div>
-          <span style={{ fontSize: "14px", fontWeight: 600 }}>Notebook</span>
+          <span style={{ fontSize: "14px", fontWeight: 600 }}>{t("notebook.title")}</span>
           <span style={{
             fontSize: "11px", marginLeft: "8px", padding: "2px 8px", borderRadius: "8px",
             backgroundColor: interpreters === null ? "var(--warn)" : interpreters.python || interpreters.r ? "var(--ok)" : "var(--error)",
             color: "#fff",
           }}>
             {interpreters === null
-              ? "Checking..."
+              ? t("notebook.checkingKernels")
               : interpreters.python || interpreters.r
-                ? `${interpreters.python ? "Python" : ""}${interpreters.python && interpreters.r ? " / " : ""}${interpreters.r ? "R" : ""} Ready`
-                : "No Kernel"}
+                ? t("notebook.kernelsReady", { kernels: `${interpreters.python ? "Python" : ""}${interpreters.python && interpreters.r ? " / " : ""}${interpreters.r ? "R" : ""}` })
+                : t("notebook.noKernel")}
           </span>
         </div>
         <div style={{ display: "flex", gap: "6px" }}>
@@ -105,9 +107,9 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId }:
       <div style={{ flex: 1, overflowY: "auto", padding: "16px" }}>
         {cells.length === 0 && (
           <div style={{ textAlign: "center", padding: "40px 0", color: "var(--muted)", fontSize: "14px" }}>
-            <p>No cells yet. Add a Python or R cell to get started.</p>
+            <p>{t("notebook.panelEmpty")}</p>
             <p style={{ fontSize: "12px", marginTop: "8px" }}>
-              Cells within this notebook share a persistent namespace.
+              {t("notebook.namespaceHint")}
             </p>
           </div>
         )}
@@ -127,7 +129,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId }:
               borderBottom: "1px solid var(--border-faint)",
             }}>
               <span style={{ fontSize: "11px", color: "var(--muted)", fontWeight: 500 }}>
-                {cell.language.toUpperCase()} Cell
+                {t("notebook.languageCell", { language: cell.language.toUpperCase() })}
               </span>
               <div style={{ display: "flex", gap: "4px" }}>
                 <button
@@ -139,7 +141,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId }:
                     fontSize: "11px", padding: "2px 10px",
                   }}
                 >
-                  {cell.running ? "Running..." : "▶ Run"}
+                  {cell.running ? t("common.running") : `▶ ${t("common.run")}`}
                 </button>
                 <button onClick={() => removeCell(cell.id)} style={{ ...btnStyle("transparent"), fontSize: "11px", color: "var(--muted)" }}>
                   ✕

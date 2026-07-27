@@ -7,7 +7,7 @@ import { JobCoordinator } from "./job-coordinator.js";
 import { snapshotCandidate } from "./research-loop/candidate-snapshot.js";
 import { ResearchLoopCoordinator } from "./research-loop/coordinator.js";
 import { activeWallMs, stopReason } from "./research-loop/stop-policy.js";
-import type { AgentRunRequest, AgentRunResult, ResearchSubagentRunner } from "./research-loop/types.js";
+import type { AgentRunRequest, AgentRunResult, AgentRunUsage, ResearchSubagentRunner } from "./research-loop/types.js";
 
 const cleanup: string[] = [];
 const coordinators: ResearchLoopCoordinator[] = [];
@@ -18,7 +18,7 @@ afterEach(async () => {
   await Promise.allSettled(jobs.splice(0).map((coordinator) => coordinator.shutdown()));
   await Promise.all(cleanup.splice(0).map(async (path) => {
     await makeWritable(path).catch(() => undefined);
-    await rm(path, { recursive: true, force: true });
+    await rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }));
 });
 
@@ -119,7 +119,11 @@ class HookedRunner implements ResearchSubagentRunner {
   shutdown(): Promise<void> { return this.inner.shutdown(); }
 }
 
+/** The default body deliberately does NOT `exec`, so the sleep is a grandchild
+ *  that inherits the job pipes: only a process-group kill can stop it. */
 class SleepingRunner implements ResearchSubagentRunner {
+  constructor(private readonly body = "sleep 30\nexit 0\n") {}
+
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
     return {
       run_id: request.operation_id,
@@ -128,7 +132,7 @@ class SleepingRunner implements ResearchSubagentRunner {
       output: {
         kind: "candidate",
         proposal: {
-          approach_summary: "sleep", rationale: "", files: { "solve.sh": "#!/usr/bin/env bash\nexec sleep 30\n" },
+          approach_summary: "sleep", rationale: "", files: { "solve.sh": `#!/usr/bin/env bash\n${this.body}` },
           entrypoint: "solve.sh", parent_candidate_ids: [], expected_artifacts: [],
         },
       },
@@ -138,6 +142,33 @@ class SleepingRunner implements ResearchSubagentRunner {
   async status(): Promise<"lost"> { return "lost"; }
   async cancel(): Promise<void> {}
   async shutdown(): Promise<void> {}
+}
+
+/** Fails after spending model budget, the way a real supervisor run dies mid-stream. */
+class SpendingFailureRunner implements ResearchSubagentRunner {
+  private readonly spent = new Map<string, AgentRunUsage>();
+
+  async run(request: AgentRunRequest): Promise<AgentRunResult> {
+    this.spent.set(request.operation_id, { model_tokens: 120, cost_usd: 0.25 });
+    throw new Error("research supervisor exited before completing");
+  }
+
+  usage(runId: string): AgentRunUsage | null { return this.spent.get(runId) ?? null; }
+  async status(): Promise<"failed"> { return "failed"; }
+  async cancel(): Promise<void> {}
+  async shutdown(): Promise<void> {}
+}
+
+/** Counts how often the drive loop re-reads the event log. */
+class CountingCoordinator extends ResearchLoopCoordinator {
+  snapshots = 0;
+
+  repository(cwd: string) {
+    const repository = super.repository(cwd);
+    const read = repository.snapshot.bind(repository);
+    repository.snapshot = async (loopId: string) => { this.snapshots += 1; return read(loopId); };
+    return repository;
+  }
 }
 
 async function configuredLoop(coordinator: ResearchLoopCoordinator, cwd: string, input: Record<string, unknown> = {}) {
@@ -426,10 +457,13 @@ describe("subagent research loop", () => {
     await waitFor(() => coordinator.detail(cwd, second.loop_id), (value) => value?.status === "cancelled");
   }, 15_000);
 
-  it("cancels the active execution job when the user completes a running loop", async () => {
+  it.each([
+    ["a shell grandchild", "sleep 30\nexit 0\n"],
+    ["an exec'd process", "exec sleep 30\n"],
+  ])("cancels the active execution job when the user completes a running loop with %s", async (_label, body) => {
     const cwd = await workspace();
     const executionJobs = jobCoordinator();
-    const coordinator = new ResearchLoopCoordinator(executionJobs, new SleepingRunner());
+    const coordinator = new ResearchLoopCoordinator(executionJobs, new SleepingRunner(body));
     coordinators.push(coordinator);
     const loop = await configuredLoop(coordinator, cwd);
     await coordinator.action(cwd, loop.loop_id, "start");
@@ -446,6 +480,10 @@ describe("subagent research loop", () => {
       (value) => Boolean(value && ["succeeded", "failed", "cancelled", "timed_out"].includes(value.status)),
     );
     expect(job?.status).toBe("cancelled");
+    // The killed job must let go of its pipes promptly, whatever it spawned.
+    const started = Date.now();
+    await executionJobs.shutdown();
+    expect(Date.now() - started).toBeLessThan(5_000);
   }, 15_000);
 
   it("stops with patience_exhausted when deterministic scores plateau", async () => {
@@ -469,6 +507,48 @@ describe("subagent research loop", () => {
     expect(detail?.stop_reason).toBe("patience_exhausted");
     expect(detail?.candidates).toHaveLength(3);
   }, 20_000);
+
+  it("charges the budget for the tokens a failed agent run already spent", async () => {
+    const cwd = await workspace();
+    const coordinator = new ResearchLoopCoordinator(jobCoordinator(), new SpendingFailureRunner());
+    coordinators.push(coordinator);
+    const loop = await configuredLoop(coordinator, cwd);
+
+    await coordinator.action(cwd, loop.loop_id, "start");
+    await waitFor(() => coordinator.detail(cwd, loop.loop_id), (value) => value?.status === "needs_attention");
+
+    const snapshot = await coordinator.repository(cwd).snapshot(loop.loop_id);
+    const failed = snapshot.records.find((row) => row.record_type === "agent.run_failed");
+    expect(failed?.payload.model_tokens).toBe(120);
+    expect(failed?.payload.cost_usd).toBe(0.25);
+    const running = { ...snapshot.loop!, status: "running" as const };
+    expect(stopReason({ ...snapshot, loop: { ...running, budget: { ...running.budget, max_model_tokens: 100 } } })).toBe("model_token_budget_exhausted");
+    expect(stopReason({ ...snapshot, loop: { ...running, budget: { ...running.budget, max_cost_usd: 0.2 } } })).toBe("cost_budget_exhausted");
+    expect(stopReason({ ...snapshot, loop: { ...running, budget: { ...running.budget, max_model_tokens: 500 } } })).toBeNull();
+  }, 15_000);
+
+  it("backs off polling while an execution job runs", async () => {
+    const cwd = await workspace();
+    const executionJobs = jobCoordinator();
+    const coordinator = new CountingCoordinator(executionJobs, new SleepingRunner());
+    coordinators.push(coordinator);
+    const loop = await configuredLoop(coordinator, cwd);
+    await coordinator.action(cwd, loop.loop_id, "start");
+    await waitFor(
+      () => coordinator.detail(cwd, loop.loop_id),
+      (value) => value?.candidates[0]?.status === "executing",
+    );
+
+    const before = coordinator.snapshots;
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    const polls = coordinator.snapshots - before;
+    expect(polls).toBeGreaterThan(0);
+    // A fixed 100 ms poll would read the log ~30 times over the same window.
+    expect(polls).toBeLessThan(12);
+
+    await coordinator.action(cwd, loop.loop_id, "cancel");
+    await waitFor(() => coordinator.detail(cwd, loop.loop_id), (value) => value?.status === "cancelled");
+  }, 25_000);
 
   it("re-validates the evaluator when starting a ready loop", async () => {
     const cwd = await workspace();
