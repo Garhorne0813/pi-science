@@ -32,7 +32,7 @@ async function workspace(sessionId = "session-a", messages = 2): Promise<string>
   return realpath(cwd);
 }
 
-async function readState(cwd: string): Promise<{ proposals: Array<Record<string, unknown>>; policy: Record<string, unknown> }> {
+async function readState(cwd: string): Promise<{ items: Array<Record<string, unknown>>; proposals: Array<Record<string, unknown>>; policy: Record<string, unknown> }> {
   return JSON.parse(await readFile(join(cwd, ".pi-science", "project-state.json"), "utf8"));
 }
 
@@ -133,6 +133,65 @@ describe("POST /api/project-knowledge/review", () => {
     expect(second.statusCode).toBe(200);
     expect(second.json()).toMatchObject({ created: 0, skipped: 1 });
     expect((await readState(cwd)).proposals).toHaveLength(1);
+  });
+
+  it("materializes knowledge items when pending proposals are accepted in a batch", async () => {
+    const cwd = await workspace();
+    const runner = new FakeReviewRunner([
+      { knowledge_type: "finding", title: "Buffer pH drifts", summary: "Observed after four hours." },
+      { knowledge_type: "decision", title: "Use fresh buffer", summary: "Prepare buffer before each run." },
+    ]);
+    const app = buildApp(config(), { ...createServerModules(config()), projectReview: new ProjectReviewService(runner) });
+    apps.push(app);
+
+    const reviewed = await app.inject({ method: "POST", url: "/api/project-knowledge/review", payload: { cwd, session_id: "session-a" } });
+    const proposalIds = reviewed.json().proposal_ids as string[];
+    const accepted = await app.inject({ method: "POST", url: `/api/project-knowledge/proposals/batch?cwd=${encodeURIComponent(cwd)}`, payload: { proposal_ids: proposalIds, action: "accept" } });
+
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json()).toMatchObject({ ok: true, failures: [], results: [{ proposal_id: proposalIds[0], status: "accepted" }, { proposal_id: proposalIds[1], status: "accepted" }] });
+    const state = await readState(cwd);
+    expect(state.proposals.map((proposal) => proposal.status)).toEqual(["accepted", "accepted"]);
+    expect(state.items).toHaveLength(2);
+    expect(state.items.map((item) => item.proposal_id)).toEqual(proposalIds);
+    expect(state.items.map((item) => item.title)).toEqual(["Buffer pH drifts", "Use fresh buffer"]);
+  });
+
+  it("recovers accepted knowledge proposals written without corresponding items", async () => {
+    const cwd = await workspace();
+    const at = new Date().toISOString();
+    await writeFile(join(cwd, ".pi-science", "project-state.json"), JSON.stringify({
+      items: [],
+      proposals: [{
+        id: "proposal-legacy-batch",
+        proposal_type: "knowledge",
+        knowledge_type: "conclusion",
+        type: "conclusion",
+        title: "Legacy accepted result",
+        summary: "This proposal was accepted by the old batch endpoint.",
+        reason: "durable result",
+        confidence: "high",
+        importance: "important",
+        status: "accepted",
+        source: { session_id: "session-a", message_ids: ["message-0"], files: [], run_ids: [], citations: [] },
+        related_files: [],
+        conflicts_with: [],
+        supersedes: [],
+        operations: [],
+        created_at: at,
+        updated_at: at,
+      }],
+      project_versions: [],
+      policy: { auto_review: false },
+      history: [],
+    }), "utf8");
+    const app = buildApp(config(), { ...createServerModules(config()), projectReview: new ProjectReviewService(new FakeReviewRunner()) });
+    apps.push(app);
+
+    const listed = await app.inject({ method: "GET", url: `/api/project-knowledge/items?cwd=${encodeURIComponent(cwd)}` });
+
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().items).toEqual([expect.objectContaining({ proposal_id: "proposal-legacy-batch", title: "Legacy accepted result", status: "active" })]);
   });
 
   it("rejects a concurrent review for the same workspace with 409", async () => {
