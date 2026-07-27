@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { RouterProvider } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 import "./index.css";
-import "./i18n";
+import i18n from "./i18n";
 import { router } from "./app/router";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { useUiStore } from "./lib/store";
@@ -19,13 +19,13 @@ createRoot(document.getElementById("root")!).render(
     <ErrorBoundary
       fallback={
         <div style={{ padding: "2rem", textAlign: "center", fontFamily: "system-ui, sans-serif" }}>
-          <h2 style={{ color: "#e24b4a" }}>Application Error</h2>
-          <p style={{ color: "#666" }}>An unexpected error occurred.</p>
+          <h2 style={{ color: "#e24b4a" }}>{i18n.t("errors.applicationTitle")}</h2>
+          <p style={{ color: "#666" }}>{i18n.t("errors.applicationUnexpected")}</p>
           <button
             onClick={() => window.location.reload()}
             style={{ marginTop: "1rem", padding: "0.5rem 1rem", cursor: "pointer", borderRadius: "6px", border: "1px solid #ccc" }}
           >
-            Reload Application
+            {i18n.t("errors.reloadApplication")}
           </button>
         </div>
       }

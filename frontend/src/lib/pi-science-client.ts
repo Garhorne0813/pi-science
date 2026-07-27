@@ -20,7 +20,7 @@ export type {
   SessionInfo,
   SessionState,
 } from "./client/types";
-export { clampThinkingLevel, conversationModelOptions, THINKING_LEVELS } from "./client/models";
+export { clampThinkingLevel, conversationModelOptions } from "./client/models";
 export { clearSessionName, deriveSessionName, getSessionName, moveSessionName, setSessionName } from "./client/session-names";
 export { clearCachedMessages } from "./client/message-cache";
 

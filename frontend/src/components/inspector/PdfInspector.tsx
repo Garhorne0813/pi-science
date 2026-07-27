@@ -5,7 +5,6 @@ import { useTranslation } from "react-i18next";
 import type { PdfInspector as PdfInspectorT } from "../../types/thread";
 import { apiRequest } from "@/lib/api";
 import { previewUrl } from "@/lib/files";
-import { PaneTitlebarInset } from "./RightPane";
 
 export function PdfInspector({
   data,
@@ -43,7 +42,6 @@ export function PdfInspector({
   return (
     <div className="flex h-full flex-col">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
-        <PaneTitlebarInset />
         <span className="truncate text-sm font-medium text-text">{title}</span>
         <div className="flex-1" />
         {controls}

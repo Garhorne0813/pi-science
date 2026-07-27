@@ -3,7 +3,6 @@ import { AlertCircle, Loader2, Play, X } from "lucide-react";
 import type { FileRoot } from "../../types/thread";
 import { readArtifact } from "../../lib/files";
 import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
-import { PaneTitlebarInset } from "../inspector/RightPane";
 import { cn } from "../../lib/cn";
 import {
   notebookKernel,
@@ -15,6 +14,7 @@ import {
   type NotebookOutput,
 } from "./notebook-model";
 import { notebookRuntime, type CellResult } from "../../lib/notebook-runtime";
+import { useTranslation } from "react-i18next";
 
 interface EditableCell extends NotebookCell {
   id: string;
@@ -36,6 +36,7 @@ export function NotebookEditor({
   onClose: () => void;
   controls?: React.ReactNode;
 }) {
+  const { t } = useTranslation();
   const [cells, setCells] = useState<EditableCell[]>([]);
   const [language, setLanguage] = useState<"python" | "r" | "unsupported">("python");
   const [languageLabel, setLanguageLabel] = useState("Python");
@@ -53,7 +54,7 @@ export function NotebookEditor({
       .then((file) => {
         if (cancelled) return;
         if (!file || file.encoding !== "utf8") {
-          throw new Error("Notebook file is unavailable or is not UTF-8 JSON");
+          throw new Error("notebook_unavailable");
         }
         const notebook = parseNotebookDocument(file.data);
         const kernel = notebookKernel(notebook);
@@ -68,7 +69,7 @@ export function NotebookEditor({
         })));
       })
       .catch((cause) => {
-        if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
+        if (!cancelled) setError(cause instanceof Error && cause.message === "notebook_unavailable" ? t("notebook.fileUnavailable") : cause instanceof Error ? cause.message : String(cause));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -77,7 +78,7 @@ export function NotebookEditor({
     return () => {
       cancelled = true;
     };
-  }, [cwd, path, root]);
+  }, [cwd, path, root, t]);
 
   useEffect(() => () => {
     void notebookRuntime.release(notebookId, cwd).catch(() => undefined);
@@ -126,7 +127,6 @@ export function NotebookEditor({
   return (
     <div className="flex h-full flex-col bg-surface">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
-        <PaneTitlebarInset />
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-text">{filename}</span>
         <span className={cn(
           "rounded-full px-2 py-0.5 text-[11px] ring-1",
@@ -138,7 +138,7 @@ export function NotebookEditor({
         <button
           type="button"
           onClick={onClose}
-          aria-label="Close notebook"
+          aria-label={t("notebook.close")}
           className="flex h-9 w-9 items-center justify-center rounded-input text-text hover:bg-surface-2"
         >
           <X size={14} strokeWidth={1.5} />
@@ -148,7 +148,7 @@ export function NotebookEditor({
       <div className="min-h-0 flex-1 overflow-y-auto bg-surface-2 p-3 sm:p-4">
         {loading && (
           <div className="flex items-center gap-2 rounded-card border border-border bg-surface p-4 text-sm text-muted">
-            <Loader2 size={15} className="animate-spin" /> Loading notebook…
+            <Loader2 size={15} className="animate-spin" /> {t("notebook.loading")}
           </div>
         )}
         {!loading && error && (
@@ -159,12 +159,12 @@ export function NotebookEditor({
         )}
         {!loading && !error && cells.length === 0 && (
           <div className="rounded-card border border-border bg-surface p-8 text-center text-sm text-muted">
-            This notebook contains no cells.
+            {t("notebook.empty")}
           </div>
         )}
         {!loading && !error && !runnable && (
           <div role="status" className="mb-3 rounded-input border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-warn">
-            Viewing is available, but execution currently supports Python and R kernels only.
+            {t("notebook.unsupportedKernel")}
           </div>
         )}
         <div className="space-y-3">
@@ -197,6 +197,7 @@ function NotebookCellView({
   onCodeChange: (code: string) => void;
   onRun: () => void;
 }) {
+  const { t } = useTranslation();
   if (cell.cell_type === "markdown") {
     return (
       <section className="rounded-card border border-border bg-surface px-5 py-4">
@@ -207,7 +208,7 @@ function NotebookCellView({
   if (cell.cell_type !== "code") {
     return (
       <section className="rounded-card border border-border bg-surface p-4">
-        <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">Raw cell {index + 1}</div>
+        <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">{t("notebook.rawCell", { index: index + 1 })}</div>
         <pre className="whitespace-pre-wrap font-mono text-xs leading-5 text-text">{cell.code}</pre>
       </section>
     );
@@ -224,11 +225,11 @@ function NotebookCellView({
           type="button"
           onClick={onRun}
           disabled={!runnable || cell.running || !cell.code.trim()}
-          aria-label={`Run code cell ${index + 1}`}
+          aria-label={t("notebook.runCell", { index: index + 1 })}
           className="flex min-h-9 items-center gap-1.5 rounded-input bg-accent px-3 text-xs font-medium text-accent-fg hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {cell.running ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
-          {cell.running ? "Running" : "Run"}
+          {cell.running ? t("common.running") : t("common.run")}
         </button>
       </div>
       <textarea
@@ -240,7 +241,7 @@ function NotebookCellView({
             onRun();
           }
         }}
-        aria-label={`Code cell ${index + 1}`}
+        aria-label={t("notebook.codeCell", { index: index + 1 })}
         spellCheck={false}
         rows={Math.max(3, Math.min(18, cell.code.split("\n").length + 1))}
         className="block w-full resize-y bg-surface px-4 py-3 font-mono text-[13px] leading-5 text-text outline-none focus:ring-2 focus:ring-inset focus:ring-accent/40"
@@ -266,6 +267,7 @@ function LiveResult({ result }: { result: CellResult }) {
 }
 
 function StoredOutputs({ outputs }: { outputs: NotebookOutput[] }) {
+  const { t } = useTranslation();
   if (outputs.length === 0) return null;
   return (
     <div className="space-y-2 border-t border-faint px-4 py-3 font-mono text-xs leading-5">
@@ -285,7 +287,7 @@ function StoredOutputs({ outputs }: { outputs: NotebookOutput[] }) {
             {typeof image === "string" && (
               <img
                 src={`data:image/png;base64,${image}`}
-                alt={`Notebook output ${index + 1}`}
+                alt={t("notebook.output", { index: index + 1 })}
                 className="mt-2 max-h-80 max-w-full rounded-input bg-white object-contain"
               />
             )}

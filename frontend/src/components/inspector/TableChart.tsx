@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { analyzeColumns, defaultChartSpec, type ChartType } from "@/lib/tableChart";
+import { analyzeColumns, defaultChartSpec, type ChartType } from "@/lib/chart";
 import type { ParsedTable } from "@/lib/csv";
 import { cn } from "@/lib/cn";
 

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { parseEigenval, type BandData } from "@/lib/bands";
+import { parseEigenval, type BandData } from "@/lib/viewers/bands";
 
 /**
  * Materials band-structure viewer (P1-3): plots each band's energy across the

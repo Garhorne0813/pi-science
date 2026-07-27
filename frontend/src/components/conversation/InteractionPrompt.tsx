@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { PendingInteraction } from "../../lib/runtime-store";
+import { useTranslation } from "react-i18next";
 
 export function InteractionPrompt({
   interaction,
@@ -8,6 +9,7 @@ export function InteractionPrompt({
   interaction: PendingInteraction;
   onRespond: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => void;
 }) {
+  const { t } = useTranslation();
   const [value, setValue] = useState(interaction.prefill || "");
 
   useEffect(() => {
@@ -17,7 +19,7 @@ export function InteractionPrompt({
   const options = (interaction.options || []).map((option) => (
     typeof option === "string"
       ? { label: option, value: option }
-      : { label: option.label || option.value || "Option", value: option.value || option.label || "" }
+      : { label: option.label || option.value || t("interaction.option"), value: option.value || option.label || "" }
   ));
 
   return (
@@ -27,8 +29,8 @@ export function InteractionPrompt({
 
       {interaction.method === "confirm" ? (
         <div className="mt-3 flex gap-2">
-          <button onClick={() => onRespond({ confirmed: true })} className="rounded-input bg-accent px-3 py-1.5 text-xs text-accent-fg">Confirm</button>
-          <button onClick={() => onRespond({ confirmed: false })} className="rounded-input border border-border px-3 py-1.5 text-xs text-text hover:bg-surface-2">Decline</button>
+          <button onClick={() => onRespond({ confirmed: true })} className="rounded-input bg-accent px-3 py-1.5 text-xs text-accent-fg">{t("common.confirm")}</button>
+          <button onClick={() => onRespond({ confirmed: false })} className="rounded-input border border-border px-3 py-1.5 text-xs text-text hover:bg-surface-2">{t("interaction.decline")}</button>
         </div>
       ) : interaction.method === "select" ? (
         <div className="mt-3 flex flex-wrap gap-2">
@@ -41,7 +43,7 @@ export function InteractionPrompt({
               {option.label}
             </button>
           ))}
-          <button onClick={() => onRespond({ cancelled: true })} className="rounded-input px-3 py-1.5 text-xs text-muted hover:bg-surface-2">Cancel</button>
+          <button onClick={() => onRespond({ cancelled: true })} className="rounded-input px-3 py-1.5 text-xs text-muted hover:bg-surface-2">{t("common.cancel")}</button>
         </div>
       ) : (
         <div className="mt-3 flex items-end gap-2">
@@ -57,9 +59,9 @@ export function InteractionPrompt({
             disabled={!value.trim()}
             className="rounded-input bg-accent px-3 py-2 text-xs text-accent-fg disabled:cursor-default disabled:opacity-50"
           >
-            Submit
+            {t("common.submit")}
           </button>
-          <button onClick={() => onRespond({ cancelled: true })} className="rounded-input px-2 py-2 text-xs text-muted hover:bg-surface-2">Cancel</button>
+          <button onClick={() => onRespond({ cancelled: true })} className="rounded-input px-2 py-2 text-xs text-muted hover:bg-surface-2">{t("common.cancel")}</button>
         </div>
       )}
     </div>

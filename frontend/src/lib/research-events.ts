@@ -1,5 +1,6 @@
 import { projectMemoryKey } from "./project-memory";
 import { queryClient } from "./query-client";
+import { openJsonEventStream } from "./event-stream";
 
 const SIGNAL_DEBOUNCE_MS = 500;
 
@@ -9,7 +10,6 @@ const SIGNAL_DEBOUNCE_MS = 500;
 // bursts do not stampede refetches. "open" also signals so a reconnect catches
 // up on anything missed while disconnected.
 export function subscribeResearchEvents(cwd: string, onSignal: () => void): () => void {
-  const source = new EventSource(`/api/project-memory/research-events?cwd=${encodeURIComponent(cwd)}`);
   let timer: ReturnType<typeof setTimeout> | null = null;
   const signal = () => {
     timer ??= setTimeout(() => {
@@ -17,10 +17,13 @@ export function subscribeResearchEvents(cwd: string, onSignal: () => void): () =
       onSignal();
     }, SIGNAL_DEBOUNCE_MS);
   };
-  source.onmessage = signal;
-  source.onopen = signal;
+  const closeStream = openJsonEventStream<unknown>(`/api/project-memory/research-events?cwd=${encodeURIComponent(cwd)}`, {
+    onMessage: signal,
+    onOpen: signal,
+    closeOnError: false,
+  });
   return () => {
-    source.close();
+    closeStream();
     if (timer !== null) clearTimeout(timer);
     timer = null;
   };

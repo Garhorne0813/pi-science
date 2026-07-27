@@ -106,6 +106,3 @@ export const useUiStore = create<UiState>((set) => ({
 // Re-export for RightPane compatibility
 export const INSPECTOR_MIN = 280;
 export const INSPECTOR_MAX = 800;
-export function useOverlayTitlebar(): boolean {
-  return false; // Web doesn't have macOS traffic lights
-}

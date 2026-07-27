@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { parseDoscar, type DosData } from "@/lib/dos";
+import { parseDoscar, type DosData } from "@/lib/viewers/dos";
 import { cn } from "@/lib/cn";
 
 /**
