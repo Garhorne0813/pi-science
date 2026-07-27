@@ -181,7 +181,6 @@ export function KnowledgePage() {
           {tab === "research" && (
             <ResearchTab
               cwd={cwd}
-              onChanged={reloadWithTimeline}
               onError={setError}
             />
           )}
