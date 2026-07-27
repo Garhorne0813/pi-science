@@ -39,14 +39,19 @@ export function useResearchLoop(cwd: string) {
     return () => { unsubscribe(); window.clearInterval(timer); };
   }, [activeLoopId, activeLoopDone, cwd, refresh]);
 
-  /** Turn a free-text prompt into a loop draft. Resolves true when a draft was produced. */
-  const intent = async (text: string): Promise<boolean> => {
+  /** Compile a conversation mode into either a durable loop draft or a structured prompt. */
+  const intent = async (text: string): Promise<{ kind: "draft" } | { kind: "conversation"; message: string } | null> => {
+    if (!mode) return null;
     setBusy(true); setError(null);
     try {
-      const result = await projectMemoryApi.intent(cwd, text);
-      setDraft({ title: result.draft.title, objective: result.draft.objective, metric: "score", direction: "maximize", maxCandidates: result.draft.budget.max_candidates, maxWallSeconds: result.draft.budget.max_wall_seconds });
-      return true;
-    } catch (cause) { setError(cause instanceof Error ? cause.message : t("research.prepareError")); return false; }
+      const result = await projectMemoryApi.intent(cwd, mode, text);
+      if (result.draft.execution_kind === "conversation") {
+        setMode(null); setPrompt(t("conversation.defaultPrompt"));
+        return { kind: "conversation", message: result.draft.conversation_prompt ?? text };
+      }
+      setDraft({ taskType: result.draft.task_type as ResearchLoopDraft["taskType"], title: result.draft.title, objective: result.draft.objective, successCriterion: result.draft.success_criterion ?? result.draft.objective, planSteps: result.draft.plan_steps, metric: result.draft.metric ?? "objective_progress", direction: result.draft.direction, maxCandidates: result.draft.budget.max_candidates, maxWallSeconds: result.draft.budget.max_wall_seconds });
+      return { kind: "draft" };
+    } catch (cause) { setError(cause instanceof Error ? cause.message : t("research.prepareError")); return null; }
     finally { setBusy(false); }
   };
 
@@ -58,8 +63,7 @@ export function useResearchLoop(cwd: string) {
       const evaluatorContent = JSON.stringify({ evaluatorId, metric: draft.metric, direction: draft.direction, source: "deterministic" });
       const digest = await contentDigest(evaluatorContent);
       await projectMemoryApi.registerEvaluator(cwd, { evaluator_id: evaluatorId, version: 1, digest, status: "approved", metrics: [{ name: draft.metric.trim(), direction: draft.direction, weight: 1, source: "deterministic" }], hard_checks: ["artifact_verified"] });
-      const targetMetrics = draft.target == null ? {} : { [draft.metric.trim()]: draft.target };
-      const loop = await projectMemoryApi.createLoop(cwd, { title: draft.title.trim(), objective: draft.objective.trim(), evaluator_ref: { evaluator_id: evaluatorId, version: 1, digest }, budget: { max_candidates: draft.maxCandidates, max_wall_seconds: draft.maxWallSeconds, max_parallel: 1 }, stop_conditions: { target_metrics: targetMetrics, patience: 5, min_improvement: 0 } });
+      const loop = await projectMemoryApi.createLoop(cwd, { title: draft.title.trim(), objective: draft.objective.trim(), task_type: draft.taskType, constraints: [draft.successCriterion, ...draft.planSteps], evaluator_ref: { evaluator_id: evaluatorId, version: 1, digest }, budget: { max_candidates: draft.maxCandidates, max_wall_seconds: draft.maxWallSeconds, max_parallel: 1 }, stop_conditions: { target_metrics: {}, patience: 3, min_improvement: 0 } });
       const preflight = await projectMemoryApi.preflight(cwd, loop.loop_id);
       if (!preflight.ok) throw new Error(preflight.blockers.join("; "));
       await projectMemoryApi.action(cwd, loop.loop_id, "start");

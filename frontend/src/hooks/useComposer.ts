@@ -24,7 +24,7 @@ export function useComposer(params: {
   research: {
     mode: ResearchStarter | null;
     draft: ResearchLoopDraft | null;
-    intent: (text: string) => Promise<boolean>;
+    intent: (text: string) => Promise<{ kind: "draft" } | { kind: "conversation"; message: string } | null>;
   };
 }) {
   const { cwd, selectedModel, onModelCommand, reviewingProject, setReviewNotice, research } = params;
@@ -118,22 +118,25 @@ export function useComposer(params: {
 
   const handleSend = async () => {
     const text = input.trim();
-    if (research.mode && !research.draft && text && !working && !reviewingProject) {
-      if (await research.intent(text)) setInput("");
-      return;
-    }
     if (!selectedModel || (!text && files.length === 0 && workspaceReferences.length === 0) || working || reviewingProject) return;
+    let workflowMessage: string | null = null;
+    if (research.mode && !research.draft && text) {
+      const prepared = await research.intent(text);
+      if (!prepared) return;
+      if (prepared.kind === "draft") { setInput(""); return; }
+      workflowMessage = prepared.message;
+    }
 
     if (text.startsWith("/") && files.length === 0 && workspaceReferences.length === 0 && await runSlashCommand(text)) {
       setInput("");
       return;
     }
 
-    let message = text;
+    let message = workflowMessage ?? text;
     if (files.length > 0) {
       const names = files.map((f) => f.name).join(", ");
-      message = text
-        ? `${text}\n\n[Attached files: ${names}]`
+      message = message
+        ? `${message}\n\n[Attached files: ${names}]`
         : `I've uploaded these files: ${names}`;
     }
 

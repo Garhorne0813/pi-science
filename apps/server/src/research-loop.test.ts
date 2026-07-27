@@ -37,10 +37,12 @@ function jobCoordinator(): JobCoordinator {
 class FakeRunner implements ResearchSubagentRunner {
   candidateCalls = 0;
   analysisCalls = 0;
+  requests: AgentRunRequest[] = [];
 
   constructor(private readonly scores: (number | null)[] = [0.95]) {}
 
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
+    this.requests.push(request);
     if (request.phase === "candidate") {
       const score = this.scores[Math.min(this.candidateCalls, this.scores.length - 1)] ?? null;
       this.candidateCalls += 1;
@@ -258,6 +260,37 @@ describe("subagent research loop", () => {
     expect(detail?.candidates.at(-1)?.evaluation?.metrics.score?.value).toBe(0.95);
     expect(runner.candidateCalls).toBe(2);
     expect(runner.analysisCalls).toBe(1);
+  }, 15_000);
+
+  it("passes the research task and evaluator contract into candidate generation", async () => {
+    const cwd = await workspace();
+    const runner = new FakeRunner([0.95]);
+    const coordinator = new ResearchLoopCoordinator(jobCoordinator(), runner);
+    coordinators.push(coordinator);
+    const loop = await configuredLoop(coordinator, cwd, {
+      task_type: "optimize",
+      constraints: ["Keep the public API stable"],
+    });
+
+    await coordinator.action(cwd, loop.loop_id, "start");
+    await waitFor(
+      () => coordinator.detail(cwd, loop.loop_id),
+      (value) => value?.status === "completed",
+    );
+
+    const candidateRequest = runner.requests.find((request) => request.phase === "candidate");
+    expect(candidateRequest?.loop.task_type).toBe("optimize");
+    expect(candidateRequest?.context).toMatchObject({
+      task_type: "optimize",
+      objective: "Produce a deterministic score",
+      constraints: ["Keep the public API stable"],
+      evaluation: {
+        metrics: [{ name: "score", direction: "maximize", weight: 1, source: "deterministic" }],
+        hard_checks: ["artifact_verified"],
+        stop_conditions: { target_metrics: { score: 0.9 }, patience: 3, min_improvement: 0.01 },
+      },
+      budget_remaining: 4,
+    });
   }, 15_000);
 
   it("recovers a lost reserved agent operation and retries it without duplicate candidate execution", async () => {

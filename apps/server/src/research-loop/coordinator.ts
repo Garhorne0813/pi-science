@@ -39,6 +39,7 @@ export class ResearchLoopCoordinator {
       revision: 0,
       title: parsed.title,
       objective: parsed.objective,
+      task_type: parsed.task_type,
       status: "draft",
       evaluator_ref: parsed.evaluator_ref ?? null,
       budget: { max_candidates: 20, max_wall_seconds: 7200, max_parallel: 1, ...parsed.budget },
@@ -222,6 +223,11 @@ export class ResearchLoopCoordinator {
     const loop = requireLoop(snapshot);
     const operationId = `op-${randomUUID().replaceAll("-", "").slice(0, 16)}`;
     const repository = this.repository(cwd);
+    // Loop snapshots intentionally contain only loop-scoped records. Evaluators
+    // are workspace-scoped, so resolve the referenced immutable version from the
+    // complete event log before building the supervisor context.
+    const records = await repository.records();
+    const evaluator = loop.evaluator_ref ? findEvaluator(records, loop.evaluator_ref.evaluator_id, loop.evaluator_ref.version) : null;
     await repository.locked(async (records) => {
       const current = reduceResearchRecords(records, loop.loop_id);
       if (requireLoop(current).status !== "running") throw new Error("research loop is not running");
@@ -235,7 +241,15 @@ export class ResearchLoopCoordinator {
         operation_id: operationId,
         loop,
         phase: "candidate",
-        context: { cwd, objective: loop.objective, constraints: loop.constraints, candidates: compactCandidates(snapshot.candidates), budget_remaining: loop.budget.max_candidates - snapshot.candidates.length },
+        context: {
+          cwd,
+          task_type: loop.task_type,
+          objective: loop.objective,
+          constraints: loop.constraints,
+          evaluation: evaluator ? { metrics: evaluator.metrics, hard_checks: evaluator.hard_checks, stop_conditions: loop.stop_conditions } : null,
+          candidates: compactCandidates(snapshot.candidates),
+          budget_remaining: loop.budget.max_candidates - snapshot.candidates.length,
+        },
       });
       const parsed = researchAgentResultSchema.parse(result.output);
       if (parsed.kind !== "candidate") throw new Error("candidate agent returned analysis output");
@@ -360,7 +374,7 @@ export class ResearchLoopCoordinator {
     await repository.append("agent.run_reserved", payload, { loop_id: loop.loop_id, candidate_id: candidate.candidate_id, operation_id: operationId });
     await repository.append("agent.run_started", payload, { loop_id: loop.loop_id, candidate_id: candidate.candidate_id, operation_id: operationId, run_id: operationId });
     try {
-      const result = await this.runner.run({ operation_id: operationId, loop, phase: "analysis", context: { cwd, candidate, frontier: frontier(snapshot.candidates) } });
+      const result = await this.runner.run({ operation_id: operationId, loop, phase: "analysis", context: { cwd, task_type: loop.task_type, objective: loop.objective, candidate, frontier: frontier(snapshot.candidates) } });
       const parsed = researchAgentResultSchema.parse(result.output);
       if (parsed.kind !== "analysis") throw new Error("analysis agent returned a candidate");
       await repository.locked(async (records) => {

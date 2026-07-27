@@ -244,13 +244,52 @@ describe("native control-plane business routes", () => {
     expect(remove.statusCode).toBe(200);
     await expect(stat(join(cwd, "renamed.txt"))).rejects.toThrow();
 
-    const loop = await app.inject({ method: "POST", url: `/api/project-memory/research-loops?cwd=${encodeURIComponent(cwd)}`, payload: { title: "Smoke loop", objective: "Verify state" } });
+    const loop = await app.inject({ method: "POST", url: `/api/project-memory/research-loops?cwd=${encodeURIComponent(cwd)}`, payload: { title: "Smoke loop", objective: "Verify state", task_type: "optimize" } });
     expect(loop.statusCode).toBe(200);
     const loopId = loop.json().loop_id as string;
     expect((await app.inject({ method: "POST", url: `/api/project-memory/research-loops/${loopId}/start?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(409);
     expect((await app.inject({ method: "POST", url: `/api/project-memory/research-loops/${loopId}/cancel?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(200);
     const listed = await app.inject({ method: "GET", url: `/api/project-memory/research-loops?cwd=${encodeURIComponent(cwd)}` });
-    expect(listed.json().loops[0]).toMatchObject({ loop_id: loopId, status: "cancelled" });
+    expect(listed.json().loops[0]).toMatchObject({ loop_id: loopId, status: "cancelled", task_type: "optimize" });
+  });
+
+  it("compiles conversation research modes into distinct execution plans", async () => {
+    const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
+
+    const optimize = await app.inject({ method: "POST", url: `/api/project-memory/research-loop-intents?cwd=${encodeURIComponent(cwd)}`, payload: { mode: "optimize", objective: "Minimize model latency" } });
+    expect(optimize.statusCode).toBe(200);
+    expect(optimize.json()).toMatchObject({
+      requires_confirmation: true,
+      missing_fields: [],
+      draft: { task_type: "optimize", execution_kind: "iterative", metric: "latency", direction: "minimize", conversation_prompt: null },
+    });
+
+    const naturalLanguage = await app.inject({ method: "POST", url: `/api/project-memory/research-loop-intents?cwd=${encodeURIComponent(cwd)}`, payload: { mode: "optimize", objective: "降低模型首 token 时间，同时保持回答质量" } });
+    expect(naturalLanguage.statusCode).toBe(200);
+    expect(naturalLanguage.json()).toMatchObject({
+      requires_confirmation: true,
+      missing_fields: [],
+      draft: { metric: "time_to_first_token", direction: "minimize" },
+    });
+    expect(naturalLanguage.json().draft.success_criterion).toContain("降低");
+    expect(naturalLanguage.json().draft.plan_steps).toHaveLength(3);
+
+    const exploratory = await app.inject({ method: "POST", url: `/api/project-memory/research-loop-intents?cwd=${encodeURIComponent(cwd)}`, payload: { mode: "research_loop", objective: "探索这种材料为什么在潮湿环境中失效" } });
+    expect(exploratory.statusCode).toBe(200);
+    expect(exploratory.json()).toMatchObject({
+      requires_confirmation: true,
+      missing_fields: [],
+      draft: { metric: "evidence_quality", direction: "maximize" },
+    });
+
+    const compare = await app.inject({ method: "POST", url: `/api/project-memory/research-loop-intents?cwd=${encodeURIComponent(cwd)}`, payload: { mode: "compare", objective: "Compare method A with method B" } });
+    expect(compare.statusCode).toBe(200);
+    expect(compare.json()).toMatchObject({ requires_confirmation: false, draft: { task_type: "compare", execution_kind: "conversation" } });
+    expect(compare.json().draft.conversation_prompt).toContain("[Workflow: compare]");
+    expect(compare.json().draft.conversation_prompt).toContain("comparison table");
+
+    const invalid = await app.inject({ method: "POST", url: `/api/project-memory/research-loop-intents?cwd=${encodeURIComponent(cwd)}`, payload: { mode: "unknown", objective: "Anything" } });
+    expect(invalid.statusCode).toBe(400);
   });
 
   it("streams research record invalidation events over SSE", async () => {

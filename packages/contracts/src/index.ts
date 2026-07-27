@@ -226,12 +226,17 @@ export const researchLoopStatusSchema = z.enum([
   "completed", "failed", "cancelled", "needs_attention",
 ]);
 
+export const researchTaskTypeSchema = z.enum([
+  "research_loop", "optimize", "compare", "evaluate", "reproduce",
+]);
+
 export const researchLoopSchema = z.object({
   schema_version: z.literal(2).default(2),
   loop_id: z.string().min(1),
   revision: z.number().int().nonnegative().default(0),
   title: z.string().min(1).max(200),
   objective: z.string().min(1).max(4000),
+  task_type: researchTaskTypeSchema.default("research_loop"),
   status: researchLoopStatusSchema,
   mode: z.literal("serial").default("serial"),
   evaluator_ref: evaluatorRefSchema.nullable().default(null),
@@ -250,6 +255,7 @@ export const researchLoopSchema = z.object({
 export const createResearchLoopSchema = z.object({
   title: z.string().min(1).max(200),
   objective: z.string().min(1).max(4000),
+  task_type: researchTaskTypeSchema.default("research_loop"),
   evaluator_ref: evaluatorRefSchema.nullable().optional(),
   budget: researchBudgetSchema.partial().optional(),
   stop_conditions: researchStopConditionsSchema.partial().optional(),
@@ -303,6 +309,7 @@ export type EvaluatorSpec = z.infer<typeof evaluatorSpecSchema>;
 export type ResearchBudget = z.infer<typeof researchBudgetSchema>;
 export type ResearchStopConditions = z.infer<typeof researchStopConditionsSchema>;
 export type ResearchLoopStatus = z.infer<typeof researchLoopStatusSchema>;
+export type ResearchTaskType = z.infer<typeof researchTaskTypeSchema>;
 export type ResearchLoop = z.infer<typeof researchLoopSchema>;
 export type CreateResearchLoop = z.infer<typeof createResearchLoopSchema>;
 export type CandidateProposal = z.infer<typeof candidateProposalSchema>;
