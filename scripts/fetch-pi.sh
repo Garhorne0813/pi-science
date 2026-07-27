@@ -48,6 +48,7 @@ cd "$RUNTIME_DIR"
 if [ ! -f "node_modules/.package-lock.json" ]; then
   npm init -y --silent 2>/dev/null
 fi
+npm pkg set type=module --silent
 npm install \
   "@earendil-works/pi-coding-agent@$PI_VERSION" \
   pi-mcp-adapter \
@@ -58,7 +59,6 @@ npm install \
 
 PI_INSTALLED="$RUNTIME_DIR/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"
 if [ -f "$PI_INSTALLED" ]; then
-  ln -sf "$PI_INSTALLED" "$RUNTIME_DIR/cli.js" 2>/dev/null || true
   echo "==> pi $PI_VERSION installed from npm"
 else
   echo "ERROR: Could not install pi."

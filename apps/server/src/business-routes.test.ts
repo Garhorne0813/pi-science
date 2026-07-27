@@ -17,6 +17,7 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
   delete process.env.PI_SCIENCE_HOME;
   delete process.env.PI_SCIENCE_WORKSPACES;
+  delete process.env.DEEPSEEK_API_KEY;
 });
 
 function config(): ServerConfig {
@@ -104,6 +105,22 @@ describe("native control-plane business routes", () => {
         { id: "openrouter/openai/gpt-4o", reasoning: false, thinking_levels: ["off"] },
       ],
     });
+  });
+
+  it("exposes reasoning levels for DeepSeek V4 fallback models", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    process.env.DEEPSEEK_API_KEY = "test-key";
+    const app = buildApp(config());
+    apps.push(app);
+
+    const response = await app.inject({ method: "GET", url: "/api/settings/config" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().available_models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "deepseek/deepseek-v4-pro", reasoning: true, thinking_levels: expect.arrayContaining(["low", "high", "xhigh"]) }),
+      expect.objectContaining({ id: "deepseek/deepseek-v4-flash", reasoning: true, thinking_levels: expect.arrayContaining(["low", "high", "xhigh"]) }),
+    ]));
   });
 
   it("reports the number of valid sessions on workspace cards", async () => {

@@ -19,7 +19,6 @@ export function useModelConfig(cwd: string, sessionId: string | undefined) {
   const [configuringModel, setConfiguringModel] = useState(false);
 
   useEffect(() => {
-    if (!activeSessionId) return;
     settingsApi.config<{ available_models?: AvailableModel[]; model?: string; thinking?: string }>(cwd)
       .then((data) => {
         const runtime = useRuntimeStore.getState();
