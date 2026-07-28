@@ -8,6 +8,7 @@ import { ProjectReviewBusyError, type ProjectReviewService } from "./project-rev
 import { ensureKnowledgeItem, readProjectState as state, statePath, timestamp as now, type Source } from "./project-review/project-state.js";
 import type { ResearchLoopCoordinator } from "./research-loop/coordinator.js";
 import { subscribeResearchEvents } from "./research-loop/events.js";
+import { compileResearchIntent } from "./research-loop/intent.js";
 
 function q(request: { query: unknown }, key: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[key]; return typeof value === "string" && value ? value : fallback; }
 async function ws(request: { query: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): Promise<string | null> { try { return await validateWorkspaceCwd(q(request, "cwd")); } catch (error) { reply.code(403).send({ error: String(error) }); return null; } }
@@ -72,7 +73,7 @@ export function registerProjectRoutes(app: FastifyInstance, research: ResearchLo
     request.raw.once("close", cleanup);
     reply.raw.once("close", cleanup);
   });
-  app.post("/api/project-memory/research-loop-intents", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const body = (request.body ?? {}) as Record<string, unknown>; const objective = String(body.objective ?? body.message ?? "").trim(); if (!objective) return reply.code(400).send({ error: "research objective is required" }); return { requires_confirmation: true, missing_fields: ["metric"], draft: { title: objective.slice(0, 200), objective, budget: { max_candidates: 10, max_wall_seconds: 7200, max_parallel: 1 }, stop_conditions: { target_metrics: {}, patience: 5, min_improvement: 0 } } }; });
+  app.post("/api/project-memory/research-loop-intents", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; try { return compileResearchIntent(request.body); } catch (error) { return researchFailure(reply, error); } });
   app.get("/api/project-memory/research-loops", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; await research.reconcile(cwd); return { loops: await research.list(cwd) }; });
   app.post("/api/project-memory/research-loops", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; try { return await research.create(cwd, request.body); } catch (error) { return researchFailure(reply, error); } });
   app.get<{ Params: { loop_id: string } }>("/api/project-memory/research-loops/:loop_id", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; research.resume(cwd, request.params.loop_id); return await research.detail(cwd, request.params.loop_id) ?? reply.code(404).send({ error: "Research loop not found" }); });

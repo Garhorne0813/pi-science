@@ -15,7 +15,7 @@ export function ContextManagementSection({ config, saving, onSave }: { config: S
   }, [config.compaction_enabled, config.compaction_threshold_percent]);
 
   const selectedModel = config.available_models.find((model) => model.id === config.model);
-  const contextWindow = selectedModel?.context_window || null;
+  const contextWindow = selectedModel?.context_window || config.model_context_window || null;
   const thresholdTokens = contextWindow ? Math.round(contextWindow * threshold / 100) : null;
 
   return (

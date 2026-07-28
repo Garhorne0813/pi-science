@@ -27,6 +27,14 @@ fi
 echo "  Node.js: $(node --version)"
 echo "  pnpm:   $(pnpm --version)"
 
+find_venv_python() {
+  local root="$1"
+  for candidate in "$root/.venv/bin/python" "$root/.venv/Scripts/python.exe" "$root/.venv/Scripts/python"; do
+    if [ -x "$candidate" ] || [ -f "$candidate" ]; then echo "$candidate"; return 0; fi
+  done
+  return 1
+}
+
 if [ -n "${PI_CLI_PATH:-}" ]; then
   PI_CLI="$PI_CLI_PATH"
   [ -f "$PI_CLI" ] || { echo "Error: PI_CLI_PATH does not point to a file: $PI_CLI" >&2; exit 1; }
@@ -60,7 +68,7 @@ if [ -z "$CONDA_PYTHON" ] && command -v uv >/dev/null 2>&1; then
   mkdir -p "$UV_CACHE_DIR"
   export UV_CACHE_DIR
   (cd "$PROJECT_DIR/backend" && uv sync --extra dev)
-  CONDA_PYTHON="$PROJECT_DIR/backend/.venv/bin/python"
+  CONDA_PYTHON="$(find_venv_python "$PROJECT_DIR/backend")"
 elif [ -z "$CONDA_PYTHON" ]; then
   CONDA_PYTHON="${PI_SCIENCE_PYTHON:-$(command -v python3 || command -v python || true)}"
   [ -n "$CONDA_PYTHON" ] || { echo "Error: no usable Python interpreter found." >&2; exit 1; }
@@ -68,7 +76,7 @@ elif [ -z "$CONDA_PYTHON" ]; then
   mkdir -p "$PIP_CACHE_DIR"
   export PIP_CACHE_DIR
   "$CONDA_PYTHON" -m pip install -e "$PROJECT_DIR/backend[dev]"
-elif [ ! -x "$PROJECT_DIR/backend/.venv/bin/python" ]; then
+elif ! find_venv_python "$PROJECT_DIR/backend" >/dev/null 2>&1; then
   PIP_CACHE_DIR="${PIP_CACHE_DIR:-$PROJECT_DIR/.cache/pip}"
   mkdir -p "$PIP_CACHE_DIR"
   export PIP_CACHE_DIR

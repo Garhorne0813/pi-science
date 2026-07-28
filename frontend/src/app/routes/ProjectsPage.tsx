@@ -145,7 +145,14 @@ export function ProjectsPage() {
       invalidateWorkspaces();
       await loadWorkspaces();
       toast(t("projects.deleted", { name }), "success");
-    } catch { toast(t("projects.deleteError"), "error"); }
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        invalidateWorkspaces();
+        await loadWorkspaces();
+        return;
+      }
+      toast(t("projects.deleteError"), "error");
+    }
   };
 
   const togglePin = async (path: string) => {

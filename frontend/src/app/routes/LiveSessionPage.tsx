@@ -124,7 +124,7 @@ export function LiveSessionPage() {
   // Rendered above the composer card in both layouts, so it lives in a variable:
   // in the welcome layout it belongs to the growing top region (otherwise its
   // height would push the composer card off the vertical centre).
-  const modePicker = isNewSession && !research.draft && !research.activeLoop
+  const modePicker = !research.draft && !research.activeLoop
     ? <ResearchModePicker className={showWelcome ? "px-0 pb-0" : undefined} selected={research.mode} disabled={working || reviewingProject || research.busy} onSelect={(mode, prompt) => { const selected = research.mode === mode ? null : mode; research.setMode(selected); research.setPrompt(selected ? prompt : t("conversation.defaultPrompt")); composer.inputRef.current?.focus(); }} />
     : null;
 
@@ -158,7 +158,7 @@ export function LiveSessionPage() {
             )}
             {showWelcome && <ConversationWelcome />}
             {showWelcome && modePicker}
-            {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onChange={research.setDraft} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
+            {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
             {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
             {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error">{research.error}</div>}
             {renderBlocks(thread.blocks, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" })}
