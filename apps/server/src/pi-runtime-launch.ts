@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import type { PiConfig } from "@pi-science/contracts";
 import type { PiProcessOptions } from "./pi-process.js";
 import { configRoot } from "./persistence.js";
@@ -14,17 +14,18 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
   const effectiveModel = config.model || (typeof settings.model === "string" ? settings.model : "");
   const effectiveThinking = config.thinking || (typeof settings.thinking === "string" ? settings.thinking : "high");
   const args: string[] = [];
+  const seededSkills = seedWorkspaceAssets(cwd);
   if (cliPath.endsWith(".ts")) {
     const tsxPath = process.env.PI_TSX_PATH || findAdjacentRuntime(cliPath, join("node_modules", ".bin", "tsx"));
     if (!tsxPath) throw new Error(`TypeScript Pi CLI requires tsx: ${cliPath}`);
     args.push(tsxPath);
     if (process.env.PI_TSCONFIG_PATH) args.push("--tsconfig", process.env.PI_TSCONFIG_PATH);
   }
-  args.push(cliPath, "--mode", "rpc", "--session-dir", join(cwd, ".pi-science", "sessions"), "--no-extensions");
+  args.push(cliPath, "--mode", "rpc", "--session-dir", join(cwd, ".pi-science", "sessions"), "--no-extensions", "-e", "pi-subagents/index.ts");
   if (effectiveModel) args.push("--model", effectiveModel);
   if (effectiveThinking) args.push("--thinking", effectiveThinking);
   if (sessionPath) args.push("--session", sessionPath);
-  for (const skill of config.skills) args.push("--skill", skill);
+  for (const skill of [...seededSkills, ...config.skills]) args.push("--skill", skill);
   for (const extension of config.extensions) args.push("-e", extension);
   const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
   let agentDir = join(dataRoot, "pi-agent", workspaceKey);
@@ -64,6 +65,27 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
     args,
     env,
   };
+}
+
+function seedWorkspaceAssets(cwd: string): string[] {
+  const projectRoot = resolve(dirname(new URL(import.meta.url).pathname), "../../..");
+  const metadata = join(cwd, ".pi-science");
+  mkdirSync(metadata, { recursive: true });
+  const agents = join(cwd, "AGENTS.md");
+  const sourceAgents = join(projectRoot, "harness", "AGENTS.md");
+  if (!existsSync(agents) && existsSync(sourceAgents)) cpSync(sourceAgents, agents);
+  const sourceSkills = join(projectRoot, "skills");
+  const targetSkills = join(cwd, ".pi", "skills");
+  mkdirSync(targetSkills, { recursive: true });
+  const result: string[] = [];
+  for (const name of readdirSync(sourceSkills, { withFileTypes: true })) {
+    if (!name.isDirectory() || !existsSync(join(sourceSkills, name.name, "SKILL.md"))) continue;
+    const target = join(targetSkills, name.name);
+    mkdirSync(target, { recursive: true });
+    cpSync(join(sourceSkills, name.name, "SKILL.md"), join(target, "SKILL.md"));
+    result.push(target);
+  }
+  return result;
 }
 
 function findAdjacentRuntime(sourcePath: string, relativePath: string): string | null {
@@ -169,13 +191,15 @@ function materializeCustomProviders(agentDir: string, raw: unknown, env: NodeJS.
     const models = Array.isArray(provider.models) ? provider.models.map(String).filter(Boolean) : [];
     const configuredReasoning = typeof provider.reasoning === "boolean" ? provider.reasoning : undefined;
     const configuredContextWindow = positiveInteger(provider.context_window) ?? 128000;
+    const hints = provider.model_hints && typeof provider.model_hints === "object" ? provider.model_hints as Record<string, any> : {};
     const envName = `PI_SCIENCE_CUSTOM_${id.toUpperCase().replaceAll("-", "_")}_API_KEY`;
     const modelDefinitions = models.map((model) => {
-      const reasoning = configuredReasoning ?? /gpt-5|thinking|reasoning|qwen3|deepseek-r1|deepseek-v4/i.test(model);
+      const hint = hints[model] ?? {};
+      const reasoning = typeof hint.reasoning === "boolean" ? hint.reasoning : configuredReasoning ?? /gpt-5|thinking|reasoning|qwen3|deepseek-r1|deepseek-v4/i.test(model);
       return {
         id: model, name: model, reasoning,
-        input: ["text"], contextWindow: configuredContextWindow, maxTokens: 16384,
-        ...(reasoning ? { thinkingLevelMap: { off: "none", minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "xhigh" } } : {}),
+        input: ["text"], contextWindow: positiveInteger(hint.context_window) ?? configuredContextWindow, maxTokens: 16384,
+        ...(reasoning ? { thinkingLevelMap: Object.fromEntries((Array.isArray(hint.thinking_levels) ? hint.thinking_levels : ["off", "minimal", "low", "medium", "high", "xhigh"]).map((level: string) => [level, level])) } : {}),
       };
     });
     const apiKey = typeof provider.api_key === "string" ? provider.api_key : "";

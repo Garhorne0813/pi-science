@@ -67,7 +67,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           // lazily on the first send/new-session action avoids StrictMode ghost
           // sessions and empty records created merely by navigation.
           client.disconnect();
-          set({ activeSessionId: null, thread: emptyThread(), status: "ready", working: false });
+          set({ activeSessionId: null, thread: { blocks: [], index: {}, loaded: true }, status: "ready", working: false });
           void loadSessionsInternal();
           return;
         }
@@ -180,8 +180,23 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       if (!message.trim()) return;
       if (get().working) throw new Error("The current conversation is still running");
       let { activeSessionId, cwd } = get();
+      const thread = get().thread;
+      const userBlock: ThreadBlock = {
+        kind: "user",
+        id: `user-${Date.now()}`,
+        text: message,
+        timestamp: new Date().toISOString(),
+      };
+      const blocks = [...thread.blocks, userBlock];
+      set({ thread: { blocks, index: { ...thread.index, [userBlock.id]: blocks.length - 1 }, loaded: true }, working: true });
       if (!activeSessionId) {
-        activeSessionId = await get().createNewSession();
+        try {
+          activeSessionId = await get().createNewSession();
+        } catch (error) {
+          const current = get();
+          if (current.cwd === cwd) set({ working: false });
+          throw error;
+        }
       }
       const client = getClient();
       registerEventListener(client);
@@ -195,16 +210,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       ++generations.localMutation;
       resetTurnBuffer();
       turnState.errored = false;
-      const thread = get().thread;
-      const userBlock: ThreadBlock = {
-        kind: "user",
-        id: `user-${Date.now()}`,
-        text: message,
-        timestamp: new Date().toISOString(),
-      };
-      const blocks = [...thread.blocks, userBlock];
-      const index = { ...thread.index, [userBlock.id]: blocks.length - 1 };
-      set({ thread: { blocks, index, loaded: true }, working: true, client });
+      set({ client, working: true });
 
       applyPromptSessionName(cwd, activeSessionId, message);
       try {
@@ -464,10 +470,11 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         resetTurnBuffer();
         turnState.errored = false;
         registerEventListener(client);
+        const currentThread = get().thread;
         set({
           client,
           activeSessionId: result.id,
-          thread: emptyThread(),
+          thread: currentThread.blocks.length > 0 ? currentThread : emptyThread(),
           working: false,
           status: "connecting",
           pendingInteraction: null,

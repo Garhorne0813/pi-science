@@ -22,7 +22,7 @@ export async function loadSessionsInternal(cwdOverride?: string): Promise<Sessio
     // Inject names from localStorage
     const named = fromDisk.map((s: SessionInfo) => ({
       ...s,
-      name: s.name || getSessionName(requestedCwd, s.id) || undefined,
+      name: s.name || current.sessions.find((item) => item.id === s.id)?.name || getSessionName(requestedCwd, s.id) || undefined,
     }));
     // Preserve only the active, newly-created optimistic entry. Treating every
     // disk-missing item as optimistic resurrects sessions after deletion.

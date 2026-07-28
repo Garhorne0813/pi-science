@@ -18,6 +18,7 @@ export interface CustomProvider {
   has_key: boolean;
   reasoning?: boolean;
   context_window?: number;
+  model_hints?: Record<string, { context_window?: number; reasoning?: boolean; thinking_levels?: string[]; source?: string }>;
 }
 
 export interface AvailableModel {
@@ -42,6 +43,7 @@ export interface SettingsConfig {
   model_catalog_source?: "pi" | "fallback";
   compaction_enabled: boolean;
   compaction_threshold_percent: number;
+  model_context_window?: number | null;
 }
 
 export interface ModelEndpoint {

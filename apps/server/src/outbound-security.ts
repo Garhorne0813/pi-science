@@ -24,13 +24,14 @@ export function isPrivateOrReservedAddress(address: string): boolean {
   return family === 4 ? ipv4IsBlocked(address) : family === 6 ? ipv6IsBlocked(address) : true;
 }
 
-export async function validateOutboundHttpUrl(raw: string): Promise<URL> {
+export async function validateOutboundHttpUrl(raw: string, options: { allowPrivate?: boolean } = {}): Promise<URL> {
   let url: URL;
   try { url = new URL(raw); } catch { throw new Error("base_url must be a valid absolute URL"); }
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("only http(s) URLs are allowed");
   if (url.username || url.password) throw new Error("URL credentials are not allowed");
   if (!url.hostname) throw new Error("URL hostname is required");
+  const allowPrivate = options.allowPrivate ?? process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0";
   const addresses = isIP(url.hostname) ? [url.hostname] : (await lookup(url.hostname, { all: true, verbatim: true })).map((entry) => entry.address);
-  if (!addresses.length || addresses.some(isPrivateOrReservedAddress)) throw new Error("outbound URL resolves to a private or reserved address");
+  if (!addresses.length || (!allowPrivate && addresses.some(isPrivateOrReservedAddress))) throw new Error("outbound URL resolves to a private or reserved address");
   return url;
 }
