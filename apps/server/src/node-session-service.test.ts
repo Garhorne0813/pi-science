@@ -123,6 +123,7 @@ describe("Node session lifecycle", () => {
   it("switches atomically between persisted sessions", async () => {
     const service = testService();
     const cwd = await workspaceWithSessions("session-a", "session-b");
+    await service.resume("session-a", cwd);
     await expect(service.state("session-a", cwd)).resolves.toMatchObject({
       id: "session-a",
       context_tokens: 32000,
@@ -131,6 +132,7 @@ describe("Node session lifecycle", () => {
       compaction_enabled: true,
     });
     await expect(service.state("session-b", cwd)).resolves.toMatchObject({ id: "session-b" });
+    await service.resume("session-b", cwd);
     expect(service.activeCount).toBe(2);
     await expect(Promise.all([
       service.command("session-a", cwd, "prompt", { message: "a" }),

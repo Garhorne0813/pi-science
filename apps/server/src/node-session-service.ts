@@ -122,6 +122,16 @@ export class NodeSessionService {
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
     return this.withLock(`${cwd}\0${sessionId}`, async () => {
+      // Short-circuit for commands that don't need a running Pi process
+      if (type === "get_commands" || type === "abort") {
+        const runtime = this.runtimes.get(runtimeKey(cwd, sessionId));
+        if (!runtime) {
+          const sessionPath = await this.repository.findPath(cwd, sessionId);
+          if (!sessionPath) return { success: false, code: "not_found", error: "session not found in this workspace" };
+          if (type === "get_commands") return { success: true, data: { commands: [] } };
+          if (type === "abort") return { success: true };
+        }
+      }
       const activated = await this.activateUnlocked(sessionId, cwd);
       if ("error" in activated) return activated;
       const runtime = activated;
@@ -286,6 +296,13 @@ export class NodeSessionService {
     });
   }
 
+  async exists(sessionId: string, cwdValue: string): Promise<boolean> {
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(cwdValue); }
+    catch { return false; }
+    return (await this.repository.findPath(cwd, sessionId)) !== null;
+  }
+
   async resume(sessionId: string, cwdValue: string): Promise<{ success: boolean; error?: string; code?: string }> {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
@@ -301,15 +318,33 @@ export class NodeSessionService {
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { error: String(error), code: "workspace_invalid" }; }
     return this.withLock(`${cwd}\0${sessionId}`, async () => {
-      const activated = await this.activateUnlocked(sessionId, cwd);
-      if ("error" in activated) return { error: activated.error, code: activated.code };
-      const result = activated.lastState && activated.lastStateAt && Date.now() - activated.lastStateAt < 500
-        ? { success: true, data: activated.lastState }
-        : await this.refreshState(activated);
+      const runtime = this.runtimes.get(runtimeKey(cwd, sessionId));
+      if (!runtime) {
+        const sessionPath = await this.repository.findPath(cwd, sessionId);
+        if (!sessionPath) return { error: "session not found in this workspace", code: "not_found" };
+        const config = effectiveConfig();
+        return {
+          id: sessionId,
+          cwd,
+          is_streaming: false,
+          is_compacting: false,
+          pending_message_count: 0,
+          model: config.model ?? null,
+          thinking: config.thinking ?? null,
+          context_tokens: null,
+          context_window: config.model_context_window ?? null,
+          context_percent: null,
+          compaction_enabled: config.compaction_enabled ?? true,
+          compaction_threshold_percent: config.compaction_threshold_percent ?? null,
+        };
+      }
+      const result = runtime.lastState && runtime.lastStateAt && Date.now() - runtime.lastStateAt < 500
+        ? { success: true, data: runtime.lastState }
+        : await this.refreshState(runtime);
       if (!result.success || !result.data || typeof result.data !== "object") return { error: String(result.error ?? "unable to read session state"), code: String(result.code ?? "runtime_error") };
-      const stats = await activated.process.sendCommand("get_session_stats");
+      const stats = await runtime.process.sendCommand("get_session_stats");
       return this.toSessionState(
-        activated,
+        runtime,
         result.data as Record<string, unknown>,
         stats.success && stats.data && typeof stats.data === "object" ? stats.data as Record<string, unknown> : undefined,
       );

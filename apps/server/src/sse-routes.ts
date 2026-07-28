@@ -55,8 +55,8 @@ export function registerSseRoutes(app: FastifyInstance, nodeSessionService: Node
     }
 
     const sessionId = request.params.session_id;
-    const resumed = await nodeSessionService.resume(sessionId, cwd);
-    if (!resumed.success) {
+    const sessionExists = await nodeSessionService.exists(sessionId, cwd);
+    if (!sessionExists) {
       return reply
         .type("text/event-stream")
         .send(serializeSseEvent({
@@ -65,8 +65,8 @@ export function registerSseRoutes(app: FastifyInstance, nodeSessionService: Node
           data: JSON.stringify({
             type: "error",
             sessionId,
-            message: resumed.error ?? "session not found in this workspace",
-            code: resumed.code,
+            message: "session not found in this workspace",
+            code: "not_found",
             terminal: true,
           }),
           created_at: new Date().toISOString(),
