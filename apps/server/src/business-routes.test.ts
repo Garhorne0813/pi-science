@@ -422,6 +422,108 @@ describe("native control-plane business routes", () => {
     expect((await app.inject({ method: "PUT", url: "/api/settings/custom-providers/local-provider", payload: { ...payload, models: ["updated-model"] } })).statusCode).toBe(200);
   });
 
+  it("preserves inline and per-model metadata from custom provider discovery", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    const requests: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.endsWith("/models")) return new Response(JSON.stringify({ data: [
+        { id: "inline-model", max_model_len: 800_000, reasoning: true, thinking_levels: ["off", "high"] },
+        { id: "detail-model" },
+      ] }), { status: 200, headers: { "content-type": "application/json" } });
+      if (url.endsWith("/models/detail-model")) return new Response(JSON.stringify({ id: "detail-model", context_window: 262_144, supports_reasoning: false }), { status: 200, headers: { "content-type": "application/json" } });
+      throw new Error(`unexpected discovery request: ${url}`);
+    });
+    const app = buildApp(config()); apps.push(app);
+
+    const discovered = await app.inject({
+      method: "POST",
+      url: "/api/settings/custom-providers/discover",
+      payload: { name: "Metadata API", base_url: "http://127.0.0.1:30002/v1", api_key: "secret", api: "openai-completions" },
+    });
+    expect(discovered.statusCode).toBe(200);
+    expect(discovered.json().provider).toMatchObject({
+      models: ["inline-model", "detail-model"],
+      model_hints: {
+        "inline-model": { context_window: 800_000, reasoning: true, thinking_levels: ["off", "high"], source: "models" },
+        "detail-model": { context_window: 262_144, reasoning: false, source: "model-detail" },
+      },
+    });
+
+    const provider = discovered.json().provider;
+    const saved = await app.inject({ method: "PUT", url: `/api/settings/custom-providers/${provider.id}`, payload: { ...provider, api_key: "secret", reasoning: true, context_window: 128_000 } });
+    expect(saved.statusCode).toBe(200);
+    expect(requests).toHaveLength(2);
+    const settings = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
+    expect(settings.available_models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "custom-metadata-api/inline-model", context_window: 800_000, reasoning: true }),
+      expect.objectContaining({ id: "custom-metadata-api/detail-model", context_window: 262_144, reasoning: false }),
+    ]));
+  });
+
+  it("allows a slower direct-save capability probe without falling back to 128K", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (!url.endsWith("/models")) throw new Error(`unexpected slow probe request: ${url}`);
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, 900);
+        init?.signal?.addEventListener("abort", () => { clearTimeout(timer); reject(init.signal?.reason); }, { once: true });
+      });
+      return new Response(JSON.stringify({ data: [{ id: "slow-model", max_model_len: 524_288, reasoning: true }] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const app = buildApp(config()); apps.push(app);
+
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/settings/custom-providers/slow-provider",
+      payload: { name: "Slow Provider", base_url: "http://127.0.0.1:30003/v1", api: "openai-completions", models: ["slow-model"], context_window: 128_000, model_hints: { "slow-model": { reasoning: false, source: "manual" } } },
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().provider.model_hints["slow-model"]).toMatchObject({ context_window: 524_288, reasoning: false, source: "manual" });
+  });
+
+  it("probes OpenAI and Anthropic model capabilities with protocol-correct authentication", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    const calls: Array<{ url: string; headers: Headers; body: Record<string, unknown> | null }> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : null;
+      calls.push({ url, headers: new Headers(init?.headers), body });
+      if (url.endsWith("/models")) {
+        const id = url.includes("anthropic") ? "claude-private" : "openai-private";
+        return new Response(JSON.stringify({ data: [{ id }] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/models/")) return new Response(JSON.stringify({ error: "metadata unavailable" }), { status: 404, headers: { "content-type": "application/json" } });
+      if (url.endsWith("/chat/completions")) return new Response(JSON.stringify({ error: { message: "Maximum context length is 131,072 tokens", supports_reasoning: true, thinking_levels: ["off", "medium", "high"] } }), { status: 400, headers: { "content-type": "application/json" } });
+      if (url.endsWith("/messages")) return new Response(JSON.stringify({ error: { message: "This model has a maximum context length of 200,000 tokens", supports_reasoning: true, thinking_levels: ["off", "high"] } }), { status: 400, headers: { "content-type": "application/json" } });
+      throw new Error(`unexpected probe request: ${url}`);
+    });
+    const app = buildApp(config()); apps.push(app);
+
+    const openai = await app.inject({ method: "POST", url: "/api/settings/custom-providers/discover", payload: { name: "OpenAI Local", base_url: "http://127.0.0.1/openai/v1", api_key: "openai-key", api: "openai-completions" } });
+    expect(openai.statusCode).toBe(200);
+    expect(openai.json().provider.model_hints["openai-private"]).toMatchObject({ context_window: 131_072, reasoning: true, thinking_levels: ["off", "medium", "high"], source: "openai-chat-probe" });
+
+    const anthropic = await app.inject({ method: "POST", url: "/api/settings/custom-providers/discover", payload: { name: "Anthropic Local", base_url: "http://127.0.0.1/anthropic/v1", api_key: "anthropic-key", api: "anthropic-messages" } });
+    expect(anthropic.statusCode).toBe(200);
+    expect(anthropic.json().provider.model_hints["claude-private"]).toMatchObject({ context_window: 200_000, reasoning: true, thinking_levels: ["off", "high"], source: "anthropic-probe" });
+
+    const openaiProbe = calls.find((call) => call.url.endsWith("/chat/completions"));
+    expect(openaiProbe?.headers.get("authorization")).toBe("Bearer openai-key");
+    expect(openaiProbe?.body?.max_tokens).toBe(1_000_000_000);
+    const anthropicList = calls.find((call) => call.url.endsWith("/anthropic/v1/models"));
+    const anthropicProbe = calls.find((call) => call.url.endsWith("/messages"));
+    expect(anthropicList?.headers.get("x-api-key")).toBe("anthropic-key");
+    expect(anthropicList?.headers.has("authorization")).toBe(false);
+    expect(anthropicProbe?.headers.get("x-api-key")).toBe("anthropic-key");
+    expect(anthropicProbe?.headers.get("anthropic-version")).toBe("2023-06-01");
+  });
+
   it("toggles compaction enabled without a threshold while keeping strict threshold validation", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
