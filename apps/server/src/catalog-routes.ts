@@ -1,4 +1,5 @@
 import { access, cp, mkdir, readdir, readFile, realpath, rename, stat, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import { delimiter } from "node:path";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,6 +42,102 @@ async function workspaceInfo(path: string): Promise<Record<string, unknown>> {
 }
 function inside(root: string, target: string): boolean { const rel = relative(root, target); return !rel.startsWith("..") && !isAbsolute(rel); }
 function expandUserPath(path: string): string { return path.startsWith("~/") ? resolve(process.env.HOME ?? ".", path.slice(2)) : resolve(path); }
+
+type ComputeProbeInput = {
+  host: string;
+  user?: string;
+  port?: number;
+  auth_method?: "key" | "password";
+  identity_file?: string;
+  password?: string;
+};
+
+const REMOTE_PROBE_COMMAND = [
+  'printf "hostname="; hostname',
+  'printf "os="; uname -srm',
+  'printf "cores="; (getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 0)',
+  'printf "memory_bytes="; (awk \'/MemTotal/ { print $2 * 1024 }\' /proc/meminfo 2>/dev/null || sysctl -n hw.memsize 2>/dev/null || echo 0)',
+  'printf "gpus="; (command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l | tr -d " " || echo 0)',
+  'printf "has_slurm="; (command -v sbatch >/dev/null 2>&1 && echo yes || echo no)',
+].join("; ");
+
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "unknown";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let amount = value;
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; }
+  return `${amount >= 10 || unit === 0 ? Math.round(amount) : amount.toFixed(1)} ${units[unit]}`;
+}
+
+async function probeComputeMachine(input: ComputeProbeInput): Promise<Record<string, unknown>> {
+  const host = String(input.host ?? "").trim();
+  const user = String(input.user ?? "").trim();
+  const port = Number(input.port ?? 22);
+  if (!host || host.startsWith("-") || !/^[a-zA-Z0-9._:[\]-]+$/.test(host)) return { reachable: false, error: "Invalid SSH hostname" };
+  if (user && !/^[a-zA-Z0-9._-]+$/.test(user)) return { reachable: false, error: "Invalid SSH username" };
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return { reachable: false, error: "SSH port must be between 1 and 65535" };
+
+  const authMethod = input.auth_method === "password" ? "password" : "key";
+  const identityFile = String(input.identity_file ?? "~/.ssh/id_rsa").trim();
+  const sshArgs = [
+    "-o", "ConnectTimeout=8",
+    "-o", "ConnectionAttempts=1",
+    "-o", "ServerAliveInterval=5",
+    "-o", "ServerAliveCountMax=1",
+    "-o", "StrictHostKeyChecking=accept-new",
+    "-p", String(port),
+  ];
+  let command = "ssh";
+  let args = sshArgs;
+  const environment = { ...process.env };
+  if (authMethod === "password") {
+    if (!input.password) return { reachable: false, error: "Password is required for this probe" };
+    command = "sshpass";
+    environment.SSHPASS = String(input.password);
+    args = ["-e", "ssh", ...sshArgs, "-o", "PreferredAuthentications=password", "-o", "PubkeyAuthentication=no"];
+  } else {
+    const keyPath = expandUserPath(identityFile || "~/.ssh/id_rsa");
+    try { await access(keyPath); }
+    catch { return { reachable: false, error: `SSH key not found: ${identityFile || "~/.ssh/id_rsa"}` }; }
+    args = [...sshArgs, "-o", "BatchMode=yes", "-i", keyPath];
+  }
+  args.push(user ? `${user}@${host}` : host, REMOTE_PROBE_COMMAND);
+
+  return await new Promise((resolveProbe) => {
+    const child = spawn(command, args, { env: environment, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const finish = (result: Record<string, unknown>) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveProbe(result);
+    };
+    child.stdout.on("data", (chunk) => { if (stdout.length < 65_536) stdout += String(chunk); });
+    child.stderr.on("data", (chunk) => { if (stderr.length < 16_384) stderr += String(chunk); });
+    child.on("error", (error) => finish({ reachable: false, error: command === "sshpass" && (error as NodeJS.ErrnoException).code === "ENOENT" ? "Password authentication requires sshpass to be installed" : String(error.message) }));
+    child.on("close", (code) => {
+      if (code !== 0) return finish({ reachable: false, error: stderr.trim() || `SSH exited with code ${code}` });
+      const values = Object.fromEntries(stdout.split(/\r?\n/).map((line) => line.split("=")).filter((parts) => parts.length >= 2).map(([key, ...rest]) => [key, rest.join("=").trim()]));
+      finish({
+        reachable: true,
+        hostname: values.hostname || host,
+        os: values.os || "unknown",
+        cores: Number(values.cores ?? 0),
+        memory: formatBytes(Number(values.memory_bytes ?? 0)),
+        gpus: Number(values.gpus ?? 0),
+        has_slurm: values.has_slurm === "yes",
+      });
+    });
+    timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      finish({ reachable: false, error: "SSH connection timed out" });
+    }, 12_000);
+  });
+}
 
 // src/ (or dist/) -> apps/server/ -> apps/ -> project root, where the shipped demo assets live.
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -156,9 +253,9 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
 
   // ── Compute machine registry ──
   app.get("/api/compute/machines", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const value = await readJson<{ machines?: unknown[] }>(join(root, ".pi-science", "compute.json"), {}); return { machines: Array.isArray(value.machines) ? value.machines : [] }; });
-  app.post("/api/compute/machines", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const machine = (request.body ?? {}) as Record<string, unknown>; if (!machine.host) return reply.code(400).send({ error: "host is required" }); const path = join(root, ".pi-science", "compute.json"); const current = await readJson<{ machines?: Record<string, unknown>[] }>(path, {}); const machines = Array.isArray(current.machines) ? current.machines : []; const item = { ...machine, label: String(machine.label ?? machine.host) }; const next = [...machines.filter((row) => row.label !== item.label), item]; await writeJsonAtomic(path, { machines: next }); return { ok: true, machines: next }; });
+  app.post("/api/compute/machines", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const machine = (request.body ?? {}) as Record<string, unknown>; if (!machine.host) return reply.code(400).send({ error: "host is required" }); const port = Number(machine.port ?? 22); if (!Number.isInteger(port) || port < 1 || port > 65535) return reply.code(400).send({ error: "port must be between 1 and 65535" }); const path = join(root, ".pi-science", "compute.json"); const current = await readJson<{ machines?: Record<string, unknown>[] }>(path, {}); const machines = Array.isArray(current.machines) ? current.machines : []; const { password: _password, ...safeMachine } = machine; const item = { ...safeMachine, port, identity_file: String(machine.identity_file ?? "~/.ssh/id_rsa"), auth_method: machine.auth_method === "password" ? "password" : "key", label: String(machine.label ?? machine.host) }; const next = [...machines.filter((row) => row.label !== item.label), item]; await writeJsonAtomic(path, { machines: next }); return { ok: true, machines: next }; });
   app.delete<{ Params: { label: string } }>("/api/compute/machines/:label", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const path = join(root, ".pi-science", "compute.json"); const current = await readJson<{ machines?: Record<string, unknown>[] }>(path, {}); await writeJsonAtomic(path, { machines: (current.machines ?? []).filter((row) => row.label !== request.params.label) }); return { ok: true }; });
-  app.post("/api/compute/probe", async (request) => ({ host: String((request.query as { host?: unknown }).host ?? ""), reachable: false, error: "Node remote dispatch is not enabled for this host; configure an executor before probing." }));
+  app.post("/api/compute/probe", async (request, reply) => { const root = await ws(request, reply); if (!root) return; return probeComputeMachine((request.body ?? {}) as ComputeProbeInput); });
   app.post("/api/compute/run", async () => ({ ok: false, error: "Remote dispatch requires a configured executor" }));
 
   // ── Citations ──

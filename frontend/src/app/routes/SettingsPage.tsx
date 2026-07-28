@@ -139,7 +139,7 @@ export function SettingsPage() {
         {tab === "llm" && <LLMTab config={config} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} saveModel={saveModel} saveCompaction={saveCompaction} onConfigReload={loadConfig} />}
         {tab === "extensions" && <ExtensionsTab workspaceCwd={workspaceCwd} />}
         {tab === "mcp" && <MCPTab workspaceCwd={workspaceCwd} />}
-        {tab === "compute" && <ComputeSettings />}
+        {tab === "compute" && <ComputeSettings workspaceCwd={workspaceCwd} />}
       </div>
     </div>
   );

@@ -124,6 +124,39 @@ describe("native control-plane business routes", () => {
     ]));
   });
 
+  it("stores compute connection settings without persisting passwords", async () => {
+    const cwd = await workspace();
+    const app = buildApp(config());
+    apps.push(app);
+
+    const saved = await app.inject({
+      method: "POST",
+      url: `/api/compute/machines?cwd=${encodeURIComponent(cwd)}`,
+      payload: { label: "cluster", host: "compute.example.org", user: "researcher", auth_method: "password", password: "do-not-save" },
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().machines).toEqual([
+      expect.objectContaining({ label: "cluster", host: "compute.example.org", port: 22, auth_method: "password", identity_file: "~/.ssh/id_rsa" }),
+    ]);
+    expect(saved.body).not.toContain("do-not-save");
+    expect(await readFile(join(cwd, ".pi-science", "compute.json"), "utf8")).not.toContain("do-not-save");
+
+    const invalidPort = await app.inject({
+      method: "POST",
+      url: `/api/compute/machines?cwd=${encodeURIComponent(cwd)}`,
+      payload: { host: "compute.example.org", port: 70_000 },
+    });
+    expect(invalidPort.statusCode).toBe(400);
+
+    const invalidProbe = await app.inject({
+      method: "POST",
+      url: `/api/compute/probe?cwd=${encodeURIComponent(cwd)}`,
+      payload: { host: "-invalid" },
+    });
+    expect(invalidProbe.statusCode).toBe(200);
+    expect(invalidProbe.json()).toMatchObject({ reachable: false, error: "Invalid SSH hostname" });
+  });
+
   it("reports the number of valid sessions on workspace cards", async () => {
     const root = join(tmpdir(), `pi-science-workspaces-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     const cwd = join(root, "counted-workspace");

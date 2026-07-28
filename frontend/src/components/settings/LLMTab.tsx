@@ -75,22 +75,21 @@ export function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKe
                 ))}
               </select>
             </label>
-            <div>
-              <div className="mb-1.5 flex items-center justify-between gap-2">
-                <span className="text-xs font-medium text-muted">{t("settings.model.thinking")}</span>
-              </div>
-              {!selectedModel && <p className="flex min-h-10 items-center rounded-input border border-border bg-surface px-3 text-xs text-muted">{t("settings.model.thinkingHint")}</p>}
-              {selectedModel && !selectedModel.reasoning && <p className="flex min-h-10 items-center rounded-input border border-border bg-surface px-3 text-xs text-muted">{t("settings.model.noReasoning")}</p>}
-              {selectedModel?.reasoning && (
-                <div className="flex min-h-10 w-full flex-wrap items-center gap-1 rounded-input border border-border bg-surface p-0.5" role="group" aria-label={t("settings.model.thinking")}>
-                  {thinkingLevels.map((level) => (
-                    <button key={level} disabled={saving === "model"} onClick={() => saveModel(config.model, level)} className={cn("min-h-9 min-w-[3.5rem] flex-1 rounded-input px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-wait disabled:opacity-50", config.thinking === level ? "bg-surface-2 text-text shadow-sm ring-1 ring-border/70" : "text-muted hover:bg-surface-2/70 hover:text-text")}>
-                      {t(`settings.thinking.${level}`, { defaultValue: level })}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-muted">{t("settings.model.thinking")}</span>
+              <select
+                aria-label={t("settings.model.thinking")}
+                value={selectedModel?.reasoning ? config.thinking : "off"}
+                disabled={!selectedModel?.reasoning || saving === "model"}
+                onChange={(event) => void saveModel(config.model, event.target.value)}
+                className="min-h-11 w-full rounded-input border border-border bg-bg px-3 py-2 text-xs text-text outline-none transition-colors focus:border-accent disabled:cursor-not-allowed disabled:bg-surface-2 disabled:text-muted disabled:opacity-70"
+              >
+                {!selectedModel?.reasoning && <option value="off">{selectedModel ? t("settings.model.noReasoning") : t("settings.model.thinkingHint")}</option>}
+                {selectedModel?.reasoning && thinkingLevels.map((level) => (
+                  <option key={level} value={level}>{t(`settings.thinking.${level}`, { defaultValue: level })}</option>
+                ))}
+              </select>
+            </label>
           </div>
           <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-faint pt-3">
             <span className="text-xs text-muted">

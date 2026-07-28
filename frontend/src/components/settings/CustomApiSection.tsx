@@ -170,7 +170,6 @@ export function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, on
                 </div>
                 <p className="truncate font-mono text-[10px] text-muted">{provider.base_url}</p>
                 <p className="mt-1 text-[10px] text-muted">{provider.models.join(", ")}</p>
-                <p className="mt-1 text-[10px] text-muted">{provider.reasoning ? t("settings.custom.reasoningEnabled") : t("settings.custom.reasoningDisabled")} · {t("settings.custom.tokens", { tokens: (provider.model_hints?.[provider.models[0] ?? ""]?.context_window || provider.context_window || 128000).toLocaleString() })}</p>
               </div>
               <button type="button" onClick={() => remove(provider.id)} className="min-h-9 shrink-0 rounded-input px-2 py-1 text-[11px] text-error hover:bg-error/10">
                 {t("common.delete")}
