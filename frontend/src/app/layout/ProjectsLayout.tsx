@@ -208,14 +208,9 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
   };
 
   const handleNew = async () => {
-    try {
-      const newId = await createNewSession();
-      if (newId) {
-        navigate(`/workspace/${encodeURIComponent(cwd)}/session/${newId}`);
-      }
-    } catch (err) {
-      toast(err instanceof Error ? err.message : "Unable to create session", "error");
-    }
+    // Session creation is lazy: the first prompt creates the server-side
+    // session, avoiding an empty Pi process for every click.
+    navigate(`/workspace/${encodeURIComponent(cwd)}`);
   };
 
   const handleFork = async (e: React.MouseEvent, sessionId: string) => {

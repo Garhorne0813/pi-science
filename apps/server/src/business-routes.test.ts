@@ -17,6 +17,7 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
   delete process.env.PI_SCIENCE_HOME;
   delete process.env.PI_SCIENCE_WORKSPACES;
+  delete process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS;
   delete process.env.DEEPSEEK_API_KEY;
 });
 
@@ -118,8 +119,8 @@ describe("native control-plane business routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json().available_models).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "deepseek/deepseek-v4-pro", reasoning: true, thinking_levels: expect.arrayContaining(["low", "high", "xhigh"]) }),
-      expect.objectContaining({ id: "deepseek/deepseek-v4-flash", reasoning: true, thinking_levels: expect.arrayContaining(["low", "high", "xhigh"]) }),
+      expect.objectContaining({ id: "deepseek/deepseek-v4-pro", reasoning: true, thinking_levels: expect.arrayContaining(["off", "high", "max"]), context_window: 1_000_000 }),
+      expect.objectContaining({ id: "deepseek/deepseek-v4-flash", reasoning: true, thinking_levels: expect.arrayContaining(["off", "high", "max"]), context_window: 1_000_000 }),
     ]));
   });
 
@@ -428,6 +429,7 @@ describe("native control-plane business routes", () => {
 
   it("blocks SSRF targets and validates subagent workspace access", async () => {
     const cwd = await workspace();
+    process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS = "0";
     const app = buildApp(config()); apps.push(app);
     await mkdir(join(cwd, ".pi", "agents"), { recursive: true });
     await writeFile(join(cwd, ".pi", "agents", "reviewer.md"), "# reviewer", "utf8");

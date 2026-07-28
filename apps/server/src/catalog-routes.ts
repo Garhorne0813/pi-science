@@ -1,4 +1,5 @@
-import { access, cp, mkdir, readdir, readFile, realpath, rename, stat, rm } from "node:fs/promises";
+import { access, cp, mkdir, readdir, readFile, realpath, rename, stat, rm, writeFile } from "node:fs/promises";
+import { delimiter } from "node:path";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
@@ -65,12 +66,13 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
   app.get("/api/skills/tools", async () => {
     const commands = [["python", "python3"], ["Node.js", "node"], ["Git", "git"], ["uv", "uv"]] as const;
     return Promise.all(commands.map(async ([name, command]) => {
-      try {
-        await access(resolve(process.env.PATH?.split(":").find((path) => path) ?? "/usr/bin", command));
-        return { name, found: true };
-      } catch {
-        return { name, found: false };
+      const paths = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
+      for (const directory of paths) {
+        for (const candidate of process.platform === "win32" ? [command, `${command}.exe`] : [command]) {
+          try { await access(resolve(directory, candidate)); return { name, found: true }; } catch { /* try next */ }
+        }
       }
+      return { name, found: false };
     }));
   });
   app.post("/api/skills/validate", async (request, reply) => {
@@ -114,11 +116,20 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
     const source = join(PROJECT_ROOT, demo.source);
     try { if (!(await stat(source)).isDirectory()) throw new Error("not a directory"); }
     catch { return reply.code(500).send({ error: `Demo content is missing from this installation (${demo.source})` }); }
-    // A repeat install opens the workspace the user already has instead of overwriting their edits.
-    let installed = true;
-    try { await stat(target); } catch { installed = false; }
-    if (!installed) await cp(source, target, { recursive: true });
+    // Preserve edits only when this workspace was installed from the same
+    // source. A changed or missing sentinel means the bundled demo has been
+    // upgraded and the stale generated workspace must be rebuilt.
+    const sentinel = join(target, ".pi-science", "demo-source");
+    let installed = false;
+    try {
+      installed = (await readFile(sentinel, "utf8")).trim() === demo.source;
+    } catch { /* first install or legacy workspace */ }
+    if (!installed) {
+      try { await rm(target, { recursive: true, force: true }); } catch { /* create below */ }
+      await cp(source, target, { recursive: true });
+    }
     await mkdir(join(target, ".pi-science"), { recursive: true });
+    await writeFile(sentinel, `${demo.source}\n`, "utf8");
     return await workspaceInfo(target);
   });
   app.post("/api/workspaces/rename", async (request, reply) => {

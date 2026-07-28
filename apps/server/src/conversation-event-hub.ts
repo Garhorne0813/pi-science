@@ -292,7 +292,15 @@ export class ConversationEventHub {
         turn.textByKey.set(key, text.text);
         if (!text.messageId) turn.activeAnonymousKey = null;
       } else {
-        turn.textByKey.set(key, accumulated + text.text);
+        // Pi may emit the complete accumulated text in text_delta events.
+        // Treat that form as a replacement and only emit the new suffix;
+        // genuine deltas continue to be appended.
+        if (accumulated && text.text.startsWith(accumulated)) {
+          emitted = text.text.slice(accumulated.length);
+          turn.textByKey.set(key, text.text);
+        } else {
+          turn.textByKey.set(key, accumulated + text.text);
+        }
       }
       if (text.text.trim() || accumulated.trim()) turn.hadText = true;
       if (!emitted && !replace) return [];
