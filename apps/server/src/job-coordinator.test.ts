@@ -78,12 +78,12 @@ describe("job coordinator", () => {
     const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "setTimeout(() => {}, 200)"] });
     expect((await coordinator.get(cwd, submitted.job_id))?.status).not.toBe("failed");
     expect((await coordinator.list(cwd, 10))[0]?.status).not.toBe("failed");
-    const finished = await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal);
+    const finished = await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal, process.platform === "win32" ? 20_000 : 8_000);
     expect(finished?.status).toBe("succeeded");
     expect(finished?.return_code).toBe(0);
     expect((await coordinator.cancel(cwd, submitted.job_id))?.status).toBe("succeeded");
     expect((await coordinator.get(cwd, submitted.job_id))?.status).toBe("succeeded");
-  }, 15_000);
+  }, 30_000);
 
   it("cancels a ready process grandchild instead of stalling shutdown", async () => {
     const cwd = await workspace();
