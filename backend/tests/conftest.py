@@ -21,7 +21,7 @@ def anyio_backend():
 
 
 @pytest.fixture
-async def client():
+async def client(temp_workspace):
     """Async HTTP test client bound to the FastAPI app."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
