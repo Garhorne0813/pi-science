@@ -12,7 +12,7 @@ export interface JobRecord { job_id: string; command: string[]; cwd: string; exe
 const ORPHAN_GRACE_MS = 15_000;
 const KILL_GRACE_MS = 2_000;
 const POSIX = process.platform !== "win32";
-const RESEARCH_ENVIRONMENT_KEYS = new Set(["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "VIRTUAL_ENV", "PYTHONNOUSERSITE", "PIP_REQUIRE_VIRTUALENV", "PIP_USER", "UV_PROJECT_ENVIRONMENT", "npm_config_prefix", "NPM_CONFIG_PREFIX", "npm_config_cache", "NPM_CONFIG_CACHE", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"]);
+const RESEARCH_ENVIRONMENT_KEYS = new Set(["PATH", "Path", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "SYSTEMROOT", "ComSpec", "COMSPEC", "PATHEXT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "VIRTUAL_ENV", "PYTHONNOUSERSITE", "PIP_REQUIRE_VIRTUALENV", "PIP_USER", "UV_PROJECT_ENVIRONMENT", "npm_config_prefix", "NPM_CONFIG_PREFIX", "npm_config_cache", "NPM_CONFIG_CACHE", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"]);
 
 export class JobCoordinator {
   private readonly children = new Map<string, ChildProcess>();

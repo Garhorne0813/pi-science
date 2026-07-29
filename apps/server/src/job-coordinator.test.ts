@@ -101,9 +101,9 @@ describe("job coordinator", () => {
     expect(windowsTaskkillArgs(4321)).toEqual(["/pid", "4321", "/T", "/F"]);
   });
 
-  it("restricts research surface jobs to an allowlisted environment", async () => {
+  it("restricts research surface jobs to an allowlisted environment while preserving Windows process essentials", async () => {
     const cwd = await workspace();
-    const coordinator = jobCoordinator({ PATH: process.env.PATH, HOME: "/tmp", SECRET_TOKEN: "leak-me" });
+    const coordinator = jobCoordinator({ PATH: process.env.PATH, HOME: "/tmp", USERPROFILE: "C:\\Users\\scientist", APPDATA: "C:\\Users\\scientist\\AppData\\Roaming", LOCALAPPDATA: "C:\\Users\\scientist\\AppData\\Local", SystemRoot: "C:\\Windows", ComSpec: "C:\\Windows\\System32\\cmd.exe", PATHEXT: ".COM;.EXE;.BAT;.CMD", SECRET_TOKEN: "leak-me" });
     const submitted = await coordinator.submit(cwd, {
       command: [process.execPath, "-e", "console.log(JSON.stringify(process.env))"],
       surface: "research-loop",
@@ -115,6 +115,12 @@ describe("job coordinator", () => {
     expect(childEnv.SECRET_TOKEN).toBeUndefined();
     expect(childEnv.PATH).toBe(process.env.PATH);
     expect(childEnv.HOME).toBe("/tmp");
+    expect(childEnv.USERPROFILE).toBe("C:\\Users\\scientist");
+    expect(childEnv.APPDATA).toBe("C:\\Users\\scientist\\AppData\\Roaming");
+    expect(childEnv.LOCALAPPDATA).toBe("C:\\Users\\scientist\\AppData\\Local");
+    expect(childEnv.SystemRoot).toBe("C:\\Windows");
+    expect(childEnv.ComSpec).toBe("C:\\Windows\\System32\\cmd.exe");
+    expect(childEnv.PATHEXT).toBe(".COM;.EXE;.BAT;.CMD");
     expect(childEnv.PI_SCIENCE_OUTPUT_DIR).toBe("/tmp/x");
   });
 

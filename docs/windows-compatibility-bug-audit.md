@@ -18,7 +18,7 @@ This pass inspected the Node control plane, React/UAT tooling, Python runtime, p
 | Windows kernel PATH | Python kernels added `<npm-prefix>/bin`; npm global shims live at `<npm-prefix>` on Windows. | Platform-specific npm executable directory with a unit test. |
 | Windows process lifecycle | Cancelling a job killed only the immediate process, leaving descendants alive and pipes open. | Windows uses `taskkill /T /F`; the lifecycle test now uses a cross-platform Node grandchild. |
 | Windows Pi runtime launch | Deriving the repository root from `new URL(import.meta.url).pathname` duplicated the drive prefix (`D:\\D:\\...`) and prevented builtin skills from being seeded. | Convert the module URL with `fileURLToPath`; the native Windows CI run exercises the session/runtime tests. |
-| Windows research loops | Candidate execution assumed `bash` was directly on PATH. | Resolver supports `PI_SCIENCE_BASH_PATH`, PATH/PATHEXT, and standard Git for Windows locations, with an actionable missing-bash error. |
+| Windows research loops | Candidate execution assumed `bash` was directly on PATH, and the restricted research-job environment discarded Windows process essentials such as `SystemRoot`, `ComSpec`, `PATHEXT`, and user profile/application-data paths. Native CI showed evaluator and process-tree jobs could remain running instead of closing. | Resolver supports `PI_SCIENCE_BASH_PATH`, PATH/PATHEXT, and standard Git for Windows locations, with an actionable missing-bash error. The restricted environment now retains the Windows process baseline while still excluding unrelated variables/secrets; the job regression test checks both preservation and redaction. |
 | Windows UAT | All browser UAT scripts hard-coded the macOS Google Chrome path. | Shared discovery supports Chrome/Chromium/Edge on macOS, Linux, and Windows and validates `CHROME_PATH`. |
 | Cross-platform tests/CI | Tests split PATH on `:`, removed live Node/Python child runtimes before shutdown (allowed on POSIX but locked on Windows), and assumed venv-backed job integration completed within 5 seconds. CI never ran on Windows. | Use `path.delimiter`, stop child runtimes before workspace cleanup, give provisioning integration tests platform-realistic bounds, and run the quality suite on Ubuntu and Windows. POSIX smoke remains Ubuntu-only. |
 | Workspace deletion | Deletion used separator-sensitive string prefix logic instead of a path boundary check. | Uses the same relative-path containment helper as rename/demo/skill validation. |
@@ -28,7 +28,7 @@ This pass inspected the Node control plane, React/UAT tooling, Python runtime, p
 | Check | Local evidence | Windows evidence |
 |---|---|---|
 | Contracts/server/frontend typecheck | `pnpm typecheck` | Added `windows-latest` CI job |
-| JS unit/integration tests | `pnpm test` plus new platform/security/browser tests | Added `windows-latest` CI job; Windows-specific behavior is also covered with platform-parameterized tests/mocks |
+| JS unit/integration tests | `pnpm test` plus new platform/security/browser/environment tests | Added `windows-latest` CI job; Windows-specific behavior is also covered with platform-parameterized tests/mocks |
 | JS production build | `pnpm build` | Added `windows-latest` CI job |
 | Python runtime | `cd backend && uv run pytest -q` | Added `windows-latest` CI job; npm-bin and workspace parity regression tests included |
 | Control-plane smoke | `pnpm smoke` on macOS/Linux shell environment | Deferred: current smoke harness is Bash/curl-oriented and remains Ubuntu-only |
