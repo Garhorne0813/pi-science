@@ -62,6 +62,10 @@ async function safeWorkspace(request: { query: unknown }): Promise<string> {
   return validateWorkspaceCwd(queryValue(request, "cwd", "."));
 }
 
+function normalizeApiPath(path: string): string { return path.replaceAll("\\", "/"); }
+function apiPath(root: string, target: string): string { return relative(root, target).split(sep).join("/"); }
+async function resolveApiFile(root: string, path: string): Promise<string> { return resolveWorkspaceFile(root, normalizeApiPath(path)); }
+
 export function registerFileReadRoutes(app: FastifyInstance): void {
   // Keep the public upload contract used by the browser without bringing a
   // second multipart implementation into the Python runtime.
@@ -71,7 +75,7 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
     try { root = await safeWorkspace(request); } catch (error) { return reply.code(403).send({ error: String(error) }); }
     const subdir = queryValue(request, "subdir", ".");
     let target: string;
-    try { target = await resolveWorkspaceFile(root, subdir); } catch (error) { return reply.code(403).send({ error: String(error) }); }
+    try { target = await resolveApiFile(root, subdir); } catch (error) { return reply.code(403).send({ error: String(error) }); }
     try {
       const entries = await readdir(target, { withFileTypes: true });
       const rows = [];
@@ -93,7 +97,7 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
     const subdir = queryValue(request, "subdir", "");
     if (!subdir) return [];
     try {
-      const target = await resolveWorkspaceFile(root, subdir);
+      const target = await resolveApiFile(root, subdir);
       const parts = relative(root, target).split(/[\\/]/).filter(Boolean);
       return parts.map((name, index) => ({ name, path: parts.slice(0, index + 1).join("/") }));
     } catch (error) {
@@ -116,17 +120,18 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
       else if (typeof body.content === "string") content = Buffer.from(body.content, "utf8");
     }
     const bodyPath = body && typeof body === "object" && !Buffer.isBuffer(body) && typeof body.path === "string" ? body.path : "";
-    const relativePath = queryPath || bodyPath || (filename.split(/[\\/]/).at(-1) ?? "");
-    if (!relativePath || relativePath === "." || relativePath === ".." || !content) return reply.code(400).send({ error: "Invalid upload" });
+    const requestedPath = queryPath || bodyPath || (filename.split(/[\\/]/).at(-1) ?? "");
+    if (!requestedPath || requestedPath === "." || requestedPath === ".." || !content) return reply.code(400).send({ error: "Invalid upload" });
     try {
-      const destination = await resolveWorkspaceFile(root, relativePath);
+      const destination = await resolveApiFile(root, requestedPath);
+      const relativePath = apiPath(root, destination);
       try { await stat(destination); return reply.code(409).send({ error: `File already exists: ${relativePath}` }); } catch { /* expected */ }
       await mkdir(dirname(destination), { recursive: true });
       const temporary = `${destination}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
       await writeFile(temporary, content, { flag: "wx" });
       await rename(temporary, destination);
       await appendJsonLine(workspaceFile(root, "provenance.jsonl"), { path: relativePath, version: 1, ts: Date.now() / 1000, tool: "file_upload", sessionId: "", contentHash: "", content: null });
-      return { ok: true, path: relativePath, filename: relativePath.split(/[\\/]/).at(-1) ?? relativePath };
+      return { ok: true, path: relativePath, filename: basename(destination) };
     } catch (error) { return reply.code(403).send({ error: String(error) }); }
   });
 
@@ -136,9 +141,9 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
     try {
       const root = await safeWorkspace(request);
       const wildcard = (request.params as { path?: string; "*"?: string }).path ?? (request.params as { "*"?: string })["*"] ?? "";
-      const target = await resolveWorkspaceFile(root, wildcard);
+      const target = await resolveApiFile(root, wildcard);
       const info = await stat(target);
-      return { path: wildcard, name: basename(target), size: info.size, modified: info.mtimeMs / 1000, is_dir: info.isDirectory() };
+      return { path: apiPath(root, target), name: basename(target), size: info.size, modified: info.mtimeMs / 1000, is_dir: info.isDirectory() };
     } catch (error) { return reply.code(404).send({ error: String(error) }); }
   });
   app.delete<{ Params: { path: string } }>("/api/files/*", async (request, reply) => {
@@ -146,17 +151,17 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
     try { root = await safeWorkspace(request); } catch (error) { return reply.code(403).send({ error: String(error) }); }
     const wildcard = (request.params as { path?: string; "*"?: string }).path ?? (request.params as { "*"?: string })["*"] ?? "";
     try {
-      const target = await resolveWorkspaceFile(root, wildcard);
+      const target = await resolveApiFile(root, wildcard);
       const info = await stat(target);
       if (info.isDirectory()) await rm(target, { recursive: false }); else await rm(target);
-      await appendJsonLine(workspaceFile(root, "provenance.jsonl"), { path: wildcard, version: 1, ts: Date.now() / 1000, tool: "file_delete", sessionId: "" });
+      await appendJsonLine(workspaceFile(root, "provenance.jsonl"), { path: apiPath(root, target), version: 1, ts: Date.now() / 1000, tool: "file_delete", sessionId: "" });
       return { ok: true };
     } catch (error) { return reply.code(404).send({ error: String(error) }); }
   });
 
   app.get<{ Params: { path: string } }>("/api/files/serve/*", async (request, reply) => serveFile(request, reply, "serve"));
   app.get<{ Params: { path: string } }>("/api/files/*", async (request, reply) => {
-    const wildcard = (request.params as { path?: string; "*"?: string }).path ?? (request.params as { "*"?: string })["*"] ?? "";
+    const wildcard = normalizeApiPath((request.params as { path?: string; "*"?: string }).path ?? (request.params as { "*"?: string })["*"] ?? "");
     if (wildcard.endsWith("/preview")) return previewFile(request, reply, wildcard.slice(0, -"/preview".length));
     if (wildcard.endsWith("/raw")) return serveFile(request, reply, "raw");
     return readWorkspaceFile(request, reply, wildcard);
@@ -172,7 +177,7 @@ async function readWorkspaceFile(
   try { root = await safeWorkspace(request); }
   catch (error) { return reply.code(403).send({ error: String(error) }); }
   let target: string;
-  try { target = await resolveWorkspaceFile(root, path); }
+  try { target = await resolveApiFile(root, path); }
   catch (error) { return reply.code(403).send({ error: String(error) }); }
   try {
     const metadata = await stat(target);
@@ -182,7 +187,7 @@ async function readWorkspaceFile(
     const forceBase64 = queryValue(request, "format", "text") === "base64";
     const encoding = !forceBase64 && isUtf8(data) ? "utf8" : "base64";
     return {
-      path,
+      path: apiPath(root, target),
       encoding,
       data: encoding === "utf8" ? data.toString("utf8") : data.toString("base64"),
       size: data.byteLength,
@@ -195,10 +200,10 @@ async function readWorkspaceFile(
 async function previewFile(request: { query: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown } }, path: string) {
   try {
     const root = await safeWorkspace(request);
-    const target = await resolveWorkspaceFile(root, path);
+    const target = await resolveApiFile(root, path);
     const info = await stat(target);
     if (!info.isFile()) return reply.code(400).send({ error: "Not a file" });
-    return { path, name: basename(target), size: info.size, modified: info.mtimeMs / 1000, extension: extname(target), preview: null };
+    return { path: apiPath(root, target), name: basename(target), size: info.size, modified: info.mtimeMs / 1000, extension: extname(target), preview: null };
   } catch (error) { return reply.code(404).send({ error: String(error) }); }
 }
 
@@ -208,22 +213,23 @@ async function moveFile(request: { query: unknown; body?: unknown }, reply: { co
   const body = (request.body ?? {}) as { source?: unknown; target?: unknown };
   if (typeof body.source !== "string" || typeof body.target !== "string") return reply.code(400).send({ error: "source and target are required" });
   try {
-    const source = await resolveWorkspaceFile(root, body.source);
-    const target = await resolveWorkspaceFile(root, body.target);
+    const source = await resolveApiFile(root, body.source);
+    const target = await resolveApiFile(root, body.target);
+    const sourcePath = apiPath(root, source); const targetPath = apiPath(root, target);
     try { await stat(target); return reply.code(409).send({ error: "Target already exists" }); } catch { /* expected */ }
     await mkdir(dirname(target), { recursive: true });
     await rename(source, target);
-    await appendJsonLine(workspaceFile(root, "provenance.jsonl"), { path: body.target, version: 1, ts: Date.now() / 1000, tool: `file_${action}`, sessionId: "", diff: `${body.source} -> ${body.target}` });
-    return { ok: true, source: body.source, target: body.target };
+    await appendJsonLine(workspaceFile(root, "provenance.jsonl"), { path: targetPath, version: 1, ts: Date.now() / 1000, tool: `file_${action}`, sessionId: "", diff: `${sourcePath} -> ${targetPath}` });
+    return { ok: true, source: sourcePath, target: targetPath };
   } catch (error) { return reply.code(400).send({ error: String(error) }); }
 }
 
 async function serveFile(request: { params: { path?: string }; query: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown }; type: (value: string) => { send: (body: unknown) => unknown }; send: (body: unknown) => unknown }, prefix: string) {
   try {
     const root = await safeWorkspace(request);
-    const path = request.params.path ?? (request.params as { "*"?: string })["*"] ?? "";
+    const path = normalizeApiPath(request.params.path ?? (request.params as { "*"?: string })["*"] ?? "");
     const relativePath = prefix === "raw" ? path.replace(/\/raw$/, "") : path;
-    const file = await resolveWorkspaceFile(root, relativePath);
+    const file = await resolveApiFile(root, relativePath);
     const metadata = await stat(file);
     if (!metadata.isFile()) return reply.code(400).send({ error: "Not a file" });
     const extension = file.slice(file.lastIndexOf(".")).toLowerCase();

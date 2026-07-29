@@ -121,6 +121,44 @@ describe("job coordinator", () => {
     await expect(stat(marker)).rejects.toThrow();
   });
 
+  it("does not spawn when another coordinator durably cancels the job", async () => {
+    const cwd = await workspace();
+    const marker = join(cwd, "cross-coordinator-must-not-start");
+    let releaseSpawn!: () => void;
+    let enteredSpawnGate!: () => void;
+    const spawnGate = new Promise<void>((resolve) => { releaseSpawn = resolve; });
+    const gateEntered = new Promise<void>((resolve) => { enteredSpawnGate = resolve; });
+    const runner = jobCoordinator(undefined, { beforeSpawn: async () => { enteredSpawnGate(); await spawnGate; } });
+    const canceller = jobCoordinator();
+    const submitted = await runner.submit(cwd, { command: [process.execPath, "-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "started")`] });
+    await gateEntered;
+
+    expect((await canceller.cancel(cwd, submitted.job_id))?.status).toBe("cancelled");
+    releaseSpawn();
+    await runner.shutdown();
+
+    expect((await runner.get(cwd, submitted.job_id))?.status).toBe("cancelled");
+    await expect(stat(marker)).rejects.toThrow();
+  });
+
+  it("waits for a timed-out process tree to close before settling", async () => {
+    const cwd = await workspace();
+    const coordinator = jobCoordinator();
+    const ready = join(cwd, "timeout-grandchild-ready");
+    const childScript = `require("node:fs").writeFileSync(${JSON.stringify(ready)}, "ready"); setTimeout(() => {}, 30000);`;
+    const parentScript = `const { spawn } = require("node:child_process"); spawn(process.execPath, ["-e", ${JSON.stringify(childScript)}], { stdio: ["ignore", "inherit", "inherit"] }); setTimeout(() => {}, 30000);`;
+    const started = Date.now();
+    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", parentScript], requirement: { timeout_seconds: 1 } });
+    await waitFor(async () => stat(ready).then(() => true, () => false), Boolean);
+
+    const finished = await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal, process.platform === "win32" ? 20_000 : 10_000);
+    expect(finished?.status).toBe("timed_out");
+    expect(Date.now() - started).toBeGreaterThanOrEqual(800);
+    const shutdownStarted = Date.now();
+    await coordinator.shutdown();
+    expect(Date.now() - shutdownStarted).toBeLessThan(1_000);
+  }, 30_000);
+
   it("preserves a durable cancellation when the runner is ready to persist success", async () => {
     const cwd = await workspace();
     let releaseTerminalSave!: () => void;

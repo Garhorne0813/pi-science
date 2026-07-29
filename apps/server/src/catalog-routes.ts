@@ -1,6 +1,6 @@
 import { access, cp, lstat, mkdir, readdir, readFile, realpath, rename, stat, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 import { configPath, readJson, writeJsonAtomic } from "./persistence.js";
@@ -54,7 +54,26 @@ async function managedWorkspacePath(pathValue: string, action: "delete" | "renam
   }
   const canonicalRequested = await realpath(requested);
   if (!pathIsInside(canonicalRoot, canonicalRequested)) throw new Error(`Cannot ${action} outside workspaces directory`);
+  const workspaceParts = relative(canonicalRoot, canonicalRequested).split(sep).filter(Boolean);
+  if (workspaceParts.length !== 1) throw new Error(`Cannot ${action} a nested workspace path`);
+  let marker;
+  try { marker = await stat(join(canonicalRequested, ".pi-science")); }
+  catch { throw new Error(`Cannot ${action} a directory that is not a workspace`); }
+  if (!marker.isDirectory()) throw new Error(`Cannot ${action} a directory that is not a workspace`);
   return canonicalRequested;
+}
+
+async function updatePinnedWorkspace(source: string, destination: string): Promise<void> {
+  const pinned = await readJson<string[]>(configPath("pinned.json"), []);
+  let changed = false;
+  const updated = await Promise.all(pinned.map(async (path) => {
+    const requested = resolve(path);
+    const canonical = await realpath(requested).catch(async () => join(await realpath(dirname(requested)).catch(() => dirname(requested)), basename(requested)));
+    if (canonical !== source) return path;
+    changed = true;
+    return destination;
+  }));
+  if (changed) await writeJsonAtomic(configPath("pinned.json"), updated);
 }
 export function catalogToolCommands(environment: NodeJS.ProcessEnv = process.env, platform = process.platform): ReadonlyArray<readonly [string, string]> {
   return [["python", defaultPythonExecutable(environment, platform)], ["Node.js", "node"], ["Git", "git"], ["uv", "uv"]];
@@ -256,8 +275,7 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
     try { await stat(destination); return reply.code(409).send({ error: "Workspace already exists" }); } catch { /* available */ }
     try {
       await rename(source, destination);
-      const pinned = await readJson<string[]>(configPath("pinned.json"), []);
-      if (pinned.includes(source)) await writeJsonAtomic(configPath("pinned.json"), pinned.map((path) => path === source ? destination : path));
+      await updatePinnedWorkspace(source, destination);
       return await workspaceInfo(destination);
     } catch { return reply.code(404).send({ error: "Workspace not found" }); }
   });

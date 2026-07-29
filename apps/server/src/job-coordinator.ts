@@ -11,6 +11,7 @@ export interface JobRecord { job_id: string; command: string[]; cwd: string; exe
 
 const ORPHAN_GRACE_MS = 15_000;
 const KILL_GRACE_MS = 2_000;
+const PROCESS_CLOSE_FAILSAFE_MS = 5_000;
 const POSIX = process.platform !== "win32";
 const RESEARCH_ENVIRONMENT_KEY_NAMES = ["PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "ComSpec", "PATHEXT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "VIRTUAL_ENV", "PYTHONNOUSERSITE", "PIP_REQUIRE_VIRTUALENV", "PIP_USER", "UV_PROJECT_ENVIRONMENT", "npm_config_prefix", "npm_config_cache", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"] as const;
 const RESEARCH_ENVIRONMENT_KEYS = new Map(RESEARCH_ENVIRONMENT_KEY_NAMES.map((key) => [key.toLowerCase(), key]));
@@ -109,6 +110,13 @@ export class JobCoordinator {
     try {
       await this.hooks.beforeSpawn?.(record);
       if (this.cancelled.has(record.job_id)) { record.status = "cancelled"; return; }
+      const path = this.jobPath(record.cwd, record.job_id);
+      const shouldSpawn = await withFileWriteLock(path, async () => {
+        const current = await readJson<JobRecord | null>(path, null);
+        if (current && isTerminal(current.status)) { Object.assign(record, current); return false; }
+        return true;
+      });
+      if (!shouldSpawn) return;
       // detached: the child leads its own process group so a shell grandchild
       // (which inherits the pipes and would otherwise keep `close` pending) dies
       // with it. Windows has no process groups, so it keeps the plain child kill.
@@ -120,7 +128,17 @@ export class JobCoordinator {
       child.stdout?.on("data", (chunk: Buffer) => { stdout = appendTail(stdout, chunk); });
       child.stderr?.on("data", (chunk: Buffer) => { stderr = appendTail(stderr, chunk); });
       const timeout = Math.max(1, Number(record.requirement.timeout_seconds ?? 3600)) * 1000; let timedOut = false;
-      const result = await new Promise<{ code: number | null }>((done) => { let timer: NodeJS.Timeout | undefined; const finish = (code: number | null) => { if (timer) clearTimeout(timer); done({ code }); }; child!.once("close", (code) => finish(code)); timer = setTimeout(() => { timedOut = true; killGroup(child!, "SIGKILL"); finish(null); }, timeout); });
+      const result = await new Promise<{ code: number | null }>((done) => {
+        let timeoutTimer: NodeJS.Timeout | undefined; let closeFailsafe: NodeJS.Timeout | undefined; let settled = false;
+        const finish = (code: number | null) => { if (settled) return; settled = true; if (timeoutTimer) clearTimeout(timeoutTimer); if (closeFailsafe) clearTimeout(closeFailsafe); done({ code }); };
+        child!.once("close", (code) => finish(code));
+        timeoutTimer = setTimeout(() => {
+          timedOut = true;
+          terminate(child!);
+          closeFailsafe = setTimeout(() => finish(null), PROCESS_CLOSE_FAILSAFE_MS);
+          closeFailsafe.unref();
+        }, timeout);
+      });
       record.stdout = stdout.toString("utf8"); record.stderr = stderr.toString("utf8"); record.return_code = result.code;
       record.status = this.cancelled.has(record.job_id) ? "cancelled" : timedOut ? "timed_out" : result.code === 0 ? "succeeded" : "failed";
     } catch (error) { if (!this.cancelled.has(record.job_id)) { record.status = "failed"; record.stderr = String(error).slice(-100_000); } }
@@ -130,7 +148,7 @@ export class JobCoordinator {
       const path = this.jobPath(record.cwd, record.job_id);
       await withFileWriteLock(path, async () => {
         const current = await readJson<JobRecord | null>(path, null);
-        const terminal = current && ["succeeded", "failed", "cancelled", "timed_out"].includes(current.status);
+        const terminal = current && isTerminal(current.status);
         const durable = current?.status === "cancelled"
           ? { ...record, status: "cancelled" as const, ended_at: current.ended_at ?? record.ended_at }
           : terminal ? current : record;
@@ -151,6 +169,8 @@ function terminate(child: ChildProcess): void {
 }
 
 export function windowsTaskkillArgs(pid: number): string[] { return ["/pid", String(pid), "/T", "/F"]; }
+
+function isTerminal(status: JobStatus): boolean { return ["succeeded", "failed", "cancelled", "timed_out"].includes(status); }
 
 function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   if (POSIX && child.pid) {
