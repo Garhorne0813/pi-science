@@ -121,10 +121,13 @@ class HookedRunner implements ResearchSubagentRunner {
   shutdown(): Promise<void> { return this.inner.shutdown(); }
 }
 
-/** The default body deliberately does NOT `exec`, so the sleep is a grandchild
- *  that inherits the job pipes: only a process-group kill can stop it. */
+const nodeSleep = `\"${process.execPath.replaceAll("\\", "/")}\" -e 'setTimeout(() => {}, 30000)'`;
+const defaultSleepBody = process.platform === "win32" ? `${nodeSleep}\nexit 0\n` : "sleep 30\nexit 0\n";
+
+/** The default body deliberately does NOT `exec`, so the long-running command is
+ *  a grandchild that inherits the job pipes: only a process-tree kill can stop it. */
 class SleepingRunner implements ResearchSubagentRunner {
-  constructor(private readonly body = "sleep 30\nexit 0\n") {}
+  constructor(private readonly body = defaultSleepBody) {}
 
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
     return {
@@ -490,7 +493,10 @@ describe("subagent research loop", () => {
     await waitFor(() => coordinator.detail(cwd, second.loop_id), (value) => value?.status === "cancelled");
   }, 15_000);
 
-  it.each([
+  it.each(process.platform === "win32" ? [
+    ["a process grandchild", `${nodeSleep}\nexit 0\n`],
+    ["an exec'd process", `exec ${nodeSleep}\n`],
+  ] : [
     ["a shell grandchild", "sleep 30\nexit 0\n"],
     ["an exec'd process", "exec sleep 30\n"],
   ])("cancels the active execution job when the user completes a running loop with %s", async (_label, body) => {

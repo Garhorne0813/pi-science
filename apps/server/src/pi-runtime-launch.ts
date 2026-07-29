@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import type { PiConfig } from "@pi-science/contracts";
 import type { PiProcessOptions } from "./pi-process.js";
@@ -68,7 +69,7 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
 }
 
 function seedWorkspaceAssets(cwd: string): string[] {
-  const projectRoot = resolve(dirname(new URL(import.meta.url).pathname), "../../..");
+  const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
   const metadata = join(cwd, ".pi-science");
   mkdirSync(metadata, { recursive: true });
   const agents = join(cwd, "AGENTS.md");
