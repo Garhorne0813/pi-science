@@ -37,6 +37,7 @@ describe("Node Pi JSONL adapter", () => {
     await expect(manager.sendCommand("workspace", "get_state")).resolves.toMatchObject({ success: true, data: { type: "get_state" } });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(events).toContain("session.idle");
+    await manager.stop("workspace");
     await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 

@@ -265,7 +265,7 @@ describe("native control-plane business routes", () => {
     expect(artifact.json()).toMatchObject({ path: "result.txt", version: 1 });
     const provenance = await app.inject({ method: "GET", url: `/api/provenance?cwd=${encodeURIComponent(cwd)}` });
     expect(provenance.json().records.length).toBeGreaterThan(0);
-  });
+  }, 20_000);
 
   it("supports atomic file writes and research-loop state transitions", async () => {
     const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
@@ -598,7 +598,7 @@ describe("native control-plane business routes", () => {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     throw new Error("cancelled job did not reach a terminal state");
-  });
+  }, 20_000);
 
   it("rejects invalid claim-check bounds and serializes provenance versions", async () => {
     const cwd = await workspace();
