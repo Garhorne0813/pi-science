@@ -310,6 +310,28 @@ describe("native control-plane business routes", () => {
     await expect(readFile(join(outsideWorkspace, "keep.txt"), "utf8")).resolves.toBe("outside");
   });
 
+  it("rejects workspace rename through a symlink or junction", async () => {
+    const sandbox = join(tmpdir(), `pi-science-rename-link-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const managed = join(sandbox, "managed");
+    const outside = join(sandbox, "outside");
+    const outsideWorkspace = join(outside, "workspace");
+    const escape = join(managed, "escape");
+    tempDirs.push(sandbox);
+    await mkdir(join(outsideWorkspace, ".pi-science"), { recursive: true });
+    await writeFile(join(outsideWorkspace, "keep.txt"), "outside", "utf8");
+    await mkdir(managed, { recursive: true });
+    await symlink(outside, escape, process.platform === "win32" ? "junction" : "dir");
+    process.env.PI_SCIENCE_WORKSPACES = managed;
+    const app = buildApp(config()); apps.push(app);
+
+    const response = await app.inject({ method: "POST", url: "/api/workspaces/rename", payload: { path: join(escape, "workspace"), name: "renamed" } });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error).toMatch(/symlink|junction/);
+    await expect(readFile(join(outsideWorkspace, "keep.txt"), "utf8")).resolves.toBe("outside");
+    await expect(stat(join(outside, "renamed"))).rejects.toThrow();
+  });
+
   it("uses platform path semantics for nested file moves, probes, and previews", async () => {
     const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
     await writeFile(join(cwd, "source.txt"), "hello", "utf8");
@@ -319,6 +341,10 @@ describe("native control-plane business routes", () => {
     expect(moved.statusCode).toBe(200);
     await expect(readFile(target, "utf8")).resolves.toBe("hello");
     await expect(stat(target.slice(0, -1))).rejects.toThrow();
+
+    const listed = await app.inject({ method: "GET", url: `/api/files?cwd=${encodeURIComponent(cwd)}&subdir=${encodeURIComponent("nested")}` });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toEqual([expect.objectContaining({ path: "nested/renamed.txt", name: "renamed.txt" })]);
 
     const probe = await app.inject({ method: "GET", url: `/api/files/probe/nested/renamed.txt?cwd=${encodeURIComponent(cwd)}` });
     expect(probe.statusCode).toBe(200);
@@ -450,6 +476,18 @@ describe("native control-plane business routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ valid: false });
     expect(response.json().validations).toHaveLength(1);
+  });
+
+  it("rejects case-insensitive metadata aliases from skill validation", async () => {
+    const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
+    const alias = join(cwd, ".PI-SCIENCE", "skill");
+    await mkdir(alias, { recursive: true });
+    await writeFile(join(alias, "SKILL.md"), "---\nname: hidden\ndescription: Hidden metadata skill\n---\n", "utf8");
+
+    const response = await app.inject({ method: "POST", url: `/api/skills/validate?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(alias)}` });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error).toMatch(/inside the workspace/);
   });
 
   it("serializes concurrent settings updates without losing providers", async () => {

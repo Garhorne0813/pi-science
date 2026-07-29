@@ -81,6 +81,8 @@ describe("job coordinator", () => {
     const finished = await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal);
     expect(finished?.status).toBe("succeeded");
     expect(finished?.return_code).toBe(0);
+    expect((await coordinator.cancel(cwd, submitted.job_id))?.status).toBe("succeeded");
+    expect((await coordinator.get(cwd, submitted.job_id))?.status).toBe("succeeded");
   }, 15_000);
 
   it("cancels a ready process grandchild instead of stalling shutdown", async () => {
@@ -117,6 +119,26 @@ describe("job coordinator", () => {
     const finished = await coordinator.get(cwd, submitted.job_id);
     expect(finished?.status).toBe("cancelled");
     await expect(stat(marker)).rejects.toThrow();
+  });
+
+  it("preserves a durable cancellation when the runner is ready to persist success", async () => {
+    const cwd = await workspace();
+    let releaseTerminalSave!: () => void;
+    let enteredTerminalSave!: () => void;
+    const terminalSaveGate = new Promise<void>((resolve) => { releaseTerminalSave = resolve; });
+    const gateEntered = new Promise<void>((resolve) => { enteredTerminalSave = resolve; });
+    const coordinator = jobCoordinator(undefined, { beforeTerminalSave: async (record) => { if (record.status === "succeeded") { enteredTerminalSave(); await terminalSaveGate; } } });
+    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "process.stdout.write('completed-output')"] });
+    await gateEntered;
+
+    const cancelled = await coordinator.cancel(cwd, submitted.job_id);
+    expect(cancelled?.status).toBe("cancelled");
+    releaseTerminalSave();
+    await coordinator.shutdown();
+
+    const finished = await coordinator.get(cwd, submitted.job_id);
+    expect(finished).toMatchObject({ status: "cancelled", stdout: "completed-output", return_code: 0 });
+    expect((await coordinator.cancel(cwd, submitted.job_id))?.status).toBe("cancelled");
   });
 
   it("builds a Windows taskkill command that includes the descendant tree", () => {

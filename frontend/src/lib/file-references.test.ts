@@ -21,6 +21,12 @@ describe("workspace reference messages", () => {
     ]);
   });
 
+  it("extracts names from persisted Windows-style references", () => {
+    expect(referencesFromMessage('<workspace_references>\n- file: "reports\\\\final.pdf"\n</workspace_references>')).toEqual([
+      { path: "reports\\final.pdf", name: "final.pdf", isDir: false },
+    ]);
+  });
+
   it("leaves ordinary user messages untouched", () => {
     expect(injectWorkspaceReferences("Hello", [])).toBe("Hello");
     expect(visibleUserMessage("Hello")).toBe("Hello");

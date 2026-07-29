@@ -42,18 +42,18 @@ async function workspaceInfo(path: string): Promise<Record<string, unknown>> {
   };
 }
 export function expandUserPath(path: string): string { if (path === "~") return resolve(userHome()); return path.startsWith("~/") || path.startsWith("~\\") ? resolve(userHome(), path.slice(2)) : resolve(path); }
-async function workspaceDeletionPath(pathValue: string): Promise<string> {
+async function managedWorkspacePath(pathValue: string, action: "delete" | "rename"): Promise<string> {
   const configuredRoot = rootDir();
   const requested = resolve(pathValue);
-  if (!pathIsInside(configuredRoot, requested)) throw new Error("Cannot delete outside workspaces directory");
+  if (!pathIsInside(configuredRoot, requested)) throw new Error(`Cannot ${action} outside workspaces directory`);
   const canonicalRoot = await realpath(configuredRoot);
   let current = configuredRoot;
   for (const part of relative(configuredRoot, requested).split(sep).filter(Boolean)) {
     current = join(current, part);
-    if ((await lstat(current)).isSymbolicLink()) throw new Error("Cannot delete a workspace through a symlink or junction");
+    if ((await lstat(current)).isSymbolicLink()) throw new Error(`Cannot ${action} a workspace through a symlink or junction`);
   }
   const canonicalRequested = await realpath(requested);
-  if (!pathIsInside(canonicalRoot, canonicalRequested)) throw new Error("Cannot delete outside workspaces directory");
+  if (!pathIsInside(canonicalRoot, canonicalRequested)) throw new Error(`Cannot ${action} outside workspaces directory`);
   return canonicalRequested;
 }
 export function catalogToolCommands(environment: NodeJS.ProcessEnv = process.env, platform = process.platform): ReadonlyArray<readonly [string, string]> {
@@ -195,7 +195,7 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
     } catch {
       /* let scanner return no skills */
     }
-    if (!pathIsInside(root, target, true) || target.split(/[\\/]/).includes(".pi-science")) {
+    if (!pathIsInside(root, target, true) || target.split(/[\\/]/).some((part) => part.toLowerCase() === ".pi-science")) {
       return reply.code(403).send({ error: "Skill path must remain inside the workspace" });
     }
     const validations = await validateSkillDir(target);
@@ -241,9 +241,14 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
   });
   app.post("/api/workspaces/rename", async (request, reply) => {
     const body = (request.body ?? {}) as { path?: unknown; name?: unknown };
-    const source = resolve(String(body.path ?? ""));
+    let source: string;
+    try { source = await managedWorkspacePath(String(body.path ?? ""), "rename"); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return reply.code(404).send({ error: "Workspace not found" });
+      return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) });
+    }
     const root = rootDir();
-    if (!pathIsInside(root, source)) return reply.code(403).send({ error: "Cannot rename outside workspaces directory" });
     const name = String(body.name ?? "").trim().replace(/[\\/]/g, "-").slice(0, 100);
     if (!name) return reply.code(400).send({ error: "Invalid workspace name" });
     if (await research?.hasActive(source) || await jobs?.hasActive(source)) return reply.code(409).send({ error: "Pause or cancel active research and jobs before renaming this workspace" });
@@ -261,7 +266,7 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
   app.post("/api/workspaces/unpin", async (request) => { const path = String(((request.body ?? {}) as { path?: unknown }).path ?? ""); const paths = (await readJson<string[]>(configPath("pinned.json"), [])).filter((item) => item !== path); await writeJsonAtomic(configPath("pinned.json"), paths); return { ok: true, pinned: false }; });
   app.delete("/api/workspaces/delete", async (request, reply) => {
     let path: string;
-    try { path = await workspaceDeletionPath(String(((request.body ?? {}) as { path?: unknown }).path ?? "")); }
+    try { path = await managedWorkspacePath(String(((request.body ?? {}) as { path?: unknown }).path ?? ""), "delete"); }
     catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ENOENT" || code === "ENOTDIR") return reply.code(404).send({ error: "Workspace not found" });

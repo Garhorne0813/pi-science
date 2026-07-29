@@ -1,3 +1,5 @@
+import { pathLeaf } from "./workspace-path";
+
 export interface WorkspaceReference {
   cwd: string;
   path: string;
@@ -27,7 +29,7 @@ export function referencesFromMessage(message: string): Array<Pick<WorkspaceRefe
     if (!match) return [];
     try {
       const path = JSON.parse(match[2]) as string;
-      return [{ path, name: path.split("/").pop() || path, isDir: match[1] === "folder" }];
+      return [{ path, name: pathLeaf(path) || path, isDir: match[1] === "folder" }];
     } catch {
       return [];
     }

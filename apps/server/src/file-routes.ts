@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { isUtf8 } from "node:buffer";
-import { basename, dirname, extname, join, relative } from "node:path";
+import { basename, dirname, extname, join, relative, sep } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "./workspace-security.js";
 import { appendJsonLine, workspaceFile } from "./persistence.js";
@@ -79,7 +79,7 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
         if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
         const path = join(target, entry.name);
         const metadata = await stat(path);
-        rows.push({ path: relative(root, path), name: entry.name, isDir: entry.isDirectory(), size: metadata.size, modified: metadata.mtimeMs / 1000 });
+        rows.push({ path: relative(root, path).split(sep).join("/"), name: entry.name, isDir: entry.isDirectory(), size: metadata.size, modified: metadata.mtimeMs / 1000 });
       }
       return rows.sort((left, right) => Number(right.isDir) - Number(left.isDir) || left.name.localeCompare(right.name));
     } catch {

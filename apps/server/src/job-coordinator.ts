@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { metadataRoot, readJson, writeJsonAtomic } from "./persistence.js";
+import { metadataRoot, readJson, withFileWriteLock, writeJsonAtomic } from "./persistence.js";
 import { defaultPythonExecutable, WorkspaceEnvironmentService } from "./workspace-environment.js";
 
 export type JobStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled" | "timed_out";
@@ -15,7 +15,7 @@ const POSIX = process.platform !== "win32";
 const RESEARCH_ENVIRONMENT_KEY_NAMES = ["PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "ComSpec", "PATHEXT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "VIRTUAL_ENV", "PYTHONNOUSERSITE", "PIP_REQUIRE_VIRTUALENV", "PIP_USER", "UV_PROJECT_ENVIRONMENT", "npm_config_prefix", "npm_config_cache", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"] as const;
 const RESEARCH_ENVIRONMENT_KEYS = new Map(RESEARCH_ENVIRONMENT_KEY_NAMES.map((key) => [key.toLowerCase(), key]));
 
-export interface JobCoordinatorHooks { beforeSpawn?: (record: Readonly<JobRecord>) => Promise<void>; platform?: NodeJS.Platform }
+export interface JobCoordinatorHooks { beforeSpawn?: (record: Readonly<JobRecord>) => Promise<void>; beforeTerminalSave?: (record: Readonly<JobRecord>) => Promise<void>; platform?: NodeJS.Platform }
 
 export class JobCoordinator {
   private readonly children = new Map<string, ChildProcess>();
@@ -76,13 +76,17 @@ export class JobCoordinator {
   async get(cwd: string, id: string): Promise<JobRecord | null> { const record = await readJson<JobRecord | null>(this.jobPath(cwd, id), null); return record ? this.healOrphan(record) : null; }
   async logs(cwd: string, id: string) { const record = await this.get(cwd, id); return record ? { job_id: record.job_id, stdout: record.stdout, stderr: record.stderr } : null; }
   async cancel(cwd: string, id: string): Promise<JobRecord | null> {
-    const record = await this.get(cwd, id);
-    if (!record || ["succeeded", "failed", "cancelled", "timed_out"].includes(record.status)) return record;
     this.cancelled.add(id);
     const child = this.children.get(id);
     if (child) terminate(child);
-    record.status = "cancelled"; record.ended_at = new Date().toISOString(); await this.save(record);
-    return record;
+    const path = this.jobPath(cwd, id);
+    return withFileWriteLock(path, async () => {
+      const record = await readJson<JobRecord | null>(path, null);
+      if (!record) { this.cancelled.delete(id); return null; }
+      if (["succeeded", "failed", "cancelled", "timed_out"].includes(record.status)) { if (record.status !== "cancelled") this.cancelled.delete(id); return record; }
+      record.status = "cancelled"; record.ended_at = new Date().toISOString(); await writeJsonAtomic(path, record);
+      return record;
+    });
   }
   async shutdown(): Promise<void> { for (const child of this.children.values()) terminate(child); await Promise.allSettled([...this.jobs.values()]); }
 
@@ -120,7 +124,21 @@ export class JobCoordinator {
       record.stdout = stdout.toString("utf8"); record.stderr = stderr.toString("utf8"); record.return_code = result.code;
       record.status = this.cancelled.has(record.job_id) ? "cancelled" : timedOut ? "timed_out" : result.code === 0 ? "succeeded" : "failed";
     } catch (error) { if (!this.cancelled.has(record.job_id)) { record.status = "failed"; record.stderr = String(error).slice(-100_000); } }
-    finally { record.ended_at = new Date().toISOString(); this.children.delete(record.job_id); await this.save(record); this.cancelled.delete(record.job_id); }
+    finally {
+      record.ended_at = new Date().toISOString(); this.children.delete(record.job_id);
+      await this.hooks.beforeTerminalSave?.(record);
+      const path = this.jobPath(record.cwd, record.job_id);
+      await withFileWriteLock(path, async () => {
+        const current = await readJson<JobRecord | null>(path, null);
+        const terminal = current && ["succeeded", "failed", "cancelled", "timed_out"].includes(current.status);
+        const durable = current?.status === "cancelled"
+          ? { ...record, status: "cancelled" as const, ended_at: current.ended_at ?? record.ended_at }
+          : terminal ? current : record;
+        await writeJsonAtomic(path, durable);
+        Object.assign(record, durable);
+      });
+      this.cancelled.delete(record.job_id);
+    }
   }
 }
 

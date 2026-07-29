@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import type { PdfInspector as PdfInspectorT } from "../../types/thread";
 import { apiRequest } from "@/lib/api";
 import { previewUrl } from "@/lib/files";
+import { pathLeaf } from "@/lib/workspace-path";
 
 export function PdfInspector({
   data,
@@ -19,7 +20,7 @@ export function PdfInspector({
   cwd: string;
 }) {
   const { t } = useTranslation();
-  const title = data.filename ?? data.path?.split("/").pop() ?? "PDF";
+  const title = data.filename ?? ((data.path ? pathLeaf(data.path) : "") || "PDF");
   const baseUrl = data.url ?? (data.path ? previewUrl(data.path, undefined, cwd) : null);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Array<{ page: number; snippet: string }>>([]);
