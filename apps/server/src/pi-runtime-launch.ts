@@ -21,7 +21,9 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
     args.push(tsxPath);
     if (process.env.PI_TSCONFIG_PATH) args.push("--tsconfig", process.env.PI_TSCONFIG_PATH);
   }
-  args.push(cliPath, "--mode", "rpc", "--session-dir", join(cwd, ".pi-science", "sessions"), "--no-extensions", "-e", "pi-subagents/index.ts");
+  args.push(cliPath, "--mode", "rpc", "--session-dir", join(cwd, ".pi-science", "sessions"), "--no-extensions");
+  const subagentsExtension = findRuntimeExtension("pi-subagents", cliPath, []);
+  if (subagentsExtension) args.push("-e", subagentsExtension);
   if (effectiveModel) args.push("--model", effectiveModel);
   if (effectiveThinking) args.push("--thinking", effectiveThinking);
   if (sessionPath) args.push("--session", sessionPath);

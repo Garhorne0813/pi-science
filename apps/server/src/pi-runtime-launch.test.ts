@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildPiProcessOptions } from "./pi-runtime-launch.js";
 
@@ -117,6 +117,28 @@ describe("Pi runtime custom provider materialization", () => {
 
     const options = buildPiProcessOptions(piRoot)!;
     expect(options.args.slice(0, 2)).toEqual([tsx, cli]);
+  });
+
+  it("resolves the installed pi-subagents extension entrypoint", async () => {
+    const piRoot = join(tmpdir(), `pi-runtime-subagents-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(piRoot);
+    const cli = join(piRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
+    const extension = join(piRoot, "node_modules", "pi-subagents", "src", "extension", "index.ts");
+    await mkdir(dirname(extension), { recursive: true });
+    await mkdir(dirname(cli), { recursive: true });
+    await writeFile(cli, "export {};\n", "utf8");
+    await writeFile(extension, "export {};\n", "utf8");
+    await writeFile(
+      join(piRoot, "node_modules", "pi-subagents", "package.json"),
+      `${JSON.stringify({ pi: { extensions: ["./src/extension/index.ts"] } })}\n`,
+      "utf8",
+    );
+    process.env.PI_CLI_PATH = cli;
+
+    const options = buildPiProcessOptions(piRoot)!;
+    expect(options.args).toContain("-e");
+    expect(options.args).toContain(extension);
+    expect(options.args).not.toContain("pi-subagents/index.ts");
   });
 
   it("surfaces models.json deletion failures except for a missing file", async () => {
