@@ -7,7 +7,7 @@ import sys
 import time
 
 import pytest
-from services.kernel_manager import KernelManager, KernelSession, CellResult
+from services.kernel_manager import KernelManager, KernelSession, CellResult, workspace_npm_bin
 
 
 class _AliveProcess:
@@ -75,6 +75,11 @@ class TestKernelManager:
         mgr = KernelManager()
         result = mgr._find("nonexistent_binary_xyz")
         assert result is None
+
+    def test_workspace_npm_bin_uses_prefix_root_on_windows(self, tmp_path):
+        prefix = tmp_path / "npm-global"
+        assert workspace_npm_bin(prefix, "nt") == prefix
+        assert workspace_npm_bin(prefix, "posix") == prefix / "bin"
 
     def test_cell_result_ok(self):
         result = CellResult(ok=True, stdout="output", result="42")

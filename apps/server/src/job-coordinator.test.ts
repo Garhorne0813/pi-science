@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { JobCoordinator, type JobRecord, type JobStatus } from "./job-coordinator.js";
+import { JobCoordinator, type JobRecord, type JobStatus, windowsTaskkillArgs } from "./job-coordinator.js";
 
 const cleanup: string[] = [];
 const jobs: JobCoordinator[] = [];
@@ -83,12 +83,11 @@ describe("job coordinator", () => {
     expect(finished?.return_code).toBe(0);
   });
 
-  it("cancels a shell grandchild with the process group instead of stalling shutdown", async () => {
+  it("cancels a process grandchild instead of stalling shutdown", async () => {
     const cwd = await workspace();
     const coordinator = jobCoordinator();
-    // `sleep 30; exit 0` keeps bash from exec-ing sleep in place, so the sleep is a
-    // real grandchild holding the inherited stdout/stderr pipes open.
-    const submitted = await coordinator.submit(cwd, { command: ["bash", "-c", "sleep 30; exit 0"] });
+    const parentScript = 'const { spawn } = require("node:child_process"); spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: ["ignore", "inherit", "inherit"] }); setTimeout(() => {}, 30000);';
+    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", parentScript] });
     await waitFor(() => coordinator.get(cwd, submitted.job_id), (record) => record?.status === "running");
 
     const started = Date.now();
@@ -97,6 +96,10 @@ describe("job coordinator", () => {
     expect(Date.now() - started).toBeLessThan(5_000);
     expect((await coordinator.get(cwd, submitted.job_id))?.status).toBe("cancelled");
   }, 20_000);
+
+  it("builds a Windows taskkill command that includes the descendant tree", () => {
+    expect(windowsTaskkillArgs(4321)).toEqual(["/pid", "4321", "/T", "/F"]);
+  });
 
   it("restricts research surface jobs to an allowlisted environment", async () => {
     const cwd = await workspace();

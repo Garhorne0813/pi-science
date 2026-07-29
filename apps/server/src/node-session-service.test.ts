@@ -1,6 +1,6 @@
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { conversationEventHub } from "./conversation-event-hub.js";
 import { NodeSessionService } from "./node-session-service.js";
@@ -116,7 +116,7 @@ describe("Node session lifecycle", () => {
       PIP_REQUIRE_VIRTUALENV: "1",
       npm_config_prefix: join(cwd, ".pi-science", "npm-global"),
     });
-    expect(environment.PATH.split(":" )[0]).toBe(join(cwd, ".venv", "bin"));
+    expect(environment.PATH.split(delimiter)[0]).toBe(join(cwd, ".venv", process.platform === "win32" ? "Scripts" : "bin"));
     await service.shutdownAll();
   }, 30_000);
 

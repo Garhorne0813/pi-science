@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { validateWorkspaceCwd } from "./workspace-security.js";
+import { resolveWorkspaceFile, validateWorkspaceCwd } from "./workspace-security.js";
 
 // Shared parity fixture: backend/tests/test_workspace_security.py mirrors this
 // scenario list case-for-case. The Node control plane is the authority; any
@@ -72,6 +72,14 @@ describe("validateWorkspaceCwd", () => {
     await expect(validateWorkspaceCwd(workspace)).resolves.toBe(workspace);
   });
 
+  it("accepts a dot-dot-prefixed child name below the managed root", async () => {
+    const managed = join(root, "managed");
+    const workspace = join(managed, "..results");
+    await mkdir(workspace, { recursive: true });
+    process.env.PI_SCIENCE_WORKSPACES = managed;
+    await expect(validateWorkspaceCwd(workspace)).resolves.toBe(workspace);
+  });
+
   it("rejects the managed workspaces root itself", async () => {
     const managed = join(root, "managed");
     await mkdir(managed, { recursive: true });
@@ -107,17 +115,30 @@ describe("validateWorkspaceCwd", () => {
     await expect(validateWorkspaceCwd(link)).rejects.toThrow(/not a registered workspace/);
   });
 
-  it("rejects an unmarked workspace reached through a symlinked managed root", async () => {
-    // Known asymmetry, deliberately characterised so both runtimes stay bug-compatible:
-    // the candidate path is realpath'd but PI_SCIENCE_WORKSPACES is only resolved
-    // lexically, so a symlinked managed root never matches. Marked workspaces are
-    // unaffected because the marker check runs first.
+  it("accepts an unmarked workspace reached through a symlinked managed root", async () => {
     const managed = join(root, "managed");
     const workspace = join(managed, "child");
     const link = join(root, "managed-link");
     await mkdir(workspace, { recursive: true });
     await symlink(managed, link, "dir");
     process.env.PI_SCIENCE_WORKSPACES = link;
-    await expect(validateWorkspaceCwd(workspace)).rejects.toThrow(/not a registered workspace/);
+    await expect(validateWorkspaceCwd(workspace)).resolves.toBe(workspace);
+  });
+});
+
+describe("resolveWorkspaceFile", () => {
+  it("allows a missing dot-dot-prefixed file inside a workspace", async () => {
+    const workspace = join(root, "marked");
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    await expect(resolveWorkspaceFile(workspace, "..results.json")).resolves.toBe(join(workspace, "..results.json"));
+  });
+
+  it("rejects a missing target below a symlink that escapes the workspace", async () => {
+    const workspace = join(root, "marked");
+    const outside = join(root, "outside");
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await symlink(outside, join(workspace, "escape"), "dir");
+    await expect(resolveWorkspaceFile(workspace, join("escape", "future.txt"))).rejects.toThrow(/escapes the workspace/);
   });
 });

@@ -126,9 +126,16 @@ function terminate(child: ChildProcess): void {
   child.once("close", () => clearTimeout(timer));
 }
 
+export function windowsTaskkillArgs(pid: number): string[] { return ["/pid", String(pid), "/T", "/F"]; }
+
 function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   if (POSIX && child.pid) {
     try { process.kill(-child.pid, signal); return; } catch { /* the group is already gone or was never created */ }
+  }
+  if (!POSIX && child.pid) {
+    const killer = spawn("taskkill", windowsTaskkillArgs(child.pid), { stdio: "ignore", windowsHide: true });
+    killer.once("error", () => child.kill(signal));
+    return;
   }
   child.kill(signal);
 }

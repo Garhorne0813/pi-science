@@ -18,6 +18,11 @@ from models import CellResult
 KERNEL_BRIDGE_DIR = Path(__file__).parent
 
 
+def workspace_npm_bin(npm_prefix: Path, platform_name: str = os.name) -> Path:
+    """Return npm's global executable directory for the current platform."""
+    return npm_prefix if platform_name == "nt" else npm_prefix / "bin"
+
+
 @dataclass
 class KernelSession:
     """A persistent Python or R kernel process."""
@@ -147,9 +152,10 @@ class KernelManager:
                 npm_prefix = Path(cwd) / ".pi-science" / "npm-global"
                 npm_cache = Path(cwd) / ".pi-science" / "cache" / "npm"
                 pnpm_home = Path(cwd) / ".pi-science" / "pnpm-global"
+                npm_bin = workspace_npm_bin(npm_prefix)
                 process_env.update({
                     "VIRTUAL_ENV": str(venv_dir),
-                    "PATH": os.pathsep.join([str(venv_bin), str(npm_prefix / "bin"), str(pnpm_home), process_env.get("PATH", "")]),
+                    "PATH": os.pathsep.join([str(venv_bin), str(npm_bin), str(pnpm_home), process_env.get("PATH", "")]),
                     "PYTHONNOUSERSITE": "1",
                     "PIP_REQUIRE_VIRTUALENV": "1",
                     "PIP_USER": "0",

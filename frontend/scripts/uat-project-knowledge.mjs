@@ -2,11 +2,12 @@ import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright-core";
+import { resolveBrowserExecutable } from "./browser-executable.mjs";
 
 
 const frontend = process.env.PI_SCIENCE_FRONTEND_URL || "http://127.0.0.1:5173";
 const backend = process.env.PI_SCIENCE_BACKEND_URL || "http://127.0.0.1:8787";
-const chromePath = process.env.CHROME_PATH || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const chromePath = await resolveBrowserExecutable();
 const workspace = path.join(os.tmpdir(), `pi-science-knowledge-uat-${process.pid}`);
 const desktopScreenshot = path.join(os.tmpdir(), "pi-science-knowledge-uat-desktop.png");
 const mobileScreenshot = path.join(os.tmpdir(), "pi-science-knowledge-uat-mobile.png");

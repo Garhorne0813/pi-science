@@ -78,6 +78,15 @@ def test_nested_unmarked_directory_below_managed_root_is_accepted(sandbox, monke
     assert workspace_security.validate_workspace_cwd(str(workspace)) == workspace
 
 
+def test_dot_dot_prefixed_child_of_managed_root_is_accepted(sandbox, monkeypatch):
+    managed = sandbox / "managed"
+    workspace = managed / "..results"
+    workspace.mkdir(parents=True)
+    monkeypatch.setenv("PI_SCIENCE_WORKSPACES", str(managed))
+
+    assert workspace_security.validate_workspace_cwd(str(workspace)) == workspace
+
+
 def test_managed_root_itself_is_rejected(sandbox, monkeypatch):
     managed = sandbox / "managed"
     managed.mkdir()
@@ -120,11 +129,7 @@ def test_symlink_escaping_the_managed_root_is_rejected(sandbox, monkeypatch):
         workspace_security.validate_workspace_cwd(str(link))
 
 
-def test_unmarked_workspace_under_symlinked_managed_root_is_rejected(sandbox, monkeypatch):
-    # Known asymmetry, deliberately characterised so both runtimes stay
-    # bug-compatible: the candidate path is realpath'd but PI_SCIENCE_WORKSPACES
-    # is only resolved lexically, so a symlinked managed root never matches.
-    # Marked workspaces are unaffected because the marker check runs first.
+def test_unmarked_workspace_under_symlinked_managed_root_is_accepted(sandbox, monkeypatch):
     managed = sandbox / "managed"
     workspace = managed / "child"
     link = sandbox / "managed-link"
@@ -132,8 +137,25 @@ def test_unmarked_workspace_under_symlinked_managed_root_is_rejected(sandbox, mo
     link.symlink_to(managed, target_is_directory=True)
     monkeypatch.setenv("PI_SCIENCE_WORKSPACES", str(link))
 
-    with pytest.raises(ValueError, match="not a registered workspace"):
-        workspace_security.validate_workspace_cwd(str(workspace))
+    assert workspace_security.validate_workspace_cwd(str(workspace)) == workspace
+
+
+def test_missing_dot_dot_prefixed_file_inside_workspace_is_accepted(sandbox):
+    workspace = sandbox / "marked"
+    (workspace / ".pi-science").mkdir(parents=True)
+
+    assert workspace_security.resolve_workspace_file(workspace, "..results.json") == workspace / "..results.json"
+
+
+def test_missing_target_below_escaping_symlink_is_rejected(sandbox):
+    workspace = sandbox / "marked"
+    outside = sandbox / "outside"
+    (workspace / ".pi-science").mkdir(parents=True)
+    outside.mkdir()
+    (workspace / "escape").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="escapes the workspace"):
+        workspace_security.resolve_workspace_file(workspace, "escape/future.txt")
 
 
 def test_workspace_context_exposes_canonical_paths(sandbox):

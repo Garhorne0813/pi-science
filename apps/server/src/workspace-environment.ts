@@ -38,10 +38,14 @@ async function executable(path: string): Promise<boolean> {
   catch { return false; }
 }
 
+export function defaultPythonExecutable(environment: NodeJS.ProcessEnv = process.env, platform = process.platform): string {
+  return environment.PI_SCIENCE_PYTHON_EXECUTABLE || environment.PYTHON || (platform === "win32" ? "python" : "python3");
+}
+
 export class WorkspaceEnvironmentService {
   private readonly provisioning = new Map<string, Promise<WorkspaceEnvironmentStatus>>();
 
-  constructor(private readonly basePython = process.env.PI_SCIENCE_PYTHON_EXECUTABLE || process.env.PYTHON || "python3") {}
+  constructor(private readonly basePython = defaultPythonExecutable()) {}
 
   async status(cwdValue: string): Promise<WorkspaceEnvironmentStatus> {
     const workspace = resolve(cwdValue);

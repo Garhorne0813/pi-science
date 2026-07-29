@@ -1,6 +1,7 @@
 import { appendFile, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { userHome } from "./platform-utils.js";
 
 const writeQueues = new Map<string, Promise<void>>();
 const LOCK_STALE_MS = 30_000;
@@ -108,7 +109,7 @@ export async function writeJsonAtomic(path: string, value: unknown): Promise<voi
 export function configRoot(): string {
   const configured = process.env.PI_SCIENCE_HOME;
   const candidates = [
-    configured ? resolve(configured) : resolve(process.env.HOME ?? ".", ".pi-science"),
+    configured ? resolve(configured) : resolve(userHome(), ".pi-science"),
     resolve(process.cwd(), ".runtime", "pi-science"),
   ];
   for (const candidate of candidates) {

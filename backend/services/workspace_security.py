@@ -12,8 +12,8 @@ managed workspaces root named by ``PI_SCIENCE_WORKSPACES``.
 
 Two mirrored details are deliberate rather than accidental:
 
-* The candidate is resolved through symlinks but the managed root is only
-  normalised lexically, exactly as Node does (``realpath`` vs ``path.resolve``).
+* Both the candidate and an existing managed root are resolved through
+  symlinks before containment is checked.
 * Without ``PI_SCIENCE_WORKSPACES`` there is no managed root at all, so
   ``config.WORKSPACES_DIR``'s ``~/pi-science-workspaces`` default grants nothing
   on its own -- such workspaces are accepted via their marker directory.
@@ -25,7 +25,13 @@ from pathlib import Path
 
 def _managed_root() -> Path | None:
     raw = os.environ.get("PI_SCIENCE_WORKSPACES")
-    return Path(os.path.abspath(raw)) if raw else None
+    if not raw:
+        return None
+    configured = Path(os.path.abspath(raw))
+    try:
+        return configured.resolve(strict=True)
+    except OSError:
+        return configured
 
 
 def validate_workspace_cwd(cwd: str) -> Path:

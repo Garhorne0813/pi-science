@@ -12,6 +12,7 @@ import {
 } from "@pi-science/contracts";
 import type { JobCoordinator, JobRecord } from "../job-coordinator.js";
 import { metadataRoot } from "../persistence.js";
+import { findBashExecutable } from "../platform-utils.js";
 import { snapshotCandidate, within } from "./candidate-snapshot.js";
 import { listReducedLoops, reduceResearchRecords } from "./reducer.js";
 import { ResearchRepository } from "./repository.js";
@@ -295,8 +296,10 @@ export class ResearchLoopCoordinator {
     await mkdir(outputs, { recursive: true });
     const script = resolve(work, candidate.proposal.solution.entrypoint);
     if (!within(work, script)) throw new Error("candidate entrypoint escapes work directory");
+    const bash = await findBashExecutable();
+    if (!bash) throw new Error("Research loop candidates require bash. Install Git for Windows or set PI_SCIENCE_BASH_PATH to bash.exe.");
     const job = await this.jobs.submit(cwd, {
-      command: ["bash", script], execution_cwd: work, surface: "research-loop",
+      command: [bash, script], execution_cwd: work, surface: "research-loop",
       env: { PI_SCIENCE_OUTPUT_DIR: outputs, PI_SCIENCE_RUN_ID: runId, PI_SCIENCE_CANDIDATE_ID: candidate.candidate_id },
       requirement: { timeout_seconds: Math.min(loop.budget.max_wall_seconds, 86_400) },
     });
