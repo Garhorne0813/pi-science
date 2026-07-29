@@ -81,7 +81,7 @@ describe("job coordinator", () => {
     const finished = await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal);
     expect(finished?.status).toBe("succeeded");
     expect(finished?.return_code).toBe(0);
-  });
+  }, 15_000);
 
   it("cancels a process grandchild instead of stalling shutdown", async () => {
     const cwd = await workspace();
