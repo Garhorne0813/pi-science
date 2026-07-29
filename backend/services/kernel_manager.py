@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import subprocess
+import sys
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -116,7 +117,6 @@ class KernelManager:
         """Find an executable. Uses the current Python interpreter for python3
         so that conda/virtual environments are picked up correctly."""
         import shutil
-        import sys
         if name in ("python3", "python"):
             # Use the same Python that runs this backend (respects conda envs)
             return sys.executable
@@ -169,7 +169,7 @@ class KernelManager:
                 process_env.pop("PYTHONHOME", None)
                 process_env.pop("PIP_PREFIX", None)
             else:
-                exe = self._python_path or "python3"
+                exe = self._python_path or sys.executable
         elif language == "r":
             script = KERNEL_BRIDGE_DIR / "kernel_bridge.R"
             exe = self._r_path or "Rscript"

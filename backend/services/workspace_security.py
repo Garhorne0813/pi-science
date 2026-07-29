@@ -52,7 +52,13 @@ def validate_workspace_cwd(cwd: str) -> Path:
     raise ValueError(f"Path is not a registered workspace: {cwd}")
 
 
-def resolve_workspace_file(workspace: str | Path, relative_path: str, *, allow_metadata: bool = False) -> Path:
+def resolve_workspace_file(
+    workspace: str | Path,
+    relative_path: str,
+    *,
+    allow_metadata: bool = False,
+    platform: str | None = None,
+) -> Path:
     """Resolve a workspace-relative file while preventing traversal/symlink escape."""
     root = Path(workspace).expanduser().resolve()
     if not relative_path or Path(relative_path).is_absolute():
@@ -64,6 +70,8 @@ def resolve_workspace_file(workspace: str | Path, relative_path: str, *, allow_m
         relative = candidate.relative_to(root)
     except ValueError as exc:
         raise ValueError("Artifact path escapes the workspace") from exc
-    if not allow_metadata and ".pi-science" in relative.parts:
+    windows = (platform == "win32") if platform is not None else os.name == "nt"
+    metadata_parts = (part.casefold() if windows else part for part in relative.parts)
+    if not allow_metadata and ".pi-science" in metadata_parts:
         raise ValueError("Artifact metadata paths are not publishable")
     return candidate

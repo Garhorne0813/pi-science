@@ -267,6 +267,28 @@ describe("native control-plane business routes", () => {
     expect(provenance.json().records.length).toBeGreaterThan(0);
   }, 20_000);
 
+  it("enforces workspace deletion containment at the HTTP boundary", async () => {
+    const sandbox = join(tmpdir(), `pi-science-delete-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const managed = join(sandbox, "managed");
+    const child = join(managed, "child");
+    const sibling = join(sandbox, "managed-evil");
+    tempDirs.push(sandbox);
+    await mkdir(join(child, ".pi-science"), { recursive: true });
+    await mkdir(sibling, { recursive: true });
+    process.env.PI_SCIENCE_WORKSPACES = managed;
+    const app = buildApp(config()); apps.push(app);
+
+    const rootResponse = await app.inject({ method: "DELETE", url: "/api/workspaces/delete", payload: { path: managed } });
+    const siblingResponse = await app.inject({ method: "DELETE", url: "/api/workspaces/delete", payload: { path: sibling } });
+    const childResponse = await app.inject({ method: "DELETE", url: "/api/workspaces/delete", payload: { path: child } });
+
+    expect(rootResponse.statusCode).toBe(403);
+    expect(siblingResponse.statusCode).toBe(403);
+    expect(childResponse.statusCode).toBe(200);
+    await expect(stat(sibling)).resolves.toBeDefined();
+    await expect(stat(child)).rejects.toThrow();
+  });
+
   it("supports atomic file writes and research-loop state transitions", async () => {
     const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
     const upload = await app.inject({ method: "POST", url: `/api/files/upload?cwd=${encodeURIComponent(cwd)}`, payload: { filename: "uploaded.txt", content: "hello" } });

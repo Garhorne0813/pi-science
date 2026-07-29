@@ -32,7 +32,7 @@ export async function validateWorkspaceCwd(cwd: string): Promise<string> {
   throw new Error(`Path is not a registered workspace: ${cwd}`);
 }
 
-export async function resolveWorkspaceFile(workspace: string, relativePath: string): Promise<string> {
+export async function resolveWorkspaceFile(workspace: string, relativePath: string, platform = process.platform): Promise<string> {
   if (!relativePath || isAbsolute(relativePath)) throw new Error("Artifact path must be relative to the workspace");
   const root = await validateWorkspaceCwd(workspace);
   const candidate = resolve(root, relativePath);
@@ -41,8 +41,7 @@ export async function resolveWorkspaceFile(workspace: string, relativePath: stri
   if (!pathIsInside(root, canonicalCandidate, true)) {
     throw new Error("Artifact path escapes the workspace");
   }
-  if (relativePathFromRoot.split(/[\\/]/).includes(".pi-science")) {
-    throw new Error("Artifact metadata paths are not publishable");
-  }
+  const includesMetadata = relativePathFromRoot.split(/[\\/]/).some((part) => (platform === "win32" ? part.toLowerCase() : part) === ".pi-science");
+  if (includesMetadata) throw new Error("Artifact metadata paths are not publishable");
   return canonicalCandidate;
 }

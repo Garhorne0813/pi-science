@@ -10,6 +10,7 @@ import { catalog as skillCatalog, getSkillInfo, validateDirectory as validateSki
 import type { JobCoordinator } from "./job-coordinator.js";
 import type { ResearchLoopCoordinator } from "./research-loop/coordinator.js";
 import { findExecutable, pathIsInside, userHome } from "./platform-utils.js";
+import { defaultPythonExecutable } from "./workspace-environment.js";
 
 function q(request: { query: unknown }, key: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[key]; return typeof value === "string" && value ? value : fallback; }
 async function ws(request: { query: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): Promise<string | null> { try { return await validateWorkspaceCwd(q(request, "cwd")); } catch (error) { reply.code(403).send({ error: String(error) }); return null; } }
@@ -41,6 +42,9 @@ async function workspaceInfo(path: string): Promise<Record<string, unknown>> {
   };
 }
 function expandUserPath(path: string): string { return path.startsWith("~/") || path.startsWith("~\\") ? resolve(userHome(), path.slice(2)) : resolve(path); }
+export function catalogToolCommands(environment: NodeJS.ProcessEnv = process.env, platform = process.platform): ReadonlyArray<readonly [string, string]> {
+  return [["python", defaultPythonExecutable(environment, platform)], ["Node.js", "node"], ["Git", "git"], ["uv", "uv"]];
+}
 
 type ComputeProbeInput = {
   host: string;
@@ -160,8 +164,7 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
     return item ?? reply.code(404).send({ error: "Skill not found" });
   });
   app.get("/api/skills/tools", async () => {
-    const commands = [["python", "python3"], ["Node.js", "node"], ["Git", "git"], ["uv", "uv"]] as const;
-    return Promise.all(commands.map(async ([name, command]) => {
+    return Promise.all(catalogToolCommands().map(async ([name, command]) => {
       return { name, found: Boolean(await findExecutable(command)) };
     }));
   });
@@ -170,7 +173,7 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
     if (!root) return;
     const pathValue = (request.query as { path?: string }).path;
     let target = pathValue
-      ? (isAbsolute(pathValue) || pathValue.startsWith("~/") ? expandUserPath(pathValue) : resolve(root, pathValue))
+      ? (isAbsolute(pathValue) || pathValue.startsWith("~/") || pathValue.startsWith("~\\") ? expandUserPath(pathValue) : resolve(root, pathValue))
       : join(root, ".pi", "skills");
     try {
       const info = await stat(target);

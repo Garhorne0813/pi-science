@@ -3,7 +3,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildPiProcessOptions } from "./pi-runtime-launch.js";
+import { buildPiProcessOptions, loadDefaultPiConfig } from "./pi-runtime-launch.js";
 
 const cleanup: string[] = [];
 const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, tsx: process.env.PI_TSX_PATH, tsconfig: process.env.PI_TSCONFIG_PATH };
@@ -100,6 +100,27 @@ describe("Pi runtime custom provider materialization", () => {
     const options = buildPiProcessOptions(cwd, undefined, undefined, isolated)!;
 
     expect(options.env).toMatchObject(isolated);
+  });
+
+  it("passes a manifest-discovered runtime extension exactly once", async () => {
+    const runtimeRoot = join(tmpdir(), `pi-runtime-manifest-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const cwd = join(tmpdir(), `pi-runtime-extension-workspace-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(runtimeRoot, cwd);
+    const cli = join(runtimeRoot, "packages", "coding-agent", "dist", "cli.js");
+    const extension = join(runtimeRoot, "node_modules", "pi-subagents", "src", "extension.ts");
+    await mkdir(join(runtimeRoot, "packages", "coding-agent", "dist"), { recursive: true });
+    await mkdir(join(runtimeRoot, "node_modules", "pi-subagents", "src"), { recursive: true });
+    await mkdir(cwd, { recursive: true });
+    await writeFile(cli, "", "utf8");
+    await writeFile(extension, "export default function extension() {}\n", "utf8");
+    await writeFile(join(runtimeRoot, "node_modules", "pi-subagents", "package.json"), JSON.stringify({ pi: { extensions: ["src/extension.ts"] } }), "utf8");
+    process.env.PI_CLI_PATH = cli;
+
+    const options = buildPiProcessOptions(cwd, loadDefaultPiConfig())!;
+    const extensions = options.args.flatMap((arg, index) => arg === "-e" ? [options.args[index + 1]] : []);
+
+    expect(extensions.filter((path) => path === extension)).toHaveLength(1);
+    expect(extensions).not.toContain("pi-subagents/index.ts");
   });
 
   it("runs a source TypeScript CLI through the adjacent tsx runtime", async () => {

@@ -147,6 +147,16 @@ def test_missing_dot_dot_prefixed_file_inside_workspace_is_accepted(sandbox):
     assert workspace_security.resolve_workspace_file(workspace, "..results.json") == workspace / "..results.json"
 
 
+def test_windows_metadata_directory_case_variant_is_rejected(sandbox):
+    workspace = sandbox / "marked"
+    (workspace / ".pi-science").mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="metadata paths"):
+        workspace_security.resolve_workspace_file(
+            workspace, ".PI-SCIENCE/secret.txt", platform="win32"
+        )
+
+
 def test_missing_target_below_escaping_symlink_is_rejected(sandbox):
     workspace = sandbox / "marked"
     outside = sandbox / "outside"

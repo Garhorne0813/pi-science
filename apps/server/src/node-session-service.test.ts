@@ -103,6 +103,16 @@ function testService(): NodeSessionService {
 }
 
 describe("Node session lifecycle", () => {
+  it("fails fast when the Pi runtime is missing without provisioning the workspace environment", async () => {
+    const environment = vi.fn(async () => ({ ...process.env }));
+    const service = new NodeSessionService(undefined, undefined, undefined, { environment });
+    const cwd = await workspaceWithSessions("missing-runtime");
+    delete process.env.PI_CLI_PATH;
+
+    await expect(service.resume("missing-runtime", cwd)).resolves.toMatchObject({ success: false, code: "spawn_failed" });
+    expect(environment).not.toHaveBeenCalled();
+  });
+
   it("starts the agent inside the workspace package environment", async () => {
     const service = new NodeSessionService();
     const cwd = await workspaceWithSessions("isolated-session");

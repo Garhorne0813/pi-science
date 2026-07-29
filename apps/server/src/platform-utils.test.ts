@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -25,6 +25,32 @@ describe("platform utilities", () => {
       await mkdir(join(root, "Git", "bin"), { recursive: true });
       await writeFile(bash, "", "utf8");
       await expect(findBashExecutable({ PATH: "", PROGRAMFILES: root }, "win32")).resolves.toBe(bash);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("finds a per-user Git for Windows installation under LocalAppData Programs", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-science-local-git-bash-"));
+    const bash = join(root, "Programs", "Git", "usr", "bin", "bash.exe");
+    try {
+      await mkdir(join(root, "Programs", "Git", "usr", "bin"), { recursive: true });
+      await writeFile(bash, "", "utf8");
+      await expect(findBashExecutable({ PATH: "", LOCALAPPDATA: root }, "win32")).resolves.toBe(bash);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("skips non-executable PATH entries and falls back to a later regular file on POSIX", async () => {
+    if (process.platform === "win32") return;
+    const root = await mkdtemp(join(tmpdir(), "pi-science-executable-"));
+    const first = join(root, "first");
+    const second = join(root, "second");
+    try {
+      await mkdir(first);
+      await mkdir(second);
+      await writeFile(join(first, "runner"), "#!/bin/sh\n", "utf8");
+      await writeFile(join(second, "runner"), "#!/bin/sh\n", "utf8");
+      await chmod(join(first, "runner"), 0o644);
+      await chmod(join(second, "runner"), 0o755);
+      await expect(findExecutable("runner", { PATH: `${first}:${second}` }, "linux")).resolves.toBe(join(second, "runner"));
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 

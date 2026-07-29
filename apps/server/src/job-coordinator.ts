@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { metadataRoot, readJson, writeJsonAtomic } from "./persistence.js";
-import { WorkspaceEnvironmentService } from "./workspace-environment.js";
+import { defaultPythonExecutable, WorkspaceEnvironmentService } from "./workspace-environment.js";
 
 export type JobStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled" | "timed_out";
 export interface JobRequirement { cpu?: number; memory_mb?: number; gpu?: boolean; runtime?: string; packages?: string[]; timeout_seconds?: number; [key: string]: unknown }
@@ -22,7 +22,7 @@ export class JobCoordinator {
   constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService()) {}
 
   capabilities(requirement: JobRequirement) {
-    const runtime = { node: process.execPath, python: process.env.PYTHON ?? "python3", r: null };
+    const runtime = { node: process.execPath, python: defaultPythonExecutable(), r: null };
     const checks = { cpu: 1, memory_mb: null, gpu: Boolean(process.env.CUDA_VISIBLE_DEVICES || process.env.NVIDIA_VISIBLE_DEVICES), runtime, packages: {} };
     const reasons: string[] = [];
     if (Number(requirement.cpu ?? 1) > 1) reasons.push(`requires ${requirement.cpu} CPUs, host has 1`);

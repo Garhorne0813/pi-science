@@ -17,14 +17,14 @@ export interface WorkspaceEnvironmentStatus {
   error?: string;
 }
 
-function executablePaths(cwd: string) {
+function executablePaths(cwd: string, platform = process.platform) {
   const virtualEnv = join(resolve(cwd), ".venv");
-  const bin = process.platform === "win32" ? join(virtualEnv, "Scripts") : join(virtualEnv, "bin");
+  const bin = platform === "win32" ? join(virtualEnv, "Scripts") : join(virtualEnv, "bin");
   return {
     virtualEnv,
     bin,
-    python: join(bin, process.platform === "win32" ? "python.exe" : "python"),
-    pip: join(bin, process.platform === "win32" ? "pip.exe" : "pip"),
+    python: join(bin, platform === "win32" ? "python.exe" : "python"),
+    pip: join(bin, platform === "win32" ? "pip.exe" : "pip"),
   };
 }
 
@@ -40,6 +40,36 @@ async function executable(path: string): Promise<boolean> {
 
 export function defaultPythonExecutable(environment: NodeJS.ProcessEnv = process.env, platform = process.platform): string {
   return environment.PI_SCIENCE_PYTHON_EXECUTABLE || environment.PYTHON || (platform === "win32" ? "python" : "python3");
+}
+
+export function workspaceEnvironmentVariables(status: WorkspaceEnvironmentStatus, inherited: NodeJS.ProcessEnv = process.env, platform = process.platform): NodeJS.ProcessEnv {
+  const paths = executablePaths(status.workspace, platform);
+  const npmBin = platform === "win32" ? status.npm.global_prefix : join(status.npm.global_prefix, "bin");
+  const pnpmHome = join(status.workspace, ".pi-science", "pnpm-global");
+  const inheritedPath = platform === "win32"
+    ? Object.entries(inherited).find(([key]) => key.toLowerCase() === "path")?.[1] ?? ""
+    : inherited.PATH ?? "";
+  const base = platform === "win32"
+    ? Object.fromEntries(Object.entries(inherited).filter(([key]) => key.toLowerCase() !== "path"))
+    : { ...inherited };
+  return {
+    ...base,
+    PATH: [paths.bin, npmBin, pnpmHome, inheritedPath].filter(Boolean).join(platform === "win32" ? ";" : delimiter),
+    VIRTUAL_ENV: status.virtual_env,
+    PYTHONNOUSERSITE: "1",
+    PIP_REQUIRE_VIRTUALENV: "1",
+    PIP_USER: "0",
+    UV_PROJECT_ENVIRONMENT: status.virtual_env,
+    npm_config_prefix: status.npm.global_prefix,
+    NPM_CONFIG_PREFIX: status.npm.global_prefix,
+    npm_config_cache: status.npm.cache,
+    NPM_CONFIG_CACHE: status.npm.cache,
+    npm_config_update_notifier: "false",
+    PNPM_HOME: pnpmHome,
+    COREPACK_HOME: join(status.workspace, ".pi-science", "cache", "corepack"),
+    PYTHONHOME: undefined,
+    PIP_PREFIX: undefined,
+  };
 }
 
 export class WorkspaceEnvironmentService {
@@ -86,28 +116,7 @@ export class WorkspaceEnvironmentService {
   }
 
   async environment(cwdValue: string, inherited: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv> {
-    const status = await this.ensure(cwdValue);
-    const paths = executablePaths(status.workspace);
-    const npmBin = process.platform === "win32" ? status.npm.global_prefix : join(status.npm.global_prefix, "bin");
-    const pnpmHome = join(status.workspace, ".pi-science", "pnpm-global");
-    return {
-      ...inherited,
-      PATH: [paths.bin, npmBin, pnpmHome, inherited.PATH ?? ""].filter(Boolean).join(delimiter),
-      VIRTUAL_ENV: status.virtual_env,
-      PYTHONNOUSERSITE: "1",
-      PIP_REQUIRE_VIRTUALENV: "1",
-      PIP_USER: "0",
-      UV_PROJECT_ENVIRONMENT: status.virtual_env,
-      npm_config_prefix: status.npm.global_prefix,
-      NPM_CONFIG_PREFIX: status.npm.global_prefix,
-      npm_config_cache: status.npm.cache,
-      NPM_CONFIG_CACHE: status.npm.cache,
-      npm_config_update_notifier: "false",
-      PNPM_HOME: pnpmHome,
-      COREPACK_HOME: join(status.workspace, ".pi-science", "cache", "corepack"),
-      PYTHONHOME: undefined,
-      PIP_PREFIX: undefined,
-    };
+    return workspaceEnvironmentVariables(await this.ensure(cwdValue), inherited);
   }
 
   private async provision(cwd: string): Promise<WorkspaceEnvironmentStatus> {

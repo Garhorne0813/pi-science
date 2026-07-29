@@ -1,4 +1,5 @@
-import { access } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -23,7 +24,11 @@ export async function findExecutable(command: string, environment: NodeJS.Proces
     ? (platform === "win32" && !extname(command) ? extensions.map((extension) => `${command}${extension}`) : [command])
     : directories.flatMap((directory) => names.map((name) => join(directory, name)));
   for (const candidate of candidates) {
-    try { await access(candidate); return candidate; } catch { /* try next */ }
+    try {
+      if (!(await stat(candidate)).isFile()) continue;
+      await access(candidate, platform === "win32" ? constants.F_OK : constants.X_OK);
+      return candidate;
+    } catch { /* try next */ }
   }
   return null;
 }
@@ -32,10 +37,14 @@ export async function findBashExecutable(environment: NodeJS.ProcessEnv = proces
   if (environment.PI_SCIENCE_BASH_PATH) return findExecutable(environment.PI_SCIENCE_BASH_PATH, environment, platform);
   const fromPath = await findExecutable("bash", environment, platform);
   if (fromPath || platform !== "win32") return fromPath;
-  const roots = [environment.PROGRAMFILES, environment["PROGRAMFILES(X86)"], environment.LOCALAPPDATA].filter((value): value is string => Boolean(value));
-  for (const root of roots) {
-    for (const candidate of [join(root, "Git", "bin", "bash.exe"), join(root, "Git", "usr", "bin", "bash.exe")]) {
-      try { await access(candidate); return candidate; } catch { /* try next */ }
+  const roots = [environment.PROGRAMFILES, environment["PROGRAMFILES(X86)"]].filter((value): value is string => Boolean(value));
+  const gitRoots = [
+    ...roots.map((root) => join(root, "Git")),
+    ...(environment.LOCALAPPDATA ? [join(environment.LOCALAPPDATA, "Programs", "Git"), join(environment.LOCALAPPDATA, "Git")] : []),
+  ];
+  for (const root of gitRoots) {
+    for (const candidate of [join(root, "bin", "bash.exe"), join(root, "usr", "bin", "bash.exe")]) {
+      try { if ((await stat(candidate)).isFile()) return candidate; } catch { /* try next */ }
     }
   }
   return null;
