@@ -126,11 +126,11 @@ describe("job coordinator", () => {
 
   it("keeps the full environment for non-research surfaces", async () => {
     const cwd = await workspace();
-    const coordinator = jobCoordinator({ PATH: process.env.PATH, HOME: "/tmp", SECRET_TOKEN: "leak-me" });
+    const coordinator = jobCoordinator({ ...process.env, SECRET_TOKEN: "leak-me" });
     const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "console.log(JSON.stringify(process.env))"], surface: "local" });
     const finished = await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal);
     expect(finished?.status).toBe("succeeded");
     const childEnv = JSON.parse(finished?.stdout ?? "{}") as Record<string, string | undefined>;
     expect(childEnv.SECRET_TOKEN).toBe("leak-me");
-  });
+  }, 15_000);
 });

@@ -156,6 +156,7 @@ describe("Node session lifecycle", () => {
   });
 
   it("keeps identical session IDs isolated across workspaces", async () => {
+    process.env.PI_SCIENCE_RPC_TIMEOUT_MS = "1500";
     const service = testService();
     const first = await workspaceWithSessions("same-session");
     const second = await workspaceWithSessions("same-session");
