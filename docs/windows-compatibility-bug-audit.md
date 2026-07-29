@@ -27,10 +27,10 @@ This pass inspected the Node control plane, React/UAT tooling, Python runtime, p
 
 | Check | Local evidence | Windows evidence |
 |---|---|---|
-| Contracts/server/frontend typecheck | `pnpm typecheck` | Added `windows-latest` CI job |
-| JS unit/integration tests | `pnpm test` plus new platform/security/browser/environment tests | Added `windows-latest` CI job; Windows-specific behavior is also covered with platform-parameterized tests/mocks |
-| JS production build | `pnpm build` | Added `windows-latest` CI job |
-| Python runtime | `cd backend && uv run pytest -q` | Added `windows-latest` CI job; npm-bin and workspace parity regression tests included |
+| Contracts/server/frontend typecheck | `pnpm typecheck` | Passed in native `windows-latest` CI |
+| JS unit/integration tests | `pnpm test` plus new platform/security/browser/environment tests | Passed in native `windows-latest` CI; Windows-specific behavior is also covered with platform-parameterized tests/mocks |
+| JS production build | `pnpm build` | Passed in native `windows-latest` CI |
+| Python runtime | `cd backend && uv run pytest -q` | Passed in native `windows-latest` CI; npm-bin, cleanup-order, and workspace parity regression tests included |
 | Control-plane smoke | `pnpm smoke` on macOS/Linux shell environment | Deferred: current smoke harness is Bash/curl-oriented and remains Ubuntu-only |
 | Browser UAT | Existing UAT commands when frontend/control plane are running | Browser path discovery is unit-tested; a live Windows browser run depends on the Windows CI/host having the services and browser available |
 
