@@ -1,6 +1,6 @@
-import { access, cp, mkdir, readdir, readFile, realpath, rename, stat, rm, writeFile } from "node:fs/promises";
+import { access, cp, lstat, mkdir, readdir, readFile, realpath, rename, stat, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 import { configPath, readJson, writeJsonAtomic } from "./persistence.js";
@@ -41,7 +41,21 @@ async function workspaceInfo(path: string): Promise<Record<string, unknown>> {
     last_modified: metadata.mtime.toISOString(),
   };
 }
-function expandUserPath(path: string): string { return path.startsWith("~/") || path.startsWith("~\\") ? resolve(userHome(), path.slice(2)) : resolve(path); }
+export function expandUserPath(path: string): string { if (path === "~") return resolve(userHome()); return path.startsWith("~/") || path.startsWith("~\\") ? resolve(userHome(), path.slice(2)) : resolve(path); }
+async function workspaceDeletionPath(pathValue: string): Promise<string> {
+  const configuredRoot = rootDir();
+  const requested = resolve(pathValue);
+  if (!pathIsInside(configuredRoot, requested)) throw new Error("Cannot delete outside workspaces directory");
+  const canonicalRoot = await realpath(configuredRoot);
+  let current = configuredRoot;
+  for (const part of relative(configuredRoot, requested).split(sep).filter(Boolean)) {
+    current = join(current, part);
+    if ((await lstat(current)).isSymbolicLink()) throw new Error("Cannot delete a workspace through a symlink or junction");
+  }
+  const canonicalRequested = await realpath(requested);
+  if (!pathIsInside(canonicalRoot, canonicalRequested)) throw new Error("Cannot delete outside workspaces directory");
+  return canonicalRequested;
+}
 export function catalogToolCommands(environment: NodeJS.ProcessEnv = process.env, platform = process.platform): ReadonlyArray<readonly [string, string]> {
   return [["python", defaultPythonExecutable(environment, platform)], ["Node.js", "node"], ["Git", "git"], ["uv", "uv"]];
 }
@@ -245,7 +259,17 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
   app.get("/api/workspaces/pinned", async () => ({ paths: await readJson<string[]>(configPath("pinned.json"), []) }));
   app.post("/api/workspaces/pin", async (request) => { const path = String(((request.body ?? {}) as { path?: unknown }).path ?? ""); const paths = await readJson<string[]>(configPath("pinned.json"), []); if (!paths.includes(path)) paths.push(path); await writeJsonAtomic(configPath("pinned.json"), paths); return { ok: true, pinned: true }; });
   app.post("/api/workspaces/unpin", async (request) => { const path = String(((request.body ?? {}) as { path?: unknown }).path ?? ""); const paths = (await readJson<string[]>(configPath("pinned.json"), [])).filter((item) => item !== path); await writeJsonAtomic(configPath("pinned.json"), paths); return { ok: true, pinned: false }; });
-  app.delete("/api/workspaces/delete", async (request, reply) => { const path = resolve(String(((request.body ?? {}) as { path?: unknown }).path ?? "")); if (!pathIsInside(rootDir(), path)) return reply.code(403).send({ error: "Cannot delete outside workspaces directory" }); if (await research?.hasActive(path) || await jobs?.hasActive(path)) return reply.code(409).send({ error: "Cancel active research and jobs before deleting this workspace" }); try { await rm(path, { recursive: true }); return { ok: true }; } catch { return reply.code(404).send({ error: "Workspace not found" }); } });
+  app.delete("/api/workspaces/delete", async (request, reply) => {
+    let path: string;
+    try { path = await workspaceDeletionPath(String(((request.body ?? {}) as { path?: unknown }).path ?? "")); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return reply.code(404).send({ error: "Workspace not found" });
+      return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+    if (await research?.hasActive(path) || await jobs?.hasActive(path)) return reply.code(409).send({ error: "Cancel active research and jobs before deleting this workspace" });
+    try { await rm(path, { recursive: true }); return { ok: true }; } catch { return reply.code(404).send({ error: "Workspace not found" }); }
+  });
 
   // ── Compute machine registry ──
   app.get("/api/compute/machines", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const value = await readJson<{ machines?: unknown[] }>(join(root, ".pi-science", "compute.json"), {}); return { machines: Array.isArray(value.machines) ? value.machines : [] }; });

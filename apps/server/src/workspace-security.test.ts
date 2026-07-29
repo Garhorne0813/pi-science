@@ -133,10 +133,10 @@ describe("resolveWorkspaceFile", () => {
     await expect(resolveWorkspaceFile(workspace, "..results.json")).resolves.toBe(join(workspace, "..results.json"));
   });
 
-  it("rejects case variants of the metadata directory on Windows", async () => {
+  it.each(["linux", "darwin", "win32"])("rejects case variants of the metadata directory on %s", async (platform) => {
     const workspace = join(root, "marked");
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
-    await expect(resolveWorkspaceFile(workspace, join(".PI-SCIENCE", "secret.txt"), "win32")).rejects.toThrow(/metadata paths/);
+    await expect(resolveWorkspaceFile(workspace, join(".PI-SCIENCE", "secret.txt"), platform as NodeJS.Platform)).rejects.toThrow(/metadata paths/);
   });
 
   it("rejects a missing target below a symlink that escapes the workspace", async () => {

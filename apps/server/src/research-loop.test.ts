@@ -139,8 +139,8 @@ class HookedRunner implements ResearchSubagentRunner {
   shutdown(): Promise<void> { return this.inner.shutdown(); }
 }
 
-const nodeSleep = `\"${process.execPath.replaceAll("\\", "/")}\" -e 'setTimeout(() => {}, 30000)'`;
-const defaultSleepBody = process.platform === "win32" ? `${nodeSleep}\nexit 0\n` : "sleep 30\nexit 0\n";
+const nodeSleep = `\"${process.execPath.replaceAll("\\", "/")}\" -e \"require('node:fs').writeFileSync(process.env.PI_SCIENCE_OUTPUT_DIR + require('node:path').sep + 'descendant-ready', 'ready'); setTimeout(() => {}, 30000)\"`;
+const defaultSleepBody = `${nodeSleep}\nexit 0\n`;
 
 /** The default body deliberately does NOT `exec`, so the long-running command is
  *  a grandchild that inherits the job pipes: only a process-tree kill can stop it. */
@@ -551,12 +551,9 @@ describe("subagent research loop", () => {
     expect(["cancelled", "succeeded"]).toContain((await evaluationJobs.get(cwd, String(operation?.run_id)))?.status);
   }, 15_000);
 
-  it.each(process.platform === "win32" ? [
+  it.each([
     ["a process grandchild", `${nodeSleep}\nexit 0\n`],
     ["an exec'd process", `exec ${nodeSleep}\n`],
-  ] : [
-    ["a shell grandchild", "sleep 30\nexit 0\n"],
-    ["an exec'd process", "exec sleep 30\n"],
   ])("cancels the active execution job when the user completes a running loop with %s", async (_label, body) => {
     const cwd = await workspace();
     const executionJobs = jobCoordinator();
@@ -569,6 +566,8 @@ describe("subagent research loop", () => {
       (value) => value?.candidates[0]?.status === "executing",
     );
     const jobId = String(executing?.candidates[0]?.execution.job_id ?? "");
+    const ready = join(cwd, String(executing?.candidates[0]?.execution.outputs_dir ?? ""), "descendant-ready");
+    await waitFor(async () => stat(ready).then(() => true, () => false), Boolean);
 
     const completed = await coordinator.action(cwd, loop.loop_id, "complete");
     expect(completed.status).toBe("completed");

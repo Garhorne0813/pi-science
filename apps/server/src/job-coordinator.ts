@@ -12,7 +12,8 @@ export interface JobRecord { job_id: string; command: string[]; cwd: string; exe
 const ORPHAN_GRACE_MS = 15_000;
 const KILL_GRACE_MS = 2_000;
 const POSIX = process.platform !== "win32";
-const RESEARCH_ENVIRONMENT_KEYS = new Set(["PATH", "Path", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "SYSTEMROOT", "ComSpec", "COMSPEC", "PATHEXT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "VIRTUAL_ENV", "PYTHONNOUSERSITE", "PIP_REQUIRE_VIRTUALENV", "PIP_USER", "UV_PROJECT_ENVIRONMENT", "npm_config_prefix", "NPM_CONFIG_PREFIX", "npm_config_cache", "NPM_CONFIG_CACHE", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"]);
+const RESEARCH_ENVIRONMENT_KEY_NAMES = ["PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "ComSpec", "PATHEXT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "VIRTUAL_ENV", "PYTHONNOUSERSITE", "PIP_REQUIRE_VIRTUALENV", "PIP_USER", "UV_PROJECT_ENVIRONMENT", "npm_config_prefix", "npm_config_cache", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"] as const;
+const RESEARCH_ENVIRONMENT_KEYS = new Map(RESEARCH_ENVIRONMENT_KEY_NAMES.map((key) => [key.toLowerCase(), key]));
 
 export class JobCoordinator {
   private readonly children = new Map<string, ChildProcess>();
@@ -141,7 +142,13 @@ function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
 }
 
 function restrictResearchEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return Object.fromEntries(Object.entries(environment).filter(([key, value]) => RESEARCH_ENVIRONMENT_KEYS.has(key) && value !== undefined));
+  const restricted: NodeJS.ProcessEnv = {};
+  for (const key of RESEARCH_ENVIRONMENT_KEY_NAMES) if (environment[key] !== undefined) restricted[key] = environment[key];
+  for (const [key, value] of Object.entries(environment)) {
+    const canonical = RESEARCH_ENVIRONMENT_KEYS.get(key.toLowerCase());
+    if (canonical && value !== undefined && restricted[canonical] === undefined) restricted[canonical] = value;
+  }
+  return restricted;
 }
 
 export function parseCommand(value: unknown): string[] {

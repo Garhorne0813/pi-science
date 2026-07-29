@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { access, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./app.js";
@@ -287,6 +287,27 @@ describe("native control-plane business routes", () => {
     expect(childResponse.statusCode).toBe(200);
     await expect(stat(sibling)).resolves.toBeDefined();
     await expect(stat(child)).rejects.toThrow();
+  });
+
+  it("rejects workspace deletion through a symlink or junction before recursive removal", async () => {
+    const sandbox = join(tmpdir(), `pi-science-delete-link-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const managed = join(sandbox, "managed");
+    const outside = join(sandbox, "outside");
+    const outsideWorkspace = join(outside, "workspace");
+    const escape = join(managed, "escape");
+    tempDirs.push(sandbox);
+    await mkdir(join(outsideWorkspace, ".pi-science"), { recursive: true });
+    await writeFile(join(outsideWorkspace, "keep.txt"), "outside", "utf8");
+    await mkdir(managed, { recursive: true });
+    await symlink(outside, escape, process.platform === "win32" ? "junction" : "dir");
+    process.env.PI_SCIENCE_WORKSPACES = managed;
+    const app = buildApp(config()); apps.push(app);
+
+    const response = await app.inject({ method: "DELETE", url: "/api/workspaces/delete", payload: { path: join(escape, "workspace") } });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error).toMatch(/symlink|junction/);
+    await expect(readFile(join(outsideWorkspace, "keep.txt"), "utf8")).resolves.toBe("outside");
   });
 
   it("supports atomic file writes and research-loop state transitions", async () => {

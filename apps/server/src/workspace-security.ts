@@ -41,7 +41,7 @@ export async function resolveWorkspaceFile(workspace: string, relativePath: stri
   if (!pathIsInside(root, canonicalCandidate, true)) {
     throw new Error("Artifact path escapes the workspace");
   }
-  const includesMetadata = relativePathFromRoot.split(/[\\/]/).some((part) => (platform === "win32" ? part.toLowerCase() : part) === ".pi-science");
+  const includesMetadata = relativePathFromRoot.split(/[\\/]/).some((part) => part.toLowerCase() === ".pi-science");
   if (includesMetadata) throw new Error("Artifact metadata paths are not publishable");
   return canonicalCandidate;
 }

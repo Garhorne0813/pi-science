@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -83,12 +83,14 @@ describe("job coordinator", () => {
     expect(finished?.return_code).toBe(0);
   }, 15_000);
 
-  it("cancels a process grandchild instead of stalling shutdown", async () => {
+  it("cancels a ready process grandchild instead of stalling shutdown", async () => {
     const cwd = await workspace();
     const coordinator = jobCoordinator();
-    const parentScript = 'const { spawn } = require("node:child_process"); spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: ["ignore", "inherit", "inherit"] }); setTimeout(() => {}, 30000);';
+    const ready = join(cwd, "grandchild-ready");
+    const childScript = `require("node:fs").writeFileSync(${JSON.stringify(ready)}, "ready"); setTimeout(() => {}, 30000);`;
+    const parentScript = `const { spawn } = require("node:child_process"); spawn(process.execPath, ["-e", ${JSON.stringify(childScript)}], { stdio: ["ignore", "inherit", "inherit"] }); setTimeout(() => {}, 30000);`;
     const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", parentScript] });
-    await waitFor(() => coordinator.get(cwd, submitted.job_id), (record) => record?.status === "running");
+    await waitFor(async () => stat(ready).then(() => true, () => false), Boolean);
 
     const started = Date.now();
     await coordinator.cancel(cwd, submitted.job_id);
@@ -101,9 +103,9 @@ describe("job coordinator", () => {
     expect(windowsTaskkillArgs(4321)).toEqual(["/pid", "4321", "/T", "/F"]);
   });
 
-  it("restricts research surface jobs to an allowlisted environment while preserving Windows process essentials", async () => {
+  it("matches research environment keys case-insensitively and emits canonical non-duplicated keys", async () => {
     const cwd = await workspace();
-    const coordinator = jobCoordinator({ PATH: process.env.PATH, HOME: "/tmp", USERPROFILE: "C:\\Users\\scientist", APPDATA: "C:\\Users\\scientist\\AppData\\Roaming", LOCALAPPDATA: "C:\\Users\\scientist\\AppData\\Local", SystemRoot: "C:\\Windows", ComSpec: "C:\\Windows\\System32\\cmd.exe", PATHEXT: ".COM;.EXE;.BAT;.CMD", SECRET_TOKEN: "leak-me" });
+    const coordinator = jobCoordinator({ PaTh: process.env.PATH, hOmE: "/tmp", uSeRpRoFiLe: "C:\\Users\\scientist", aPpDaTa: "C:\\Users\\scientist\\AppData\\Roaming", LoCaLaPpDaTa: "C:\\Users\\scientist\\AppData\\Local", sYsTeMrOoT: "C:\\Windows", cOmSpEc: "C:\\Windows\\System32\\cmd.exe", pAtHeXt: ".COM;.EXE;.BAT;.CMD", sEcReT_tOkEn: "leak-me" });
     const submitted = await coordinator.submit(cwd, {
       command: [process.execPath, "-e", "console.log(JSON.stringify(process.env))"],
       surface: "research-loop",
@@ -113,6 +115,10 @@ describe("job coordinator", () => {
     expect(finished?.status).toBe("succeeded");
     const childEnv = JSON.parse(finished?.stdout ?? "{}") as Record<string, string | undefined>;
     expect(childEnv.SECRET_TOKEN).toBeUndefined();
+    expect(childEnv.sEcReT_tOkEn).toBeUndefined();
+    expect(childEnv.PaTh).toBeUndefined();
+    expect(childEnv.sYsTeMrOoT).toBeUndefined();
+    expect(childEnv.cOmSpEc).toBeUndefined();
     expect(childEnv.PATH).toBe(process.env.PATH);
     expect(childEnv.HOME).toBe("/tmp");
     expect(childEnv.USERPROFILE).toBe("C:\\Users\\scientist");

@@ -147,13 +147,14 @@ def test_missing_dot_dot_prefixed_file_inside_workspace_is_accepted(sandbox):
     assert workspace_security.resolve_workspace_file(workspace, "..results.json") == workspace / "..results.json"
 
 
-def test_windows_metadata_directory_case_variant_is_rejected(sandbox):
+@pytest.mark.parametrize("platform", ["linux", "darwin", "win32"])
+def test_metadata_directory_case_variant_is_rejected_on_every_platform(sandbox, platform):
     workspace = sandbox / "marked"
     (workspace / ".pi-science").mkdir(parents=True)
 
     with pytest.raises(ValueError, match="metadata paths"):
         workspace_security.resolve_workspace_file(
-            workspace, ".PI-SCIENCE/secret.txt", platform="win32"
+            workspace, ".PI-SCIENCE/secret.txt", platform=platform
         )
 
 

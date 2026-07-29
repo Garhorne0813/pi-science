@@ -70,8 +70,7 @@ def resolve_workspace_file(
         relative = candidate.relative_to(root)
     except ValueError as exc:
         raise ValueError("Artifact path escapes the workspace") from exc
-    windows = (platform == "win32") if platform is not None else os.name == "nt"
-    metadata_parts = (part.casefold() if windows else part for part in relative.parts)
+    metadata_parts = (part.casefold() for part in relative.parts)
     if not allow_metadata and ".pi-science" in metadata_parts:
         raise ValueError("Artifact metadata paths are not publishable")
     return candidate
