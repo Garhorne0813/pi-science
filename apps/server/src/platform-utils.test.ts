@@ -54,13 +54,22 @@ describe("platform utilities", () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
-  it("honours Windows PATHEXT and quoted PATH entries", async () => {
+  it("honours Windows PATHEXT and quoted PATH entries case-insensitively", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-science-path-"));
     const bin = join(root, "Program Files", "Tools");
     try {
       await mkdir(bin, { recursive: true });
       await writeFile(join(bin, "runner.CMD"), "@echo off\r\n", "utf8");
-      await expect(findExecutable("runner", { PATH: `\"${bin}\"`, PATHEXT: ".CMD;.EXE" }, "win32")).resolves.toBe(join(bin, "runner.CMD"));
+      await expect(findExecutable("runner", { Path: `\"${bin}\"`, PathExt: ".CMD;.EXE" }, "win32")).resolves.toBe(join(bin, "runner.CMD"));
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("does not treat mixed-case Path as PATH on POSIX", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-science-posix-path-"));
+    try {
+      await writeFile(join(root, "runner"), "#!/bin/sh\n", "utf8");
+      await chmod(join(root, "runner"), 0o755);
+      await expect(findExecutable("runner", { Path: root }, "linux")).resolves.toBeNull();
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 });

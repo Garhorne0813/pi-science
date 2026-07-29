@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { isUtf8 } from "node:buffer";
-import { dirname, relative } from "node:path";
+import { basename, dirname, extname, join, relative } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "./workspace-security.js";
 import { appendJsonLine, workspaceFile } from "./persistence.js";
@@ -77,7 +77,7 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
       const rows = [];
       for (const entry of entries) {
         if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-        const path = `${target}/${entry.name}`;
+        const path = join(target, entry.name);
         const metadata = await stat(path);
         rows.push({ path: relative(root, path), name: entry.name, isDir: entry.isDirectory(), size: metadata.size, modified: metadata.mtimeMs / 1000 });
       }
@@ -138,7 +138,7 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
       const wildcard = (request.params as { path?: string; "*"?: string }).path ?? (request.params as { "*"?: string })["*"] ?? "";
       const target = await resolveWorkspaceFile(root, wildcard);
       const info = await stat(target);
-      return { path: wildcard, name: target.slice(target.lastIndexOf("/") + 1), size: info.size, modified: info.mtimeMs / 1000, is_dir: info.isDirectory() };
+      return { path: wildcard, name: basename(target), size: info.size, modified: info.mtimeMs / 1000, is_dir: info.isDirectory() };
     } catch (error) { return reply.code(404).send({ error: String(error) }); }
   });
   app.delete<{ Params: { path: string } }>("/api/files/*", async (request, reply) => {
@@ -198,7 +198,7 @@ async function previewFile(request: { query: unknown }, reply: { code: (status: 
     const target = await resolveWorkspaceFile(root, path);
     const info = await stat(target);
     if (!info.isFile()) return reply.code(400).send({ error: "Not a file" });
-    return { path, name: target.slice(target.lastIndexOf("/") + 1), size: info.size, modified: info.mtimeMs / 1000, extension: target.slice(target.lastIndexOf(".")), preview: null };
+    return { path, name: basename(target), size: info.size, modified: info.mtimeMs / 1000, extension: extname(target), preview: null };
   } catch (error) { return reply.code(404).send({ error: String(error) }); }
 }
 
@@ -211,7 +211,7 @@ async function moveFile(request: { query: unknown; body?: unknown }, reply: { co
     const source = await resolveWorkspaceFile(root, body.source);
     const target = await resolveWorkspaceFile(root, body.target);
     try { await stat(target); return reply.code(409).send({ error: "Target already exists" }); } catch { /* expected */ }
-    await mkdir(target.slice(0, target.lastIndexOf("/")), { recursive: true });
+    await mkdir(dirname(target), { recursive: true });
     await rename(source, target);
     await appendJsonLine(workspaceFile(root, "provenance.jsonl"), { path: body.target, version: 1, ts: Date.now() / 1000, tool: `file_${action}`, sessionId: "", diff: `${body.source} -> ${body.target}` });
     return { ok: true, source: body.source, target: body.target };

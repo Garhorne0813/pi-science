@@ -310,6 +310,25 @@ describe("native control-plane business routes", () => {
     await expect(readFile(join(outsideWorkspace, "keep.txt"), "utf8")).resolves.toBe("outside");
   });
 
+  it("uses platform path semantics for nested file moves, probes, and previews", async () => {
+    const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
+    await writeFile(join(cwd, "source.txt"), "hello", "utf8");
+    const target = join(cwd, "nested", "renamed.txt");
+
+    const moved = await app.inject({ method: "POST", url: `/api/files/rename?cwd=${encodeURIComponent(cwd)}`, payload: { source: "source.txt", target: "nested/renamed.txt" } });
+    expect(moved.statusCode).toBe(200);
+    await expect(readFile(target, "utf8")).resolves.toBe("hello");
+    await expect(stat(target.slice(0, -1))).rejects.toThrow();
+
+    const probe = await app.inject({ method: "GET", url: `/api/files/probe/nested/renamed.txt?cwd=${encodeURIComponent(cwd)}` });
+    expect(probe.statusCode).toBe(200);
+    expect(probe.json()).toMatchObject({ path: "nested/renamed.txt", name: "renamed.txt", is_dir: false });
+
+    const preview = await app.inject({ method: "GET", url: `/api/files/nested/renamed.txt/preview?cwd=${encodeURIComponent(cwd)}` });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json()).toMatchObject({ path: "nested/renamed.txt", name: "renamed.txt", extension: ".txt" });
+  });
+
   it("supports atomic file writes and research-loop state transitions", async () => {
     const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
     const upload = await app.inject({ method: "POST", url: `/api/files/upload?cwd=${encodeURIComponent(cwd)}`, payload: { filename: "uploaded.txt", content: "hello" } });

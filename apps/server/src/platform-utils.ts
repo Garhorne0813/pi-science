@@ -13,11 +13,16 @@ export function pathIsInside(root: string, target: string, allowRoot = false): b
   return !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
 }
 
+function environmentValue(environment: NodeJS.ProcessEnv, key: string, platform: NodeJS.Platform): string | undefined {
+  if (environment[key] !== undefined || platform !== "win32") return environment[key];
+  return Object.entries(environment).find(([candidate]) => candidate.toLowerCase() === key.toLowerCase())?.[1];
+}
+
 export async function findExecutable(command: string, environment: NodeJS.ProcessEnv = process.env, platform = process.platform): Promise<string | null> {
-  const pathValue = environment.PATH || environment.Path || environment.path || "";
+  const pathValue = environmentValue(environment, "PATH", platform) ?? "";
   const directories = pathValue.split(platform === "win32" ? ";" : delimiter).map((value) => value.trim().replace(/^"|"$/g, "")).filter(Boolean);
   const extensions = platform === "win32"
-    ? (environment.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+    ? (environmentValue(environment, "PATHEXT", platform) ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
     : [""];
   const names = platform === "win32" && !extname(command) ? extensions.map((extension) => `${command}${extension}`) : [command];
   const candidates = isAbsolute(command) || command.includes("/") || command.includes("\\")

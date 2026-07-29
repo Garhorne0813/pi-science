@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { JobCoordinator, type JobRecord, type JobStatus, windowsTaskkillArgs } from "./job-coordinator.js";
+import { JobCoordinator, type JobRecord, type JobStatus, restrictResearchEnvironment, windowsTaskkillArgs } from "./job-coordinator.js";
 
 const cleanup: string[] = [];
 const jobs: JobCoordinator[] = [];
@@ -19,8 +19,8 @@ async function workspace(): Promise<string> {
   return cwd;
 }
 
-function jobCoordinator(environment: NodeJS.ProcessEnv = { ...process.env }): JobCoordinator {
-  const coordinator = new JobCoordinator({ environment: async () => ({ ...environment }) });
+function jobCoordinator(environment: NodeJS.ProcessEnv = { ...process.env }, hooks: ConstructorParameters<typeof JobCoordinator>[1] = {}): JobCoordinator {
+  const coordinator = new JobCoordinator({ environment: async () => ({ ...environment }) }, hooks);
   jobs.push(coordinator);
   return coordinator;
 }
@@ -99,35 +99,52 @@ describe("job coordinator", () => {
     expect((await coordinator.get(cwd, submitted.job_id))?.status).toBe("cancelled");
   }, 20_000);
 
+  it("does not spawn a job cancelled after running state is persisted", async () => {
+    const cwd = await workspace();
+    const marker = join(cwd, "must-not-start");
+    let releaseSpawn!: () => void;
+    let enteredSpawnGate!: () => void;
+    const spawnGate = new Promise<void>((resolve) => { releaseSpawn = resolve; });
+    const gateEntered = new Promise<void>((resolve) => { enteredSpawnGate = resolve; });
+    const coordinator = jobCoordinator(undefined, { beforeSpawn: async () => { enteredSpawnGate(); await spawnGate; } });
+    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "started")`] });
+    await gateEntered;
+
+    const cancelled = await coordinator.cancel(cwd, submitted.job_id);
+    expect(cancelled?.status).toBe("cancelled");
+    releaseSpawn();
+    await coordinator.shutdown();
+    const finished = await coordinator.get(cwd, submitted.job_id);
+    expect(finished?.status).toBe("cancelled");
+    await expect(stat(marker)).rejects.toThrow();
+  });
+
   it("builds a Windows taskkill command that includes the descendant tree", () => {
     expect(windowsTaskkillArgs(4321)).toEqual(["/pid", "4321", "/T", "/F"]);
   });
 
-  it("matches research environment keys case-insensitively and emits canonical non-duplicated keys", async () => {
+  it("uses exact allowlist keys on POSIX without promoting mixed-case host variables", () => {
+    const filtered = restrictResearchEnvironment({ PATH: "/canonical/bin", PaTh: "/untrusted/bin", HOME: "/canonical/home", hOmE: "/untrusted/home", sEcReT_tOkEn: "leak-me", SECRET_TOKEN: "also-leak-me" }, "linux");
+    expect(filtered).toEqual({ PATH: "/canonical/bin", HOME: "/canonical/home" });
+  });
+
+  it("matches Windows research environment keys case-insensitively and emits canonical non-duplicated keys", () => {
+    const filtered = restrictResearchEnvironment({ PATH: "C:\\canonical", PaTh: "C:\\duplicate", hOmE: "C:\\Users\\scientist", sYsTeMrOoT: "C:\\Windows", cOmSpEc: "C:\\Windows\\System32\\cmd.exe", pAtHeXt: ".COM;.EXE;.BAT;.CMD", sEcReT_tOkEn: "leak-me" }, "win32");
+    expect(filtered).toEqual({ PATH: "C:\\canonical", HOME: "C:\\Users\\scientist", SystemRoot: "C:\\Windows", ComSpec: "C:\\Windows\\System32\\cmd.exe", PATHEXT: ".COM;.EXE;.BAT;.CMD" });
+  });
+
+  it("passes only canonical research variables and requested PI_SCIENCE values to a POSIX child", async () => {
     const cwd = await workspace();
-    const coordinator = jobCoordinator({ PaTh: process.env.PATH, hOmE: "/tmp", uSeRpRoFiLe: "C:\\Users\\scientist", aPpDaTa: "C:\\Users\\scientist\\AppData\\Roaming", LoCaLaPpDaTa: "C:\\Users\\scientist\\AppData\\Local", sYsTeMrOoT: "C:\\Windows", cOmSpEc: "C:\\Windows\\System32\\cmd.exe", pAtHeXt: ".COM;.EXE;.BAT;.CMD", sEcReT_tOkEn: "leak-me" });
-    const submitted = await coordinator.submit(cwd, {
-      command: [process.execPath, "-e", "console.log(JSON.stringify(process.env))"],
-      surface: "research-loop",
-      env: { PI_SCIENCE_OUTPUT_DIR: "/tmp/x" },
-    });
+    const coordinator = jobCoordinator({ PATH: process.env.PATH, HOME: "/tmp", hOmE: "/untrusted", sEcReT_tOkEn: "leak-me" }, { platform: "linux" });
+    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "console.log(JSON.stringify(process.env))"], surface: "research-loop", env: { PI_SCIENCE_OUTPUT_DIR: "/tmp/x" } });
     const finished = await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal);
     expect(finished?.status).toBe("succeeded");
     const childEnv = JSON.parse(finished?.stdout ?? "{}") as Record<string, string | undefined>;
-    expect(childEnv.SECRET_TOKEN).toBeUndefined();
-    expect(childEnv.sEcReT_tOkEn).toBeUndefined();
-    expect(childEnv.PaTh).toBeUndefined();
-    expect(childEnv.sYsTeMrOoT).toBeUndefined();
-    expect(childEnv.cOmSpEc).toBeUndefined();
     expect(childEnv.PATH).toBe(process.env.PATH);
     expect(childEnv.HOME).toBe("/tmp");
-    expect(childEnv.USERPROFILE).toBe("C:\\Users\\scientist");
-    expect(childEnv.APPDATA).toBe("C:\\Users\\scientist\\AppData\\Roaming");
-    expect(childEnv.LOCALAPPDATA).toBe("C:\\Users\\scientist\\AppData\\Local");
-    expect(childEnv.SystemRoot).toBe("C:\\Windows");
-    expect(childEnv.ComSpec).toBe("C:\\Windows\\System32\\cmd.exe");
-    expect(childEnv.PATHEXT).toBe(".COM;.EXE;.BAT;.CMD");
     expect(childEnv.PI_SCIENCE_OUTPUT_DIR).toBe("/tmp/x");
+    expect(childEnv.hOmE).toBeUndefined();
+    expect(childEnv.sEcReT_tOkEn).toBeUndefined();
   });
 
   it("keeps the full environment for non-research surfaces", async () => {

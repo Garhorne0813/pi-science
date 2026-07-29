@@ -12,6 +12,7 @@ import { cn } from "../../lib/cn";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
+import { workspacePathLeaf } from "../../lib/workspace-path";
 
 export function ProjectsLayout() {
   const { t } = useTranslation();
@@ -101,7 +102,7 @@ export function ProjectsLayout() {
             <nav className="flex flex-col gap-0.5 mb-3">
               <SidebarNavItem
                 to="/"
-                label={isWorkspace ? (activeCwd!.split("/").pop() || t("nav.projects")) : t("nav.projects")}
+                label={isWorkspace ? (workspacePathLeaf(activeCwd!) || t("nav.projects")) : t("nav.projects")}
                 icon={isWorkspace ? <ArrowLeft size={16} /> : <FolderOpen size={16} />}
                 active={false}
               />

@@ -15,12 +15,14 @@ const POSIX = process.platform !== "win32";
 const RESEARCH_ENVIRONMENT_KEY_NAMES = ["PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "ComSpec", "PATHEXT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "VIRTUAL_ENV", "PYTHONNOUSERSITE", "PIP_REQUIRE_VIRTUALENV", "PIP_USER", "UV_PROJECT_ENVIRONMENT", "npm_config_prefix", "npm_config_cache", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"] as const;
 const RESEARCH_ENVIRONMENT_KEYS = new Map(RESEARCH_ENVIRONMENT_KEY_NAMES.map((key) => [key.toLowerCase(), key]));
 
+export interface JobCoordinatorHooks { beforeSpawn?: (record: Readonly<JobRecord>) => Promise<void>; platform?: NodeJS.Platform }
+
 export class JobCoordinator {
   private readonly children = new Map<string, ChildProcess>();
   private readonly jobs = new Map<string, Promise<void>>();
   private readonly cancelled = new Set<string>();
 
-  constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService()) {}
+  constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService(), private readonly hooks: JobCoordinatorHooks = {}) {}
 
   capabilities(requirement: JobRequirement) {
     const runtime = { node: process.execPath, python: defaultPythonExecutable(), r: null };
@@ -44,7 +46,7 @@ export class JobCoordinator {
         .filter((entry): entry is [string, string] => /^PI_SCIENCE_[A-Z0-9_]+$/.test(entry[0]) && typeof entry[1] === "string"))
       : {};
     const surface = typeof body.surface === "string" ? body.surface : "local";
-    const environment = { ...(surface.startsWith("research") ? restrictResearchEnvironment(baseEnvironment) : baseEnvironment), ...requestedEnvironment };
+    const environment = { ...(surface.startsWith("research") ? restrictResearchEnvironment(baseEnvironment, this.hooks.platform ?? process.platform) : baseEnvironment), ...requestedEnvironment };
     const executionCwd = typeof body.execution_cwd === "string" ? resolve(body.execution_cwd) : resolve(cwd);
     const executionRelative = relative(resolve(cwd), executionCwd);
     if (isAbsolute(executionRelative) || executionRelative === ".." || executionRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) throw new Error("execution cwd escapes the workspace");
@@ -101,11 +103,14 @@ export class JobCoordinator {
     record.status = "running"; record.started_at = new Date().toISOString(); await this.save(record);
     let child: ChildProcess | undefined;
     try {
+      await this.hooks.beforeSpawn?.(record);
+      if (this.cancelled.has(record.job_id)) { record.status = "cancelled"; return; }
       // detached: the child leads its own process group so a shell grandchild
       // (which inherits the pipes and would otherwise keep `close` pending) dies
       // with it. Windows has no process groups, so it keeps the plain child kill.
       child = spawn(record.command[0]!, record.command.slice(1), { cwd: record.execution_cwd ?? record.cwd, env: environment, stdio: ["ignore", "pipe", "pipe"], detached: POSIX });
       this.children.set(record.job_id, child);
+      if (this.cancelled.has(record.job_id)) terminate(child);
       let stdout = Buffer.alloc(0); let stderr = Buffer.alloc(0);
       const appendTail = (current: Buffer, chunk: Buffer) => Buffer.concat([current, chunk]).subarray(-100_000);
       child.stdout?.on("data", (chunk: Buffer) => { stdout = appendTail(stdout, chunk); });
@@ -141,9 +146,10 @@ function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   child.kill(signal);
 }
 
-function restrictResearchEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function restrictResearchEnvironment(environment: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
   const restricted: NodeJS.ProcessEnv = {};
   for (const key of RESEARCH_ENVIRONMENT_KEY_NAMES) if (environment[key] !== undefined) restricted[key] = environment[key];
+  if (platform !== "win32") return restricted;
   for (const [key, value] of Object.entries(environment)) {
     const canonical = RESEARCH_ENVIRONMENT_KEYS.get(key.toLowerCase());
     if (canonical && value !== undefined && restricted[canonical] === undefined) restricted[canonical] = value;
