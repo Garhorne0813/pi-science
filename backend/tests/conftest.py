@@ -12,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from main import app
+from services.kernel_manager import kernel_manager
 
 
 @pytest.fixture
@@ -24,7 +25,10 @@ async def client():
     """Async HTTP test client bound to the FastAPI app."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
-        yield ac
+        try:
+            yield ac
+        finally:
+            await kernel_manager.shutdown_all()
 
 
 @pytest.fixture
