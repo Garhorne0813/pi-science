@@ -122,7 +122,7 @@ export class JobCoordinator {
     if (LIVE_JOB_OWNERS.has(ownership.token)) return true;
     if (this.hooks.ownerProcessAlive) return this.hooks.ownerProcessAlive(ownership.pid, ownership);
     if (ownership.pid === process.pid) return false;
-    try { process.kill(ownership.pid, 0); return true; } catch { return false; }
+    try { process.kill(ownership.pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
   }
   private async healOrphan(record: JobRecord): Promise<JobRecord> {
     if (!isNonterminal(record.status) || this.jobs.has(record.job_id)) return record;
