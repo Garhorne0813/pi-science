@@ -120,10 +120,10 @@ describe("job coordinator", () => {
     let enteredTerminal!: () => void;
     const terminalGate = new Promise<void>((resolve) => { releaseTerminal = resolve; });
     const gateEntered = new Promise<void>((resolve) => { enteredTerminal = resolve; });
-    const owner = jobCoordinator(undefined, { now: () => now, leaseMs: 100, heartbeatMs: 25, beforeTerminalSave: async () => { enteredTerminal(); await terminalGate; } });
+    const owner = jobCoordinator(undefined, { now: () => now, leaseMs: 10_000, heartbeatMs: 5_000, beforeTerminalSave: async () => { enteredTerminal(); await terminalGate; } });
     const submitted = await owner.submit(cwd, { command: [process.execPath, "-e", "process.stdout.write('stale-success')"] });
     await gateEntered;
-    now += 1_000;
+    now += 20_000;
     const observer = jobCoordinator(undefined, { now: () => now, ownerProcessAlive: () => false });
     const ownership = (await observer.get(cwd, submitted.job_id))?.ownership;
     expect(ownership).toBeTruthy();
@@ -134,8 +134,8 @@ describe("job coordinator", () => {
     const stored = JSON.parse(await readFile(path, "utf8")) as JobRecord;
     if (stored.ownership) stored.ownership.token = "lost-owner-token";
     await writeFile(path, `${JSON.stringify(stored, null, 2)}\n`, "utf8");
-    expect((await observer.get(cwd, submitted.job_id))?.status).toBe("failed");
-    releaseTerminal();
+    try { expect((await observer.get(cwd, submitted.job_id))?.status).toBe("failed"); }
+    finally { releaseTerminal(); }
     await owner.shutdown();
     expect((await observer.get(cwd, submitted.job_id))?.status).toBe("failed");
   });
