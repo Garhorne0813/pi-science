@@ -392,8 +392,8 @@ function Body({
   }
   if (kind === "image") {
     return url ? (
-      <div className="flex justify-center p-4">
-        <img src={url} alt={filename} className="max-w-full rounded-sm bg-white shadow-card" />
+      <div className="flex items-center justify-center min-h-full p-4">
+        <img src={url} alt={filename} className="max-w-full max-h-full rounded-sm bg-white shadow-card object-contain" />
       </div>
     ) : (
       <Note text={t("filePreview.loading")} />
