@@ -60,7 +60,7 @@ bash scripts/install.sh
 bash scripts/start.sh
 ```
 
-Shell 启动器已在 macOS/Linux 上验证，并按 WSL 环境设计。Git Bash 仅提供 best-effort 支持，CI 不验证其进程树和信号语义；目前也不提供原生 PowerShell/CMD 启动器。它有意运行 `tsx watch` 与 Vite 开发服务器，不是生产部署服务器。安装完成后的启动过程直接调用 package-local 可执行文件，因此运行时不需要 npm 或 pnpm wrapper；安装、构建和依赖更新仍然需要 pnpm。
+Shell 启动器面向 macOS/Linux 设计，并计划用于 WSL；CI 当前只在 Linux 上验证其生命周期。Git Bash 仅提供 best-effort 支持，CI 不验证其进程树和信号语义；目前也不提供原生 PowerShell/CMD 启动器。它有意运行 `tsx watch` 与 Vite 开发服务器，不是生产部署服务器。安装完成后的启动过程直接调用 package-local 可执行文件，因此运行时不需要 npm 或 pnpm wrapper；安装、构建和依赖更新仍然需要 pnpm。
 
 ### `pi-science` 命令
 

@@ -31,7 +31,9 @@ VITE_BIN="$PROJECT_DIR/frontend/node_modules/.bin/vite"
 [ -x "$VITE_BIN" ] || { echo "Error: frontend dependencies are not installed. Run: bash scripts/install.sh" >&2; exit 1; }
 
 CONTROL_PLANE_PID=""
+CONTROL_PLANE_STARTED=""
 FRONTEND_PID=""
+FRONTEND_STARTED=""
 CONTROL_PLANE_PORT="${PI_SCIENCE_CONTROL_PLANE_PORT:-8787}"
 SCIENTIFIC_RUNTIME_PORT="${PI_SCIENCE_RUNTIME_PORT:-8788}"
 FRONTEND_PORT="${PI_SCIENCE_FRONTEND_PORT:-5173}"
@@ -41,7 +43,11 @@ case "$STARTUP_TIMEOUT_SECONDS" in ''|*[!0-9]*) echo "Error: PI_SCIENCE_STARTUP_
 [ "$STARTUP_TIMEOUT_SECONDS" -gt 0 ] || { echo "Error: PI_SCIENCE_STARTUP_TIMEOUT_SECONDS must be a positive integer." >&2; exit 1; }
 STARTUP_DEADLINE=$(( $(date +%s) + STARTUP_TIMEOUT_SECONDS ))
 
-process_start_identity() { ps -ww -o lstart= -p "$1" 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | head -n 1; }
+process_start_identity() {
+  if [ -n "${PI_SCIENCE_TEST_PROCESS_IDENTITY_DIR:-}" ] && [ -f "$PI_SCIENCE_TEST_PROCESS_IDENTITY_DIR/$1" ]; then cat "$PI_SCIENCE_TEST_PROCESS_IDENTITY_DIR/$1"; return; fi
+  if [ -r "/proc/$1/stat" ]; then local value fields; value="$(cat "/proc/$1/stat" 2>/dev/null || true)"; fields="${value##*) }"; set -- $fields; [ "$#" -ge 20 ] && { shift 19; printf 'linux-proc-start-ticks:%s\n' "$1"; return; }; fi
+  ps -ww -o lstart= -p "$1" 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | head -n 1
+}
 
 process_tree_pids() {
   local root="$1" previous="" current="$root"
@@ -54,7 +60,7 @@ process_tree_pids() {
   printf '%s\n' $current
 }
 
-process_tree_snapshot() { local pid identity; for pid in $(process_tree_pids "$1"); do identity="$(process_start_identity "$pid")"; [ -n "$identity" ] && printf '%s\t%s\n' "$pid" "$identity" || true; done; return 0; }
+process_tree_snapshot() { local root="$1" expected="$2" pid identity; identity="$(process_start_identity "$root")"; [ -n "$expected" ] && [ "$identity" = "$expected" ] || return 0; for pid in $(process_tree_pids "$root"); do identity="$(process_start_identity "$pid")"; [ -n "$identity" ] && printf '%s\t%s\n' "$pid" "$identity" || true; done; return 0; }
 signal_snapshot() { local snapshot="$1" signal="$2" pid identity current; while IFS=$'\t' read -r pid identity; do [ -n "$pid" ] || continue; current="$(process_start_identity "$pid")"; [ -n "$current" ] && [ "$current" = "$identity" ] && kill -"$signal" "$pid" 2>/dev/null || true; done <<EOF
 $snapshot
 EOF
@@ -67,20 +73,25 @@ EOF
 
 stop_owned_process() {
   set +e
-  local root="$1" waited=0 initial final all
-  [ -n "$root" ] || return 0
-  initial="$(process_tree_snapshot "$root")"
+  local root="$1" expected="$2" waited=0 initial final all
+  [ -n "$root" ] && [ -n "$expected" ] && [ "$(process_start_identity "$root")" = "$expected" ] || { set -e; return 0; }
+  initial="$(process_tree_snapshot "$root" "$expected")"
   [ -n "$initial" ] || return 0
-  signal_snapshot "$(printf '%s\n' "$initial" | head -n 1)" TERM
+  [ "$(process_start_identity "$root")" = "$expected" ] && signal_snapshot "$(printf '%s\n' "$initial" | head -n 1)" TERM
   while [ "$waited" -lt 50 ]; do
+    [ "$(process_start_identity "$root")" = "$expected" ] || break
     snapshot_has_live_identity "$initial" || break
     sleep 0.1
     waited=$((waited + 1))
   done
-  final="$(process_tree_snapshot "$root")"
+  local root_current
+  root_current="$(process_start_identity "$root")"
+  final="$(process_tree_snapshot "$root" "$expected")"
   all="$initial${final:+
 $final}"
-  signal_snapshot "$all" KILL
+  if [ "$root_current" = "$expected" ]; then signal_snapshot "$all" KILL
+  elif ! kill -0 "$root" 2>/dev/null; then signal_snapshot "$initial" KILL
+  fi
   wait "$root" 2>/dev/null || true
   set -e
   return 0
@@ -90,8 +101,8 @@ cleanup() {
   local status=$?
   trap - EXIT INT TERM
   if [ -n "$CONTROL_PLANE_PID$FRONTEND_PID" ]; then echo ""; echo "==> Shutting down..."; fi
-  [ -z "$FRONTEND_PID" ] || stop_owned_process "$FRONTEND_PID"
-  [ -z "$CONTROL_PLANE_PID" ] || stop_owned_process "$CONTROL_PLANE_PID"
+  [ -z "$FRONTEND_PID" ] || stop_owned_process "$FRONTEND_PID" "$FRONTEND_STARTED"
+  [ -z "$CONTROL_PLANE_PID" ] || stop_owned_process "$CONTROL_PLANE_PID" "$CONTROL_PLANE_STARTED"
   exit "$status"
 }
 trap cleanup EXIT
@@ -149,6 +160,8 @@ export PI_SCIENCE_NODE_PI_MANAGER="${PI_SCIENCE_NODE_PI_MANAGER:-1}"
   PI_SCIENCE_PORT="$CONTROL_PLANE_PORT" exec "$PI_NODE_PATH" "$CONTROL_PLANE_CLI" watch src/main.ts
 ) &
 CONTROL_PLANE_PID=$!
+CONTROL_PLANE_STARTED="$(process_start_identity "$CONTROL_PLANE_PID")"
+[ -n "$CONTROL_PLANE_STARTED" ] || { echo "Error: unable to establish control-plane process identity." >&2; exit 1; }
 
 echo "  Waiting for control plane..."
 wait_for_health "$CONTROL_PLANE_PID" "http://127.0.0.1:${CONTROL_PLANE_PORT}/api/health" "control plane"
@@ -160,6 +173,8 @@ port_is_available "$FRONTEND_PORT" || { echo "Error: port $FRONTEND_PORT is alre
   exec "$VITE_BIN" --host 127.0.0.1 --port "$FRONTEND_PORT" --strictPort
 ) &
 FRONTEND_PID=$!
+FRONTEND_STARTED="$(process_start_identity "$FRONTEND_PID")"
+[ -n "$FRONTEND_STARTED" ] || { echo "Error: unable to establish frontend process identity." >&2; exit 1; }
 wait_for_health "$FRONTEND_PID" "http://127.0.0.1:$FRONTEND_PORT" "frontend"
 
 if [ "${PI_SCIENCE_OPEN_BROWSER:-0}" = "1" ]; then

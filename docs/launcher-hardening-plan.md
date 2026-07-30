@@ -18,7 +18,7 @@ Harden the installed local-development launcher without changing Pi-Science into
 ## Approved decisions
 
 - This remains a local checkout/development launcher. Keep `tsx watch` and Vite dev mode.
-- Shell launchers are validated on macOS/Linux and are intended to run under WSL. Git Bash is best-effort only: CI does not validate its process-tree or signal semantics, so native-equivalent lifecycle behavior is not claimed. Native PowerShell/CMD launchers are out of scope.
+- Shell launchers are designed for macOS/Linux and are intended to run under WSL. CI validates lifecycle behavior on Linux only. Git Bash is best-effort: CI does not validate its process-tree or signal semantics, so native-equivalent lifecycle behavior is not claimed. Native PowerShell/CMD launchers are out of scope.
 - PATH-launcher collision and symlink hardening is included as an independently reviewable change.
 - Job restart behavior uses fail-and-reap semantics. The server does not claim to adopt stdout/stderr or exit status from a child created by a dead process.
 - Job ownership is durable and fenced. A valid lease or credibly live owner prevents healing; an expired dead owner fails explicitly. Arbitrary PIDs are never signaled on PID evidence alone.
@@ -38,8 +38,8 @@ Harden the installed local-development launcher without changing Pi-Science into
 - Start Vite in a background subshell that changes to `frontend` and `exec`s the package-local Vite shim with host `127.0.0.1`, port `5173`, and `--strictPort`.
 - Track those PIDs and terminate each owned process tree with a bounded TERM grace period followed by KILL when needed. Retain the initial descendant set so TERM-ignoring children are still killed after their root exits or they are reparented. Wait only for targeted PIDs.
 - Use one end-to-end configurable `PI_SCIENCE_STARTUP_TIMEOUT_SECONDS` deadline with a 90-second default across sequential control-plane and frontend readiness. Detached startup uses the same outer deadline and rolls back only the verified supervisor and its captured descendants.
-- Persist detached state atomically as PID, random launch token, process-start evidence and checkout identity. Discard malformed, legacy, mismatched or PID-reused state without signaling it.
-- Serialize detached preflight, spawn, identity establishment, state commit, readiness and rollback with an ownership-tracked checkout-local lock. Bootstrap INT/TERM/EXIT cleanup acts only on its PID/token, and success is reported only while `run.state` still belongs to that transaction.
+- Persist detached state atomically as PID, random launch token, process-start evidence and checkout identity. On Linux, process identity uses `/proc/<pid>/stat` start ticks; elsewhere it uses the best available status identity for live launcher ownership but remains conservative about stale PID signaling. Discard malformed, legacy, mismatched or PID-reused state without signaling it.
+- Serialize detached preflight, spawn, identity establishment, state commit, readiness and rollback with an ownership-tracked checkout-local lock containing owner PID, start identity and token. A demonstrably dead or identity-mismatched owner is conservatively reclaimed through atomic hard-link arbitration; a live or unverifiable owner is never displaced. Bootstrap INT/TERM/EXIT cleanup acts only on its PID/token, and success is reported only while `run.state` still belongs to that transaction. If the launcher itself is SIGKILLed after supervisor spawn but before state commit, the next invocation reclaims the dead-owner lock and refuses the surviving unverified listener with an actionable cleanup path; automatic adoption is not claimed.
 - Retain the original descendant snapshot across TERM cleanup so reparented TERM-ignoring descendants are still killed. Fence every TERM/KILL target with its captured process-start identity and skip a PID whose identity changed. Never sweep a pre-existing checkout-local listener.
 - Do not reuse an ambiguous existing listener. If port 5173 is occupied, fail with an explicit error instead of relying only on process CWD.
 
@@ -58,7 +58,7 @@ Harden the installed local-development launcher without changing Pi-Science into
 - Renew leases on one bounded unref'ed interval per active job and stop it on success, failure, cancellation, timeout and shutdown.
 - Perform running, heartbeat, cancellation, healing and terminal transitions under the per-job file lock. Terminal writes require the same generation/token, so cancellation or healing wins over stale output.
 - Preserve a job while its lease is valid or its owner is credibly active. Existing records without ownership metadata retain the legacy grace compatibility path.
-- Fail-and-reap does not adopt process streams after restart. Authorization, synchronous spawn, child registration and durable child identity persistence share the per-job lock. The record stores child PID, process-start identity when reliably available, process-group semantics and the owning generation/token. After an expired lease and dead owner, POSIX reaping signals only an exactly verified identity; a reused PID is rejected. Platforms without a reliable start identity fail with explicit unreaped-risk diagnostics and no PID-only signal.
+- Fail-and-reap does not adopt process streams after restart. Authorization, synchronous spawn, child registration and durable child identity persistence share the per-job lock. The record stores child PID, identity kind/value, process-group semantics, platform and the owning generation/token. Linux reaping requires an exact `/proc/<pid>/stat` start-tick match plus matching persisted/current platform before signaling the process group. macOS and Windows currently have no implemented kernel-backed identity verifier here, so expired dead-owner jobs fail with explicit unreaped-risk diagnostics and no PID-only signal. A reused PID, platform mismatch or ownership fence mismatch is never signaled.
 
 ### 5. Tests and CI
 
@@ -98,6 +98,7 @@ Update `README.md` and `README.zh-CN.md` together to state:
 
 - Production static frontend hosting or running `apps/server/dist/main.js` from this launcher.
 - Native PowerShell/CMD launchers or native Windows process supervision.
+- Automatic adoption of a supervisor left by SIGKILL between detached spawn and `run.state` commit; stale lock recovery prevents permanent blockage, but the surviving unverified listener must be inspected and stopped explicitly.
 - Adopting or reconnecting to a dead server's child process streams after restart; that requires a separate durable runner architecture.
 - Dependency upgrades.
 - Redesigning `scripts/pi-science.sh` beyond changes required to preserve the hardened start/stop contract.

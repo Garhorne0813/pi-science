@@ -157,6 +157,7 @@ writeFileSync(new URL("../frontend.cwd", import.meta.url), process.cwd());
 writeFileSync(new URL("../frontend.pid", import.meta.url), String(process.pid));
 const server = http.createServer((_req, res) => { res.writeHead(200); res.end("vite"); });
 if (process.env.PI_SCIENCE_TEST_FRONTEND_NEVER_READY !== "1") setTimeout(() => server.listen(port, "127.0.0.1"), Number(process.env.PI_SCIENCE_TEST_FRONTEND_DELAY_MS || 0));
+else setInterval(() => {}, 1000);
 const stop = () => server.close(() => process.exit(0));
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
 EOF
@@ -221,8 +222,8 @@ assert_contains "$TEMP_ROOT/invalid-timeout.log" 'must be a positive integer'
 [ ! -e "$FIXTURE/control.pid" ] || fail "invalid timeout spawned the control plane"
 [ ! -e "$FIXTURE/.runtime/pi-science/run.state" ] || fail "invalid timeout left run.state"
 
-# Two simultaneous detached starts are one checkout-local transaction. The
-# contender cannot truncate the log, replace state, or start an untracked tree.
+# A live checkout-local launch lock refuses a simultaneous detached contender
+# before it can commit supervisor state.
 CONCURRENT_BARRIER="$TEMP_ROOT/concurrent-bootstrap"
 CONCURRENT_CONTROL_PORT="$(free_port)"; CONCURRENT_RUNTIME_PORT="$(free_port)"; CONCURRENT_FRONTEND_PORT="$(free_port)"
 rm -f "$CONCURRENT_BARRIER.ready" "$CONCURRENT_BARRIER.release"
@@ -247,6 +248,7 @@ rm -f "$SIGNAL_BOOTSTRAP_BARRIER.ready" "$SIGNAL_BOOTSTRAP_BARRIER.release"
 PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_CONTROL_PLANE_PORT="$SIGNAL_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$SIGNAL_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$SIGNAL_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=8 PI_SCIENCE_TEST_BOOTSTRAP_BARRIER="$SIGNAL_BOOTSTRAP_BARRIER" bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/signal-bootstrap.log" 2>&1 &
 SIGNAL_BOOTSTRAP_PID=$!
 wait_file "$SIGNAL_BOOTSTRAP_BARRIER.ready" || fail "signalled bootstrap did not reach barrier"
+SIGNAL_SUPERVISOR_PID="$(cat "$SIGNAL_BOOTSTRAP_BARRIER.pid")"
 kill -TERM "$SIGNAL_BOOTSTRAP_PID"
 set +e
 wait "$SIGNAL_BOOTSTRAP_PID"; SIGNAL_BOOTSTRAP_STATUS=$?
@@ -254,8 +256,44 @@ set -e
 [ "$SIGNAL_BOOTSTRAP_STATUS" -eq 143 ] || fail "signalled bootstrap exited $SIGNAL_BOOTSTRAP_STATUS instead of 143"
 [ ! -e "$FIXTURE/.runtime/pi-science/run.state" ] || fail "signalled bootstrap left run.state"
 [ ! -e "$FIXTURE/.runtime/pi-science/start.lock" ] || fail "signalled bootstrap left its transaction lock"
+wait_pid_gone "$SIGNAL_SUPERVISOR_PID" || fail "signalled bootstrap left the published supervisor alive"
 wait_port_available "$SIGNAL_CONTROL_PORT" || fail "signalled bootstrap left control-plane port occupied"
 wait_port_available "$SIGNAL_FRONTEND_PORT" || fail "signalled bootstrap left frontend port occupied"
+
+# A dead launch-lock owner is reclaimed, while a live owner is never displaced.
+DEAD_LOCK="$FIXTURE/.runtime/pi-science/start.lock"
+mkdir -p "$DEAD_LOCK"
+printf 'pid=999999\nstarted=dead-owner\ntoken=dead-token\n' > "$DEAD_LOCK/owner"
+if PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=invalid bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/dead-lock.log" 2>&1; then fail "dead-lock preflight returned success"; fi
+assert_not_contains "$TEMP_ROOT/dead-lock.log" 'another Pi-Science detached launch transaction is active'
+[ ! -e "$DEAD_LOCK" ] || fail "dead launch lock was not reclaimed and released"
+LIVE_LOCK_STARTED="$(PI_SCIENCE_SOURCE_ONLY=1 bash -c 'source "$1"; process_start_identity "$2"' _ "$FIXTURE/scripts/pi-science.sh" "$$")"
+mkdir -p "$DEAD_LOCK"
+printf 'pid=%s\nstarted=%s\ntoken=live-token\n' "$$" "$LIVE_LOCK_STARTED" > "$DEAD_LOCK/owner"
+if bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/live-lock.log" 2>&1; then fail "live launch lock was displaced"; fi
+assert_contains "$TEMP_ROOT/live-lock.log" 'another Pi-Science detached launch transaction is active'
+[ -e "$DEAD_LOCK" ] || fail "live owner lock was removed"
+rm -rf "$DEAD_LOCK"
+
+# SIGKILL after supervisor spawn leaves a verifiably stale lock, not a permanent
+# start blockage. The next launch reclaims the lock and reports the surviving
+# unverified listener; manual cleanup uses the published fenced supervisor ID.
+KILL_BOOTSTRAP_BARRIER="$TEMP_ROOT/kill-bootstrap"
+KILL_CONTROL_PORT="$(free_port)"; KILL_RUNTIME_PORT="$(free_port)"; KILL_FRONTEND_PORT="$(free_port)"
+rm -f "$KILL_BOOTSTRAP_BARRIER.ready" "$KILL_BOOTSTRAP_BARRIER.release" "$KILL_BOOTSTRAP_BARRIER.pid" "$KILL_BOOTSTRAP_BARRIER.started"
+PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_CONTROL_PLANE_PORT="$KILL_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$KILL_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$KILL_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=8 PI_SCIENCE_TEST_BOOTSTRAP_BARRIER="$KILL_BOOTSTRAP_BARRIER" bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/kill-bootstrap-owner.log" 2>&1 &
+KILL_BOOTSTRAP_OWNER=$!
+wait_file "$KILL_BOOTSTRAP_BARRIER.ready" || fail "SIGKILL bootstrap did not reach barrier"
+KILL_SUPERVISOR_PID="$(cat "$KILL_BOOTSTRAP_BARRIER.pid")"; KILL_SUPERVISOR_STARTED="$(cat "$KILL_BOOTSTRAP_BARRIER.started")"
+kill -KILL "$KILL_BOOTSTRAP_OWNER"; wait "$KILL_BOOTSTRAP_OWNER" 2>/dev/null || true
+wait_url "http://127.0.0.1:$KILL_CONTROL_PORT/api/health" || fail "SIGKILL residual supervisor did not become observable"
+if PI_SCIENCE_CONTROL_PLANE_PORT="$KILL_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$KILL_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$KILL_FRONTEND_PORT" bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/kill-bootstrap-recovery.log" 2>&1; then fail "residual supervisor was silently reused"; fi
+assert_not_contains "$TEMP_ROOT/kill-bootstrap-recovery.log" 'another Pi-Science detached launch transaction is active'
+assert_contains "$TEMP_ROOT/kill-bootstrap-recovery.log" 'already in use by an unverified process'
+[ ! -e "$FIXTURE/.runtime/pi-science/start.lock" ] || fail "recovered stale launch lock remained"
+PI_SCIENCE_SOURCE_ONLY=1 bash -c 'source "$1"; stop_process_tree "$2" "$3"' _ "$FIXTURE/scripts/pi-science.sh" "$KILL_SUPERVISOR_PID" "$KILL_SUPERVISOR_STARTED"
+wait_pid_gone "$KILL_SUPERVISOR_PID" || fail "documented residual supervisor cleanup failed"
+wait_port_available "$KILL_CONTROL_PORT" || fail "documented residual cleanup left control port occupied"
 
 # A stale state file pointing at an unrelated live PID is discarded without
 # signaling that process, even if its start timestamp is valid.
@@ -351,7 +389,8 @@ bash -c 'sleep 30 & echo $! > "$1"; wait' _ "$TEMP_ROOT/reused-child.pid" &
 REUSED_ROOT_PID=$!
 wait_file "$TEMP_ROOT/reused-child.pid" || fail "PID-reuse fixture child did not start"
 REUSED_CHILD_PID="$(cat "$TEMP_ROOT/reused-child.pid")"
-PI_SCIENCE_SOURCE_ONLY=1 PI_SCIENCE_TEST_PROCESS_IDENTITY_DIR="$IDENTITY_DIR" PI_SCIENCE_TEST_PROCESS_SNAPSHOT_BARRIER="$IDENTITY_BARRIER" bash -c 'source "$1"; stop_process_tree "$2"' _ "$FIXTURE/scripts/pi-science.sh" "$REUSED_ROOT_PID" &
+REUSED_ROOT_STARTED="$(PI_SCIENCE_SOURCE_ONLY=1 PI_SCIENCE_TEST_PROCESS_IDENTITY_DIR="$IDENTITY_DIR" bash -c 'source "$1"; process_start_identity "$2"' _ "$FIXTURE/scripts/pi-science.sh" "$REUSED_ROOT_PID")"
+PI_SCIENCE_SOURCE_ONLY=1 PI_SCIENCE_TEST_PROCESS_IDENTITY_DIR="$IDENTITY_DIR" PI_SCIENCE_TEST_PROCESS_SNAPSHOT_BARRIER="$IDENTITY_BARRIER" bash -c 'source "$1"; stop_process_tree "$2" "$3"' _ "$FIXTURE/scripts/pi-science.sh" "$REUSED_ROOT_PID" "$REUSED_ROOT_STARTED" &
 REUSED_STOPPER_PID=$!
 wait_file "$IDENTITY_BARRIER.ready" || fail "process snapshot barrier was not reached"
 printf 'reused-process-start-identity\n' > "$IDENTITY_DIR/$REUSED_CHILD_PID"
@@ -360,5 +399,24 @@ wait "$REUSED_STOPPER_PID" || fail "identity-fenced stop helper failed"
 kill -0 "$REUSED_CHILD_PID" 2>/dev/null || fail "changed-identity descendant was signalled"
 kill "$REUSED_CHILD_PID" 2>/dev/null || true
 wait "$REUSED_ROOT_PID" 2>/dev/null || true
+
+# A changed root identity prevents both a new traversal and every TERM/KILL.
+ROOT_IDENTITY_BARRIER="$TEMP_ROOT/root-process-snapshot"
+rm -f "$ROOT_IDENTITY_BARRIER.ready" "$ROOT_IDENTITY_BARRIER.release" "$TEMP_ROOT/reused-root-child.pid"
+bash -c 'sleep 30 & echo $! > "$1"; wait' _ "$TEMP_ROOT/reused-root-child.pid" &
+CHANGED_ROOT_PID=$!
+wait_file "$TEMP_ROOT/reused-root-child.pid" || fail "changed-root fixture child did not start"
+CHANGED_ROOT_CHILD_PID="$(cat "$TEMP_ROOT/reused-root-child.pid")"
+CHANGED_ROOT_STARTED="$(PI_SCIENCE_SOURCE_ONLY=1 PI_SCIENCE_TEST_PROCESS_IDENTITY_DIR="$IDENTITY_DIR" bash -c 'source "$1"; process_start_identity "$2"' _ "$FIXTURE/scripts/pi-science.sh" "$CHANGED_ROOT_PID")"
+PI_SCIENCE_SOURCE_ONLY=1 PI_SCIENCE_TEST_PROCESS_IDENTITY_DIR="$IDENTITY_DIR" PI_SCIENCE_TEST_PROCESS_SNAPSHOT_BARRIER="$ROOT_IDENTITY_BARRIER" bash -c 'source "$1"; stop_process_tree "$2" "$3"' _ "$FIXTURE/scripts/pi-science.sh" "$CHANGED_ROOT_PID" "$CHANGED_ROOT_STARTED" &
+CHANGED_ROOT_STOPPER=$!
+wait_file "$ROOT_IDENTITY_BARRIER.ready" || fail "changed-root snapshot barrier was not reached"
+printf 'reused-root-start-identity\n' > "$IDENTITY_DIR/$CHANGED_ROOT_PID"
+: > "$ROOT_IDENTITY_BARRIER.release"
+wait "$CHANGED_ROOT_STOPPER" || fail "changed-root stop helper failed"
+kill -0 "$CHANGED_ROOT_PID" 2>/dev/null || fail "changed-identity root was signalled"
+kill -0 "$CHANGED_ROOT_CHILD_PID" 2>/dev/null || fail "child was signalled after root identity changed"
+kill "$CHANGED_ROOT_CHILD_PID" "$CHANGED_ROOT_PID" 2>/dev/null || true
+wait "$CHANGED_ROOT_PID" 2>/dev/null || true
 
 echo "launcher contract and lifecycle tests passed"
