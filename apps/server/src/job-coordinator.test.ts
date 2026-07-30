@@ -140,11 +140,16 @@ describe("job coordinator", () => {
     expect((await observer.get(cwd, submitted.job_id))?.status).toBe("failed");
   });
 
-  it("starts and stops one bounded heartbeat on terminal completion", async () => {
+  it("starts one bounded heartbeat, extends the durable lease, and stops on completion", async () => {
     const cwd = await workspace();
     const started: string[] = []; const stopped: string[] = [];
-    const coordinator = jobCoordinator(undefined, { leaseMs: 200, heartbeatMs: 25, onHeartbeatStarted: (id) => started.push(id), onHeartbeatStopped: (id) => stopped.push(id) });
-    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "setTimeout(() => {}, 80)"] });
+    const coordinator = jobCoordinator(undefined, { leaseMs: 300, heartbeatMs: 25, onHeartbeatStarted: (id) => started.push(id), onHeartbeatStopped: (id) => stopped.push(id) });
+    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "setTimeout(() => {}, 180)"] });
+    const initialLease = Date.parse(submitted.ownership!.lease_expires_at);
+    await waitFor(async () => {
+      const stored = JSON.parse(await readFile(join(cwd, ".pi-science", "jobs", `${submitted.job_id}.json`), "utf8")) as JobRecord;
+      return Date.parse(stored.ownership?.lease_expires_at ?? "") > initialLease;
+    }, Boolean);
     expect((await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal))?.status).toBe("succeeded");
     expect(started).toEqual([submitted.job_id]);
     expect(stopped).toEqual([submitted.job_id]);
@@ -233,6 +238,61 @@ describe("job coordinator", () => {
 
     expect((await runner.get(cwd, submitted.job_id))?.status).toBe("cancelled");
     await expect(stat(marker)).rejects.toThrow();
+  });
+
+  it("terminates a locally owned child when another coordinator cancels after readiness", async () => {
+    const cwd = await workspace();
+    const ready = join(cwd, "cross-ready"); const delayed = join(cwd, "cross-delayed");
+    const runner = jobCoordinator(undefined, { leaseMs: 300, heartbeatMs: 25 });
+    const canceller = jobCoordinator();
+    const script = `const fs=require("node:fs"); fs.writeFileSync(${JSON.stringify(ready)},"ready"); setTimeout(()=>fs.writeFileSync(${JSON.stringify(delayed)},"bad"),1000); setTimeout(()=>{},30000)`;
+    const submitted = await runner.submit(cwd, { command: [process.execPath, "-e", script] });
+    await waitFor(async () => stat(ready).then(() => true, () => false), Boolean);
+    const started = Date.now();
+    expect((await canceller.cancel(cwd, submitted.job_id))?.status).toBe("cancelled");
+    expect((await waitFor(() => runner.get(cwd, submitted.job_id), terminal, 5_000))?.status).toBe("cancelled");
+    expect(Date.now() - started).toBeLessThan(5_000);
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await expect(stat(delayed)).rejects.toThrow();
+  }, 10_000);
+
+  it("serializes final authorization, spawn registration, and cross-coordinator cancellation", async () => {
+    const cwd = await workspace(); const delayed = join(cwd, "authorization-delayed");
+    let entered!: () => void; let release!: () => void;
+    const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
+    const releasePromise = new Promise<void>((resolve) => { release = resolve; });
+    const runner = jobCoordinator(undefined, { leaseMs: 300, heartbeatMs: 25, beforeAuthorizedSpawn: async () => { entered(); await releasePromise; } });
+    const canceller = jobCoordinator();
+    const submitted = await runner.submit(cwd, { command: [process.execPath, "-e", `setTimeout(()=>require("node:fs").writeFileSync(${JSON.stringify(delayed)},"bad"),1000); setTimeout(()=>{},30000)`] });
+    await enteredPromise;
+    const cancellation = canceller.cancel(cwd, submitted.job_id);
+    release();
+    expect((await cancellation)?.status).toBe("cancelled");
+    expect((await waitFor(() => runner.get(cwd, submitted.job_id), terminal, 5_000))?.status).toBe("cancelled");
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await expect(stat(delayed)).rejects.toThrow();
+  }, 10_000);
+
+  it("reaps only a verified fenced orphan child identity", async () => {
+    const cwd = await workspace();
+    const ownership: JobOwnership = { instance_id: "dead-owner", pid: 999_999, process_started_at: new Date(0).toISOString(), generation: 4, token: "owner-token", heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(2_000).toISOString(), child: { pid: 4567, process_started_at: "verified-start", process_group: true, platform: "linux", ownership_generation: 4, ownership_token: "owner-token" } };
+    await writeStoredJob(cwd, "job_dddddddddddddddd", "running", new Date(1_000).toISOString(), "", ownership);
+    const reaped: number[] = [];
+    const observer = jobCoordinator(undefined, { now: () => 3_000, ownerProcessAlive: () => false, reapChild: (identity) => { reaped.push(identity.pid); return "reaped"; } });
+    const healed = await observer.get(cwd, "job_dddddddddddddddd");
+    expect(healed?.status).toBe("failed"); expect(reaped).toEqual([4567]); expect(healed?.stderr).toContain("was reaped");
+  });
+
+  it("does not signal a reused or unverifiable orphan child identity", async () => {
+    const cwd = await workspace();
+    for (const [suffix, result] of [["eeeeeeeeeeeeeeee", "identity-mismatch"], ["ffffffffffffffff", "unverifiable"]] as const) {
+      const token = `token-${suffix}`;
+      const ownership: JobOwnership = { instance_id: "dead-owner", pid: 999_999, process_started_at: new Date(0).toISOString(), generation: 2, token, heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(2_000).toISOString(), child: { pid: 7654, process_started_at: "old-start", process_group: true, platform: "linux", ownership_generation: 2, ownership_token: token } };
+      await writeStoredJob(cwd, `job_${suffix}`, "running", new Date(1_000).toISOString(), "", ownership);
+      const observer = jobCoordinator(undefined, { now: () => 3_000, ownerProcessAlive: () => false, reapChild: () => result });
+      const healed = await observer.get(cwd, `job_${suffix}`);
+      expect(healed?.status).toBe("failed"); expect(healed?.stderr).toMatch(result === "identity-mismatch" ? /was reused/ : /manual cleanup may be required/);
+    }
   });
 
   it("waits for a timed-out process tree to close before settling", async () => {
