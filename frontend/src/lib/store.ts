@@ -19,9 +19,13 @@ interface UiState {
   inspectorOpen: boolean;
   inspectorWidth: number;
   inspectorMaximized: boolean;
+  inspectorTabs: Inspector[];
+  activeInspectorIndex: number;
   inspectorData: Inspector | null;
   openInspector: (data: Inspector) => void;
   closeInspector: () => void;
+  closeInspectorTab: (index: number) => void;
+  setActiveInspector: (index: number) => void;
   setInspectorWidth: (w: number) => void;
   setInspectorMaximized: (m: boolean) => void;
   workspaceReferences: WorkspaceReference[];
@@ -80,9 +84,22 @@ export const useUiStore = create<UiState>((set) => ({
   inspectorOpen: false,
   inspectorWidth: loadFromStorage("inspector.width", 420),
   inspectorMaximized: false,
-  inspectorData: null,
-  openInspector: (data) => set({ inspectorOpen: true, inspectorData: data }),
-  closeInspector: () => set({ inspectorOpen: false, inspectorData: null }),
+  inspectorTabs: [],
+  activeInspectorIndex: 0,
+  get inspectorData() { return this.inspectorTabs[this.activeInspectorIndex] ?? null; },
+  openInspector: (data) => set((state) => {
+    const existing = state.inspectorTabs.findIndex((tab) => tabKey(tab) === tabKey(data));
+    if (existing >= 0) return { inspectorOpen: true, activeInspectorIndex: existing };
+    return { inspectorOpen: true, inspectorTabs: [...state.inspectorTabs, data], activeInspectorIndex: state.inspectorTabs.length };
+  }),
+  closeInspector: () => set({ inspectorOpen: false }),
+  closeInspectorTab: (index) => set((state) => {
+    const tabs = state.inspectorTabs.filter((_, i) => i !== index);
+    if (tabs.length === 0) return { inspectorOpen: false, inspectorTabs: [], activeInspectorIndex: 0 };
+    const next = Math.min(index, tabs.length - 1);
+    return { inspectorTabs: tabs, activeInspectorIndex: next };
+  }),
+  setActiveInspector: (index) => set({ activeInspectorIndex: index }),
   setInspectorWidth: (w) => {
     saveToStorage("inspector.width", w);
     set({ inspectorWidth: w });
@@ -102,6 +119,13 @@ export const useUiStore = create<UiState>((set) => ({
     workspaceReferences: state.workspaceReferences.filter((item) => item.cwd !== cwd),
   })),
 }));
+
+function tabKey(tab: Inspector): string {
+  if (tab.variant === "file" || tab.variant === "notebook-file") return `${tab.variant}:${tab.path}`;
+  if (tab.variant === "artifact") return `${tab.variant}:${tab.title}`;
+  if (tab.variant === "pdf") return `${tab.variant}:${tab.path ?? tab.url}`;
+  return `${tab.variant}:${JSON.stringify(tab).slice(0, 80)}`;
+}
 
 // Re-export for RightPane compatibility
 export const INSPECTOR_MIN = 280;

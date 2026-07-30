@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
-import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Sun, Moon, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical } from "lucide-react";
+import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Sun, Moon, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical, X } from "lucide-react";
 import { useUiStore } from "../../lib/store";
 import { useRuntimeStore } from "../../lib/runtime-store";
 import { InspectorShell } from "../../components/inspector/InspectorShell";
@@ -8,11 +8,19 @@ import { RightPane } from "../../components/inspector/RightPane";
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
 import { useWorkspaceCwd } from "../../lib/workspace-context";
 import { usePendingProposalCount } from "../../lib/project-knowledge";
+import type { Inspector } from "../../types/thread";
 import { cn } from "../../lib/cn";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { workspacePathLeaf } from "../../lib/workspace-path";
+
+function tabLabel(tab: Inspector): string {
+  if (tab.variant === "file" || tab.variant === "notebook-file") return (tab as any).filename ?? (tab as any).path?.split(/[\\/]/).pop() ?? "";
+  if (tab.variant === "artifact") return (tab as any).title ?? "artifact";
+  if (tab.variant === "pdf") return (tab as any).filename ?? "PDF";
+  return tab.variant;
+}
 
 export function ProjectsLayout() {
   const { t } = useTranslation();
@@ -20,8 +28,12 @@ export function ProjectsLayout() {
   const sidebarWidth = useUiStore((s) => s.sidebarWidth);
   const setSidebarCollapsed = useUiStore((s) => s.setSidebarCollapsed);
   const inspectorOpen = useUiStore((s) => s.inspectorOpen);
+  const inspectorTabs = useUiStore((s) => s.inspectorTabs);
+  const activeInspectorIndex = useUiStore((s) => s.activeInspectorIndex);
   const inspectorData = useUiStore((s) => s.inspectorData);
   const closeInspector = useUiStore((s) => s.closeInspector);
+  const closeInspectorTab = useUiStore((s) => s.closeInspectorTab);
+  const setActiveInspector = useUiStore((s) => s.setActiveInspector);
   const location = useLocation();
   const activeCwd = useWorkspaceCwd();
   const isWorkspace = !!activeCwd;
@@ -148,7 +160,26 @@ export function ProjectsLayout() {
       {/* Inspector — only in workspace context */}
       {isWorkspace && inspectorOpen && inspectorData && (
         <RightPane onClose={closeInspector}>
-          <ErrorBoundary>
+          {inspectorTabs.length > 1 && (
+            <div className="flex items-center gap-0 border-b border-border bg-surface overflow-x-auto">
+              {inspectorTabs.map((tab, i) => (
+                <button
+                  key={i}
+                  onClick={() => setActiveInspector(i)}
+                  className={`flex items-center gap-1.5 shrink-0 border-r border-border px-3 py-1.5 text-xs max-w-[160px] ${i === activeInspectorIndex ? "bg-surface-2 text-text border-b-2 border-b-accent -mb-px" : "text-muted hover:text-text hover:bg-surface-2"}`}
+                >
+                  <span className="truncate">{tabLabel(tab)}</span>
+                  <span
+                    onClick={(e) => { e.stopPropagation(); closeInspectorTab(i); }}
+                    className="text-muted hover:text-error cursor-pointer shrink-0"
+                  >
+                    <X size={12} />
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+          <ErrorBoundary key={activeInspectorIndex}>
             <InspectorShell inspector={inspectorData} onClose={closeInspector} cwd={activeCwd || undefined} />
           </ErrorBoundary>
         </RightPane>

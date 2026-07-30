@@ -150,7 +150,7 @@ beforeEach(() => {
   });
   queryClient.clear();
   resetDynamicCommands();
-  useUiStore.setState({ inspectorOpen: false, inspectorData: null, workspaceReferences: [] });
+  useUiStore.setState({ inspectorOpen: false, inspectorTabs: [], activeInspectorIndex: 0, workspaceReferences: [] });
   useRuntimeStore.setState({
     status: "ready",
     client: null,
