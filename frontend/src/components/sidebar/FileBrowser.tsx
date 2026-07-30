@@ -26,7 +26,29 @@ export function FileBrowser({ cwd }: { cwd: string }) {
   const loadFiles = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     try {
-      setEntries(await workspaceFiles.sidebar(cwd, signal));
+      const rootEntries = await workspaceFiles.sidebar(cwd, signal);
+      setEntries(rootEntries);
+      const work = rootEntries.find((e) => e.isDir && e.name === "work");
+      if (work) {
+        setOpenFolders((prev) => { const next = new Set(prev); next.add(work.path); return next; });
+        setFolderStates((prev) => { const next = new Map(prev); next.set(work.path, { entries: [], loading: true, error: null }); return next; });
+        try {
+          const result = await workspaceFiles.directory(cwd, work.path);
+          setFolderStates((prev) => {
+            const next = new Map(prev);
+            if (!next.get(work.path)?.loading) return next;
+            next.set(work.path, { entries: result.entries, loading: false, error: null });
+            return next;
+          });
+        } catch (error) {
+          setFolderStates((prev) => {
+            const next = new Map(prev);
+            if (!next.get(work.path)?.loading) return next;
+            next.set(work.path, { entries: [], loading: false, error: error instanceof Error ? error.message : String(error) });
+            return next;
+          });
+        }
+      }
     } catch (error) {
       if (!signal?.aborted) toast(error instanceof Error ? error.message : t("files.loadError"), "error");
     } finally { if (!signal?.aborted) setLoading(false); }
@@ -145,7 +167,7 @@ export function FileBrowser({ cwd }: { cwd: string }) {
         </span>
       </div>
       {expanded && (
-        <div className="mt-1 flex flex-col gap-0.5 max-h-96 overflow-y-auto">
+        <div className="mt-1 flex flex-col gap-0.5 max-h-32 overflow-y-auto">
           {loading && entries.length === 0 ? (
             <p className="px-2 text-[11px] text-muted/60 italic">{t("common.loading")}</p>
           ) : entries.length === 0 ? (
