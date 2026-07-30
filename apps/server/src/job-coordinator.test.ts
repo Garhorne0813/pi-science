@@ -161,6 +161,7 @@ describe("job coordinator", () => {
       if (mode === "shutdown") await coordinator.shutdown();
       else await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal, 10_000);
       expect(started).toContain(submitted.job_id);
+      await waitFor(async () => stopped.includes(submitted.job_id), Boolean);
       expect(stopped).toContain(submitted.job_id);
     }
   }, 20_000);

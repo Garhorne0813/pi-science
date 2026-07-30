@@ -15,6 +15,7 @@ const OWNERSHIP_LEASE_MS = 30_000;
 const OWNERSHIP_HEARTBEAT_MS = 5_000;
 const KILL_GRACE_MS = 2_000;
 const PROCESS_CLOSE_FAILSAFE_MS = 5_000;
+const WINDOWS_EXIT_DRAIN_MS = 1_000;
 const POSIX = process.platform !== "win32";
 const RESEARCH_ENVIRONMENT_KEY_NAMES = ["PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "ComSpec", "PATHEXT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "VIRTUAL_ENV", "PYTHONNOUSERSITE", "PIP_REQUIRE_VIRTUALENV", "PIP_USER", "UV_PROJECT_ENVIRONMENT", "npm_config_prefix", "npm_config_cache", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"] as const;
 const RESEARCH_ENVIRONMENT_KEYS = new Map(RESEARCH_ENVIRONMENT_KEY_NAMES.map((key) => [key.toLowerCase(), key]));
@@ -201,6 +202,7 @@ export class JobCoordinator {
         let timeoutTimer: NodeJS.Timeout | undefined; let closeFailsafe: NodeJS.Timeout | undefined; let settled = false;
         const finish = (code: number | null) => { if (settled) return; settled = true; if (timeoutTimer) clearTimeout(timeoutTimer); if (closeFailsafe) clearTimeout(closeFailsafe); done({ code }); };
         child!.once("close", (code) => finish(code));
+        child!.once("exit", (code) => { if (!POSIX && !timedOut && !settled) { closeFailsafe = setTimeout(() => finish(code), WINDOWS_EXIT_DRAIN_MS); closeFailsafe.unref(); } });
         timeoutTimer = setTimeout(() => {
           timedOut = true;
           terminate(child!);
