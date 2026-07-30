@@ -10,13 +10,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 RUN_DIR="$PROJECT_DIR/.runtime/pi-science"
-PID_FILE="$RUN_DIR/run.pid"
+STATE_DIR="$RUN_DIR/run.state"
+LEGACY_PID_FILE="$RUN_DIR/run.pid"
 LOG_FILE="$RUN_DIR/pi-science.log"
 CONTROL_PLANE_PORT="${PI_SCIENCE_CONTROL_PLANE_PORT:-8787}"
 SCIENTIFIC_RUNTIME_PORT="${PI_SCIENCE_RUNTIME_PORT:-8788}"
 FRONTEND_PORT="${PI_SCIENCE_FRONTEND_PORT:-5173}"
 FRONTEND_URL="http://127.0.0.1:$FRONTEND_PORT"
 READY_TIMEOUT_SECONDS="${PI_SCIENCE_STARTUP_TIMEOUT_SECONDS:-90}"
+SUPERVISOR_CLEANUP_GRACE_TENTHS=120
+STATE_PID="" STATE_TOKEN="" STATE_STARTED=""
 
 usage() {
   cat <<'EOF'
@@ -34,58 +37,91 @@ Start options:
 EOF
 }
 
-control_plane_is_ready() {
-  curl --fail --silent "http://127.0.0.1:${CONTROL_PLANE_PORT}/api/health" >/dev/null 2>&1
+control_plane_is_ready() { curl --fail --silent "http://127.0.0.1:${CONTROL_PLANE_PORT}/api/health" >/dev/null 2>&1; }
+frontend_is_ready() { curl --fail --silent "$FRONTEND_URL" >/dev/null 2>&1; }
+port_listener_pids() { command -v lsof >/dev/null 2>&1 || return 0; lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | sort -u || true; }
+open_browser() { if command -v open >/dev/null 2>&1; then open "$1" >/dev/null 2>&1 || true; elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$1" >/dev/null 2>&1 || true; fi; }
+process_start_identity() { ps -ww -o lstart= -p "$1" 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | head -n 1; }
+process_command() { ps -ww -o command= -p "$1" 2>/dev/null | sed 's/^[[:space:]]*//' | head -n 1; }
+
+remove_run_state() { rm -rf "$STATE_DIR"; rm -f "$LEGACY_PID_FILE"; }
+read_run_state() {
+  STATE_PID="" STATE_TOKEN="" STATE_STARTED=""
+  [ -d "$STATE_DIR" ] || { [ ! -e "$STATE_DIR" ] || remove_run_state; rm -f "$LEGACY_PID_FILE"; return 1; }
+  STATE_PID="$(cat "$STATE_DIR/pid" 2>/dev/null || true)"
+  STATE_TOKEN="$(cat "$STATE_DIR/token" 2>/dev/null || true)"
+  STATE_STARTED="$(cat "$STATE_DIR/started" 2>/dev/null || true)"
+  case "$STATE_PID" in ''|*[!0-9]*) remove_run_state; return 1 ;; esac
+  case "$STATE_TOKEN" in ''|*[!A-Za-z0-9_-]*) remove_run_state; return 1 ;; esac
+  [ -n "$STATE_STARTED" ] || { remove_run_state; return 1; }
+  return 0
 }
 
-frontend_is_ready() {
-  curl --fail --silent "$FRONTEND_URL" >/dev/null 2>&1
+running_supervisor() {
+  read_run_state || return 1
+  if ! kill -0 "$STATE_PID" 2>/dev/null; then remove_run_state; return 1; fi
+  local current_started command
+  current_started="$(process_start_identity "$STATE_PID")"
+  command="$(process_command "$STATE_PID")"
+  if [ -z "$current_started" ] || [ "$current_started" != "$STATE_STARTED" ]; then remove_run_state; return 1; fi
+  case "$command" in *"$SCRIPT_DIR/start.sh"*"--launch-token $STATE_TOKEN"*) ;; *) remove_run_state; return 1 ;; esac
+  printf '%s' "$STATE_PID"
 }
 
-port_listener_pids() {
-  command -v lsof >/dev/null 2>&1 || return 0
-  lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | sort -u || true
+write_run_state() {
+  local pid="$1" token="$2" started="$3" temp="$RUN_DIR/.run.state.$$.$token"
+  rm -rf "$temp"; mkdir "$temp"
+  printf '%s\n' "$pid" > "$temp/pid"
+  printf '%s\n' "$token" > "$temp/token"
+  printf '%s\n' "$started" > "$temp/started"
+  printf '%s\n' "$PROJECT_DIR" > "$temp/checkout"
+  rm -rf "$STATE_DIR"
+  mv "$temp" "$STATE_DIR"
+  rm -f "$LEGACY_PID_FILE"
 }
 
-# Only ever signal processes whose working directory is inside this checkout, so
-# an unrelated service on the same port is reported rather than killed.
-pid_belongs_to_project() {
-  local cwd
-  cwd="$(lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)"
-  [ -n "$cwd" ] && case "$cwd" in "$PROJECT_DIR"|"$PROJECT_DIR"/*) return 0 ;; esac
-  return 1
+process_tree_pids() {
+  local root="$1" previous="" current="$root"
+  while [ "$current" != "$previous" ]; do
+    previous="$current"
+    while read -r pid ppid; do
+      case " $current " in *" $ppid "*) case " $current " in *" $pid "*) ;; *) current="$current $pid" ;; esac ;; esac
+    done < <(ps -eo pid=,ppid= 2>/dev/null || true)
+  done
+  printf '%s\n' $current
 }
 
-open_browser() {
-  if command -v open >/dev/null 2>&1; then open "$1" >/dev/null 2>&1 || true
-  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$1" >/dev/null 2>&1 || true
-  fi
-}
-
-running_pid() {
-  [ -f "$PID_FILE" ] || return 1
-  local pid
-  pid="$(cat "$PID_FILE" 2>/dev/null || true)"
-  case "$pid" in ''|*[!0-9]*) rm -f "$PID_FILE"; return 1 ;; esac
-  if ! kill -0 "$pid" 2>/dev/null; then rm -f "$PID_FILE"; return 1; fi
-  printf '%s' "$pid"
+stop_process_tree() {
+  local root="$1" waited=0 initial current all pid alive
+  initial="$(process_tree_pids "$root")"
+  [ -n "$initial" ] || return 0
+  kill -TERM "$root" 2>/dev/null || true
+  while [ "$waited" -lt "$SUPERVISOR_CLEANUP_GRACE_TENTHS" ]; do
+    alive=false
+    for pid in $initial; do kill -0 "$pid" 2>/dev/null && alive=true; done
+    [ "$alive" = true ] || break
+    sleep 0.1; waited=$((waited + 1))
+  done
+  current="$(process_tree_pids "$root")"
+  all="$initial $current"
+  for pid in $all; do kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true; done
+  wait "$root" 2>/dev/null || true
 }
 
 cmd_start() {
   local detach=false open=true
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      -d|--detach) detach=true ;;
-      --no-open) open=false ;;
-      *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
-    esac
-    shift
-  done
+  while [ $# -gt 0 ]; do case "$1" in -d|--detach) detach=true ;; --no-open) open=false ;; *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;; esac; shift; done
 
-  if control_plane_is_ready; then
+  local existing=""
+  existing="$(running_supervisor 2>/dev/null || true)"
+  if [ -n "$existing" ] && control_plane_is_ready; then
     echo "Pi-Science is already running at $FRONTEND_URL"
     [ "$open" = true ] && open_browser "$FRONTEND_URL"
     return 0
+  fi
+  if control_plane_is_ready; then
+    echo "Error: control-plane port $CONTROL_PLANE_PORT is already in use by an unverified process; refusing to reuse or stop it." >&2
+    exit 1
   fi
 
   if [ "$detach" != true ]; then
@@ -95,19 +131,24 @@ cmd_start() {
 
   case "$READY_TIMEOUT_SECONDS" in ''|*[!0-9]*) echo "Error: PI_SCIENCE_STARTUP_TIMEOUT_SECONDS must be a positive integer." >&2; exit 2 ;; esac
   [ "$READY_TIMEOUT_SECONDS" -gt 0 ] || { echo "Error: PI_SCIENCE_STARTUP_TIMEOUT_SECONDS must be a positive integer." >&2; exit 2; }
+  [ -z "$existing" ] || { echo "Error: a verified Pi-Science supervisor is still running but is not healthy; stop it first." >&2; exit 1; }
 
   mkdir -p "$RUN_DIR"
-  nohup bash "$SCRIPT_DIR/start.sh" >"$LOG_FILE" 2>&1 &
-  local pid=$! deadline=$(( $(date +%s) + READY_TIMEOUT_SECONDS ))
-  printf '%s\n' "$pid" > "$PID_FILE"
+  local token pid started deadline cleanup_wait
+  token="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(18).toString("hex"))')"
+  (cd "$PROJECT_DIR" && exec nohup bash "$SCRIPT_DIR/start.sh" --launch-token "$token") >"$LOG_FILE" 2>&1 &
+  pid=$!
+  started=""
+  for _ in $(seq 1 40); do started="$(process_start_identity "$pid")"; [ -n "$started" ] && break; kill -0 "$pid" 2>/dev/null || break; sleep 0.025; done
+  if [ -z "$started" ]; then stop_process_tree "$pid"; echo "Error: unable to establish detached supervisor identity." >&2; exit 1; fi
+  write_run_state "$pid" "$token" "$started"
+  deadline=$(( $(date +%s) + READY_TIMEOUT_SECONDS ))
 
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    if ! kill -0 "$pid" 2>/dev/null; then
+    if ! running_supervisor >/dev/null 2>&1; then
       echo "Error: Pi-Science exited during startup. Last lines of $LOG_FILE:" >&2
       tail -n 20 "$LOG_FILE" >&2 || true
-      stop_pid "$pid"
-      rm -f "$PID_FILE"
-      stop_owned_listeners >/dev/null
+      remove_run_state
       exit 1
     fi
     if control_plane_is_ready && frontend_is_ready; then
@@ -122,91 +163,33 @@ cmd_start() {
     sleep 0.25
   done
 
-  if control_plane_is_ready && frontend_is_ready; then
-    echo "Pi-Science is running in the background (pid $pid)"
-    echo "  Frontend:           $FRONTEND_URL"
-    echo "  Node control plane: http://127.0.0.1:$CONTROL_PLANE_PORT"
-    echo "  Logs:               $LOG_FILE"
-    echo "  Stop with:          pi-science stop"
-    [ "$open" = true ] && open_browser "$FRONTEND_URL"
-    return 0
-  fi
+  if control_plane_is_ready && frontend_is_ready; then echo "Pi-Science is running in the background (pid $pid)"; return 0; fi
   echo "Error: Pi-Science did not become ready within ${READY_TIMEOUT_SECONDS}s. See $LOG_FILE" >&2
-  stop_pid "$pid"
-  rm -f "$PID_FILE"
-  stop_owned_listeners >/dev/null
+  cleanup_wait=0
+  while [ "$cleanup_wait" -lt "$SUPERVISOR_CLEANUP_GRACE_TENTHS" ] && kill -0 "$pid" 2>/dev/null; do sleep 0.1; cleanup_wait=$((cleanup_wait + 1)); done
+  kill -0 "$pid" 2>/dev/null && stop_process_tree "$pid" || true
+  remove_run_state
   exit 1
 }
 
-stop_pid() {
-  local pid="$1" waited=0
-  kill "$pid" 2>/dev/null || return 0
-  while [ "$waited" -lt 50 ] && kill -0 "$pid" 2>/dev/null; do
-    sleep 0.1
-    waited=$((waited + 1))
-  done
-  kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
-}
-
-stop_owned_listeners() {
-  local port listener stopped=false
-  for port in "$CONTROL_PLANE_PORT" "$FRONTEND_PORT" "$SCIENTIFIC_RUNTIME_PORT"; do
-    while read -r listener; do
-      [ -n "$listener" ] || continue
-      if pid_belongs_to_project "$listener"; then
-        stop_pid "$listener"
-        stopped=true
-      else
-        echo "Note: port $port is held by pid $listener from outside this checkout; leaving it alone." >&2
-      fi
-    done < <(port_listener_pids "$port")
-  done
-  [ "$stopped" = true ]
-}
-
 cmd_stop() {
-  local stopped=false pid
-  if pid="$(running_pid)"; then
-    stop_pid "$pid"
-    rm -f "$PID_FILE"
-    stopped=true
-  fi
-  rm -f "$PID_FILE"
-
-  # A foreground start leaves no pid file, and a detached one can outlive its
-  # supervisor, so sweep the ports this checkout owns as well.
-  stop_owned_listeners && stopped=true || true
-
-  if [ "$stopped" = true ]; then echo "Pi-Science stopped."
-  else echo "Pi-Science is not running."
+  local pid=""
+  pid="$(running_supervisor 2>/dev/null || true)"
+  if [ -n "$pid" ]; then stop_process_tree "$pid"; remove_run_state; echo "Pi-Science stopped."
+  else remove_run_state; echo "Pi-Science is not running."
   fi
 }
 
 cmd_status() {
-  local pid
-  if pid="$(running_pid)"; then echo "Supervisor:         running (pid $pid, logs at $LOG_FILE)"
-  else echo "Supervisor:         not started by 'pi-science start --detach'"
-  fi
-  if control_plane_is_ready; then echo "Node control plane: ready at http://127.0.0.1:$CONTROL_PLANE_PORT"
-  else echo "Node control plane: not responding on port $CONTROL_PLANE_PORT"
-  fi
-  if frontend_is_ready; then echo "Frontend:           ready at $FRONTEND_URL"
-  else echo "Frontend:           not responding on port $FRONTEND_PORT"
-  fi
-  if [ -n "$(port_listener_pids "$SCIENTIFIC_RUNTIME_PORT")" ]; then echo "Python worker:      listening on port $SCIENTIFIC_RUNTIME_PORT"
-  else echo "Python worker:      idle (started on demand)"
-  fi
+  local pid=""
+  pid="$(running_supervisor 2>/dev/null || true)"
+  if [ -n "$pid" ]; then echo "Supervisor:         running (pid $pid, logs at $LOG_FILE)"; else echo "Supervisor:         not started by 'pi-science start --detach'"; fi
+  if control_plane_is_ready; then echo "Node control plane: ready at http://127.0.0.1:$CONTROL_PLANE_PORT"; else echo "Node control plane: not responding on port $CONTROL_PLANE_PORT"; fi
+  if frontend_is_ready; then echo "Frontend:           ready at $FRONTEND_URL"; else echo "Frontend:           not responding on port $FRONTEND_PORT"; fi
+  if [ -n "$(port_listener_pids "$SCIENTIFIC_RUNTIME_PORT")" ]; then echo "Python worker:      listening on port $SCIENTIFIC_RUNTIME_PORT"; else echo "Python worker:      idle (started on demand)"; fi
   echo "Checkout:           $PROJECT_DIR"
 }
 
 command="${1:-start}"
 [ $# -gt 0 ] && shift || true
-case "$command" in
-  start) cmd_start "$@" ;;
-  stop) cmd_stop ;;
-  status) cmd_status ;;
-  help|-h|--help) usage ;;
-  -*) cmd_start "$command" "$@" ;;
-  *) echo "Unknown command: $command" >&2; usage >&2; exit 2 ;;
-esac
+case "$command" in start) cmd_start "$@" ;; stop) cmd_stop ;; status) cmd_status ;; help|-h|--help) usage ;; -*) cmd_start "$command" "$@" ;; *) echo "Unknown command: $command" >&2; usage >&2; exit 2 ;; esac

@@ -3,6 +3,12 @@
 # Usage: bash scripts/start.sh
 set -euo pipefail
 
+if [ "${1:-}" = "--launch-token" ]; then
+  [ "$#" -eq 2 ] || { echo "Error: invalid launcher identity arguments." >&2; exit 2; }
+  export PI_SCIENCE_LAUNCH_TOKEN="$2"
+  shift 2
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 INSTALL_STATE_FILE="$PROJECT_DIR/.runtime/pi-science/install.env"

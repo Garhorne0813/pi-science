@@ -13,15 +13,26 @@ PROJECT_ASSIGNMENT="$(printf 'PI_SCIENCE_DIR=%q' "$PROJECT_DIR")"
 LOCK_DIR="$BIN_DIR/.pi-science-launcher.lock"
 LAUNCHER_TEMP=""
 OLD_SNAPSHOT=""
+LOCK_OWNED=false
+LOCK_TOKEN="$$-${RANDOM:-0}-$(date +%s)"
+CLEANED=false
 mkdir -p "$BIN_DIR"
 
 cleanup() {
+  [ "$CLEANED" = false ] || return 0
+  CLEANED=true
   [ -z "$LAUNCHER_TEMP" ] || rm -f "$LAUNCHER_TEMP"
   [ -z "$OLD_SNAPSHOT" ] || rm -f "$OLD_SNAPSHOT"
-  rmdir "$LOCK_DIR" 2>/dev/null || true
+  if [ "$LOCK_OWNED" = true ] && [ "$(cat "$LOCK_DIR/owner" 2>/dev/null || true)" = "$LOCK_TOKEN" ]; then rm -rf "$LOCK_DIR"; fi
 }
-trap cleanup EXIT INT TERM
+on_int() { trap - INT TERM; cleanup; exit 130; }
+on_term() { trap - INT TERM; cleanup; exit 143; }
+trap cleanup EXIT
+trap on_int INT
+trap on_term TERM
 mkdir "$LOCK_DIR" 2>/dev/null || { echo "Error: another Pi-Science launcher installation is active in $BIN_DIR" >&2; exit 1; }
+LOCK_OWNED=true
+printf '%s\n' "$LOCK_TOKEN" > "$LOCK_DIR/owner"
 
 launcher_is_owned() {
   [ -f "$LAUNCHER" ] && [ ! -L "$LAUNCHER" ] || return 1
