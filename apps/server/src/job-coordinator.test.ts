@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { JobCoordinator, type JobRecord, type JobStatus, restrictResearchEnvironment, windowsTaskkillArgs } from "./job-coordinator.js";
+import { JobCoordinator, type JobOwnership, type JobRecord, type JobStatus, restrictResearchEnvironment, windowsTaskkillArgs } from "./job-coordinator.js";
 
 const cleanup: string[] = [];
 const jobs: JobCoordinator[] = [];
@@ -25,8 +25,8 @@ function jobCoordinator(environment: NodeJS.ProcessEnv = { ...process.env }, hoo
   return coordinator;
 }
 
-async function writeStoredJob(cwd: string, jobId: string, status: JobStatus, createdAt: string, stderr = ""): Promise<void> {
-  const record: JobRecord = { job_id: jobId, command: ["/bin/true"], cwd, surface: "local", status, created_at: createdAt, stdout: "", stderr, artifact_ids: [], environment: {}, requirement: {} };
+async function writeStoredJob(cwd: string, jobId: string, status: JobStatus, createdAt: string, stderr = "", ownership?: JobOwnership): Promise<void> {
+  const record: JobRecord = { job_id: jobId, command: ["/bin/true"], cwd, surface: "local", status, created_at: createdAt, stdout: "", stderr, artifact_ids: [], environment: {}, requirement: {}, ...(ownership ? { ownership } : {}) };
   await mkdir(join(cwd, ".pi-science", "jobs"), { recursive: true });
   await writeFile(join(cwd, ".pi-science", "jobs", `${jobId}.json`), `${JSON.stringify(record, null, 2)}\n`, "utf8");
 }
@@ -71,6 +71,99 @@ describe("job coordinator", () => {
     expect((await coordinator.list(cwd, 10)).map((record) => record.status).sort()).toEqual(["pending", "running"]);
     expect(await coordinator.hasActive(cwd)).toBe(true);
   });
+
+  it("preserves a healthy job owned by another coordinator beyond the legacy orphan grace", async () => {
+    const cwd = await workspace();
+    let now = 1_000;
+    let releaseSpawn!: () => void;
+    let enteredSpawn!: () => void;
+    const spawnGate = new Promise<void>((resolve) => { releaseSpawn = resolve; });
+    const gateEntered = new Promise<void>((resolve) => { enteredSpawn = resolve; });
+    const owner = jobCoordinator(undefined, { now: () => now, leaseMs: 200, heartbeatMs: 25, beforeSpawn: async () => { enteredSpawn(); await spawnGate; } });
+    const observer = jobCoordinator(undefined, { now: () => now, leaseMs: 200, heartbeatMs: 25 });
+    const submitted = await owner.submit(cwd, { command: [process.execPath, "-e", "process.exit(0)"] });
+    await gateEntered;
+    now += 60_000;
+    expect((await observer.get(cwd, submitted.job_id))?.status).toBe("running");
+    expect(await observer.hasActive(cwd)).toBe(true);
+    releaseSpawn();
+    expect((await waitFor(() => observer.get(cwd, submitted.job_id), terminal))?.status).toBe("succeeded");
+  });
+
+  it("heals only an expired lease whose owner is no longer credibly active", async () => {
+    const cwd = await workspace();
+    const ownership: JobOwnership = { instance_id: "dead-owner", pid: 999_999, process_started_at: new Date(0).toISOString(), generation: 7, token: "dead-token", heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(2_000).toISOString() };
+    await writeStoredJob(cwd, "job_aaaaaaaaaaaaaaaa", "running", new Date(1_000).toISOString(), "", ownership);
+    const observer = jobCoordinator(undefined, { now: () => 3_000, ownerProcessAlive: () => false });
+    const healed = await observer.get(cwd, "job_aaaaaaaaaaaaaaaa");
+    expect(healed?.status).toBe("failed");
+    expect(healed?.stderr).toContain("owner lease expired");
+    expect(healed?.stderr).toContain("dead-owner");
+  });
+
+  it("does not heal a valid lease or an expired lease with an unverifiably reused live PID", async () => {
+    const cwd = await workspace();
+    const valid: JobOwnership = { instance_id: "remote-owner", pid: 42, process_started_at: new Date(0).toISOString(), generation: 1, token: "valid-token", heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(5_000).toISOString() };
+    await writeStoredJob(cwd, "job_bbbbbbbbbbbbbbbb", "running", new Date(1_000).toISOString(), "", valid);
+    const observer = jobCoordinator(undefined, { now: () => 3_000, ownerProcessAlive: () => false });
+    expect((await observer.get(cwd, "job_bbbbbbbbbbbbbbbb"))?.status).toBe("running");
+    const expired = { ...valid, token: "reused-token", lease_expires_at: new Date(2_000).toISOString() };
+    await writeStoredJob(cwd, "job_cccccccccccccccc", "running", new Date(1_000).toISOString(), "", expired);
+    const conservative = jobCoordinator(undefined, { now: () => 3_000, ownerProcessAlive: () => true });
+    expect((await conservative.get(cwd, "job_cccccccccccccccc"))?.status).toBe("running");
+  });
+
+  it("fences a stale owner terminal write after another coordinator heals the job", async () => {
+    const cwd = await workspace();
+    let now = 1_000;
+    let releaseTerminal!: () => void;
+    let enteredTerminal!: () => void;
+    const terminalGate = new Promise<void>((resolve) => { releaseTerminal = resolve; });
+    const gateEntered = new Promise<void>((resolve) => { enteredTerminal = resolve; });
+    const owner = jobCoordinator(undefined, { now: () => now, leaseMs: 100, heartbeatMs: 25, beforeTerminalSave: async () => { enteredTerminal(); await terminalGate; } });
+    const submitted = await owner.submit(cwd, { command: [process.execPath, "-e", "process.stdout.write('stale-success')"] });
+    await gateEntered;
+    now += 1_000;
+    const observer = jobCoordinator(undefined, { now: () => now, ownerProcessAlive: () => false });
+    const ownership = (await observer.get(cwd, submitted.job_id))?.ownership;
+    expect(ownership).toBeTruthy();
+    // The in-process ownership token still proves the owner is live, so simulate
+    // a replacement process by expiring the durable owner directly.
+    if (ownership) ownership.token = "lost-owner-token";
+    const path = join(cwd, ".pi-science", "jobs", `${submitted.job_id}.json`);
+    const stored = JSON.parse(await readFile(path, "utf8")) as JobRecord;
+    if (stored.ownership) stored.ownership.token = "lost-owner-token";
+    await writeFile(path, `${JSON.stringify(stored, null, 2)}\n`, "utf8");
+    expect((await observer.get(cwd, submitted.job_id))?.status).toBe("failed");
+    releaseTerminal();
+    await owner.shutdown();
+    expect((await observer.get(cwd, submitted.job_id))?.status).toBe("failed");
+  });
+
+  it("starts and stops one bounded heartbeat on terminal completion", async () => {
+    const cwd = await workspace();
+    const started: string[] = []; const stopped: string[] = [];
+    const coordinator = jobCoordinator(undefined, { leaseMs: 200, heartbeatMs: 25, onHeartbeatStarted: (id) => started.push(id), onHeartbeatStopped: (id) => stopped.push(id) });
+    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "setTimeout(() => {}, 80)"] });
+    expect((await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal))?.status).toBe("succeeded");
+    expect(started).toEqual([submitted.job_id]);
+    expect(stopped).toEqual([submitted.job_id]);
+  });
+
+  it("stops ownership heartbeats after cancel, timeout, and shutdown", async () => {
+    const cwd = await workspace();
+    for (const mode of ["cancel", "timeout", "shutdown"] as const) {
+      const started: string[] = []; const stopped: string[] = [];
+      const coordinator = jobCoordinator(undefined, { leaseMs: 200, heartbeatMs: 25, onHeartbeatStarted: (id) => started.push(id), onHeartbeatStopped: (id) => stopped.push(id) });
+      const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "setTimeout(() => {}, 30000)"], ...(mode === "timeout" ? { requirement: { timeout_seconds: 1 } } : {}) });
+      await waitFor(() => coordinator.get(cwd, submitted.job_id), (record) => record?.status === "running");
+      if (mode === "cancel") await coordinator.cancel(cwd, submitted.job_id);
+      if (mode === "shutdown") await coordinator.shutdown();
+      else await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal, 10_000);
+      expect(started).toContain(submitted.job_id);
+      expect(stopped).toContain(submitted.job_id);
+    }
+  }, 20_000);
 
   it("leaves live submitted jobs alone until they finish on their own", async () => {
     const cwd = await workspace();

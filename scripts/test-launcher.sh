@@ -99,6 +99,35 @@ for kind in file directory; do
   if find "$BIN_DIR" -maxdepth 1 -name '.pi-science-launcher.*' -print | grep -q .; then fail "installer temp file leaked after $kind race"; fi
 done
 
+# A failed second/third writer never removes the first writer's lock.
+CONTENTION_BARRIER="$TEMP_ROOT/contention"
+rm -f "$LAUNCHER" "$CONTENTION_BARRIER.ready" "$CONTENTION_BARRIER.release"
+PI_SCIENCE_TEST_LAUNCHER_COMMIT_BARRIER="$CONTENTION_BARRIER" bash "$WRITER_SCRIPT" "$CHECKOUT" "$BIN_DIR" >"$TEMP_ROOT/writer-1.log" 2>&1 &
+WRITER_ONE_PID=$!
+wait_file "$CONTENTION_BARRIER.ready" || fail "first writer did not reach contention barrier"
+[ -d "$BIN_DIR/.pi-science-launcher.lock" ] || fail "first writer does not own the lock"
+if bash "$WRITER_SCRIPT" "$CHECKOUT" "$BIN_DIR" >"$TEMP_ROOT/writer-2.log" 2>&1; then fail "second writer acquired an owned lock"; fi
+[ -d "$BIN_DIR/.pi-science-launcher.lock" ] || fail "second writer removed the first writer's lock"
+if bash "$WRITER_SCRIPT" "$CHECKOUT" "$BIN_DIR" >"$TEMP_ROOT/writer-3.log" 2>&1; then fail "third writer acquired an owned lock"; fi
+[ -d "$BIN_DIR/.pi-science-launcher.lock" ] || fail "third writer removed the first writer's lock"
+: > "$CONTENTION_BARRIER.release"
+wait "$WRITER_ONE_PID" || fail "first writer failed after contention"
+[ ! -e "$BIN_DIR/.pi-science-launcher.lock" ] || fail "first writer leaked its lock"
+
+# TERM exits a blocked writer and cleans exactly the lock/temp files it owns.
+SIGNAL_BARRIER="$TEMP_ROOT/signaled-writer"
+rm -f "$LAUNCHER" "$SIGNAL_BARRIER.ready" "$SIGNAL_BARRIER.release"
+PI_SCIENCE_TEST_LAUNCHER_COMMIT_BARRIER="$SIGNAL_BARRIER" bash "$WRITER_SCRIPT" "$CHECKOUT" "$BIN_DIR" >"$TEMP_ROOT/signaled-writer.log" 2>&1 &
+SIGNALED_WRITER_PID=$!
+wait_file "$SIGNAL_BARRIER.ready" || fail "signaled writer did not reach barrier"
+kill -TERM "$SIGNALED_WRITER_PID"
+set +e
+wait "$SIGNALED_WRITER_PID"; SIGNALED_STATUS=$?
+set -e
+[ "$SIGNALED_STATUS" -eq 143 ] || fail "signaled writer exited $SIGNALED_STATUS instead of 143"
+[ ! -e "$BIN_DIR/.pi-science-launcher.lock" ] || fail "signaled writer leaked its lock"
+if find "$BIN_DIR" -maxdepth 1 -name '.pi-science-launcher.*' -print | grep -q .; then fail "signaled writer leaked a temp file"; fi
+
 # Temporary local checkout with real Node and fake package-local CLIs. The fake
 # services record CWD/PIDs and expose only the readiness endpoints used by start.sh.
 FIXTURE="$TEMP_ROOT/runtime checkout with spaces"
@@ -185,33 +214,71 @@ EOF
 chmod +x "$FIXTURE/frontend/node_modules/.bin/vite"
 
 # Invalid detached timeouts fail before the supervisor or services are spawned.
-rm -f "$FIXTURE/control.pid" "$FIXTURE/.runtime/pi-science/run.pid"
+rm -f "$FIXTURE/control.pid" "$FIXTURE/.runtime/pi-science/run.state"
 INVALID_CONTROL_PORT="$(free_port)"; INVALID_RUNTIME_PORT="$(free_port)"; INVALID_FRONTEND_PORT="$(free_port)"
 if PI_SCIENCE_CONTROL_PLANE_PORT="$INVALID_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$INVALID_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$INVALID_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=invalid bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/invalid-timeout.log" 2>&1; then fail "invalid detached timeout returned success"; fi
 assert_contains "$TEMP_ROOT/invalid-timeout.log" 'must be a positive integer'
 [ ! -e "$FIXTURE/control.pid" ] || fail "invalid timeout spawned the control plane"
-[ ! -e "$FIXTURE/.runtime/pi-science/run.pid" ] || fail "invalid timeout left run.pid"
+[ ! -e "$FIXTURE/.runtime/pi-science/run.state" ] || fail "invalid timeout left run.state"
+
+# A stale state file pointing at an unrelated live PID is discarded without
+# signaling that process, even if its start timestamp is valid.
+sleep 30 &
+UNRELATED_PID=$!
+mkdir -p "$FIXTURE/.runtime/pi-science/run.state"
+printf '%s\n' "$UNRELATED_PID" > "$FIXTURE/.runtime/pi-science/run.state/pid"
+printf '%s\n' 'not-the-launch-token' > "$FIXTURE/.runtime/pi-science/run.state/token"
+ps -ww -o lstart= -p "$UNRELATED_PID" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' > "$FIXTURE/.runtime/pi-science/run.state/started"
+printf '%s\n' "$FIXTURE" > "$FIXTURE/.runtime/pi-science/run.state/checkout"
+bash "$FIXTURE/scripts/pi-science.sh" status >"$TEMP_ROOT/unrelated-status.log"
+kill -0 "$UNRELATED_PID" 2>/dev/null || fail "status killed an unrelated live PID"
+[ ! -e "$FIXTURE/.runtime/pi-science/run.state" ] || fail "mismatched supervisor state was not removed"
+bash "$FIXTURE/scripts/pi-science.sh" stop >/dev/null
+kill -0 "$UNRELATED_PID" 2>/dev/null || fail "stop killed an unrelated live PID"
+kill "$UNRELATED_PID"; wait "$UNRELATED_PID" 2>/dev/null || true
+
+# A pre-existing checkout-local health listener is refused and survives rollback.
+PREEXISTING_PORT="$(free_port)"
+node -e 'require("node:http").createServer((_q,r)=>{r.writeHead(200);r.end("existing")}).listen(Number(process.argv[1]),"127.0.0.1");' "$PREEXISTING_PORT" &
+PREEXISTING_PID=$!
+wait_url "http://127.0.0.1:$PREEXISTING_PORT/api/health" || fail "pre-existing listener did not start"
+if PI_SCIENCE_CONTROL_PLANE_PORT="$PREEXISTING_PORT" PI_SCIENCE_RUNTIME_PORT="$(free_port)" PI_SCIENCE_FRONTEND_PORT="$(free_port)" bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/pre-existing.log" 2>&1; then fail "pre-existing listener was reused"; fi
+assert_contains "$TEMP_ROOT/pre-existing.log" 'already in use by an unverified process'
+kill -0 "$PREEXISTING_PID" 2>/dev/null || fail "startup refusal killed a pre-existing listener"
+kill "$PREEXISTING_PID"; wait "$PREEXISTING_PID" 2>/dev/null || true
 
 # Sequential slow readiness remains within one coherent detached deadline.
 DETACH_CONTROL_PORT="$(free_port)"; DETACH_RUNTIME_PORT="$(free_port)"; DETACH_FRONTEND_PORT="$(free_port)"
 PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_CONTROL_PLANE_PORT="$DETACH_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$DETACH_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$DETACH_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=5 PI_SCIENCE_TEST_CONTROL_DELAY_MS=1200 PI_SCIENCE_TEST_FRONTEND_DELAY_MS=1200 bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/detach.log"
 assert_contains "$TEMP_ROOT/detach.log" 'running in the background'
-[ -f "$FIXTURE/.runtime/pi-science/run.pid" ] || fail "detached start did not write run.pid"
+[ -d "$FIXTURE/.runtime/pi-science/run.state" ] || fail "detached start did not write run.state"
 PI_SCIENCE_CONTROL_PLANE_PORT="$DETACH_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$DETACH_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$DETACH_FRONTEND_PORT" bash "$FIXTURE/scripts/pi-science.sh" status >"$TEMP_ROOT/status.log"
 assert_contains "$TEMP_ROOT/status.log" 'Supervisor:         running'
 assert_contains "$TEMP_ROOT/status.log" 'Node control plane: ready'
+DETACH_SUPERVISOR_PID="$(cat "$FIXTURE/.runtime/pi-science/run.state/pid")"
+DETACH_CONTROL_PID="$(cat "$FIXTURE/control.pid")"
+DETACH_CONTROL_CHILD_PID="$(cat "$FIXTURE/control.child.pid")"
+DETACH_FRONTEND_PID="$(cat "$FIXTURE/frontend.pid")"
 PI_SCIENCE_CONTROL_PLANE_PORT="$DETACH_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$DETACH_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$DETACH_FRONTEND_PORT" bash "$FIXTURE/scripts/pi-science.sh" stop >"$TEMP_ROOT/stop.log"
-[ ! -e "$FIXTURE/.runtime/pi-science/run.pid" ] || fail "stop left run.pid"
+[ ! -e "$FIXTURE/.runtime/pi-science/run.state" ] || fail "stop left run.state"
 wait_port_available "$DETACH_CONTROL_PORT" || fail "detached stop left control-plane port occupied"
 wait_port_available "$DETACH_FRONTEND_PORT" || fail "detached stop left frontend port occupied"
+wait_pid_gone "$DETACH_SUPERVISOR_PID" || fail "detached stop left supervisor alive"
+wait_pid_gone "$DETACH_CONTROL_PID" || fail "detached stop left control plane alive"
+wait_pid_gone "$DETACH_CONTROL_CHILD_PID" || fail "detached stop left TERM-ignoring descendant alive"
+wait_pid_gone "$DETACH_FRONTEND_PID" || fail "detached stop left frontend alive"
 
 # A never-ready detached frontend rolls back its supervisor, PID file and ports.
 NEVER_CONTROL_PORT="$(free_port)"; NEVER_RUNTIME_PORT="$(free_port)"; NEVER_FRONTEND_PORT="$(free_port)"
 if PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_CONTROL_PLANE_PORT="$NEVER_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$NEVER_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$NEVER_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=2 PI_SCIENCE_TEST_FRONTEND_NEVER_READY=1 bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/never.log" 2>&1; then fail "never-ready detached start returned success"; fi
 assert_contains "$TEMP_ROOT/never.log" 'did not become ready within 2s'
-[ ! -e "$FIXTURE/.runtime/pi-science/run.pid" ] || fail "timed-out detached start left run.pid"
+[ ! -e "$FIXTURE/.runtime/pi-science/run.state" ] || fail "timed-out detached start left run.state"
+NEVER_CONTROL_PID="$(cat "$FIXTURE/control.pid")"; NEVER_CONTROL_CHILD_PID="$(cat "$FIXTURE/control.child.pid")"; NEVER_FRONTEND_PID="$(cat "$FIXTURE/frontend.pid")"
 wait_port_available "$NEVER_CONTROL_PORT" || fail "timed-out detached start left control-plane port occupied"
 wait_port_available "$NEVER_FRONTEND_PORT" || fail "timed-out detached start left frontend port occupied"
+wait_pid_gone "$NEVER_CONTROL_PID" || fail "deadline rollback left control plane alive"
+wait_pid_gone "$NEVER_CONTROL_CHILD_PID" || fail "deadline rollback left TERM-ignoring descendant alive"
+wait_pid_gone "$NEVER_FRONTEND_PID" || fail "deadline rollback left frontend alive"
 
 # SIGINT delivery from a foreground parent models terminal Ctrl+C without the
 # signal-ignore semantics Bash applies to its own asynchronous children.
