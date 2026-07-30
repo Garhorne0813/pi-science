@@ -94,8 +94,12 @@ export function MarkdownViewer({
   const openInspector = useUiStore((s) => s.openInspector);
   const handleFileLink = useCallback((href: string) => {
     if (!cwd) return;
-    const path = href;
-    openInspector(fileInspectorForPath(path, path.split(/[\\/]/).pop() || path, undefined, cwd));
+    let path = href;
+    // Strip ./ prefix and resolve absolute paths under the workspace root.
+    const normalizedCwd = cwd.replace(/[\/]+$/, "");
+    if (path.startsWith("./")) path = path.slice(2);
+    else if (path.startsWith(normalizedCwd + "/") || path.startsWith(normalizedCwd + "\\")) path = path.slice(normalizedCwd.length + 1);
+    openInspector(fileInspectorForPath(path, path.split(/[\\/]/).at(-1) || path, undefined, cwd));
   }, [cwd, openInspector]);
   return (
     <div className={cn(s.root, className)}>

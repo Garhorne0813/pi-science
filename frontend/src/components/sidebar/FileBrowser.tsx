@@ -79,20 +79,21 @@ export function FileBrowser({ cwd }: { cwd: string }) {
   }, [cwd, folderStates]);
 
   const folderEntries = useMemo(() => {
-    const seen = new Set(entries.map((e) => e.path));
-    const result: (FileListEntry & { depth: number })[] = entries.map((e) => ({ ...e, depth: 0 }));
-    const walk = (parentPath: string, depth: number) => {
-      const state = folderStates.get(parentPath);
-      if (!state || state.loading || state.error) return;
-      for (const child of state.entries) {
-        if (seen.has(child.path)) continue;
-        seen.add(child.path);
-        result.push({ ...child, depth });
-        if (child.isDir && openFolders.has(child.path)) walk(child.path, depth + 1);
+    const seen = new Set<string>();
+    const build = (items: FileListEntry[], depth: number): (FileListEntry & { depth: number })[] => {
+      const row: (FileListEntry & { depth: number })[] = [];
+      for (const entry of items) {
+        if (seen.has(entry.path)) continue;
+        seen.add(entry.path);
+        row.push({ ...entry, depth });
+        if (entry.isDir && openFolders.has(entry.path)) {
+          const state = folderStates.get(entry.path);
+          if (state && !state.loading && !state.error) row.push(...build(state.entries, depth + 1));
+        }
       }
+      return row;
     };
-    for (const entry of entries) { if (entry.isDir && openFolders.has(entry.path)) walk(entry.path, 1); }
-    return result;
+    return build(entries, 0);
   }, [entries, openFolders, folderStates]);
 
   const refreshFiles = () => {
