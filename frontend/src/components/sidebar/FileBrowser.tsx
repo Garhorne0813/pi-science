@@ -167,7 +167,7 @@ export function FileBrowser({ cwd }: { cwd: string }) {
         </span>
       </div>
       {expanded && (
-        <div className="mt-1 flex flex-col gap-0.5 max-h-32 overflow-y-auto">
+        <div className="mt-1 flex flex-col gap-0.5 max-h-72 overflow-y-auto">
           {loading && entries.length === 0 ? (
             <p className="px-2 text-[11px] text-muted/60 italic">{t("common.loading")}</p>
           ) : entries.length === 0 ? (
