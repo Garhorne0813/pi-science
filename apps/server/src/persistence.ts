@@ -10,6 +10,8 @@ const LOCK_RETRY_MIN_MS = 5;
 const LOCK_RETRY_MAX_MS = 100;
 const LOCK_RELEASE_RETRIES = 5;
 const LOCK_RELEASE_RETRY_MS = 20;
+const JSON_ATOMIC_RENAME_RETRIES = 5;
+const JSON_ATOMIC_RENAME_RETRY_MS = 20;
 
 export interface FileLockHooks { unlink?: (path: string) => Promise<void>; sleep?: (ms: number) => Promise<void> }
 interface LockOwner { pid: number; acquired_at: string; token?: string }
@@ -145,11 +147,28 @@ export async function readJson<T>(path: string, fallback: T): Promise<T> {
   try { return JSON.parse(await readFile(path, "utf8")) as T; } catch { return fallback; }
 }
 
-export async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
+export async function writeJsonAtomic(path: string, value: unknown, hooks: FileLockHooks = {}): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+  const sleep = hooks.sleep ?? ((ms: number) => new Promise<void>((resolveWait) => setTimeout(resolveWait, ms)));
+  const remove = hooks.unlink ?? unlink;
   await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  await rename(temporary, path);
+  for (let attempt = 0; ; attempt += 1) {
+    try { await rename(temporary, path); return; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        if (attempt >= JSON_ATOMIC_RENAME_RETRIES - 1) throw error;
+        // Antivirus or a cleaner removed the temp file; rewrite and retry.
+        await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+        await sleep(JSON_ATOMIC_RENAME_RETRY_MS * (attempt + 1));
+        continue;
+      }
+      if (code !== "EPERM" && code !== "EBUSY") throw error;
+      if (attempt >= JSON_ATOMIC_RENAME_RETRIES - 1) { await remove(temporary).catch(() => undefined); throw error; }
+      await sleep(JSON_ATOMIC_RENAME_RETRY_MS * (attempt + 1));
+    }
+  }
 }
 
 export function configRoot(): string {

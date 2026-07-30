@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { acquireFileLock, withFileWriteLock } from "./persistence.js";
+import { acquireFileLock, withFileWriteLock, writeJsonAtomic } from "./persistence.js";
 
 const cleanup: string[] = [];
 
@@ -123,6 +123,24 @@ describe("cross-process file lock", () => {
     const second = withFileWriteLock(path, async () => "second");
     await expect(first).rejects.toThrow("access denied");
     await expect(Promise.race([second, delay(2_000).then(() => "hung")])).resolves.toBe("second");
+  });
+
+  it("writes atomically with idempotent overwrite", async () => {
+    const cwd = await workspace();
+    const path = join(cwd, "normal.json");
+    await writeJsonAtomic(path, { key: "value" });
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ key: "value" });
+    await writeJsonAtomic(path, { key: "updated" });
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ key: "updated" });
+  });
+
+  it("leaves no orphaned temp files after a normal atomic write", async () => {
+    const cwd = await workspace();
+    const path = join(cwd, "no-temp.json");
+    await writeJsonAtomic(path, { key: "clean" });
+    const { readdir } = await import("node:fs/promises");
+    const entries = await readdir(cwd).catch(() => [] as string[]);
+    expect(entries.some((e) => e.endsWith(".tmp"))).toBe(false);
   });
 
   it("never removes a lock whose ownership token was replaced", async () => {
