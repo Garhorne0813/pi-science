@@ -275,6 +275,36 @@ assert_contains "$TEMP_ROOT/live-lock.log" 'another Pi-Science detached launch t
 [ -e "$DEAD_LOCK" ] || fail "live owner lock was removed"
 rm -rf "$DEAD_LOCK"
 
+# A live owner whose process identity is inaccessible is unverifiable, not dead,
+# and its lock is never reclaimed.
+LOCK_IDENTITY_DIR="$TEMP_ROOT/lock-identities"
+mkdir -p "$LOCK_IDENTITY_DIR" "$DEAD_LOCK"
+: > "$LOCK_IDENTITY_DIR/$$"
+printf 'pid=%s\nstarted=recorded-but-inaccessible\ntoken=unverifiable-token\n' "$$" > "$DEAD_LOCK/owner"
+if PI_SCIENCE_TEST_PROCESS_IDENTITY_DIR="$LOCK_IDENTITY_DIR" bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/unverifiable-lock.log" 2>&1; then fail "unverifiable live launch lock was displaced"; fi
+assert_contains "$TEMP_ROOT/unverifiable-lock.log" 'stale launch lock has unverifiable ownership'
+[ -e "$DEAD_LOCK" ] || fail "unverifiable live owner lock was removed"
+rm -rf "$DEAD_LOCK"
+
+# Atomic stale-lock quarantine admits one winner. Killing that winner after it
+# installs verifiable ownership leaves a lock that a later process can recover.
+RECLAIM_BARRIER="$TEMP_ROOT/stale-reclaim"
+rm -f "$RECLAIM_BARRIER.ready" "$RECLAIM_BARRIER.release" "$RECLAIM_BARRIER.winner"
+mkdir -p "$DEAD_LOCK"
+printf 'pid=999999\nstarted=dead-owner\ntoken=dead-token\n' > "$DEAD_LOCK/owner"
+PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=invalid PI_SCIENCE_TEST_RECLAIM_BARRIER="$RECLAIM_BARRIER" bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/reclaim-winner.log" 2>&1 &
+RECLAIM_WINNER_PID=$!
+wait_file "$RECLAIM_BARRIER.ready" || fail "stale-lock arbitration winner did not reach barrier"
+[ "$(cat "$RECLAIM_BARRIER.winner")" = "$RECLAIM_WINNER_PID" ] || fail "stale-lock winner PID was not published"
+if PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=invalid bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/reclaim-contender.log" 2>&1; then fail "second stale-lock reclaimer displaced the winner"; fi
+assert_contains "$TEMP_ROOT/reclaim-contender.log" 'another Pi-Science detached launch transaction is active'
+kill -KILL "$RECLAIM_WINNER_PID"; wait "$RECLAIM_WINNER_PID" 2>/dev/null || true
+if PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=invalid bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/reclaim-recovery.log" 2>&1; then fail "invalid-timeout recovery unexpectedly succeeded"; fi
+assert_not_contains "$TEMP_ROOT/reclaim-recovery.log" 'another Pi-Science detached launch transaction is active'
+assert_not_contains "$TEMP_ROOT/reclaim-recovery.log" 'stale launch lock has unverifiable ownership'
+[ ! -e "$DEAD_LOCK" ] || fail "recovered launch lock remained"
+if find "$FIXTURE/.runtime/pi-science" -maxdepth 1 \( -name 'start.lock.reclaim' -o -name '.start.lock.stale.*' -o -name '.start.lock.*' \) -print | grep -q .; then fail "stale-lock arbitration artifact remained"; fi
+
 # SIGKILL after supervisor spawn leaves a verifiably stale lock, not a permanent
 # start blockage. The next launch reclaims the lock and reports the surviving
 # unverified listener; manual cleanup uses the published fenced supervisor ID.

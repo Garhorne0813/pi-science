@@ -125,6 +125,31 @@ describe("job coordinator", () => {
     expect((await conservative.get(cwd, "job_cccccccccccccccc"))?.status).toBe("running");
   });
 
+  it("compares stable owner identity kinds exactly and treats unavailable or cross-platform evidence conservatively", async () => {
+    const cwd = await workspace();
+    const owner = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" });
+    const pid = owner.pid!;
+    try {
+      const base: JobOwnership = { instance_id: "remote-owner", pid, process_started_at: "legacy", process_identity: { kind: "ps-lstart-utc", platform: "darwin", value: "stable UTC identity" }, generation: 1, token: "stable-token", heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(2_000).toISOString() };
+      await writeStoredJob(cwd, "job_owneridentity000", "running", new Date(1_000).toISOString(), "", base);
+      const priorLocale = process.env.LC_ALL; const priorTimezone = process.env.TZ;
+      process.env.LC_ALL = "fr_FR.UTF-8"; process.env.TZ = "Pacific/Auckland";
+      try {
+        const matching = jobCoordinator(undefined, { now: () => 3_000, platform: "darwin", ownerProcessIdentity: () => ({ kind: "ps-lstart-utc", platform: "darwin", value: "stable UTC identity" }) });
+        expect((await matching.get(cwd, "job_owneridentity000"))?.status).toBe("running");
+      } finally { if (priorLocale === undefined) delete process.env.LC_ALL; else process.env.LC_ALL = priorLocale; if (priorTimezone === undefined) delete process.env.TZ; else process.env.TZ = priorTimezone; }
+      await writeStoredJob(cwd, "job_owneridentity111", "running", new Date(1_000).toISOString(), "", { ...base, token: "mismatch-token" });
+      const mismatch = jobCoordinator(undefined, { now: () => 3_000, platform: "darwin", ownerProcessIdentity: () => ({ kind: "ps-lstart-utc", platform: "darwin", value: "different identity" }) });
+      expect((await mismatch.get(cwd, "job_owneridentity111"))?.status).toBe("failed");
+      await writeStoredJob(cwd, "job_owneridentity222", "running", new Date(1_000).toISOString(), "", { ...base, token: "platform-token" });
+      const crossPlatform = jobCoordinator(undefined, { now: () => 3_000, platform: "linux", ownerProcessIdentity: () => ({ kind: "linux-proc-start-ticks", platform: "linux", value: "123" }) });
+      expect((await crossPlatform.get(cwd, "job_owneridentity222"))?.status).toBe("running");
+      await writeStoredJob(cwd, "job_owneridentity333", "running", new Date(1_000).toISOString(), "", { ...base, token: "unavailable-token" });
+      const unavailable = jobCoordinator(undefined, { now: () => 3_000, platform: "darwin", ownerProcessIdentity: () => null });
+      expect((await unavailable.get(cwd, "job_owneridentity333"))?.status).toBe("running");
+    } finally { owner.kill("SIGKILL"); await waitFor(() => processExists(pid), (alive) => !alive).catch(() => undefined); }
+  });
+
   it("fences a stale owner terminal write after another coordinator heals the job", async () => {
     const cwd = await workspace();
     let now = 1_000;
@@ -284,6 +309,47 @@ describe("job coordinator", () => {
     await new Promise((resolve) => setTimeout(resolve, 1100));
     await expect(stat(delayed)).rejects.toThrow();
   }, 10_000);
+
+  it("attempts fenced persisted-child cleanup before cross-coordinator cancellation and never reaps twice", async () => {
+    const cwd = await workspace();
+    const ownership: JobOwnership = { instance_id: "remote-owner", pid: 999_999, process_started_at: "legacy", generation: 4, token: "cancel-token", heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(9_000).toISOString(), child: { pid: 4567, process_identity: { kind: "linux-proc-start-ticks", value: "123" }, process_group: true, platform: "linux", ownership_generation: 4, ownership_token: "cancel-token" } };
+    await writeStoredJob(cwd, "job_cancelreap000000", "running", new Date(1_000).toISOString(), "", ownership);
+    const reaped: number[] = [];
+    const canceller = jobCoordinator(undefined, { now: () => 3_000, reapChild: (identity) => { reaped.push(identity.pid); return "reaped"; } });
+    const cancelled = await canceller.cancel(cwd, "job_cancelreap000000");
+    expect(cancelled?.status).toBe("cancelled"); expect(cancelled?.stderr).toContain("cancellation cleanup"); expect(cancelled?.stderr).toContain("was reaped"); expect(reaped).toEqual([4567]);
+    expect((await canceller.cancel(cwd, "job_cancelreap000000"))?.status).toBe("cancelled"); expect(reaped).toEqual([4567]);
+  });
+
+  it.skipIf(process.platform !== "linux")("reaps a verified persisted Linux process group during cross-coordinator cancellation", async () => {
+    const cwd = await workspace();
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 30000)"], { detached: true, stdio: "ignore" });
+    const pid = child.pid!;
+    try {
+      const ticks = await waitFor(() => linuxStartTicks(pid), Boolean);
+      const token = "cancel-real-token";
+      const ownership: JobOwnership = { instance_id: "remote-owner", pid: 999_999, process_started_at: "legacy", generation: 6, token, heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(99_000).toISOString(), child: { pid, process_identity: { kind: "linux-proc-start-ticks", value: ticks! }, process_group: true, platform: "linux", ownership_generation: 6, ownership_token: token } };
+      await writeStoredJob(cwd, "job_cancelreal000000", "running", new Date(1_000).toISOString(), "", ownership);
+      const canceller = jobCoordinator();
+      const cancelled = await canceller.cancel(cwd, "job_cancelreal000000");
+      expect(cancelled?.status).toBe("cancelled"); expect(cancelled?.stderr).toContain("was reaped");
+      await waitFor(() => processExists(pid), (alive) => !alive);
+    } finally { try { process.kill(-pid, "SIGKILL"); } catch { /* already gone */ } await waitFor(() => processExists(pid), (alive) => !alive).catch(() => undefined); }
+  });
+
+  it.skipIf(process.platform !== "linux")("does not signal a mismatched persisted child during cancellation", async () => {
+    const cwd = await workspace();
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 30000)"], { detached: true, stdio: "ignore" });
+    const pid = child.pid!;
+    try {
+      const ticks = await waitFor(() => linuxStartTicks(pid), Boolean);
+      const token = "cancel-mismatch-token";
+      const ownership: JobOwnership = { instance_id: "remote-owner", pid: 999_999, process_started_at: "legacy", generation: 7, token, heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(99_000).toISOString(), child: { pid, process_identity: { kind: "linux-proc-start-ticks", value: `${ticks!}0` }, process_group: true, platform: "linux", ownership_generation: 7, ownership_token: token } };
+      await writeStoredJob(cwd, "job_cancelmismatch00", "running", new Date(1_000).toISOString(), "", ownership);
+      const cancelled = await jobCoordinator().cancel(cwd, "job_cancelmismatch00");
+      expect(cancelled?.status).toBe("cancelled"); expect(cancelled?.stderr).toContain("was reused"); expect(await processExists(pid)).toBe(true);
+    } finally { try { process.kill(-pid, "SIGKILL"); } catch { /* cleanup */ } await waitFor(() => processExists(pid), (alive) => !alive).catch(() => undefined); }
+  });
 
   it("reaps only a verified fenced orphan child identity", async () => {
     const cwd = await workspace();

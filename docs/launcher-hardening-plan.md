@@ -54,11 +54,11 @@ Harden the installed local-development launcher without changing Pi-Science into
 
 ### 4. Durable JobCoordinator ownership
 
-- Give every coordinator a random instance ID and process-start timestamp. Every nonterminal job persists owner PID, generation, random fencing token, heartbeat timestamp and lease expiry.
+- Give every coordinator a random instance ID and a typed owner-process identity. Linux persists `/proc/<pid>/stat` start ticks; non-Linux fallback evidence is captured with `LC_ALL=C`, `LANG=C`, and `TZ=UTC` and is treated conservatively when unavailable or incomparable. Every nonterminal job also persists owner PID, generation, random fencing token, heartbeat timestamp and lease expiry.
 - Renew leases on one bounded unref'ed interval per active job and stop it on success, failure, cancellation, timeout and shutdown.
 - Perform running, heartbeat, cancellation, healing and terminal transitions under the per-job file lock. Terminal writes require the same generation/token, so cancellation or healing wins over stale output.
 - Preserve a job while its lease is valid or its owner is credibly active. Existing records without ownership metadata retain the legacy grace compatibility path.
-- Fail-and-reap does not adopt process streams after restart. Authorization, synchronous spawn, child registration and durable child identity persistence share the per-job lock. The record stores child PID, identity kind/value, process-group semantics, platform and the owning generation/token. Linux reaping requires an exact `/proc/<pid>/stat` start-tick match plus matching persisted/current platform before signaling the process group. macOS and Windows currently have no implemented kernel-backed identity verifier here, so expired dead-owner jobs fail with explicit unreaped-risk diagnostics and no PID-only signal. A reused PID, platform mismatch or ownership fence mismatch is never signaled.
+- Fail-and-reap does not adopt process streams after restart. Authorization, synchronous spawn, child registration and durable child identity persistence share the per-job lock. The record stores child PID, identity kind/value, process-group semantics, platform and the owning generation/token. Linux reaping requires an exact `/proc/<pid>/stat` start-tick match plus matching persisted/current platform before signaling the process group. Cross-coordinator cancellation attempts the same fenced cleanup before persisting terminal cancellation; unverifiable macOS/Windows identities are not signalled and leave explicit residual diagnostics. A reused PID, platform mismatch or ownership fence mismatch is never signaled.
 
 ### 5. Tests and CI
 
@@ -106,7 +106,7 @@ Update `README.md` and `README.zh-CN.md` together to state:
 
 ## Rollback and residual risks
 
-The source changes are isolated to shell launch/install behavior, launcher tests, CI wiring, engine metadata, and documentation. The process-launch commit and installer-safety commit can be reverted independently. `tsx watch` and Vite remain development processes and retain their own internal child-management behavior. Git Bash signal semantics can differ from WSL/Linux; documentation will not claim native Windows equivalence. Force-overwriting unrelated PATH entries is intentionally not provided; users must move/remove collisions explicitly.
+The diff spans shell launch/install behavior, launcher tests, CI wiring, engine metadata, documentation, `JobCoordinator` durable ownership/reaping, public job API sanitization, and server characterization tests. Launcher commits and JobCoordinator commits remain separate so either area can be reviewed or reverted independently, but reverting durable ownership also requires reverting its API sanitizer and ownership tests as one unit. `tsx watch` and Vite remain development processes and retain their own internal child-management behavior. Git Bash signal semantics can differ from WSL/Linux; documentation will not claim native Windows equivalence. Force-overwriting unrelated PATH entries is intentionally not provided; users must move/remove collisions explicitly.
 
 ## PR acceptance criteria
 

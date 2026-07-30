@@ -9,8 +9,9 @@ import { defaultPythonExecutable, WorkspaceEnvironmentService } from "./workspac
 export type JobStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled" | "timed_out";
 export interface JobRequirement { cpu?: number; memory_mb?: number; gpu?: boolean; runtime?: string; packages?: string[]; timeout_seconds?: number; [key: string]: unknown }
 export type JobProcessIdentity = { kind: "linux-proc-start-ticks"; value: string };
+export type JobOwnerProcessIdentity = { kind: "linux-proc-start-ticks" | "ps-lstart-utc"; platform: NodeJS.Platform; value: string };
 export interface JobChildIdentity { pid: number; process_identity: JobProcessIdentity | null; process_group: boolean; platform: NodeJS.Platform; ownership_generation: number; ownership_token: string }
-export interface JobOwnership { instance_id: string; pid: number; process_started_at: string; generation: number; token: string; heartbeat_at: string; lease_expires_at: string; child?: JobChildIdentity }
+export interface JobOwnership { instance_id: string; pid: number; process_started_at: string; process_identity?: JobOwnerProcessIdentity; generation: number; token: string; heartbeat_at: string; lease_expires_at: string; child?: JobChildIdentity }
 export interface JobRecord { job_id: string; command: string[]; cwd: string; execution_cwd?: string; surface: string; status: JobStatus; created_at: string; started_at?: string; ended_at?: string; return_code?: number | null; stdout: string; stderr: string; artifact_ids: string[]; environment: Record<string, unknown>; requirement: JobRequirement; ownership?: JobOwnership }
 export type PublicJobRecord = Omit<JobRecord, "ownership">;
 export function publicJobRecord(record: JobRecord): PublicJobRecord { const { ownership: _ownership, ...publicRecord } = record; return publicRecord; }
@@ -25,7 +26,7 @@ const POSIX = process.platform !== "win32";
 const RESEARCH_ENVIRONMENT_KEY_NAMES = ["PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "ComSpec", "PATHEXT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "VIRTUAL_ENV", "PYTHONNOUSERSITE", "PIP_REQUIRE_VIRTUALENV", "PIP_USER", "UV_PROJECT_ENVIRONMENT", "npm_config_prefix", "npm_config_cache", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"] as const;
 const RESEARCH_ENVIRONMENT_KEYS = new Map(RESEARCH_ENVIRONMENT_KEY_NAMES.map((key) => [key.toLowerCase(), key]));
 
-export interface JobCoordinatorHooks { beforeSpawn?: (record: Readonly<JobRecord>) => Promise<void>; testBeforeAuthorizedSpawn?: (record: Readonly<JobRecord>) => Promise<void>; beforeTerminalSave?: (record: Readonly<JobRecord>) => Promise<void>; platform?: NodeJS.Platform; now?: () => number; leaseMs?: number; heartbeatMs?: number; ownerProcessAlive?: (pid: number, ownership: Readonly<JobOwnership>) => boolean; childStartIdentity?: (pid: number, platform: NodeJS.Platform) => JobProcessIdentity | null; reapChild?: (identity: Readonly<JobChildIdentity>) => "reaped" | "identity-mismatch" | "unverifiable" | "missing"; onHeartbeatStarted?: (jobId: string) => void; onHeartbeatStopped?: (jobId: string) => void }
+export interface JobCoordinatorHooks { beforeSpawn?: (record: Readonly<JobRecord>) => Promise<void>; testBeforeAuthorizedSpawn?: (record: Readonly<JobRecord>) => Promise<void>; beforeTerminalSave?: (record: Readonly<JobRecord>) => Promise<void>; platform?: NodeJS.Platform; now?: () => number; leaseMs?: number; heartbeatMs?: number; ownerProcessAlive?: (pid: number, ownership: Readonly<JobOwnership>) => boolean; ownerProcessIdentity?: (pid: number, platform: NodeJS.Platform) => JobOwnerProcessIdentity | null; childStartIdentity?: (pid: number, platform: NodeJS.Platform) => JobProcessIdentity | null; reapChild?: (identity: Readonly<JobChildIdentity>) => "reaped" | "identity-mismatch" | "unverifiable" | "missing"; onHeartbeatStarted?: (jobId: string) => void; onHeartbeatStopped?: (jobId: string) => void }
 
 const LIVE_JOB_OWNERS = new Set<string>();
 
@@ -35,12 +36,16 @@ export class JobCoordinator {
   private readonly cancelled = new Set<string>();
   private readonly heartbeats = new Map<string, NodeJS.Timeout>();
   private readonly instanceId = `coordinator_${randomUUID()}`;
-  private readonly processStartedAt = processStartIdentity(process.pid, process.platform) ?? new Date(Date.now() - process.uptime() * 1000).toISOString();
+  private readonly processIdentity: JobOwnerProcessIdentity | null;
+  private readonly processStartedAt: string;
   private readonly now: () => number;
   private readonly leaseMs: number;
   private readonly heartbeatMs: number;
 
   constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService(), private readonly hooks: JobCoordinatorHooks = {}) {
+    const platform = hooks.platform ?? process.platform;
+    this.processIdentity = hooks.ownerProcessIdentity ? hooks.ownerProcessIdentity(process.pid, platform) : ownerProcessIdentity(process.pid, platform);
+    this.processStartedAt = this.processIdentity?.value ?? new Date(Date.now() - process.uptime() * 1000).toISOString();
     this.now = hooks.now ?? Date.now;
     this.leaseMs = Math.max(100, hooks.leaseMs ?? OWNERSHIP_LEASE_MS);
     this.heartbeatMs = Math.max(25, Math.min(hooks.heartbeatMs ?? OWNERSHIP_HEARTBEAT_MS, Math.floor(this.leaseMs / 2)));
@@ -73,7 +78,7 @@ export class JobCoordinator {
     const executionRelative = relative(resolve(cwd), executionCwd);
     if (isAbsolute(executionRelative) || executionRelative === ".." || executionRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) throw new Error("execution cwd escapes the workspace");
     const now = this.now();
-    const ownership: JobOwnership = { instance_id: this.instanceId, pid: process.pid, process_started_at: this.processStartedAt, generation: 1, token: randomUUID(), heartbeat_at: new Date(now).toISOString(), lease_expires_at: new Date(now + this.leaseMs).toISOString() };
+    const ownership: JobOwnership = { instance_id: this.instanceId, pid: process.pid, process_started_at: this.processStartedAt, ...(this.processIdentity ? { process_identity: this.processIdentity } : {}), generation: 1, token: randomUUID(), heartbeat_at: new Date(now).toISOString(), lease_expires_at: new Date(now + this.leaseMs).toISOString() };
     const record: JobRecord = { job_id: `job_${randomUUID().replaceAll("-", "").slice(0, 16)}`, command, cwd, ...(executionCwd !== resolve(cwd) ? { execution_cwd: executionCwd } : {}), surface, status: "pending", created_at: new Date(now).toISOString(), stdout: "", stderr: "", artifact_ids: [], environment: { platform: process.platform, node: process.version, virtual_env: environment.VIRTUAL_ENV, npm_prefix: environment.npm_config_prefix }, requirement, ownership };
     LIVE_JOB_OWNERS.add(ownership.token);
     try { await this.save(record); } catch (error) { LIVE_JOB_OWNERS.delete(ownership.token); throw error; }
@@ -109,6 +114,11 @@ export class JobCoordinator {
       const record = await readJson<JobRecord | null>(path, null);
       if (!record) { this.cancelled.delete(id); return null; }
       if (isTerminal(record.status)) { if (record.status !== "cancelled") this.cancelled.delete(id); return record; }
+      if (!child && record.ownership?.child) {
+        const cleanup = this.reapOrphanChild(record.ownership);
+        const note = `cancellation cleanup: ${cleanup}`;
+        record.stderr = record.stderr ? `${record.stderr}\n${note}` : note;
+      }
       record.status = "cancelled"; record.ended_at = new Date(this.now()).toISOString(); await writeJsonAtomic(path, record);
       return record;
     });
@@ -129,8 +139,12 @@ export class JobCoordinator {
     if (ownership.pid === process.pid) return false;
     try {
       process.kill(ownership.pid, 0);
-      const identity = processStartIdentity(ownership.pid, this.hooks.platform ?? process.platform);
-      return identity === null || identity === ownership.process_started_at;
+      const expected = ownership.process_identity;
+      if (!expected) return true;
+      const platform = this.hooks.platform ?? process.platform;
+      if (expected.platform !== platform) return true;
+      const identity = this.hooks.ownerProcessIdentity ? this.hooks.ownerProcessIdentity(ownership.pid, platform) : ownerProcessIdentity(ownership.pid, platform);
+      return !identity || identity.kind !== expected.kind || identity.platform !== expected.platform ? true : identity.value === expected.value;
     } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
   }
   private reapOrphanChild(ownership: JobOwnership): string {
@@ -269,11 +283,13 @@ export function windowsTaskkillArgs(pid: number): string[] { return ["/pid", Str
 function isTerminal(status: JobStatus): boolean { return ["succeeded", "failed", "cancelled", "timed_out"].includes(status); }
 function isNonterminal(status: JobStatus): boolean { return status === "pending" || status === "running"; }
 
-function processStartIdentity(pid: number, platform: NodeJS.Platform): string | null {
+function ownerProcessIdentity(pid: number, platform: NodeJS.Platform): JobOwnerProcessIdentity | null {
+  const linux = childProcessIdentity(pid, platform);
+  if (linux) return { ...linux, platform };
   if (platform === "win32") return null;
-  const result = spawnSync("ps", ["-ww", "-o", "lstart=", "-p", String(pid)], { encoding: "utf8", windowsHide: true });
+  const result = spawnSync("ps", ["-ww", "-o", "lstart=", "-p", String(pid)], { encoding: "utf8", windowsHide: true, env: { ...process.env, LC_ALL: "C", LANG: "C", TZ: "UTC" } });
   const value = result.status === 0 ? result.stdout.trim() : "";
-  return value || null;
+  return value ? { kind: "ps-lstart-utc", platform, value } : null;
 }
 
 function childProcessIdentity(pid: number, platform: NodeJS.Platform): JobProcessIdentity | null {
