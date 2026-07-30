@@ -208,10 +208,10 @@ export function LiveSessionPage() {
               <div className="border-b border-faint px-3 py-2">
                 <div className="flex flex-wrap gap-1.5">
                   {workspaceReferences.map((reference) => (
-                    <span key={reference.path} className="flex max-w-full items-center gap-1 rounded-input bg-accent/5 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-accent/20" title={reference.path}>
+                    <span key={reference.path} className="flex max-w-full items-center gap-1 rounded-input bg-accent/5 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-accent/20 cursor-pointer hover:bg-accent/10" title={`${t("conversation.clickToInsert")} ${reference.path}`} onClick={() => { const current = input; setInput(current ? `${current} ${reference.path}` : reference.path); removeWorkspaceReference(workspaceCwd, reference.path); }}>
                       {reference.isDir ? <FolderOpen size={11} className="shrink-0 text-accent" /> : <File size={11} className="shrink-0 text-accent" />}
                       <span className="truncate">{reference.path}</span>
-                      <button type="button" aria-label={`Remove reference ${reference.name}`} onClick={() => removeWorkspaceReference(workspaceCwd, reference.path)} className="shrink-0 text-muted hover:text-error">
+                      <button type="button" aria-label={`Remove reference ${reference.name}`} onClick={(e) => { e.stopPropagation(); removeWorkspaceReference(workspaceCwd, reference.path); }} className="shrink-0 text-muted hover:text-error">
                         <X size={11} />
                       </button>
                     </span>
