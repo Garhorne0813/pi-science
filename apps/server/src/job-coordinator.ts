@@ -7,23 +7,38 @@ import { defaultPythonExecutable, WorkspaceEnvironmentService } from "./workspac
 
 export type JobStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled" | "timed_out";
 export interface JobRequirement { cpu?: number; memory_mb?: number; gpu?: boolean; runtime?: string; packages?: string[]; timeout_seconds?: number; [key: string]: unknown }
-export interface JobRecord { job_id: string; command: string[]; cwd: string; execution_cwd?: string; surface: string; status: JobStatus; created_at: string; started_at?: string; ended_at?: string; return_code?: number | null; stdout: string; stderr: string; artifact_ids: string[]; environment: Record<string, unknown>; requirement: JobRequirement }
+export interface JobOwnership { instance_id: string; pid: number; process_started_at: string; generation: number; token: string; heartbeat_at: string; lease_expires_at: string }
+export interface JobRecord { job_id: string; command: string[]; cwd: string; execution_cwd?: string; surface: string; status: JobStatus; created_at: string; started_at?: string; ended_at?: string; return_code?: number | null; stdout: string; stderr: string; artifact_ids: string[]; environment: Record<string, unknown>; requirement: JobRequirement; ownership?: JobOwnership }
 
 const ORPHAN_GRACE_MS = 15_000;
+const OWNERSHIP_LEASE_MS = 30_000;
+const OWNERSHIP_HEARTBEAT_MS = 5_000;
 const KILL_GRACE_MS = 2_000;
 const PROCESS_CLOSE_FAILSAFE_MS = 5_000;
 const POSIX = process.platform !== "win32";
 const RESEARCH_ENVIRONMENT_KEY_NAMES = ["PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "ComSpec", "PATHEXT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "VIRTUAL_ENV", "PYTHONNOUSERSITE", "PIP_REQUIRE_VIRTUALENV", "PIP_USER", "UV_PROJECT_ENVIRONMENT", "npm_config_prefix", "npm_config_cache", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"] as const;
 const RESEARCH_ENVIRONMENT_KEYS = new Map(RESEARCH_ENVIRONMENT_KEY_NAMES.map((key) => [key.toLowerCase(), key]));
 
-export interface JobCoordinatorHooks { beforeSpawn?: (record: Readonly<JobRecord>) => Promise<void>; beforeTerminalSave?: (record: Readonly<JobRecord>) => Promise<void>; platform?: NodeJS.Platform }
+export interface JobCoordinatorHooks { beforeSpawn?: (record: Readonly<JobRecord>) => Promise<void>; beforeTerminalSave?: (record: Readonly<JobRecord>) => Promise<void>; platform?: NodeJS.Platform; now?: () => number; leaseMs?: number; heartbeatMs?: number; ownerProcessAlive?: (pid: number, ownership: Readonly<JobOwnership>) => boolean; onHeartbeatStarted?: (jobId: string) => void; onHeartbeatStopped?: (jobId: string) => void }
+
+const LIVE_JOB_OWNERS = new Set<string>();
 
 export class JobCoordinator {
   private readonly children = new Map<string, ChildProcess>();
   private readonly jobs = new Map<string, Promise<void>>();
   private readonly cancelled = new Set<string>();
+  private readonly heartbeats = new Map<string, NodeJS.Timeout>();
+  private readonly instanceId = `coordinator_${randomUUID()}`;
+  private readonly processStartedAt = new Date(Date.now() - process.uptime() * 1000).toISOString();
+  private readonly now: () => number;
+  private readonly leaseMs: number;
+  private readonly heartbeatMs: number;
 
-  constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService(), private readonly hooks: JobCoordinatorHooks = {}) {}
+  constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService(), private readonly hooks: JobCoordinatorHooks = {}) {
+    this.now = hooks.now ?? Date.now;
+    this.leaseMs = Math.max(100, hooks.leaseMs ?? OWNERSHIP_LEASE_MS);
+    this.heartbeatMs = Math.max(25, Math.min(hooks.heartbeatMs ?? OWNERSHIP_HEARTBEAT_MS, Math.floor(this.leaseMs / 2)));
+  }
 
   capabilities(requirement: JobRequirement) {
     const runtime = { node: process.execPath, python: defaultPythonExecutable(), r: null };
@@ -51,8 +66,11 @@ export class JobCoordinator {
     const executionCwd = typeof body.execution_cwd === "string" ? resolve(body.execution_cwd) : resolve(cwd);
     const executionRelative = relative(resolve(cwd), executionCwd);
     if (isAbsolute(executionRelative) || executionRelative === ".." || executionRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) throw new Error("execution cwd escapes the workspace");
-    const record: JobRecord = { job_id: `job_${randomUUID().replaceAll("-", "").slice(0, 16)}`, command, cwd, ...(executionCwd !== resolve(cwd) ? { execution_cwd: executionCwd } : {}), surface, status: "pending", created_at: new Date().toISOString(), stdout: "", stderr: "", artifact_ids: [], environment: { platform: process.platform, node: process.version, virtual_env: environment.VIRTUAL_ENV, npm_prefix: environment.npm_config_prefix }, requirement };
-    await this.save(record);
+    const now = this.now();
+    const ownership: JobOwnership = { instance_id: this.instanceId, pid: process.pid, process_started_at: this.processStartedAt, generation: 1, token: randomUUID(), heartbeat_at: new Date(now).toISOString(), lease_expires_at: new Date(now + this.leaseMs).toISOString() };
+    const record: JobRecord = { job_id: `job_${randomUUID().replaceAll("-", "").slice(0, 16)}`, command, cwd, ...(executionCwd !== resolve(cwd) ? { execution_cwd: executionCwd } : {}), surface, status: "pending", created_at: new Date(now).toISOString(), stdout: "", stderr: "", artifact_ids: [], environment: { platform: process.platform, node: process.version, virtual_env: environment.VIRTUAL_ENV, npm_prefix: environment.npm_config_prefix }, requirement, ownership };
+    LIVE_JOB_OWNERS.add(ownership.token);
+    try { await this.save(record); } catch (error) { LIVE_JOB_OWNERS.delete(ownership.token); throw error; }
     const task = this.run(record, environment);
     this.jobs.set(record.job_id, task);
     void task.catch(() => undefined).finally(() => { if (this.jobs.get(record.job_id) === task) this.jobs.delete(record.job_id); });
@@ -84,36 +102,87 @@ export class JobCoordinator {
     return withFileWriteLock(path, async () => {
       const record = await readJson<JobRecord | null>(path, null);
       if (!record) { this.cancelled.delete(id); return null; }
-      if (["succeeded", "failed", "cancelled", "timed_out"].includes(record.status)) { if (record.status !== "cancelled") this.cancelled.delete(id); return record; }
-      record.status = "cancelled"; record.ended_at = new Date().toISOString(); await writeJsonAtomic(path, record);
+      if (isTerminal(record.status)) { if (record.status !== "cancelled") this.cancelled.delete(id); return record; }
+      record.status = "cancelled"; record.ended_at = new Date(this.now()).toISOString(); await writeJsonAtomic(path, record);
       return record;
     });
   }
-  async shutdown(): Promise<void> { for (const child of this.children.values()) terminate(child); await Promise.allSettled([...this.jobs.values()]); }
+  async shutdown(): Promise<void> {
+    for (const child of this.children.values()) terminate(child);
+    await Promise.allSettled([...this.jobs.values()]);
+    for (const id of [...this.heartbeats.keys()]) this.stopHeartbeat(id);
+  }
 
   private jobsDir(cwd: string) { return join(metadataRoot(cwd), "jobs"); }
   private jobPath(cwd: string, id: string) { if (!/^job_[A-Za-z0-9]{16}$/.test(id)) throw new Error("Invalid job id"); const root = resolve(this.jobsDir(cwd)); const target = resolve(root, `${id}.json`); const rel = relative(root, target); if (isAbsolute(rel) || rel.startsWith("..")) throw new Error("Job path escapes the workspace"); return target; }
   private async save(record: JobRecord) { await writeJsonAtomic(this.jobPath(record.cwd, record.job_id), record); }
+  private ownershipMatches(left: JobOwnership | undefined, right: JobOwnership | undefined): boolean { return Boolean(left && right && left.instance_id === right.instance_id && left.generation === right.generation && left.token === right.token); }
+  private ownerCrediblyAlive(ownership: JobOwnership): boolean {
+    if (LIVE_JOB_OWNERS.has(ownership.token)) return true;
+    if (this.hooks.ownerProcessAlive) return this.hooks.ownerProcessAlive(ownership.pid, ownership);
+    if (ownership.pid === process.pid) return false;
+    try { process.kill(ownership.pid, 0); return true; } catch { return false; }
+  }
   private async healOrphan(record: JobRecord): Promise<JobRecord> {
-    if (!["pending", "running"].includes(record.status) || this.jobs.has(record.job_id)) return record;
-    if (Date.now() - Date.parse(record.created_at) < ORPHAN_GRACE_MS) return record;
-    const note = "job was orphaned by a server restart";
-    record.status = "failed"; record.return_code = null; record.ended_at = new Date().toISOString();
-    record.stderr = record.stderr ? `${record.stderr}\n${note}` : note;
-    await this.save(record);
-    return record;
+    if (!isNonterminal(record.status) || this.jobs.has(record.job_id)) return record;
+    const path = this.jobPath(record.cwd, record.job_id);
+    return withFileWriteLock(path, async () => {
+      const current = await readJson<JobRecord | null>(path, null);
+      if (!current || !isNonterminal(current.status) || this.jobs.has(current.job_id)) return current ?? record;
+      const now = this.now();
+      if (!current.ownership) {
+        if (now - Date.parse(current.created_at) < ORPHAN_GRACE_MS) return current;
+      } else {
+        if (Date.parse(current.ownership.lease_expires_at) > now || this.ownerCrediblyAlive(current.ownership)) return current;
+      }
+      const note = current.ownership ? `job owner lease expired and owner process is no longer active (${current.ownership.instance_id})` : "job was orphaned by a server restart";
+      current.status = "failed"; current.return_code = null; current.ended_at = new Date(now).toISOString();
+      current.stderr = current.stderr ? `${current.stderr}\n${note}` : note;
+      await writeJsonAtomic(path, current);
+      return current;
+    });
+  }
+  private startHeartbeat(record: JobRecord): void {
+    if (!record.ownership || this.heartbeats.has(record.job_id)) return;
+    const refresh = async () => {
+      const ownership = record.ownership;
+      if (!ownership) return;
+      const path = this.jobPath(record.cwd, record.job_id);
+      await withFileWriteLock(path, async () => {
+        const current = await readJson<JobRecord | null>(path, null);
+        if (!current || !isNonterminal(current.status) || !this.ownershipMatches(current.ownership, ownership)) { this.stopHeartbeat(record.job_id); return; }
+        const now = this.now();
+        current.ownership = { ...ownership, heartbeat_at: new Date(now).toISOString(), lease_expires_at: new Date(now + this.leaseMs).toISOString() };
+        record.ownership = current.ownership;
+        await writeJsonAtomic(path, current);
+      });
+    };
+    let refreshing = false;
+    const timer = setInterval(() => { if (refreshing) return; refreshing = true; void refresh().catch(() => undefined).finally(() => { refreshing = false; }); }, this.heartbeatMs);
+    timer.unref(); this.heartbeats.set(record.job_id, timer); this.hooks.onHeartbeatStarted?.(record.job_id);
+  }
+  private stopHeartbeat(id: string): void {
+    const timer = this.heartbeats.get(id); if (!timer) return;
+    clearInterval(timer); this.heartbeats.delete(id); this.hooks.onHeartbeatStopped?.(id);
   }
   private async run(record: JobRecord, environment: NodeJS.ProcessEnv): Promise<void> {
-    if (this.cancelled.has(record.job_id)) { record.status = "cancelled"; record.ended_at = new Date().toISOString(); await this.save(record); this.cancelled.delete(record.job_id); return; }
-    record.status = "running"; record.started_at = new Date().toISOString(); await this.save(record);
+    const path = this.jobPath(record.cwd, record.job_id);
+    if (this.cancelled.has(record.job_id)) { record.status = "cancelled"; record.ended_at = new Date(this.now()).toISOString(); await this.save(record); this.cancelled.delete(record.job_id); LIVE_JOB_OWNERS.delete(record.ownership?.token ?? ""); return; }
+    let enteredRunning = false;
+    try { enteredRunning = await withFileWriteLock(path, async () => {
+      const current = await readJson<JobRecord | null>(path, null);
+      if (!current || isTerminal(current.status) || !this.ownershipMatches(current.ownership, record.ownership)) { if (current) Object.assign(record, current); return false; }
+      current.status = "running"; current.started_at = new Date(this.now()).toISOString(); Object.assign(record, current); await writeJsonAtomic(path, current); return true;
+    }); } catch (error) { LIVE_JOB_OWNERS.delete(record.ownership?.token ?? ""); throw error; }
+    if (!enteredRunning) { LIVE_JOB_OWNERS.delete(record.ownership?.token ?? ""); return; }
+    this.startHeartbeat(record);
     let child: ChildProcess | undefined;
     try {
       await this.hooks.beforeSpawn?.(record);
       if (this.cancelled.has(record.job_id)) { record.status = "cancelled"; return; }
-      const path = this.jobPath(record.cwd, record.job_id);
       const shouldSpawn = await withFileWriteLock(path, async () => {
         const current = await readJson<JobRecord | null>(path, null);
-        if (current && isTerminal(current.status)) { Object.assign(record, current); return false; }
+        if (!current || isTerminal(current.status) || !this.ownershipMatches(current.ownership, record.ownership)) { if (current) Object.assign(record, current); return false; }
         return true;
       });
       if (!shouldSpawn) return;
@@ -143,15 +212,16 @@ export class JobCoordinator {
       record.status = this.cancelled.has(record.job_id) ? "cancelled" : timedOut ? "timed_out" : result.code === 0 ? "succeeded" : "failed";
     } catch (error) { if (!this.cancelled.has(record.job_id)) { record.status = "failed"; record.stderr = String(error).slice(-100_000); } }
     finally {
-      record.ended_at = new Date().toISOString(); this.children.delete(record.job_id);
+      this.stopHeartbeat(record.job_id); LIVE_JOB_OWNERS.delete(record.ownership?.token ?? "");
+      record.ended_at = new Date(this.now()).toISOString(); this.children.delete(record.job_id);
       await this.hooks.beforeTerminalSave?.(record);
-      const path = this.jobPath(record.cwd, record.job_id);
       await withFileWriteLock(path, async () => {
         const current = await readJson<JobRecord | null>(path, null);
         const terminal = current && isTerminal(current.status);
+        const ownsCurrent = this.ownershipMatches(current?.ownership, record.ownership);
         const durable = current?.status === "cancelled"
-          ? { ...record, status: "cancelled" as const, ended_at: current.ended_at ?? record.ended_at }
-          : terminal ? current : record;
+          ? { ...record, status: "cancelled" as const, ended_at: current.ended_at ?? record.ended_at, ownership: current.ownership }
+          : terminal || !ownsCurrent ? current ?? record : record;
         await writeJsonAtomic(path, durable);
         Object.assign(record, durable);
       });
@@ -171,6 +241,7 @@ function terminate(child: ChildProcess): void {
 export function windowsTaskkillArgs(pid: number): string[] { return ["/pid", String(pid), "/T", "/F"]; }
 
 function isTerminal(status: JobStatus): boolean { return ["succeeded", "failed", "cancelled", "timed_out"].includes(status); }
+function isNonterminal(status: JobStatus): boolean { return status === "pending" || status === "running"; }
 
 function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   if (POSIX && child.pid) {
