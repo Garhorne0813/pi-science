@@ -293,6 +293,26 @@ describe("job coordinator", () => {
     await expect(stat(delayed)).rejects.toThrow();
   }, 10_000);
 
+  it("preserves cross-coordinator cleanup diagnostics after the original runner settles", async () => {
+    const cwd = await workspace();
+    const ready = join(cwd, "cross-diagnostic-ready");
+    const runner = jobCoordinator(undefined, { leaseMs: 300, heartbeatMs: 25 });
+    const canceller = jobCoordinator(undefined, { reapChild: () => "unverifiable" });
+    const script = `const fs=require("node:fs"); process.stderr.write("runner diagnostic\\n"); fs.writeFileSync(${JSON.stringify(ready)},"ready"); setTimeout(()=>{},30000)`;
+    const submitted = await runner.submit(cwd, { command: [process.execPath, "-e", script] });
+    await waitFor(async () => stat(ready).then(() => true, () => false), Boolean);
+
+    const cancelled = await canceller.cancel(cwd, submitted.job_id);
+    expect(cancelled?.stderr).toContain("cancellation cleanup");
+    await runner.shutdown();
+
+    const finished = await runner.get(cwd, submitted.job_id);
+    expect(finished).toMatchObject({ status: "cancelled" });
+    expect(finished?.stderr).toContain("runner diagnostic");
+    expect(finished?.stderr).toContain("cancellation cleanup");
+    expect(finished?.stderr.match(/cancellation cleanup/g)).toHaveLength(1);
+  }, 10_000);
+
   it("serializes final authorization, spawn registration, and cross-coordinator cancellation", async () => {
     const cwd = await workspace(); const delayed = join(cwd, "authorization-delayed");
     let entered!: () => void; let release!: () => void;

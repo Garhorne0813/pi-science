@@ -97,4 +97,41 @@ describe("cross-process file lock", () => {
     expect(ran).toBe(true);
     await expect(stat(`${path}.lock`)).rejects.toThrow();
   });
+
+  it("retries transient Windows-style release failures before advancing the queue", async () => {
+    const cwd = await workspace();
+    const path = join(cwd, "records.jsonl");
+    let attempts = 0;
+    const result = await withFileWriteLock(path, async () => "done", {
+      unlink: async (target) => {
+        attempts += 1;
+        if (attempts < 3) throw Object.assign(new Error("busy"), { code: attempts === 1 ? "EPERM" : "EBUSY" });
+        await rm(target);
+      },
+      sleep: async () => undefined,
+    });
+    expect(result).toBe("done");
+    expect(attempts).toBe(3);
+    expect(await withFileWriteLock(path, async () => "next")).toBe("next");
+  });
+
+  it("propagates permanent release failure without leaving the next queued writer hanging", async () => {
+    const cwd = await workspace();
+    const path = join(cwd, "records.jsonl");
+    const permanent = Object.assign(new Error("access denied"), { code: "EACCES" });
+    const first = withFileWriteLock(path, async () => "first", { unlink: async () => { throw permanent; } });
+    const second = withFileWriteLock(path, async () => "second");
+    await expect(first).rejects.toThrow("access denied");
+    await expect(Promise.race([second, delay(2_000).then(() => "hung")])).resolves.toBe("second");
+  });
+
+  it("never removes a lock whose ownership token was replaced", async () => {
+    const cwd = await workspace();
+    const path = join(cwd, "records.jsonl");
+    const release = await acquireFileLock(path);
+    await writeFile(`${path}.lock`, JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString(), token: "replacement-token" }), "utf8");
+    await expect(release()).rejects.toThrow("ownership changed");
+    expect(JSON.parse(await readFile(`${path}.lock`, "utf8")).token).toBe("replacement-token");
+    await rm(`${path}.lock`);
+  });
 });

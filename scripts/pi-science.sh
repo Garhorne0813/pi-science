@@ -21,7 +21,7 @@ FRONTEND_URL="http://127.0.0.1:$FRONTEND_PORT"
 READY_TIMEOUT_SECONDS="${PI_SCIENCE_STARTUP_TIMEOUT_SECONDS:-90}"
 SUPERVISOR_CLEANUP_GRACE_TENTHS=120
 STATE_PID="" STATE_TOKEN="" STATE_STARTED=""
-LAUNCH_LOCK_TOKEN="" LAUNCH_LOCK_TEMP="" BOOTSTRAP_PID="" BOOTSTRAP_TOKEN="" BOOTSTRAP_STARTED="" BOOTSTRAP_ACTIVE=false
+LAUNCH_LOCK_TOKEN="" LAUNCH_LOCK_TEMP="" LAUNCH_LOCK_CLAIM="" LAUNCH_LOCK_STALE="" BOOTSTRAP_PID="" BOOTSTRAP_TOKEN="" BOOTSTRAP_STARTED="" BOOTSTRAP_ACTIVE=false
 
 usage() {
   cat <<'EOF'
@@ -56,11 +56,27 @@ write_launch_lock_candidate() {
   local started
   started="$(process_start_identity "$$")"
   [ -n "$started" ] || { echo "Error: current launcher process identity is unavailable; refusing an unfenced detached launch." >&2; return 1; }
-  LAUNCH_LOCK_TEMP="$(mktemp "$RUN_DIR/.start.lock.XXXXXX")"
+  LAUNCH_LOCK_TEMP="$(mktemp "$RUN_DIR/.start.lock.$$.$LAUNCH_LOCK_TOKEN.XXXXXX")"
   printf 'pid=%s\nstarted=%s\ntoken=%s\n' "$$" "$started" "$LAUNCH_LOCK_TOKEN" > "$LAUNCH_LOCK_TEMP"
 }
 read_lock_value() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n 1; }
-cleanup_stale_launch_lock_artifacts() { rm -f "$RUN_DIR/start.lock.reclaim"; find "$RUN_DIR" -maxdepth 1 -type d -name '.start.lock.stale.*' -exec rm -rf {} + 2>/dev/null || true; find "$RUN_DIR" -maxdepth 1 -type f -name '.start.lock.*' -delete 2>/dev/null || true; }
+cleanup_owned_launch_lock_artifacts() {
+  [ -z "$LAUNCH_LOCK_TEMP" ] || rm -f "$LAUNCH_LOCK_TEMP"
+  [ -z "$LAUNCH_LOCK_CLAIM" ] || rm -f "$LAUNCH_LOCK_CLAIM"
+  [ -z "$LAUNCH_LOCK_STALE" ] || rm -rf "$LAUNCH_LOCK_STALE"
+  LAUNCH_LOCK_TEMP="" LAUNCH_LOCK_CLAIM="" LAUNCH_LOCK_STALE=""
+}
+cleanup_dead_launch_lock_artifacts() {
+  local artifact name remainder owner_pid
+  for artifact in "$RUN_DIR"/.start.lock.*; do
+    [ -e "$artifact" ] || continue
+    name="${artifact##*/}"; remainder="${name#.start.lock.}"
+    case "$remainder" in claim.*) remainder="${remainder#claim.}" ;; stale.*) remainder="${remainder#stale.}" ;; esac
+    owner_pid="${remainder%%.*}"
+    case "$owner_pid" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$owner_pid" 2>/dev/null || rm -rf "$artifact"
+  done
+}
 launch_lock_owner_is_live() {
   local file="$1" pid started current kill_error
   pid="$(read_lock_value "$file" pid)"; started="$(read_lock_value "$file" started)"
@@ -78,28 +94,54 @@ acquire_launch_lock() {
   LAUNCH_LOCK_TOKEN="$$-${RANDOM:-0}-$(date +%s)"
   write_launch_lock_candidate || return 1
   if mkdir "$LAUNCH_LOCK_DIR" 2>/dev/null; then
-    if ln "$LAUNCH_LOCK_TEMP" "$LAUNCH_LOCK_DIR/owner" 2>/dev/null; then rm -f "$LAUNCH_LOCK_TEMP"; LAUNCH_LOCK_TEMP=""; cleanup_stale_launch_lock_artifacts; return 0; fi
-    rmdir "$LAUNCH_LOCK_DIR" 2>/dev/null || true; rm -f "$LAUNCH_LOCK_TEMP"; LAUNCH_LOCK_TEMP=""; echo "Error: could not persist detached launch-lock ownership." >&2; return 1
+    if ln "$LAUNCH_LOCK_TEMP" "$LAUNCH_LOCK_DIR/owner" 2>/dev/null; then rm -f "$LAUNCH_LOCK_TEMP"; LAUNCH_LOCK_TEMP=""; cleanup_dead_launch_lock_artifacts; return 0; fi
+    rmdir "$LAUNCH_LOCK_DIR" 2>/dev/null || true; cleanup_owned_launch_lock_artifacts; echo "Error: could not persist detached launch-lock ownership." >&2; return 1
   fi
   local owner_status
-  if launch_lock_owner_is_live "$LAUNCH_LOCK_DIR/owner"; then rm -f "$LAUNCH_LOCK_TEMP"; LAUNCH_LOCK_TEMP=""; echo "Error: another Pi-Science detached launch transaction is active for this checkout." >&2; return 1; else owner_status=$?; fi
-  if [ "$owner_status" -eq 2 ]; then rm -f "$LAUNCH_LOCK_TEMP"; LAUNCH_LOCK_TEMP=""; echo "Error: stale launch lock has unverifiable ownership: $LAUNCH_LOCK_DIR. Inspect running launchers, then remove it manually." >&2; return 1; fi
-  if launch_lock_owner_is_live "$LAUNCH_LOCK_DIR/owner"; then rm -f "$LAUNCH_LOCK_TEMP"; LAUNCH_LOCK_TEMP=""; echo "Error: another Pi-Science detached launch transaction is active for this checkout." >&2; return 1; else owner_status=$?; fi
-  if [ "$owner_status" -eq 2 ]; then rm -f "$LAUNCH_LOCK_TEMP"; LAUNCH_LOCK_TEMP=""; echo "Error: stale launch lock has unverifiable ownership: $LAUNCH_LOCK_DIR. Inspect running launchers, then remove it manually." >&2; return 1; fi
-  local stale="$RUN_DIR/.start.lock.stale.$$.$LAUNCH_LOCK_TOKEN"
-  if ! mv "$LAUNCH_LOCK_DIR" "$stale" 2>/dev/null; then rm -f "$LAUNCH_LOCK_TEMP"; LAUNCH_LOCK_TEMP=""; echo "Error: another launcher won stale-lock recovery." >&2; return 1; fi
-  if ! mkdir "$LAUNCH_LOCK_DIR" 2>/dev/null || ! ln "$LAUNCH_LOCK_TEMP" "$LAUNCH_LOCK_DIR/owner" 2>/dev/null; then rm -rf "$stale"; rmdir "$LAUNCH_LOCK_DIR" 2>/dev/null || true; rm -f "$LAUNCH_LOCK_TEMP"; LAUNCH_LOCK_TEMP=""; echo "Error: another launcher won stale-lock recovery." >&2; return 1; fi
+  if launch_lock_owner_is_live "$LAUNCH_LOCK_DIR/owner"; then cleanup_owned_launch_lock_artifacts; echo "Error: another Pi-Science detached launch transaction is active for this checkout." >&2; return 1; else owner_status=$?; fi
+  if [ "$owner_status" -eq 2 ]; then cleanup_owned_launch_lock_artifacts; echo "Error: stale launch lock has unverifiable ownership: $LAUNCH_LOCK_DIR. Inspect running launchers, then remove it manually." >&2; return 1; fi
+
+  # Bind reclamation to the exact owner inode that was inspected. A delayed
+  # contender can never quarantine a newer winner merely because the pathname
+  # was reused after its stale-owner check.
+  LAUNCH_LOCK_CLAIM="$RUN_DIR/.start.lock.claim.$$.$LAUNCH_LOCK_TOKEN"
+  if ! ln "$LAUNCH_LOCK_DIR/owner" "$LAUNCH_LOCK_CLAIM" 2>/dev/null; then cleanup_owned_launch_lock_artifacts; echo "Error: another launcher won stale-lock recovery." >&2; return 1; fi
+  if [ -n "${PI_SCIENCE_TEST_PRE_QUARANTINE_BARRIER:-}" ]; then
+    : > "${PI_SCIENCE_TEST_PRE_QUARANTINE_BARRIER}.ready"
+    while [ ! -f "${PI_SCIENCE_TEST_PRE_QUARANTINE_BARRIER}.release" ]; do sleep 0.01; done
+  fi
+  if [ ! "$LAUNCH_LOCK_DIR/owner" -ef "$LAUNCH_LOCK_CLAIM" ]; then cleanup_owned_launch_lock_artifacts; echo "Error: another launcher replaced the stale lock before recovery." >&2; return 1; fi
+  if launch_lock_owner_is_live "$LAUNCH_LOCK_CLAIM"; then cleanup_owned_launch_lock_artifacts; echo "Error: another Pi-Science detached launch transaction is active for this checkout." >&2; return 1; else owner_status=$?; fi
+  if [ "$owner_status" -eq 2 ]; then cleanup_owned_launch_lock_artifacts; echo "Error: stale launch lock has unverifiable ownership: $LAUNCH_LOCK_DIR. Inspect running launchers, then remove it manually." >&2; return 1; fi
+
+  LAUNCH_LOCK_STALE="$RUN_DIR/.start.lock.stale.$$.$LAUNCH_LOCK_TOKEN"
+  if ! mv "$LAUNCH_LOCK_DIR" "$LAUNCH_LOCK_STALE" 2>/dev/null; then cleanup_owned_launch_lock_artifacts; echo "Error: another launcher won stale-lock recovery." >&2; return 1; fi
+  if [ ! "$LAUNCH_LOCK_STALE/owner" -ef "$LAUNCH_LOCK_CLAIM" ]; then
+    if [ ! -e "$LAUNCH_LOCK_DIR" ]; then mv "$LAUNCH_LOCK_STALE" "$LAUNCH_LOCK_DIR" 2>/dev/null || true; fi
+    LAUNCH_LOCK_STALE=""; cleanup_owned_launch_lock_artifacts
+    echo "Error: another launcher installed a newer lock during recovery; its ownership was preserved." >&2
+    return 1
+  fi
+  if ! mkdir "$LAUNCH_LOCK_DIR" 2>/dev/null || ! ln "$LAUNCH_LOCK_TEMP" "$LAUNCH_LOCK_DIR/owner" 2>/dev/null; then
+    rmdir "$LAUNCH_LOCK_DIR" 2>/dev/null || true
+    [ -e "$LAUNCH_LOCK_DIR" ] || mv "$LAUNCH_LOCK_STALE" "$LAUNCH_LOCK_DIR" 2>/dev/null || true
+    LAUNCH_LOCK_STALE=""; cleanup_owned_launch_lock_artifacts
+    echo "Error: another launcher won stale-lock recovery." >&2
+    return 1
+  fi
   if [ -n "${PI_SCIENCE_TEST_RECLAIM_BARRIER:-}" ]; then
     printf '%s\n' "$$" > "${PI_SCIENCE_TEST_RECLAIM_BARRIER}.winner"
     : > "${PI_SCIENCE_TEST_RECLAIM_BARRIER}.ready"
     while [ ! -f "${PI_SCIENCE_TEST_RECLAIM_BARRIER}.release" ]; do sleep 0.01; done
   fi
-  rm -rf "$stale"; rm -f "$LAUNCH_LOCK_TEMP"; LAUNCH_LOCK_TEMP=""; cleanup_stale_launch_lock_artifacts
+  rm -rf "$LAUNCH_LOCK_STALE"; rm -f "$LAUNCH_LOCK_TEMP" "$LAUNCH_LOCK_CLAIM"
+  LAUNCH_LOCK_STALE="" LAUNCH_LOCK_TEMP="" LAUNCH_LOCK_CLAIM=""
+  cleanup_dead_launch_lock_artifacts
 }
 release_launch_lock() {
   if [ -n "$LAUNCH_LOCK_TOKEN" ] && [ "$(read_lock_value "$LAUNCH_LOCK_DIR/owner" token)" = "$LAUNCH_LOCK_TOKEN" ]; then rm -rf "$LAUNCH_LOCK_DIR"; fi
-  [ -z "$LAUNCH_LOCK_TEMP" ] || rm -f "$LAUNCH_LOCK_TEMP"
-  LAUNCH_LOCK_TOKEN=""; LAUNCH_LOCK_TEMP=""
+  cleanup_owned_launch_lock_artifacts
+  LAUNCH_LOCK_TOKEN=""
 }
 bootstrap_cleanup() {
   local status=$?

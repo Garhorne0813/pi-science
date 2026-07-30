@@ -260,7 +260,7 @@ export class JobCoordinator {
         const terminal = current && isTerminal(current.status);
         const ownsCurrent = this.ownershipMatches(current?.ownership, record.ownership);
         const durable = current?.status === "cancelled"
-          ? { ...record, status: "cancelled" as const, ended_at: current.ended_at ?? record.ended_at, ownership: current.ownership }
+          ? { ...record, status: "cancelled" as const, ended_at: current.ended_at ?? record.ended_at, ownership: current.ownership, stderr: mergeDiagnosticText(record.stderr, current.stderr) }
           : terminal || !ownsCurrent ? current ?? record : record;
         await writeJsonAtomic(path, durable);
         Object.assign(record, durable);
@@ -282,6 +282,12 @@ export function windowsTaskkillArgs(pid: number): string[] { return ["/pid", Str
 
 function isTerminal(status: JobStatus): boolean { return ["succeeded", "failed", "cancelled", "timed_out"].includes(status); }
 function isNonterminal(status: JobStatus): boolean { return status === "pending" || status === "running"; }
+function mergeDiagnosticText(runner: string, durable: string): string {
+  if (!runner) return durable;
+  if (!durable || runner === durable || runner.includes(durable)) return runner;
+  if (durable.includes(runner)) return durable;
+  return `${runner}\n${durable}`;
+}
 
 function ownerProcessIdentity(pid: number, platform: NodeJS.Platform): JobOwnerProcessIdentity | null {
   const linux = childProcessIdentity(pid, platform);

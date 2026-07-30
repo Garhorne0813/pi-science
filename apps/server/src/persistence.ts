@@ -1,5 +1,6 @@
 import { appendFile, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { userHome } from "./platform-utils.js";
 
@@ -7,6 +8,11 @@ const writeQueues = new Map<string, Promise<void>>();
 const LOCK_STALE_MS = 30_000;
 const LOCK_RETRY_MIN_MS = 5;
 const LOCK_RETRY_MAX_MS = 100;
+const LOCK_RELEASE_RETRIES = 5;
+const LOCK_RELEASE_RETRY_MS = 20;
+
+export interface FileLockHooks { unlink?: (path: string) => Promise<void>; sleep?: (ms: number) => Promise<void> }
+interface LockOwner { pid: number; acquired_at: string; token?: string }
 
 export function metadataRoot(workspace: string): string {
   return join(resolve(workspace), ".pi-science");
@@ -26,7 +32,7 @@ export async function appendJsonLineUnlocked(path: string, value: unknown): Prom
 /** Serializes writers to `path`: the in-process promise queue is the fast path,
  *  and the advisory lockfile held for the queued operation keeps a second server
  *  process on the same workspace out. */
-export async function withFileWriteLock<T>(path: string, operation: () => Promise<T>): Promise<T> {
+export async function withFileWriteLock<T>(path: string, operation: () => Promise<T>, hooks: FileLockHooks = {}): Promise<T> {
   const key = resolve(path);
   const previous = writeQueues.get(key) ?? Promise.resolve();
   let release!: () => void;
@@ -35,7 +41,7 @@ export async function withFileWriteLock<T>(path: string, operation: () => Promis
   writeQueues.set(key, pending);
   await previous;
   try {
-    const unlock = await acquireFileLock(key);
+    const unlock = await acquireFileLock(key, hooks);
     try { return await operation(); } finally { await unlock(); }
   } finally { release(); if (writeQueues.get(key) === pending) writeQueues.delete(key); }
 }
@@ -43,20 +49,56 @@ export async function withFileWriteLock<T>(path: string, operation: () => Promis
 /** Cross-process advisory lock: exclusive creation of a `<path>.lock` sidecar is
  *  the mutual-exclusion primitive. Resolves with the release function once the
  *  lock is held; callers must release it in a `finally`. */
-export async function acquireFileLock(path: string): Promise<() => Promise<void>> {
+export async function acquireFileLock(path: string, hooks: FileLockHooks = {}): Promise<() => Promise<void>> {
   const lockPath = `${resolve(path)}.lock`;
+  const token = randomUUID();
   await mkdir(dirname(lockPath), { recursive: true });
   for (let wait = LOCK_RETRY_MIN_MS; ; wait = Math.min(wait * 2, LOCK_RETRY_MAX_MS)) {
     try {
       const handle = await open(lockPath, "wx");
-      try { await handle.writeFile(JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString() }), "utf8"); } finally { await handle.close(); }
-      return async () => { await unlink(lockPath).catch(() => undefined); };
+      try { await handle.writeFile(JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString(), token } satisfies LockOwner), "utf8"); } finally { await handle.close(); }
+      return async () => releaseFileLock(lockPath, token, hooks);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       await breakStaleLock(lockPath);
       await new Promise((resolveWait) => setTimeout(resolveWait, wait));
     }
   }
+}
+
+async function releaseFileLock(lockPath: string, token: string, hooks: FileLockHooks): Promise<void> {
+  const remove = hooks.unlink ?? unlink;
+  const sleep = hooks.sleep ?? ((ms: number) => new Promise<void>((resolveWait) => setTimeout(resolveWait, ms)));
+  const claim = `${lockPath}.release-${process.pid}-${token}`;
+  let owner = await readLockOwner(lockPath);
+  if (!owner) return;
+  if (owner.token !== token) throw new Error(`File lock ownership changed before release: ${lockPath}`);
+  try { await rename(lockPath, claim); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
+  owner = await readLockOwner(claim);
+  if (owner?.token !== token) {
+    try { await rename(claim, lockPath); } catch { /* keep the replacement claim for manual recovery rather than deleting it */ }
+    throw new Error(`File lock ownership changed during release: ${lockPath}`);
+  }
+  for (let attempt = 0; ; attempt += 1) {
+    const current = await readLockOwner(claim);
+    if (current?.token !== token) throw new Error(`File lock ownership changed during release retry: ${lockPath}`);
+    try { await remove(claim); return; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return;
+      if ((code !== "EPERM" && code !== "EBUSY") || attempt >= LOCK_RELEASE_RETRIES - 1) throw error;
+      await sleep(LOCK_RELEASE_RETRY_MS * (attempt + 1));
+    }
+  }
+}
+
+async function readLockOwner(path: string): Promise<LockOwner | null> {
+  let text: string;
+  try { text = await readFile(path, "utf8"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+  try { return JSON.parse(text) as LockOwner; }
+  catch { throw new Error(`Invalid file lock ownership record: ${path}`); }
 }
 
 /** A lock is only stolen when it is BOTH older than the stale window AND its
@@ -66,11 +108,15 @@ async function breakStaleLock(lockPath: string): Promise<void> {
   let info;
   try { info = await stat(lockPath); } catch { return; }
   if (Date.now() - info.mtimeMs < LOCK_STALE_MS) return;
-  if (await lockOwnerIsAlive(lockPath)) return;
-  // rename() is the arbiter: only one of several racing processes can move the
-  // stale inode away, so only one of them goes on to recreate the lock.
-  const claim = `${lockPath}.stale-${process.pid}-${Math.random().toString(16).slice(2)}`;
+  const observed = await readFile(lockPath, "utf8").catch(() => null);
+  if (observed === null || await lockOwnerIsAlive(lockPath)) return;
+  const claim = `${lockPath}.stale-${process.pid}-${randomUUID()}`;
   try { await rename(lockPath, claim); } catch { return; }
+  const moved = await readFile(claim, "utf8").catch(() => null);
+  if (moved !== observed) {
+    try { await rename(claim, lockPath); } catch { /* never delete an unverified replacement lock */ }
+    return;
+  }
   await unlink(claim).catch(() => undefined);
 }
 
