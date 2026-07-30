@@ -1,10 +1,23 @@
-import { createHash } from "node:crypto";
+import { createHash, randomInt, randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import type { PiConfig } from "@pi-science/contracts";
 import type { PiProcessOptions } from "./pi-process.js";
 import { configRoot } from "./persistence.js";
+
+const allocatedWebPorts = new Set<number>();
+
+function allocateWebPort(): number {
+  for (let attempt = 0; attempt < 40_000; attempt += 1) {
+    const port = randomInt(20_000, 60_000);
+    if (!allocatedWebPorts.has(port)) {
+      allocatedWebPorts.add(port);
+      return port;
+    }
+  }
+  throw new Error("unable to allocate a unique Pi Web port");
+}
 
 export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: [], extensions: [] }, sessionPath?: string, workspaceEnvironment: NodeJS.ProcessEnv = {}): PiProcessOptions | null {
   const cliPath = process.env.PI_CLI_PATH;
@@ -15,21 +28,34 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
   const effectiveModel = config.model || (typeof settings.model === "string" ? settings.model : "");
   const effectiveThinking = config.thinking || (typeof settings.thinking === "string" ? settings.thinking : "high");
   const args: string[] = [];
+  let command = nodePath;
+  const useRpcMode = process.env.PI_SCIENCE_PI_MODE === "rpc";
+  const webPort = useRpcMode ? 0 : allocateWebPort();
+  const webAuthToken = useRpcMode ? "" : randomUUID();
   const seededSkills = seedWorkspaceAssets(cwd);
   if (cliPath.endsWith(".ts")) {
     const tsxPath = process.env.PI_TSX_PATH || findAdjacentRuntime(cliPath, join("node_modules", ".bin", "tsx"));
     if (!tsxPath) throw new Error(`TypeScript Pi CLI requires tsx: ${cliPath}`);
     args.push(tsxPath);
     if (process.env.PI_TSCONFIG_PATH) args.push("--tsconfig", process.env.PI_TSCONFIG_PATH);
+    args.push(cliPath);
+  } else if (/\.[cm]?js$/i.test(cliPath)) {
+    args.push(cliPath);
+  } else {
+    command = cliPath;
   }
-  args.push(cliPath, "--mode", "rpc", "--session-dir", join(cwd, ".pi-science", "sessions"), "--no-extensions");
+  const sessionDir = join(cwd, ".pi-science", "sessions");
+  args.push("--mode", useRpcMode ? "rpc" : "web");
+  if (useRpcMode) args.push("--session-dir", sessionDir);
+  else args.push("--host", "127.0.0.1", "--port", String(webPort), "--web-app-managed", "--no-session");
+  args.push("--no-extensions");
   if (effectiveModel) args.push("--model", effectiveModel);
   if (effectiveThinking) args.push("--thinking", effectiveThinking);
-  if (sessionPath) args.push("--session", sessionPath);
-  for (const skill of [...seededSkills, ...config.skills]) args.push("--skill", skill);
+  if (useRpcMode && sessionPath) args.push("--session", sessionPath);
+  for (const skill of useRpcMode ? [...seededSkills, ...config.skills] : config.skills) args.push("--skill", skill);
   for (const extension of config.extensions) args.push("-e", extension);
   const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
-  let agentDir = join(dataRoot, "pi-agent", workspaceKey);
+  let agentDir = join(dataRoot, "pi-agent", useRpcMode ? workspaceKey : "web-host");
   try {
     mkdirSync(agentDir, { recursive: true });
   } catch (error) {
@@ -47,6 +73,12 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
     PI_WORKSPACE_DIR: resolve(cwd),
     CONTEXT_MODE_DATA_DIR: agentDir,
     CONTEXT_MODE_DIR: join(agentDir, "context-mode"),
+    ...(!useRpcMode ? { PI_WEB_AUTH_TOKEN: webAuthToken } : {}),
+    ...(!useRpcMode ? {
+      PI_WEB_MAX_RUNTIMES: process.env.PI_WEB_MAX_RUNTIMES ?? "256",
+      PI_WEB_MAX_CONCURRENT_TURNS: process.env.PI_WEB_MAX_CONCURRENT_TURNS ?? "16",
+      PI_WEB_IDLE_TIMEOUT_MS: process.env.PI_WEB_IDLE_TIMEOUT_MS ?? String(24 * 60 * 60_000),
+    } : {}),
     ...(config.provider ? { PI_DEFAULT_PROVIDER: config.provider } : {}),
   };
   if (storedKeys && typeof storedKeys === "object") {
@@ -62,9 +94,23 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
 
   return {
     cwd,
-    command: nodePath,
+    command,
     args,
     env,
+    ...(!useRpcMode ? {
+      web: {
+        baseUrl: `http://127.0.0.1:${webPort}`,
+        authToken: webAuthToken,
+        runtime: {
+          cwd: resolve(cwd),
+          sessionDir,
+          ...(sessionPath ? { sessionPath } : {}),
+          ...(effectiveModel ? { model: effectiveModel } : {}),
+          ...(effectiveModel && effectiveThinking ? { thinking: effectiveThinking } : {}),
+          runtimeEnv: Object.fromEntries(Object.entries(env).map(([key, value]) => [key, value ?? null])),
+        },
+      },
+    } : {}),
   };
 }
 

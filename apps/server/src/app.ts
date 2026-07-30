@@ -20,7 +20,7 @@ import { registerEnvironmentRoutes } from "./environment-routes.js";
 import { validateWorkspaceCwd } from "./workspace-security.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
-  const { sessions: nodeSessionService, events, sessionRepository, settings, jobs, research, projectReview, scientificRuntime, environments } = modules;
+  const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, jobs, research, projectReview, scientificRuntime, environments } = modules;
   const app = Fastify({
     logger: { level: config.logLevel },
     bodyLimit: config.maxBodyBytes,
@@ -102,7 +102,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     const runtime = scientificRuntime.snapshot();
     return gatewayHealthSchema.parse({
       status: "ok",
-      active_pi_processes: nodeSessionService.activeCount,
+      active_pi_processes: nodeSessionService.processCount,
       active_kernels: 0,
       service: "pi-science-server",
       control_plane: "node",
@@ -130,6 +130,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     for (const result of results) if (result.status === "rejected") app.log.error({ err: result.reason }, "research loop recovery failed");
   });
   if (config.nodePiManager) app.addHook("onClose", async () => nodeSessionService.shutdownAll());
+  app.addHook("onClose", async () => piManager.shutdownAll());
   app.addHook("onClose", async () => scientificRuntime.shutdown());
   app.addHook("onClose", async () => research.shutdown());
   app.addHook("onClose", async () => projectReview.shutdown());

@@ -220,8 +220,17 @@ Additional end-to-end checks:
 ```bash
 pnpm smoke
 pnpm uat:conversation
-PI_CLI_PATH=/absolute/path/to/pi pnpm smoke:real-pi
+PI_CLI_PATH=/absolute/path/to/pi-web pnpm smoke:real-pi
 ```
+
+`scripts/install.sh` downloads the platform-specific Pi Web release, verifies it
+against the published `SHA256SUMS`, and records the native executable. Set
+`PI_WEB_REPO=/absolute/path/to/pi-web` during installation only to opt into a
+local source checkout. `PI_CLI_PATH` may also point directly to either a native
+Pi Web executable or a JavaScript/TypeScript CLI that supports `--mode web`. Pi-Science
+launches one authenticated loopback Web host for the control-plane lifetime;
+workspaces, conversations, and background agents use isolated runtimes inside
+that shared process. Set `PI_SCIENCE_PI_MODE=rpc` only as a temporary rollback option.
 
 Focused frontend UAT commands are available under `frontend`:
 

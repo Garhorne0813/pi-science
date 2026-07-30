@@ -205,8 +205,15 @@ uv run --directory backend pytest -q
 ```bash
 pnpm smoke
 pnpm uat:conversation
-PI_CLI_PATH=/absolute/path/to/pi pnpm smoke:real-pi
+PI_CLI_PATH=/absolute/path/to/pi-web pnpm smoke:real-pi
 ```
+
+`scripts/install.sh` 默认下载当前平台对应的 Pi Web release，并使用发布的
+`SHA256SUMS` 校验。仅在需要使用本地源码 checkout 时，在安装阶段设置
+`PI_WEB_REPO=/absolute/path/to/pi-web`。`PI_CLI_PATH` 也可以直接指向支持
+`--mode web` 的 Pi Web 原生可执行文件或 JavaScript/TypeScript CLI。Pi-Science 在控制平面生命周期内
+只启动一个仅监听本机且带认证的 Web host；workspace、对话和后台 agent 都使用该进程内
+相互隔离的 runtime。仅在临时回退时设置 `PI_SCIENCE_PI_MODE=rpc`。
 
 前端专项 UAT：
 

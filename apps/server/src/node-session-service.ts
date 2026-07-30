@@ -416,6 +416,7 @@ export class NodeSessionService {
   }
 
   get activeCount(): number { return this.runtimes.size; }
+  get processCount(): number { return this.manager.processCount; }
 
   private async activateUnlocked(sessionId: string, cwd: string): Promise<RuntimeRecord | ServiceFailure> {
     const key = runtimeKey(cwd, sessionId);
@@ -457,7 +458,7 @@ export class NodeSessionService {
     if (!options) return { error: "PI_CLI_PATH is not configured", code: "spawn_failed" };
     let process: PiProcess;
     const managerKey = randomUUID();
-    try { process = this.manager.start(managerKey, options); }
+    try { process = await this.manager.start(managerKey, options); }
     catch (error) { return { error: `unable to start Pi runtime: ${String(error)}`, code: "spawn_failed" }; }
     const runtime: RuntimeRecord = { cwd, managerKey, process, activeSessionId: "", config: { ...config }, busy: false, restartPending: false, closing: false };
     this.eventHub.bind(cwd, process, {

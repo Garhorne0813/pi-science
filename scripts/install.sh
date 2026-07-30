@@ -41,13 +41,17 @@ if [ -n "${PI_CLI_PATH:-}" ]; then
 else
   echo "==> Installing Pi agent runtime..."
   bash "$SCRIPT_DIR/fetch-pi.sh"
+  PI_CLI_MARKER="$RUNTIME_DIR/.cli-path"
   PI_DEV_MARKER="$RUNTIME_DIR/.dev-repo-path"
-  if [ -f "$PI_DEV_MARKER" ]; then
+  if [ -f "$PI_CLI_MARKER" ]; then
+    PI_CLI="$(cat "$PI_CLI_MARKER")"
+  elif [ -f "$PI_DEV_MARKER" ]; then
     PI_REPO_PATH="$(cat "$PI_DEV_MARKER")"
     PI_CLI="$PI_REPO_PATH/packages/coding-agent/src/cli.ts"
   else
     PI_CLI="$RUNTIME_DIR/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"
   fi
+  [ -f "$PI_CLI" ] || { echo "Error: Pi installer did not produce a CLI at: $PI_CLI" >&2; exit 1; }
 fi
 
 echo "==> Installing JavaScript workspace dependencies..."

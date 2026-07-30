@@ -8,7 +8,7 @@ import { ProjectReviewService } from "./project-review/service.js";
 import { parseReviewResult, type ReviewRunRequest, type ReviewRunResult, type ReviewSubagentRunner } from "./project-review/types.js";
 
 const cleanup: string[] = [];
-const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE };
+const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE, piMode: process.env.PI_SCIENCE_PI_MODE };
 
 beforeEach(async () => {
   const root = join(tmpdir(), `pi-science-node-service-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -56,6 +56,7 @@ beforeEach(async () => {
   process.env.PI_SCIENCE_HOME = join(root, "data");
   process.env.PI_CLI_PATH = script;
   process.env.PI_NODE_PATH = process.execPath;
+  process.env.PI_SCIENCE_PI_MODE = "rpc";
   process.env.FAKE_PI_LOG = join(root, "rpc.jsonl");
   process.env.FAKE_PI_STARTS = join(root, "starts.txt");
   // Leave enough headroom for spawning the fake Pi under parallel CI load.
@@ -77,6 +78,8 @@ afterEach(async () => {
   process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS = original.deadline;
   process.env.PI_SCIENCE_IDLE_RUNTIME_MS = original.idle;
   process.env.FAKE_PI_MODE = original.mode;
+  if (original.piMode === undefined) delete process.env.PI_SCIENCE_PI_MODE;
+  else process.env.PI_SCIENCE_PI_MODE = original.piMode;
   delete process.env.FAKE_PI_LOG;
   delete process.env.FAKE_PI_STARTS;
   delete process.env.FAKE_PI_FAIL_STATE_AFTER;

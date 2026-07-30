@@ -18,6 +18,7 @@ const original = {
   node: process.env.PI_NODE_PATH,
   log: process.env.FAKE_PI_LOG,
   mode: process.env.FAKE_PI_MODE,
+  piMode: process.env.PI_SCIENCE_PI_MODE,
 };
 
 beforeEach(async () => {
@@ -51,13 +52,14 @@ beforeEach(async () => {
   process.env.PI_SCIENCE_HOME = join(root, "data");
   process.env.PI_CLI_PATH = script;
   process.env.PI_NODE_PATH = process.execPath;
+  process.env.PI_SCIENCE_PI_MODE = "rpc";
   process.env.FAKE_PI_LOG = join(root, "rpc.jsonl");
 });
 
 afterEach(async () => {
   await nodeSessionService.shutdownAll();
   for (const [key, value] of Object.entries(original)) {
-    const environmentKey = key === "home" ? "PI_SCIENCE_HOME" : key === "cli" ? "PI_CLI_PATH" : key === "node" ? "PI_NODE_PATH" : key === "mode" ? "FAKE_PI_MODE" : "FAKE_PI_LOG";
+    const environmentKey = key === "home" ? "PI_SCIENCE_HOME" : key === "cli" ? "PI_CLI_PATH" : key === "node" ? "PI_NODE_PATH" : key === "mode" ? "FAKE_PI_MODE" : key === "piMode" ? "PI_SCIENCE_PI_MODE" : "FAKE_PI_LOG";
     if (value === undefined) delete process.env[environmentKey];
     else process.env[environmentKey] = value;
   }

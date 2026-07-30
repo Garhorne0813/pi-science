@@ -1,68 +1,79 @@
 #!/usr/bin/env bash
-# Fetch/install the pi agent runtime into runtime/pi/.
-# Like open-science's fetch-opencode.sh: the runtime never lives in git.
+# Install the Pi Web runtime into runtime/pi/. Release binaries are the default;
+# set PI_WEB_REPO to opt into running a local source checkout.
 set -euo pipefail
 
-PI_VERSION="${PI_VERSION:-0.80.6}"
+PI_WEB_VERSION="${PI_WEB_VERSION:-0.1.0}"
+PI_WEB_RELEASE_REPO="${PI_WEB_RELEASE_REPO:-Garhorne0813/pi-web}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 RUNTIME_DIR="$PROJECT_DIR/runtime/pi"
+CLI_MARKER="$RUNTIME_DIR/.cli-path"
 
 mkdir -p "$RUNTIME_DIR"
 
-# Keep npm's cache inside the project runtime by default. This avoids startup
-# failures when ~/.npm contains files created by a previous root-owned npm
-# invocation. Respect an explicitly configured cache path.
-NPM_CACHE_DIR="${NPM_CONFIG_CACHE:-$RUNTIME_DIR/.npm-cache}"
-mkdir -p "$NPM_CACHE_DIR"
-export NPM_CONFIG_CACHE="$NPM_CACHE_DIR"
-
-# ── Strategy 1: Local pi repo (dev mode) ──
-LOCAL_PI_REPO="$(dirname "$PROJECT_DIR")/pi"
-if [ -d "$LOCAL_PI_REPO/packages/coding-agent/src" ]; then
-  echo "==> pi (dev mode): running from source at $LOCAL_PI_REPO"
-
-  cd "$LOCAL_PI_REPO"
-  if [ ! -d "node_modules/.bin/tsx" ]; then
-    echo "  Installing pi dependencies (npm install --ignore-scripts)..."
-    npm install --ignore-scripts 2>&1 | tail -1
-  fi
-
-  # Install extensions (MCP adapter, subagents)
-  for pkg in pi-mcp-adapter pi-subagents pi-web-access context-mode; do
-    if [ ! -d "node_modules/$pkg" ]; then
-      echo "  Installing $pkg..."
-      npm install "$pkg" --save-dev --ignore-scripts 2>&1 | tail -1
-    fi
-  done
-
-  # Output: path to pi repo root (config.py knows how to run from source)
-  echo "$LOCAL_PI_REPO" > "$RUNTIME_DIR/.dev-repo-path"
-  echo "==> pi dev mode ready (tsx from source)"
+# Local source is an explicit development override. This avoids silently using
+# a nearby checkout whose generated dist packages may be stale.
+if [ -n "${PI_WEB_REPO:-}" ]; then
+  LOCAL_PI_REPO="$PI_WEB_REPO"
+  [ -f "$LOCAL_PI_REPO/packages/coding-agent/src/cli.ts" ] || {
+    echo "ERROR: PI_WEB_REPO is not a Pi Web source checkout: $LOCAL_PI_REPO" >&2
+    exit 1
+  }
+  [ -x "$LOCAL_PI_REPO/node_modules/.bin/tsx" ] || {
+    echo "ERROR: Pi Web source dependencies are missing. Run npm install in: $LOCAL_PI_REPO" >&2
+    exit 1
+  }
+  printf '%s\n' "$LOCAL_PI_REPO/packages/coding-agent/src/cli.ts" > "$CLI_MARKER"
+  printf '%s\n' "$LOCAL_PI_REPO" > "$RUNTIME_DIR/.dev-repo-path"
+  echo "==> Pi Web dev runtime ready: $LOCAL_PI_REPO"
   exit 0
 fi
 
-# ── Strategy 2: npm install (production) ──
-echo "==> Installing @earendil-works/pi-coding-agent@$PI_VERSION and extensions from npm..."
-cd "$RUNTIME_DIR"
-if [ ! -f "node_modules/.package-lock.json" ]; then
-  npm init -y --silent 2>/dev/null
-fi
-npm pkg set type=module --silent
-npm install \
-  "@earendil-works/pi-coding-agent@$PI_VERSION" \
-  pi-mcp-adapter \
-  pi-subagents \
-  pi-web-access \
-  context-mode \
-  --ignore-scripts 2>&1 | tail -3
+case "$(uname -s)" in
+  Darwin) platform="darwin" ;;
+  Linux) platform="linux" ;;
+  *) echo "ERROR: Pi Web release installation supports macOS and Linux from this script." >&2; exit 1 ;;
+esac
+case "$(uname -m)" in
+  arm64|aarch64) arch="arm64" ;;
+  x86_64|amd64) arch="x64" ;;
+  *) echo "ERROR: Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
 
-PI_INSTALLED="$RUNTIME_DIR/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"
-if [ -f "$PI_INSTALLED" ]; then
-  echo "==> pi $PI_VERSION installed from npm"
-else
-  echo "ERROR: Could not install pi."
-  echo "  npm install @earendil-works/pi-coding-agent@$PI_VERSION"
-  echo "  Or set PI_CLI_PATH env var."
-  exit 1
+archive="pi-web-${platform}-${arch}.tar.gz"
+tag="pi-web-v${PI_WEB_VERSION}"
+release_url="https://github.com/${PI_WEB_RELEASE_REPO}/releases/download/${tag}"
+install_dir="$RUNTIME_DIR/releases/$PI_WEB_VERSION"
+pi_cli="$install_dir/pi-web/pi-web"
+
+if [ ! -x "$pi_cli" ]; then
+  download_dir="$(mktemp -d "$RUNTIME_DIR/.pi-web-download.XXXXXX")"
+  trap 'rm -rf "$download_dir"' EXIT
+  echo "==> Downloading Pi Web $PI_WEB_VERSION ($platform-$arch)..."
+  curl --fail --location --silent --show-error -o "$download_dir/$archive" "$release_url/$archive"
+  curl --fail --location --silent --show-error -o "$download_dir/SHA256SUMS" "$release_url/SHA256SUMS"
+
+  expected="$(awk -v name="$archive" '$2 == name || $2 == "*" name { print $1; exit }' "$download_dir/SHA256SUMS")"
+  [ -n "$expected" ] || { echo "ERROR: $archive is missing from SHA256SUMS." >&2; exit 1; }
+  if command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$download_dir/$archive" | awk '{print $1}')"
+  elif command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$download_dir/$archive" | awk '{print $1}')"
+  else
+    echo "ERROR: shasum or sha256sum is required to verify Pi Web." >&2
+    exit 1
+  fi
+  [ "$actual" = "$expected" ] || { echo "ERROR: SHA-256 verification failed for $archive." >&2; exit 1; }
+
+  mkdir -p "$install_dir"
+  tar -xzf "$download_dir/$archive" -C "$install_dir"
+  chmod +x "$pi_cli"
 fi
+
+"$pi_cli" --help | grep -q -- '--web-app-managed' || {
+  echo "ERROR: Installed Pi Web does not support app-managed Web Mode: $pi_cli" >&2
+  exit 1
+}
+printf '%s\n' "$pi_cli" > "$CLI_MARKER"
+echo "==> Pi Web $PI_WEB_VERSION ready: $pi_cli"
