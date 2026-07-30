@@ -221,6 +221,42 @@ assert_contains "$TEMP_ROOT/invalid-timeout.log" 'must be a positive integer'
 [ ! -e "$FIXTURE/control.pid" ] || fail "invalid timeout spawned the control plane"
 [ ! -e "$FIXTURE/.runtime/pi-science/run.state" ] || fail "invalid timeout left run.state"
 
+# Two simultaneous detached starts are one checkout-local transaction. The
+# contender cannot truncate the log, replace state, or start an untracked tree.
+CONCURRENT_BARRIER="$TEMP_ROOT/concurrent-bootstrap"
+CONCURRENT_CONTROL_PORT="$(free_port)"; CONCURRENT_RUNTIME_PORT="$(free_port)"; CONCURRENT_FRONTEND_PORT="$(free_port)"
+rm -f "$CONCURRENT_BARRIER.ready" "$CONCURRENT_BARRIER.release"
+PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_CONTROL_PLANE_PORT="$CONCURRENT_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$CONCURRENT_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$CONCURRENT_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=8 PI_SCIENCE_TEST_BOOTSTRAP_BARRIER="$CONCURRENT_BARRIER" bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/concurrent-owner.log" 2>&1 &
+CONCURRENT_OWNER_PID=$!
+wait_file "$CONCURRENT_BARRIER.ready" || fail "concurrent launch owner did not reach bootstrap barrier"
+if PI_SCIENCE_CONTROL_PLANE_PORT="$CONCURRENT_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$CONCURRENT_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$CONCURRENT_FRONTEND_PORT" bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/concurrent-contender.log" 2>&1; then fail "concurrent detached contender returned success"; fi
+assert_contains "$TEMP_ROOT/concurrent-contender.log" 'another Pi-Science detached launch transaction is active'
+: > "$CONCURRENT_BARRIER.release"
+wait "$CONCURRENT_OWNER_PID" || { cat "$TEMP_ROOT/concurrent-owner.log" >&2; fail "concurrent launch owner failed"; }
+[ -d "$FIXTURE/.runtime/pi-science/run.state" ] || fail "concurrent owner did not commit run.state"
+CONCURRENT_STATE_PID="$(cat "$FIXTURE/.runtime/pi-science/run.state/pid")"
+PI_SCIENCE_CONTROL_PLANE_PORT="$CONCURRENT_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$CONCURRENT_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$CONCURRENT_FRONTEND_PORT" bash "$FIXTURE/scripts/pi-science.sh" stop >/dev/null
+wait_pid_gone "$CONCURRENT_STATE_PID" || fail "concurrent owner supervisor survived stop"
+[ ! -e "$FIXTURE/.runtime/pi-science/start.lock" ] || fail "concurrent launch lock leaked"
+
+# TERM between supervisor spawn and state commit rolls back only that bootstrap
+# transaction and leaves no untracked supervisor, state or lock.
+SIGNAL_BOOTSTRAP_BARRIER="$TEMP_ROOT/signal-bootstrap"
+SIGNAL_CONTROL_PORT="$(free_port)"; SIGNAL_RUNTIME_PORT="$(free_port)"; SIGNAL_FRONTEND_PORT="$(free_port)"
+rm -f "$SIGNAL_BOOTSTRAP_BARRIER.ready" "$SIGNAL_BOOTSTRAP_BARRIER.release"
+PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_CONTROL_PLANE_PORT="$SIGNAL_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$SIGNAL_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$SIGNAL_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=8 PI_SCIENCE_TEST_BOOTSTRAP_BARRIER="$SIGNAL_BOOTSTRAP_BARRIER" bash "$FIXTURE/scripts/pi-science.sh" start --detach --no-open >"$TEMP_ROOT/signal-bootstrap.log" 2>&1 &
+SIGNAL_BOOTSTRAP_PID=$!
+wait_file "$SIGNAL_BOOTSTRAP_BARRIER.ready" || fail "signalled bootstrap did not reach barrier"
+kill -TERM "$SIGNAL_BOOTSTRAP_PID"
+set +e
+wait "$SIGNAL_BOOTSTRAP_PID"; SIGNAL_BOOTSTRAP_STATUS=$?
+set -e
+[ "$SIGNAL_BOOTSTRAP_STATUS" -eq 143 ] || fail "signalled bootstrap exited $SIGNAL_BOOTSTRAP_STATUS instead of 143"
+[ ! -e "$FIXTURE/.runtime/pi-science/run.state" ] || fail "signalled bootstrap left run.state"
+[ ! -e "$FIXTURE/.runtime/pi-science/start.lock" ] || fail "signalled bootstrap left its transaction lock"
+wait_port_available "$SIGNAL_CONTROL_PORT" || fail "signalled bootstrap left control-plane port occupied"
+wait_port_available "$SIGNAL_FRONTEND_PORT" || fail "signalled bootstrap left frontend port occupied"
+
 # A stale state file pointing at an unrelated live PID is discarded without
 # signaling that process, even if its start timestamp is valid.
 sleep 30 &
@@ -306,5 +342,23 @@ for port in (control, frontend):
         sock.bind(("127.0.0.1", int(port)))
 PY
 python3 "$TEMP_ROOT/test-sigint.py" "$FIXTURE/scripts/start.sh" "$INT_CONTROL_PORT" "$INT_RUNTIME_PORT" "$INT_FRONTEND_PORT" "$(command -v python3)" "$FIXTURE/pi-cli.mjs" "$TEMP_ROOT/int.log" || { cat "$TEMP_ROOT/int.log" >&2; fail "SIGINT cleanup failed"; }
+
+# Descendant cleanup fences every snapshot PID with its process-start identity.
+# Injecting a changed identity after the snapshot proves a reused PID is skipped.
+IDENTITY_DIR="$TEMP_ROOT/process-identities"; IDENTITY_BARRIER="$TEMP_ROOT/process-snapshot"
+mkdir -p "$IDENTITY_DIR"; rm -f "$IDENTITY_BARRIER.ready" "$IDENTITY_BARRIER.release"
+bash -c 'sleep 30 & echo $! > "$1"; wait' _ "$TEMP_ROOT/reused-child.pid" &
+REUSED_ROOT_PID=$!
+wait_file "$TEMP_ROOT/reused-child.pid" || fail "PID-reuse fixture child did not start"
+REUSED_CHILD_PID="$(cat "$TEMP_ROOT/reused-child.pid")"
+PI_SCIENCE_SOURCE_ONLY=1 PI_SCIENCE_TEST_PROCESS_IDENTITY_DIR="$IDENTITY_DIR" PI_SCIENCE_TEST_PROCESS_SNAPSHOT_BARRIER="$IDENTITY_BARRIER" bash -c 'source "$1"; stop_process_tree "$2"' _ "$FIXTURE/scripts/pi-science.sh" "$REUSED_ROOT_PID" &
+REUSED_STOPPER_PID=$!
+wait_file "$IDENTITY_BARRIER.ready" || fail "process snapshot barrier was not reached"
+printf 'reused-process-start-identity\n' > "$IDENTITY_DIR/$REUSED_CHILD_PID"
+: > "$IDENTITY_BARRIER.release"
+wait "$REUSED_STOPPER_PID" || fail "identity-fenced stop helper failed"
+kill -0 "$REUSED_CHILD_PID" 2>/dev/null || fail "changed-identity descendant was signalled"
+kill "$REUSED_CHILD_PID" 2>/dev/null || true
+wait "$REUSED_ROOT_PID" 2>/dev/null || true
 
 echo "launcher contract and lifecycle tests passed"

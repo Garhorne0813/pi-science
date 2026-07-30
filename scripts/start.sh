@@ -41,6 +41,8 @@ case "$STARTUP_TIMEOUT_SECONDS" in ''|*[!0-9]*) echo "Error: PI_SCIENCE_STARTUP_
 [ "$STARTUP_TIMEOUT_SECONDS" -gt 0 ] || { echo "Error: PI_SCIENCE_STARTUP_TIMEOUT_SECONDS must be a positive integer." >&2; exit 1; }
 STARTUP_DEADLINE=$(( $(date +%s) + STARTUP_TIMEOUT_SECONDS ))
 
+process_start_identity() { ps -ww -o lstart= -p "$1" 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | head -n 1; }
+
 process_tree_pids() {
   local root="$1" previous="" current="$root"
   while [ "$current" != "$previous" ]; do
@@ -52,23 +54,36 @@ process_tree_pids() {
   printf '%s\n' $current
 }
 
+process_tree_snapshot() { local pid identity; for pid in $(process_tree_pids "$1"); do identity="$(process_start_identity "$pid")"; [ -n "$identity" ] && printf '%s\t%s\n' "$pid" "$identity" || true; done; return 0; }
+signal_snapshot() { local snapshot="$1" signal="$2" pid identity current; while IFS=$'\t' read -r pid identity; do [ -n "$pid" ] || continue; current="$(process_start_identity "$pid")"; [ -n "$current" ] && [ "$current" = "$identity" ] && kill -"$signal" "$pid" 2>/dev/null || true; done <<EOF
+$snapshot
+EOF
+}
+snapshot_has_live_identity() { local snapshot="$1" pid identity current; while IFS=$'\t' read -r pid identity; do [ -n "$pid" ] || continue; current="$(process_start_identity "$pid")"; [ -n "$current" ] && [ "$current" = "$identity" ] && return 0; done <<EOF
+$snapshot
+EOF
+  return 1
+}
+
 stop_owned_process() {
-  local root="$1" waited=0 initial final all pid alive
+  set +e
+  local root="$1" waited=0 initial final all
   [ -n "$root" ] || return 0
-  initial="$(process_tree_pids "$root")"
+  initial="$(process_tree_snapshot "$root")"
   [ -n "$initial" ] || return 0
-  kill -TERM $initial 2>/dev/null || true
+  signal_snapshot "$(printf '%s\n' "$initial" | head -n 1)" TERM
   while [ "$waited" -lt 50 ]; do
-    alive=false
-    for pid in $initial; do kill -0 "$pid" 2>/dev/null && alive=true; done
-    [ "$alive" = true ] || break
+    snapshot_has_live_identity "$initial" || break
     sleep 0.1
     waited=$((waited + 1))
   done
-  final="$(process_tree_pids "$root")"
-  all="$initial $final"
-  for pid in $all; do kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true; done
+  final="$(process_tree_snapshot "$root")"
+  all="$initial${final:+
+$final}"
+  signal_snapshot "$all" KILL
   wait "$root" 2>/dev/null || true
+  set -e
+  return 0
 }
 
 cleanup() {
