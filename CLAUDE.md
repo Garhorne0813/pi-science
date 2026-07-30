@@ -8,6 +8,13 @@ conversation runs its own **Pi agent process** (`runtime/pi/`, fetched). Shared 
 `packages/contracts/`; builtin agent skills in `skills/`. Python holds no business state — it is a
 replaceable execution service.
 
+## Security boundary
+- The main control agent must never read, write, or execute files outside the project checkout
+  (`/Users/cyq/codex/pi-science`) without the user's explicit permission. This includes but is
+  not limited to: `~/`, `/tmp/`, `/etc/`, other repositories, and system directories.
+- When a task genuinely requires accessing a path outside the project, ask first and state the
+  exact path and reason before proceeding.
+
 ## Verification
 
 ```bash
