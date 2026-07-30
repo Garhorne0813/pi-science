@@ -160,14 +160,16 @@ export function FilePreviewInspector({
         >
           <History size={14} strokeWidth={1.5} />
         </button>
-        <button
-          className="text-text hover:opacity-60"
-          aria-label={t("common.open")}
-          title={t("filePreview.openExternally")}
-          onClick={() => void openArtifactExternally(data.path, data.root, cwd)}
-        >
-          <ExternalLink size={14} strokeWidth={1.5} />
-        </button>
+        {kind !== "html" && (
+          <button
+            className="text-text hover:opacity-60"
+            aria-label={t("common.open")}
+            title={t("filePreview.openExternally")}
+            onClick={() => void openArtifactExternally(data.path, data.root, cwd)}
+          >
+            <ExternalLink size={14} strokeWidth={1.5} />
+          </button>
+        )}
         {controls}
         <button className="text-text hover:opacity-60" aria-label={t("common.close")} onClick={onClose}>
           <X size={14} strokeWidth={1.5} />
