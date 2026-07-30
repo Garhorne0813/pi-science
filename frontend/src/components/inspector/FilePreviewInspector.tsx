@@ -190,7 +190,7 @@ export function FilePreviewInspector({
             path={data.path}
             root={data.root}
             cwd={cwd}
-            onOpenExternally={() => void openArtifactExternally(data.path, data.root, cwd)}
+            onOpenExternally={kind === "html" ? undefined : () => void openArtifactExternally(data.path, data.root, cwd)}
           />
         )}
         {!showHistory && !loading && !error && (
@@ -483,7 +483,7 @@ export function PreviewError({
   path?: string;
   root?: FileRoot;
   cwd: string;
-  onOpenExternally: () => void;
+  onOpenExternally?: () => void;
 }) {
   const { t } = useTranslation();
   const tooLarge = /too large/i.test(error);
@@ -523,12 +523,14 @@ export function PreviewError({
               {t("filePreview.inspectWithoutLoading")}
             </button>
           )}
-          <button
-            className="inline-flex items-center gap-1.5 rounded-input border border-border bg-surface-2 px-2.5 py-1.5 text-[13px] text-text hover:bg-surface"
-            onClick={onOpenExternally}
-          >
-            <ExternalLink size={13} /> {t("common.open")}
-          </button>
+          {onOpenExternally && (
+            <button
+              className="inline-flex items-center gap-1.5 rounded-input border border-border bg-surface-2 px-2.5 py-1.5 text-[13px] text-text hover:bg-surface"
+              onClick={onOpenExternally}
+            >
+              <ExternalLink size={13} /> {t("common.open")}
+            </button>
+          )}
         </div>
         {probeError && <div className="mt-3 text-[13px] text-error">{probeError}</div>}
         {pointer && <LargeFilePointerPanel p={pointer} />}
