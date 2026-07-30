@@ -76,7 +76,7 @@ function reactText(node: React.ReactNode): string {
   return "";
 }
 
-const FILE_HREF = /^(?!(?:https?:\/\/|mailto:|#|data:)\/\/)/i;
+const FILE_HREF = /^(?!(?:https?:\/\/|mailto:|#|data:))/i;
 export function MarkdownViewer({
   children,
   className,
