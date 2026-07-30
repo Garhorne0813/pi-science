@@ -18,7 +18,7 @@ Harden the installed local-development launcher without changing Pi-Science into
 ## Approved decisions
 
 - This remains a local checkout/development launcher. Keep `tsx watch` and Vite dev mode.
-- Shell launchers support macOS/Linux and Bash environments on Windows such as WSL or Git Bash. Native PowerShell/CMD launchers are out of scope.
+- Shell launchers are validated on macOS/Linux and are intended to run under WSL. Git Bash is best-effort only: CI does not validate its process-tree or signal semantics, so native-equivalent lifecycle behavior is not claimed. Native PowerShell/CMD launchers are out of scope.
 - PATH-launcher collision and symlink hardening is included as an independently reviewable change.
 - Job restart behavior uses fail-and-reap semantics. The server does not claim to adopt stdout/stderr or exit status from a child created by a dead process.
 - Job ownership is durable and fenced. A valid lease or credibly live owner prevents healing; an expired dead owner fails explicitly. Arbitrary PIDs are never signaled on PID evidence alone.
@@ -39,7 +39,8 @@ Harden the installed local-development launcher without changing Pi-Science into
 - Track those PIDs and terminate each owned process tree with a bounded TERM grace period followed by KILL when needed. Retain the initial descendant set so TERM-ignoring children are still killed after their root exits or they are reparented. Wait only for targeted PIDs.
 - Use one end-to-end configurable `PI_SCIENCE_STARTUP_TIMEOUT_SECONDS` deadline with a 90-second default across sequential control-plane and frontend readiness. Detached startup uses the same outer deadline and rolls back only the verified supervisor and its captured descendants.
 - Persist detached state atomically as PID, random launch token, process-start evidence and checkout identity. Discard malformed, legacy, mismatched or PID-reused state without signaling it.
-- Retain the original descendant snapshot across TERM cleanup so reparented TERM-ignoring descendants are still killed. Never sweep a pre-existing checkout-local listener.
+- Serialize detached preflight, spawn, identity establishment, state commit, readiness and rollback with an ownership-tracked checkout-local lock. Bootstrap INT/TERM/EXIT cleanup acts only on its PID/token, and success is reported only while `run.state` still belongs to that transaction.
+- Retain the original descendant snapshot across TERM cleanup so reparented TERM-ignoring descendants are still killed. Fence every TERM/KILL target with its captured process-start identity and skip a PID whose identity changed. Never sweep a pre-existing checkout-local listener.
 - Do not reuse an ambiguous existing listener. If port 5173 is occupied, fail with an explicit error instead of relying only on process CWD.
 
 ### 3. PATH launcher safety
@@ -57,12 +58,12 @@ Harden the installed local-development launcher without changing Pi-Science into
 - Renew leases on one bounded unref'ed interval per active job and stop it on success, failure, cancellation, timeout and shutdown.
 - Perform running, heartbeat, cancellation, healing and terminal transitions under the per-job file lock. Terminal writes require the same generation/token, so cancellation or healing wins over stale output.
 - Preserve a job while its lease is valid or its owner is credibly active. Existing records without ownership metadata retain the legacy grace compatibility path.
-- Fail-and-reap does not adopt process streams after restart. A lost owner is recorded as failed with an explicit reason. PID reuse or unverifiable process identity is handled conservatively and is never signaled.
+- Fail-and-reap does not adopt process streams after restart. Authorization, synchronous spawn, child registration and durable child identity persistence share the per-job lock. The record stores child PID, process-start identity when reliably available, process-group semantics and the owning generation/token. After an expired lease and dead owner, POSIX reaping signals only an exactly verified identity; a reused PID is rejected. Platforms without a reliable start identity fail with explicit unreaped-risk diagnostics and no PID-only signal.
 
 ### 5. Tests and CI
 
 - Add a static launcher contract test for package-local CLI paths, CWD-preserving subshells, absence of npm/pnpm runtime wrappers, Node version checks, dependency diagnostics, and the generated-launcher safety contract.
-- Add a credential-free Bash lifecycle fixture that builds a temporary checkout with fake Node/tsx/Vite/Python assets and verifies readiness, preserved CWD, package-wrapper absence, foreground SIGINT and TERM cleanup, KILL fallback for a TERM-ignoring reparented descendant, detached slow/never-ready behavior, status/stop/PID cleanup, startup-failure cleanup, port release, paths containing spaces, Node-version boundaries, missing dependencies, generated-launcher execution, checkout ownership refusal, deterministic file/directory substitution races, symlink refusal, and safe reinstall of an owned launcher.
+- Add a credential-free Bash lifecycle fixture that builds a temporary checkout with fake Node/tsx/Vite/Python assets and verifies readiness, preserved CWD, package-wrapper absence, foreground SIGINT and TERM cleanup, KILL fallback for a TERM-ignoring reparented descendant, detached slow/never-ready behavior, concurrent detached-start serialization, bootstrap-signal rollback, status/stop/PID cleanup, PID-reuse fencing for descendant snapshots, startup-failure cleanup, port release, paths containing spaces, Node-version boundaries, missing dependencies, generated-launcher execution, checkout ownership refusal, deterministic file/directory substitution races, symlink refusal, and safe reinstall of an owned launcher.
 - Run launcher tests only in Ubuntu CI. Windows CI continues to validate the cross-platform application but is not evidence of native shell-launcher support. Serialize server test files on the two-core Windows runner so native Node/bash/taskkill integration processes do not starve unrelated fixed-deadline tests; this changes scheduling, not assertions or timeouts.
 
 ### 6. Documentation
@@ -85,7 +86,7 @@ Update `README.md` and `README.zh-CN.md` together to state:
 | Cleanup | Observe fake control-plane/frontend child PIDs exit and ports become bindable after TERM, foreground SIGINT, detached stop, deadline rollback, and startup failure; verify KILL removes a TERM-ignoring reparented child |
 | Paths | Run lifecycle fixture from a checkout path containing spaces |
 | Installer | Refuse unrelated file/directory/symlink; portable no-clobber reinstall with rollback; three-party contention and signaled-writer cleanup |
-| Job ownership | Two coordinators, valid/expired leases, dead and unverifiable owners, stale-terminal fencing, legacy records and heartbeat cleanup |
+| Job ownership | Two coordinators, valid/expired leases, durable lease extension, active cross-coordinator cancellation, final spawn authorization, verified orphan reaping, PID-reuse rejection, stale-terminal fencing, legacy records and heartbeat cleanup |
 | Type safety | `pnpm typecheck` |
 | JS behavior | `pnpm test` |
 | Build | `pnpm build` |
@@ -114,7 +115,7 @@ The source changes are isolated to shell launch/install behavior, launcher tests
 - missing dependencies and unsupported Node versions fail before services start with actionable diagnostics.
 - installer refuses unrelated/symlink collisions and reinstalls its own launcher with the documented portable no-clobber/rollback contract.
 - detached status/stop validate exact supervisor identity and never signal an unrelated live PID.
-- healthy owned jobs survive observation beyond the former 15-second boundary; expired dead owners fail explicitly and stale owners cannot overwrite the result.
+- healthy owned jobs survive observation beyond the former 15-second boundary; cross-coordinator cancellation terminates a locally owned child; expired dead owners reap only verified child identities; stale owners cannot overwrite the result; public job APIs never expose ownership or fencing metadata.
 - checkout paths containing spaces work.
 - Node `>=22.12.0`, platform boundaries, local-dev status and reinstall rules are documented in both READMEs.
 - Focused launcher tests and the repository verification commands pass.

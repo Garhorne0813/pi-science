@@ -60,7 +60,7 @@ bash scripts/install.sh
 bash scripts/start.sh
 ```
 
-The shell launcher supports macOS, Linux, WSL, and Git Bash. It deliberately runs `tsx watch` and the Vite development server; it is not a production deployment server, and native PowerShell/CMD launchers are not currently provided. Starting an installed checkout invokes package-local executables directly, so npm and pnpm wrappers are not runtime requirements; pnpm is still required for installation, builds, and dependency updates.
+The shell launcher is validated on macOS/Linux and is intended to run under WSL. Git Bash is best-effort only—CI does not validate its process-tree and signal semantics—while native PowerShell/CMD launchers are not currently provided. It deliberately runs `tsx watch` and the Vite development server; it is not a production deployment server. Starting an installed checkout invokes package-local executables directly, so npm and pnpm wrappers are not runtime requirements; pnpm is still required for installation, builds, and dependency updates.
 
 ### The `pi-science` command
 
