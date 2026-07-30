@@ -13,50 +13,84 @@ fi
 
 CONDA_PYTHON="${PI_SCIENCE_PYTHON:-${PI_SCIENCE_INSTALL_PYTHON:-}}"
 PI_CLI="${PI_CLI_PATH:-${PI_SCIENCE_INSTALL_PI_CLI:-}}"
+NODE_COMMAND="$(command -v node || true)"
 [ -x "$CONDA_PYTHON" ] || { echo "Error: Python environment is not installed. Run: bash scripts/install.sh" >&2; exit 1; }
 [ -f "$PI_CLI" ] || { echo "Error: Pi runtime is not installed. Run: bash scripts/install.sh" >&2; exit 1; }
-command -v pnpm >/dev/null 2>&1 || { echo "Error: pnpm is required." >&2; exit 1; }
+[ -n "$NODE_COMMAND" ] || { echo "Error: Node.js >=22.12.0 is required. Run: bash scripts/install.sh" >&2; exit 1; }
+PI_NODE_PATH="$("$NODE_COMMAND" -p 'process.execPath')"
+"$PI_NODE_PATH" -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 12) ? 0 : 1)' || { echo "Error: Node.js >=22.12.0 is required (found $("$PI_NODE_PATH" --version)). Run: bash scripts/install.sh" >&2; exit 1; }
+CONTROL_PLANE_CLI="$PROJECT_DIR/apps/server/node_modules/tsx/dist/cli.mjs"
+VITE_BIN="$PROJECT_DIR/frontend/node_modules/.bin/vite"
+[ -f "$CONTROL_PLANE_CLI" ] || { echo "Error: server dependencies are not installed. Run: bash scripts/install.sh" >&2; exit 1; }
+[ -x "$VITE_BIN" ] || { echo "Error: frontend dependencies are not installed. Run: bash scripts/install.sh" >&2; exit 1; }
 
 CONTROL_PLANE_PID=""
 FRONTEND_PID=""
-FRONTEND_REUSED=false
 CONTROL_PLANE_PORT="${PI_SCIENCE_CONTROL_PLANE_PORT:-8787}"
 SCIENTIFIC_RUNTIME_PORT="${PI_SCIENCE_RUNTIME_PORT:-8788}"
-PNPM_STORE_DIR="${PNPM_STORE_DIR:-$PROJECT_DIR/.cache/pnpm-store}"
+FRONTEND_PORT="${PI_SCIENCE_FRONTEND_PORT:-5173}"
+STARTUP_TIMEOUT_SECONDS="${PI_SCIENCE_STARTUP_TIMEOUT_SECONDS:-90}"
 PIP_CACHE_DIR="${PIP_CACHE_DIR:-$PROJECT_DIR/.cache/pip}"
+case "$STARTUP_TIMEOUT_SECONDS" in ''|*[!0-9]*) echo "Error: PI_SCIENCE_STARTUP_TIMEOUT_SECONDS must be a positive integer." >&2; exit 1 ;; esac
+[ "$STARTUP_TIMEOUT_SECONDS" -gt 0 ] || { echo "Error: PI_SCIENCE_STARTUP_TIMEOUT_SECONDS must be a positive integer." >&2; exit 1; }
+
+process_tree_pids() {
+  local root="$1" previous="" current="$root"
+  while [ "$current" != "$previous" ]; do
+    previous="$current"
+    while read -r pid ppid; do
+      case " $current " in *" $ppid "*) case " $current " in *" $pid "*) ;; *) current="$current $pid" ;; esac ;; esac
+    done < <(ps -eo pid=,ppid= 2>/dev/null || true)
+  done
+  printf '%s\n' $current
+}
+
+stop_owned_process() {
+  local root="$1" waited=0 pids
+  [ -n "$root" ] && kill -0 "$root" 2>/dev/null || return 0
+  pids="$(process_tree_pids "$root")"
+  kill -TERM $pids 2>/dev/null || true
+  while [ "$waited" -lt 50 ] && kill -0 "$root" 2>/dev/null; do sleep 0.1; waited=$((waited + 1)); done
+  if kill -0 "$root" 2>/dev/null; then pids="$(process_tree_pids "$root")"; kill -KILL $pids 2>/dev/null || true; fi
+  wait "$root" 2>/dev/null || true
+}
 
 cleanup() {
-  echo ""
-  echo "==> Shutting down..."
-  [ -z "$CONTROL_PLANE_PID" ] || kill "$CONTROL_PLANE_PID" 2>/dev/null || true
-  [ -z "$FRONTEND_PID" ] || kill "$FRONTEND_PID" 2>/dev/null || true
-  wait 2>/dev/null || true
+  local status=$?
+  trap - EXIT INT TERM
+  if [ -n "$CONTROL_PLANE_PID$FRONTEND_PID" ]; then echo ""; echo "==> Shutting down..."; fi
+  [ -z "$FRONTEND_PID" ] || stop_owned_process "$FRONTEND_PID"
+  [ -z "$CONTROL_PLANE_PID" ] || stop_owned_process "$CONTROL_PLANE_PID"
+  exit "$status"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 port_is_available() {
   "$CONDA_PYTHON" -c 'import socket,sys; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", int(sys.argv[1]))); s.close()' "$1" >/dev/null 2>&1
 }
 
-project_frontend_is_running() {
-  local pid cwd
-  command -v lsof >/dev/null 2>&1 || return 1
-  while read -r pid; do
-    [ -n "$pid" ] || continue
-    cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)"
-    [ "$cwd" = "$PROJECT_DIR/frontend" ] && return 0
-  done < <(lsof -nP -iTCP:5173 -sTCP:LISTEN -t 2>/dev/null | sort -u)
+wait_for_health() {
+  local pid="$1" url="$2" label="$3" attempts=$((STARTUP_TIMEOUT_SECONDS * 2)) attempt=0
+  while [ "$attempt" -lt "$attempts" ]; do
+    kill -0 "$pid" 2>/dev/null || { echo "Error: $label exited during startup." >&2; return 1; }
+    curl --fail --silent "$url" >/dev/null 2>&1 && return 0
+    sleep 0.5
+    attempt=$((attempt + 1))
+  done
+  echo "Error: $label did not become ready within ${STARTUP_TIMEOUT_SECONDS}s." >&2
   return 1
 }
 
 export PI_CLI_PATH="$PI_CLI"
-export PI_NODE_PATH="$(command -v node)"
+export PI_NODE_PATH
 export PIP_CACHE_DIR
 export PI_SCIENCE_HOME="${PI_SCIENCE_HOME:-$HOME/.pi-science}"
 export PI_SCIENCE_WORKSPACES="${PI_SCIENCE_WORKSPACES:-$HOME/pi-science-workspaces}"
 export PI_SCIENCE_INTERNAL_TOKEN="${PI_SCIENCE_INTERNAL_TOKEN:-$(openssl rand -hex 32 2>/dev/null || date +%s)}"
 export PI_SCIENCE_REQUIRE_INTERNAL_TOKEN="${PI_SCIENCE_REQUIRE_INTERNAL_TOKEN:-1}"
-mkdir -p "$PI_SCIENCE_HOME/sessions" "$PI_SCIENCE_WORKSPACES" "$PNPM_STORE_DIR"
+mkdir -p "$PI_SCIENCE_HOME/sessions" "$PI_SCIENCE_WORKSPACES"
 
 if ! port_is_available "$SCIENTIFIC_RUNTIME_PORT"; then
   echo "Error: port $SCIENTIFIC_RUNTIME_PORT is already in use." >&2
@@ -79,51 +113,33 @@ export PI_SCIENCE_BACKEND_URL="${PI_SCIENCE_BACKEND_URL:-http://127.0.0.1:${CONT
 export PI_SCIENCE_NODE_SESSIONS="${PI_SCIENCE_NODE_SESSIONS:-1}"
 export PI_SCIENCE_NODE_SSE="${PI_SCIENCE_NODE_SSE:-1}"
 export PI_SCIENCE_NODE_PI_MANAGER="${PI_SCIENCE_NODE_PI_MANAGER:-1}"
-PI_SCIENCE_PORT="$CONTROL_PLANE_PORT" pnpm --config.store-dir="$PNPM_STORE_DIR" --filter @pi-science/server dev &
+(
+  cd "$PROJECT_DIR/apps/server"
+  PI_SCIENCE_PORT="$CONTROL_PLANE_PORT" exec "$PI_NODE_PATH" "$CONTROL_PLANE_CLI" watch src/main.ts
+) &
 CONTROL_PLANE_PID=$!
 
 echo "  Waiting for control plane..."
-for _ in $(seq 1 30); do
-  kill -0 "$CONTROL_PLANE_PID" 2>/dev/null || break
-  curl --fail --silent "http://127.0.0.1:${CONTROL_PLANE_PORT}/api/health" >/dev/null 2>&1 && break
-  sleep 0.5
-done
-curl --fail --silent "http://127.0.0.1:${CONTROL_PLANE_PORT}/api/health" >/dev/null 2>&1 || { echo "Error: control plane did not become ready." >&2; exit 1; }
+wait_for_health "$CONTROL_PLANE_PID" "http://127.0.0.1:${CONTROL_PLANE_PORT}/api/health" "control plane"
 
-echo "==> Starting frontend on http://127.0.0.1:5173"
-if ! port_is_available 5173; then
-  if project_frontend_is_running; then
-    FRONTEND_REUSED=true
-    echo "  Reusing existing Pi-Science frontend on port 5173."
-  else
-    echo "Error: port 5173 is already in use." >&2
-    exit 1
-  fi
-fi
-if [ "$FRONTEND_REUSED" != true ]; then
+echo "==> Starting frontend on http://127.0.0.1:$FRONTEND_PORT"
+port_is_available "$FRONTEND_PORT" || { echo "Error: port $FRONTEND_PORT is already in use; refusing to reuse an unverified frontend." >&2; exit 1; }
+(
   cd "$PROJECT_DIR/frontend"
-  NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-$PROJECT_DIR/.cache/npm}"
-  mkdir -p "$NPM_CONFIG_CACHE"
-  export NPM_CONFIG_CACHE
-  npm run dev -- --host 127.0.0.1 --port 5173 --strictPort &
-  FRONTEND_PID=$!
-  for _ in $(seq 1 30); do
-    kill -0 "$FRONTEND_PID" 2>/dev/null || break
-    curl --fail --silent http://127.0.0.1:5173 >/dev/null 2>&1 && break
-    sleep 0.5
-  done
-  curl --fail --silent http://127.0.0.1:5173 >/dev/null 2>&1 || { echo "Error: frontend did not become ready." >&2; exit 1; }
-fi
+  exec "$VITE_BIN" --host 127.0.0.1 --port "$FRONTEND_PORT" --strictPort
+) &
+FRONTEND_PID=$!
+wait_for_health "$FRONTEND_PID" "http://127.0.0.1:$FRONTEND_PORT" "frontend"
 
 if [ "${PI_SCIENCE_OPEN_BROWSER:-0}" = "1" ]; then
-  if command -v open >/dev/null 2>&1; then open http://127.0.0.1:5173 >/dev/null 2>&1 || true
-  elif command -v xdg-open >/dev/null 2>&1; then xdg-open http://127.0.0.1:5173 >/dev/null 2>&1 || true
+  if command -v open >/dev/null 2>&1; then open "http://127.0.0.1:$FRONTEND_PORT" >/dev/null 2>&1 || true
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "http://127.0.0.1:$FRONTEND_PORT" >/dev/null 2>&1 || true
   fi
 fi
 
 echo ""
 echo "Pi-Science is running:"
-echo "  Frontend:          http://127.0.0.1:5173"
+echo "  Frontend:          http://127.0.0.1:$FRONTEND_PORT"
 echo "  Node control plane: http://127.0.0.1:$CONTROL_PLANE_PORT"
 echo "  Python worker:      on demand at http://127.0.0.1:$SCIENTIFIC_RUNTIME_PORT"
 echo "  API docs:           http://127.0.0.1:$CONTROL_PLANE_PORT/docs"
