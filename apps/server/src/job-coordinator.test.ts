@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,6 +45,17 @@ async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean,
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
+
+async function linuxStartTicks(pid: number): Promise<string | null> {
+  try {
+    const value = (await readFile(`/proc/${pid}/stat`, "utf8")).trim();
+    const commandStart = value.indexOf("("); const commandEnd = value.lastIndexOf(")");
+    const fields = commandStart >= 1 && commandEnd > commandStart && /^\d+\s$/.test(value.slice(0, commandStart)) ? value.slice(commandEnd + 1).trim().split(/\s+/) : [];
+    return fields[19] && /^\d+$/.test(fields[19]!) ? fields[19]! : null;
+  } catch { return null; }
+}
+
+async function processExists(pid: number): Promise<boolean> { try { process.kill(pid, 0); return true; } catch { return false; } }
 
 describe("job coordinator", () => {
   it("heals orphaned pending/running records after a restart and unblocks hasActive", async () => {
@@ -261,7 +273,7 @@ describe("job coordinator", () => {
     let entered!: () => void; let release!: () => void;
     const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
     const releasePromise = new Promise<void>((resolve) => { release = resolve; });
-    const runner = jobCoordinator(undefined, { leaseMs: 300, heartbeatMs: 25, beforeAuthorizedSpawn: async () => { entered(); await releasePromise; } });
+    const runner = jobCoordinator(undefined, { leaseMs: 300, heartbeatMs: 25, testBeforeAuthorizedSpawn: async () => { entered(); await releasePromise; } });
     const canceller = jobCoordinator();
     const submitted = await runner.submit(cwd, { command: [process.execPath, "-e", `setTimeout(()=>require("node:fs").writeFileSync(${JSON.stringify(delayed)},"bad"),1000); setTimeout(()=>{},30000)`] });
     await enteredPromise;
@@ -275,7 +287,7 @@ describe("job coordinator", () => {
 
   it("reaps only a verified fenced orphan child identity", async () => {
     const cwd = await workspace();
-    const ownership: JobOwnership = { instance_id: "dead-owner", pid: 999_999, process_started_at: new Date(0).toISOString(), generation: 4, token: "owner-token", heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(2_000).toISOString(), child: { pid: 4567, process_started_at: "verified-start", process_group: true, platform: "linux", ownership_generation: 4, ownership_token: "owner-token" } };
+    const ownership: JobOwnership = { instance_id: "dead-owner", pid: 999_999, process_started_at: new Date(0).toISOString(), generation: 4, token: "owner-token", heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(2_000).toISOString(), child: { pid: 4567, process_identity: { kind: "linux-proc-start-ticks", value: "123" }, process_group: true, platform: "linux", ownership_generation: 4, ownership_token: "owner-token" } };
     await writeStoredJob(cwd, "job_dddddddddddddddd", "running", new Date(1_000).toISOString(), "", ownership);
     const reaped: number[] = [];
     const observer = jobCoordinator(undefined, { now: () => 3_000, ownerProcessAlive: () => false, reapChild: (identity) => { reaped.push(identity.pid); return "reaped"; } });
@@ -287,12 +299,51 @@ describe("job coordinator", () => {
     const cwd = await workspace();
     for (const [suffix, result] of [["eeeeeeeeeeeeeeee", "identity-mismatch"], ["ffffffffffffffff", "unverifiable"]] as const) {
       const token = `token-${suffix}`;
-      const ownership: JobOwnership = { instance_id: "dead-owner", pid: 999_999, process_started_at: new Date(0).toISOString(), generation: 2, token, heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(2_000).toISOString(), child: { pid: 7654, process_started_at: "old-start", process_group: true, platform: "linux", ownership_generation: 2, ownership_token: token } };
+      const ownership: JobOwnership = { instance_id: "dead-owner", pid: 999_999, process_started_at: new Date(0).toISOString(), generation: 2, token, heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(2_000).toISOString(), child: { pid: 7654, process_identity: { kind: "linux-proc-start-ticks", value: "123" }, process_group: true, platform: "linux", ownership_generation: 2, ownership_token: token } };
       await writeStoredJob(cwd, `job_${suffix}`, "running", new Date(1_000).toISOString(), "", ownership);
       const observer = jobCoordinator(undefined, { now: () => 3_000, ownerProcessAlive: () => false, reapChild: () => result });
       const healed = await observer.get(cwd, `job_${suffix}`);
       expect(healed?.status).toBe("failed"); expect(healed?.stderr).toMatch(result === "identity-mismatch" ? /was reused/ : /manual cleanup may be required/);
     }
+  });
+
+  it.skipIf(process.platform !== "linux")("reaps a real Linux process group only when proc start ticks and platform match", async () => {
+    const cwd = await workspace();
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 30000)"], { detached: true, stdio: "ignore" });
+    const pid = child.pid!;
+    try {
+      const ticks = await waitFor(() => linuxStartTicks(pid), Boolean);
+      const token = "real-linux-token";
+      const ownership: JobOwnership = { instance_id: "dead-owner", pid: 999_999, process_started_at: new Date(0).toISOString(), generation: 8, token, heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(2_000).toISOString(), child: { pid, process_identity: { kind: "linux-proc-start-ticks", value: ticks! }, process_group: true, platform: "linux", ownership_generation: 8, ownership_token: token } };
+      await writeStoredJob(cwd, "job_realreap00000000", "running", new Date(1_000).toISOString(), "", ownership);
+      const observer = jobCoordinator(undefined, { now: () => 3_000, ownerProcessAlive: () => false });
+      const healed = await observer.get(cwd, "job_realreap00000000");
+      expect(healed?.status).toBe("failed"); expect(healed?.stderr).toContain("was reaped");
+      await waitFor(() => processExists(pid), (alive) => !alive);
+    } finally { try { process.kill(-pid, "SIGKILL"); } catch { /* already reaped */ } await waitFor(() => processExists(pid), (alive) => !alive).catch(() => undefined); }
+  });
+
+  it.skipIf(process.platform !== "linux")("leaves a real process alive for identity or platform mismatch and skips unfenced reaping", async () => {
+    const cwd = await workspace();
+    for (const [suffix, platform, identityValue] of [["realmismatch0000", "linux", "0"], ["platformmismatch", "darwin", "0"]] as const) {
+      const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 30000)"], { detached: true, stdio: "ignore" });
+      const pid = child.pid!;
+      try {
+        const ticks = await waitFor(() => linuxStartTicks(pid), Boolean);
+        const token = `token-${suffix}`;
+        const ownership: JobOwnership = { instance_id: "dead-owner", pid: 999_999, process_started_at: new Date(0).toISOString(), generation: 9, token, heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(2_000).toISOString(), child: { pid, process_identity: { kind: "linux-proc-start-ticks", value: identityValue === "0" && platform === "linux" ? `${ticks!}0` : ticks! }, process_group: true, platform, ownership_generation: 9, ownership_token: token } };
+        await writeStoredJob(cwd, `job_${suffix}`, "running", new Date(1_000).toISOString(), "", ownership);
+        const observer = jobCoordinator(undefined, { now: () => 3_000, ownerProcessAlive: () => false });
+        const healed = await observer.get(cwd, `job_${suffix}`);
+        expect(healed?.status).toBe("failed"); expect(await processExists(pid)).toBe(true);
+      } finally { try { process.kill(-pid, "SIGKILL"); } catch { /* cleanup */ } await waitFor(() => processExists(pid), (alive) => !alive).catch(() => undefined); }
+    }
+
+    const token = "fence-token"; const reaped: number[] = [];
+    const ownership: JobOwnership = { instance_id: "dead-owner", pid: 999_999, process_started_at: new Date(0).toISOString(), generation: 10, token, heartbeat_at: new Date(1_000).toISOString(), lease_expires_at: new Date(2_000).toISOString(), child: { pid: 4321, process_identity: { kind: "linux-proc-start-ticks", value: "123" }, process_group: true, platform: "linux", ownership_generation: 9, ownership_token: token } };
+    await writeStoredJob(cwd, "job_fencemismatch000", "running", new Date(1_000).toISOString(), "", ownership);
+    const observer = jobCoordinator(undefined, { now: () => 3_000, ownerProcessAlive: () => false, reapChild: (identity) => { reaped.push(identity.pid); return "reaped"; } });
+    expect((await observer.get(cwd, "job_fencemismatch000"))?.status).toBe("failed"); expect(reaped).toEqual([]);
   });
 
   it("waits for a timed-out process tree to close before settling", async () => {

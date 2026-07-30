@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { metadataRoot, readJson, withFileWriteLock, writeJsonAtomic } from "./persistence.js";
@@ -7,7 +8,8 @@ import { defaultPythonExecutable, WorkspaceEnvironmentService } from "./workspac
 
 export type JobStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled" | "timed_out";
 export interface JobRequirement { cpu?: number; memory_mb?: number; gpu?: boolean; runtime?: string; packages?: string[]; timeout_seconds?: number; [key: string]: unknown }
-export interface JobChildIdentity { pid: number; process_started_at: string | null; process_group: boolean; platform: NodeJS.Platform; ownership_generation: number; ownership_token: string }
+export type JobProcessIdentity = { kind: "linux-proc-start-ticks"; value: string };
+export interface JobChildIdentity { pid: number; process_identity: JobProcessIdentity | null; process_group: boolean; platform: NodeJS.Platform; ownership_generation: number; ownership_token: string }
 export interface JobOwnership { instance_id: string; pid: number; process_started_at: string; generation: number; token: string; heartbeat_at: string; lease_expires_at: string; child?: JobChildIdentity }
 export interface JobRecord { job_id: string; command: string[]; cwd: string; execution_cwd?: string; surface: string; status: JobStatus; created_at: string; started_at?: string; ended_at?: string; return_code?: number | null; stdout: string; stderr: string; artifact_ids: string[]; environment: Record<string, unknown>; requirement: JobRequirement; ownership?: JobOwnership }
 export type PublicJobRecord = Omit<JobRecord, "ownership">;
@@ -23,7 +25,7 @@ const POSIX = process.platform !== "win32";
 const RESEARCH_ENVIRONMENT_KEY_NAMES = ["PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "ComSpec", "PATHEXT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "VIRTUAL_ENV", "PYTHONNOUSERSITE", "PIP_REQUIRE_VIRTUALENV", "PIP_USER", "UV_PROJECT_ENVIRONMENT", "npm_config_prefix", "npm_config_cache", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"] as const;
 const RESEARCH_ENVIRONMENT_KEYS = new Map(RESEARCH_ENVIRONMENT_KEY_NAMES.map((key) => [key.toLowerCase(), key]));
 
-export interface JobCoordinatorHooks { beforeSpawn?: (record: Readonly<JobRecord>) => Promise<void>; beforeAuthorizedSpawn?: (record: Readonly<JobRecord>) => Promise<void>; beforeTerminalSave?: (record: Readonly<JobRecord>) => Promise<void>; platform?: NodeJS.Platform; now?: () => number; leaseMs?: number; heartbeatMs?: number; ownerProcessAlive?: (pid: number, ownership: Readonly<JobOwnership>) => boolean; childStartIdentity?: (pid: number) => string | null; reapChild?: (identity: Readonly<JobChildIdentity>) => "reaped" | "identity-mismatch" | "unverifiable" | "missing"; onHeartbeatStarted?: (jobId: string) => void; onHeartbeatStopped?: (jobId: string) => void }
+export interface JobCoordinatorHooks { beforeSpawn?: (record: Readonly<JobRecord>) => Promise<void>; testBeforeAuthorizedSpawn?: (record: Readonly<JobRecord>) => Promise<void>; beforeTerminalSave?: (record: Readonly<JobRecord>) => Promise<void>; platform?: NodeJS.Platform; now?: () => number; leaseMs?: number; heartbeatMs?: number; ownerProcessAlive?: (pid: number, ownership: Readonly<JobOwnership>) => boolean; childStartIdentity?: (pid: number, platform: NodeJS.Platform) => JobProcessIdentity | null; reapChild?: (identity: Readonly<JobChildIdentity>) => "reaped" | "identity-mismatch" | "unverifiable" | "missing"; onHeartbeatStarted?: (jobId: string) => void; onHeartbeatStopped?: (jobId: string) => void }
 
 const LIVE_JOB_OWNERS = new Set<string>();
 
@@ -204,7 +206,9 @@ export class JobCoordinator {
       const spawned = await withFileWriteLock(path, async () => {
         const current = await readJson<JobRecord | null>(path, null);
         if (!current || isTerminal(current.status) || !this.ownershipMatches(current.ownership, record.ownership)) { if (current) Object.assign(record, current); return false; }
-        await this.hooks.beforeAuthorizedSpawn?.(record);
+        // Test-only deterministic barrier. Production callers cannot inject work
+        // into this spawn-authorization critical section.
+        await this.hooks.testBeforeAuthorizedSpawn?.(record);
         // spawn() returns synchronously. Authorization, process creation, durable
         // child identity and local registration therefore share one per-job
         // critical section; another coordinator cannot cancel between them.
@@ -221,7 +225,7 @@ export class JobCoordinator {
           timeoutTimer = setTimeout(() => { timedOut = true; terminate(child!); closeFailsafe = setTimeout(() => finish(null), PROCESS_CLOSE_FAILSAFE_MS); closeFailsafe.unref(); }, timeout);
         });
         const platform = this.hooks.platform ?? process.platform;
-        const childIdentity: JobChildIdentity = { pid: child.pid!, process_started_at: this.hooks.childStartIdentity?.(child.pid!) ?? processStartIdentity(child.pid!, platform), process_group: platform !== "win32", platform, ownership_generation: current.ownership!.generation, ownership_token: current.ownership!.token };
+        const childIdentity: JobChildIdentity = { pid: child.pid!, process_identity: this.hooks.childStartIdentity?.(child.pid!, platform) ?? childProcessIdentity(child.pid!, platform), process_group: platform !== "win32", platform, ownership_generation: current.ownership!.generation, ownership_token: current.ownership!.token };
         current.ownership = { ...current.ownership!, child: childIdentity };
         record.ownership = current.ownership;
         await writeJsonAtomic(path, current);
@@ -272,10 +276,23 @@ function processStartIdentity(pid: number, platform: NodeJS.Platform): string | 
   return value || null;
 }
 
+function childProcessIdentity(pid: number, platform: NodeJS.Platform): JobProcessIdentity | null {
+  if (platform !== "linux") return null;
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8").trim();
+    const commandStart = stat.indexOf("("); const commandEnd = stat.lastIndexOf(")");
+    if (commandStart < 1 || commandEnd <= commandStart || !/^\d+\s$/.test(stat.slice(0, commandStart))) return null;
+    const fieldsAfterCommand = stat.slice(commandEnd + 1).trim().split(/\s+/);
+    const startTicks = fieldsAfterCommand[19]; // field 22; field 3 is index 0 here
+    return startTicks && /^\d+$/.test(startTicks) ? { kind: "linux-proc-start-ticks", value: startTicks } : null;
+  } catch { return null; }
+}
+
 function reapPersistedChild(identity: JobChildIdentity, platform: NodeJS.Platform): "reaped" | "identity-mismatch" | "unverifiable" | "missing" {
   try { process.kill(identity.pid, 0); } catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH" ? "missing" : "unverifiable"; }
-  if (platform === "win32" || !identity.process_started_at) return "unverifiable";
-  if (processStartIdentity(identity.pid, platform) !== identity.process_started_at) return "identity-mismatch";
+  if (platform !== identity.platform || platform !== "linux" || identity.process_identity?.kind !== "linux-proc-start-ticks") return "unverifiable";
+  const current = childProcessIdentity(identity.pid, platform);
+  if (!current || current.kind !== identity.process_identity.kind || current.value !== identity.process_identity.value) return "identity-mismatch";
   try { process.kill(identity.process_group ? -identity.pid : identity.pid, "SIGKILL"); return "reaped"; } catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH" ? "missing" : "unverifiable"; }
 }
 
