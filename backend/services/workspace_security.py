@@ -12,8 +12,8 @@ managed workspaces root named by ``PI_SCIENCE_WORKSPACES``.
 
 Two mirrored details are deliberate rather than accidental:
 
-* The candidate is resolved through symlinks but the managed root is only
-  normalised lexically, exactly as Node does (``realpath`` vs ``path.resolve``).
+* Both the candidate and an existing managed root are resolved through
+  symlinks before containment is checked.
 * Without ``PI_SCIENCE_WORKSPACES`` there is no managed root at all, so
   ``config.WORKSPACES_DIR``'s ``~/pi-science-workspaces`` default grants nothing
   on its own -- such workspaces are accepted via their marker directory.
@@ -25,7 +25,13 @@ from pathlib import Path
 
 def _managed_root() -> Path | None:
     raw = os.environ.get("PI_SCIENCE_WORKSPACES")
-    return Path(os.path.abspath(raw)) if raw else None
+    if not raw:
+        return None
+    configured = Path(os.path.abspath(raw))
+    try:
+        return configured.resolve(strict=True)
+    except OSError:
+        return configured
 
 
 def validate_workspace_cwd(cwd: str) -> Path:
@@ -46,7 +52,13 @@ def validate_workspace_cwd(cwd: str) -> Path:
     raise ValueError(f"Path is not a registered workspace: {cwd}")
 
 
-def resolve_workspace_file(workspace: str | Path, relative_path: str, *, allow_metadata: bool = False) -> Path:
+def resolve_workspace_file(
+    workspace: str | Path,
+    relative_path: str,
+    *,
+    allow_metadata: bool = False,
+    platform: str | None = None,
+) -> Path:
     """Resolve a workspace-relative file while preventing traversal/symlink escape."""
     root = Path(workspace).expanduser().resolve()
     if not relative_path or Path(relative_path).is_absolute():
@@ -58,6 +70,7 @@ def resolve_workspace_file(workspace: str | Path, relative_path: str, *, allow_m
         relative = candidate.relative_to(root)
     except ValueError as exc:
         raise ValueError("Artifact path escapes the workspace") from exc
-    if not allow_metadata and ".pi-science" in relative.parts:
+    metadata_parts = (part.casefold() for part in relative.parts)
+    if not allow_metadata and ".pi-science" in metadata_parts:
         raise ValueError("Artifact metadata paths are not publishable")
     return candidate

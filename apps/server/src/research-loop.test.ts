@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { researchLoopSchema } from "@pi-science/contracts";
-import { JobCoordinator } from "./job-coordinator.js";
+import { JobCoordinator, type JobRecord } from "./job-coordinator.js";
 import { snapshotCandidate } from "./research-loop/candidate-snapshot.js";
 import { ResearchLoopCoordinator } from "./research-loop/coordinator.js";
 import { activeWallMs, stopReason } from "./research-loop/stop-policy.js";
@@ -30,6 +30,24 @@ async function workspace(): Promise<string> {
 
 function jobCoordinator(): JobCoordinator {
   const coordinator = new JobCoordinator({ environment: async () => ({ ...process.env }) });
+  jobs.push(coordinator);
+  return coordinator;
+}
+
+class HookedJobCoordinator extends JobCoordinator {
+  constructor(private readonly afterSubmit: (surface: string, job: JobRecord) => Promise<void>) {
+    super({ environment: async () => ({ ...process.env }) });
+  }
+
+  override async submit(cwd: string, body: Record<string, unknown>): Promise<JobRecord> {
+    const job = await super.submit(cwd, body);
+    await this.afterSubmit(String(body.surface ?? ""), job);
+    return job;
+  }
+}
+
+function hookedJobCoordinator(afterSubmit: (surface: string, job: JobRecord) => Promise<void>): HookedJobCoordinator {
+  const coordinator = new HookedJobCoordinator(afterSubmit);
   jobs.push(coordinator);
   return coordinator;
 }
@@ -121,10 +139,13 @@ class HookedRunner implements ResearchSubagentRunner {
   shutdown(): Promise<void> { return this.inner.shutdown(); }
 }
 
-/** The default body deliberately does NOT `exec`, so the sleep is a grandchild
- *  that inherits the job pipes: only a process-group kill can stop it. */
+const nodeSleep = `\"${process.execPath.replaceAll("\\", "/")}\" -e \"require('node:fs').writeFileSync(process.env.PI_SCIENCE_OUTPUT_DIR + require('node:path').sep + 'descendant-ready', 'ready'); setTimeout(() => {}, 30000)\"`;
+const defaultSleepBody = `${nodeSleep}\nexit 0\n`;
+
+/** The default body deliberately does NOT `exec`, so the long-running command is
+ *  a grandchild that inherits the job pipes: only a process-tree kill can stop it. */
 class SleepingRunner implements ResearchSubagentRunner {
-  constructor(private readonly body = "sleep 30\nexit 0\n") {}
+  constructor(private readonly body = defaultSleepBody) {}
 
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
     return {
@@ -490,9 +511,49 @@ describe("subagent research loop", () => {
     await waitFor(() => coordinator.detail(cwd, second.loop_id), (value) => value?.status === "cancelled");
   }, 15_000);
 
+  it("cancels an execution job submitted after the loop completed without publishing a started operation", async () => {
+    const cwd = await workspace();
+    let complete = async () => {};
+    const executionJobs = hookedJobCoordinator(async (surface) => { if (surface === "research-loop") await complete(); });
+    const coordinator = new ResearchLoopCoordinator(executionJobs, new SleepingRunner());
+    coordinators.push(coordinator);
+    const loop = await configuredLoop(coordinator, cwd);
+    complete = async () => { await coordinator.action(cwd, loop.loop_id, "complete"); };
+
+    await coordinator.action(cwd, loop.loop_id, "start");
+    const detail = await waitFor(() => coordinator.detail(cwd, loop.loop_id), (value) => value?.status === "completed" && value.operations.some((item) => item.kind === "execution" && item.status === "failed"));
+    const operation = detail?.operations.find((item) => item.kind === "execution");
+    const records = await coordinator.repository(cwd).records();
+
+    expect(operation?.status).toBe("failed");
+    expect(operation?.error).toMatch(/finalized before execution job publication/);
+    expect(records.some((row) => row.record_type === "candidate.execution_started")).toBe(false);
+    expect((await executionJobs.get(cwd, String(operation?.run_id)))?.status).toBe("cancelled");
+  }, 15_000);
+
+  it("cancels an evaluator job submitted after the loop completed without reopening the operation", async () => {
+    const cwd = await workspace();
+    let complete = async () => {};
+    const evaluationJobs = hookedJobCoordinator(async (surface) => { if (surface === "research-evaluator") await complete(); });
+    const coordinator = new ResearchLoopCoordinator(evaluationJobs, new FakeRunner([0.95]));
+    coordinators.push(coordinator);
+    const loop = await configuredLoop(coordinator, cwd);
+    complete = async () => { await coordinator.action(cwd, loop.loop_id, "complete"); };
+
+    await coordinator.action(cwd, loop.loop_id, "start");
+    const detail = await waitFor(() => coordinator.detail(cwd, loop.loop_id), (value) => value?.status === "completed" && value.operations.some((item) => item.kind === "evaluation" && item.status === "failed"));
+    const operation = detail?.operations.find((item) => item.kind === "evaluation");
+    const records = await coordinator.repository(cwd).records();
+
+    expect(operation?.status).toBe("failed");
+    expect(operation?.error).toMatch(/finalized before evaluation job publication/);
+    expect(records.some((row) => row.record_type === "candidate.evaluation_started")).toBe(false);
+    expect(["cancelled", "succeeded"]).toContain((await evaluationJobs.get(cwd, String(operation?.run_id)))?.status);
+  }, 15_000);
+
   it.each([
-    ["a shell grandchild", "sleep 30\nexit 0\n"],
-    ["an exec'd process", "exec sleep 30\n"],
+    ["a process grandchild", `${nodeSleep}\nexit 0\n`],
+    ["an exec'd process", `exec ${nodeSleep}\n`],
   ])("cancels the active execution job when the user completes a running loop with %s", async (_label, body) => {
     const cwd = await workspace();
     const executionJobs = jobCoordinator();
@@ -505,6 +566,8 @@ describe("subagent research loop", () => {
       (value) => value?.candidates[0]?.status === "executing",
     );
     const jobId = String(executing?.candidates[0]?.execution.job_id ?? "");
+    const ready = join(cwd, String(executing?.candidates[0]?.execution.outputs_dir ?? ""), "descendant-ready");
+    await waitFor(async () => stat(ready).then(() => true, () => false), Boolean);
 
     const completed = await coordinator.action(cwd, loop.loop_id, "complete");
     expect(completed.status).toBe("completed");

@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import subprocess
+import sys
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +17,11 @@ from typing import Optional
 from models import CellResult
 
 KERNEL_BRIDGE_DIR = Path(__file__).parent
+
+
+def workspace_npm_bin(npm_prefix: Path, platform_name: str = os.name) -> Path:
+    """Return npm's global executable directory for the current platform."""
+    return npm_prefix if platform_name == "nt" else npm_prefix / "bin"
 
 
 @dataclass
@@ -111,7 +117,6 @@ class KernelManager:
         """Find an executable. Uses the current Python interpreter for python3
         so that conda/virtual environments are picked up correctly."""
         import shutil
-        import sys
         if name in ("python3", "python"):
             # Use the same Python that runs this backend (respects conda envs)
             return sys.executable
@@ -147,9 +152,10 @@ class KernelManager:
                 npm_prefix = Path(cwd) / ".pi-science" / "npm-global"
                 npm_cache = Path(cwd) / ".pi-science" / "cache" / "npm"
                 pnpm_home = Path(cwd) / ".pi-science" / "pnpm-global"
+                npm_bin = workspace_npm_bin(npm_prefix)
                 process_env.update({
                     "VIRTUAL_ENV": str(venv_dir),
-                    "PATH": os.pathsep.join([str(venv_bin), str(npm_prefix / "bin"), str(pnpm_home), process_env.get("PATH", "")]),
+                    "PATH": os.pathsep.join([str(venv_bin), str(npm_bin), str(pnpm_home), process_env.get("PATH", "")]),
                     "PYTHONNOUSERSITE": "1",
                     "PIP_REQUIRE_VIRTUALENV": "1",
                     "PIP_USER": "0",
@@ -163,7 +169,7 @@ class KernelManager:
                 process_env.pop("PYTHONHOME", None)
                 process_env.pop("PIP_PREFIX", None)
             else:
-                exe = self._python_path or "python3"
+                exe = self._python_path or sys.executable
         elif language == "r":
             script = KERNEL_BRIDGE_DIR / "kernel_bridge.R"
             exe = self._r_path or "Rscript"

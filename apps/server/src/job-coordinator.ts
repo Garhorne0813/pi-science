@@ -2,8 +2,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { metadataRoot, readJson, writeJsonAtomic } from "./persistence.js";
-import { WorkspaceEnvironmentService } from "./workspace-environment.js";
+import { metadataRoot, readJson, withFileWriteLock, writeJsonAtomic } from "./persistence.js";
+import { defaultPythonExecutable, WorkspaceEnvironmentService } from "./workspace-environment.js";
 
 export type JobStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled" | "timed_out";
 export interface JobRequirement { cpu?: number; memory_mb?: number; gpu?: boolean; runtime?: string; packages?: string[]; timeout_seconds?: number; [key: string]: unknown }
@@ -11,18 +11,22 @@ export interface JobRecord { job_id: string; command: string[]; cwd: string; exe
 
 const ORPHAN_GRACE_MS = 15_000;
 const KILL_GRACE_MS = 2_000;
+const PROCESS_CLOSE_FAILSAFE_MS = 5_000;
 const POSIX = process.platform !== "win32";
-const RESEARCH_ENVIRONMENT_KEYS = new Set(["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "VIRTUAL_ENV", "PYTHONNOUSERSITE", "PIP_REQUIRE_VIRTUALENV", "PIP_USER", "UV_PROJECT_ENVIRONMENT", "npm_config_prefix", "NPM_CONFIG_PREFIX", "npm_config_cache", "NPM_CONFIG_CACHE", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"]);
+const RESEARCH_ENVIRONMENT_KEY_NAMES = ["PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "ComSpec", "PATHEXT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "VIRTUAL_ENV", "PYTHONNOUSERSITE", "PIP_REQUIRE_VIRTUALENV", "PIP_USER", "UV_PROJECT_ENVIRONMENT", "npm_config_prefix", "npm_config_cache", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"] as const;
+const RESEARCH_ENVIRONMENT_KEYS = new Map(RESEARCH_ENVIRONMENT_KEY_NAMES.map((key) => [key.toLowerCase(), key]));
+
+export interface JobCoordinatorHooks { beforeSpawn?: (record: Readonly<JobRecord>) => Promise<void>; beforeTerminalSave?: (record: Readonly<JobRecord>) => Promise<void>; platform?: NodeJS.Platform }
 
 export class JobCoordinator {
   private readonly children = new Map<string, ChildProcess>();
   private readonly jobs = new Map<string, Promise<void>>();
   private readonly cancelled = new Set<string>();
 
-  constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService()) {}
+  constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService(), private readonly hooks: JobCoordinatorHooks = {}) {}
 
   capabilities(requirement: JobRequirement) {
-    const runtime = { node: process.execPath, python: process.env.PYTHON ?? "python3", r: null };
+    const runtime = { node: process.execPath, python: defaultPythonExecutable(), r: null };
     const checks = { cpu: 1, memory_mb: null, gpu: Boolean(process.env.CUDA_VISIBLE_DEVICES || process.env.NVIDIA_VISIBLE_DEVICES), runtime, packages: {} };
     const reasons: string[] = [];
     if (Number(requirement.cpu ?? 1) > 1) reasons.push(`requires ${requirement.cpu} CPUs, host has 1`);
@@ -43,7 +47,7 @@ export class JobCoordinator {
         .filter((entry): entry is [string, string] => /^PI_SCIENCE_[A-Z0-9_]+$/.test(entry[0]) && typeof entry[1] === "string"))
       : {};
     const surface = typeof body.surface === "string" ? body.surface : "local";
-    const environment = { ...(surface.startsWith("research") ? restrictResearchEnvironment(baseEnvironment) : baseEnvironment), ...requestedEnvironment };
+    const environment = { ...(surface.startsWith("research") ? restrictResearchEnvironment(baseEnvironment, this.hooks.platform ?? process.platform) : baseEnvironment), ...requestedEnvironment };
     const executionCwd = typeof body.execution_cwd === "string" ? resolve(body.execution_cwd) : resolve(cwd);
     const executionRelative = relative(resolve(cwd), executionCwd);
     if (isAbsolute(executionRelative) || executionRelative === ".." || executionRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) throw new Error("execution cwd escapes the workspace");
@@ -73,13 +77,17 @@ export class JobCoordinator {
   async get(cwd: string, id: string): Promise<JobRecord | null> { const record = await readJson<JobRecord | null>(this.jobPath(cwd, id), null); return record ? this.healOrphan(record) : null; }
   async logs(cwd: string, id: string) { const record = await this.get(cwd, id); return record ? { job_id: record.job_id, stdout: record.stdout, stderr: record.stderr } : null; }
   async cancel(cwd: string, id: string): Promise<JobRecord | null> {
-    const record = await this.get(cwd, id);
-    if (!record || ["succeeded", "failed", "cancelled", "timed_out"].includes(record.status)) return record;
     this.cancelled.add(id);
     const child = this.children.get(id);
     if (child) terminate(child);
-    record.status = "cancelled"; record.ended_at = new Date().toISOString(); await this.save(record);
-    return record;
+    const path = this.jobPath(cwd, id);
+    return withFileWriteLock(path, async () => {
+      const record = await readJson<JobRecord | null>(path, null);
+      if (!record) { this.cancelled.delete(id); return null; }
+      if (["succeeded", "failed", "cancelled", "timed_out"].includes(record.status)) { if (record.status !== "cancelled") this.cancelled.delete(id); return record; }
+      record.status = "cancelled"; record.ended_at = new Date().toISOString(); await writeJsonAtomic(path, record);
+      return record;
+    });
   }
   async shutdown(): Promise<void> { for (const child of this.children.values()) terminate(child); await Promise.allSettled([...this.jobs.values()]); }
 
@@ -100,21 +108,55 @@ export class JobCoordinator {
     record.status = "running"; record.started_at = new Date().toISOString(); await this.save(record);
     let child: ChildProcess | undefined;
     try {
+      await this.hooks.beforeSpawn?.(record);
+      if (this.cancelled.has(record.job_id)) { record.status = "cancelled"; return; }
+      const path = this.jobPath(record.cwd, record.job_id);
+      const shouldSpawn = await withFileWriteLock(path, async () => {
+        const current = await readJson<JobRecord | null>(path, null);
+        if (current && isTerminal(current.status)) { Object.assign(record, current); return false; }
+        return true;
+      });
+      if (!shouldSpawn) return;
       // detached: the child leads its own process group so a shell grandchild
       // (which inherits the pipes and would otherwise keep `close` pending) dies
       // with it. Windows has no process groups, so it keeps the plain child kill.
       child = spawn(record.command[0]!, record.command.slice(1), { cwd: record.execution_cwd ?? record.cwd, env: environment, stdio: ["ignore", "pipe", "pipe"], detached: POSIX });
       this.children.set(record.job_id, child);
+      if (this.cancelled.has(record.job_id)) terminate(child);
       let stdout = Buffer.alloc(0); let stderr = Buffer.alloc(0);
       const appendTail = (current: Buffer, chunk: Buffer) => Buffer.concat([current, chunk]).subarray(-100_000);
       child.stdout?.on("data", (chunk: Buffer) => { stdout = appendTail(stdout, chunk); });
       child.stderr?.on("data", (chunk: Buffer) => { stderr = appendTail(stderr, chunk); });
       const timeout = Math.max(1, Number(record.requirement.timeout_seconds ?? 3600)) * 1000; let timedOut = false;
-      const result = await new Promise<{ code: number | null }>((done) => { let timer: NodeJS.Timeout | undefined; const finish = (code: number | null) => { if (timer) clearTimeout(timer); done({ code }); }; child!.once("close", (code) => finish(code)); timer = setTimeout(() => { timedOut = true; killGroup(child!, "SIGKILL"); finish(null); }, timeout); });
+      const result = await new Promise<{ code: number | null }>((done) => {
+        let timeoutTimer: NodeJS.Timeout | undefined; let closeFailsafe: NodeJS.Timeout | undefined; let settled = false;
+        const finish = (code: number | null) => { if (settled) return; settled = true; if (timeoutTimer) clearTimeout(timeoutTimer); if (closeFailsafe) clearTimeout(closeFailsafe); done({ code }); };
+        child!.once("close", (code) => finish(code));
+        timeoutTimer = setTimeout(() => {
+          timedOut = true;
+          terminate(child!);
+          closeFailsafe = setTimeout(() => finish(null), PROCESS_CLOSE_FAILSAFE_MS);
+          closeFailsafe.unref();
+        }, timeout);
+      });
       record.stdout = stdout.toString("utf8"); record.stderr = stderr.toString("utf8"); record.return_code = result.code;
       record.status = this.cancelled.has(record.job_id) ? "cancelled" : timedOut ? "timed_out" : result.code === 0 ? "succeeded" : "failed";
     } catch (error) { if (!this.cancelled.has(record.job_id)) { record.status = "failed"; record.stderr = String(error).slice(-100_000); } }
-    finally { record.ended_at = new Date().toISOString(); this.children.delete(record.job_id); await this.save(record); this.cancelled.delete(record.job_id); }
+    finally {
+      record.ended_at = new Date().toISOString(); this.children.delete(record.job_id);
+      await this.hooks.beforeTerminalSave?.(record);
+      const path = this.jobPath(record.cwd, record.job_id);
+      await withFileWriteLock(path, async () => {
+        const current = await readJson<JobRecord | null>(path, null);
+        const terminal = current && isTerminal(current.status);
+        const durable = current?.status === "cancelled"
+          ? { ...record, status: "cancelled" as const, ended_at: current.ended_at ?? record.ended_at }
+          : terminal ? current : record;
+        await writeJsonAtomic(path, durable);
+        Object.assign(record, durable);
+      });
+      this.cancelled.delete(record.job_id);
+    }
   }
 }
 
@@ -126,15 +168,31 @@ function terminate(child: ChildProcess): void {
   child.once("close", () => clearTimeout(timer));
 }
 
+export function windowsTaskkillArgs(pid: number): string[] { return ["/pid", String(pid), "/T", "/F"]; }
+
+function isTerminal(status: JobStatus): boolean { return ["succeeded", "failed", "cancelled", "timed_out"].includes(status); }
+
 function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   if (POSIX && child.pid) {
     try { process.kill(-child.pid, signal); return; } catch { /* the group is already gone or was never created */ }
   }
+  if (!POSIX && child.pid) {
+    const killer = spawn("taskkill", windowsTaskkillArgs(child.pid), { stdio: "ignore", windowsHide: true });
+    killer.once("error", () => child.kill(signal));
+    return;
+  }
   child.kill(signal);
 }
 
-function restrictResearchEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return Object.fromEntries(Object.entries(environment).filter(([key, value]) => RESEARCH_ENVIRONMENT_KEYS.has(key) && value !== undefined));
+export function restrictResearchEnvironment(environment: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
+  const restricted: NodeJS.ProcessEnv = {};
+  for (const key of RESEARCH_ENVIRONMENT_KEY_NAMES) if (environment[key] !== undefined) restricted[key] = environment[key];
+  if (platform !== "win32") return restricted;
+  for (const [key, value] of Object.entries(environment)) {
+    const canonical = RESEARCH_ENVIRONMENT_KEYS.get(key.toLowerCase());
+    if (canonical && value !== undefined && restricted[canonical] === undefined) restricted[canonical] = value;
+  }
+  return restricted;
 }
 
 export function parseCommand(value: unknown): string[] {

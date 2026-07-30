@@ -10,8 +10,13 @@ permissions:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    name: verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,8 +55,12 @@ jobs:
       - name: Build all JavaScript packages
         run: pnpm build
 
+      - name: Enforce frontend bundle budget
+        run: pnpm --filter frontend test:bundle
+
       - name: Test Python scientific runtime
         run: uv run --directory backend pytest -q
 
       - name: Run control-plane smoke test
+        if: runner.os != 'Windows'
         run: bash scripts/smoke-control-plane.sh

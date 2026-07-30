@@ -7,7 +7,7 @@ import sys
 import time
 
 import pytest
-from services.kernel_manager import KernelManager, KernelSession, CellResult
+from services.kernel_manager import KernelManager, KernelSession, CellResult, workspace_npm_bin
 
 
 class _AliveProcess:
@@ -75,6 +75,38 @@ class TestKernelManager:
         mgr = KernelManager()
         result = mgr._find("nonexistent_binary_xyz")
         assert result is None
+
+    def test_workspace_npm_bin_uses_prefix_root_on_windows(self, tmp_path):
+        prefix = tmp_path / "npm-global"
+        assert workspace_npm_bin(prefix, "nt") == prefix
+        assert workspace_npm_bin(prefix, "posix") == prefix / "bin"
+
+    @pytest.mark.anyio
+    async def test_python_spawn_without_workspace_venv_uses_current_interpreter(self, tmp_path, monkeypatch):
+        commands = []
+
+        class FakeProcess:
+            stdin = None
+            stdout = None
+            stderr = None
+
+            def poll(self):
+                return None
+
+        def fake_popen(command, **_kwargs):
+            commands.append(command)
+            return FakeProcess()
+
+        async def healthy(_session, _code):
+            return CellResult(ok=True, result="2")
+
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+        monkeypatch.setattr(KernelSession, "execute", healthy)
+        mgr = KernelManager()
+
+        await mgr._spawn("notebook", "python", str(tmp_path))
+
+        assert commands[0][0] == sys.executable
 
     def test_cell_result_ok(self):
         result = CellResult(ok=True, stdout="output", result="42")

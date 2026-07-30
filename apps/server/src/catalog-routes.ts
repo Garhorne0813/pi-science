@@ -1,7 +1,6 @@
-import { access, cp, mkdir, readdir, readFile, realpath, rename, stat, rm, writeFile } from "node:fs/promises";
+import { access, cp, lstat, mkdir, readdir, readFile, realpath, rename, stat, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { delimiter } from "node:path";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 import { configPath, readJson, writeJsonAtomic } from "./persistence.js";
@@ -10,10 +9,12 @@ import { sessionRepository } from "./session-repository.js";
 import { catalog as skillCatalog, getSkillInfo, validateDirectory as validateSkillDir } from "./skill-catalog.js";
 import type { JobCoordinator } from "./job-coordinator.js";
 import type { ResearchLoopCoordinator } from "./research-loop/coordinator.js";
+import { findExecutable, pathIsInside, userHome } from "./platform-utils.js";
+import { defaultPythonExecutable } from "./workspace-environment.js";
 
 function q(request: { query: unknown }, key: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[key]; return typeof value === "string" && value ? value : fallback; }
 async function ws(request: { query: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): Promise<string | null> { try { return await validateWorkspaceCwd(q(request, "cwd")); } catch (error) { reply.code(403).send({ error: String(error) }); return null; } }
-function rootDir(): string { return resolve(process.env.PI_SCIENCE_WORKSPACES ?? join(process.env.HOME ?? ".", "pi-science-workspaces")); }
+function rootDir(): string { return resolve(process.env.PI_SCIENCE_WORKSPACES ?? join(userHome(), "pi-science-workspaces")); }
 export async function knownWorkspacePaths(): Promise<string[]> {
   const paths = new Set<string>();
   try {
@@ -40,8 +41,43 @@ async function workspaceInfo(path: string): Promise<Record<string, unknown>> {
     last_modified: metadata.mtime.toISOString(),
   };
 }
-function inside(root: string, target: string): boolean { const rel = relative(root, target); return !rel.startsWith("..") && !isAbsolute(rel); }
-function expandUserPath(path: string): string { return path.startsWith("~/") ? resolve(process.env.HOME ?? ".", path.slice(2)) : resolve(path); }
+export function expandUserPath(path: string): string { if (path === "~") return resolve(userHome()); return path.startsWith("~/") || path.startsWith("~\\") ? resolve(userHome(), path.slice(2)) : resolve(path); }
+async function managedWorkspacePath(pathValue: string, action: "delete" | "rename"): Promise<string> {
+  const configuredRoot = rootDir();
+  const requested = resolve(pathValue);
+  if (!pathIsInside(configuredRoot, requested)) throw new Error(`Cannot ${action} outside workspaces directory`);
+  const canonicalRoot = await realpath(configuredRoot);
+  let current = configuredRoot;
+  for (const part of relative(configuredRoot, requested).split(sep).filter(Boolean)) {
+    current = join(current, part);
+    if ((await lstat(current)).isSymbolicLink()) throw new Error(`Cannot ${action} a workspace through a symlink or junction`);
+  }
+  const canonicalRequested = await realpath(requested);
+  if (!pathIsInside(canonicalRoot, canonicalRequested)) throw new Error(`Cannot ${action} outside workspaces directory`);
+  const workspaceParts = relative(canonicalRoot, canonicalRequested).split(sep).filter(Boolean);
+  if (workspaceParts.length !== 1) throw new Error(`Cannot ${action} a nested workspace path`);
+  let marker;
+  try { marker = await stat(join(canonicalRequested, ".pi-science")); }
+  catch { throw new Error(`Cannot ${action} a directory that is not a workspace`); }
+  if (!marker.isDirectory()) throw new Error(`Cannot ${action} a directory that is not a workspace`);
+  return canonicalRequested;
+}
+
+async function updatePinnedWorkspace(source: string, destination: string): Promise<void> {
+  const pinned = await readJson<string[]>(configPath("pinned.json"), []);
+  let changed = false;
+  const updated = await Promise.all(pinned.map(async (path) => {
+    const requested = resolve(path);
+    const canonical = await realpath(requested).catch(async () => join(await realpath(dirname(requested)).catch(() => dirname(requested)), basename(requested)));
+    if (canonical !== source) return path;
+    changed = true;
+    return destination;
+  }));
+  if (changed) await writeJsonAtomic(configPath("pinned.json"), updated);
+}
+export function catalogToolCommands(environment: NodeJS.ProcessEnv = process.env, platform = process.platform): ReadonlyArray<readonly [string, string]> {
+  return [["python", defaultPythonExecutable(environment, platform)], ["Node.js", "node"], ["Git", "git"], ["uv", "uv"]];
+}
 
 type ComputeProbeInput = {
   host: string;
@@ -161,15 +197,8 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
     return item ?? reply.code(404).send({ error: "Skill not found" });
   });
   app.get("/api/skills/tools", async () => {
-    const commands = [["python", "python3"], ["Node.js", "node"], ["Git", "git"], ["uv", "uv"]] as const;
-    return Promise.all(commands.map(async ([name, command]) => {
-      const paths = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
-      for (const directory of paths) {
-        for (const candidate of process.platform === "win32" ? [command, `${command}.exe`] : [command]) {
-          try { await access(resolve(directory, candidate)); return { name, found: true }; } catch { /* try next */ }
-        }
-      }
-      return { name, found: false };
+    return Promise.all(catalogToolCommands().map(async ([name, command]) => {
+      return { name, found: Boolean(await findExecutable(command)) };
     }));
   });
   app.post("/api/skills/validate", async (request, reply) => {
@@ -177,7 +206,7 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
     if (!root) return;
     const pathValue = (request.query as { path?: string }).path;
     let target = pathValue
-      ? (isAbsolute(pathValue) || pathValue.startsWith("~/") ? expandUserPath(pathValue) : resolve(root, pathValue))
+      ? (isAbsolute(pathValue) || pathValue.startsWith("~/") || pathValue.startsWith("~\\") ? expandUserPath(pathValue) : resolve(root, pathValue))
       : join(root, ".pi", "skills");
     try {
       const info = await stat(target);
@@ -185,7 +214,7 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
     } catch {
       /* let scanner return no skills */
     }
-    if (!inside(root, target) || target.split(/[\\/]/).includes(".pi-science")) {
+    if (!pathIsInside(root, target, true) || target.split(/[\\/]/).some((part) => part.toLowerCase() === ".pi-science")) {
       return reply.code(403).send({ error: "Skill path must remain inside the workspace" });
     }
     const validations = await validateSkillDir(target);
@@ -209,7 +238,7 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
     if (!demo) return reply.code(400).send({ error: "Unknown demo" });
     const root = rootDir();
     const target = resolve(root, demo.workspace);
-    if (!inside(root, target) || target === root) return reply.code(403).send({ error: "Demo target escapes the workspaces directory" });
+    if (!pathIsInside(root, target)) return reply.code(403).send({ error: "Demo target escapes the workspaces directory" });
     const source = join(PROJECT_ROOT, demo.source);
     try { if (!(await stat(source)).isDirectory()) throw new Error("not a directory"); }
     catch { return reply.code(500).send({ error: `Demo content is missing from this installation (${demo.source})` }); }
@@ -231,9 +260,14 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
   });
   app.post("/api/workspaces/rename", async (request, reply) => {
     const body = (request.body ?? {}) as { path?: unknown; name?: unknown };
-    const source = resolve(String(body.path ?? ""));
+    let source: string;
+    try { source = await managedWorkspacePath(String(body.path ?? ""), "rename"); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return reply.code(404).send({ error: "Workspace not found" });
+      return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) });
+    }
     const root = rootDir();
-    if (!inside(root, source) || source === root) return reply.code(403).send({ error: "Cannot rename outside workspaces directory" });
     const name = String(body.name ?? "").trim().replace(/[\\/]/g, "-").slice(0, 100);
     if (!name) return reply.code(400).send({ error: "Invalid workspace name" });
     if (await research?.hasActive(source) || await jobs?.hasActive(source)) return reply.code(409).send({ error: "Pause or cancel active research and jobs before renaming this workspace" });
@@ -241,15 +275,24 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
     try { await stat(destination); return reply.code(409).send({ error: "Workspace already exists" }); } catch { /* available */ }
     try {
       await rename(source, destination);
-      const pinned = await readJson<string[]>(configPath("pinned.json"), []);
-      if (pinned.includes(source)) await writeJsonAtomic(configPath("pinned.json"), pinned.map((path) => path === source ? destination : path));
+      await updatePinnedWorkspace(source, destination);
       return await workspaceInfo(destination);
     } catch { return reply.code(404).send({ error: "Workspace not found" }); }
   });
   app.get("/api/workspaces/pinned", async () => ({ paths: await readJson<string[]>(configPath("pinned.json"), []) }));
   app.post("/api/workspaces/pin", async (request) => { const path = String(((request.body ?? {}) as { path?: unknown }).path ?? ""); const paths = await readJson<string[]>(configPath("pinned.json"), []); if (!paths.includes(path)) paths.push(path); await writeJsonAtomic(configPath("pinned.json"), paths); return { ok: true, pinned: true }; });
   app.post("/api/workspaces/unpin", async (request) => { const path = String(((request.body ?? {}) as { path?: unknown }).path ?? ""); const paths = (await readJson<string[]>(configPath("pinned.json"), [])).filter((item) => item !== path); await writeJsonAtomic(configPath("pinned.json"), paths); return { ok: true, pinned: false }; });
-  app.delete("/api/workspaces/delete", async (request, reply) => { const path = resolve(String(((request.body ?? {}) as { path?: unknown }).path ?? "")); if (!path.startsWith(`${rootDir()}${process.platform === "win32" ? "\\" : "/"}`)) return reply.code(403).send({ error: "Cannot delete outside workspaces directory" }); if (await research?.hasActive(path) || await jobs?.hasActive(path)) return reply.code(409).send({ error: "Cancel active research and jobs before deleting this workspace" }); try { await rm(path, { recursive: true }); return { ok: true }; } catch { return reply.code(404).send({ error: "Workspace not found" }); } });
+  app.delete("/api/workspaces/delete", async (request, reply) => {
+    let path: string;
+    try { path = await managedWorkspacePath(String(((request.body ?? {}) as { path?: unknown }).path ?? ""), "delete"); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return reply.code(404).send({ error: "Workspace not found" });
+      return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+    if (await research?.hasActive(path) || await jobs?.hasActive(path)) return reply.code(409).send({ error: "Cancel active research and jobs before deleting this workspace" });
+    try { await rm(path, { recursive: true }); return { ok: true }; } catch { return reply.code(404).send({ error: "Workspace not found" }); }
+  });
 
   // ── Compute machine registry ──
   app.get("/api/compute/machines", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const value = await readJson<{ machines?: unknown[] }>(join(root, ".pi-science", "compute.json"), {}); return { machines: Array.isArray(value.machines) ? value.machines : [] }; });

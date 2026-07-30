@@ -2,6 +2,7 @@ import type { CreateSessionRequest, PiConfig, SessionState } from "@pi-science/c
 import { randomUUID } from "node:crypto";
 import { mkdir, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
+import nodeProcess from "node:process";
 import { ConversationEventHub, conversationEventHub } from "./conversation-event-hub.js";
 import { observeNodePiEvent } from "./node-event-observer.js";
 import { PiManager, piManager } from "./pi-manager.js";
@@ -446,6 +447,7 @@ export class NodeSessionService {
     let options: PiProcessOptions | null;
     if (preparedOptions) options = preparedOptions;
     else {
+      if (!nodeProcess.env.PI_CLI_PATH) return { error: "PI_CLI_PATH is not configured", code: "spawn_failed" };
       let environment: NodeJS.ProcessEnv;
       try { environment = await this.environments.environment(cwd); }
       catch (error) { return { error: `unable to prepare isolated workspace environment: ${String(error)}`, code: "environment_failed" }; }

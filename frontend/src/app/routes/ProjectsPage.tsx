@@ -9,6 +9,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ApiError, apiRequest } from "../../lib/api";
 import { queryClient } from "../../lib/query-client";
 import { timeAgo } from "../../lib/format";
+import { workspacePathLeaf } from "../../lib/workspace-path";
 
 interface Workspace {
   name: string;
@@ -104,7 +105,7 @@ export function ProjectsPage() {
     // when the alert dialog steals focus.
     setEditingName(null);
     setEditValue("");
-    if (!newName || newName === oldPath.split("/").pop()) {
+    if (!newName || newName === workspacePathLeaf(oldPath)) {
       return;
     }
     try {
@@ -120,7 +121,7 @@ export function ProjectsPage() {
   };
 
   const handleDelete = async (path: string) => {
-    const name = path.split("/").pop() || path;
+    const name = workspacePathLeaf(path);
     if (!await confirmAction({
       title: t("projects.deleteTitle"),
       message: t("projects.deleteConfirm", { name }),

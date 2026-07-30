@@ -1,6 +1,6 @@
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { conversationEventHub } from "./conversation-event-hub.js";
 import { NodeSessionService } from "./node-session-service.js";
@@ -103,6 +103,16 @@ function testService(): NodeSessionService {
 }
 
 describe("Node session lifecycle", () => {
+  it("fails fast when the Pi runtime is missing without provisioning the workspace environment", async () => {
+    const environment = vi.fn(async () => ({ ...process.env }));
+    const service = new NodeSessionService(undefined, undefined, undefined, { environment });
+    const cwd = await workspaceWithSessions("missing-runtime");
+    delete process.env.PI_CLI_PATH;
+
+    await expect(service.resume("missing-runtime", cwd)).resolves.toMatchObject({ success: false, code: "spawn_failed" });
+    expect(environment).not.toHaveBeenCalled();
+  });
+
   it("starts the agent inside the workspace package environment", async () => {
     const service = new NodeSessionService();
     const cwd = await workspaceWithSessions("isolated-session");
@@ -116,7 +126,7 @@ describe("Node session lifecycle", () => {
       PIP_REQUIRE_VIRTUALENV: "1",
       npm_config_prefix: join(cwd, ".pi-science", "npm-global"),
     });
-    expect(environment.PATH.split(":" )[0]).toBe(join(cwd, ".venv", "bin"));
+    expect(environment.PATH.split(delimiter)[0]).toBe(join(cwd, ".venv", process.platform === "win32" ? "Scripts" : "bin"));
     await service.shutdownAll();
   }, 30_000);
 
@@ -146,6 +156,7 @@ describe("Node session lifecycle", () => {
   });
 
   it("keeps identical session IDs isolated across workspaces", async () => {
+    process.env.PI_SCIENCE_RPC_TIMEOUT_MS = "1500";
     const service = testService();
     const first = await workspaceWithSessions("same-session");
     const second = await workspaceWithSessions("same-session");

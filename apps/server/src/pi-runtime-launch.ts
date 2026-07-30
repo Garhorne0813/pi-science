@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import type { PiConfig } from "@pi-science/contracts";
 import type { PiProcessOptions } from "./pi-process.js";
@@ -21,7 +22,7 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
     args.push(tsxPath);
     if (process.env.PI_TSCONFIG_PATH) args.push("--tsconfig", process.env.PI_TSCONFIG_PATH);
   }
-  args.push(cliPath, "--mode", "rpc", "--session-dir", join(cwd, ".pi-science", "sessions"), "--no-extensions", "-e", "pi-subagents/index.ts");
+  args.push(cliPath, "--mode", "rpc", "--session-dir", join(cwd, ".pi-science", "sessions"), "--no-extensions");
   if (effectiveModel) args.push("--model", effectiveModel);
   if (effectiveThinking) args.push("--thinking", effectiveThinking);
   if (sessionPath) args.push("--session", sessionPath);
@@ -68,7 +69,7 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
 }
 
 function seedWorkspaceAssets(cwd: string): string[] {
-  const projectRoot = resolve(dirname(new URL(import.meta.url).pathname), "../../..");
+  const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
   const metadata = join(cwd, ".pi-science");
   mkdirSync(metadata, { recursive: true });
   const agents = join(cwd, "AGENTS.md");

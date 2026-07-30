@@ -12,6 +12,7 @@ import {
 } from "@pi-science/contracts";
 import type { JobCoordinator, JobRecord } from "../job-coordinator.js";
 import { metadataRoot } from "../persistence.js";
+import { findBashExecutable } from "../platform-utils.js";
 import { snapshotCandidate, within } from "./candidate-snapshot.js";
 import { listReducedLoops, reduceResearchRecords } from "./reducer.js";
 import { ResearchRepository } from "./repository.js";
@@ -295,20 +296,17 @@ export class ResearchLoopCoordinator {
     await mkdir(outputs, { recursive: true });
     const script = resolve(work, candidate.proposal.solution.entrypoint);
     if (!within(work, script)) throw new Error("candidate entrypoint escapes work directory");
+    const bash = await findBashExecutable();
+    if (!bash) throw new Error("Research loop candidates require bash. Install Git for Windows or set PI_SCIENCE_BASH_PATH to bash.exe.");
     const job = await this.jobs.submit(cwd, {
-      command: ["bash", script], execution_cwd: work, surface: "research-loop",
+      command: [bash, script], execution_cwd: work, surface: "research-loop",
       env: { PI_SCIENCE_OUTPUT_DIR: outputs, PI_SCIENCE_RUN_ID: runId, PI_SCIENCE_CANDIDATE_ID: candidate.candidate_id },
       requirement: { timeout_seconds: Math.min(loop.budget.max_wall_seconds, 86_400) },
     });
-    await repository.locked(async (records) => {
-      const current = reduceResearchRecords(records, loop.loop_id);
-      const currentLoop = requireLoop(current);
-      await repository.appendUnlocked("candidate.execution_started", {
-        phase: "execution", job_id: job.job_id, run_id: runId,
-        work_dir: relative(cwd, work), outputs_dir: relative(cwd, outputs),
-      }, { loop_id: loop.loop_id, candidate_id: candidate.candidate_id, operation_id: operationId, run_id: job.job_id });
-      if (["cancelling", "cancelled"].includes(currentLoop.status)) await this.jobs.cancel(cwd, job.job_id);
-    });
+    await this.publishSubmittedJob(cwd, loop.loop_id, candidate.candidate_id, operationId, job, "proposed", "candidate.execution_started", {
+      phase: "execution", job_id: job.job_id, run_id: runId,
+      work_dir: relative(cwd, work), outputs_dir: relative(cwd, outputs),
+    }, "candidate.execution_failed", { phase: "execution", status: "cancelled", error: "loop finalized before execution job publication" });
   }
 
   private async reconcileExecution(cwd: string, snapshot: ResearchSnapshot, candidate: ResearchCandidate): Promise<boolean> {
@@ -361,9 +359,9 @@ export class ResearchLoopCoordinator {
       env: { PI_SCIENCE_OUTPUT_DIR: outputsRoot, PI_SCIENCE_EVALUATION_PATH: evaluationPath },
       requirement: { timeout_seconds: Math.min(loop.budget.max_wall_seconds, 300) },
     });
-    await repository.append("candidate.evaluation_started", {
+    await this.publishSubmittedJob(cwd, loop.loop_id, candidate.candidate_id, operationId, job, "succeeded", "candidate.evaluation_started", {
       phase: "evaluation", job_id: job.job_id, evaluation_path: relative(cwd, evaluationPath), evaluator_digest: evaluator.digest,
-    }, { loop_id: loop.loop_id, candidate_id: candidate.candidate_id, operation_id: operationId, run_id: job.job_id });
+    }, "candidate.evaluation_failed", { phase: "evaluation", error: "loop finalized before evaluation job publication" });
   }
 
   private async analyzeCandidate(cwd: string, snapshot: ResearchSnapshot, candidate: ResearchCandidate): Promise<void> {
@@ -549,6 +547,37 @@ export class ResearchLoopCoordinator {
       phase: "evaluation", evaluation, evaluation_status: passed ? "passed" : "failed",
       evaluator_ref: loop.evaluator_ref, evaluator_job_id: job.job_id,
     }, { loop_id: loop.loop_id, candidate_id: candidate.candidate_id, operation_id: operation.operation_id, run_id: job.job_id });
+  }
+
+  private async publishSubmittedJob(
+    cwd: string,
+    loopId: string,
+    candidateId: string,
+    operationId: string,
+    job: JobRecord,
+    candidateStatus: ResearchCandidate["status"],
+    startedType: string,
+    startedPayload: Record<string, unknown>,
+    failedType: string,
+    failedPayload: Record<string, unknown>,
+  ): Promise<void> {
+    const repository = this.repository(cwd);
+    const published = await repository.locked(async (records) => {
+      const current = reduceResearchRecords(records, loopId);
+      const operation = current.operations.find((item) => item.operation_id === operationId);
+      const candidate = current.candidates.find((item) => item.candidate_id === candidateId);
+      if (!operation || operation.status !== "reserved" || candidate?.status !== candidateStatus || !["running", "pausing"].includes(requireLoop(current).status)) return false;
+      await repository.appendUnlocked(startedType, startedPayload, { loop_id: loopId, candidate_id: candidateId, operation_id: operationId, run_id: job.job_id });
+      return true;
+    });
+    if (published) return;
+    await this.jobs.cancel(cwd, job.job_id);
+    await repository.locked(async (records) => {
+      const current = reduceResearchRecords(records, loopId);
+      const operation = current.operations.find((item) => item.operation_id === operationId);
+      if (!operation || operation.status !== "reserved") return;
+      await repository.appendUnlocked(failedType, failedPayload, { loop_id: loopId, candidate_id: candidateId, operation_id: operationId, run_id: job.job_id });
+    });
   }
 
   private async finishOperation(

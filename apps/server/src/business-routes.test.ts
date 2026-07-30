@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { access, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./app.js";
@@ -265,6 +265,174 @@ describe("native control-plane business routes", () => {
     expect(artifact.json()).toMatchObject({ path: "result.txt", version: 1 });
     const provenance = await app.inject({ method: "GET", url: `/api/provenance?cwd=${encodeURIComponent(cwd)}` });
     expect(provenance.json().records.length).toBeGreaterThan(0);
+  }, 20_000);
+
+  it("enforces workspace deletion containment at the HTTP boundary", async () => {
+    const sandbox = join(tmpdir(), `pi-science-delete-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const managed = join(sandbox, "managed");
+    const child = join(managed, "child");
+    const sibling = join(sandbox, "managed-evil");
+    tempDirs.push(sandbox);
+    await mkdir(join(child, ".pi-science"), { recursive: true });
+    await mkdir(sibling, { recursive: true });
+    process.env.PI_SCIENCE_WORKSPACES = managed;
+    const app = buildApp(config()); apps.push(app);
+
+    const rootResponse = await app.inject({ method: "DELETE", url: "/api/workspaces/delete", payload: { path: managed } });
+    const siblingResponse = await app.inject({ method: "DELETE", url: "/api/workspaces/delete", payload: { path: sibling } });
+    const childResponse = await app.inject({ method: "DELETE", url: "/api/workspaces/delete", payload: { path: child } });
+
+    expect(rootResponse.statusCode).toBe(403);
+    expect(siblingResponse.statusCode).toBe(403);
+    expect(childResponse.statusCode).toBe(200);
+    await expect(stat(sibling)).resolves.toBeDefined();
+    await expect(stat(child)).rejects.toThrow();
+  });
+
+  it("rejects nested and unmarked paths as managed workspace identities", async () => {
+    const sandbox = join(tmpdir(), `pi-science-nested-workspace-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const managed = join(sandbox, "managed");
+    const parent = join(managed, "parent");
+    const nested = join(parent, "nested");
+    const unmarked = join(managed, "unmarked");
+    tempDirs.push(sandbox);
+    await mkdir(join(parent, ".pi-science"), { recursive: true });
+    await mkdir(join(nested, ".pi-science"), { recursive: true });
+    await mkdir(unmarked, { recursive: true });
+    process.env.PI_SCIENCE_WORKSPACES = managed;
+    const canonicalParent = await realpath(parent);
+    const modules = createServerModules(config());
+    const active = vi.spyOn(modules.jobs, "hasActive").mockImplementation(async (path) => path === canonicalParent);
+    const app = buildApp(config(), modules); apps.push(app);
+
+    const nestedDelete = await app.inject({ method: "DELETE", url: "/api/workspaces/delete", payload: { path: nested } });
+    const nestedRename = await app.inject({ method: "POST", url: "/api/workspaces/rename", payload: { path: nested, name: "renamed" } });
+    const unmarkedDelete = await app.inject({ method: "DELETE", url: "/api/workspaces/delete", payload: { path: unmarked } });
+    const parentDelete = await app.inject({ method: "DELETE", url: "/api/workspaces/delete", payload: { path: parent } });
+
+    expect(nestedDelete.statusCode).toBe(403);
+    expect(nestedRename.statusCode).toBe(403);
+    expect(unmarkedDelete.statusCode).toBe(403);
+    expect(parentDelete.statusCode).toBe(409);
+    expect(active).toHaveBeenCalledWith(canonicalParent);
+    await expect(stat(nested)).resolves.toBeDefined();
+    await expect(stat(unmarked)).resolves.toBeDefined();
+  });
+
+  it("updates a pin stored through a symlinked managed root after rename", async () => {
+    const sandbox = join(tmpdir(), `pi-science-pinned-link-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const managed = join(sandbox, "managed");
+    const alias = join(sandbox, "managed-alias");
+    const source = join(managed, "source");
+    const home = join(sandbox, "home");
+    tempDirs.push(sandbox);
+    await mkdir(join(source, ".pi-science"), { recursive: true });
+    await symlink(managed, alias, process.platform === "win32" ? "junction" : "dir");
+    process.env.PI_SCIENCE_WORKSPACES = alias;
+    process.env.PI_SCIENCE_HOME = home;
+    const app = buildApp(config()); apps.push(app);
+    const requestedSource = join(alias, "source");
+
+    expect((await app.inject({ method: "POST", url: "/api/workspaces/pin", payload: { path: requestedSource } })).statusCode).toBe(200);
+    const renamed = await app.inject({ method: "POST", url: "/api/workspaces/rename", payload: { path: requestedSource, name: "renamed" } });
+
+    expect(renamed.statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/workspaces/pinned" })).json()).toEqual({ paths: [join(alias, "renamed")] });
+    await expect(stat(join(managed, "renamed", ".pi-science"))).resolves.toBeDefined();
+  });
+
+  it("rejects workspace deletion through a symlink or junction before recursive removal", async () => {
+    const sandbox = join(tmpdir(), `pi-science-delete-link-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const managed = join(sandbox, "managed");
+    const outside = join(sandbox, "outside");
+    const outsideWorkspace = join(outside, "workspace");
+    const escape = join(managed, "escape");
+    tempDirs.push(sandbox);
+    await mkdir(join(outsideWorkspace, ".pi-science"), { recursive: true });
+    await writeFile(join(outsideWorkspace, "keep.txt"), "outside", "utf8");
+    await mkdir(managed, { recursive: true });
+    await symlink(outside, escape, process.platform === "win32" ? "junction" : "dir");
+    process.env.PI_SCIENCE_WORKSPACES = managed;
+    const app = buildApp(config()); apps.push(app);
+
+    const response = await app.inject({ method: "DELETE", url: "/api/workspaces/delete", payload: { path: join(escape, "workspace") } });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error).toMatch(/symlink|junction/);
+    await expect(readFile(join(outsideWorkspace, "keep.txt"), "utf8")).resolves.toBe("outside");
+  });
+
+  it("rejects workspace rename through a symlink or junction", async () => {
+    const sandbox = join(tmpdir(), `pi-science-rename-link-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const managed = join(sandbox, "managed");
+    const outside = join(sandbox, "outside");
+    const outsideWorkspace = join(outside, "workspace");
+    const escape = join(managed, "escape");
+    tempDirs.push(sandbox);
+    await mkdir(join(outsideWorkspace, ".pi-science"), { recursive: true });
+    await writeFile(join(outsideWorkspace, "keep.txt"), "outside", "utf8");
+    await mkdir(managed, { recursive: true });
+    await symlink(outside, escape, process.platform === "win32" ? "junction" : "dir");
+    process.env.PI_SCIENCE_WORKSPACES = managed;
+    const app = buildApp(config()); apps.push(app);
+
+    const response = await app.inject({ method: "POST", url: "/api/workspaces/rename", payload: { path: join(escape, "workspace"), name: "renamed" } });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error).toMatch(/symlink|junction/);
+    await expect(readFile(join(outsideWorkspace, "keep.txt"), "utf8")).resolves.toBe("outside");
+    await expect(stat(join(outside, "renamed"))).rejects.toThrow();
+  });
+
+  it("uses platform path semantics for nested file moves, probes, and previews", async () => {
+    const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
+    await writeFile(join(cwd, "source.txt"), "hello", "utf8");
+    const target = join(cwd, "nested", "renamed.txt");
+
+    const moved = await app.inject({ method: "POST", url: `/api/files/rename?cwd=${encodeURIComponent(cwd)}`, payload: { source: "source.txt", target: "nested/renamed.txt" } });
+    expect(moved.statusCode).toBe(200);
+    await expect(readFile(target, "utf8")).resolves.toBe("hello");
+    await expect(stat(target.slice(0, -1))).rejects.toThrow();
+
+    const listed = await app.inject({ method: "GET", url: `/api/files?cwd=${encodeURIComponent(cwd)}&subdir=${encodeURIComponent("nested")}` });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toEqual([expect.objectContaining({ path: "nested/renamed.txt", name: "renamed.txt" })]);
+
+    const probe = await app.inject({ method: "GET", url: `/api/files/probe/nested/renamed.txt?cwd=${encodeURIComponent(cwd)}` });
+    expect(probe.statusCode).toBe(200);
+    expect(probe.json()).toMatchObject({ path: "nested/renamed.txt", name: "renamed.txt", is_dir: false });
+
+    const preview = await app.inject({ method: "GET", url: `/api/files/nested/renamed.txt/preview?cwd=${encodeURIComponent(cwd)}` });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json()).toMatchObject({ path: "nested/renamed.txt", name: "renamed.txt", extension: ".txt" });
+  });
+
+  it("normalizes backslash-form file requests and provenance to API paths", async () => {
+    const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
+    const uploaded = await app.inject({ method: "POST", url: `/api/files/upload?cwd=${encodeURIComponent(cwd)}`, payload: { path: "incoming\\nested.txt", content: "hello" } });
+    expect(uploaded.statusCode).toBe(200);
+    expect(uploaded.json()).toMatchObject({ path: "incoming/nested.txt", filename: "nested.txt" });
+
+    const moved = await app.inject({ method: "POST", url: `/api/files/move?cwd=${encodeURIComponent(cwd)}`, payload: { source: "incoming\\nested.txt", target: "results\\renamed.txt" } });
+    expect(moved.statusCode).toBe(200);
+    expect(moved.json()).toMatchObject({ source: "incoming/nested.txt", target: "results/renamed.txt" });
+
+    const requested = encodeURIComponent("results\\renamed.txt");
+    const probe = await app.inject({ method: "GET", url: `/api/files/probe/${requested}?cwd=${encodeURIComponent(cwd)}` });
+    const preview = await app.inject({ method: "GET", url: `/api/files/${encodeURIComponent("results\\renamed.txt\\preview")}?cwd=${encodeURIComponent(cwd)}` });
+    const read = await app.inject({ method: "GET", url: `/api/files/${requested}?cwd=${encodeURIComponent(cwd)}` });
+    expect(probe.statusCode).toBe(200);
+    expect(probe.json()).toMatchObject({ path: "results/renamed.txt", name: "renamed.txt" });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json()).toMatchObject({ path: "results/renamed.txt", name: "renamed.txt" });
+    expect(read.statusCode).toBe(200);
+    expect(read.json()).toMatchObject({ path: "results/renamed.txt", data: "hello" });
+
+    const provenance = (await readFile(join(cwd, ".pi-science", "provenance.jsonl"), "utf8")).trim().split(/\r?\n/).map((line) => JSON.parse(line) as { path: string; diff?: string });
+    expect(provenance).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "incoming/nested.txt" }),
+      expect.objectContaining({ path: "results/renamed.txt", diff: "incoming/nested.txt -> results/renamed.txt" }),
+    ]));
   });
 
   it("supports atomic file writes and research-loop state transitions", async () => {
@@ -388,6 +556,18 @@ describe("native control-plane business routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ valid: false });
     expect(response.json().validations).toHaveLength(1);
+  });
+
+  it("rejects case-insensitive metadata aliases from skill validation", async () => {
+    const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
+    const alias = join(cwd, ".PI-SCIENCE", "skill");
+    await mkdir(alias, { recursive: true });
+    await writeFile(join(alias, "SKILL.md"), "---\nname: hidden\ndescription: Hidden metadata skill\n---\n", "utf8");
+
+    const response = await app.inject({ method: "POST", url: `/api/skills/validate?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(alias)}` });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error).toMatch(/inside the workspace/);
   });
 
   it("serializes concurrent settings updates without losing providers", async () => {
@@ -598,7 +778,7 @@ describe("native control-plane business routes", () => {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     throw new Error("cancelled job did not reach a terminal state");
-  });
+  }, 20_000);
 
   it("rejects invalid claim-check bounds and serializes provenance versions", async () => {
     const cwd = await workspace();

@@ -1,13 +1,14 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const dist = new URL("../dist/assets/", import.meta.url);
+const dist = fileURLToPath(new URL("../dist/assets/", import.meta.url));
 const files = await readdir(dist);
 const budget = Number(process.env.PI_SCIENCE_ENTRY_BUDGET || 300_000);
 const entries = [];
 for (const file of files) {
   if (!file.endsWith(".js") || file.startsWith("vendor-")) continue;
-  const info = await stat(join(dist.pathname, file));
+  const info = await stat(join(dist, file));
   entries.push({ file, size: info.size });
 }
 const failures = entries.filter((entry) => entry.size > budget);
@@ -15,7 +16,7 @@ const html = await readFile(new URL("../dist/index.html", import.meta.url), "utf
 const initialFiles = [...html.matchAll(/(?:src|href)="\/assets\/([^"]+\.js)"/g)].map((match) => match[1]);
 const initial = [];
 for (const file of initialFiles) {
-  const info = await stat(join(dist.pathname, file));
+  const info = await stat(join(dist, file));
   initial.push({ file, size: info.size });
 }
 const initialBudget = Number(process.env.PI_SCIENCE_INITIAL_JS_BUDGET || 1_500_000);
