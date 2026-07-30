@@ -15,6 +15,14 @@ replaceable execution service.
 - When a task genuinely requires accessing a path outside the project, ask first and state the
   exact path and reason before proceeding.
 
+## Output and preview rules
+- Never start HTTP servers (e.g. `python -m http.server`) or open browsers (`open`, `xdg-open`,
+  `start`) to preview generated HTML or other files. The right-side inspector panel already
+  renders HTML, PDF, images, and markdown inline through the workspace file server. Return the
+  workspace-relative file path in a markdown link so the user can click to open it in the panel.
+- Never generate `file://` URLs. Use workspace-relative paths that the frontend can resolve
+  through `/api/files/serve/`.
+
 ## Verification
 
 ```bash
