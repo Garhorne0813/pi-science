@@ -73,7 +73,7 @@ pi-science status           # 查看当前运行状态
 pi-science stop             # 停止本仓库启动的服务
 ```
 
-不加 `--detach` 时，`pi-science` 会占用当前终端，Ctrl+C 停止，与 `bash scripts/start.sh` 完全一致。生成的启动器只转发到当前 checkout；如果目标位置已经存在无关文件、目录或 symlink，安装器会拒绝覆盖，需要先显式移动或删除冲突项。重复运行安装器可以安全更新属于同一 checkout 的启动器。
+不加 `--detach` 时，`pi-science` 会占用当前终端，Ctrl+C 停止，与 `bash scripts/start.sh` 完全一致。前台和后台启动共用一个端到端就绪期限（`PI_SCIENCE_STARTUP_TIMEOUT_SECONDS`，默认 90 秒）；后台启动失败会删除 PID 文件并回滚本 checkout 拥有的监听进程。生成的启动器只转发到当前 checkout；如果目标位置已经存在无关文件、目录或 symlink，安装器会拒绝覆盖，需要先显式移动或删除冲突项。重复运行安装器可以安全更新属于同一 checkout 的启动器。安装器通过同目录锁协调并发的 Pi-Science 安装，并以 no-clobber 提交检测已覆盖的目标替换场景；文档不声称可抵御所有主动、非协作的恶意文件系统竞态。
 
 仓库移动后，或者 `git pull` 修改了 `package.json`、`pnpm-lock.yaml`、Python 依赖元数据或 Pi runtime 版本时，需要重新运行 `scripts/install.sh`；只有源码变化时不需要重装。安装后可直接运行 `bash scripts/start.sh`。如果继续使用 `dev.sh`，但希望跳过安装：
 

@@ -66,7 +66,8 @@ running_pid() {
   [ -f "$PID_FILE" ] || return 1
   local pid
   pid="$(cat "$PID_FILE" 2>/dev/null || true)"
-  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 1
+  case "$pid" in ''|*[!0-9]*) rm -f "$PID_FILE"; return 1 ;; esac
+  if ! kill -0 "$pid" 2>/dev/null; then rm -f "$PID_FILE"; return 1; fi
   printf '%s' "$pid"
 }
 
@@ -92,17 +93,21 @@ cmd_start() {
     exec bash "$SCRIPT_DIR/start.sh"
   fi
 
+  case "$READY_TIMEOUT_SECONDS" in ''|*[!0-9]*) echo "Error: PI_SCIENCE_STARTUP_TIMEOUT_SECONDS must be a positive integer." >&2; exit 2 ;; esac
+  [ "$READY_TIMEOUT_SECONDS" -gt 0 ] || { echo "Error: PI_SCIENCE_STARTUP_TIMEOUT_SECONDS must be a positive integer." >&2; exit 2; }
+
   mkdir -p "$RUN_DIR"
   nohup bash "$SCRIPT_DIR/start.sh" >"$LOG_FILE" 2>&1 &
-  local pid=$!
+  local pid=$! deadline=$(( $(date +%s) + READY_TIMEOUT_SECONDS ))
   printf '%s\n' "$pid" > "$PID_FILE"
 
-  local waited=0
-  while [ "$waited" -lt "$READY_TIMEOUT_SECONDS" ]; do
+  while [ "$(date +%s)" -lt "$deadline" ]; do
     if ! kill -0 "$pid" 2>/dev/null; then
       echo "Error: Pi-Science exited during startup. Last lines of $LOG_FILE:" >&2
       tail -n 20 "$LOG_FILE" >&2 || true
+      stop_pid "$pid"
       rm -f "$PID_FILE"
+      stop_owned_listeners >/dev/null
       exit 1
     fi
     if control_plane_is_ready && frontend_is_ready; then
@@ -114,22 +119,50 @@ cmd_start() {
       [ "$open" = true ] && open_browser "$FRONTEND_URL"
       return 0
     fi
-    sleep 1
-    waited=$((waited + 1))
+    sleep 0.25
   done
 
+  if control_plane_is_ready && frontend_is_ready; then
+    echo "Pi-Science is running in the background (pid $pid)"
+    echo "  Frontend:           $FRONTEND_URL"
+    echo "  Node control plane: http://127.0.0.1:$CONTROL_PLANE_PORT"
+    echo "  Logs:               $LOG_FILE"
+    echo "  Stop with:          pi-science stop"
+    [ "$open" = true ] && open_browser "$FRONTEND_URL"
+    return 0
+  fi
   echo "Error: Pi-Science did not become ready within ${READY_TIMEOUT_SECONDS}s. See $LOG_FILE" >&2
+  stop_pid "$pid"
+  rm -f "$PID_FILE"
+  stop_owned_listeners >/dev/null
   exit 1
 }
 
 stop_pid() {
   local pid="$1" waited=0
   kill "$pid" 2>/dev/null || return 0
-  while [ "$waited" -lt 15 ] && kill -0 "$pid" 2>/dev/null; do
-    sleep 1
+  while [ "$waited" -lt 50 ] && kill -0 "$pid" 2>/dev/null; do
+    sleep 0.1
     waited=$((waited + 1))
   done
   kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
+stop_owned_listeners() {
+  local port listener stopped=false
+  for port in "$CONTROL_PLANE_PORT" "$FRONTEND_PORT" "$SCIENTIFIC_RUNTIME_PORT"; do
+    while read -r listener; do
+      [ -n "$listener" ] || continue
+      if pid_belongs_to_project "$listener"; then
+        stop_pid "$listener"
+        stopped=true
+      else
+        echo "Note: port $port is held by pid $listener from outside this checkout; leaving it alone." >&2
+      fi
+    done < <(port_listener_pids "$port")
+  done
+  [ "$stopped" = true ]
 }
 
 cmd_stop() {
@@ -143,18 +176,7 @@ cmd_stop() {
 
   # A foreground start leaves no pid file, and a detached one can outlive its
   # supervisor, so sweep the ports this checkout owns as well.
-  local port
-  for port in "$CONTROL_PLANE_PORT" "$FRONTEND_PORT" "$SCIENTIFIC_RUNTIME_PORT"; do
-    while read -r listener; do
-      [ -n "$listener" ] || continue
-      if pid_belongs_to_project "$listener"; then
-        stop_pid "$listener"
-        stopped=true
-      else
-        echo "Note: port $port is held by pid $listener from outside this checkout; leaving it alone." >&2
-      fi
-    done < <(port_listener_pids "$port")
-  done
+  stop_owned_listeners && stopped=true || true
 
   if [ "$stopped" = true ]; then echo "Pi-Science stopped."
   else echo "Pi-Science is not running."

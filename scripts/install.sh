@@ -15,7 +15,7 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 NODE_PATH="$(node -p 'process.execPath')"
-if ! "$NODE_PATH" -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 12) ? 0 : 1)'; then
+if ! "$NODE_PATH" "$SCRIPT_DIR/check-node-version.mjs"; then
   echo "Error: Node.js >=22.12.0 is required (found $("$NODE_PATH" --version))." >&2
   exit 1
 fi

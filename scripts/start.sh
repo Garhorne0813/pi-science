@@ -18,7 +18,7 @@ NODE_COMMAND="$(command -v node || true)"
 [ -f "$PI_CLI" ] || { echo "Error: Pi runtime is not installed. Run: bash scripts/install.sh" >&2; exit 1; }
 [ -n "$NODE_COMMAND" ] || { echo "Error: Node.js >=22.12.0 is required. Run: bash scripts/install.sh" >&2; exit 1; }
 PI_NODE_PATH="$("$NODE_COMMAND" -p 'process.execPath')"
-"$PI_NODE_PATH" -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 12) ? 0 : 1)' || { echo "Error: Node.js >=22.12.0 is required (found $("$PI_NODE_PATH" --version)). Run: bash scripts/install.sh" >&2; exit 1; }
+"$PI_NODE_PATH" "$SCRIPT_DIR/check-node-version.mjs" || { echo "Error: Node.js >=22.12.0 is required (found $("$PI_NODE_PATH" --version)). Run: bash scripts/install.sh" >&2; exit 1; }
 CONTROL_PLANE_CLI="$PROJECT_DIR/apps/server/node_modules/tsx/dist/cli.mjs"
 VITE_BIN="$PROJECT_DIR/frontend/node_modules/.bin/vite"
 [ -f "$CONTROL_PLANE_CLI" ] || { echo "Error: server dependencies are not installed. Run: bash scripts/install.sh" >&2; exit 1; }
@@ -33,6 +33,7 @@ STARTUP_TIMEOUT_SECONDS="${PI_SCIENCE_STARTUP_TIMEOUT_SECONDS:-90}"
 PIP_CACHE_DIR="${PIP_CACHE_DIR:-$PROJECT_DIR/.cache/pip}"
 case "$STARTUP_TIMEOUT_SECONDS" in ''|*[!0-9]*) echo "Error: PI_SCIENCE_STARTUP_TIMEOUT_SECONDS must be a positive integer." >&2; exit 1 ;; esac
 [ "$STARTUP_TIMEOUT_SECONDS" -gt 0 ] || { echo "Error: PI_SCIENCE_STARTUP_TIMEOUT_SECONDS must be a positive integer." >&2; exit 1; }
+STARTUP_DEADLINE=$(( $(date +%s) + STARTUP_TIMEOUT_SECONDS ))
 
 process_tree_pids() {
   local root="$1" previous="" current="$root"
@@ -46,12 +47,21 @@ process_tree_pids() {
 }
 
 stop_owned_process() {
-  local root="$1" waited=0 pids
-  [ -n "$root" ] && kill -0 "$root" 2>/dev/null || return 0
-  pids="$(process_tree_pids "$root")"
-  kill -TERM $pids 2>/dev/null || true
-  while [ "$waited" -lt 50 ] && kill -0 "$root" 2>/dev/null; do sleep 0.1; waited=$((waited + 1)); done
-  if kill -0 "$root" 2>/dev/null; then pids="$(process_tree_pids "$root")"; kill -KILL $pids 2>/dev/null || true; fi
+  local root="$1" waited=0 initial final all pid alive
+  [ -n "$root" ] || return 0
+  initial="$(process_tree_pids "$root")"
+  [ -n "$initial" ] || return 0
+  kill -TERM $initial 2>/dev/null || true
+  while [ "$waited" -lt 50 ]; do
+    alive=false
+    for pid in $initial; do kill -0 "$pid" 2>/dev/null && alive=true; done
+    [ "$alive" = true ] || break
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  final="$(process_tree_pids "$root")"
+  all="$initial $final"
+  for pid in $all; do kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true; done
   wait "$root" 2>/dev/null || true
 }
 
@@ -72,14 +82,14 @@ port_is_available() {
 }
 
 wait_for_health() {
-  local pid="$1" url="$2" label="$3" attempts=$((STARTUP_TIMEOUT_SECONDS * 2)) attempt=0
-  while [ "$attempt" -lt "$attempts" ]; do
+  local pid="$1" url="$2" label="$3"
+  while [ "$(date +%s)" -lt "$STARTUP_DEADLINE" ]; do
     kill -0 "$pid" 2>/dev/null || { echo "Error: $label exited during startup." >&2; return 1; }
     curl --fail --silent "$url" >/dev/null 2>&1 && return 0
-    sleep 0.5
-    attempt=$((attempt + 1))
+    sleep 0.25
   done
-  echo "Error: $label did not become ready within ${STARTUP_TIMEOUT_SECONDS}s." >&2
+  curl --fail --silent "$url" >/dev/null 2>&1 && return 0
+  echo "Error: $label did not become ready within the ${STARTUP_TIMEOUT_SECONDS}s startup deadline." >&2
   return 1
 }
 

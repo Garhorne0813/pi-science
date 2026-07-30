@@ -73,7 +73,7 @@ pi-science status           # report what is currently running
 pi-science stop             # stop the services started from this checkout
 ```
 
-Without `--detach`, `pi-science` holds the terminal and Ctrl+C stops it, exactly like `bash scripts/start.sh`. The generated launcher only forwards to this checkout and refuses to overwrite an unrelated file, directory, or symlink already named `pi-science`; move such a collision explicitly before installing. Re-running the installer safely updates a launcher owned by the same checkout.
+Without `--detach`, `pi-science` holds the terminal and Ctrl+C stops it, exactly like `bash scripts/start.sh`. Foreground and detached startup share one end-to-end readiness deadline (`PI_SCIENCE_STARTUP_TIMEOUT_SECONDS`, default 90 seconds); failed detached startup removes its PID file and rolls back owned listeners. The generated launcher only forwards to this checkout and refuses to overwrite an unrelated file, directory, or symlink already named `pi-science`; move such a collision explicitly before installing. Re-running the installer safely updates a launcher owned by the same checkout. A same-directory lock coordinates concurrent Pi-Science installers and the final no-clobber commit detects demonstrated destination substitutions; the installer does not claim protection from every actively hostile, non-cooperating filesystem race.
 
 Re-run `scripts/install.sh` after moving the checkout or after a `git pull` changes `package.json`, `pnpm-lock.yaml`, Python dependency metadata, or the Pi runtime version. Source-only changes do not require reinstalling. After installation, use `bash scripts/start.sh`; to keep using `dev.sh` while skipping installation, run:
 
