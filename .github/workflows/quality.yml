@@ -46,6 +46,10 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --directory backend --extra dev
 
+      - name: Test POSIX launcher lifecycle
+        if: runner.os != 'Windows'
+        run: bash scripts/test-launcher.sh
+
       - name: Typecheck contracts, control plane and frontend
         run: pnpm typecheck
 

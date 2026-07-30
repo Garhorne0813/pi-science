@@ -13,7 +13,7 @@
     · <a href="#开发与测试">开发与测试</a>
   </p>
   <p>
-    <img src="https://img.shields.io/badge/Node.js-%E2%89%A522-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22+" />
+    <img src="https://img.shields.io/badge/Node.js-%E2%89%A522.12-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22.12+" />
     <img src="https://img.shields.io/badge/Python-%E2%89%A53.11-3776AB?logo=python&logoColor=white" alt="Python 3.11+" />
     <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111" alt="React 19" />
     <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License" />
@@ -36,7 +36,7 @@
 
 ### 环境要求
 
-- Node.js 22 或更高版本
+- Node.js 22.12 或更高版本
 - Python 3.11 或更高版本
 - pnpm
 - 一个 LLM 提供商 API Key，或可信的 OpenAI / Anthropic 兼容本地端点
@@ -53,12 +53,14 @@ bash scripts/dev.sh
 
 ### 分开安装和启动
 
-首次部署或依赖变化后执行安装：
+为本地 checkout 安装一次依赖，然后可独立启动开发服务：
 
 ```bash
 bash scripts/install.sh
 bash scripts/start.sh
 ```
+
+Shell 启动器支持 macOS、Linux、WSL 和 Git Bash。它有意运行 `tsx watch` 与 Vite 开发服务器，不是生产部署服务器；目前不提供原生 PowerShell/CMD 启动器。安装完成后的启动过程直接调用 package-local 可执行文件，因此运行时不需要 npm 或 pnpm wrapper；安装、构建和依赖更新仍然需要 pnpm。
 
 ### `pi-science` 命令
 
@@ -71,9 +73,9 @@ pi-science status           # 查看当前运行状态
 pi-science stop             # 停止本仓库启动的服务
 ```
 
-不加 `--detach` 时，`pi-science` 会占用当前终端，Ctrl+C 停止，与 `bash scripts/start.sh` 完全一致。启动器只是转发到本仓库，`git pull` 后无需重装；但仓库移动位置后需要重新运行 `scripts/install.sh`。
+不加 `--detach` 时，`pi-science` 会占用当前终端，Ctrl+C 停止，与 `bash scripts/start.sh` 完全一致。生成的启动器只转发到当前 checkout；如果目标位置已经存在无关文件、目录或 symlink，安装器会拒绝覆盖，需要先显式移动或删除冲突项。重复运行安装器可以安全更新属于同一 checkout 的启动器。
 
-后续只需运行 `bash scripts/start.sh`。如果继续使用 `dev.sh`，但希望跳过安装：
+仓库移动后，或者 `git pull` 修改了 `package.json`、`pnpm-lock.yaml`、Python 依赖元数据或 Pi runtime 版本时，需要重新运行 `scripts/install.sh`；只有源码变化时不需要重装。安装后可直接运行 `bash scripts/start.sh`。如果继续使用 `dev.sh`，但希望跳过安装：
 
 ```bash
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
