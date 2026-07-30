@@ -54,7 +54,19 @@ jobs:
         run: pnpm typecheck
 
       - name: Test contracts, control plane, frontend and skills
+        if: runner.os != 'Windows'
         run: pnpm test
+
+      # Native process integration tests launch Node, bash and taskkill trees.
+      # Serializing server files on the two-core Windows runner prevents unrelated
+      # 500 ms/15 s characterization deadlines from competing for process slots.
+      - name: Test contracts, serialized control plane, frontend and skills
+        if: runner.os == 'Windows'
+        run: |
+          pnpm --filter @pi-science/contracts test
+          pnpm --filter @pi-science/server exec vitest run --fileParallelism=false
+          pnpm --filter frontend test
+          pnpm test:skills
 
       - name: Build all JavaScript packages
         run: pnpm build

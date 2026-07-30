@@ -63,7 +63,7 @@ Harden the installed local-development launcher without changing Pi-Science into
 
 - Add a static launcher contract test for package-local CLI paths, CWD-preserving subshells, absence of npm/pnpm runtime wrappers, Node version checks, dependency diagnostics, and the generated-launcher safety contract.
 - Add a credential-free Bash lifecycle fixture that builds a temporary checkout with fake Node/tsx/Vite/Python assets and verifies readiness, preserved CWD, package-wrapper absence, foreground SIGINT and TERM cleanup, KILL fallback for a TERM-ignoring reparented descendant, detached slow/never-ready behavior, status/stop/PID cleanup, startup-failure cleanup, port release, paths containing spaces, Node-version boundaries, missing dependencies, generated-launcher execution, checkout ownership refusal, deterministic file/directory substitution races, symlink refusal, and safe reinstall of an owned launcher.
-- Run launcher tests only in Ubuntu CI. Windows CI continues to validate the cross-platform application but is not evidence of native shell-launcher support.
+- Run launcher tests only in Ubuntu CI. Windows CI continues to validate the cross-platform application but is not evidence of native shell-launcher support. Serialize server test files on the two-core Windows runner so native Node/bash/taskkill integration processes do not starve unrelated fixed-deadline tests; this changes scheduling, not assertions or timeouts.
 
 ### 6. Documentation
 
