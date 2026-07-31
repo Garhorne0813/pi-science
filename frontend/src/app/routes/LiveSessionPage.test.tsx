@@ -91,6 +91,24 @@ function agentBlock(id: string, text: string): ThreadBlock {
   return { kind: "agent", id, parts: [{ id: `${id}-p0`, text }] };
 }
 
+function userBlock(id: string, text: string): ThreadBlock {
+  return { kind: "user", id, text, timestamp: new Date().toISOString() };
+}
+
+/** IntersectionObserver stub that captures its callback so tests can drive
+ *  the rail highlight logic manually (jsdom has no IO implementation). */
+class IOStub {
+  static instances: IOStub[] = [];
+  cb: IntersectionObserverCallback;
+  constructor(cb: IntersectionObserverCallback) {
+    this.cb = cb;
+    IOStub.instances.push(this);
+  }
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
 function textarea(): HTMLTextAreaElement {
   const element = document.querySelector("textarea");
   if (!element) throw new Error("composer textarea not mounted");
@@ -141,6 +159,20 @@ beforeEach(() => {
   overrides = [];
   fetchMock.mockClear();
   vi.stubGlobal("fetch", fetchMock);
+  IOStub.instances = [];
+  vi.stubGlobal("IntersectionObserver", IOStub);
+  Element.prototype.scrollIntoView = vi.fn();
+  Element.prototype.scrollTo = vi.fn();
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: false,
+    media: query,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    onchange: null,
+    dispatchEvent: vi.fn(),
+  }));
   const storage = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => storage.get(key) ?? null,
@@ -511,6 +543,205 @@ describe("slash-command dispatcher", () => {
     await waitFor(() => expect(sendPrompt).toHaveBeenCalledTimes(1));
     expect(sendPrompt.mock.calls[0][0]).toBe("/xyz do a thing");
     expect(useRuntimeStore.getState().draft).toBe("");
+  });
+});
+
+describe("conversation nav rail and scroll-to-latest", () => {
+  function threadWith(blocks: ThreadBlock[]) {
+    const index: Record<string, number> = {};
+    blocks.forEach((block, i) => { index[block.id] = i; });
+    useRuntimeStore.setState({ thread: { blocks, index, loaded: true } });
+  }
+
+  function scroller(): HTMLElement {
+    const element = document.querySelector("[class*='overflow-y-auto']");
+    if (!element) throw new Error("thread scroller not mounted");
+    return element as HTMLElement;
+  }
+
+  it("shows one summary entry per user query once there are at least two", async () => {
+    threadWith([
+      userBlock("u1", "First question about models"),
+      agentBlock("a1", "first reply"),
+      userBlock("u2", "Second question about data"),
+      agentBlock("a2", "second reply"),
+    ]);
+    await renderReady();
+    const nav = screen.getByRole("navigation", { name: "Conversation" });
+    expect(nav).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "First question about models" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Second question about data" })).toBeInTheDocument();
+  });
+
+  it("jumps to the selected user message on click", async () => {
+    threadWith([
+      userBlock("u1", "First question about models"),
+      agentBlock("a1", "first reply"),
+      userBlock("u2", "Second question about data"),
+      agentBlock("a2", "second reply"),
+    ]);
+    await renderReady();
+    fireEvent.click(screen.getByRole("button", { name: "Second question about data" }));
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith(
+      expect.objectContaining({ block: "start" }),
+    );
+  });
+
+  it("does not follow the stream to the bottom after a rail jump", async () => {
+    threadWith([
+      userBlock("u1", "First question about models"),
+      agentBlock("a1", "first reply"),
+      userBlock("u2", "Second question about data"),
+      agentBlock("a2", "second reply"),
+    ]);
+    await renderReady();
+    const scrollerEl = scroller();
+    Object.defineProperty(scrollerEl, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(scrollerEl, "clientHeight", { value: 600, configurable: true });
+    scrollerEl.scrollTop = 500;
+    fireEvent.click(screen.getByRole("button", { name: "Second question about data" }));
+    // A streamed block arrives: the follow-output effect must not yank the
+    // viewport back to the bottom because the user is inspecting history.
+    act(() => {
+      useRuntimeStore.setState((state) => ({
+        thread: { ...state.thread, blocks: [...state.thread.blocks, agentBlock("a3", "streamed reply")] },
+      }));
+    });
+    expect(scrollerEl.scrollTop).toBe(500);
+  });
+
+  it("resumes following the stream after the arrow is clicked", async () => {
+    threadWith([
+      userBlock("u1", "First question about models"),
+      agentBlock("a1", "first reply"),
+    ]);
+    await renderReady();
+    const scrollerEl = scroller();
+    Object.defineProperty(scrollerEl, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(scrollerEl, "clientHeight", { value: 600, configurable: true });
+    scrollerEl.scrollTop = 500;
+    fireEvent.scroll(scrollerEl);
+    fireEvent.click(await screen.findByLabelText("Back to latest"));
+    // followOutputRef is true again: the next streamed block pins to the bottom.
+    act(() => {
+      useRuntimeStore.setState((state) => ({
+        thread: { ...state.thread, blocks: [...state.thread.blocks, agentBlock("a2", "streamed reply")] },
+      }));
+    });
+    expect(scrollerEl.scrollTop).toBe(2000);
+  });
+
+  it("shows the back-to-latest arrow after scrolling up and hides it near the bottom", async () => {
+    threadWith([
+      userBlock("u1", "First question about models"),
+      agentBlock("a1", "first reply"),
+    ]);
+    await renderReady();
+    const scrollerEl = scroller();
+    Object.defineProperty(scrollerEl, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(scrollerEl, "clientHeight", { value: 600, configurable: true });
+    scrollerEl.scrollTop = 500;
+    fireEvent.scroll(scrollerEl);
+    const arrow = await screen.findByLabelText("Back to latest");
+    expect(arrow).toBeInTheDocument();
+    scrollerEl.scrollTop = 1940;
+    fireEvent.scroll(scrollerEl);
+    await waitFor(() => expect(screen.queryByLabelText("Back to latest")).toBeNull());
+  });
+
+  it("scrolls back to the bottom when the arrow is clicked", async () => {
+    threadWith([
+      userBlock("u1", "First question about models"),
+      agentBlock("a1", "first reply"),
+    ]);
+    await renderReady();
+    const scrollerEl = scroller();
+    Object.defineProperty(scrollerEl, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(scrollerEl, "clientHeight", { value: 600, configurable: true });
+    scrollerEl.scrollTop = 500;
+    fireEvent.scroll(scrollerEl);
+    fireEvent.click(await screen.findByLabelText("Back to latest"));
+    expect(Element.prototype.scrollTo).toHaveBeenCalledWith(
+      expect.objectContaining({ top: 2000 }),
+    );
+  });
+
+  it("shows the rail for a single user message", async () => {
+    threadWith([userBlock("u1", "Only one question"), agentBlock("a1", "reply")]);
+    await renderReady();
+    expect(screen.getByRole("navigation", { name: "Conversation" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Only one question" })).toHaveLength(1);
+  });
+
+  it("falls back to the attachment label for reference-only messages and truncates long ones", async () => {
+    const longText = "x".repeat(200);
+    threadWith([
+      userBlock("u1", "<workspace_references>\n- file: \"/tmp/a.py\"\n</workspace_references>"),
+      agentBlock("a1", "reply"),
+      userBlock("u2", longText),
+      agentBlock("a2", "reply"),
+    ]);
+    await renderReady();
+    const attachment = screen.getByRole("button", { name: "Attachment" });
+    expect(attachment).toBeInTheDocument();
+    const longEntry = screen.getByRole("button", { name: longText.slice(0, 120) });
+    expect(longEntry).toHaveAttribute("title", longText);
+  });
+
+  it("hides the rail when there are no user messages", async () => {
+    threadWith([agentBlock("a1", "reply")]);
+    await renderReady();
+    expect(screen.queryByRole("navigation", { name: "Conversation" })).toBeNull();
+  });
+
+  it("highlights the rail entry for the user message in the viewport", async () => {
+    threadWith([
+      userBlock("u1", "First question about models"),
+      agentBlock("a1", "first reply"),
+      userBlock("u2", "Second question about data"),
+      agentBlock("a2", "second reply"),
+    ]);
+    await renderReady();
+    // jsdom reports zero scroll geometry, which would make the IO callback take
+    // the near-bottom branch; give the scroller real heights first.
+    const scrollerEl = scroller();
+    Object.defineProperty(scrollerEl, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(scrollerEl, "clientHeight", { value: 600, configurable: true });
+    const io = IOStub.instances[IOStub.instances.length - 1];
+    const target1 = document.getElementById("user-msg-u1");
+    const target2 = document.getElementById("user-msg-u2");
+    if (!target1 || !target2) throw new Error("user message anchors not rendered");
+    act(() => {
+      io.cb([
+        { target: target1, isIntersecting: true, intersectionRatio: 0.9 } as unknown as IntersectionObserverEntry,
+        { target: target2, isIntersecting: false, intersectionRatio: 0 } as unknown as IntersectionObserverEntry,
+      ], io as unknown as IntersectionObserver);
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "First question about models" })).toHaveAttribute("aria-current", "true"),
+    );
+    expect(screen.getByRole("button", { name: "Second question about data" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("grows the rail when a new user message streams in", async () => {
+    threadWith([
+      userBlock("u1", "First question about models"),
+      agentBlock("a1", "first reply"),
+      userBlock("u2", "Second question about data"),
+      agentBlock("a2", "second reply"),
+    ]);
+    await renderReady();
+    act(() => {
+      threadWith([
+        userBlock("u1", "First question about models"),
+        agentBlock("a1", "first reply"),
+        userBlock("u2", "Second question about data"),
+        agentBlock("a2", "second reply"),
+        userBlock("u3", "Third question about results"),
+        agentBlock("a3", "third reply"),
+      ]);
+    });
+    expect(await screen.findByRole("button", { name: "Third question about results" })).toBeInTheDocument();
   });
 });
 

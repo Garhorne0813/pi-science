@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowUp, Loader2, Square, Plus, Sparkles, X, File, FolderOpen, Settings } from "lucide-react";
+import { ArrowDown, ArrowUp, Loader2, Square, Plus, Sparkles, X, File, FolderOpen, Settings } from "lucide-react";
 import { getSessionName } from "../../lib/pi-science-client";
 import { useRuntimeStore } from "../../lib/runtime-store";
 import { useUiStore } from "../../lib/store";
@@ -13,6 +13,8 @@ import { ConversationWelcome } from "../../components/conversation/ConversationW
 import { ModelControlMenu } from "../../components/conversation/ModelControlMenu";
 import { InteractionPrompt } from "../../components/conversation/InteractionPrompt";
 import { renderBlocks } from "../../components/conversation/ConversationBlocks";
+import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
+import { visibleUserMessage } from "../../lib/file-references";
 import { useTranslation } from "react-i18next";
 import { ResearchLoopDraftCard, ResearchLoopStatusCard, ResearchModePicker } from "../../components/conversation/ResearchLoopControls";
 import { useTurnEffects } from "../../hooks/useTurnEffects";
@@ -45,6 +47,14 @@ export function LiveSessionPage() {
   const respondToInteraction = useRuntimeStore((s) => s.respondToInteraction);
   const scrollRef = useRef<HTMLDivElement>(null);
   const followOutputRef = useRef(true);
+  const [showScrollDown, setShowScrollDown] = useState(false);
+
+  // A new session (or a reconnect) starts at the bottom: never inherit the
+  // "user scrolled up" state of the previous session on this route.
+  useEffect(() => {
+    followOutputRef.current = true;
+    setShowScrollDown(false);
+  }, [sessionId]);
   const [reviewingProject, setReviewingProject] = useState(false);
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
   const removeWorkspaceReference = useUiStore((state) => state.removeWorkspaceReference);
@@ -69,10 +79,32 @@ export function LiveSessionPage() {
   const handleThreadScroll = () => {
     const scroller = scrollRef.current;
     if (!scroller) return;
-    followOutputRef.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 96;
+    const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 96;
+    followOutputRef.current = nearBottom;
+    setShowScrollDown(!nearBottom);
   };
 
   const { suggestions, setSuggestions } = useTurnEffects(working, thread.blocks);
+
+  const userNavItems = useMemo<ConversationNavItem[]>(() => thread.blocks
+    .filter((block) => block.kind === "user")
+    .map((block) => {
+      const visible = visibleUserMessage(block.text);
+      return { id: block.id, label: (visible || t("conversation.attachment")).slice(0, 120), full: block.text };
+    }), [thread.blocks, t]);
+
+  const smoothScroll = () => !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const handleNavSelect = (id: string) => {
+    // Stop the follow-output effect from yanking the viewport back to the bottom.
+    followOutputRef.current = false;
+    document.getElementById(`user-msg-${id}`)?.scrollIntoView({ behavior: smoothScroll() ? "smooth" : "auto", block: "start" });
+  };
+  const scrollToBottom = () => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    followOutputRef.current = true;
+    scroller.scrollTo({ top: scroller.scrollHeight, behavior: smoothScroll() ? "smooth" : "auto" });
+  };
   const model = useModelConfig(workspaceCwd, sessionId);
 
   useEffect(() => {
@@ -153,7 +185,7 @@ export function LiveSessionPage() {
       {/* Welcome layout: this top region and the spacer below the composer both
           grow equally, so the composer card lands on the vertical centre while
           the welcome copy hangs off its bottom edge. */}
-      <div className="flex min-h-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 flex-1 flex-col">
         {/* Thread */}
         <div ref={scrollRef} onScroll={handleThreadScroll} className={cn("flex-1 overflow-y-auto [overflow-anchor:none]", showWelcome && "flex flex-col justify-end")}>
           {/* 824 = 760 composer column + the px-8 gutters, so thread content lines up with the composer's edges.
@@ -187,9 +219,28 @@ export function LiveSessionPage() {
           </div>
         </div>
 
+        {/* ChatGPT-style rail: jump between user queries (desktop only) */}
+        {userNavItems.length >= 1 && (
+          <ConversationNavRail items={userNavItems} rootRef={scrollRef} onSelect={handleNavSelect} />
+        )}
+
         {/* Composer */}
         <div className={cn("px-8 shrink-0", showWelcome ? "py-0" : "pb-5 pt-2")}>
-          {!showWelcome && modePicker && <div className="mx-auto max-w-[760px]">{modePicker}</div>}
+          {!showWelcome && (
+            <div className="relative mx-auto max-w-[760px]">
+              {modePicker}
+              {showScrollDown && (
+                <button
+                  type="button"
+                  aria-label={t("conversation.scrollToLatest")}
+                  onClick={scrollToBottom}
+                  className="absolute -top-10 left-1/2 z-10 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-card transition-colors hover:bg-surface-2 hover:text-text"
+                >
+                  <ArrowDown size={15} />
+                </button>
+              )}
+            </div>
+          )}
           {suggestions.length > 0 && !working && !research.draft && !research.activeLoop && !input.trim() && (
             <div className="mx-auto flex max-w-[760px] flex-wrap gap-2 px-1 pb-2" aria-label={t("conversation.suggestions")}>
               {suggestions.map((suggestion) => (

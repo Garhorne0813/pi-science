@@ -41,7 +41,7 @@ export function renderBlocks(blocks: ThreadBlock[], codeRunner: CodeRunner) {
 
 function BlockRenderer({ block, actionText, codeRunner }: { block: ThreadBlock; actionText?: string; codeRunner: CodeRunner }) {
   switch (block.kind) {
-    case "user": return <UserMessage text={block.text} timestamp={block.timestamp} />;
+    case "user": return <UserMessage id={block.id} text={block.text} timestamp={block.timestamp} />;
     case "agent": return <AgentMessage parts={block.parts} partial={block.partial} timestamp={block.timestamp} actionText={actionText} codeRunner={codeRunner} />;
     case "tool": return <ToolCard block={block} />;
     case "status-line": return <StatusLine block={block} />;
@@ -79,12 +79,12 @@ function ToolGroup({ blocks }: { blocks: ToolCallBlock[] }) {
   );
 }
 
-function UserMessage({ text, timestamp }: { text: string; timestamp?: string }) {
+function UserMessage({ id, text, timestamp }: { id: string; text: string; timestamp?: string }) {
   const visibleText = visibleUserMessage(text);
   const references = referencesFromMessage(text);
   const copyText = visibleText || references.map((reference) => reference.path).join("\n");
   return (
-    <div className="group/message ml-auto flex max-w-[85%] flex-col items-end gap-1.5">
+    <div id={`user-msg-${id}`} className="group/message ml-auto flex max-w-[85%] scroll-mt-4 flex-col items-end gap-1.5">
       {visibleText && (
         <div className="rounded-card bg-surface-2 px-4 py-3 text-[15px] leading-relaxed text-text whitespace-pre-wrap">
           {visibleText}
