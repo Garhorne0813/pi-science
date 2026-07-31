@@ -44,13 +44,15 @@ export function previewUrl(path: string, root: FileRoot | undefined, cwd: string
   return `${API}/files/serve/${encodedPath}?${params}`;
 }
 
-/** Open a file in the OS default app — web fallback: open in new tab. */
+/** Open a file in the OS default app — web fallback: open in new tab.
+ *  serve URLs are excluded because the right-side inspector previews them inline. */
 export async function openArtifactExternally(
   path: string,
   root: FileRoot | undefined,
   cwd: string,
 ): Promise<void> {
   const url = previewUrl(path, root, cwd);
+  if (url.includes("/api/files/serve/")) return;
   window.open(url, "_blank");
 }
 

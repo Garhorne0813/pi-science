@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -218,16 +218,30 @@ async function configuredLoop(coordinator: ResearchLoopCoordinator, cwd: string,
   return preflight.loop;
 }
 
-async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean, timeoutMs = 8_000): Promise<T> {
+async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean, timeoutMs = 8_000, diagnostics?: () => Promise<unknown>): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   let last: T;
   for (;;) {
     const value = await read();
     last = value;
     if (accept(value)) return value;
-    if (Date.now() >= deadline) throw new Error(`timed out waiting for research loop state: ${JSON.stringify(last)}`);
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for research loop state: ${JSON.stringify(last)}${diagnostics ? `; diagnostics: ${JSON.stringify(await diagnostics())}` : ""}`);
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
+}
+
+async function jobLockDiagnostics(cwd: string): Promise<unknown> {
+  const jobsDir = join(cwd, ".pi-science", "jobs");
+  const names = await readdir(jobsDir).catch(() => []);
+  return Promise.all(names.map(async (name) => {
+    const path = join(jobsDir, name);
+    if (!name.includes(".json")) return { name, content: await readFile(path, "utf8").catch((error) => String(error)) };
+    const record = await readFile(path, "utf8").then((text) => JSON.parse(text) as { status?: unknown; ownership?: { child?: { pid?: number } } }, (error) => ({ error: String(error) }));
+    const pid = "ownership" in record ? record.ownership?.child?.pid : undefined;
+    let child_alive: boolean | null = null;
+    if (pid) { try { process.kill(pid, 0); child_alive = true; } catch { child_alive = false; } }
+    return { name, record, child_alive };
+  }));
 }
 
 async function makeWritable(path: string): Promise<void> {
@@ -337,6 +351,8 @@ describe("subagent research loop", () => {
     const detail = await waitFor(
       () => coordinator.detail(cwd, ready.loop_id),
       (value) => value?.status === "completed",
+      8_000,
+      () => jobLockDiagnostics(cwd),
     );
 
     expect(detail?.operations.find((operation) => operation.operation_id === "op-lost-agent")?.status).toBe("failed");
@@ -541,7 +557,7 @@ describe("subagent research loop", () => {
     complete = async () => { await coordinator.action(cwd, loop.loop_id, "complete"); };
 
     await coordinator.action(cwd, loop.loop_id, "start");
-    const detail = await waitFor(() => coordinator.detail(cwd, loop.loop_id), (value) => value?.status === "completed" && value.operations.some((item) => item.kind === "evaluation" && item.status === "failed"));
+    const detail = await waitFor(() => coordinator.detail(cwd, loop.loop_id), (value) => value?.status === "completed" && value.operations.some((item) => item.kind === "evaluation" && item.status === "failed"), 8_000, () => jobLockDiagnostics(cwd));
     const operation = detail?.operations.find((item) => item.kind === "evaluation");
     const records = await coordinator.repository(cwd).records();
 

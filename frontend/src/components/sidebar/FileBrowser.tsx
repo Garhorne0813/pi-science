@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { FolderOpen, File, ChevronRight, ChevronDown, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { FolderOpen, File, ChevronRight, ChevronDown, RefreshCw, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useUiStore } from "../../lib/store";
 import { fileInspectorForPath } from "../../lib/artifacts";
@@ -8,6 +8,8 @@ import { useFeedback } from "../feedback/feedback-context";
 import { FileContextMenu, type ContextPoint, type FileListEntry } from "./FileContextMenu";
 import { useRuntimeStore } from "../../lib/runtime-store";
 
+interface DirState { entries: FileListEntry[]; loading: boolean; error: string | null }
+
 export function FileBrowser({ cwd }: { cwd: string }) {
   const { t } = useTranslation();
   const { confirm, toast } = useFeedback();
@@ -15,6 +17,8 @@ export function FileBrowser({ cwd }: { cwd: string }) {
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ entry: FileListEntry; point: ContextPoint } | null>(null);
+  const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
+  const [folderStates, setFolderStates] = useState<Map<string, DirState>>(new Map());
   const openInspector = useUiStore((s) => s.openInspector);
   const addWorkspaceReference = useUiStore((s) => s.addWorkspaceReference);
   const fileRevision = useRuntimeStore((s) => s.fileRevision);
@@ -22,7 +26,29 @@ export function FileBrowser({ cwd }: { cwd: string }) {
   const loadFiles = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     try {
-      setEntries(await workspaceFiles.sidebar(cwd, signal));
+      const rootEntries = await workspaceFiles.sidebar(cwd, signal);
+      setEntries(rootEntries);
+      const work = rootEntries.find((e) => e.isDir && e.name === "work");
+      if (work) {
+        setOpenFolders((prev) => { const next = new Set(prev); next.add(work.path); return next; });
+        setFolderStates((prev) => { const next = new Map(prev); next.set(work.path, { entries: [], loading: true, error: null }); return next; });
+        try {
+          const result = await workspaceFiles.directory(cwd, work.path);
+          setFolderStates((prev) => {
+            const next = new Map(prev);
+            if (!next.get(work.path)?.loading) return next;
+            next.set(work.path, { entries: result.entries, loading: false, error: null });
+            return next;
+          });
+        } catch (error) {
+          setFolderStates((prev) => {
+            const next = new Map(prev);
+            if (!next.get(work.path)?.loading) return next;
+            next.set(work.path, { entries: [], loading: false, error: error instanceof Error ? error.message : String(error) });
+            return next;
+          });
+        }
+      }
     } catch (error) {
       if (!signal?.aborted) toast(error instanceof Error ? error.message : t("files.loadError"), "error");
     } finally { if (!signal?.aborted) setLoading(false); }
@@ -35,9 +61,62 @@ export function FileBrowser({ cwd }: { cwd: string }) {
   }, [fileRevision, loadFiles]);
 
   const handleClick = (entry: FileListEntry) => {
-    if (entry.isDir) return;
+    if (entry.isDir) {
+      toggleFolder(entry.path);
+      return;
+    }
     openInspector(fileInspectorForPath(entry.path, entry.name, undefined, cwd));
   };
+
+  const toggleFolder = useCallback(async (dirPath: string) => {
+    setOpenFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(dirPath)) { next.delete(dirPath); return next; }
+      next.add(dirPath);
+      return next;
+    });
+    const alreadyLoaded = folderStates.has(dirPath);
+    if (!alreadyLoaded) {
+      setFolderStates((prev) => { const next = new Map(prev); next.set(dirPath, { entries: [], loading: true, error: null }); return next; });
+      try {
+        const result = await workspaceFiles.directory(cwd, dirPath);
+        setFolderStates((prev) => {
+          const next = new Map(prev);
+          const current = next.get(dirPath);
+          // If the folder was closed and reopened while the request was in flight, keep loading.
+          if (!current || !current.loading) return next;
+          next.set(dirPath, { entries: result.entries, loading: false, error: null });
+          return next;
+        });
+      } catch (error) {
+        setFolderStates((prev) => {
+          const next = new Map(prev);
+          const current = next.get(dirPath);
+          if (!current || !current.loading) return next;
+          next.set(dirPath, { entries: [], loading: false, error: error instanceof Error ? error.message : String(error) });
+          return next;
+        });
+      }
+    }
+  }, [cwd, folderStates]);
+
+  const folderEntries = useMemo(() => {
+    const seen = new Set<string>();
+    const build = (items: FileListEntry[], depth: number): (FileListEntry & { depth: number })[] => {
+      const row: (FileListEntry & { depth: number })[] = [];
+      for (const entry of items) {
+        if (seen.has(entry.path)) continue;
+        seen.add(entry.path);
+        row.push({ ...entry, depth });
+        if (entry.isDir && openFolders.has(entry.path)) {
+          const state = folderStates.get(entry.path);
+          if (state && !state.loading && !state.error) row.push(...build(state.entries, depth + 1));
+        }
+      }
+      return row;
+    };
+    return build(entries, 0);
+  }, [entries, openFolders, folderStates]);
 
   const refreshFiles = () => {
     workspaceFiles.invalidate();
@@ -88,24 +167,34 @@ export function FileBrowser({ cwd }: { cwd: string }) {
         </span>
       </div>
       {expanded && (
-        <div className="mt-1 flex flex-col gap-0.5 max-h-48 overflow-y-auto">
+        <div className="mt-1 flex flex-col gap-0.5 max-h-72 overflow-y-auto">
           {loading && entries.length === 0 ? (
             <p className="px-2 text-[11px] text-muted/60 italic">{t("common.loading")}</p>
           ) : entries.length === 0 ? (
             <p className="px-2 text-[11px] text-muted/60 italic">{t("files.empty")}</p>
           ) : (
-            entries.map((e) => (
-              <button
-                key={e.path}
-                onClick={() => handleClick(e)}
-                onContextMenu={(ev) => handleContextMenu(ev, e)}
-                className="flex items-center gap-2 px-2 py-0.5 text-[12px] text-text/80 hover:bg-surface-2 rounded text-left truncate"
-                title={e.path}
-              >
-                {e.isDir ? <FolderOpen size={12} className="text-muted shrink-0" /> : <File size={12} className="text-muted shrink-0" />}
-                <span className="truncate">{e.name}</span>
-              </button>
-            ))
+            folderEntries.map((e) => {
+              const state = folderStates.get(e.path);
+              const isLoading = state?.loading;
+              const error = state?.error;
+              return (
+                <div key={e.path}>
+                  <button
+                    onClick={() => handleClick(e)}
+                    onContextMenu={(ev) => handleContextMenu(ev, e)}
+                    className="flex items-center gap-2 px-2 py-0.5 text-[12px] text-text/80 hover:bg-surface-2 rounded text-left truncate w-full"
+                    title={e.path}
+                    style={{ paddingLeft: `${8 + e.depth * 12}px` }}
+                  >
+                    {e.isDir && openFolders.has(e.path) ? <ChevronDown size={10} className="text-muted shrink-0" /> : e.isDir ? <ChevronRight size={10} className="text-muted shrink-0" /> : null}
+                    {e.isDir ? <FolderOpen size={12} className="text-muted shrink-0" /> : <File size={12} className="text-muted shrink-0" />}
+                    <span className="truncate">{e.name}</span>
+                    {isLoading && <Loader2 size={10} className="animate-spin text-muted shrink-0 ml-auto" />}
+                  </button>
+                  {error && <p className="px-2 text-[10px] text-error/80 italic" style={{ paddingLeft: `${20 + e.depth * 12}px` }}>{error}</p>}
+                </div>
+              );
+            })
           )}
         </div>
       )}

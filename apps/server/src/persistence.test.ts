@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { acquireFileLock, withFileWriteLock } from "./persistence.js";
+import { acquireFileLock, withFileWriteLock, writeJsonAtomic } from "./persistence.js";
 
 const cleanup: string[] = [];
 
@@ -96,5 +96,60 @@ describe("cross-process file lock", () => {
     expect(await pending).toBe("done");
     expect(ran).toBe(true);
     await expect(stat(`${path}.lock`)).rejects.toThrow();
+  });
+
+  it("retries transient Windows-style release failures before advancing the queue", async () => {
+    const cwd = await workspace();
+    const path = join(cwd, "records.jsonl");
+    let attempts = 0;
+    const result = await withFileWriteLock(path, async () => "done", {
+      unlink: async (target) => {
+        attempts += 1;
+        if (attempts < 3) throw Object.assign(new Error("busy"), { code: attempts === 1 ? "EPERM" : "EBUSY" });
+        await rm(target);
+      },
+      sleep: async () => undefined,
+    });
+    expect(result).toBe("done");
+    expect(attempts).toBe(3);
+    expect(await withFileWriteLock(path, async () => "next")).toBe("next");
+  });
+
+  it("propagates permanent release failure without leaving the next queued writer hanging", async () => {
+    const cwd = await workspace();
+    const path = join(cwd, "records.jsonl");
+    const permanent = Object.assign(new Error("access denied"), { code: "EACCES" });
+    const first = withFileWriteLock(path, async () => "first", { unlink: async () => { throw permanent; } });
+    const second = withFileWriteLock(path, async () => "second");
+    await expect(first).rejects.toThrow("access denied");
+    await expect(Promise.race([second, delay(2_000).then(() => "hung")])).resolves.toBe("second");
+  });
+
+  it("writes atomically with idempotent overwrite", async () => {
+    const cwd = await workspace();
+    const path = join(cwd, "normal.json");
+    await writeJsonAtomic(path, { key: "value" });
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ key: "value" });
+    await writeJsonAtomic(path, { key: "updated" });
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ key: "updated" });
+  });
+
+  it("leaves no orphaned temp files after a normal atomic write", async () => {
+    const cwd = await workspace();
+    const path = join(cwd, "no-temp.json");
+    await writeJsonAtomic(path, { key: "clean" });
+    const { readdir } = await import("node:fs/promises");
+    const entries = await readdir(cwd).catch(() => [] as string[]);
+    expect(entries.some((e) => e.endsWith(".tmp"))).toBe(false);
+  });
+
+  it("never removes a lock whose ownership token was replaced", async () => {
+    const cwd = await workspace();
+    const path = join(cwd, "records.jsonl");
+    const release = await acquireFileLock(path);
+    await writeFile(`${path}.lock`, JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString(), token: "replacement-token" }), "utf8");
+    await expect(release()).rejects.toThrow("ownership changed");
+    expect(JSON.parse(await readFile(`${path}.lock`, "utf8")).token).toBe("replacement-token");
+    await rm(`${path}.lock`);
   });
 });

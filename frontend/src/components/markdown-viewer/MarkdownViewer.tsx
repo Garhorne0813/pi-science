@@ -1,9 +1,12 @@
-import { isValidElement } from "react";
+import { isValidElement, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { File } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { fenceLanguage, runnableLanguage } from "@/lib/runnable-code";
 import { RunnableCodeBlock } from "../conversation/RunnableCodeBlock";
+import { fileInspectorForPath } from "@/lib/artifacts";
+import { useUiStore } from "@/lib/store";
 
 /** Two contexts render markdown: chat bubbles (theme colors, compact) and the
  *  file-preview "paper" (document-neutral black-on-white, editorial scale —
@@ -73,6 +76,7 @@ function reactText(node: React.ReactNode): string {
   return "";
 }
 
+const FILE_HREF = /^(?!(?:https?:\/\/|mailto:|#|data:|file:))/i;
 export function MarkdownViewer({
   children,
   className,
@@ -86,17 +90,46 @@ export function MarkdownViewer({
   codeRunner?: CodeRunner;
 }) {
   const s = STYLES[variant];
+  const cwd = codeRunner?.cwd;
+  const openInspector = useUiStore((s) => s.openInspector);
+  const handleFileLink = useCallback((href: string) => {
+    if (!cwd) return;
+    let path = href;
+    // Strip ./ prefix and resolve absolute paths under the workspace root.
+    const normalizedCwd = cwd.replace(/[\/]+$/, "");
+    if (path.startsWith("./")) path = path.slice(2);
+    else if (path.startsWith(normalizedCwd + "/") || path.startsWith(normalizedCwd + "\\")) path = path.slice(normalizedCwd.length + 1);
+    openInspector(fileInspectorForPath(path, path.split(/[\\/]/).at(-1) || path, undefined, cwd));
+  }, [cwd, openInspector]);
   return (
     <div className={cn(s.root, className)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
           p: ({ children }) => <p className={s.p}>{children}</p>,
-          a: ({ children, href }) => (
-            <a href={href} className={s.a}>
-              {children}
-            </a>
-          ),
+          a: ({ children, href: rawHref }) => {
+            const href = rawHref ?? "";
+            if (cwd && FILE_HREF.test(href)) {
+              return (
+                <span
+                  onClick={(e) => { e.preventDefault(); handleFileLink(href); }}
+                  className={`${s.a} inline-flex items-center gap-1 cursor-pointer`}
+                  title={href}
+                  role="link"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleFileLink(href); }}
+                >
+                  <File size={12} className="shrink-0" />
+                  {children}
+                </span>
+              );
+            }
+            return (
+              <a href={rawHref} className={s.a}>
+                {children}
+              </a>
+            );
+          },
           code: ({ children }) => <code className={s.code}>{children}</code>,
           // Block code: the plain wrapper — its inner <code> is restyled via [&_code].
           // In chat with a codeRunner, python fences become executable blocks.

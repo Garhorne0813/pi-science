@@ -103,6 +103,7 @@
   "conversation.configureProvider": "Configure a provider and model in Settings before sending a message.",
   "conversation.modelListError": "Unable to load model list",
   "conversation.modelSetError": "Unable to set model",
+  "conversation.clickToInsert": "Click to insert path:",
   "conversation.uploadError": "Upload failed",
   "conversation.reviewError": "Project review failed",
   "knowledge.loadError": "Unable to load project knowledge",

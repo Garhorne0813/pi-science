@@ -14,7 +14,7 @@ export function injectWorkspaceReferences(message: string, references: Workspace
   const items = references
     .map((reference) => `- ${reference.isDir ? "folder" : "file"}: ${JSON.stringify(reference.path)}`)
     .join("\n");
-  return `<workspace_references>\n${items}\n</workspace_references>\n\n${message}`.trimEnd();
+  return `${message}\n\n<workspace_references>\n${items}\n</workspace_references>`.trim();
 }
 
 export function visibleUserMessage(message: string): string {

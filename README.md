@@ -13,7 +13,7 @@
     · <a href="#development">Development</a>
   </p>
   <p>
-    <img src="https://img.shields.io/badge/Node.js-%E2%89%A522-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22+" />
+    <img src="https://img.shields.io/badge/Node.js-%E2%89%A522.12-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22.12+" />
     <img src="https://img.shields.io/badge/Python-%E2%89%A53.11-3776AB?logo=python&logoColor=white" alt="Python 3.11+" />
     <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111" alt="React 19" />
     <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License" />
@@ -36,7 +36,7 @@ Each project keeps its own conversations, files, runs, provenance, and reviewed 
 
 ### Requirements
 
-- Node.js 22 or newer
+- Node.js 22.12 or newer
 - Python 3.11 or newer
 - pnpm
 - An LLM provider API key, or a trusted OpenAI/Anthropic-compatible local endpoint
@@ -53,12 +53,14 @@ bash scripts/dev.sh
 
 ### Separate installation and startup
 
-For repeatable deployments, install once and start independently:
+For a repeatable local checkout, install dependencies once and start the development services independently:
 
 ```bash
 bash scripts/install.sh
 bash scripts/start.sh
 ```
+
+The shell launcher is designed for macOS/Linux and is intended to run under WSL; CI validates its lifecycle on Linux. Git Bash is best-effort only—CI does not validate its process-tree and signal semantics—while native PowerShell/CMD launchers are not currently provided. It deliberately runs `tsx watch` and the Vite development server; it is not a production deployment server. Starting an installed checkout invokes package-local executables directly, so npm and pnpm wrappers are not runtime requirements; pnpm is still required for installation, builds, and dependency updates.
 
 ### The `pi-science` command
 
@@ -71,9 +73,9 @@ pi-science status           # report what is currently running
 pi-science stop             # stop the services started from this checkout
 ```
 
-Without `--detach`, `pi-science` holds the terminal and Ctrl+C stops it, exactly like `bash scripts/start.sh`. The launcher only forwards to this checkout, so a `git pull` needs no reinstall — but re-run `scripts/install.sh` if you move the checkout.
+Without `--detach`, `pi-science` holds the terminal and Ctrl+C stops it, exactly like `bash scripts/start.sh`. Foreground and detached startup share one end-to-end readiness deadline (`PI_SCIENCE_STARTUP_TIMEOUT_SECONDS`, default 90 seconds); failed detached startup removes its PID file and rolls back owned listeners. The generated launcher only forwards to this checkout and refuses to overwrite an unrelated file, directory, or symlink already named `pi-science`; move such a collision explicitly before installing. Re-running the installer safely updates a launcher owned by the same checkout. A same-directory lock coordinates concurrent Pi-Science installers and the final no-clobber commit detects demonstrated destination substitutions; the installer does not claim protection from every actively hostile, non-cooperating filesystem race.
 
-After the first installation, use only `bash scripts/start.sh`. To keep using `dev.sh` without reinstalling, run:
+Re-run `scripts/install.sh` after moving the checkout or after a `git pull` changes `package.json`, `pnpm-lock.yaml`, Python dependency metadata, or the Pi runtime version. Source-only changes do not require reinstalling. After installation, use `bash scripts/start.sh`; to keep using `dev.sh` while skipping installation, run:
 
 ```bash
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
