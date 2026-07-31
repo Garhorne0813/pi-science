@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/cn";
@@ -19,6 +19,10 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const confirm = useCallback((options: ConfirmOptions) => new Promise<boolean>((resolve) => {
+    // Capture the trigger synchronously: the confirm dialog autoFocuses its
+    // cancel button on render, which would otherwise become the recorded
+    // activeElement and be gone by the time we restore focus.
+    lastFocused.current = document.activeElement as HTMLElement | null;
     setConfirmation({ ...options, resolve });
   }), []);
 
@@ -26,6 +30,32 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
     confirmation?.resolve(value);
     setConfirmation(null);
   };
+
+  // Restore focus to the element that opened the confirm dialog, so keyboard
+  // users do not end up on <body> (where the settings modal Escape/Tab handlers
+  // would no longer fire) after cancelling.
+  const lastFocused = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!confirmation && lastFocused.current) {
+      lastFocused.current.focus();
+      lastFocused.current = null;
+    }
+  }, [confirmation]);
+
+  // Escape cancels the confirm dialog (replacing window.confirm behaviour that
+  // the SubagentSettings flow used to rely on).
+  useEffect(() => {
+    if (!confirmation) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        confirmation.resolve(false);
+        setConfirmation(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [confirmation]);
 
   return (
     <FeedbackContext.Provider value={{ toast, confirm }}>

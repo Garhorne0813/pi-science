@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowUp, Loader2, Square, Plus, Sparkles, X, File, FolderOpen } from "lucide-react";
+import { ArrowUp, Loader2, Square, Plus, Sparkles, X, File, FolderOpen, Settings } from "lucide-react";
 import { getSessionName } from "../../lib/pi-science-client";
 import { useRuntimeStore } from "../../lib/runtime-store";
 import { useUiStore } from "../../lib/store";
@@ -48,6 +48,7 @@ export function LiveSessionPage() {
   const [reviewingProject, setReviewingProject] = useState(false);
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
   const removeWorkspaceReference = useUiStore((state) => state.removeWorkspaceReference);
+  const openSettings = useUiStore((state) => state.openSettings);
 
   useEffect(() => {
     connect(workspaceCwd, sessionId || undefined);
@@ -138,6 +139,15 @@ export function LiveSessionPage() {
           )} title={status} />
           <h1 className="min-w-0 truncate text-[13px] font-medium text-text">{title}</h1>
         </div>
+        <button
+          type="button"
+          onClick={() => openSettings(workspaceCwd)}
+          aria-label={t("nav.settings")}
+          title={t("nav.settings")}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-input text-muted transition-colors hover:bg-surface-2 hover:text-text"
+        >
+          <Settings size={15} />
+        </button>
       </header>
 
       {/* Welcome layout: this top region and the spacer below the composer both

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { queryClient } from "../../lib/query-client";
 import { settingsApi, subagentsQuery } from "../../lib/settings-api";
 import type { ProjectSubagent } from "../../lib/settings-types";
+import { useFeedback } from "../feedback/feedback-context";
 import { Section } from "./Section";
 
 const EMPTY_SUBAGENT: ProjectSubagent = {
@@ -21,6 +22,7 @@ const EMPTY_SUBAGENT: ProjectSubagent = {
 
 export function SubagentSettings({ workspaceCwd }: { workspaceCwd: string | null }) {
   const { t } = useTranslation();
+  const { confirm } = useFeedback();
   const [agents, setAgents] = useState<ProjectSubagent[]>([]);
   const [draft, setDraft] = useState<ProjectSubagent | null>(null);
   const [busy, setBusy] = useState(false);
@@ -61,7 +63,14 @@ export function SubagentSettings({ workspaceCwd }: { workspaceCwd: string | null
   };
 
   const remove = async (agent: ProjectSubagent) => {
-    if (!workspaceCwd || !window.confirm(t("settings.subagents.deleteConfirm", { name: agent.name }))) return;
+    if (!workspaceCwd) return;
+    const confirmed = await confirm({
+      title: t("settings.subagents.deleteTitle"),
+      message: t("settings.subagents.deleteConfirm", { name: agent.name }),
+      confirmLabel: t("common.delete"),
+      destructive: true,
+    });
+    if (!confirmed) return;
     setError(null);
     try {
       await settingsApi.deleteSubagent(workspaceCwd, agent.name, t("settings.subagents.deleteError"));

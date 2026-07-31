@@ -150,7 +150,7 @@ beforeEach(() => {
   });
   queryClient.clear();
   resetDynamicCommands();
-  useUiStore.setState({ inspectorOpen: false, inspectorData: null, workspaceReferences: [] });
+  useUiStore.setState({ inspectorOpen: false, inspectorData: null, workspaceReferences: [], settingsOpen: false, settingsScope: null, });
   useRuntimeStore.setState({
     status: "ready",
     client: null,
@@ -511,5 +511,15 @@ describe("slash-command dispatcher", () => {
     await waitFor(() => expect(sendPrompt).toHaveBeenCalledTimes(1));
     expect(sendPrompt.mock.calls[0][0]).toBe("/xyz do a thing");
     expect(useRuntimeStore.getState().draft).toBe("");
+  });
+});
+
+describe("header settings entry", () => {
+  it("opens the settings dialog with the workspace scope from the gear button", async () => {
+    useUiStore.setState({ settingsOpen: false });
+    await renderReady();
+    fireEvent.click(screen.getByLabelText("Settings"));
+    expect(useUiStore.getState().settingsOpen).toBe(true);
+    expect(useUiStore.getState().settingsScope).toBe(CWD);
   });
 });
