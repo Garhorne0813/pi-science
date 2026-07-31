@@ -201,4 +201,44 @@ describe("Node control plane", () => {
     expect(response.json()).toMatchObject({ code: "spawn_failed" });
     await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
+
+  it("saves text edits through the content route and records provenance", async () => {
+    const workspace = join(tmpdir(), `pi-science-content-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    await writeFile(join(workspace, "notes.txt"), "hello", "utf8");
+    const app = buildApp(config("http://127.0.0.1:1", { nodeFiles: true }));
+    openApps.push(app);
+    const save = await app.inject({
+      method: "POST",
+      url: `/api/files/content?cwd=${encodeURIComponent(workspace)}`,
+      payload: { path: "notes.txt", content: "updated" },
+    });
+    expect(save.statusCode).toBe(200);
+    expect(save.json()).toMatchObject({ ok: true, path: "notes.txt", size: 7 });
+    const readBack = await app.inject({ method: "GET", url: `/api/files/notes.txt?cwd=${encodeURIComponent(workspace)}` });
+    expect(readBack.json()).toMatchObject({ path: "notes.txt", encoding: "utf8", data: "updated", size: 7 });
+    await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it("rejects binary files and path escapes on the content route", async () => {
+    const workspace = join(tmpdir(), `pi-science-content-bin-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    await writeFile(join(workspace, "blob.bin"), Buffer.from([0, 159, 146, 150]), "utf8");
+    const app = buildApp(config("http://127.0.0.1:1", { nodeFiles: true }));
+    openApps.push(app);
+    const binary = await app.inject({
+      method: "POST",
+      url: `/api/files/content?cwd=${encodeURIComponent(workspace)}`,
+      payload: { path: "blob.bin", content: "tampered" },
+    });
+    expect(binary.statusCode).toBe(400);
+    expect(binary.json()).toMatchObject({ error: expect.stringContaining("binary") });
+    const escape = await app.inject({
+      method: "POST",
+      url: `/api/files/content?cwd=${encodeURIComponent(workspace)}`,
+      payload: { path: "../outside.txt", content: "x" },
+    });
+    expect(escape.statusCode).toBe(403);
+    await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
 });

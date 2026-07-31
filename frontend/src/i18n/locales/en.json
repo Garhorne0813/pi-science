@@ -735,7 +735,6 @@
   "filePreview.cancel": "Cancel",
   "filePreview.saved": "Saved",
   "filePreview.saveFailed": "Failed to save: {{message}}",
-  "filePreview.editBinaryUnsupported": "Cannot edit binary files",
   "filePreview.tooLargeTitle": "{{filename}} is too large",
   "filePreview.tooLargeBody": "File is too large to preview in the browser.",
   "mesh.noGeometry": "No geometry data",

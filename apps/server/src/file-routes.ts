@@ -150,6 +150,9 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
       const relativePath = apiPath(root, target);
       const metadata = await stat(target);
       if (!metadata.isFile()) return reply.code(400).send({ error: `Not a file: ${relativePath}` });
+      if (metadata.size > 50 * 1024 * 1024) {
+        return reply.code(400).send({ error: `File too large to edit (${metadata.size} bytes).` });
+      }
       // Refuse binary content that round-trips as lossy text (UTF-8 re-encode
       // of a PDF/PNG would corrupt the file). Only allow overwrites when the
       // existing file reads back as UTF-8 text.
@@ -170,7 +173,16 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
       });
       return { ok: true, path: relativePath, size: Buffer.byteLength(body.content, "utf8") };
     } catch (error) {
-      return reply.code(404).send({ error: String(error) });
+      // Path containment/validation failures are 403 (matching the sibling file
+      // routes); missing files stay 404; write-side failures (EACCES, ENOSPC)
+      // surface as 500 so the client does not mistake them for a missing path.
+      if (error instanceof Error && /escapes the workspace|must be relative|metadata paths/i.test(error.message)) {
+        return reply.code(403).send({ error: error.message });
+      }
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return reply.code(404).send({ error: `File not found: ${body.path}` });
+      }
+      return reply.code(500).send({ error: String(error) });
     }
   });
   app.get("/api/files/probe/*", async (request, reply) => {

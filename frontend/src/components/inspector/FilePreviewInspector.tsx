@@ -137,8 +137,16 @@ export function FilePreviewInspector({
   const editable = (kind === "text" || kind === "markdown" || kind === "table" || kind === "html") && !loading && !error && text !== null;
   const canSave = editing && draft !== null && !saving;
 
+  // The inspector instance is reused across files (the same component stays
+  // mounted while data.path changes), so the edit session must be scoped to
+  // the path that was open when editing started. A save that resolves after
+  // the user opened a different file must not write or apply state to the new
+  // file.
+  const editPathRef = useRef<string | null>(null);
+
   const startEdit = () => {
     if (text === null) return;
+    editPathRef.current = data.path;
     setDraft(text);
     setSaveError(null);
     setSaveNotice(null);
@@ -146,6 +154,7 @@ export function FilePreviewInspector({
   };
 
   const cancelEdit = () => {
+    editPathRef.current = null;
     setEditing(false);
     setDraft(null);
     setSaveError(null);
@@ -154,17 +163,25 @@ export function FilePreviewInspector({
 
   const saveEdit = async () => {
     if (draft === null || saving) return;
+    const targetPath = editPathRef.current;
+    if (!targetPath) return;
     setSaving(true);
     setSaveError(null);
     setSaveNotice(null);
     try {
-      await writeArtifact(data.path, data.root, cwd, draft);
+      await writeArtifact(targetPath, data.root, cwd, draft);
+      // The save may have resolved after the user switched to another file in
+      // the same inspector instance — only apply the result when the path is
+      // still the one being edited.
+      if (editPathRef.current !== targetPath) return;
       setText(draft);
       setEditing(false);
+      editPathRef.current = null;
       setDraft(null);
       setSaveNotice(t("filePreview.saved"));
       window.setTimeout(() => setSaveNotice(null), 2000);
     } catch (cause) {
+      if (editPathRef.current !== targetPath) return;
       setSaveError(cause instanceof Error ? t("filePreview.saveFailed", { message: cause.message }) : String(cause));
     } finally {
       setSaving(false);
