@@ -308,7 +308,7 @@ describe("runtime session actions", () => {
       text: "answer started",
     });
     rejectPrompt(new Error("network timeout"));
-    await expect(sending).resolves.toBeUndefined();
+    await expect(sending).resolves.toBeNull();
 
     const current = useRuntimeStore.getState();
     expect(current.working).toBe(true);

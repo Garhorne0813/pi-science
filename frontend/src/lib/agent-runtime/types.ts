@@ -43,7 +43,7 @@ export interface RuntimeState {
   // Actions
   connect: (cwd: string, sessionId?: string) => Promise<void>;
   disconnect: () => void;
-  sendPrompt: (message: string) => Promise<void>;
+  sendPrompt: (message: string) => Promise<string | null>;
   abort: () => Promise<void>;
   setModel: (model: string, thinking?: string) => Promise<string | null>;
   respondToInteraction: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => Promise<void>;

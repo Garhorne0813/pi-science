@@ -8,7 +8,7 @@ import { foldEvent, resetTurnBuffer } from "./event-fold";
 import { generations, turnState } from "./generations";
 import { reconcileAfterGap, reconcileWorkingState, recoverMissingSession, resyncCompletedHistory } from "./recovery";
 import { applySessionReplacements } from "./session-replacement";
-import { loadSessionsInternal } from "./sessions";
+import { loadSessionsInternal, optimisticSessionIds } from "./sessions";
 import { useRuntimeStore } from "./store";
 import type { PendingInteraction } from "./types";
 
@@ -93,7 +93,25 @@ export function registerEventListener(client: PiScienceClient) {
       && event.terminal === true
       && isMissingSessionError(event.message)
     ) {
-      recoverMissingSession(String(event.sessionId || state.activeSessionId || ""), state.cwd, client);
+      const missingSessionId = String(event.sessionId || state.activeSessionId || "");
+      // A just-created session can briefly be invisible to the disk-based
+      // existence check: the Pi process writes its JSONL only after emitting
+      // the session event, so the first SSE connect may see a terminal
+      // "session not found" while the record is still being flushed. For an
+      // optimistic (locally created, not yet listed from disk) session, retry
+      // the attach instead of treating the turn as dead — recovering would
+      // blank the conversation the user just started.
+      if (missingSessionId && optimisticSessionIds.has(missingSessionId)) {
+        useRuntimeStore.setState({ status: "connecting" });
+        setTimeout(() => {
+          const latest = useRuntimeStore.getState();
+          if (latest.activeSessionId === missingSessionId && latest.cwd === state.cwd) {
+            client.connect(missingSessionId, state.cwd);
+          }
+        }, 750);
+        return;
+      }
+      recoverMissingSession(missingSessionId, state.cwd, client);
       return;
     }
 

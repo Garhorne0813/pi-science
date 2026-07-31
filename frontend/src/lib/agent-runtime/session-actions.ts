@@ -176,8 +176,8 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       set({ status: "offline", pendingInteraction: null });
     },
 
-    sendPrompt: async (message: string) => {
-      if (!message.trim()) return;
+    sendPrompt: async (message: string): Promise<string | null> => {
+      if (!message.trim()) return null;
       if (get().working) throw new Error("The current conversation is still running");
       let { activeSessionId, cwd } = get();
       const thread = get().thread;
@@ -224,6 +224,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
             monitorGeneration,
           );
         }
+        return activeSessionId;
       } catch (error) {
         const current = get();
         if (current.activeSessionId === activeSessionId && current.cwd === cwd) {
@@ -237,7 +238,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           // The HTTP acknowledgement can time out after Pi already accepted the
           // prompt. Live events or authoritative streaming state win over that
           // ambiguous transport failure, preventing a false reset to Send.
-          if (activityGeneration !== generations.activity && current.working) return;
+          if (activityGeneration !== generations.activity && current.working) return null;
           try {
             const runtimeState = await client.getSessionState(activeSessionId, cwd);
             const stillCurrent = get();
@@ -251,7 +252,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
               )
             ) {
               set({ working: true, status: "connecting" });
-              return;
+              return null;
             }
           } catch {
             // Fall through to the original request error.
