@@ -222,17 +222,22 @@ Additional end-to-end checks:
 ```bash
 pnpm smoke
 pnpm uat:conversation
-PI_CLI_PATH=/absolute/path/to/pi-web pnpm smoke:real-pi
+PI_CLI_PATH=/absolute/path/to/pi-orbit pnpm smoke:real-pi
 ```
 
-`scripts/install.sh` downloads the platform-specific Pi Web release, verifies it
+`scripts/install.sh` downloads the platform-specific Pi Orbit release, verifies it
 against the published `SHA256SUMS`, and records the native executable. Set
-`PI_WEB_REPO=/absolute/path/to/pi-web` during installation only to opt into a
+`PI_ORBIT_REPO=/absolute/path/to/pi-orbit` during installation only to opt into a
 local source checkout. `PI_CLI_PATH` may also point directly to either a native
-Pi Web executable or a JavaScript/TypeScript CLI that supports `--mode web`. Pi-Science
+Pi Orbit executable or a JavaScript/TypeScript CLI that supports `--mode web`. Pi-Science
 launches one authenticated loopback Web host for the control-plane lifetime;
 workspaces, conversations, and background agents use isolated runtimes inside
-that shared process. Set `PI_SCIENCE_PI_MODE=rpc` only as a temporary rollback option.
+that shared process. The bearer token remains in the Pi-Science backend and no
+browser origin is granted CORS access. A workspace that passes Pi-Science's
+registration and path validation is inside the application's trust boundary, so
+the control plane records Pi Orbit project trust before creating its runtime;
+only register workspaces whose project-local instructions and skills you trust.
+Set `PI_SCIENCE_PI_MODE=rpc` only as a temporary rollback option.
 
 Focused frontend UAT commands are available under `frontend`:
 

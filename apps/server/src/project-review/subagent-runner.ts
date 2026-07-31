@@ -11,7 +11,7 @@ const RESPONSE_LIMIT_BYTES = 2_000_000;
 const RUN_TIMEOUT_MS = 5 * 60_000;
 const REPAIR_ATTEMPTS = 1;
 
-/** Runs one bounded reviewer turn in a throwaway Pi Web runtime. Deliberately a
+/** Runs one bounded reviewer turn in a throwaway Pi Orbit runtime. Deliberately a
  *  sibling of the research-loop runner rather than a shared abstraction: the
  *  two have different lifecycles (one-shot vs. long-lived loop). */
 export class PiReviewSubagentRunner implements ReviewSubagentRunner {

@@ -16,7 +16,7 @@ function allocateWebPort(): number {
       return port;
     }
   }
-  throw new Error("unable to allocate a unique Pi Web port");
+  throw new Error("unable to allocate a unique Pi Orbit port");
 }
 
 export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: [], extensions: [] }, sessionPath?: string, workspaceEnvironment: NodeJS.ProcessEnv = {}): PiProcessOptions | null {
@@ -73,11 +73,11 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
     PI_WORKSPACE_DIR: resolve(cwd),
     CONTEXT_MODE_DATA_DIR: agentDir,
     CONTEXT_MODE_DIR: join(agentDir, "context-mode"),
-    ...(!useRpcMode ? { PI_WEB_AUTH_TOKEN: webAuthToken } : {}),
+    ...(!useRpcMode ? { PI_ORBIT_AUTH_TOKEN: webAuthToken } : {}),
     ...(!useRpcMode ? {
-      PI_WEB_MAX_RUNTIMES: process.env.PI_WEB_MAX_RUNTIMES ?? "256",
-      PI_WEB_MAX_CONCURRENT_TURNS: process.env.PI_WEB_MAX_CONCURRENT_TURNS ?? "16",
-      PI_WEB_IDLE_TIMEOUT_MS: process.env.PI_WEB_IDLE_TIMEOUT_MS ?? String(24 * 60 * 60_000),
+      PI_ORBIT_MAX_RUNTIMES: process.env.PI_ORBIT_MAX_RUNTIMES ?? "256",
+      PI_ORBIT_MAX_CONCURRENT_TURNS: process.env.PI_ORBIT_MAX_CONCURRENT_TURNS ?? "16",
+      PI_ORBIT_IDLE_TIMEOUT_MS: process.env.PI_ORBIT_IDLE_TIMEOUT_MS ?? String(24 * 60 * 60_000),
     } : {}),
     ...(config.provider ? { PI_DEFAULT_PROVIDER: config.provider } : {}),
   };

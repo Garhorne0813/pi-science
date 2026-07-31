@@ -2,9 +2,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { createInterface } from "node:readline";
-import type { PiWebHost } from "./pi-web-host.js";
+import type { PiOrbitHost, PiOrbitRuntimeDescriptor } from "./pi-orbit-host.js";
 
-export interface PiWebRuntimeRequest {
+export interface PiOrbitRuntimeRequest {
   cwd: string;
   sessionDir: string;
   sessionPath?: string;
@@ -22,7 +22,7 @@ export interface PiProcessOptions {
   web?: {
     baseUrl: string;
     authToken: string;
-    runtime: PiWebRuntimeRequest;
+    runtime: PiOrbitRuntimeRequest;
   };
 }
 
@@ -43,21 +43,23 @@ interface PendingRequest {
 
 export class PiProcess extends EventEmitter {
   readonly child: ChildProcess;
+  readonly runtimeIdentity: PiOrbitRuntimeDescriptor | undefined;
   private readonly pending = new Map<string, PendingRequest>();
   private readonly requestTimeoutMs: number;
-  private readonly webHost: PiWebHost | undefined;
+  private readonly webHost: PiOrbitHost | undefined;
   private readonly runtimeId: string | undefined;
   private eventAbort: AbortController | undefined;
   private closed = false;
   private exitEmitted = false;
   private removeHostListeners: (() => void) | undefined;
 
-  private constructor(options: PiProcessOptions, webHost?: PiWebHost, runtimeId?: string) {
+  private constructor(options: PiProcessOptions, webHost?: PiOrbitHost, descriptor?: PiOrbitRuntimeDescriptor) {
     super();
     const environmentTimeout = Number(process.env.PI_SCIENCE_RUNTIME_TIMEOUT_MS ?? process.env.PI_SCIENCE_RPC_TIMEOUT_MS ?? 0);
     this.requestTimeoutMs = options.requestTimeoutMs ?? (environmentTimeout > 0 ? environmentTimeout : 30_000);
     this.webHost = webHost;
-    this.runtimeId = runtimeId;
+    this.runtimeId = descriptor?.runtimeId;
+    this.runtimeIdentity = descriptor;
     if (webHost) {
       this.child = webHost.child;
       const onStderr = (text: string) => this.emit("stderr", text);
@@ -93,14 +95,14 @@ export class PiProcess extends EventEmitter {
   }
 
   static start(options: PiProcessOptions): PiProcess {
-    if (options.web) throw new Error("Pi Web runtimes must be created through PiManager");
+    if (options.web) throw new Error("Pi Orbit runtimes must be created through PiManager");
     return new PiProcess(options);
   }
 
-  static async attachWeb(host: PiWebHost, options: PiProcessOptions): Promise<PiProcess> {
-    if (!options.web) throw new Error("Pi Web runtime options are required");
+  static async attachWeb(host: PiOrbitHost, options: PiProcessOptions): Promise<PiProcess> {
+    if (!options.web) throw new Error("Pi Orbit runtime options are required");
     const descriptor = await host.createRuntime(options.web.runtime, options.requestTimeoutMs);
-    const process = new PiProcess(options, host, descriptor.runtimeId);
+    const process = new PiProcess(options, host, descriptor);
     try {
       await process.startEventStream();
       return process;
@@ -135,9 +137,9 @@ export class PiProcess extends EventEmitter {
 
   async sendNotification(type: string, params: Record<string, unknown> = {}): Promise<void> {
     if (this.webHost) {
-      if (type !== "extension_ui_response") throw new Error(`unsupported Pi Web notification: ${type}`);
+      if (type !== "extension_ui_response") throw new Error(`unsupported Pi Orbit notification: ${type}`);
       const result = await this.webRequest("POST", `${this.runtimePath()}/ui-response`, { type, ...params });
-      if (!result.success) throw new Error(String(result.error ?? "Pi Web notification failed"));
+      if (!result.success) throw new Error(String(result.error ?? "Pi Orbit notification failed"));
       return;
     }
     if (this.closed || !this.child.stdin || this.child.stdin.destroyed) throw new Error("pi runtime stdin is unavailable");
@@ -172,7 +174,7 @@ export class PiProcess extends EventEmitter {
   }
 
   private async sendWebCommand(type: string, params: Record<string, unknown>): Promise<PiResult> {
-    if (this.closed) return { success: false, code: "process_closed", error: "Pi Web runtime is unavailable" };
+    if (this.closed) return { success: false, code: "process_closed", error: "Pi Orbit runtime is unavailable" };
     try {
       const runtimePath = this.runtimePath();
       const sessionPath = `/api/sessions/${encodeURIComponent(this.runtimeId!)}`;
@@ -204,7 +206,11 @@ export class PiProcess extends EventEmitter {
         }
         case "get_tree": return this.asData(await this.webRequest("GET", `${sessionPath}/tree`));
         case "get_last_assistant_text": return this.asData(await this.webRequest("GET", `${sessionPath}/last-assistant-text`));
-        case "switch_session": return this.webRequest("POST", `${runtimePath}/resume`, { sessionPath: params.sessionPath });
+        case "switch_session": {
+          const result = await this.webRequest("POST", `${runtimePath}/resume`, { sessionPath: params.sessionPath });
+          if (result.success) await this.refreshRuntimeIdentity();
+          return result;
+        }
         case "prompt":
         case "abort":
         case "compact":
@@ -212,8 +218,16 @@ export class PiProcess extends EventEmitter {
         case "steer":
         case "follow_up":
           return this.webRequest("POST", `${runtimePath}/${type === "follow_up" ? "follow-up" : type}`, params);
-        case "fork": return this.webRequest("POST", `${runtimePath}/fork`, params.entryId ? { entryId: params.entryId } : {});
-        case "clone": return this.webRequest("POST", `${sessionPath}/clone`);
+        case "fork": {
+          const result = await this.webRequest("POST", `${runtimePath}/fork`, params.entryId ? { entryId: params.entryId } : {});
+          if (result.success) await this.refreshRuntimeIdentity();
+          return result;
+        }
+        case "clone": {
+          const result = await this.webRequest("POST", `${sessionPath}/clone`);
+          if (result.success) await this.refreshRuntimeIdentity();
+          return result;
+        }
         case "set_model": return this.webRequest("POST", `${runtimePath}/model`, { provider: params.provider, modelId: params.modelId });
         case "set_thinking_level": return this.webRequest("POST", `${runtimePath}/thinking`, { level: params.level });
         case "bash": return this.webRequest("POST", `${sessionPath}/bash`, { command: params.command });
@@ -221,7 +235,7 @@ export class PiProcess extends EventEmitter {
         case "abort_retry": return this.webRequest("POST", `${sessionPath}/${type.replaceAll("_", "-")}`);
         case "set_session_name": return this.webRequest("PATCH", sessionPath, { name: params.name });
         case "export_html": return this.asData(await this.webRequest("POST", `${sessionPath}/export`, { outputPath: params.outputPath }));
-        default: return { success: false, code: "unsupported_command", error: `Pi Web mode does not support command: ${type}` };
+        default: return { success: false, code: "unsupported_command", error: `Pi Orbit Web Mode does not support command: ${type}` };
       }
     } catch (error) {
       const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
@@ -242,7 +256,7 @@ export class PiProcess extends EventEmitter {
     const response = await this.webHost!.request("GET", `${this.runtimePath()}/events?after=0`, undefined, 0, this.eventAbort.signal);
     if (!response.ok || !response.body) throw new Error(await this.webHost!.responseError(response));
     void this.consumeEventStream(response).catch((error: unknown) => {
-      if (!this.closed && !this.eventAbort?.signal.aborted) this.emit("stderr", `Pi Web event stream failed: ${String(error)}\n`);
+      if (!this.closed && !this.eventAbort?.signal.aborted) this.emit("stderr", `Pi Orbit event stream failed: ${String(error)}\n`);
     });
   }
 
@@ -250,7 +264,7 @@ export class PiProcess extends EventEmitter {
     let response = initialResponse;
     let lastSequence = 0;
     while (!this.closed && !this.eventAbort?.signal.aborted) {
-      if (!response.body) throw new Error("Pi Web event stream has no response body");
+      if (!response.body) throw new Error("Pi Orbit event stream has no response body");
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -299,15 +313,25 @@ export class PiProcess extends EventEmitter {
         ...data,
         success: false,
         code: String(data.code ?? (data.cancelled === true ? "cancelled" : `http_${response.status}`)),
-        error: String(data.error ?? data.details ?? `Pi Web request failed with HTTP ${response.status}`),
+        error: String(data.error ?? data.details ?? `Pi Orbit request failed with HTTP ${response.status}`),
       };
     }
     return { ...data, success: true, data: payload };
   }
 
   private runtimePath(): string {
-    if (!this.runtimeId) throw new Error("Pi Web runtime is not initialized");
+    if (!this.runtimeId) throw new Error("Pi Orbit runtime is not initialized");
     return `/api/runtimes/${encodeURIComponent(this.runtimeId)}`;
+  }
+
+  private async refreshRuntimeIdentity(): Promise<void> {
+    if (!this.runtimeIdentity) return;
+    const result = await this.webRequest("GET", this.runtimePath());
+    if (!result.success || !result.data || typeof result.data !== "object") return;
+    const descriptor = result.data as Partial<PiOrbitRuntimeDescriptor>;
+    if (descriptor.runtimeId === this.runtimeId && typeof descriptor.piSessionId === "string") {
+      Object.assign(this.runtimeIdentity, descriptor);
+    }
   }
 
   private async disposeWebRuntime(): Promise<void> {
@@ -324,10 +348,10 @@ export class PiProcess extends EventEmitter {
       }
       const deleted = await this.webHost!.request("DELETE", path, undefined, Math.min(this.requestTimeoutMs, 2_000));
       if (!deleted.ok && deleted.status !== 404 && !this.webHost!.isClosed) {
-        this.emit("stderr", `Unable to dispose Pi Web runtime: ${await this.webHost!.responseError(deleted)}\n`);
+        this.emit("stderr", `Unable to dispose Pi Orbit runtime: ${await this.webHost!.responseError(deleted)}\n`);
       }
     } catch (error) {
-      if (!this.webHost!.isClosed) this.emit("stderr", `Unable to dispose Pi Web runtime: ${String(error)}\n`);
+      if (!this.webHost!.isClosed) this.emit("stderr", `Unable to dispose Pi Orbit runtime: ${String(error)}\n`);
     }
   }
 

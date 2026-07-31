@@ -1,11 +1,11 @@
 import { PiProcess, type PiProcessOptions, type PiResult } from "./pi-process.js";
-import { PiWebHost } from "./pi-web-host.js";
+import { PiOrbitHost } from "./pi-orbit-host.js";
 
 export class PiManager {
   private readonly processes = new Map<string, PiProcess>();
   private readonly pendingStarts = new Map<string, Promise<PiProcess>>();
-  private webHost: PiWebHost | undefined;
-  private webHostStart: Promise<PiWebHost> | undefined;
+  private webHost: PiOrbitHost | undefined;
+  private webHostStart: Promise<PiOrbitHost> | undefined;
 
   async start(key: string, options: PiProcessOptions): Promise<PiProcess> {
     const existing = this.processes.get(key);
@@ -71,11 +71,11 @@ export class PiManager {
     return process;
   }
 
-  private async ensureWebHost(options: PiProcessOptions): Promise<PiWebHost> {
+  private async ensureWebHost(options: PiProcessOptions): Promise<PiOrbitHost> {
     if (this.webHost && !this.webHost.isClosed) return this.webHost;
     if (this.webHostStart) return this.webHostStart;
     const starting = (async () => {
-      const host = new PiWebHost(options);
+      const host = new PiOrbitHost(options);
       host.once("exit", () => {
         if (this.webHost === host) this.webHost = undefined;
       });

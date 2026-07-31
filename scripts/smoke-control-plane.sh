@@ -432,7 +432,11 @@ if [ "$REAL_PI" = true ]; then
     HEALTH_FINAL_JSON="$(curl --fail --silent --show-error --dump-header "$HEALTH_FINAL_HEADERS" \
         "http://127.0.0.1:${NODE_PORT}/api/health")"
     assert_header_file_contains "$HEALTH_FINAL_HEADERS" 'x-pi-science-runtime: node-control-plane'
-    python3 -c 'import json,sys; value=json.loads(sys.argv[1])["active_pi_processes"]; assert value == 0, value' "$HEALTH_FINAL_JSON"
+    # Web mode deliberately keeps its single shared Pi Orbit host alive for
+    # the control-plane lifetime after all dynamic runtimes are deleted.
+    EXPECTED_FINAL_PROCESSES=1
+    if [ "${PI_SCIENCE_PI_MODE:-}" = "rpc" ]; then EXPECTED_FINAL_PROCESSES=0; fi
+    python3 -c 'import json,sys; value=json.loads(sys.argv[1])["active_pi_processes"]; expected=int(sys.argv[2]); assert value == expected, value' "$HEALTH_FINAL_JSON" "$EXPECTED_FINAL_PROCESSES"
 fi
 
 echo "[smoke] passed"

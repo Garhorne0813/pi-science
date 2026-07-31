@@ -207,15 +207,18 @@ uv run --directory backend pytest -q
 ```bash
 pnpm smoke
 pnpm uat:conversation
-PI_CLI_PATH=/absolute/path/to/pi-web pnpm smoke:real-pi
+PI_CLI_PATH=/absolute/path/to/pi-orbit pnpm smoke:real-pi
 ```
 
-`scripts/install.sh` 默认下载当前平台对应的 Pi Web release，并使用发布的
+`scripts/install.sh` 默认下载当前平台对应的 Pi Orbit release，并使用发布的
 `SHA256SUMS` 校验。仅在需要使用本地源码 checkout 时，在安装阶段设置
-`PI_WEB_REPO=/absolute/path/to/pi-web`。`PI_CLI_PATH` 也可以直接指向支持
-`--mode web` 的 Pi Web 原生可执行文件或 JavaScript/TypeScript CLI。Pi-Science 在控制平面生命周期内
+`PI_ORBIT_REPO=/absolute/path/to/pi-orbit`。`PI_CLI_PATH` 也可以直接指向支持
+`--mode web` 的 Pi Orbit 原生可执行文件或 JavaScript/TypeScript CLI。Pi-Science 在控制平面生命周期内
 只启动一个仅监听本机且带认证的 Web host；workspace、对话和后台 agent 都使用该进程内
-相互隔离的 runtime。仅在临时回退时设置 `PI_SCIENCE_PI_MODE=rpc`。
+相互隔离的 runtime。Bearer token 只保留在 Pi-Science 后端，不向任何浏览器 origin 开放 CORS。
+通过 Pi-Science 注册和路径校验的 workspace 属于应用信任边界，因此控制平面会在创建 runtime
+前记录 Pi Orbit 的项目信任；请只注册你信任其中项目级指令和 skill 的 workspace。
+仅在临时回退时设置 `PI_SCIENCE_PI_MODE=rpc`。
 
 前端专项 UAT：
 

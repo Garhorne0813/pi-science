@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Install the Pi Web runtime into runtime/pi/. Release binaries are the default;
-# set PI_WEB_REPO to opt into running a local source checkout.
+# Install the Pi Orbit runtime into runtime/pi/. Release binaries are the default;
+# set PI_ORBIT_REPO to opt into running a local source checkout.
 set -euo pipefail
 
-PI_WEB_VERSION="${PI_WEB_VERSION:-0.1.0}"
-PI_WEB_RELEASE_REPO="${PI_WEB_RELEASE_REPO:-Garhorne0813/pi-web}"
+PI_ORBIT_VERSION="${PI_ORBIT_VERSION:-0.1.0}"
+PI_ORBIT_RELEASE_REPO="${PI_ORBIT_RELEASE_REPO:-Garhorne0813/pi-orbit}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 RUNTIME_DIR="$PROJECT_DIR/runtime/pi"
@@ -14,26 +14,26 @@ mkdir -p "$RUNTIME_DIR"
 
 # Local source is an explicit development override. This avoids silently using
 # a nearby checkout whose generated dist packages may be stale.
-if [ -n "${PI_WEB_REPO:-}" ]; then
-  LOCAL_PI_REPO="$PI_WEB_REPO"
+if [ -n "${PI_ORBIT_REPO:-}" ]; then
+  LOCAL_PI_REPO="$PI_ORBIT_REPO"
   [ -f "$LOCAL_PI_REPO/packages/coding-agent/src/cli.ts" ] || {
-    echo "ERROR: PI_WEB_REPO is not a Pi Web source checkout: $LOCAL_PI_REPO" >&2
+    echo "ERROR: PI_ORBIT_REPO is not a Pi Orbit source checkout: $LOCAL_PI_REPO" >&2
     exit 1
   }
   [ -x "$LOCAL_PI_REPO/node_modules/.bin/tsx" ] || {
-    echo "ERROR: Pi Web source dependencies are missing. Run npm install in: $LOCAL_PI_REPO" >&2
+    echo "ERROR: Pi Orbit source dependencies are missing. Run npm install in: $LOCAL_PI_REPO" >&2
     exit 1
   }
   printf '%s\n' "$LOCAL_PI_REPO/packages/coding-agent/src/cli.ts" > "$CLI_MARKER"
   printf '%s\n' "$LOCAL_PI_REPO" > "$RUNTIME_DIR/.dev-repo-path"
-  echo "==> Pi Web dev runtime ready: $LOCAL_PI_REPO"
+  echo "==> Pi Orbit dev runtime ready: $LOCAL_PI_REPO"
   exit 0
 fi
 
 case "$(uname -s)" in
   Darwin) platform="darwin" ;;
   Linux) platform="linux" ;;
-  *) echo "ERROR: Pi Web release installation supports macOS and Linux from this script." >&2; exit 1 ;;
+  *) echo "ERROR: Pi Orbit release installation supports macOS and Linux from this script." >&2; exit 1 ;;
 esac
 case "$(uname -m)" in
   arm64|aarch64) arch="arm64" ;;
@@ -41,16 +41,16 @@ case "$(uname -m)" in
   *) echo "ERROR: Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-archive="pi-web-${platform}-${arch}.tar.gz"
-tag="pi-web-v${PI_WEB_VERSION}"
-release_url="https://github.com/${PI_WEB_RELEASE_REPO}/releases/download/${tag}"
-install_dir="$RUNTIME_DIR/releases/$PI_WEB_VERSION"
-pi_cli="$install_dir/pi-web/pi-web"
+archive="pi-orbit-${platform}-${arch}.tar.gz"
+tag="pi-orbit-v${PI_ORBIT_VERSION}"
+release_url="https://github.com/${PI_ORBIT_RELEASE_REPO}/releases/download/${tag}"
+install_dir="$RUNTIME_DIR/releases/pi-orbit-$PI_ORBIT_VERSION"
+pi_cli="$install_dir/pi-orbit/pi-orbit"
 
 if [ ! -x "$pi_cli" ]; then
-  download_dir="$(mktemp -d "$RUNTIME_DIR/.pi-web-download.XXXXXX")"
+  download_dir="$(mktemp -d "$RUNTIME_DIR/.pi-orbit-download.XXXXXX")"
   trap 'rm -rf "$download_dir"' EXIT
-  echo "==> Downloading Pi Web $PI_WEB_VERSION ($platform-$arch)..."
+  echo "==> Downloading Pi Orbit $PI_ORBIT_VERSION ($platform-$arch)..."
   curl --fail --location --silent --show-error -o "$download_dir/$archive" "$release_url/$archive"
   curl --fail --location --silent --show-error -o "$download_dir/SHA256SUMS" "$release_url/SHA256SUMS"
 
@@ -61,7 +61,7 @@ if [ ! -x "$pi_cli" ]; then
   elif command -v sha256sum >/dev/null 2>&1; then
     actual="$(sha256sum "$download_dir/$archive" | awk '{print $1}')"
   else
-    echo "ERROR: shasum or sha256sum is required to verify Pi Web." >&2
+    echo "ERROR: shasum or sha256sum is required to verify Pi Orbit." >&2
     exit 1
   fi
   [ "$actual" = "$expected" ] || { echo "ERROR: SHA-256 verification failed for $archive." >&2; exit 1; }
@@ -72,8 +72,8 @@ if [ ! -x "$pi_cli" ]; then
 fi
 
 "$pi_cli" --help | grep -q -- '--web-app-managed' || {
-  echo "ERROR: Installed Pi Web does not support app-managed Web Mode: $pi_cli" >&2
+  echo "ERROR: Installed Pi Orbit does not support app-managed Web Mode: $pi_cli" >&2
   exit 1
 }
 printf '%s\n' "$pi_cli" > "$CLI_MARKER"
-echo "==> Pi Web $PI_WEB_VERSION ready: $pi_cli"
+echo "==> Pi Orbit $PI_ORBIT_VERSION ready: $pi_cli"

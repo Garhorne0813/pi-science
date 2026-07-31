@@ -138,11 +138,11 @@ describe("Pi runtime custom provider materialization", () => {
     expect(options.args.slice(0, 2)).toEqual([tsx, cli]);
   });
 
-  it("runs a native Pi Web release executable directly", async () => {
+  it("runs a native Pi Orbit release executable directly", async () => {
     const cwd = join(tmpdir(), `pi-runtime-native-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(cwd);
     await mkdir(cwd, { recursive: true });
-    const cli = join(cwd, "pi-web");
+    const cli = join(cwd, "pi-orbit");
     await writeFile(cli, "", "utf8");
     process.env.PI_CLI_PATH = cli;
 
@@ -168,7 +168,7 @@ describe("Pi runtime custom provider materialization", () => {
     expect(options.args).not.toContain("--auth-token");
     expect(options.web?.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(options.web?.authToken).toBeTruthy();
-    expect(options.env?.PI_WEB_AUTH_TOKEN).toBe(options.web?.authToken);
+    expect(options.env?.PI_ORBIT_AUTH_TOKEN).toBe(options.web?.authToken);
     expect(options.web?.runtime).toMatchObject({ cwd, sessionDir: join(cwd, ".pi-science", "sessions") });
   });
 
