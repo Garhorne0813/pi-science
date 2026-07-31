@@ -108,4 +108,24 @@ describe("FilePreviewInspector edit capability", () => {
     expect(writeCalls).toHaveLength(0);
     expect(screen.queryByLabelText("Edit x.txt")).toBeNull();
   });
+
+  it("does not apply a stale save to a different file opened in the same inspector", async () => {
+    const { unmount } = renderInspector("a.txt", "a.txt", "text");
+    fireEvent.click(await screen.findByLabelText("Edit file"));
+    const textarea = await screen.findByLabelText("Edit a.txt");
+    fireEvent.change(textarea, { target: { value: "content from a.txt" } });
+    fireEvent.click(screen.getByLabelText("Save"));
+    // While the save request is in flight, open a different file in the same
+    // inspector instance (the component is reused across files).
+    unmount();
+    renderInspector("b.txt", "b.txt", "text");
+    await waitFor(() => expect(writeCalls).toHaveLength(1));
+    // The stale save must not have applied b.txt's preview or offered a
+    // stale draft for the next edit.
+    expect(writeCalls[0]).toEqual({ path: "a.txt", content: "content from a.txt" });
+    fireEvent.click(await screen.findByLabelText("Edit file"));
+    const bTextarea = await screen.findByLabelText("Edit b.txt") as HTMLTextAreaElement;
+    expect(bTextarea.value).toContain("line1");
+    expect(bTextarea.value).not.toContain("content from a.txt");
+  });
 });

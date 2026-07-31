@@ -87,6 +87,7 @@ export function FilePreviewInspector({
     setUrl(null);
     setBytes(null);
     setEditing(false);
+    editPathRef.current = null;
     setDraft(null);
     setSaveError(null);
     setSaveNotice(null);
