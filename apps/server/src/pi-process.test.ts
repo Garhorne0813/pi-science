@@ -147,6 +147,8 @@ describe("Node Pi Web adapter", () => {
     await manager.stop("web-workspace");
     expect(manager.hostProcessCount).toBe(1);
     await expect(manager.sendCommand("web-workspace-2", "get_state")).resolves.toMatchObject({ success: true });
+    await manager.shutdownAll();
+    expect(manager.hostProcessCount).toBe(0);
     await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 });
