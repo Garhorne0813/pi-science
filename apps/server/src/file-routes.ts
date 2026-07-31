@@ -4,6 +4,7 @@ import { isUtf8 } from "node:buffer";
 import { basename, dirname, extname, join, relative, sep } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "./workspace-security.js";
+import { recordProvenance } from "./artifact-routes.js";
 import { appendJsonLine, workspaceFile } from "./persistence.js";
 
 const contentTypes: Record<string, string> = {
@@ -137,6 +138,41 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
 
   app.post("/api/files/move", async (request, reply) => moveFile(request, reply, "move"));
   app.post("/api/files/rename", async (request, reply) => moveFile(request, reply, "rename"));
+  app.post("/api/files/content", async (request, reply) => {
+    let root: string;
+    try { root = await safeWorkspace(request); } catch (error) { return reply.code(403).send({ error: String(error) }); }
+    const body = (request.body ?? {}) as { path?: unknown; content?: unknown };
+    if (typeof body.path !== "string" || typeof body.content !== "string") {
+      return reply.code(400).send({ error: "path and content are required" });
+    }
+    try {
+      const target = await resolveApiFile(root, body.path);
+      const relativePath = apiPath(root, target);
+      const metadata = await stat(target);
+      if (!metadata.isFile()) return reply.code(400).send({ error: `Not a file: ${relativePath}` });
+      // Refuse binary content that round-trips as lossy text (UTF-8 re-encode
+      // of a PDF/PNG would corrupt the file). Only allow overwrites when the
+      // existing file reads back as UTF-8 text.
+      const existing = await readFile(target);
+      if (!isUtf8(existing)) {
+        return reply.code(400).send({ error: `Cannot edit binary file: ${relativePath}` });
+      }
+      await writeFile(target, Buffer.from(body.content, "utf8"));
+      // Record the edit with a content snapshot and an auto-incremented version
+      // (v1, v2, …) so the version-history panel can show every revision.
+      // recordProvenance computes version = max(version for path) + 1 and
+      // stores contentHash + content (truncated to 100k) for diffing.
+      await recordProvenance(root, {
+        path: relativePath,
+        tool: "file_edit",
+        session_id: "",
+        content: body.content,
+      });
+      return { ok: true, path: relativePath, size: Buffer.byteLength(body.content, "utf8") };
+    } catch (error) {
+      return reply.code(404).send({ error: String(error) });
+    }
+  });
   app.get("/api/files/probe/*", async (request, reply) => {
     try {
       const root = await safeWorkspace(request);
