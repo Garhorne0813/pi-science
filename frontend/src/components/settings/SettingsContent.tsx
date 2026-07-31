@@ -12,30 +12,12 @@ import { MCPTab } from "./MCPTab";
 
 type Tab = "general" | "llm" | "extensions" | "mcp" | "compute";
 
-const TAB_GROUPS: { id: string; labelKey: string; tabs: { id: Tab; labelKey: string; icon: React.ReactNode }[] }[] = [
-  {
-    id: "general",
-    labelKey: "settings.group.general",
-    tabs: [{ id: "general", labelKey: "settings.general", icon: <Languages size={14} /> }],
-  },
-  {
-    id: "model",
-    labelKey: "settings.group.model",
-    tabs: [{ id: "llm", labelKey: "settings.llm", icon: <Cpu size={14} /> }],
-  },
-  {
-    id: "capabilities",
-    labelKey: "settings.group.capabilities",
-    tabs: [
-      { id: "extensions", labelKey: "settings.extensions", icon: <Puzzle size={14} /> },
-      { id: "mcp", labelKey: "settings.mcp", icon: <FlaskConical size={14} /> },
-    ],
-  },
-  {
-    id: "system",
-    labelKey: "settings.group.system",
-    tabs: [{ id: "compute", labelKey: "settings.compute", icon: <Server size={14} /> }],
-  },
+const TABS: { id: Tab; labelKey: string; icon: React.ReactNode }[] = [
+  { id: "general", labelKey: "settings.general", icon: <Languages size={14} /> },
+  { id: "llm", labelKey: "settings.llm", icon: <Cpu size={14} /> },
+  { id: "extensions", labelKey: "settings.extensions", icon: <Puzzle size={14} /> },
+  { id: "mcp", labelKey: "settings.mcp", icon: <FlaskConical size={14} /> },
+  { id: "compute", labelKey: "settings.compute", icon: <Server size={14} /> },
 ];
 
 /** Settings page content: vertical navigation on the left, active tab on the
@@ -65,7 +47,7 @@ export function SettingsContent({ scope }: { scope: string | null }) {
   };
 
   const handleNavKeyDown = (event: React.KeyboardEvent) => {
-    const order = TAB_GROUPS.flatMap((group) => group.tabs.map((item) => item.id));
+    const order = TABS.map((item) => item.id);
     const index = order.indexOf(tab);
     let next: Tab | null = null;
     if (event.key === "ArrowDown") next = order[(index + 1) % order.length];
@@ -162,34 +144,27 @@ export function SettingsContent({ scope }: { scope: string | null }) {
   return (
     <div className="flex min-h-0 flex-1">
       {/* Vertical navigation */}
-      <nav role="tablist" aria-orientation="vertical" aria-label={t("nav.settings")} onKeyDown={handleNavKeyDown} className="flex w-12 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border px-2 py-3 md:w-52 md:px-3">
-        {TAB_GROUPS.map((group) => (
-          <div key={group.id}>
-            <p className="mb-1 hidden px-2 text-[10px] font-medium uppercase tracking-wide text-muted md:block">{t(group.labelKey)}</p>
-            <div className="flex flex-col gap-0.5">
-              {group.tabs.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  role="tab"
-                  id={`settings-tab-${item.id}`}
-                  aria-selected={tab === item.id}
-                  aria-controls="settings-tabpanel"
-                  aria-label={t(item.labelKey)}
-                  onClick={() => changeTab(item.id)}
-                  title={t(item.labelKey)}
-                  className={cn(
-                    "relative flex min-h-10 items-center gap-2 rounded-input px-2 text-left text-xs font-medium transition-colors",
-                    tab === item.id ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2 hover:text-text",
-                    tab === item.id && "after:absolute after:left-0 after:top-1/2 after:h-4 after:w-0.5 after:-translate-y-1/2 after:rounded-full after:bg-accent",
-                  )}
-                >
-                  <span className="shrink-0" aria-hidden="true">{item.icon}</span>
-                  <span className="hidden truncate md:inline">{t(item.labelKey)}</span>
-                </button>
-              ))}
-            </div>
-          </div>
+      <nav role="tablist" aria-orientation="vertical" aria-label={t("nav.settings")} onKeyDown={handleNavKeyDown} className="flex w-12 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border px-2 py-3 md:w-52 md:px-3">
+        {TABS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            id={`settings-tab-${item.id}`}
+            aria-selected={tab === item.id}
+            aria-controls="settings-tabpanel"
+            aria-label={t(item.labelKey)}
+            onClick={() => changeTab(item.id)}
+            title={t(item.labelKey)}
+            className={cn(
+              "relative flex min-h-10 items-center gap-2 rounded-input px-2 text-left text-xs font-medium transition-colors",
+              tab === item.id ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2 hover:text-text",
+              tab === item.id && "after:absolute after:left-0 after:top-1/2 after:h-4 after:w-0.5 after:-translate-y-1/2 after:rounded-full after:bg-accent",
+            )}
+          >
+            <span className="shrink-0" aria-hidden="true">{item.icon}</span>
+            <span className="hidden truncate md:inline">{t(item.labelKey)}</span>
+          </button>
         ))}
       </nav>
 
