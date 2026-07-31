@@ -90,7 +90,7 @@ export function ConversationNavRail({
         title={t("conversation.threadNav")}
         className="pointer-events-auto flex h-16 w-8 items-center justify-center rounded-input outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
-        <span className="h-14 w-2 rounded-full bg-muted transition-colors group-hover:bg-accent group-focus-within:bg-accent" />
+        <span className="h-14 w-2 rounded-full bg-[#a8a49a] transition-colors group-hover:bg-accent group-focus-within:bg-accent" />
       </button>
       <nav
         ref={listRef}
