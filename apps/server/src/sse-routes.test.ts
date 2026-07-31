@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveLastEventId, SseBackpressureBuffer } from "./sse-routes.js";
+import Fastify from "fastify";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { resolveLastEventId, registerSseRoutes, SseBackpressureBuffer } from "./sse-routes.js";
 
 describe("SSE backpressure buffer", () => {
   it("stays bounded by item count and byte size", () => {
@@ -32,5 +36,47 @@ describe("SSE cursor selection", () => {
 
   it("prefers the standard Last-Event-ID header on browser reconnect", () => {
     expect(resolveLastEventId("epoch:43", "epoch:42")).toBe("epoch:43");
+  });
+});
+
+describe("SSE session existence fallback", () => {
+  const workspace = mkdtempSync(join(tmpdir(), "pi-science-sse-"));
+  mkdirSync(join(workspace, ".pi-science", "sessions"), { recursive: true });
+
+  it("accepts a session that exists only in the live in-memory runtime", async () => {
+    const app = Fastify();
+    const sessionService = {
+      exists: async () => false,
+      liveSessions: () => [{ id: "fresh-session", cwd: workspace }],
+    };
+    let subscribed = false;
+    const hub = {
+      subscribe: async () => {
+        subscribed = true;
+        throw new Error("subscribe-reached");
+      },
+    };
+    registerSseRoutes(app, sessionService as never, hub as never);
+    const response = await app.inject({ method: "GET", url: `/api/sessions/fresh-session/events?cwd=${encodeURIComponent(workspace)}` });
+    // The existence fallback let the request through to subscription — the
+    // route did NOT reply with the terminal "session not found" error.
+    expect(subscribed).toBe(true);
+    expect(response.body).not.toContain("session not found in this workspace");
+    await app.close();
+  });
+
+  it("still rejects a session that is neither on disk nor in memory", async () => {
+    const app = Fastify();
+    const sessionService = {
+      exists: async () => false,
+      liveSessions: () => [],
+    };
+    const hub = { subscribe: async () => ({ unsubscribe: () => undefined }) };
+    registerSseRoutes(app, sessionService as never, hub as never);
+    const response = await app.inject({ method: "GET", url: `/api/sessions/ghost/events?cwd=${encodeURIComponent(workspace)}` });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("session not found in this workspace");
+    await app.close();
+    rmSync(workspace, { recursive: true, force: true });
   });
 });

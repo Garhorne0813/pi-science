@@ -46,11 +46,31 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --directory backend --extra dev
 
+      - name: Test POSIX launcher lifecycle
+        if: runner.os != 'Windows'
+        run: bash scripts/test-launcher.sh
+
       - name: Typecheck contracts, control plane and frontend
         run: pnpm typecheck
 
       - name: Test contracts, control plane, frontend and skills
+        if: runner.os != 'Windows'
         run: pnpm test
+
+      # Native process integration tests launch Node, bash and taskkill trees.
+      # Serializing server files on the two-core Windows runner prevents unrelated
+      # 500 ms/15 s characterization deadlines from competing for process slots.
+      - name: Test contracts, serialized control plane, frontend and skills
+        if: runner.os == 'Windows'
+        run: |
+          pnpm --filter @pi-science/contracts test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm --filter @pi-science/server exec vitest run --fileParallelism=false
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm --filter frontend test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm test:skills
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build all JavaScript packages
         run: pnpm build

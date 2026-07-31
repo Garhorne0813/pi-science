@@ -31,6 +31,22 @@ export async function readArtifact(
   }
 }
 
+/** Overwrite a workspace text file with new content. Uses REST API. */
+export async function writeArtifact(
+  path: string,
+  root: FileRoot | undefined,
+  cwd: string,
+  content: string,
+): Promise<{ ok: boolean; path: string; size: number }> {
+  const params = new URLSearchParams({ cwd });
+  if (root) params.set("root", root);
+  return apiRequest<{ ok: boolean; path: string; size: number }>(`${API}/files/content?${params}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, content }),
+  });
+}
+
 /** URL for browser-native preview (PDF, images, HTML, video).
  *  Uses /serve/ instead of /{path}/raw so relative references
  *  (CSS, JS, images) in HTML resolve back to the same prefix.
@@ -44,13 +60,15 @@ export function previewUrl(path: string, root: FileRoot | undefined, cwd: string
   return `${API}/files/serve/${encodedPath}?${params}`;
 }
 
-/** Open a file in the OS default app — web fallback: open in new tab. */
+/** Open a file in the OS default app — web fallback: open in new tab.
+ *  serve URLs are excluded because the right-side inspector previews them inline. */
 export async function openArtifactExternally(
   path: string,
   root: FileRoot | undefined,
   cwd: string,
 ): Promise<void> {
   const url = previewUrl(path, root, cwd);
+  if (url.includes("/api/files/serve/")) return;
   window.open(url, "_blank");
 }
 

@@ -769,12 +769,18 @@ describe("native control-plane business routes", () => {
 
     const submitted = await app.inject({ method: "POST", url: `/api/jobs?cwd=${encodeURIComponent(cwd)}`, payload: { command: [process.execPath, "-e", "setTimeout(() => process.stdout.write('late'), 500)"], requirement: { timeout_seconds: 10 } } });
     expect(submitted.statusCode).toBe(200);
+    expect(submitted.json()).not.toHaveProperty("ownership");
     const jobId = submitted.json().job_id as string;
+    const listed = await app.inject({ method: "GET", url: `/api/jobs?cwd=${encodeURIComponent(cwd)}` });
+    expect(listed.json().jobs[0]).not.toHaveProperty("ownership");
+    const fetched = await app.inject({ method: "GET", url: `/api/jobs/${jobId}?cwd=${encodeURIComponent(cwd)}` });
+    expect(fetched.json()).not.toHaveProperty("ownership");
     const cancelled = await app.inject({ method: "DELETE", url: `/api/jobs/${jobId}?cwd=${encodeURIComponent(cwd)}` });
     expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json()).not.toHaveProperty("ownership");
     for (let attempt = 0; attempt < 30; attempt++) {
       const current = (await app.inject({ method: "GET", url: `/api/jobs/${jobId}?cwd=${encodeURIComponent(cwd)}` })).json();
-      if (!["pending", "running"].includes(current.status)) { expect(current.status).toBe("cancelled"); return; }
+      if (!["pending", "running"].includes(current.status)) { expect(current.status).toBe("cancelled"); expect(current).not.toHaveProperty("ownership"); return; }
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     throw new Error("cancelled job did not reach a terminal state");

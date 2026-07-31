@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { Code2, Eye, ExternalLink, FileSearch, History, Loader2, X } from "lucide-react";
+import { Check, Code2, Eye, ExternalLink, FileSearch, History, Loader2, Pencil, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { FilePreviewInspector as FilePreviewInspectorT, FileRoot } from "../../types/thread";
 import { previewKindForName, type PreviewKind } from "@/lib/artifacts";
@@ -9,6 +9,7 @@ import {
   previewUrl,
   probeLargeFile,
   readArtifact,
+  writeArtifact,
   type LargeFilePointer,
 } from "@/lib/files";
 import { parseTableFile } from "@/lib/csv";
@@ -68,6 +69,11 @@ export function FilePreviewInspector({
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"preview" | "code">(policy.defaultTab);
   const [showHistory, setShowHistory] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveNotice, setSaveNotice] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -80,6 +86,11 @@ export function FilePreviewInspector({
     setText(data.content ?? null);
     setUrl(null);
     setBytes(null);
+    setEditing(false);
+    editPathRef.current = null;
+    setDraft(null);
+    setSaveError(null);
+    setSaveNotice(null);
     (async () => {
       try {
         if (needsUrl) {
@@ -122,6 +133,62 @@ export function FilePreviewInspector({
 
   const canToggle = policy.supportsCode;
 
+  // Editable text files: plain code/text, markdown, csv and html (html stays
+  // read-only in its browser preview tab — editing happens on the code tab).
+  const editable = (kind === "text" || kind === "markdown" || kind === "table" || kind === "html") && !loading && !error && text !== null;
+  const canSave = editing && draft !== null && !saving;
+
+  // The inspector instance is reused across files (the same component stays
+  // mounted while data.path changes), so the edit session must be scoped to
+  // the path that was open when editing started. A save that resolves after
+  // the user opened a different file must not write or apply state to the new
+  // file.
+  const editPathRef = useRef<string | null>(null);
+
+  const startEdit = () => {
+    if (text === null) return;
+    editPathRef.current = data.path;
+    setDraft(text);
+    setSaveError(null);
+    setSaveNotice(null);
+    setEditing(true);
+  };
+
+  const cancelEdit = () => {
+    editPathRef.current = null;
+    setEditing(false);
+    setDraft(null);
+    setSaveError(null);
+    setSaveNotice(null);
+  };
+
+  const saveEdit = async () => {
+    if (draft === null || saving) return;
+    const targetPath = editPathRef.current;
+    if (!targetPath) return;
+    setSaving(true);
+    setSaveError(null);
+    setSaveNotice(null);
+    try {
+      await writeArtifact(targetPath, data.root, cwd, draft);
+      // The save may have resolved after the user switched to another file in
+      // the same inspector instance — only apply the result when the path is
+      // still the one being edited.
+      if (editPathRef.current !== targetPath) return;
+      setText(draft);
+      setEditing(false);
+      editPathRef.current = null;
+      setDraft(null);
+      setSaveNotice(t("filePreview.saved"));
+      window.setTimeout(() => setSaveNotice(null), 2000);
+    } catch (cause) {
+      if (editPathRef.current !== targetPath) return;
+      setSaveError(cause instanceof Error ? t("filePreview.saveFailed", { message: cause.message }) : String(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   // Where the user was in this file, restored when they come back to it —
   // history browsing keeps its own offset so the two don't clobber each other.
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -151,6 +218,39 @@ export function FilePreviewInspector({
           </div>
         )}
         <div className="flex-1" />
+        {saveNotice && <span className="mr-1 text-xs text-ok">{saveNotice}</span>}
+        {editing ? (
+          <>
+            <button
+              className="flex items-center gap-1 rounded-input bg-accent px-2.5 py-1 text-xs text-accent-fg hover:opacity-90 disabled:opacity-50"
+              aria-label={t("filePreview.save")}
+              onClick={() => void saveEdit()}
+              disabled={!canSave}
+            >
+              {saving ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+              {t("filePreview.save")}
+            </button>
+            <button
+              className="flex items-center gap-1 rounded-input border border-border px-2.5 py-1 text-xs text-muted hover:text-text"
+              aria-label={t("filePreview.cancel")}
+              onClick={cancelEdit}
+              disabled={saving}
+            >
+              {t("filePreview.cancel")}
+            </button>
+          </>
+        ) : (
+          editable && !showHistory && (
+            <button
+              className="text-text hover:opacity-60"
+              aria-label={t("filePreview.edit")}
+              title={t("filePreview.edit")}
+              onClick={startEdit}
+            >
+              <Pencil size={14} strokeWidth={1.5} />
+            </button>
+          )
+        )}
         <button
           className={cn(showHistory ? "text-accent" : "text-text hover:opacity-60")}
           aria-label={t("filePreview.versionHistory")}
@@ -160,14 +260,16 @@ export function FilePreviewInspector({
         >
           <History size={14} strokeWidth={1.5} />
         </button>
-        <button
-          className="text-text hover:opacity-60"
-          aria-label={t("common.open")}
-          title={t("filePreview.openExternally")}
-          onClick={() => void openArtifactExternally(data.path, data.root, cwd)}
-        >
-          <ExternalLink size={14} strokeWidth={1.5} />
-        </button>
+        {kind !== "html" && (
+          <button
+            className="text-text hover:opacity-60"
+            aria-label={t("common.open")}
+            title={t("filePreview.openExternally")}
+            onClick={() => void openArtifactExternally(data.path, data.root, cwd)}
+          >
+            <ExternalLink size={14} strokeWidth={1.5} />
+          </button>
+        )}
         {controls}
         <button className="text-text hover:opacity-60" aria-label={t("common.close")} onClick={onClose}>
           <X size={14} strokeWidth={1.5} />
@@ -176,22 +278,34 @@ export function FilePreviewInspector({
 
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto bg-surface-2">
         {showHistory && <ProvenancePanel path={data.path} language={data.language} cwd={cwd} />}
-        {!showHistory && loading && (
+        {!showHistory && editing && draft !== null && (
+          <div className="flex h-full flex-col">
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              spellCheck={false}
+              className="min-h-0 flex-1 resize-none bg-surface p-4 font-mono text-[12.5px] leading-[1.55] text-text outline-none"
+              aria-label={`Edit ${data.filename}`}
+            />
+            {saveError && <div className="border-t border-border px-4 py-2 text-xs text-error">{saveError}</div>}
+          </div>
+        )}
+        {!showHistory && !editing && loading && (
           <div className="flex items-center gap-2 p-4 text-sm text-muted">
             <Loader2 size={15} className="animate-spin" /> {t("filePreview.loadingFile", { filename: data.filename })}
           </div>
         )}
-        {!showHistory && !loading && error && (
+        {!showHistory && !editing && !loading && error && (
           <PreviewError
             error={error}
             filename={data.filename}
             path={data.path}
             root={data.root}
             cwd={cwd}
-            onOpenExternally={() => void openArtifactExternally(data.path, data.root, cwd)}
+            onOpenExternally={kind === "html" ? undefined : () => void openArtifactExternally(data.path, data.root, cwd)}
           />
         )}
-        {!showHistory && !loading && !error && (
+        {!showHistory && !editing && !loading && !error && (
           <Suspense fallback={<Note text={t("filePreview.loadingScientificViewer")} />}>
             <Body
               kind={kind}
@@ -390,8 +504,8 @@ function Body({
   }
   if (kind === "image") {
     return url ? (
-      <div className="flex justify-center p-4">
-        <img src={url} alt={filename} className="max-w-full rounded-sm bg-white shadow-card" />
+      <div className="flex items-center justify-center min-h-full p-4">
+        <img src={url} alt={filename} className="max-w-full max-h-full rounded-sm bg-white shadow-card object-contain" />
       </div>
     ) : (
       <Note text={t("filePreview.loading")} />
@@ -481,7 +595,7 @@ export function PreviewError({
   path?: string;
   root?: FileRoot;
   cwd: string;
-  onOpenExternally: () => void;
+  onOpenExternally?: () => void;
 }) {
   const { t } = useTranslation();
   const tooLarge = /too large/i.test(error);
@@ -521,12 +635,14 @@ export function PreviewError({
               {t("filePreview.inspectWithoutLoading")}
             </button>
           )}
-          <button
-            className="inline-flex items-center gap-1.5 rounded-input border border-border bg-surface-2 px-2.5 py-1.5 text-[13px] text-text hover:bg-surface"
-            onClick={onOpenExternally}
-          >
-            <ExternalLink size={13} /> {t("common.open")}
-          </button>
+          {onOpenExternally && (
+            <button
+              className="inline-flex items-center gap-1.5 rounded-input border border-border bg-surface-2 px-2.5 py-1.5 text-[13px] text-text hover:bg-surface"
+              onClick={onOpenExternally}
+            >
+              <ExternalLink size={13} /> {t("common.open")}
+            </button>
+          )}
         </div>
         {probeError && <div className="mt-3 text-[13px] text-error">{probeError}</div>}
         {pointer && <LargeFilePointerPanel p={pointer} />}
