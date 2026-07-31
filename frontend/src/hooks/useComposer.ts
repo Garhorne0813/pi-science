@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { setSessionName } from "../lib/pi-science-client";
 import { useRuntimeStore } from "../lib/runtime-store";
@@ -31,6 +31,7 @@ export function useComposer(params: {
   const { t } = useTranslation();
   const { toast } = useFeedback();
   const navigate = useNavigate();
+  const location = useLocation();
   const thread = useRuntimeStore((s) => s.thread);
   const working = useRuntimeStore((s) => s.working);
   const sendPrompt = useRuntimeStore((s) => s.sendPrompt);
@@ -147,13 +148,24 @@ export function useComposer(params: {
     setInput("");
     setFiles([]);
     clearWorkspaceReferences(cwd);
-    void sendPrompt(message).catch(() => {
-      // Keep the failed message visible with its inline error, but restore the
-      // original draft/attachments so retrying does not require retyping.
-      if (!useRuntimeStore.getState().draft) setInput(text);
-      setFiles((current) => current.length > 0 ? current : sentFiles);
-      sentReferences.forEach((reference) => useUiStore.getState().addWorkspaceReference(reference));
-    });
+    void sendPrompt(message)
+      .then((sentSessionId) => {
+        // A first prompt on a workspace landing route (no :sessionId segment)
+        // creates the session lazily. Mirror the /new command and adopt the new
+        // session id in the URL; otherwise the route stays on the bare
+        // workspace path and a later connect() without a sessionId clears the
+        // thread back to the blank composer.
+        if (sentSessionId && !location.pathname.match(/\/session\/[^/]+$/)) {
+          navigate(`/workspace/${encodeURIComponent(cwd)}/session/${sentSessionId}`, { replace: true });
+        }
+      })
+      .catch(() => {
+        // Keep the failed message visible with its inline error, but restore the
+        // original draft/attachments so retrying does not require retyping.
+        if (!useRuntimeStore.getState().draft) setInput(text);
+        setFiles((current) => current.length > 0 ? current : sentFiles);
+        sentReferences.forEach((reference) => useUiStore.getState().addWorkspaceReference(reference));
+      });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

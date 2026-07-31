@@ -252,4 +252,45 @@ describe("runtime conversation recovery", () => {
       expect.objectContaining({ kind: "agent", id: "agent-fast" }),
     );
   });
+
+  it("replaces the thread with the settle-time snapshot without duplicating the live turn", async () => {
+    let messagesReads = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) {
+        messagesReads += 1;
+        // Complete authoritative snapshot: JSONL ids that never match the live
+        // block ids (user-<ts> / SSE partId).
+        return jsonResponse({ messages: [
+          { id: "user-durable", role: "user", content: [{ type: "text", text: "hello" }], timestamp: "2026-01-01T00:00:00Z" },
+          { id: "agent-durable", role: "assistant", content: [{ type: "text", text: "world" }], timestamp: "2026-01-01T00:00:01Z" },
+        ] });
+      }
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.includes("/prompt")) return jsonResponse({ ok: true, id: "session-a" });
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    FakeEventSource.instances[0].open();
+
+    await useRuntimeStore.getState().sendPrompt("hello");
+    // Live turn: user block id is user-<ts>; agent block id is the SSE partId.
+    FakeEventSource.instances.at(-1)!.emit("text.updated", { type: "text.updated", sessionId: "session-a", partId: "live-part", text: "world" });
+    expect(useRuntimeStore.getState().thread.blocks.some((b) => b.kind === "user")).toBe(true);
+    expect(useRuntimeStore.getState().thread.blocks.some((b) => b.kind === "agent" && (b as { parts?: Array<{ id: string }> }).parts?.some((p) => p.id === "live-part"))).toBe(true);
+
+    FakeEventSource.instances.at(-1)!.emit("session.idle", { type: "session.idle", sessionId: "session-a" });
+    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false));
+    await vi.waitFor(() => {
+      const ids = useRuntimeStore.getState().thread.blocks.map((b) => b.id);
+      expect(ids).toEqual(["user-durable", "agent-durable"]);
+    });
+
+    const blocks = useRuntimeStore.getState().thread.blocks;
+    // Exactly the snapshot content: one user + one agent, no live duplicates.
+    expect(blocks.filter((b) => b.kind === "user").map((b) => b.id)).toEqual(["user-durable"]);
+    expect(blocks.filter((b) => b.kind === "agent").map((b) => b.id)).toEqual(["agent-durable"]);
+    expect(blocks.some((b) => (b as { parts?: Array<{ id: string }> }).parts?.some((p) => p.id === "live-part"))).toBe(false);
+  });
 });

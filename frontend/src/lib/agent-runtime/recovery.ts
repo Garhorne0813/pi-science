@@ -19,6 +19,16 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
       || current.cwd !== cwd
       || current.working
     ) return;
+    // Restore the REST snapshot wholesale for a settled conversation. The Pi
+    // process writes the session JSONL before agent_settled, so a non-empty
+    // snapshot is authoritative. Merging live blocks into it would duplicate
+    // the turn: live ids (user-<ts>, SSE partId) can never match REST ids
+    // (JSONL message ids). Only a racing empty snapshot needs the guard — the
+    // file may not have flushed yet, so keep the visible live thread.
+    if (messages.length === 0 && current.thread.blocks.length > 0) {
+      // The snapshot is stale (file not flushed yet) — keep the live thread.
+      return;
+    }
     useRuntimeStore.setState({ thread: threadFromMessages(messages) });
   } catch (error) {
     console.error("Failed to resynchronize completed conversation:", error);

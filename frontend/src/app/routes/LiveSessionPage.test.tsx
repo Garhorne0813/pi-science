@@ -171,7 +171,7 @@ beforeEach(() => {
     draft: "",
     connect: vi.fn(async () => undefined),
     disconnect: vi.fn(),
-    sendPrompt: vi.fn(async () => undefined),
+    sendPrompt: vi.fn(async (): Promise<string | null> => null),
     abort: vi.fn(async () => undefined),
     createNewSession: vi.fn(async () => "s2"),
   });
@@ -185,7 +185,7 @@ afterEach(() => {
 
 describe("composer send-failure restore", () => {
   it("loads the configured model and sends from a workspace without an active session", async () => {
-    const sendPrompt = vi.fn(async (_message: string) => undefined);
+    const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sessions: [], activeSessionId: null, model: "", sendPrompt });
 
     renderWorkspaceLanding();
@@ -223,7 +223,7 @@ describe("composer send-failure restore", () => {
   it("does not overwrite a draft the user typed while the failing send was in flight", async () => {
     let rejectSend: (error: Error) => void = () => undefined;
     const pending = new Promise<void>((_resolve, reject) => { rejectSend = reject; });
-    const sendPrompt = vi.fn((_message: string) => pending);
+    const sendPrompt = vi.fn((_message: string): Promise<string | null> => pending as unknown as Promise<string | null>);
     useRuntimeStore.setState({ sendPrompt });
     await renderReady();
 
@@ -251,7 +251,7 @@ describe("composer send-failure restore", () => {
 
 describe("conversation research workflows", () => {
   it("sends compare as a structured conversation task instead of creating a loop", async () => {
-    const sendPrompt = vi.fn(async (_message: string) => undefined);
+    const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sendPrompt });
     overrides.push((url, init) => {
       if ((init.method || "GET").toUpperCase() !== "POST" || !url.startsWith("/api/project-memory/research-loop-intents")) return null;
@@ -296,7 +296,7 @@ describe("conversation research workflows", () => {
   });
 
   it("turns optimize into an editable loop draft and infers a deterministic metric", async () => {
-    const sendPrompt = vi.fn(async (_message: string) => undefined);
+    const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sendPrompt });
     overrides.push((url, init) => {
       if ((init.method || "GET").toUpperCase() !== "POST" || !url.startsWith("/api/project-memory/research-loop-intents")) return null;
@@ -331,7 +331,7 @@ describe("conversation research workflows", () => {
 
 describe("IME composition Enter guard", () => {
   it("suppresses Enter during composition and sends only after compositionend settles", async () => {
-    const sendPrompt = vi.fn(async (_message: string) => undefined);
+    const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sendPrompt });
     await renderReady();
     act(() => { useRuntimeStore.getState().setDraft("你好"); });
@@ -360,7 +360,7 @@ describe("IME composition Enter guard", () => {
   });
 
   it("does not send on Shift+Enter", async () => {
-    const sendPrompt = vi.fn(async (_message: string) => undefined);
+    const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sendPrompt });
     await renderReady();
     act(() => { useRuntimeStore.getState().setDraft("multi"); });
@@ -470,7 +470,7 @@ describe("model change optimistic rollback", () => {
 
 describe("slash-command dispatcher", () => {
   it("/compact posts to the compact endpoint and reports it without sending a prompt", async () => {
-    const sendPrompt = vi.fn(async (_message: string) => undefined);
+    const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sendPrompt });
     await renderReady();
     act(() => { useRuntimeStore.getState().setDraft("/compact"); });
@@ -487,7 +487,7 @@ describe("slash-command dispatcher", () => {
   });
 
   it("/name stores the session name locally and reports it (no toast)", async () => {
-    const sendPrompt = vi.fn(async (_message: string) => undefined);
+    const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sendPrompt });
     await renderReady();
     act(() => { useRuntimeStore.getState().setDraft("/name Protein folding run"); });
@@ -501,7 +501,7 @@ describe("slash-command dispatcher", () => {
   });
 
   it("an unknown slash command falls through to a normal send", async () => {
-    const sendPrompt = vi.fn(async (_message: string) => undefined);
+    const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sendPrompt });
     await renderReady();
     act(() => { useRuntimeStore.getState().setDraft("/xyz do a thing"); });

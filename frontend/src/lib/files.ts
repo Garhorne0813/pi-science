@@ -31,6 +31,22 @@ export async function readArtifact(
   }
 }
 
+/** Overwrite a workspace text file with new content. Uses REST API. */
+export async function writeArtifact(
+  path: string,
+  root: FileRoot | undefined,
+  cwd: string,
+  content: string,
+): Promise<{ ok: boolean; path: string; size: number }> {
+  const params = new URLSearchParams({ cwd });
+  if (root) params.set("root", root);
+  return apiRequest<{ ok: boolean; path: string; size: number }>(`${API}/files/content?${params}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, content }),
+  });
+}
+
 /** URL for browser-native preview (PDF, images, HTML, video).
  *  Uses /serve/ instead of /{path}/raw so relative references
  *  (CSS, JS, images) in HTML resolve back to the same prefix.

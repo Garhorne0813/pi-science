@@ -55,7 +55,14 @@ export function registerSseRoutes(app: FastifyInstance, nodeSessionService: Node
     }
 
     const sessionId = request.params.session_id;
-    const sessionExists = await nodeSessionService.exists(sessionId, cwd);
+    // A freshly-created session may not have flushed its JSONL yet: the Pi
+    // process writes the session file only after emitting the session event,
+    // so an SSE connect that arrives right after POST /api/sessions returns
+    // would see exists()==false and tear the conversation down. Treat a
+    // still-running in-memory runtime as proof of existence so the stream
+    // attaches and replays events as they land.
+    const sessionExists = await nodeSessionService.exists(sessionId, cwd)
+      || nodeSessionService.liveSessions(cwd).some((session) => session.id === sessionId);
     if (!sessionExists) {
       return reply
         .type("text/event-stream")

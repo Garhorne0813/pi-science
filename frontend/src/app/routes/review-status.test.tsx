@@ -92,7 +92,7 @@ beforeEach(() => {
     draft: "",
     connect: vi.fn(async () => undefined),
     disconnect: vi.fn(),
-    sendPrompt: vi.fn(async () => undefined),
+    sendPrompt: vi.fn(async (): Promise<string | null> => null),
     abort: vi.fn(async () => undefined),
     createNewSession: vi.fn(async () => "s2"),
   });

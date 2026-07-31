@@ -39,6 +39,63 @@ describe("runtime event subscription", () => {
     expect(source.readyState).toBe(FakeEventSource.CLOSED);
   });
 
+  it("bounded optimistic retry recovers a session that never materializes on disk", async () => {
+    const { optimisticSessionIds } = await import("./sessions");
+    optimisticSessionIds.add("optimistic-ghost");
+    try {
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/messages")) return jsonResponse({ messages: [] });
+        if (url.includes("/state")) return jsonResponse(state("optimistic-ghost"));
+        if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+        throw new Error(`Unexpected request: ${url}`);
+      }));
+      await useRuntimeStore.getState().connect("/workspace", "optimistic-ghost");
+      const source = FakeEventSource.instances[0];
+      source.open();
+
+      const emitNotFound = () => source.emit("error", {
+        type: "error",
+        sessionId: "optimistic-ghost",
+        message: "session not found in this workspace",
+        terminal: true,
+      });
+
+      // First not-found: optimistic retry scheduled (connect count grows).
+      emitNotFound();
+      expect(useRuntimeStore.getState().status).toBe("connecting");
+      await new Promise((resolve) => setTimeout(resolve, 850));
+      const afterFirst = FakeEventSource.instances.length;
+      expect(afterFirst).toBeGreaterThanOrEqual(2);
+
+      // Second not-found: retry again (cap = 2).
+      FakeEventSource.instances.at(-1)!.emit("error", {
+        type: "error",
+        sessionId: "optimistic-ghost",
+        message: "session not found in this workspace",
+        terminal: true,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 850));
+      const afterSecond = FakeEventSource.instances.length;
+      expect(afterSecond).toBeGreaterThan(afterFirst);
+
+      // Third not-found: cap exhausted — recovery runs, no further connects.
+      FakeEventSource.instances.at(-1)!.emit("error", {
+        type: "error",
+        sessionId: "optimistic-ghost",
+        message: "session not found in this workspace",
+        terminal: true,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 850));
+      const afterThird = FakeEventSource.instances.length;
+      expect(afterThird).toBe(afterSecond);
+      expect(useRuntimeStore.getState().activeSessionId).toBeNull();
+      expect(optimisticSessionIds.has("optimistic-ghost")).toBe(false);
+    } finally {
+      optimisticSessionIds.delete("optimistic-ghost");
+    }
+  });
+
   it("shows work immediately, handles extension questions, and settles on idle", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
