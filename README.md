@@ -30,7 +30,7 @@ Most AI research tools stop at reading and summarizing papers. Pi-Science is bui
 - **Literature with real, verifiable citations.** Zero-config Crossref/arXiv/PubMed retrieval with inline DOIs rendered as clickable sources — never invented references.
 - **Local-first by architecture.** Workspaces are plain folders on your machine. Nothing leaves it except the LLM calls you configure — including fully local endpoints such as Ollama or LM Studio. Unpublished data stays yours.
 
-Each project keeps its own conversations, files, runs, provenance, and reviewed knowledge. Each conversation runs in an independent Pi process, so multiple sessions continue concurrently without blocking one another.
+Each project keeps its own conversations, files, runs, provenance, and reviewed knowledge. Conversations run in isolated runtimes inside a shared Pi host, so multiple sessions continue concurrently without blocking one another.
 
 ## Quick Start
 
@@ -81,15 +81,6 @@ Re-run `scripts/install.sh` after moving the checkout or after a `git pull` chan
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 ```
 
-### Local services
-
-| Service | Address | Purpose |
-|---|---|---|
-| Web app | `http://127.0.0.1:5173` | Main research workspace |
-| Node control plane | `http://127.0.0.1:8787` | Sessions, SSE, files, jobs, settings, and project APIs |
-| Python worker | `http://127.0.0.1:8788` | On-demand internal scientific services and kernels |
-| API documentation | `http://127.0.0.1:8787/docs` | Interactive API reference |
-
 Open **Settings → LLM** after startup and configure a provider and default model.
 
 ## Highlights
@@ -97,7 +88,7 @@ Open **Settings → LLM** after startup and configure a provider and default mod
 | Area | What Pi-Science provides |
 |---|---|
 | Agent workspace | Streaming conversations, tool cards, Markdown, LaTeX, slash commands, and interactive extension prompts |
-| Concurrent sessions | One independent Pi process per session, including restored and forked conversations |
+| Concurrent sessions | Isolated runtimes for active, restored, and forked conversations inside one shared Pi host |
 | Scientific files | Native previews for molecular structures, FITS, genomics, phase data, 3D models, tables, office documents, media, and code |
 | Reproducibility | Artifact hashes, generating code and diffs, environment snapshots, provenance history, and reproduce actions |
 | Project memory | Reviewer proposals, human approval, evidence links, project versions, research loops, and Pareto-frontier tracking |
@@ -122,58 +113,10 @@ Pi-Science renders common research formats directly in the browser.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    UI[React web app] --> CP[Node / TypeScript control plane]
-    CP --> P1[Pi process · session A]
-    CP --> P2[Pi process · session B]
-    CP --> PN[Pi process · session N]
-    CP --> PY[Python scientific worker · on demand]
-    PY --> K[Python / R kernels]
-    CP --> WS[(Workspace files and .pi-science metadata)]
-```
-
-- The **React frontend** provides chat, project memory, file inspection, notebooks, runs, skills, and settings.
-- The **Node control plane** owns conversation processes, session APIs, live SSE events, files, jobs, provenance, and application settings.
-- The **Python worker** starts when a scientific route is requested, provides scientific services and kernels, and is reclaimed after 5 minutes idle by default (`PI_SCIENCE_SCIENTIFIC_IDLE_MS`).
-- Each session is keyed by both workspace and session ID. Idle Pi processes are reclaimed after 30 minutes by default; set `PI_SCIENCE_IDLE_RUNTIME_MS=0` to disable cleanup.
-
-See the [research loop architecture (ADR)](docs/adr-research-loop-subagents.md) for deeper implementation details.
-
-## Project Model
-
-Every initialized project is a workspace. Project-local runtime state is kept under `.pi-science/`, while agent instructions and skills remain in standard Pi locations.
-
-```text
-project/
-├── AGENTS.md
-├── .venv/                 # workspace-local Python packages
-├── node_modules/          # workspace-local JavaScript packages
-├── .pi/
-│   ├── skills/
-│   └── agents/
-├── .pi-science/
-│   ├── sessions/
-│   ├── artifacts.jsonl
-│   ├── provenance.jsonl
-│   └── research-records-v2.jsonl
-└── your research files
-```
-
-Reviewed project memory is created lazily. Findings do not enter the formal project record until the user accepts them.
-
-### Workspace package isolation
-
-Pi-Science creates `.venv/` on the first Agent, Job, or Python Kernel use. The
-Agent process, local jobs, and notebook kernel all receive that environment at
-the front of `PATH`; `pip` is configured to refuse installation outside a
-virtual environment. `npm install` continues to write `node_modules/` in the
-workspace, while even explicit global npm/pnpm installs are redirected under
-`.pi-science/` instead of modifying the host installation.
-
-The environment can be inspected or initialized from the Notebooks page, or
-through `GET/POST /api/environments/workspace?cwd=...`. Existing malformed
-`.venv` directories are never overwritten automatically.
+Pi-Science uses a local-first control plane, one shared Pi Orbit Web host with
+isolated agent runtimes, and an on-demand scientific worker. See the
+[architecture reference](docs/architecture.md) for process ownership, service
+boundaries, workspace state, lifecycle, and security details.
 
 ## Slash Commands
 
@@ -225,20 +168,6 @@ pnpm uat:conversation
 PI_CLI_PATH=/absolute/path/to/pi-orbit pnpm smoke:real-pi
 ```
 
-`scripts/install.sh` downloads the platform-specific Pi Orbit release, verifies it
-against the published `SHA256SUMS`, and records the native executable. Set
-`PI_ORBIT_REPO=/absolute/path/to/pi-orbit` during installation only to opt into a
-local source checkout. `PI_CLI_PATH` may also point directly to either a native
-Pi Orbit executable or a JavaScript/TypeScript CLI that supports `--mode web`. Pi-Science
-launches one authenticated loopback Web host for the control-plane lifetime;
-workspaces, conversations, and background agents use isolated runtimes inside
-that shared process. The bearer token remains in the Pi-Science backend and no
-browser origin is granted CORS access. A workspace that passes Pi-Science's
-registration and path validation is inside the application's trust boundary, so
-the control plane records Pi Orbit project trust before creating its runtime;
-only register workspaces whose project-local instructions and skills you trust.
-Set `PI_SCIENCE_PI_MODE=rpc` only as a temporary rollback option.
-
 Focused frontend UAT commands are available under `frontend`:
 
 ```bash
@@ -250,8 +179,9 @@ npm run test:uat:office
 
 ## Documentation
 
+- [Architecture](docs/architecture.md)
 - [Research loop architecture (ADR)](docs/adr-research-loop-subagents.md)
-- Interactive API reference at `http://127.0.0.1:8787/docs` while the stack is running
+- Interactive API reference while the stack is running
 
 ## Contributing
 
