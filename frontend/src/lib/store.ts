@@ -28,6 +28,12 @@ interface UiState {
   addWorkspaceReference: (reference: WorkspaceReference) => void;
   removeWorkspaceReference: (cwd: string, path: string) => void;
   clearWorkspaceReferences: (cwd: string) => void;
+  settingsOpen: boolean;
+  /** Snapshot of the workspace cwd taken when the dialog opened; the dialog
+   *  must not follow route changes while it is open (e.g. browser back). */
+  settingsScope: string | null;
+  openSettings: (scope: string | null) => void;
+  closeSettings: () => void;
 }
 
 function loadFromStorage<T>(key: string, fallback: T): T {
@@ -101,6 +107,11 @@ export const useUiStore = create<UiState>((set) => ({
   clearWorkspaceReferences: (cwd) => set((state) => ({
     workspaceReferences: state.workspaceReferences.filter((item) => item.cwd !== cwd),
   })),
+
+  settingsOpen: false,
+  settingsScope: null,
+  openSettings: (scope) => set({ settingsOpen: true, settingsScope: scope }),
+  closeSettings: () => set({ settingsOpen: false }),
 }));
 
 // Re-export for RightPane compatibility

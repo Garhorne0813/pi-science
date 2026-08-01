@@ -3,7 +3,14 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { clampThinkingLevel, conversationModelOptions, type AvailableModel } from "../lib/pi-science-client";
 import { applySessionReplacements, useRuntimeStore, type SessionReplacement } from "../lib/runtime-store";
-import { settingsApi } from "../lib/settings-api";
+import { queryClient } from "../lib/query-client";
+import { settingsApi, settingsKey } from "../lib/settings-api";
+
+interface ModelConfigData {
+  available_models?: AvailableModel[];
+  model?: string;
+  thinking?: string;
+}
 
 /** Model + thinking-level selection for the conversation composer. */
 export function useModelConfig(cwd: string, sessionId: string | undefined) {
@@ -19,23 +26,37 @@ export function useModelConfig(cwd: string, sessionId: string | undefined) {
   const [configuringModel, setConfiguringModel] = useState(false);
 
   useEffect(() => {
-    settingsApi.config<{ available_models?: AvailableModel[]; model?: string; thinking?: string }>(cwd)
-      .then((data) => {
-        const runtime = useRuntimeStore.getState();
-        const allAvailableModels: AvailableModel[] = Array.isArray(data.available_models) ? data.available_models : [];
-        const availableModels = conversationModelOptions(allAvailableModels);
-        setModels(availableModels);
-        const nextModel = runtime.model || data.model || "";
-        const nextModelInfo = availableModels.find((model: AvailableModel) => model.id === nextModel);
-        const supported = nextModelInfo?.thinking_levels || [];
-        const configuredThinking = runtime.thinking || data.thinking || "high";
-        setSelectedModel(nextModel);
-        setThinking(supported.length > 0 ? clampThinkingLevel(configuredThinking, supported) : configuredThinking);
-        setModelError(availableModels.length === 0
-          ? t("conversation.configureProvider")
-          : null);
-      })
+    const key = settingsKey("config", cwd ?? null);
+    let cancelled = false;
+    const applyConfig = (data?: ModelConfigData) => {
+      if (!data || cancelled) return;
+      const runtime = useRuntimeStore.getState();
+      const allAvailableModels: AvailableModel[] = Array.isArray(data.available_models) ? data.available_models : [];
+      const availableModels = conversationModelOptions(allAvailableModels);
+      setModels(availableModels);
+      const nextModel = runtime.model || data.model || "";
+      const nextModelInfo = availableModels.find((model: AvailableModel) => model.id === nextModel);
+      const supported = nextModelInfo?.thinking_levels || [];
+      const configuredThinking = runtime.thinking || data.thinking || "high";
+      setSelectedModel(nextModel);
+      setThinking(supported.length > 0 ? clampThinkingLevel(configuredThinking, supported) : configuredThinking);
+      setModelError(availableModels.length === 0
+        ? t("conversation.configureProvider")
+        : null);
+    };
+    // The settings dialog saves the model while this page stays mounted under
+    // the modal, so the composer tracks the shared cache instead of only the
+    // initial fetch.
+    const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+      if (event.type === "updated" && JSON.stringify(event.query.queryKey) === JSON.stringify(key)) {
+        applyConfig(event.query.state.data as ModelConfigData | undefined);
+      }
+    });
+    applyConfig(queryClient.getQueryData(key) as ModelConfigData | undefined);
+    settingsApi.config<ModelConfigData>(cwd)
+      .then((data) => applyConfig(data))
       .catch((cause) => setModelError(cause instanceof Error ? cause.message : t("conversation.modelListError")));
+    return () => { cancelled = true; unsubscribe(); };
   }, [activeSessionId, cwd, t]);
 
   useEffect(() => {
