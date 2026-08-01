@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { FolderOpen, File, ChevronRight, Trash2, ArrowUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useUiStore } from "../../lib/store";
+import { useUiStore } from "../../lib/ui";
 import { fileInspectorForPath } from "../../lib/artifacts";
-import { workspaceFiles, type Breadcrumb } from "../../lib/workspace-files";
+import { workspaceFiles, type Breadcrumb } from "../../lib/workspace";
 import { FileContextMenu, type ContextPoint, type FileListEntry } from "../../components/sidebar/FileContextMenu";
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "../../components/layout/WorkspacePage";
-import { useRuntimeStore } from "../../lib/runtime-store";
-import { useRequiredWorkspaceCwd } from "../../lib/workspace-context";
+import { useRuntimeStore } from "../../lib/agent-runtime";
+import { useRequiredWorkspaceCwd } from "../../lib/workspace";
 
 export function FilesPage() {
   const { t } = useTranslation();

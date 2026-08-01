@@ -1,8 +1,8 @@
 import { BookOpen, FileText, FlaskConical, FolderOpen, History, Inbox, Loader2, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { cn } from "../../lib/cn";
-import type { ProjectPolicy } from "../../lib/project-knowledge";
+import { cn } from "../../lib/ui";
+import type { ProjectPolicy } from "../../lib/knowledge";
 import { WorkspacePageHeader, WorkspacePageRefreshButton } from "../layout/WorkspacePage";
 
 export type KnowledgePageTab = "overview" | "inbox" | "knowledge" | "research" | "files" | "history";

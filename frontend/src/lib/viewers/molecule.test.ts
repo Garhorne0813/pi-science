@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { defaultStyleMode, isSmilesFile, looksLikeMacromolecule, moleculeFormatFor, smilesToMolblock } from "./molecule";
 
-const LYSOZYME = "../demo-molecules/data/1LYS.pdb";
+const LYSOZYME = "../demos/molecular-playground/data/1LYS.pdb";
 
 describe("molecule helpers", () => {
   it("maps molecule extensions to 3Dmol formats", () => {

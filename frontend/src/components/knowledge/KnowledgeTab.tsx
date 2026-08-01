@@ -1,7 +1,7 @@
 import { FileText } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { cn } from "../../lib/cn";
-import { groupKnowledgeItems, KNOWLEDGE_LABELS, type KnowledgeItem } from "../../lib/project-knowledge";
+import { cn } from "../../lib/ui";
+import { groupKnowledgeItems, KNOWLEDGE_LABELS, type KnowledgeItem } from "../../lib/knowledge";
 import { EmptyState } from "./EmptyState";
 
 export function KnowledgeTab({ items }: { items: KnowledgeItem[] }) {

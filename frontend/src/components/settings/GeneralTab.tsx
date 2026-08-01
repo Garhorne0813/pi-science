@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { shippedLocales } from "../../i18n/config";
-import { useUiStore } from "../../lib/store";
+import { useUiStore } from "../../lib/ui";
 import { Section } from "./Section";
 
 export function GeneralTab() {

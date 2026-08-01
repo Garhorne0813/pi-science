@@ -1,16 +1,16 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2, File, FolderOpen } from "lucide-react";
-import { cn } from "../../lib/cn";
-import { useUiStore } from "../../lib/store";
-import { useRuntimeStore } from "../../lib/runtime-store";
+import { cn } from "../../lib/ui";
+import { useUiStore } from "../../lib/ui";
+import { useRuntimeStore } from "../../lib/agent-runtime";
 import type { ThreadBlock, ToolCallBlock } from "../../types/thread";
 import { MarkdownViewer, type CodeRunner } from "../markdown-viewer/MarkdownViewer";
 import { extractArtifactRefs, refToArtifactBlock, fileInspectorFromBlock } from "../../lib/artifacts";
-import { referencesFromMessage, visibleUserMessage } from "../../lib/file-references";
-import { agentActionTextByBlock } from "../../lib/message-actions";
+import { referencesFromMessage, visibleUserMessage } from "../../lib/files";
+import { agentActionTextByBlock } from "../../lib/conversation";
 import { extractCitations } from "../../lib/citations";
-import { parseSuggestions } from "../../lib/suggestions";
+import { parseSuggestions } from "../../lib/conversation";
 import { MessageActions } from "./MessageActions";
 
 /** Render blocks, grouping consecutive tool cards together. */

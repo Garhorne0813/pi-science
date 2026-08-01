@@ -10,9 +10,9 @@ import {
   type EvaluatorSpec,
   type ResearchLoop,
 } from "@pi-science/contracts";
-import type { JobCoordinator, JobRecord } from "../job-coordinator.js";
-import { metadataRoot } from "../persistence.js";
-import { findBashExecutable } from "../platform-utils.js";
+import type { JobCoordinator, JobRecord } from "../runtime/jobs/job-coordinator.js";
+import { metadataRoot } from "../storage/persistence.js";
+import { findBashExecutable } from "../support/platform-utils.js";
 import { snapshotCandidate, within } from "./candidate-snapshot.js";
 import { listReducedLoops, reduceResearchRecords } from "./reducer.js";
 import { ResearchRepository } from "./repository.js";

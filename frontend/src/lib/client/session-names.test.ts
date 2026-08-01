@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveSessionName, getSessionName, moveSessionName, setSessionName } from "../pi-science-client";
+import { deriveSessionName, getSessionName, moveSessionName, setSessionName } from "./pi-science-client";
 import { installClientTestEnvironment } from "./test-helpers";
 
 

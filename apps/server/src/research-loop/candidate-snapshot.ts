@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import type { CandidateProposal } from "@pi-science/contracts";
-import { metadataRoot, writeJsonAtomic } from "../persistence.js";
+import { metadataRoot, writeJsonAtomic } from "../storage/persistence.js";
 
 function safeRelativePath(value: string): string {
   const normalized = normalize(value.replaceAll("\\", "/"));

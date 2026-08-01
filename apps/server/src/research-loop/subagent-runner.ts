@@ -2,11 +2,11 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { researchAgentResultSchema } from "@pi-science/contracts";
-import { metadataRoot } from "../persistence.js";
-import { PiManager, piManager } from "../pi-manager.js";
-import type { PiProcess, PiEvent } from "../pi-process.js";
-import { buildPiProcessOptions, loadDefaultPiConfig } from "../pi-runtime-launch.js";
-import type { WorkspaceEnvironmentService } from "../workspace-environment.js";
+import { metadataRoot } from "../storage/persistence.js";
+import { PiManager, piManager } from "../runtime/pi/pi-manager.js";
+import type { PiProcess, PiEvent } from "../runtime/pi/pi-process.js";
+import { buildPiProcessOptions, loadDefaultPiConfig } from "../runtime/pi/pi-runtime-launch.js";
+import type { WorkspaceEnvironmentService } from "../runtime/workspace/workspace-environment.js";
 import type { AgentRunRequest, AgentRunResult, AgentRunUsage, ResearchSubagentRunner } from "./types.js";
 
 type ActiveRun = { managerKey: string; process: PiProcess; state: "running" | "completed" | "failed"; usage: AgentRunUsage };

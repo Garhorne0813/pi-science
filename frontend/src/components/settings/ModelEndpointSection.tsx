@@ -2,9 +2,9 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { cn } from "../../lib/cn";
-import { modelEndpointsQuery, settingsApi } from "../../lib/settings-api";
-import type { ModelEndpoint } from "../../lib/settings-types";
+import { cn } from "../../lib/ui";
+import { modelEndpointsQuery, settingsApi } from "../../lib/settings";
+import type { ModelEndpoint } from "../../lib/settings";
 
 export function ModelEndpointSection() {
   const { t } = useTranslation();

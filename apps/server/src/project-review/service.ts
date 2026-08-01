@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import { withFileWriteLock, writeJsonAtomic } from "../persistence.js";
-import { sessionRepository, type SessionMessageRecord, type SessionRepository } from "../session-repository.js";
+import { withFileWriteLock, writeJsonAtomic } from "../storage/persistence.js";
+import { sessionRepository, type SessionMessageRecord, type SessionRepository } from "../runtime/node/session-repository.js";
 import { readProjectState, statePath, timestamp, type Proposal } from "./project-state.js";
 import type { ConversationExcerpt, ExcerptMessage, ReviewProposal, ReviewSubagentRunner } from "./types.js";
 

@@ -3,8 +3,8 @@
 
 import { afterEach, beforeEach, vi } from "vitest";
 
-import { createClient } from "../pi-science-client";
-import { useRuntimeStore } from "../runtime-store";
+import { createClient } from "../client/pi-science-client";
+import { useRuntimeStore } from "./index";
 
 export class FakeEventSource {
   static readonly CONNECTING = 0;

@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { clampThinkingLevel, conversationModelOptions, type AvailableModel } from "../lib/pi-science-client";
-import { applySessionReplacements, useRuntimeStore, type SessionReplacement } from "../lib/runtime-store";
-import { queryClient } from "../lib/query-client";
-import { settingsApi, settingsKey } from "../lib/settings-api";
+import { clampThinkingLevel, conversationModelOptions, type AvailableModel } from "../lib/client/pi-science-client";
+import { applySessionReplacements, useRuntimeStore, type SessionReplacement } from "../lib/agent-runtime";
+import { queryClient } from "../lib/client/query-client";
+import { settingsApi, settingsKey } from "../lib/settings";
 
 interface ModelConfigData {
   available_models?: AvailableModel[];

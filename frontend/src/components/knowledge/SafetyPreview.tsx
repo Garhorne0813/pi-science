@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { cn } from "../../lib/cn";
+import { cn } from "../../lib/ui";
 
 export function SafetyPreview({ data }: { data: Record<string, unknown> }) {
   const { t } = useTranslation();

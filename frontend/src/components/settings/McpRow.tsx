@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
-import { cn } from "../../lib/cn";
-import type { McpServer } from "../../lib/settings-types";
+import { cn } from "../../lib/ui";
+import type { McpServer } from "../../lib/settings";
 
 export function McpRow({ server, onToggle }: { server: McpServer; onToggle: (id: string, on: boolean) => void }) {
   const { t } = useTranslation();

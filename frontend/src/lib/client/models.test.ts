@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { clampThinkingLevel, conversationModelOptions } from "../pi-science-client";
+import { clampThinkingLevel, conversationModelOptions } from "./pi-science-client";
 
 
 describe("conversation model menu", () => {

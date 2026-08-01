@@ -3,9 +3,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { QueryClientProvider } from "@tanstack/react-query";
 import { FeedbackContext } from "../feedback/feedback-context";
 import { SettingsDialog } from "./SettingsDialog";
-import { queryClient } from "../../lib/query-client";
-import { useRuntimeStore } from "../../lib/runtime-store";
-import { useUiStore } from "../../lib/store";
+import { queryClient } from "../../lib/client/query-client";
+import { useRuntimeStore } from "../../lib/agent-runtime";
+import { useUiStore } from "../../lib/ui";
 import i18n from "../../i18n";
 
 function jsonResponse(body: unknown, status = 200): Response {

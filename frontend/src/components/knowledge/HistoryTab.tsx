@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { History, Loader2, RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { projectKnowledgeApi } from "../../lib/project-knowledge";
-import { useProjectTimeline } from "../../lib/project-memory";
+import { projectKnowledgeApi } from "../../lib/knowledge";
+import { useProjectTimeline } from "../../lib/knowledge";
 import { EmptyState } from "./EmptyState";
 
 export function HistoryTab({

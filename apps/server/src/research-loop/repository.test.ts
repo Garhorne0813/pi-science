@@ -2,7 +2,7 @@ import { appendFile, mkdir, mkdtemp, rm, truncate, writeFile } from "node:fs/pro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { metadataRoot, readJsonLines } from "../persistence.js";
+import { metadataRoot, readJsonLines } from "../storage/persistence.js";
 import { ResearchRepository } from "./repository.js";
 import type { ResearchRecord } from "./types.js";
 

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { agentProfilesQuery, settingsApi } from "../../lib/settings-api";
-import type { AgentProfile } from "../../lib/settings-types";
+import { agentProfilesQuery, settingsApi } from "../../lib/settings";
+import type { AgentProfile } from "../../lib/settings";
 import { Section } from "./Section";
 
 export function AgentProfilesSection() {

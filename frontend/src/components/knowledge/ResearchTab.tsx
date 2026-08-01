@@ -3,7 +3,7 @@ import { ArrowRight, FlaskConical, MessageSquareText } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
-import { useResearchLoops } from "../../lib/project-memory";
+import { useResearchLoops } from "../../lib/knowledge";
 import { EmptyState } from "./EmptyState";
 
 /** Knowledge only summarizes research. New workflows start in conversation and

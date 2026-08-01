@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { cn } from "../../lib/cn";
+import { cn } from "../../lib/ui";
 import {
   projectKnowledgeApi,
   projectKnowledgeKey,
@@ -10,9 +10,9 @@ import {
   type ProjectPolicy,
   type ProjectSummary,
   type Proposal,
-} from "../../lib/project-knowledge";
-import { queryClient } from "../../lib/query-client";
-import { useRuntimeStore } from "../../lib/runtime-store";
+} from "../../lib/knowledge";
+import { queryClient } from "../../lib/client/query-client";
+import { useRuntimeStore } from "../../lib/agent-runtime";
 import { KnowledgePageHeader, KnowledgePageTabs, type KnowledgePageTab } from "../../components/knowledge/KnowledgePageHeader";
 import { FilesTab } from "../../components/knowledge/FilesTab";
 import { HistoryTab } from "../../components/knowledge/HistoryTab";
@@ -21,8 +21,8 @@ import { KnowledgeTab } from "../../components/knowledge/KnowledgeTab";
 import { OverviewTab } from "../../components/knowledge/OverviewTab";
 import { ResearchTab } from "../../components/knowledge/ResearchTab";
 import { WorkspacePage } from "../../components/layout/WorkspacePage";
-import { projectMemoryApi, projectMemoryKey, type ProjectMemoryOverview } from "../../lib/project-memory";
-import { useRequiredWorkspaceCwd } from "../../lib/workspace-context";
+import { projectMemoryApi, projectMemoryKey, type ProjectMemoryOverview } from "../../lib/knowledge";
+import { useRequiredWorkspaceCwd } from "../../lib/workspace";
 
 export function KnowledgePage() {
   const { t } = useTranslation();

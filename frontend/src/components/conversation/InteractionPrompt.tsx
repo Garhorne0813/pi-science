@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { PendingInteraction } from "../../lib/runtime-store";
+import type { PendingInteraction } from "../../lib/agent-runtime";
 import { useTranslation } from "react-i18next";
 
 export function InteractionPrompt({

@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FolderOpen, File, ChevronRight, ChevronDown, RefreshCw, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useUiStore } from "../../lib/store";
+import { useUiStore } from "../../lib/ui";
 import { fileInspectorForPath } from "../../lib/artifacts";
-import { workspaceFiles } from "../../lib/workspace-files";
+import { workspaceFiles } from "../../lib/workspace";
 import { useFeedback } from "../feedback/feedback-context";
 import { FileContextMenu, type ContextPoint, type FileListEntry } from "./FileContextMenu";
-import { useRuntimeStore } from "../../lib/runtime-store";
+import { useRuntimeStore } from "../../lib/agent-runtime";
 
 interface DirState { entries: FileListEntry[]; loading: boolean; error: string | null }
 

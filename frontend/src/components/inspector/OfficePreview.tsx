@@ -11,9 +11,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { cn } from "@/lib/cn";
-import { useScrollMemory } from "@/lib/scrollMemory";
-import type { SheetHtml } from "@/lib/xlsx";
+import { cn } from "@/lib/ui";
+import { useScrollMemory } from "@/lib/ui";
+import type { SheetHtml } from "@/lib/shared/xlsx";
 
 /** Document-neutral canvas: black text, CJK-aware fonts, light gray backdrop. */
 const BASE_CSS = `
@@ -158,7 +158,7 @@ export function XlsxView({ bytes, scrollKey }: { bytes: ArrayBuffer; scrollKey: 
     (async () => {
       try {
         // Dynamic import keeps ExcelJS in a lazy chunk, out of the main bundle.
-        const { workbookSheets } = await import("@/lib/xlsx");
+        const { workbookSheets } = await import("@/lib/shared/xlsx");
         const parsed = await workbookSheets(bytes);
         if (cancelled) return;
         setSheets(parsed);
@@ -237,7 +237,7 @@ export function PptxView({ bytes, scrollKey }: { bytes: ArrayBuffer; scrollKey: 
       try {
         const [{ init }, { normalizePptxForPreview }] = await Promise.all([
           import("pptx-preview"),
-          import("@/lib/pptx"),
+          import("@/lib/shared/pptx"),
         ]);
         if (cancelled) return;
         // Keep this normalization hook separate so provider-specific PPTX

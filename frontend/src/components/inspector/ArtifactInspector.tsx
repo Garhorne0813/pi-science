@@ -1,11 +1,11 @@
 import { useRef, useState } from "react";
 import { Check, ChevronLeft, ChevronRight, Download, X } from "lucide-react";
 import type { ArtifactInspector as ArtifactInspectorT, ArtifactTab } from "../../types/thread";
-import { useScrollMemory } from "@/lib/scrollMemory";
-import { cn } from "@/lib/cn";
+import { useScrollMemory } from "@/lib/ui";
+import { cn } from "@/lib/ui";
 import { CodeViewer } from "@/components/code-viewer/CodeViewer";
 import { resolveArtifactContent } from "@/lib/artifacts";
-import { saveTextWithFeedback } from "@/lib/download";
+import { saveTextWithFeedback } from "@/lib/shared/download";
 
 const TABS: Array<{ id: ArtifactTab; label: string }> = [
   { id: "code", label: "Code" },

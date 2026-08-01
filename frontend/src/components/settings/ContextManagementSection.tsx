@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { SettingsConfig } from "../../lib/settings-types";
+import type { SettingsConfig } from "../../lib/settings";
 
 function clampCompactionThreshold(value: number): number { return Math.min(95, Math.max(50, value)); }
 

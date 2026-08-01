@@ -50,28 +50,14 @@ coverage/
 .pi-science/
 .runtime/
 
-# Project documentation (local only, not versioned)
-ARCHITECTURE.md
-CHANGELOG.md
-
-# Implementation planning documents (local only, not versioned)
-implementation-docs/
-
 # Dev-only runtime data
 .data/
 workspaces/
 .dev-data/
 .dev-workspaces/
 
-# Claude Code planning artifacts (local only)
-.planning/
-
-# Temporary planning documents
-ATOMIC_IMPROVEMENT_PLAN.md
-
 # Local credentials and generated logs
 .env.example
-CODE_REVIEW.md
 *.log
 
 # AI assistant local data

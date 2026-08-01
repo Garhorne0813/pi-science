@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import i18n from "./index";
-import { useUiStore } from "../lib/store";
+import { useUiStore } from "../lib/ui";
 import en from "./locales/en.json";
 import zhHans from "./locales/zh-Hans.json";
 

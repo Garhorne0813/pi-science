@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { INSPECTOR_MAX, INSPECTOR_MIN, useUiStore } from "@/lib/store";
-import { cn } from "@/lib/cn";
+import { INSPECTOR_MAX, INSPECTOR_MIN, useUiStore } from "@/lib/ui";
+import { cn } from "@/lib/ui";
 
 /** Dragging the divider below this pane width closes the pane — the same
  *  snap-shut behaviour as the sidebar. Sits below INSPECTOR_MIN for a clear snap. */

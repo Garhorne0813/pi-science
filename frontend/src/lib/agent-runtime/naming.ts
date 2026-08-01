@@ -2,8 +2,8 @@
  *  sidebar entry in sync with the stored one. */
 
 import type { ThreadBlock } from "../../types/thread";
-import { deriveSessionName, getSessionName, setSessionName } from "../pi-science-client";
-import { visibleUserMessage } from "../file-references";
+import { deriveSessionName, getSessionName, setSessionName } from "../client/pi-science-client";
+import { visibleUserMessage } from "../files";
 import type { Thread } from "./event-fold";
 import { useRuntimeStore } from "./store";
 

@@ -2,8 +2,8 @@ import { Lock } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
-import type { ProjectSummary } from "../../lib/project-knowledge";
-import type { ProjectMemoryOverview } from "../../lib/project-memory";
+import type { ProjectSummary } from "../../lib/knowledge";
+import type { ProjectMemoryOverview } from "../../lib/knowledge";
 import { MetricCard } from "./MetricCard";
 
 export function OverviewTab({ document, summary, memorySummary }: { document: string; summary: ProjectSummary | null; memorySummary: ProjectMemoryOverview | null }) {

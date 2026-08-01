@@ -8,8 +8,8 @@ import {
   getSessionName,
   moveSessionName,
   type SessionInfo,
-} from "../pi-science-client";
-import { replaceBrowserSessionRoute } from "../session-navigation";
+} from "../client/pi-science-client";
+import { replaceBrowserSessionRoute } from "./session-navigation";
 import { emptyThread, resetTurnBuffer } from "./event-fold";
 import { generations, turnState } from "./generations";
 import { resyncCompletedHistory } from "./recovery";

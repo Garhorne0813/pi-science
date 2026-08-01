@@ -2,7 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { SettingsNavItem } from "./ProjectsLayout";
-import { useUiStore } from "../../lib/store";
+import { useUiStore } from "../../lib/ui";
 import i18n from "../../i18n";
 
 function LocationProbe() {

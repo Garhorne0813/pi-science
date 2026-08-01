@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { settingsApi } from "../../lib/settings-api";
-import type { CustomProvider } from "../../lib/settings-types";
+import { settingsApi } from "../../lib/settings";
+import type { CustomProvider } from "../../lib/settings";
 
 export function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, onClose }: { providers: CustomProvider[]; onConfigReload: () => Promise<void>; isOpen: boolean; onOpen: () => void; onClose: () => void }) {
   const { t } = useTranslation();

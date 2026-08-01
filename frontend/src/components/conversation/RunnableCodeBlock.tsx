@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Loader2, Play, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { cn } from "../../lib/cn";
-import { notebookRuntime, type CellResult } from "../../lib/notebook-runtime";
+import { cn } from "../../lib/ui";
+import { notebookRuntime, type CellResult } from "../../lib/notebook";
 
 /** Chat code block with a Claude analysis-tool style "Run" affordance: executes
  *  python on the workspace kernel bridge and shows stdout/result/error inline. */

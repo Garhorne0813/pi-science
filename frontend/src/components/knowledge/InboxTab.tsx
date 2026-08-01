@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Inbox } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { projectKnowledgeApi, type Proposal } from "../../lib/project-knowledge";
+import { projectKnowledgeApi, type Proposal } from "../../lib/knowledge";
 import { EmptyState } from "./EmptyState";
 import { ProposalCard } from "./ProposalCard";
 

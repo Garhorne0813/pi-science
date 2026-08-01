@@ -1,17 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { BookOpen, Play, Square, RefreshCw, ExternalLink, CheckCircle2 } from "lucide-react";
-import { cn } from "../../lib/cn";
-import { useUiStore } from "../../lib/store";
+import { cn } from "../../lib/ui";
+import { useUiStore } from "../../lib/ui";
 import { fileInspectorForPath } from "../../lib/artifacts";
 import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "../../components/layout/WorkspacePage";
 import { useTranslation } from "react-i18next";
-import { timeAgo } from "../../lib/format";
-import { apiRequest } from "../../lib/api";
-import { queryClient } from "../../lib/query-client";
+import { timeAgo } from "../../lib/shared";
+import { apiRequest } from "../../lib/client/api";
+import { queryClient } from "../../lib/client/query-client";
 import { useFeedback } from "../../components/feedback/feedback-context";
-import { useRequiredWorkspaceCwd } from "../../lib/workspace-context";
-import { openJsonEventStream } from "../../lib/event-stream";
+import { useRequiredWorkspaceCwd } from "../../lib/workspace";
+import { openJsonEventStream } from "../../lib/client/event-stream";
 
 interface Notebook {
   path: string; name: string; size: number; modified: string;

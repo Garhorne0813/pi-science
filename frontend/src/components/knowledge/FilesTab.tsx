@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import { FileText, Loader2, Lock, Save, Settings } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { cn } from "../../lib/cn";
+import { cn } from "../../lib/ui";
 import { fileInspectorForPath } from "../../lib/artifacts";
-import { formatFileSize, projectKnowledgeApi, useLogicalFileViews, type ProjectPolicy } from "../../lib/project-knowledge";
-import { useUiStore } from "../../lib/store";
+import { formatFileSize, projectKnowledgeApi, useLogicalFileViews, type ProjectPolicy } from "../../lib/knowledge";
+import { useUiStore } from "../../lib/ui";
 
 export function FilesTab({
   cwd,

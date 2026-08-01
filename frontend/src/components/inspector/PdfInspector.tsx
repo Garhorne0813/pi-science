@@ -3,9 +3,9 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { PdfInspector as PdfInspectorT } from "../../types/thread";
-import { apiRequest } from "@/lib/api";
+import { apiRequest } from "@/lib/client/api";
 import { previewUrl } from "@/lib/files";
-import { pathLeaf } from "@/lib/workspace-path";
+import { pathLeaf } from "@/lib/workspace";
 
 export function PdfInspector({
   data,

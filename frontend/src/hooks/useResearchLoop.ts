@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { projectMemoryApi, projectMemoryKey, type ResearchLoopDetail } from "../lib/project-memory";
-import { queryClient } from "../lib/query-client";
-import { subscribeResearchInvalidation } from "../lib/research-events";
-import { contentDigest, randomIdSuffix } from "../lib/research-identity";
+import { projectMemoryApi, projectMemoryKey, type ResearchLoopDetail } from "../lib/knowledge";
+import { queryClient } from "../lib/client/query-client";
+import { subscribeResearchInvalidation } from "../lib/research";
+import { contentDigest, randomIdSuffix } from "../lib/research";
 import type { ResearchLoopDraft, ResearchStarter } from "../components/conversation/ResearchLoopControls";
 
 /** Research-loop intent → draft → confirm → run lifecycle for one workspace. */

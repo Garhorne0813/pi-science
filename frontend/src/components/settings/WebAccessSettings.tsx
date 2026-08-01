@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Eye, EyeOff, Globe2, Loader2, Save, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { queryClient } from "../../lib/query-client";
-import { settingsApi, webAccessQuery } from "../../lib/settings-api";
-import type { WebAccessConfig } from "../../lib/settings-types";
+import { queryClient } from "../../lib/client/query-client";
+import { settingsApi, webAccessQuery } from "../../lib/settings";
+import type { WebAccessConfig } from "../../lib/settings";
 import { Section } from "./Section";
 
 export function WebAccessSettings() {

@@ -5,7 +5,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { useTranslation } from "react-i18next";
 import { extOf } from "@/lib/artifacts";
-import { cn } from "@/lib/cn";
+import { cn } from "@/lib/ui";
 
 /**
  * Interactive 3D viewer for mesh / CAD-export files (stl, obj, ply, gltf, glb),

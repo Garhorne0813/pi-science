@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { PiScienceClient } from "../pi-science-client";
+import { PiScienceClient } from "./pi-science-client";
 import { installClientTestEnvironment } from "./test-helpers";
 
 

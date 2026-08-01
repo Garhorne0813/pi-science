@@ -1,13 +1,13 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { setSessionName } from "../lib/pi-science-client";
-import { useRuntimeStore } from "../lib/runtime-store";
-import { useUiStore } from "../lib/store";
-import { apiRequest } from "../lib/api";
-import { injectWorkspaceReferences } from "../lib/file-references";
-import { lastCompletedAgentMessageText } from "../lib/message-actions";
-import { parseSuggestions } from "../lib/suggestions";
+import { setSessionName } from "../lib/client/pi-science-client";
+import { useRuntimeStore } from "../lib/agent-runtime";
+import { useUiStore } from "../lib/ui";
+import { apiRequest } from "../lib/client/api";
+import { injectWorkspaceReferences } from "../lib/files";
+import { lastCompletedAgentMessageText } from "../lib/conversation";
+import { parseSuggestions } from "../lib/conversation";
 import { useFeedback } from "../components/feedback/feedback-context";
 import type { ResearchLoopDraft, ResearchStarter } from "../components/conversation/ResearchLoopControls";
 

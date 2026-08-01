@@ -6,8 +6,8 @@ import "./index.css";
 import i18n from "./i18n";
 import { router } from "./app/router";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { useUiStore } from "./lib/store";
-import { queryClient } from "./lib/query-client";
+import { useUiStore } from "./lib/ui";
+import { queryClient } from "./lib/client/query-client";
 import { FeedbackProvider } from "./components/feedback/FeedbackProvider";
 
 const initialUi = useUiStore.getState();

@@ -12,14 +12,14 @@ import {
   writeArtifact,
   type LargeFilePointer,
 } from "@/lib/files";
-import { parseTableFile } from "@/lib/csv";
+import { parseTableFile } from "@/lib/shared";
 import { formatNumber } from "@/i18n/format";
 import { CodeViewer } from "@/components/code-viewer/CodeViewer";
 import { MarkdownViewer } from "@/components/markdown-viewer/MarkdownViewer";
 import { ProvenancePanel } from "./ProvenancePanel";
 import { TablePreview } from "./TablePreview";
 import { TableChart } from "./TableChart";
-import { canChart } from "@/lib/chart";
+import { canChart } from "@/lib/shared";
 const DocxView = lazy(() => import("./OfficePreview").then((module) => ({ default: module.DocxView })));
 const PptxView = lazy(() => import("./OfficePreview").then((module) => ({ default: module.PptxView })));
 const XlsxView = lazy(() => import("./OfficePreview").then((module) => ({ default: module.XlsxView })));
@@ -32,9 +32,9 @@ import { BandView } from "./BandView";
 import { QCodeView } from "./QCodeView";
 import { AnomalyMapView } from "./AnomalyMapView";
 import { PhaseView } from "./PhaseView";
-import { useScrollMemory } from "@/lib/scrollMemory";
-import { cn } from "@/lib/cn";
-import { previewPolicy } from "@/lib/preview-policy";
+import { useScrollMemory } from "@/lib/ui";
+import { cn } from "@/lib/ui";
+import { previewPolicy } from "@/lib/artifacts/preview-policy";
 
 /**
  * Right-pane preview for any workspace file. Strategy (no format conversion):
@@ -548,7 +548,7 @@ function Note({ text }: { text: string }) {
 
 /** Tabular file preview with a Table ↔ Chart toggle. The Chart tab appears only
  *  when the data has a numeric column to plot (P1-5 native chart surface). */
-function TableView({ table }: { table: import("@/lib/csv").ParsedTable }) {
+function TableView({ table }: { table: import("@/lib/shared").ParsedTable }) {
   const { t } = useTranslation();
   const [view, setView] = useState<"table" | "chart">("table");
   const chartable = canChart(table);
