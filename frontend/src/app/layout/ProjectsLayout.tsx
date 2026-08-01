@@ -1,5 +1,5 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { lazy, Suspense, useState, useEffect } from "react";
 import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Sun, Moon, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical } from "lucide-react";
 import { useUiStore } from "../../lib/store";
 import { useRuntimeStore } from "../../lib/runtime-store";
@@ -10,6 +10,9 @@ import { useWorkspaceCwd } from "../../lib/workspace-context";
 import { usePendingProposalCount } from "../../lib/project-knowledge";
 import { cn } from "../../lib/cn";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
+
+// The settings bundle (dialog + five tabs) only loads on first open.
+const SettingsDialog = lazy(() => import("../../components/settings/SettingsDialog").then((m) => ({ default: m.SettingsDialog })));
 import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { workspacePathLeaf } from "../../lib/workspace-path";
@@ -153,6 +156,11 @@ export function ProjectsLayout() {
           </ErrorBoundary>
         </RightPane>
       )}
+
+      {/* Settings dialog — floats above every page, one instance only */}
+      <Suspense fallback={null}>
+        <SettingsDialog />
+      </Suspense>
     </div>
   );
 }
@@ -342,32 +350,24 @@ function SidebarNavItem({ to, label, icon, active, badge }: { to: string; label:
   );
 }
 
-function SettingsNavItem({ cwd, collapsed = false }: { cwd: string | null; collapsed?: boolean }) {
+export function SettingsNavItem({ cwd, collapsed = false }: { cwd: string | null; collapsed?: boolean }) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
-  const location = useLocation();
-  const active = location.pathname.endsWith("/settings");
-  const target = cwd ? `/workspace/${encodeURIComponent(cwd)}/settings` : "/settings";
-  const workspaceHome = cwd ? `/workspace/${encodeURIComponent(cwd)}` : "/";
-  const state = location.state as { settingsReturnTo?: string } | null;
+  const settingsOpen = useUiStore((s) => s.settingsOpen);
+  const openSettings = useUiStore((s) => s.openSettings);
   const handleClick = () => {
-    if (active) {
-      navigate(state?.settingsReturnTo || workspaceHome);
-      return;
-    }
-    navigate(target, { state: { settingsReturnTo: `${location.pathname}${location.search}${location.hash}` } });
+    openSettings(cwd);
     if (window.innerWidth < 768) useUiStore.getState().setSidebarCollapsed(true);
   };
 
   if (collapsed) {
     return (
-      <button onClick={handleClick} className={cn("rounded p-1.5 text-muted transition-colors hover:bg-surface-2 hover:text-text", active && "text-accent")} title={active ? t("nav.backToPrevious") : t("nav.settings")}>
+      <button onClick={handleClick} className={cn("rounded p-1.5 text-muted transition-colors hover:bg-surface-2 hover:text-text", settingsOpen && "text-accent")} title={t("nav.settings")}>
         <Settings size={16} />
       </button>
     );
   }
   return (
-    <button onClick={handleClick} className={cn("flex h-9 min-h-0 w-full items-center gap-2 rounded-input px-2 text-left text-[13px]", active ? "bg-surface-2 font-medium text-text" : "text-text/90 hover:bg-surface-2 hover:text-text")}>
+    <button onClick={handleClick} className={cn("flex h-9 min-h-0 w-full items-center gap-2 rounded-input px-2 text-left text-[13px]", settingsOpen ? "bg-surface-2 font-medium text-text" : "text-text/90 hover:bg-surface-2 hover:text-text")}>
       <span className="shrink-0 text-muted"><Settings size={16} /></span>
       <span className="min-w-0 flex-1 truncate">{t("nav.settings")}</span>
     </button>

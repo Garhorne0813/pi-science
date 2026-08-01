@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { cn } from "../lib/cn";
 import { matchCommands } from "../lib/slash-commands";
+import { useUiStore } from "../lib/store";
 
 interface Props {
   input: string;
@@ -18,6 +19,8 @@ export function SlashCommandMenu({ input, onSelect, onDismiss }: Props) {
   useEffect(() => {
     if (commands.length === 0) return undefined;
     const handleKeyDown = (event: KeyboardEvent) => {
+      // The settings modal overlays the composer; never swallow its keys.
+      if (useUiStore.getState().settingsOpen) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
