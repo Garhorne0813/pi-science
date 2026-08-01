@@ -563,7 +563,7 @@ export class NodeSessionService {
         if (current !== runtime || !runtime.operationPending) return;
         const state = await runtime.process.sendCommand("get_state");
         const data = state.data && typeof state.data === "object" ? state.data as Record<string, unknown> : {};
-        const active = Boolean(data.isStreaming) || Boolean(data.isCompacting) || Number(data.pendingMessageCount ?? 0) > 0;
+        const active = Boolean(data.busy) || Boolean(data.isStreaming) || Boolean(data.isCompacting) || Number(data.pendingMessageCount ?? 0) > 0;
         if (state.success && active && Date.now() < (runtime.operationDeadline ?? 0)) {
           runtime.busy = true;
           this.scheduleOperationReconciliation(runtime, false);
@@ -768,7 +768,7 @@ export class NodeSessionService {
     runtime.lastState = data;
     runtime.lastStateAt = Date.now();
     if (typeof data.sessionId === "string") runtime.activeSessionId = data.sessionId;
-    runtime.busy = Boolean(runtime.operationPending) || Boolean(data.isStreaming) || Boolean(data.isCompacting) || Number(data.pendingMessageCount ?? 0) > 0;
+    runtime.busy = Boolean(runtime.operationPending) || Boolean(data.busy) || Boolean(data.isStreaming) || Boolean(data.isCompacting) || Number(data.pendingMessageCount ?? 0) > 0;
     const model = data.model as { provider?: unknown; id?: unknown } | undefined;
     if (model?.provider && model.id) runtime.config.model = `${model.provider}/${model.id}`;
     if (typeof data.thinkingLevel === "string") runtime.config.thinking = data.thinkingLevel;

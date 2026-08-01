@@ -39,10 +39,10 @@ beforeEach(async () => {
     '  const request = JSON.parse(line);',
     '  if (log) fs.appendFileSync(log, JSON.stringify(request) + "\\n");',
     '  if (!request.id) return;',
-    '  if (request.type === "get_state") { stateRequests++; if (process.env.FAKE_PI_MODE === "restart-fail-once" && startNumber === 2) return; if (process.env.FAKE_PI_MODE === "new-session-state-fails" && sessionId.startsWith("generated-")) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (Number(process.env.FAKE_PI_FAIL_STATE_AFTER || 0) > 0 && stateRequests > Number(process.env.FAKE_PI_FAIL_STATE_AFTER)) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); return respond(request, { data: { sessionId, isStreaming: busy, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }',
+    '  if (request.type === "get_state") { stateRequests++; if (process.env.FAKE_PI_MODE === "restart-fail-once" && startNumber === 2) return; if (process.env.FAKE_PI_MODE === "new-session-state-fails" && sessionId.startsWith("generated-")) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (Number(process.env.FAKE_PI_FAIL_STATE_AFTER || 0) > 0 && stateRequests > Number(process.env.FAKE_PI_FAIL_STATE_AFTER)) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); const orbitBusyOnly = process.env.FAKE_PI_MODE === "orbit-busy-without-agent-start"; return respond(request, { data: { sessionId, busy, isStreaming: orbitBusyOnly ? false : busy, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }',
     '  if (request.type === "switch_session") { sessionId = JSON.parse(fs.readFileSync(request.sessionPath, "utf8").split("\\n")[0]).id; return respond(request); }',
     '  if (request.type === "new_session" || request.type === "clone" || request.type === "fork") { sessionId = `generated-${++counter}-${process.pid}`; return respond(request); }',
-    '  if (request.type === "prompt") { if (process.env.FAKE_PI_MODE === "prompt-timeout") return; busy = true; respond(request); process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); return; }',
+    '  if (request.type === "prompt") { if (process.env.FAKE_PI_MODE === "prompt-timeout") return; busy = true; respond(request); if (process.env.FAKE_PI_MODE !== "orbit-busy-without-agent-start") process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); return; }',
     '  if (request.type === "compact") { if (process.env.FAKE_PI_MODE === "compact-timeout") return; return respond(request); }',
     '  if (request.type === "abort") { busy = false; respond(request); process.stdout.write(JSON.stringify({ type: "agent_settled", handledWithoutTurn: true }) + "\\n"); return; }',
     '  if (request.type === "get_commands") return process.env.FAKE_PI_MODE === "cancel-commands" ? respond(request, { data: { cancelled: true } }) : respond(request, { data: { commands: [{ name: "review", source: "skill" }] } });',
@@ -256,6 +256,24 @@ describe("Node session lifecycle", () => {
       await expect(service.create({ cwd, config: { skills: [], extensions: [] } })).resolves.toHaveProperty("id");
       await service.shutdownAll();
     }
+  });
+
+  it("uses Pi Orbit runtime busy state when the agent_start event is delayed", async () => {
+    process.env.FAKE_PI_MODE = "orbit-busy-without-agent-start";
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-orbit-busy");
+    const publish = vi.spyOn(conversationEventHub, "publish");
+    await service.resume("session-orbit-busy", cwd);
+
+    await expect(service.command("session-orbit-busy", cwd, "prompt", { message: "test" })).resolves.toMatchObject({ success: true });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(publish).not.toHaveBeenCalledWith(cwd, "session-orbit-busy", expect.objectContaining({
+      message: "The prompt was accepted but the Pi runtime did not start an agent turn.",
+    }));
+    await service.command("session-orbit-busy", cwd, "abort");
+    publish.mockRestore();
+    await service.shutdownAll();
   });
 
   it("rolls back a new session when configuration fails", async () => {
