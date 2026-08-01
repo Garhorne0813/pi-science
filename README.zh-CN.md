@@ -115,7 +115,7 @@ Pi-Science 可以直接在浏览器中渲染常见科研格式。
 
 Pi-Science 使用 local-first 控制面、一个承载隔离 agent runtime 的共享 Pi Orbit
 Web Host，以及按需启动的科学计算服务。进程归属、服务边界、工作区状态、生命周期和
-安全设计详见[架构文档](docs/architecture.md)。
+安全设计详见[架构文档](docs/architecture.zh-CN.md)。
 
 ## 斜杠命令
 
@@ -178,7 +178,7 @@ npm run test:uat:office
 
 ## 文档
 
-- [架构文档](docs/architecture.md)
+- [架构文档](docs/architecture.zh-CN.md)
 - [研究循环架构（ADR）](docs/adr-research-loop-subagents.md)
 - 运行栈启动后可查看交互式 API 参考
 

@@ -1,5 +1,7 @@
 # Pi-Science Architecture
 
+[简体中文](architecture.zh-CN.md)
+
 This document describes the current Pi-Science runtime architecture. It is the
 canonical reference for process ownership, runtime isolation, service
 boundaries, workspace state, and lifecycle behavior.
