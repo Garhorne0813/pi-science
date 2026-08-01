@@ -185,8 +185,8 @@ describe("native Node conversation routes", () => {
       process.env.FAKE_PI_MODE = mode;
       const cwd = await workspaceWithSessions(`session-${mode}`);
       const server = app();
-      // Spawn Pi first so the short-circuit doesn't fire; the test verifies
-      // that runtime errors and cancellations are properly propagated.
+      // Spawn Pi first so the test verifies that runtime errors and
+      // cancellations are properly propagated.
       await server.inject({ method: "POST", url: `/api/sessions/session-${mode}/resume?cwd=${encodeURIComponent(cwd)}` });
       const response = await server.inject({ method: "GET", url: `/api/sessions/session-${mode}/commands?cwd=${encodeURIComponent(cwd)}` });
       expect(response.statusCode).toBe(statusCode);

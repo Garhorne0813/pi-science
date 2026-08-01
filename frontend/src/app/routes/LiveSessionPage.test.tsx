@@ -11,7 +11,7 @@
  *   b. IME composition Enter guard (including the compositionend setTimeout(0))
  *   c. turn-completion effects (auto-preview + follow-up suggestions state machine)
  *   d. model/thinking optimistic update and rollback on save failure
- *   e. slash-command dispatcher (/compact, /name, unknown falls through to send)
+ *   e. slash-command dispatcher (/compact, /export, unknown falls through to send)
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -44,7 +44,6 @@ import { FeedbackContext } from "../../components/feedback/feedback-context";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
 import { queryClient } from "../../lib/client/query-client";
-import { getSessionName } from "../../lib/client/pi-science-client";
 import { resetDynamicCommands } from "../../lib/conversation";
 import i18n from "../../i18n";
 import type { ThreadBlock } from "../../types/thread";
@@ -501,6 +500,28 @@ describe("model change optimistic rollback", () => {
 
 
 describe("slash-command dispatcher", () => {
+  it("keeps the slash draft when Escape closes the command menu", async () => {
+    await renderReady();
+    act(() => { useRuntimeStore.getState().setDraft("/"); });
+
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(textarea()).toHaveValue("/");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("clears the composer draft when the conversation changes", async () => {
+    await renderReady();
+    act(() => { useRuntimeStore.getState().setDraft("/skill:review"); });
+    expect(textarea()).toHaveValue("/skill:review");
+
+    act(() => { useRuntimeStore.setState({ activeSessionId: "s2" }); });
+
+    await waitFor(() => expect(textarea()).toHaveValue(""));
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
   it("/compact posts to the compact endpoint and reports it without sending a prompt", async () => {
     const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sendPrompt });
@@ -512,24 +533,30 @@ describe("slash-command dispatcher", () => {
     await waitFor(() => expect(screen.getByText("Session compacted")).toBeInTheDocument());
     const compactCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/compact"));
     expect(compactCall).toBeDefined();
-    expect(String(compactCall?.[0])).toBe(`/api/sessions/${SESSION_ID}/compact?cwd=${CWD}`);
-    expect((compactCall?.[1] as RequestInit).method).toBe("POST");
+    if (!compactCall) throw new Error("compact request was not sent");
+    expect(String(compactCall[0])).toBe(`/api/sessions/${SESSION_ID}/compact?cwd=${CWD}`);
+    expect((compactCall[1] as RequestInit).method).toBe("POST");
     expect(sendPrompt).not.toHaveBeenCalled();
     expect(useRuntimeStore.getState().draft).toBe("");
   });
 
-  it("/name stores the session name locally and reports it (no toast)", async () => {
+  it("/export opens the selected session format without sending a prompt", async () => {
     const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sendPrompt });
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
     await renderReady();
-    act(() => { useRuntimeStore.getState().setDraft("/name Protein folding run"); });
+    act(() => { useRuntimeStore.getState().setDraft("/export jsonl"); });
 
     fireEvent.click(sendButton());
 
-    await waitFor(() => expect(screen.getByText("Session renamed to Protein folding run")).toBeInTheDocument());
-    expect(getSessionName(CWD, SESSION_ID)).toBe("Protein folding run");
+    await waitFor(() => expect(open).toHaveBeenCalledWith(
+      `/api/sessions/${SESSION_ID}/export?cwd=${CWD}&format=jsonl`,
+      "_blank",
+      "noopener,noreferrer",
+    ));
     expect(sendPrompt).not.toHaveBeenCalled();
     expect(useRuntimeStore.getState().draft).toBe("");
+    open.mockRestore();
   });
 
   it("an unknown slash command falls through to a normal send", async () => {
@@ -746,11 +773,9 @@ describe("conversation nav rail and scroll-to-latest", () => {
 });
 
 describe("header settings entry", () => {
-  it("opens the settings dialog with the workspace scope from the gear button", async () => {
+  it("does not render a settings button in the header", async () => {
     useUiStore.setState({ settingsOpen: false });
     await renderReady();
-    fireEvent.click(screen.getByLabelText("Settings"));
-    expect(useUiStore.getState().settingsOpen).toBe(true);
-    expect(useUiStore.getState().settingsScope).toBe(CWD);
+    expect(screen.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
   });
 });

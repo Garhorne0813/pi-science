@@ -236,6 +236,17 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
+  it("activates a persisted session before loading command metadata", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-a");
+
+    await expect(service.command("session-a", cwd, "get_commands")).resolves.toMatchObject({
+      data: { commands: [{ name: "review", source: "skill" }] },
+    });
+    expect(service.activeCount).toBe(1);
+    await service.shutdownAll();
+  });
+
   it("reports configuration reload failures instead of silently succeeding", async () => {
     const service = testService();
     const cwd = await workspaceWithSessions("session-a");

@@ -6,21 +6,30 @@ export interface SlashCommand {
   description: string;
   argumentHint?: string;
   immediate?: boolean;
-  group: "session" | "workspace" | "utility" | "skill" | "extension" | "prompt";
+  group: "session" | "utility" | "skill";
   source?: string;
 }
 
 const BUILTIN_COMMANDS: SlashCommand[] = [
-  { name: "new", description: "Start a new session", group: "session", immediate: true },
-  { name: "name", description: "Set session display name", argumentHint: "<name>", group: "session" },
-  { name: "model", description: "Switch the active model", argumentHint: "<provider/model>", group: "session" },
   { name: "compact", description: "Compact the current session", group: "session", immediate: true },
-  { name: "session", description: "Show session information", group: "session", immediate: true },
-  { name: "copy", description: "Copy the last agent reply", group: "utility", immediate: true },
   { name: "export", description: "Export the session", argumentHint: "<html|jsonl>", group: "utility" },
 ];
 
 let dynamicCommands: SlashCommand[] = [];
+const dynamicCommandListeners = new Set<() => void>();
+
+function notifyDynamicCommands(): void {
+  dynamicCommandListeners.forEach((listener) => listener());
+}
+
+export function subscribeDynamicCommands(listener: () => void): () => void {
+  dynamicCommandListeners.add(listener);
+  return () => dynamicCommandListeners.delete(listener);
+}
+
+export function getDynamicCommandsSnapshot(): SlashCommand[] {
+  return dynamicCommands;
+}
 
 export async function fetchDynamicCommands(sessionId: string, cwd: string): Promise<void> {
   try {
@@ -29,32 +38,39 @@ export async function fetchDynamicCommands(sessionId: string, cwd: string): Prom
       queryFn: () => apiRequest<{ commands?: SlashCommand[] }>(`/api/sessions/${encodeURIComponent(sessionId)}/commands?${new URLSearchParams({ cwd })}`),
       staleTime: 0,
     });
-    dynamicCommands = (Array.isArray(data.commands) ? data.commands : []).map((command: SlashCommand) => ({
-      name: command.name,
-      description: command.description || "",
-      argumentHint: command.argumentHint,
-      source: command.source,
-      group: command.source === "skill" ? "skill" : command.source === "extension" ? "extension" : "prompt",
-    }));
+    dynamicCommands = (Array.isArray(data.commands) ? data.commands : [])
+      .filter((command: SlashCommand) => command.source === "skill" && command.name.startsWith("skill:"))
+      .map((command: SlashCommand) => ({
+        name: command.name,
+        description: command.description || "",
+        argumentHint: command.argumentHint,
+        source: command.source,
+        group: "skill" as const,
+      }));
+    notifyDynamicCommands();
   } catch (error) {
     // An HTTP error means the session has no command list to offer yet — keep the
     // ones already loaded, as the pre-Query code did by returning on `!response.ok`.
-    if (!(error instanceof ApiError)) dynamicCommands = [];
+    if (!(error instanceof ApiError)) {
+      dynamicCommands = [];
+      notifyDynamicCommands();
+    }
   }
 }
 
 export function resetDynamicCommands(): void {
   dynamicCommands = [];
+  notifyDynamicCommands();
 }
 
-export function allCommands(): SlashCommand[] {
+export function allCommands(commands = dynamicCommands): SlashCommand[] {
   const builtins = new Set(BUILTIN_COMMANDS.map((command) => command.name));
-  return [...BUILTIN_COMMANDS, ...dynamicCommands.filter((command) => !builtins.has(command.name))];
+  return [...BUILTIN_COMMANDS, ...commands.filter((command) => !builtins.has(command.name))];
 }
 
-export function matchCommands(prefix: string): SlashCommand[] {
+export function matchCommands(prefix: string, commands = dynamicCommands): SlashCommand[] {
   const value = prefix.toLowerCase();
-  return allCommands().filter((command) => (
+  return allCommands(commands).filter((command) => (
     !value
     || command.name.toLowerCase().startsWith(value)
     || command.description.toLowerCase().includes(value)

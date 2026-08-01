@@ -164,6 +164,7 @@ describe("Pi runtime custom provider materialization", () => {
     expect(options.args).not.toContain("rpc");
     expect(options.args).toContain("--web-app-managed");
     expect(options.args).toContain("--no-session");
+    expect(options.args).toContain("--approve");
     expect(options.args).not.toContain("--session-dir");
     expect(options.args).not.toContain("--auth-token");
     expect(options.web?.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);

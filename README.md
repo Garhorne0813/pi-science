@@ -124,14 +124,11 @@ Type `/` in the conversation composer to open the command menu.
 
 | Command | Action |
 |---|---|
-| `/new` | Create a conversation |
-| `/model <provider/model>` | Switch the active model |
 | `/compact` | Compact conversation context |
-| `/name <name>` | Rename the current conversation |
-| `/copy` | Copy the latest agent response |
 | `/export <html\|jsonl>` | Export conversation history |
-| `/session` | Show session information |
-| `/skill:<name>` | Invoke a workspace skill through the agent |
+| `/skill:<name>` | Invoke a dynamically discovered workspace skill |
+
+Pi-Science-managed workspaces trust `.pi/skills/` by default; these project-built-in skills participate in Pi command discovery.
 
 ## Model Configuration
 

@@ -125,13 +125,14 @@ export class NodeSessionService {
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
     return this.withLock(`${cwd}\0${sessionId}`, async () => {
-      // Short-circuit for commands that don't need a running Pi process
-      if (type === "get_commands" || type === "abort") {
+      // Abort is safe to acknowledge when there is no live runtime. Command
+      // discovery must activate the persisted session so project skills and
+      // other runtime-provided metadata are available after a server restart.
+      if (type === "abort") {
         const runtime = this.runtimes.get(runtimeKey(cwd, sessionId));
         if (!runtime) {
           const sessionPath = await this.repository.findPath(cwd, sessionId);
           if (!sessionPath) return { success: false, code: "not_found", error: "session not found in this workspace" };
-          if (type === "get_commands") return { success: true, data: { commands: [] } };
           if (type === "abort") return { success: true };
         }
       }
