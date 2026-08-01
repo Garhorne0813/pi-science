@@ -277,6 +277,39 @@ describe("subagent research loop", () => {
     }, Date.parse("2026-01-01T00:00:20.000Z"))).toBe("model_token_budget_exhausted");
   });
 
+  it("waits for an active drive to finish during shutdown", async () => {
+    const cwd = await workspace();
+    const inner = new FakeRunner([0.95]);
+    let markStarted = () => {};
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    let releaseRun = () => {};
+    const blocked = new Promise<void>((resolve) => { releaseRun = resolve; });
+    const runner: ResearchSubagentRunner = {
+      async run(request) {
+        markStarted();
+        await blocked;
+        return inner.run(request);
+      },
+      status: () => inner.status(),
+      cancel: () => inner.cancel(),
+      shutdown: () => inner.shutdown(),
+    };
+    const coordinator = new ResearchLoopCoordinator(jobCoordinator(), runner);
+    coordinators.push(coordinator);
+    const loop = await configuredLoop(coordinator, cwd);
+
+    await coordinator.action(cwd, loop.loop_id, "start");
+    await started;
+    let shutdownSettled = false;
+    const shutdown = coordinator.shutdown().then(() => { shutdownSettled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(shutdownSettled).toBe(false);
+
+    releaseRun();
+    await shutdown;
+    expect(shutdownSettled).toBe(true);
+  });
+
   it("automatically proposes, executes, evaluates, diagnoses, and stops at a deterministic target", async () => {
     const cwd = await workspace();
     const runner = new FakeRunner([0.4, 0.95]);

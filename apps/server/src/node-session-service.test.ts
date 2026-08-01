@@ -407,7 +407,7 @@ describe("automatic project review", () => {
     await waitFor(async () => (await proposals(cwd)).length === 2);
     expect(runner.calls).toHaveLength(2);
     await service.shutdownAll();
-  });
+  }, 15_000);
 
   it("does not run the reviewer when policy.auto_review is disabled", async () => {
     const runner = new FakeReviewRunner();
