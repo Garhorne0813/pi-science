@@ -27,7 +27,7 @@ async function fakeRuntime(): Promise<{ cwd: string; command: string; args: stri
   return { cwd, command: process.execPath, args: [script] };
 }
 
-async function fakeWebRuntime(createFailure?: boolean): Promise<{
+async function fakeWebRuntime(createFailure = false, initialTrustDecision: boolean | null = null): Promise<{
   cwd: string;
   command: string;
   args: string[];
@@ -51,7 +51,7 @@ async function fakeWebRuntime(createFailure?: boolean): Promise<{
     'import http from "node:http";',
     'const token = process.env.FAKE_WEB_TOKEN;',
     'let counter = 0;',
-    'let trustDecision = null;',
+    `let trustDecision = ${JSON.stringify(initialTrustDecision)};`,
     'const runtimes = new Map();',
     'const clients = new Map();',
     'function json(response, status, value) { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); }',
@@ -175,6 +175,17 @@ describe("Node Pi Orbit adapter", () => {
       status: 422,
       payload: { diagnostics: [{ type: "error", message: "broken skill" }] },
     });
+
+    await manager.shutdownAll();
+    await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it("defaults a legacy untrusted workspace to trusted", async () => {
+    const manager = new PiManager();
+    managers.push(manager);
+    const runtime = await fakeWebRuntime(false, false);
+
+    await expect(manager.start("legacy-untrusted-workspace", runtime)).resolves.toBeDefined();
 
     await manager.shutdownAll();
     await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

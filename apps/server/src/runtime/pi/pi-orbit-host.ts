@@ -172,7 +172,10 @@ export class PiOrbitHost extends EventEmitter {
     const statusResponse = await this.request("GET", `/api/project-trust?${query}`, undefined, timeoutMs);
     if (!statusResponse.ok) throw await this.requestError(statusResponse);
     const status = await statusResponse.json() as { cwd?: unknown; required?: unknown; decision?: unknown };
-    if (status.required !== true || typeof status.decision === "boolean") return;
+    // Managed Pi Science workspaces treat their .pi/skills/ directory as
+    // builtin project assets, so an unset or legacy false decision is trusted
+    // automatically. An existing true decision is already in the desired state.
+    if (status.required !== true || status.decision === true) return;
     const canonicalCwd = typeof status.cwd === "string" ? status.cwd : cwd;
     const decisionResponse = await this.request("PUT", "/api/project-trust", { cwd: canonicalCwd, decision: true }, timeoutMs);
     if (!decisionResponse.ok) throw await this.requestError(decisionResponse);

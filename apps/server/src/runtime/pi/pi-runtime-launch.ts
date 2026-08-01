@@ -48,6 +48,9 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
   args.push("--mode", useRpcMode ? "rpc" : "web");
   if (useRpcMode) args.push("--session-dir", sessionDir);
   else args.push("--host", "127.0.0.1", "--port", String(webPort), "--web-app-managed", "--no-session");
+  // Pi Science workspaces own their .pi/skills/ resources; trust them by
+  // default so project-built-in skills are available to the managed runtime.
+  args.push("--approve");
   args.push("--no-extensions");
   if (effectiveModel) args.push("--model", effectiveModel);
   if (effectiveThinking) args.push("--thinking", effectiveThinking);

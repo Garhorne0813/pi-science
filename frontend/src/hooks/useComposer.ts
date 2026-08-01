@@ -1,13 +1,10 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { setSessionName } from "../lib/client/pi-science-client";
 import { useRuntimeStore } from "../lib/agent-runtime";
 import { useUiStore } from "../lib/ui";
 import { apiRequest } from "../lib/client/api";
 import { injectWorkspaceReferences } from "../lib/files";
-import { lastCompletedAgentMessageText } from "../lib/conversation";
-import { parseSuggestions } from "../lib/conversation";
 import { useFeedback } from "../components/feedback/feedback-context";
 import type { ResearchLoopDraft, ResearchStarter } from "../components/conversation/ResearchLoopControls";
 
@@ -17,8 +14,8 @@ import type { ResearchLoopDraft, ResearchStarter } from "../components/conversat
  */
 export function useComposer(params: {
   cwd: string;
+  conversationKey?: string | null;
   selectedModel: string;
-  onModelCommand: (model: string) => void;
   reviewingProject: boolean;
   setReviewNotice: (notice: string) => void;
   research: {
@@ -27,16 +24,14 @@ export function useComposer(params: {
     intent: (text: string) => Promise<{ kind: "draft" } | { kind: "conversation"; message: string } | null>;
   };
 }) {
-  const { cwd, selectedModel, onModelCommand, reviewingProject, setReviewNotice, research } = params;
+  const { cwd, conversationKey = null, selectedModel, reviewingProject, setReviewNotice, research } = params;
   const { t } = useTranslation();
   const { toast } = useFeedback();
   const navigate = useNavigate();
   const location = useLocation();
-  const thread = useRuntimeStore((s) => s.thread);
   const working = useRuntimeStore((s) => s.working);
   const sendPrompt = useRuntimeStore((s) => s.sendPrompt);
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
-  const createNewSession = useRuntimeStore((s) => s.createNewSession);
   const input = useRuntimeStore((s) => s.draft);
   const setInput = useRuntimeStore((s) => s.setDraft);
   const [files, setFiles] = useState<File[]>([]);
@@ -53,6 +48,18 @@ export function useComposer(params: {
     [allWorkspaceReferences, cwd],
   );
   const clearWorkspaceReferences = useUiStore((state) => state.clearWorkspaceReferences);
+  const composerContextRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const composerContext = `${cwd}\0${conversationKey ?? ""}\0${activeSessionId ?? ""}`;
+    const previousContext = composerContextRef.current;
+    composerContextRef.current = composerContext;
+    if (previousContext !== null && previousContext !== composerContext) {
+      setInput("");
+      setFiles([]);
+      clearWorkspaceReferences(cwd);
+    }
+  }, [activeSessionId, clearWorkspaceReferences, conversationKey, cwd, setInput]);
 
   const uploadFiles = useCallback(async (fileList: FileList | File[]) => {
     const arr = Array.from(fileList);
@@ -76,35 +83,10 @@ export function useComposer(params: {
     if (!match) return false;
     const [, name, rawArgs = ""] = match;
     const args = rawArgs.trim();
-    if (name === "new") {
-      const newId = await createNewSession();
-      navigate(`/workspace/${encodeURIComponent(cwd)}/session/${newId}`);
-      return true;
-    }
-    if (name === "name") {
-      if (activeSessionId && args) {
-        setSessionName(cwd, activeSessionId, args);
-        setReviewNotice(`Session renamed to ${args}`);
-      }
-      return true;
-    }
-    if (name === "model") {
-      if (args) await onModelCommand(args);
-      return true;
-    }
     if (name === "compact") {
       if (!activeSessionId) return true;
       await apiRequest(`/api/sessions/${encodeURIComponent(activeSessionId)}/compact?${new URLSearchParams({ cwd })}`, { method: "POST" });
       setReviewNotice("Session compacted");
-      return true;
-    }
-    if (name === "session") {
-      setReviewNotice(activeSessionId ? `Session ${activeSessionId.slice(0, 8)}` : "No active session");
-      return true;
-    }
-    if (name === "copy") {
-      const text = parseSuggestions(lastCompletedAgentMessageText(thread.blocks)).clean;
-      if (text && navigator.clipboard) await navigator.clipboard.writeText(text);
       return true;
     }
     if (name === "export") {
@@ -151,8 +133,8 @@ export function useComposer(params: {
     void sendPrompt(message)
       .then((sentSessionId) => {
         // A first prompt on a workspace landing route (no :sessionId segment)
-        // creates the session lazily. Mirror the /new command and adopt the new
-        // session id in the URL; otherwise the route stays on the bare
+        // creates the session lazily. Adopt the new session id in the URL;
+        // otherwise the route stays on the bare
         // workspace path and a later connect() without a sessionId clears the
         // thread back to the blank composer.
         if (sentSessionId && !location.pathname.match(/\/session\/[^/]+$/)) {

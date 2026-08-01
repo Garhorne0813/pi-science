@@ -123,14 +123,11 @@ Web Host，以及按需启动的科学计算服务。进程归属、服务边界
 
 | 命令 | 作用 |
 |---|---|
-| `/new` | 创建新对话 |
-| `/model <provider/model>` | 切换当前模型 |
 | `/compact` | 压缩对话上下文 |
-| `/name <name>` | 重命名当前对话 |
-| `/copy` | 复制最近一条智能体回复 |
 | `/export <html\|jsonl>` | 导出对话历史 |
-| `/session` | 显示 session 信息 |
-| `/skill:<name>` | 通过智能体调用工作区技能 |
+| `/skill:<name>` | 调用动态发现的工作区技能 |
+
+Pi-Science 托管的工作区默认信任 `.pi/skills/`；其中的项目内置 skills 会参与 Pi 的命令发现。
 
 ## 模型配置
 
