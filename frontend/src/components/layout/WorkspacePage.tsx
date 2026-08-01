@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 
-import { cn } from "../../lib/cn";
+import { cn } from "../../lib/ui";
 
 export function WorkspacePage({ children, className }: { children: ReactNode; className?: string }) {
   return (

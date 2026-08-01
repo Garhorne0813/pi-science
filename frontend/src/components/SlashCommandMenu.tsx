@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { cn } from "../lib/cn";
-import { matchCommands } from "../lib/slash-commands";
-import { useUiStore } from "../lib/store";
+import { cn } from "../lib/ui";
+import { matchCommands } from "../lib/conversation";
+import { useUiStore } from "../lib/ui";
 
 interface Props {
   input: string;

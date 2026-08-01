@@ -10,7 +10,7 @@ import {
   moveSessionName,
   type HistoryMessage,
   type SessionInfo,
-} from "../pi-science-client";
+} from "../client/pi-science-client";
 import { appendRuntimeError, isMissingSessionError } from "./errors";
 import { emptyThread, mergeHistoryWithLive, resetTurnBuffer, threadFromMessages } from "./event-fold";
 import { generations, turnState } from "./generations";

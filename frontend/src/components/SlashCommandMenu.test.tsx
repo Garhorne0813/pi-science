@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { SlashCommandMenu } from "./SlashCommandMenu";
-import { useUiStore } from "../lib/store";
+import { useUiStore } from "../lib/ui";
 
 function renderMenu() {
   const onDismiss = vi.fn();

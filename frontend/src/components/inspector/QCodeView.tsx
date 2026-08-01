@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { AlertTriangle, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { parseQCode, segmentsFor, type QCodeParsed } from "@/lib/viewers/qcode";
-import { cn } from "@/lib/cn";
+import { cn } from "@/lib/ui";
 
 /**
  * Qualitative-coding two-way traceback viewer (P1-3, social science). Renders

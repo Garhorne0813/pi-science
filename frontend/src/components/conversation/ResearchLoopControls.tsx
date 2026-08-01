@@ -1,6 +1,6 @@
 import { BarChart3, Check, FlaskConical, Loader2, Pause, Play, RotateCcw, X } from "lucide-react";
-import { cn } from "../../lib/cn";
-import type { ExperienceRecord, ResearchLoop, ResearchTaskType } from "../../lib/project-memory";
+import { cn } from "../../lib/ui";
+import type { ExperienceRecord, ResearchLoop, ResearchTaskType } from "../../lib/knowledge";
 import { useTranslation } from "react-i18next";
 
 export type ResearchStarter = ResearchTaskType;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { cn } from "../../lib/cn";
+import { cn } from "../../lib/ui";
 import { FeedbackContext, type ConfirmOptions, type ToastTone } from "./feedback-context";
 
 type Toast = { id: number; message: string; tone: ToastTone };

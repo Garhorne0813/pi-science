@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Play, Check, X, Loader2, ChevronDown, ChevronRight } from "lucide-react";
-import { cn } from "../../lib/cn";
+import { cn } from "../../lib/ui";
 import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "../../components/layout/WorkspacePage";
 import { useTranslation } from "react-i18next";
-import { timeAgo } from "../../lib/format";
-import { queryClient } from "../../lib/query-client";
+import { timeAgo } from "../../lib/shared";
+import { queryClient } from "../../lib/client/query-client";
 import { runLogQuery, runsQuery } from "../../lib/runs";
 import { useFeedback } from "../../components/feedback/feedback-context";
-import { useRequiredWorkspaceCwd } from "../../lib/workspace-context";
+import { useRequiredWorkspaceCwd } from "../../lib/workspace";
 
 export function RunsPage() {
   const { t } = useTranslation();

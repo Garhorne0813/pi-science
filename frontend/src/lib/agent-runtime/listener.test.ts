@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { useRuntimeStore } from "../runtime-store";
+import { useRuntimeStore } from "./index";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
 

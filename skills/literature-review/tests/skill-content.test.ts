@@ -14,7 +14,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { catalog, parseSkill, validateDirectory } from "../../../apps/server/src/skill-catalog.js";
+import { catalog, parseSkill, validateDirectory } from "../../../apps/server/src/catalog/skill-catalog.js";
 
 const SKILL_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SKILL_MD = join(SKILL_DIR, "SKILL.md");

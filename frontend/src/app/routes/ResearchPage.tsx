@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FlaskConical, Loader2, Pause, Play, X } from "lucide-react";
 import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "../../components/layout/WorkspacePage";
-import { projectMemoryApi, useResearchLoopDetail, useResearchLoops } from "../../lib/project-memory";
-import { subscribeResearchInvalidation } from "../../lib/research-events";
-import { cn } from "../../lib/cn";
+import { projectMemoryApi, useResearchLoopDetail, useResearchLoops } from "../../lib/knowledge";
+import { subscribeResearchInvalidation } from "../../lib/research";
+import { cn } from "../../lib/ui";
 import { useTranslation } from "react-i18next";
-import { useRequiredWorkspaceCwd } from "../../lib/workspace-context";
+import { useRequiredWorkspaceCwd } from "../../lib/workspace";
 
 export function ResearchPage() {
   const { t } = useTranslation();

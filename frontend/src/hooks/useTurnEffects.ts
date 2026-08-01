@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { useUiStore } from "../lib/store";
+import { useUiStore } from "../lib/ui";
 import { extractArtifactRefs, refToArtifactBlock, fileInspectorFromBlock } from "../lib/artifacts";
-import { pickAutoPreviewArtifact } from "../lib/artifact-autopreview";
-import { parseSuggestions } from "../lib/suggestions";
+import { pickAutoPreviewArtifact } from "../lib/artifacts/artifact-autopreview";
+import { parseSuggestions } from "../lib/conversation";
 import type { ThreadBlock } from "../types/thread";
 
 /**

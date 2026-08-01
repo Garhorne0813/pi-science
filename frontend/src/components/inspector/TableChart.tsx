@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { analyzeColumns, defaultChartSpec, type ChartType } from "@/lib/chart";
-import type { ParsedTable } from "@/lib/csv";
-import { cn } from "@/lib/cn";
+import { analyzeColumns, defaultChartSpec, type ChartType } from "@/lib/shared";
+import type { ParsedTable } from "@/lib/shared";
+import { cn } from "@/lib/ui";
 
 /**
  * Native chart for a parsed table (P1-5): plots numeric columns with the app's

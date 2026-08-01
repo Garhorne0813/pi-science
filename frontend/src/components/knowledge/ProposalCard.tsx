@@ -3,8 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Loader2, Pencil, Save, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { cn } from "../../lib/cn";
-import { KNOWLEDGE_LABELS, projectKnowledgeApi, type FileOperation, type Proposal } from "../../lib/project-knowledge";
+import { cn } from "../../lib/ui";
+import { KNOWLEDGE_LABELS, projectKnowledgeApi, type FileOperation, type Proposal } from "../../lib/knowledge";
 import { OperationList } from "./OperationList";
 import { SafetyPreview } from "./SafetyPreview";
 

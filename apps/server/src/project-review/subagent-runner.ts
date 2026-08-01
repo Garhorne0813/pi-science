@@ -1,10 +1,10 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { metadataRoot } from "../persistence.js";
-import { PiManager, piManager } from "../pi-manager.js";
-import type { PiProcess, PiEvent } from "../pi-process.js";
-import { buildPiProcessOptions, loadDefaultPiConfig } from "../pi-runtime-launch.js";
-import type { WorkspaceEnvironmentService } from "../workspace-environment.js";
+import { metadataRoot } from "../storage/persistence.js";
+import { PiManager, piManager } from "../runtime/pi/pi-manager.js";
+import type { PiProcess, PiEvent } from "../runtime/pi/pi-process.js";
+import { buildPiProcessOptions, loadDefaultPiConfig } from "../runtime/pi/pi-runtime-launch.js";
+import type { WorkspaceEnvironmentService } from "../runtime/workspace/workspace-environment.js";
 import { knowledgeTypes, parseReviewResult, type ConversationExcerpt, type ReviewRunRequest, type ReviewRunResult, type ReviewSubagentRunner } from "./types.js";
 
 const RESPONSE_LIMIT_BYTES = 2_000_000;

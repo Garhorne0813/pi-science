@@ -10,7 +10,7 @@ import {
   parseGenome,
   type GenomeFeature,
 } from "@/lib/viewers/genome";
-import { cn } from "@/lib/cn";
+import { cn } from "@/lib/ui";
 
 const ROW_H = 15;
 const MAX_ROWS = 60; // cap drawn rows so a dense contig can't blow up the DOM

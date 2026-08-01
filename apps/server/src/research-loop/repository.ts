@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { open, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { appendJsonLineUnlocked, metadataRoot, withFileWriteLock } from "../persistence.js";
+import { appendJsonLineUnlocked, metadataRoot, withFileWriteLock } from "../storage/persistence.js";
 import { emitResearchEvent } from "./events.js";
 import { listReducedLoops, reduceResearchRecords } from "./reducer.js";
 import type { ResearchRecord, ResearchSnapshot } from "./types.js";

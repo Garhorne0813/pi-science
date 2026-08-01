@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, ChevronDown, Pin, PinOff, Pencil, Trash2, X, Dna, Earth } from "lucide-react";
-import { cn } from "../../lib/cn";
+import { cn } from "../../lib/ui";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { useQuery } from "@tanstack/react-query";
-import { ApiError, apiRequest } from "../../lib/api";
-import { queryClient } from "../../lib/query-client";
-import { timeAgo } from "../../lib/format";
-import { workspacePathLeaf } from "../../lib/workspace-path";
+import { ApiError, apiRequest } from "../../lib/client/api";
+import { queryClient } from "../../lib/client/query-client";
+import { timeAgo } from "../../lib/shared";
+import { workspacePathLeaf } from "../../lib/workspace";
 
 interface Workspace {
   name: string;

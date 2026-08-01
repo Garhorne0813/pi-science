@@ -4,7 +4,7 @@ import { ArtifactInspector } from "./ArtifactInspector";
 import { PdfInspector } from "./PdfInspector";
 import { NotebookPanel } from "./NotebookPanel";
 import { NotebookEditor } from "../notebook/NotebookEditor";
-import { useRuntimeStore } from "../../lib/runtime-store";
+import { useRuntimeStore } from "../../lib/agent-runtime";
 
 /** Right pane. Renders the correct inspector variant. */
 export function InspectorShell({

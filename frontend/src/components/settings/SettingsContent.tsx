@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Cpu, FlaskConical, Languages, Loader2, Puzzle, Server } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { cn } from "../../lib/cn";
-import { settingsApi } from "../../lib/settings-api";
-import type { SettingsConfig } from "../../lib/settings-types";
+import { cn } from "../../lib/ui";
+import { settingsApi } from "../../lib/settings";
+import type { SettingsConfig } from "../../lib/settings";
 import { ComputeSettings } from "./ComputeSettings";
 import { ExtensionsTab } from "./ExtensionsTab";
 import { GeneralTab } from "./GeneralTab";

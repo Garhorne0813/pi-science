@@ -1,6 +1,6 @@
 /** Session list loading and the optimistic-session bookkeeping it needs. */
 
-import { getClient, getSessionName, type SessionInfo } from "../pi-science-client";
+import { getClient, getSessionName, type SessionInfo } from "../client/pi-science-client";
 import { useRuntimeStore } from "./store";
 
 /** Sessions created locally that the backend has not listed yet. Owned here

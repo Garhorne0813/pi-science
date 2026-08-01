@@ -12,9 +12,9 @@ import {
   Trash2,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { apiRequest } from "../../lib/api";
-import { cn } from "../../lib/cn";
-import { queryClient } from "../../lib/query-client";
+import { apiRequest } from "../../lib/client/api";
+import { cn } from "../../lib/ui";
+import { queryClient } from "../../lib/client/query-client";
 
 type AuthMethod = "key" | "password";
 

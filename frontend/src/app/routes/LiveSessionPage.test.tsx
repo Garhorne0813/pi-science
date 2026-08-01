@@ -39,13 +39,13 @@ vi.mock("../../components/conversation/ModelControlMenu", () => ({
 }));
 
 import { LiveSessionPage } from "./LiveSessionPage";
-import { WorkspaceProvider } from "../../lib/workspace-context";
+import { WorkspaceProvider } from "../../lib/workspace";
 import { FeedbackContext } from "../../components/feedback/feedback-context";
-import { useRuntimeStore } from "../../lib/runtime-store";
-import { useUiStore } from "../../lib/store";
-import { queryClient } from "../../lib/query-client";
-import { getSessionName } from "../../lib/pi-science-client";
-import { resetDynamicCommands } from "../../lib/slash-commands";
+import { useRuntimeStore } from "../../lib/agent-runtime";
+import { useUiStore } from "../../lib/ui";
+import { queryClient } from "../../lib/client/query-client";
+import { getSessionName } from "../../lib/client/pi-science-client";
+import { resetDynamicCommands } from "../../lib/conversation";
 import i18n from "../../i18n";
 import type { ThreadBlock } from "../../types/thread";
 

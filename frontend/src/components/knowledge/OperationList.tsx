@@ -1,4 +1,4 @@
-import type { FileOperation } from "../../lib/project-knowledge";
+import type { FileOperation } from "../../lib/knowledge";
 
 export function OperationList({ operations }: { operations: FileOperation[] }) {
   return (

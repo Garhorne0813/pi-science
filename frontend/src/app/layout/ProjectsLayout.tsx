@@ -1,21 +1,21 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { lazy, Suspense, useState, useEffect } from "react";
 import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Sun, Moon, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical } from "lucide-react";
-import { useUiStore } from "../../lib/store";
-import { useRuntimeStore } from "../../lib/runtime-store";
+import { useUiStore } from "../../lib/ui";
+import { useRuntimeStore } from "../../lib/agent-runtime";
 import { InspectorShell } from "../../components/inspector/InspectorShell";
 import { RightPane } from "../../components/inspector/RightPane";
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
-import { useWorkspaceCwd } from "../../lib/workspace-context";
-import { usePendingProposalCount } from "../../lib/project-knowledge";
-import { cn } from "../../lib/cn";
+import { useWorkspaceCwd } from "../../lib/workspace";
+import { usePendingProposalCount } from "../../lib/knowledge";
+import { cn } from "../../lib/ui";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 
 // The settings bundle (dialog + five tabs) only loads on first open.
 const SettingsDialog = lazy(() => import("../../components/settings/SettingsDialog").then((m) => ({ default: m.SettingsDialog })));
 import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
-import { workspacePathLeaf } from "../../lib/workspace-path";
+import { workspacePathLeaf } from "../../lib/workspace";
 
 export function ProjectsLayout() {
   const { t } = useTranslation();

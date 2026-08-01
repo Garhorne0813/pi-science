@@ -2,7 +2,7 @@ import { Check, Copy } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { cn } from "../../lib/cn";
+import { cn } from "../../lib/ui";
 
 export function MessageActions({ text, timestamp, align = "left" }: { text: string; timestamp?: string; align?: "left" | "right" }) {
   const { t, i18n } = useTranslation();

@@ -10,7 +10,7 @@ import {
   smilesToMolblock,
   type MoleculeStyleMode,
 } from "@/lib/viewers/molecule";
-import { cn } from "@/lib/cn";
+import { cn } from "@/lib/ui";
 
 const STYLE_OPTIONS: Array<{ value: MoleculeStyleMode; key: string }> = [
   { value: "stick", key: "molecule.style.stick" },

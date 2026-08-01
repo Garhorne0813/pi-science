@@ -1,7 +1,7 @@
 // Shared accessor for the workspace project-knowledge state document. Both the
 // project-knowledge routes and the reviewer that appends proposals to the inbox
 // read and write it, so the shape lives here rather than inside either caller.
-import { readJson, workspaceFile } from "../persistence.js";
+import { readJson, workspaceFile } from "../storage/persistence.js";
 
 export type Source = { session_id?: string | null; message_ids: string[]; files: string[]; run_ids: string[]; citations: string[] };
 export type Policy = { auto_review: boolean; reminder_threshold: number; max_directory_depth: number; minimum_files_for_new_category: number; locked_paths: string[]; naming_pattern: string; accepted_counts: Record<string, number>; rejected_counts: Record<string, number>; external_services_allowed: boolean; allowed_egress_domains: string[]; blocked_data_classes: string[]; updated_at: string };

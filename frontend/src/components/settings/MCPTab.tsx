@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { queryClient } from "../../lib/query-client";
-import { mcpCatalogQuery, settingsApi } from "../../lib/settings-api";
-import type { McpServer } from "../../lib/settings-types";
+import { queryClient } from "../../lib/client/query-client";
+import { mcpCatalogQuery, settingsApi } from "../../lib/settings";
+import type { McpServer } from "../../lib/settings";
 import { McpRow } from "./McpRow";
 import { Section } from "./Section";
 

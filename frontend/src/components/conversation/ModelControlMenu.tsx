@@ -2,8 +2,8 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronDown, ChevronRight, Gauge } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { cn } from "../../lib/cn";
-import type { AvailableModel } from "../../lib/pi-science-client";
+import { cn } from "../../lib/ui";
+import type { AvailableModel } from "../../lib/client/pi-science-client";
 
 const EN_THINKING_LABELS: Record<string, string> = {
   off: "Off",

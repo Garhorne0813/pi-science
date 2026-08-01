@@ -7,7 +7,7 @@
  *  clears it through `resetTurnBuffer()`. */
 
 import type { ThreadBlock } from "../../types/thread";
-import type { HistoryMessage, PiScienceEvent } from "../pi-science-client";
+import type { HistoryMessage, PiScienceEvent } from "../client/pi-science-client";
 
 export interface Thread {
   blocks: ThreadBlock[];

@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { Package, Puzzle, Wrench, Check, X, ChevronRight, ShieldCheck, AlertTriangle, RotateCcw, Loader2 } from "lucide-react";
 import { WorkspacePage, WorkspacePageHeader } from "../../components/layout/WorkspacePage";
-import { skillsApi, skillsKey } from "../../lib/skills-api";
-import { settingsApi, invalidateSettings } from "../../lib/settings-api";
-import { apiRequest } from "../../lib/api";
-import { queryClient } from "../../lib/query-client";
-import { applySessionReplacements, type SessionReplacement } from "../../lib/runtime-store";
-import { useWorkspaceCwd } from "../../lib/workspace-context";
+import { skillsApi, skillsKey } from "../../lib/skills";
+import { settingsApi, invalidateSettings } from "../../lib/settings";
+import { apiRequest } from "../../lib/client/api";
+import { queryClient } from "../../lib/client/query-client";
+import { applySessionReplacements, type SessionReplacement } from "../../lib/agent-runtime";
+import { useWorkspaceCwd } from "../../lib/workspace";
 import { useTranslation } from "react-i18next";
 
 interface Skill {

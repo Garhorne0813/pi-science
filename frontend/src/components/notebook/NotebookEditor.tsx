@@ -3,7 +3,7 @@ import { AlertCircle, Loader2, Play, X } from "lucide-react";
 import type { FileRoot } from "../../types/thread";
 import { readArtifact } from "../../lib/files";
 import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
-import { cn } from "../../lib/cn";
+import { cn } from "../../lib/ui";
 import {
   notebookKernel,
   outputText,
@@ -13,7 +13,7 @@ import {
   type NotebookCell,
   type NotebookOutput,
 } from "./notebook-model";
-import { notebookRuntime, type CellResult } from "../../lib/notebook-runtime";
+import { notebookRuntime, type CellResult } from "../../lib/notebook";
 import { useTranslation } from "react-i18next";
 
 interface EditableCell extends NotebookCell {

@@ -2,11 +2,11 @@ import { isValidElement, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { File } from "lucide-react";
-import { cn } from "@/lib/cn";
-import { fenceLanguage, runnableLanguage } from "@/lib/runnable-code";
+import { cn } from "@/lib/ui";
+import { fenceLanguage, runnableLanguage } from "@/lib/conversation";
 import { RunnableCodeBlock } from "../conversation/RunnableCodeBlock";
 import { fileInspectorForPath } from "@/lib/artifacts";
-import { useUiStore } from "@/lib/store";
+import { useUiStore } from "@/lib/ui";
 
 /** Two contexts render markdown: chat bubbles (theme colors, compact) and the
  *  file-preview "paper" (document-neutral black-on-white, editorial scale —

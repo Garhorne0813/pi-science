@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bot, Loader2, Plus, Save, Trash2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { queryClient } from "../../lib/query-client";
-import { settingsApi, subagentsQuery } from "../../lib/settings-api";
-import type { ProjectSubagent } from "../../lib/settings-types";
+import { queryClient } from "../../lib/client/query-client";
+import { settingsApi, subagentsQuery } from "../../lib/settings";
+import type { ProjectSubagent } from "../../lib/settings";
 import { useFeedback } from "../feedback/feedback-context";
 import { Section } from "./Section";
 

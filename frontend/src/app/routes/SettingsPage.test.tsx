@@ -2,9 +2,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { SettingsPage } from "./SettingsPage";
-import { WorkspaceProvider } from "../../lib/workspace-context";
-import { queryClient } from "../../lib/query-client";
-import { useUiStore } from "../../lib/store";
+import { WorkspaceProvider } from "../../lib/workspace";
+import { queryClient } from "../../lib/client/query-client";
+import { useUiStore } from "../../lib/ui";
 import i18n from "../../i18n";
 
 function jsonResponse(body: unknown, status = 200): Response {

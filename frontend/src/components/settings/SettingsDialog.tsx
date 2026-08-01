@@ -1,9 +1,9 @@
 import { lazy, Suspense, useEffect, useRef } from "react";
 import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { cn } from "../../lib/cn";
-import { useRuntimeStore } from "../../lib/runtime-store";
-import { useUiStore } from "../../lib/store";
+import { cn } from "../../lib/ui";
+import { useRuntimeStore } from "../../lib/agent-runtime";
+import { useUiStore } from "../../lib/ui";
 
 /** The settings content (vertical nav + five tabs) is the heavy part; it only
  *  loads once the dialog is first opened. */

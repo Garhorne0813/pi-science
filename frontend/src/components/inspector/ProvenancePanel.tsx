@@ -5,10 +5,10 @@ import { useTranslation } from "react-i18next";
 import type { ProvenanceEnvironment, ProvenanceRecord, RunRecord } from "../../types/thread";
 import { listProvenance, readEnvLockfile } from "@/lib/provenance";
 import { listRuns, reproduceRunPrompt } from "@/lib/runs";
-import { useRuntimeStore } from "@/lib/runtime-store";
+import { useRuntimeStore } from "@/lib/agent-runtime";
 import { CodeViewer } from "@/components/code-viewer/CodeViewer";
 import { DiffView } from "@/components/code-viewer/DiffView";
-import { cn } from "@/lib/cn";
+import { cn } from "@/lib/ui";
 import i18n from "@/i18n";
 
 /** The prompt the Reproduce action drafts — prefilled, reviewed, user-sent. */

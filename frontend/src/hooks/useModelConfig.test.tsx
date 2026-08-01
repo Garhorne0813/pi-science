@@ -3,9 +3,9 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { useModelConfig } from "./useModelConfig";
-import { queryClient } from "../lib/query-client";
-import { settingsApi } from "../lib/settings-api";
-import { useRuntimeStore } from "../lib/runtime-store";
+import { queryClient } from "../lib/client/query-client";
+import { settingsApi } from "../lib/settings";
+import { useRuntimeStore } from "../lib/agent-runtime";
 import i18n from "../i18n";
 
 function jsonResponse(body: unknown, status = 200): Response {

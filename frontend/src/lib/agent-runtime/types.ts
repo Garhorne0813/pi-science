@@ -1,6 +1,6 @@
 /** Public state shape of the agent runtime store. */
 
-import type { PiScienceClient, SessionInfo } from "../pi-science-client";
+import type { PiScienceClient, SessionInfo } from "../client/pi-science-client";
 import type { Thread } from "./event-fold";
 
 export interface PendingInteraction {

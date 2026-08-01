@@ -1,4 +1,4 @@
-import { cn } from "../../lib/cn";
+import { cn } from "../../lib/ui";
 
 export function MetricCard({ label, value, emphasis = false }: { label: string; value: number; emphasis?: boolean }) {
   return (

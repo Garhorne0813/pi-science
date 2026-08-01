@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { Check, Eye, EyeOff, Key, Loader2, Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { cn } from "../../lib/cn";
-import { clampThinkingLevel } from "../../lib/pi-science-client";
-import type { AvailableModel, Provider, SettingsConfig } from "../../lib/settings-types";
+import { cn } from "../../lib/ui";
+import { clampThinkingLevel } from "../../lib/client/pi-science-client";
+import type { AvailableModel, Provider, SettingsConfig } from "../../lib/settings";
 import { ContextManagementSection } from "./ContextManagementSection";
 import { CustomApiSection } from "./CustomApiSection";
 import { ModelEndpointSection } from "./ModelEndpointSection";

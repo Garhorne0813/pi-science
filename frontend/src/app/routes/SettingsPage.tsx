@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { useUiStore } from "../../lib/store";
-import { useWorkspaceCwd } from "../../lib/workspace-context";
+import { useUiStore } from "../../lib/ui";
+import { useWorkspaceCwd } from "../../lib/workspace";
 
 /** Legacy deep-link target for `/settings` and `/workspace/:cwd/settings`.
  *  The dialog itself lives in ProjectsLayout; this shell opens it on mount and

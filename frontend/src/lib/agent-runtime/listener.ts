@@ -1,8 +1,8 @@
 /** Single SSE subscription that drives the store: connection status, turn
  *  lifecycle, interaction prompts and thread folding. */
 
-import type { PiScienceClient } from "../pi-science-client";
-import { workspaceFiles } from "../workspace-files";
+import type { PiScienceClient } from "../client/pi-science-client";
+import { workspaceFiles } from "../workspace";
 import { appendRuntimeError, isMissingSessionError } from "./errors";
 import { foldEvent, resetTurnBuffer } from "./event-fold";
 import { generations, turnState } from "./generations";

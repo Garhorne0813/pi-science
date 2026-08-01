@@ -2,7 +2,7 @@ import { createBrowserRouter } from "react-router-dom";
 import { Suspense, lazy, type ReactElement } from "react";
 import { ProjectsLayout } from "./layout/ProjectsLayout";
 import { RoutedErrorBoundary } from "../components/ErrorBoundary";
-import { WorkspaceProvider } from "../lib/workspace-context";
+import { WorkspaceProvider } from "../lib/workspace";
 import { useTranslation } from "react-i18next";
 
 const ProjectsPage = lazy(() => import("./routes/ProjectsPage").then((m) => ({ default: m.ProjectsPage })));

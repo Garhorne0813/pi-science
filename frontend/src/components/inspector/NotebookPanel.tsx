@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import { notebookRuntime, type CellResult } from "../../lib/notebook-runtime";
+import { notebookRuntime, type CellResult } from "../../lib/notebook";
 import { useTranslation } from "react-i18next";
 
 interface Cell {

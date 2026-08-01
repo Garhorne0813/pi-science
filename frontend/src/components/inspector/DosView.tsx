@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { parseDoscar, type DosData } from "@/lib/viewers/dos";
-import { cn } from "@/lib/cn";
+import { cn } from "@/lib/ui";
 
 /**
  * Native density-of-states viewer for materials (P1-3): renders a VASP DOSCAR

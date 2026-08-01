@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { parseFits, pixelToWorld, type FitsImage, type FitsResult } from "@/lib/viewers/fits";
-import { cn } from "@/lib/cn";
+import { cn } from "@/lib/ui";
 
 /**
  * Native FITS viewer for astronomy (P1-3): renders a 2-D image HDU to a canvas

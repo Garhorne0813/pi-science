@@ -170,10 +170,9 @@ PI_CLI_PATH=/absolute/path/to/pi-orbit pnpm smoke:real-pi
 前端专项 UAT：
 
 ```bash
-cd frontend
-npm run test:uat:knowledge
-npm run test:uat:notebook
-npm run test:uat:office
+pnpm --filter frontend test:uat:knowledge
+pnpm --filter frontend test:uat:notebook
+pnpm --filter frontend test:uat:office
 ```
 
 ## 文档

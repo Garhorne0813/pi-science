@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { extensionsQuery } from "../../lib/settings-api";
+import { extensionsQuery } from "../../lib/settings";
 import { AgentProfilesSection } from "./AgentProfilesSection";
 import { ExtCard } from "./ExtCard";
 import { Section } from "./Section";

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { getSessionName, setSessionName } from "../pi-science-client";
-import { applySessionReplacements, useRuntimeStore } from "../runtime-store";
+import { getSessionName, setSessionName } from "../client/pi-science-client";
+import { applySessionReplacements, useRuntimeStore } from "./index";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
 
