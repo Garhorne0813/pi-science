@@ -6,6 +6,7 @@ import nodeProcess from "node:process";
 import { ConversationEventHub, conversationEventHub } from "./conversation-event-hub.js";
 import { observeNodePiEvent } from "./node-event-observer.js";
 import { PiManager, piManager } from "./pi-manager.js";
+import { PiOrbitRequestError } from "./pi-orbit-host.js";
 import type { PiProcess, PiProcessOptions, PiResult } from "./pi-process.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "./pi-runtime-launch.js";
 import type { ProjectReviewService } from "./project-review/service.js";
@@ -13,7 +14,8 @@ import { validateWorkspaceCwd } from "./workspace-security.js";
 import { SessionRepository, invalidateSessionFileCache, sessionRepository } from "./session-repository.js";
 import { WorkspaceEnvironmentService } from "./workspace-environment.js";
 
-type ServiceFailure = { success: false; error: string; code: string };
+type RuntimeFailure = { error: string; code: string; diagnostics?: unknown };
+type ServiceFailure = RuntimeFailure & { success: false };
 type PendingOperation = "prompt" | "compact";
 type RuntimeRecord = {
   cwd: string;
@@ -97,7 +99,7 @@ export class NodeSessionService {
     this.log = log;
   }
 
-  async create(body: CreateSessionRequest): Promise<{ id: string; cwd: string } | { error: string; code: string; sessionId?: string }> {
+  async create(body: CreateSessionRequest): Promise<{ id: string; cwd: string } | RuntimeFailure & { sessionId?: string }> {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(body.cwd); }
     catch (error) { return { error: String(error), code: "workspace_invalid" }; }
@@ -199,6 +201,33 @@ export class NodeSessionService {
       if (!ready.success) return ready;
       const sessionPath = await this.repository.findPath(cwd, sessionId);
       if (!sessionPath) return { success: false, code: "not_found", error: "session not found" };
+      if (source.process.runtimeIdentity) {
+        const result = await source.process.sendCommand(entryId ? "fork" : "clone", entryId ? { entryId } : {});
+        if (!result.success) return result;
+        const state = await this.refreshState(source);
+        if (!state.success || !source.activeSessionId || source.activeSessionId === sessionId) {
+          return { success: false, code: "reconcile_failed", error: "fork did not create a distinct session" };
+        }
+        const forkedSessionId = source.activeSessionId;
+        this.registerRuntime(source, sessionId);
+
+        // Pi Orbit enforces exclusive ownership of a persisted session. Fork
+        // the source runtime first (which releases that ownership), then
+        // recreate the original session in a separate runtime.
+        const restored = await this.startRuntime(cwd, { ...source.config }, sessionPath);
+        if ("error" in restored) {
+          this.log("warn", `fork succeeded but the source session could not be restored: ${restored.error}`);
+        } else {
+          const restoredState = await this.refreshState(restored);
+          if (restoredState.success && restored.activeSessionId === sessionId) this.registerRuntime(restored);
+          else {
+            await this.cleanupRuntime(restored);
+            this.log("warn", "fork succeeded but the source session runtime returned a mismatched identity");
+          }
+        }
+        invalidateSessionFileCache(cwd);
+        return { ...result, sessionId: forkedSessionId };
+      }
       const started = await this.startRuntime(cwd, { ...source.config });
       if ("error" in started) return started;
       const switched = await started.process.sendCommand("switch_session", { sessionPath });
@@ -416,6 +445,7 @@ export class NodeSessionService {
   }
 
   get activeCount(): number { return this.runtimes.size; }
+  get processCount(): number { return this.manager.processCount; }
 
   private async activateUnlocked(sessionId: string, cwd: string): Promise<RuntimeRecord | ServiceFailure> {
     const key = runtimeKey(cwd, sessionId);
@@ -443,7 +473,7 @@ export class NodeSessionService {
     return runtime;
   }
 
-  private async startRuntime(cwd: string, config: PiConfig, sessionPath?: string, preparedOptions?: PiProcessOptions): Promise<RuntimeRecord | { error: string; code: string }> {
+  private async startRuntime(cwd: string, config: PiConfig, sessionPath?: string, preparedOptions?: PiProcessOptions): Promise<RuntimeRecord | RuntimeFailure> {
     let options: PiProcessOptions | null;
     if (preparedOptions) options = preparedOptions;
     else {
@@ -457,8 +487,17 @@ export class NodeSessionService {
     if (!options) return { error: "PI_CLI_PATH is not configured", code: "spawn_failed" };
     let process: PiProcess;
     const managerKey = randomUUID();
-    try { process = this.manager.start(managerKey, options); }
-    catch (error) { return { error: `unable to start Pi runtime: ${String(error)}`, code: "spawn_failed" }; }
+    try { process = await this.manager.start(managerKey, options); }
+    catch (error) {
+      if (error instanceof PiOrbitRequestError) {
+        return {
+          error: `unable to start Pi Orbit runtime: ${error.message}`,
+          code: error.code,
+          ...(error.payload.diagnostics === undefined ? {} : { diagnostics: error.payload.diagnostics }),
+        };
+      }
+      return { error: `unable to start Pi runtime: ${String(error)}`, code: "spawn_failed" };
+    }
     const runtime: RuntimeRecord = { cwd, managerKey, process, activeSessionId: "", config: { ...config }, busy: false, restartPending: false, closing: false };
     this.eventHub.bind(cwd, process, {
       activeSessionId: () => runtime.activeSessionId || null,
@@ -524,7 +563,7 @@ export class NodeSessionService {
         if (current !== runtime || !runtime.operationPending) return;
         const state = await runtime.process.sendCommand("get_state");
         const data = state.data && typeof state.data === "object" ? state.data as Record<string, unknown> : {};
-        const active = Boolean(data.isStreaming) || Boolean(data.isCompacting) || Number(data.pendingMessageCount ?? 0) > 0;
+        const active = Boolean(data.busy) || Boolean(data.isStreaming) || Boolean(data.isCompacting) || Number(data.pendingMessageCount ?? 0) > 0;
         if (state.success && active && Date.now() < (runtime.operationDeadline ?? 0)) {
           runtime.busy = true;
           this.scheduleOperationReconciliation(runtime, false);
@@ -729,7 +768,7 @@ export class NodeSessionService {
     runtime.lastState = data;
     runtime.lastStateAt = Date.now();
     if (typeof data.sessionId === "string") runtime.activeSessionId = data.sessionId;
-    runtime.busy = Boolean(runtime.operationPending) || Boolean(data.isStreaming) || Boolean(data.isCompacting) || Number(data.pendingMessageCount ?? 0) > 0;
+    runtime.busy = Boolean(runtime.operationPending) || Boolean(data.busy) || Boolean(data.isStreaming) || Boolean(data.isCompacting) || Number(data.pendingMessageCount ?? 0) > 0;
     const model = data.model as { provider?: unknown; id?: unknown } | undefined;
     if (model?.provider && model.id) runtime.config.model = `${model.provider}/${model.id}`;
     if (typeof data.thinkingLevel === "string") runtime.config.thinking = data.thinkingLevel;

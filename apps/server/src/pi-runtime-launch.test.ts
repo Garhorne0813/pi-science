@@ -1,12 +1,11 @@
-import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "./pi-runtime-launch.js";
 
 const cleanup: string[] = [];
-const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, tsx: process.env.PI_TSX_PATH, tsconfig: process.env.PI_TSCONFIG_PATH };
+const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, tsx: process.env.PI_TSX_PATH, tsconfig: process.env.PI_TSCONFIG_PATH, piMode: process.env.PI_SCIENCE_PI_MODE };
 
 beforeEach(async () => {
   const root = join(tmpdir(), `pi-science-runtime-launch-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -14,6 +13,7 @@ beforeEach(async () => {
   await mkdir(root, { recursive: true });
   process.env.PI_SCIENCE_HOME = join(root, "control-home");
   process.env.PI_CLI_PATH = join(root, "fake-pi.mjs");
+  delete process.env.PI_SCIENCE_PI_MODE;
 });
 
 afterEach(async () => {
@@ -21,6 +21,8 @@ afterEach(async () => {
   process.env.PI_CLI_PATH = original.cli;
   process.env.PI_TSX_PATH = original.tsx;
   process.env.PI_TSCONFIG_PATH = original.tsconfig;
+  if (original.piMode === undefined) delete process.env.PI_SCIENCE_PI_MODE;
+  else process.env.PI_SCIENCE_PI_MODE = original.piMode;
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
 });
 
@@ -28,8 +30,7 @@ async function obstructModelsFile(customProviders?: unknown[]): Promise<string> 
   const cwd = join(tmpdir(), `pi-science-runtime-workspace-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   cleanup.push(cwd);
   await mkdir(cwd, { recursive: true });
-  const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
-  const agentDir = join(process.env.PI_SCIENCE_HOME!, "pi-agent", workspaceKey);
+  const agentDir = join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host");
   await mkdir(join(agentDir, "models.json"), { recursive: true });
   await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
   await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), `${JSON.stringify({ custom_providers: customProviders ?? [] })}\n`, "utf8");
@@ -48,8 +49,7 @@ describe("Pi runtime custom provider materialization", () => {
 
     buildPiProcessOptions(cwd);
 
-    const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
-    const catalog = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", workspaceKey, "models.json"), "utf8"));
+    const catalog = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "models.json"), "utf8"));
     expect(catalog.providers["custom-deepseek"].models[0]).toMatchObject({
       id: "deepseek-v4-flash",
       reasoning: true,
@@ -70,8 +70,7 @@ describe("Pi runtime custom provider materialization", () => {
       skills: [],
       extensions: [],
     });
-    const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
-    const settings = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", workspaceKey, "settings.json"), "utf8"));
+    const settings = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "settings.json"), "utf8"));
     expect(settings.compaction).toMatchObject({ enabled: true, reserveTokens: 20000, keepRecentTokens: 20000 });
   });
 
@@ -80,8 +79,7 @@ describe("Pi runtime custom provider materialization", () => {
     cleanup.push(cwd);
     await mkdir(cwd, { recursive: true });
     buildPiProcessOptions(cwd);
-    const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
-    const guidance = await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", workspaceKey, "APPEND_SYSTEM.md"), "utf8");
+    const guidance = await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "APPEND_SYSTEM.md"), "utf8");
     expect(guidance).toContain("<!--suggest: q1 | q2 | q3-->");
     expect(guidance).toContain("follow-up questions in the user's language");
   });
@@ -138,6 +136,40 @@ describe("Pi runtime custom provider materialization", () => {
 
     const options = buildPiProcessOptions(piRoot)!;
     expect(options.args.slice(0, 2)).toEqual([tsx, cli]);
+  });
+
+  it("runs a native Pi Orbit release executable directly", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-native-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    const cli = join(cwd, "pi-orbit");
+    await writeFile(cli, "", "utf8");
+    process.env.PI_CLI_PATH = cli;
+
+    const options = buildPiProcessOptions(cwd)!;
+
+    expect(options.command).toBe(cli);
+    expect(options.args[0]).toBe("--mode");
+    expect(options.args).not.toContain(cli);
+  });
+
+  it("launches Pi in authenticated app-managed web mode", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-web-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+
+    const options = buildPiProcessOptions(cwd)!;
+
+    expect(options.args).toContain("web");
+    expect(options.args).not.toContain("rpc");
+    expect(options.args).toContain("--web-app-managed");
+    expect(options.args).toContain("--no-session");
+    expect(options.args).not.toContain("--session-dir");
+    expect(options.args).not.toContain("--auth-token");
+    expect(options.web?.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(options.web?.authToken).toBeTruthy();
+    expect(options.env?.PI_ORBIT_AUTH_TOKEN).toBe(options.web?.authToken);
+    expect(options.web?.runtime).toMatchObject({ cwd, sessionDir: join(cwd, ".pi-science", "sessions") });
   });
 
   it("surfaces models.json deletion failures except for a missing file", async () => {

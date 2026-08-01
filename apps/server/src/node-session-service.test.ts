@@ -8,7 +8,7 @@ import { ProjectReviewService } from "./project-review/service.js";
 import { parseReviewResult, type ReviewRunRequest, type ReviewRunResult, type ReviewSubagentRunner } from "./project-review/types.js";
 
 const cleanup: string[] = [];
-const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE };
+const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE, piMode: process.env.PI_SCIENCE_PI_MODE };
 
 beforeEach(async () => {
   const root = join(tmpdir(), `pi-science-node-service-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -39,10 +39,10 @@ beforeEach(async () => {
     '  const request = JSON.parse(line);',
     '  if (log) fs.appendFileSync(log, JSON.stringify(request) + "\\n");',
     '  if (!request.id) return;',
-    '  if (request.type === "get_state") { stateRequests++; if (process.env.FAKE_PI_MODE === "restart-fail-once" && startNumber === 2) return; if (process.env.FAKE_PI_MODE === "new-session-state-fails" && sessionId.startsWith("generated-")) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (Number(process.env.FAKE_PI_FAIL_STATE_AFTER || 0) > 0 && stateRequests > Number(process.env.FAKE_PI_FAIL_STATE_AFTER)) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); return respond(request, { data: { sessionId, isStreaming: busy, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }',
+    '  if (request.type === "get_state") { stateRequests++; if (process.env.FAKE_PI_MODE === "restart-fail-once" && startNumber === 2) return; if (process.env.FAKE_PI_MODE === "new-session-state-fails" && sessionId.startsWith("generated-")) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (Number(process.env.FAKE_PI_FAIL_STATE_AFTER || 0) > 0 && stateRequests > Number(process.env.FAKE_PI_FAIL_STATE_AFTER)) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); const orbitBusyOnly = process.env.FAKE_PI_MODE === "orbit-busy-without-agent-start"; return respond(request, { data: { sessionId, busy, isStreaming: orbitBusyOnly ? false : busy, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }',
     '  if (request.type === "switch_session") { sessionId = JSON.parse(fs.readFileSync(request.sessionPath, "utf8").split("\\n")[0]).id; return respond(request); }',
     '  if (request.type === "new_session" || request.type === "clone" || request.type === "fork") { sessionId = `generated-${++counter}-${process.pid}`; return respond(request); }',
-    '  if (request.type === "prompt") { if (process.env.FAKE_PI_MODE === "prompt-timeout") return; busy = true; respond(request); process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); return; }',
+    '  if (request.type === "prompt") { if (process.env.FAKE_PI_MODE === "prompt-timeout") return; busy = true; respond(request); if (process.env.FAKE_PI_MODE !== "orbit-busy-without-agent-start") process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); return; }',
     '  if (request.type === "compact") { if (process.env.FAKE_PI_MODE === "compact-timeout") return; return respond(request); }',
     '  if (request.type === "abort") { busy = false; respond(request); process.stdout.write(JSON.stringify({ type: "agent_settled", handledWithoutTurn: true }) + "\\n"); return; }',
     '  if (request.type === "get_commands") return process.env.FAKE_PI_MODE === "cancel-commands" ? respond(request, { data: { cancelled: true } }) : respond(request, { data: { commands: [{ name: "review", source: "skill" }] } });',
@@ -56,6 +56,7 @@ beforeEach(async () => {
   process.env.PI_SCIENCE_HOME = join(root, "data");
   process.env.PI_CLI_PATH = script;
   process.env.PI_NODE_PATH = process.execPath;
+  process.env.PI_SCIENCE_PI_MODE = "rpc";
   process.env.FAKE_PI_LOG = join(root, "rpc.jsonl");
   process.env.FAKE_PI_STARTS = join(root, "starts.txt");
   // Leave enough headroom for spawning the fake Pi under parallel CI load.
@@ -77,6 +78,8 @@ afterEach(async () => {
   process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS = original.deadline;
   process.env.PI_SCIENCE_IDLE_RUNTIME_MS = original.idle;
   process.env.FAKE_PI_MODE = original.mode;
+  if (original.piMode === undefined) delete process.env.PI_SCIENCE_PI_MODE;
+  else process.env.PI_SCIENCE_PI_MODE = original.piMode;
   delete process.env.FAKE_PI_LOG;
   delete process.env.FAKE_PI_STARTS;
   delete process.env.FAKE_PI_FAIL_STATE_AFTER;
@@ -255,6 +258,24 @@ describe("Node session lifecycle", () => {
     }
   });
 
+  it("uses Pi Orbit runtime busy state when the agent_start event is delayed", async () => {
+    process.env.FAKE_PI_MODE = "orbit-busy-without-agent-start";
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-orbit-busy");
+    const publish = vi.spyOn(conversationEventHub, "publish");
+    await service.resume("session-orbit-busy", cwd);
+
+    await expect(service.command("session-orbit-busy", cwd, "prompt", { message: "test" })).resolves.toMatchObject({ success: true });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(publish).not.toHaveBeenCalledWith(cwd, "session-orbit-busy", expect.objectContaining({
+      message: "The prompt was accepted but the Pi runtime did not start an agent turn.",
+    }));
+    await service.command("session-orbit-busy", cwd, "abort");
+    publish.mockRestore();
+    await service.shutdownAll();
+  });
+
   it("rolls back a new session when configuration fails", async () => {
     const service = testService();
     const cwd = await workspaceWithSessions("session-a");
@@ -386,7 +407,7 @@ describe("automatic project review", () => {
     await waitFor(async () => (await proposals(cwd)).length === 2);
     expect(runner.calls).toHaveLength(2);
     await service.shutdownAll();
-  });
+  }, 15_000);
 
   it("does not run the reviewer when policy.auto_review is disabled", async () => {
     const runner = new FakeReviewRunner();

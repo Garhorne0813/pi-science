@@ -1,7 +1,17 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { createInterface } from "node:readline";
 import { EventEmitter } from "node:events";
+import { createInterface } from "node:readline";
+import type { PiOrbitHost, PiOrbitRuntimeDescriptor } from "./pi-orbit-host.js";
+
+export interface PiOrbitRuntimeRequest {
+  cwd: string;
+  sessionDir: string;
+  sessionPath?: string;
+  model?: string;
+  thinking?: string;
+  runtimeEnv?: Record<string, string | null>;
+}
 
 export interface PiProcessOptions {
   cwd: string;
@@ -9,6 +19,11 @@ export interface PiProcessOptions {
   args: string[];
   env?: NodeJS.ProcessEnv;
   requestTimeoutMs?: number;
+  web?: {
+    baseUrl: string;
+    authToken: string;
+    runtime: PiOrbitRuntimeRequest;
+  };
 }
 
 export interface PiEvent {
@@ -27,39 +42,82 @@ interface PendingRequest {
 }
 
 export class PiProcess extends EventEmitter {
-  readonly child: ChildProcessWithoutNullStreams;
+  readonly child: ChildProcess;
+  readonly runtimeIdentity: PiOrbitRuntimeDescriptor | undefined;
   private readonly pending = new Map<string, PendingRequest>();
   private readonly requestTimeoutMs: number;
+  private readonly webHost: PiOrbitHost | undefined;
+  private readonly runtimeId: string | undefined;
+  private eventAbort: AbortController | undefined;
   private closed = false;
+  private exitEmitted = false;
+  private removeHostListeners: (() => void) | undefined;
 
-  private constructor(private readonly options: PiProcessOptions) {
+  private constructor(options: PiProcessOptions, webHost?: PiOrbitHost, descriptor?: PiOrbitRuntimeDescriptor) {
     super();
-    const environmentTimeout = Number(process.env.PI_SCIENCE_RPC_TIMEOUT_MS ?? 0);
+    const environmentTimeout = Number(process.env.PI_SCIENCE_RUNTIME_TIMEOUT_MS ?? process.env.PI_SCIENCE_RPC_TIMEOUT_MS ?? 0);
     this.requestTimeoutMs = options.requestTimeoutMs ?? (environmentTimeout > 0 ? environmentTimeout : 30_000);
+    this.webHost = webHost;
+    this.runtimeId = descriptor?.runtimeId;
+    this.runtimeIdentity = descriptor;
+    if (webHost) {
+      this.child = webHost.child;
+      const onStderr = (text: string) => this.emit("stderr", text);
+      const onExit = ({ code, signal }: { code: number | null; signal: NodeJS.Signals | null }) => {
+        this.closed = true;
+        this.emitExit(code, signal);
+      };
+      webHost.on("stderr", onStderr);
+      webHost.on("exit", onExit);
+      this.removeHostListeners = () => {
+        webHost.off("stderr", onStderr);
+        webHost.off("exit", onExit);
+      };
+      return;
+    }
+
     this.child = spawn(options.command, options.args, {
       cwd: options.cwd,
       env: options.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
-    const lines = createInterface({ input: this.child.stdout });
-    lines.on("line", (line) => this.handleLine(line));
-    this.child.stderr.on("data", (chunk: Buffer) => this.emit("stderr", chunk.toString("utf8")));
+    if (this.child.stdout) {
+      const lines = createInterface({ input: this.child.stdout });
+      lines.on("line", (line) => this.handleLine(line));
+    }
+    this.child.stderr?.on("data", (chunk: Buffer) => this.emit("stderr", chunk.toString("utf8")));
     this.child.once("error", (error) => this.failPending(`pi process error: ${error.message}`));
     this.child.once("close", (code, signal) => {
       this.closed = true;
       this.failPending(`pi process exited with code ${code ?? "null"}${signal ? ` (${signal})` : ""}`);
-      this.emit("exit", { code, signal });
+      this.emitExit(code, signal);
     });
   }
 
   static start(options: PiProcessOptions): PiProcess {
+    if (options.web) throw new Error("Pi Orbit runtimes must be created through PiManager");
     return new PiProcess(options);
   }
 
+  static async attachWeb(host: PiOrbitHost, options: PiProcessOptions): Promise<PiProcess> {
+    if (!options.web) throw new Error("Pi Orbit runtime options are required");
+    const descriptor = await host.createRuntime(options.web.runtime, options.requestTimeoutMs);
+    const process = new PiProcess(options, host, descriptor);
+    try {
+      await process.startEventStream();
+      return process;
+    } catch (error) {
+      await process.shutdown().catch(() => undefined);
+      throw error;
+    }
+  }
+
   async sendCommand(type: string, params: Record<string, unknown> = {}): Promise<PiResult> {
-    if (this.closed || this.child.stdin.destroyed) {
+    if (this.webHost) return this.sendWebCommand(type, params);
+    if (this.closed || !this.child.stdin || this.child.stdin.destroyed) {
       return { success: false, code: "process_closed", error: "pi runtime stdin is unavailable" };
     }
+    const stdin = this.child.stdin;
     const id = randomUUID();
     const command = `${JSON.stringify({ id, type, ...params })}\n`;
     return new Promise((resolve) => {
@@ -68,7 +126,7 @@ export class PiProcess extends EventEmitter {
         resolve({ success: false, code: "timeout", error: `request timeout after ${this.requestTimeoutMs}ms` });
       }, this.requestTimeoutMs);
       this.pending.set(id, { resolve, timer });
-      this.child.stdin.write(command, "utf8", (error) => {
+      stdin.write(command, "utf8", (error) => {
         if (!error) return;
         clearTimeout(timer);
         this.pending.delete(id);
@@ -78,15 +136,30 @@ export class PiProcess extends EventEmitter {
   }
 
   async sendNotification(type: string, params: Record<string, unknown> = {}): Promise<void> {
-    if (this.closed || this.child.stdin.destroyed) throw new Error("pi runtime stdin is unavailable");
+    if (this.webHost) {
+      if (type !== "extension_ui_response") throw new Error(`unsupported Pi Orbit notification: ${type}`);
+      const result = await this.webRequest("POST", `${this.runtimePath()}/ui-response`, { type, ...params });
+      if (!result.success) throw new Error(String(result.error ?? "Pi Orbit notification failed"));
+      return;
+    }
+    if (this.closed || !this.child.stdin || this.child.stdin.destroyed) throw new Error("pi runtime stdin is unavailable");
+    const stdin = this.child.stdin;
     const command = `${JSON.stringify({ type, ...params })}\n`;
     await new Promise<void>((resolve, reject) => {
-      this.child.stdin.write(command, "utf8", (error) => error ? reject(error) : resolve());
+      stdin.write(command, "utf8", (error) => error ? reject(error) : resolve());
     });
   }
 
   async shutdown(): Promise<void> {
     if (this.closed) return;
+    this.closed = true;
+    this.eventAbort?.abort();
+    this.removeHostListeners?.();
+    this.removeHostListeners = undefined;
+    if (this.webHost) {
+      await this.disposeWebRuntime();
+      return;
+    }
     this.child.kill("SIGTERM");
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
@@ -100,31 +173,208 @@ export class PiProcess extends EventEmitter {
     });
   }
 
+  private async sendWebCommand(type: string, params: Record<string, unknown>): Promise<PiResult> {
+    if (this.closed) return { success: false, code: "process_closed", error: "Pi Orbit runtime is unavailable" };
+    try {
+      const runtimePath = this.runtimePath();
+      const sessionPath = `/api/sessions/${encodeURIComponent(this.runtimeId!)}`;
+      switch (type) {
+        case "get_state": {
+          const result = await this.webRequest("GET", `${runtimePath}/state`);
+          if (!result.success || !result.data || typeof result.data !== "object") return result;
+          const data = result.data as Record<string, unknown>;
+          return {
+            success: true,
+            data: {
+              ...data,
+              sessionId: typeof data.sessionId === "string" ? data.sessionId : data.piSessionId,
+            },
+          };
+        }
+        case "get_session_stats": return this.asData(await this.webRequest("GET", `${sessionPath}/stats`));
+        case "get_available_models": {
+          const result = await this.webRequest("GET", `/api/models?session_id=${encodeURIComponent(this.runtimeId!)}`);
+          return result.success ? { success: true, data: { models: result.data } } : result;
+        }
+        case "get_available_thinking_levels": return this.asData(await this.webRequest("GET", `${sessionPath}/thinking-levels`));
+        case "get_commands": return this.asData(await this.webRequest("GET", `${runtimePath}/commands`));
+        case "get_messages": return this.asData(await this.webRequest("GET", `${sessionPath}/messages`));
+        case "get_fork_messages": return this.asData(await this.webRequest("GET", `${sessionPath}/fork-messages`));
+        case "get_entries": {
+          const since = typeof params.since === "string" ? `?since=${encodeURIComponent(params.since)}` : "";
+          return this.asData(await this.webRequest("GET", `${sessionPath}/entries${since}`));
+        }
+        case "get_tree": return this.asData(await this.webRequest("GET", `${sessionPath}/tree`));
+        case "get_last_assistant_text": return this.asData(await this.webRequest("GET", `${sessionPath}/last-assistant-text`));
+        case "switch_session": {
+          const result = await this.webRequest("POST", `${runtimePath}/resume`, { sessionPath: params.sessionPath });
+          if (result.success) await this.refreshRuntimeIdentity();
+          return result;
+        }
+        case "prompt":
+        case "abort":
+        case "compact":
+          return this.webRequest("POST", `${runtimePath}/${type}`, type === "prompt" ? { message: params.message } : undefined);
+        case "steer":
+        case "follow_up":
+          return this.webRequest("POST", `${runtimePath}/${type === "follow_up" ? "follow-up" : type}`, params);
+        case "fork": {
+          const result = await this.webRequest("POST", `${runtimePath}/fork`, params.entryId ? { entryId: params.entryId } : {});
+          if (result.success) await this.refreshRuntimeIdentity();
+          return result;
+        }
+        case "clone": {
+          const result = await this.webRequest("POST", `${sessionPath}/clone`);
+          if (result.success) await this.refreshRuntimeIdentity();
+          return result;
+        }
+        case "set_model": return this.webRequest("POST", `${runtimePath}/model`, { provider: params.provider, modelId: params.modelId });
+        case "set_thinking_level": return this.webRequest("POST", `${runtimePath}/thinking`, { level: params.level });
+        case "bash": return this.webRequest("POST", `${sessionPath}/bash`, { command: params.command });
+        case "abort_bash":
+        case "abort_retry": return this.webRequest("POST", `${sessionPath}/${type.replaceAll("_", "-")}`);
+        case "set_session_name": return this.webRequest("PATCH", sessionPath, { name: params.name });
+        case "export_html": return this.asData(await this.webRequest("POST", `${sessionPath}/export`, { outputPath: params.outputPath }));
+        default: return { success: false, code: "unsupported_command", error: `Pi Orbit Web Mode does not support command: ${type}` };
+      }
+    } catch (error) {
+      const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+      return {
+        success: false,
+        code: timedOut ? "timeout" : "transport_error",
+        error: timedOut ? `request timeout after ${this.requestTimeoutMs}ms` : error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  private asData(result: PiResult): PiResult {
+    return result.success ? { success: true, data: result.data } : result;
+  }
+
+  private async startEventStream(): Promise<void> {
+    this.eventAbort = new AbortController();
+    const response = await this.webHost!.request("GET", `${this.runtimePath()}/events?after=0`, undefined, 0, this.eventAbort.signal);
+    if (!response.ok || !response.body) throw new Error(await this.webHost!.responseError(response));
+    void this.consumeEventStream(response).catch((error: unknown) => {
+      if (!this.closed && !this.eventAbort?.signal.aborted) this.emit("stderr", `Pi Orbit event stream failed: ${String(error)}\n`);
+    });
+  }
+
+  private async consumeEventStream(initialResponse: Response): Promise<void> {
+    let response = initialResponse;
+    let lastSequence = 0;
+    while (!this.closed && !this.eventAbort?.signal.aborted) {
+      if (!response.body) throw new Error("Pi Orbit event stream has no response body");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true }).replaceAll("\r", "");
+        let boundary: number;
+        while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+          const frame = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const data = frame.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
+          if (!data) continue;
+          try {
+            const payload = JSON.parse(data) as Record<string, unknown>;
+            if (typeof payload.sequence === "number") lastSequence = payload.sequence;
+            const event = payload.event && typeof payload.event === "object" ? payload.event as PiEvent : undefined;
+            if (event?.type) {
+              this.emit("event", event);
+              if (event.type === "runtime_evicted") {
+                this.closed = true;
+                this.emitExit(null, null);
+                return;
+              }
+            }
+          } catch {
+            this.emit("malformed", data.slice(0, 500));
+          }
+        }
+      }
+      if (this.closed || this.eventAbort?.signal.aborted) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      response = await this.webHost!.request("GET", `${this.runtimePath()}/events?after=${lastSequence}`, undefined, 0, this.eventAbort?.signal);
+      if (!response.ok) throw new Error(await this.webHost!.responseError(response));
+    }
+  }
+
+  private async webRequest(method: string, path: string, body?: Record<string, unknown>): Promise<PiResult> {
+    const response = await this.webHost!.request(method, path, body, this.requestTimeoutMs);
+    let payload: unknown;
+    try { payload = await response.json(); }
+    catch { payload = {}; }
+    const data = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+    if (!response.ok || data.success === false || data.cancelled === true) {
+      return {
+        ...data,
+        success: false,
+        code: String(data.code ?? (data.cancelled === true ? "cancelled" : `http_${response.status}`)),
+        error: String(data.error ?? data.details ?? `Pi Orbit request failed with HTTP ${response.status}`),
+      };
+    }
+    return { ...data, success: true, data: payload };
+  }
+
+  private runtimePath(): string {
+    if (!this.runtimeId) throw new Error("Pi Orbit runtime is not initialized");
+    return `/api/runtimes/${encodeURIComponent(this.runtimeId)}`;
+  }
+
+  private async refreshRuntimeIdentity(): Promise<void> {
+    if (!this.runtimeIdentity) return;
+    const result = await this.webRequest("GET", this.runtimePath());
+    if (!result.success || !result.data || typeof result.data !== "object") return;
+    const descriptor = result.data as Partial<PiOrbitRuntimeDescriptor>;
+    if (descriptor.runtimeId === this.runtimeId && typeof descriptor.piSessionId === "string") {
+      Object.assign(this.runtimeIdentity, descriptor);
+    }
+  }
+
+  private async disposeWebRuntime(): Promise<void> {
+    const path = this.runtimePath();
+    try {
+      await this.webHost!.request("POST", `${path}/abort`, undefined, Math.min(this.requestTimeoutMs, 2_000));
+      const deadline = Date.now() + 2_000;
+      while (Date.now() < deadline) {
+        const state = await this.webHost!.request("GET", path, undefined, Math.min(this.requestTimeoutMs, 1_000));
+        if (!state.ok) break;
+        const descriptor = await state.json() as { busy?: unknown };
+        if (descriptor.busy !== true) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      const deleted = await this.webHost!.request("DELETE", path, undefined, Math.min(this.requestTimeoutMs, 2_000));
+      if (!deleted.ok && deleted.status !== 404 && !this.webHost!.isClosed) {
+        this.emit("stderr", `Unable to dispose Pi Orbit runtime: ${await this.webHost!.responseError(deleted)}\n`);
+      }
+    } catch (error) {
+      if (!this.webHost!.isClosed) this.emit("stderr", `Unable to dispose Pi Orbit runtime: ${String(error)}\n`);
+    }
+  }
+
+  private emitExit(code: number | null, signal: NodeJS.Signals | null): void {
+    if (this.exitEmitted) return;
+    this.exitEmitted = true;
+    this.emit("exit", { code, signal });
+  }
+
   private handleLine(line: string): void {
     if (!line.trim()) return;
     let payload: Record<string, unknown>;
-    try {
-      payload = JSON.parse(line) as Record<string, unknown>;
-    } catch {
-      this.emit("malformed", line.slice(0, 500));
-      return;
-    }
+    try { payload = JSON.parse(line) as Record<string, unknown>; }
+    catch { this.emit("malformed", line.slice(0, 500)); return; }
     const id = typeof payload.id === "string" ? payload.id : undefined;
     const pending = id ? this.pending.get(id) : undefined;
     if (pending && id) {
       clearTimeout(pending.timer);
       this.pending.delete(id);
       const data = payload.data && typeof payload.data === "object" ? payload.data as Record<string, unknown> : undefined;
-      if (data?.cancelled === true) {
-        pending.resolve({
-          ...payload,
-          success: false,
-          code: "cancelled",
-          error: typeof payload.error === "string" ? payload.error : "request was cancelled by the Pi runtime",
-        });
-      } else {
-        pending.resolve(payload as PiResult);
-      }
+      pending.resolve(data?.cancelled === true
+        ? { ...payload, success: false, code: "cancelled", error: typeof payload.error === "string" ? payload.error : "request was cancelled by the Pi runtime" }
+        : payload as PiResult);
       return;
     }
     if (typeof payload.type === "string") this.emit("event", payload as PiEvent);

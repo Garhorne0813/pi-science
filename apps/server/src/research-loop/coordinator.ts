@@ -25,7 +25,7 @@ const DRIVE_POLL_MIN_MS = 100;
 const DRIVE_POLL_MAX_MS = 2_000;
 
 export class ResearchLoopCoordinator {
-  private readonly driving = new Set<string>();
+  private readonly driving = new Map<string, Promise<void>>();
   private closed = false;
 
   constructor(private readonly jobs: JobCoordinator, private readonly runner: ResearchSubagentRunner) {}
@@ -145,8 +145,8 @@ export class ResearchLoopCoordinator {
   resume(cwd: string, loopId: string): void {
     const key = `${resolve(cwd)}\0${loopId}`;
     if (this.closed || this.driving.has(key)) return;
-    this.driving.add(key);
-    void this.drive(cwd, loopId).finally(() => this.driving.delete(key));
+    const drive = this.drive(cwd, loopId).finally(() => this.driving.delete(key));
+    this.driving.set(key, drive);
   }
 
   async reconcile(cwd: string): Promise<void> {
@@ -156,6 +156,7 @@ export class ResearchLoopCoordinator {
   async shutdown(): Promise<void> {
     this.closed = true;
     await this.runner.shutdown();
+    await Promise.allSettled(this.driving.values());
   }
 
   private async drive(cwd: string, loopId: string): Promise<void> {

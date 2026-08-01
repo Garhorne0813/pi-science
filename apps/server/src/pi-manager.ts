@@ -1,17 +1,23 @@
 import { PiProcess, type PiProcessOptions, type PiResult } from "./pi-process.js";
+import { PiOrbitHost } from "./pi-orbit-host.js";
 
 export class PiManager {
   private readonly processes = new Map<string, PiProcess>();
+  private readonly pendingStarts = new Map<string, Promise<PiProcess>>();
+  private webHost: PiOrbitHost | undefined;
+  private webHostStart: Promise<PiOrbitHost> | undefined;
 
-  start(key: string, options: PiProcessOptions): PiProcess {
+  async start(key: string, options: PiProcessOptions): Promise<PiProcess> {
     const existing = this.processes.get(key);
     if (existing) return existing;
-    const process = PiProcess.start(options);
-    process.once("exit", () => {
-      if (this.processes.get(key) === process) this.processes.delete(key);
-    });
-    this.processes.set(key, process);
-    return process;
+    const pending = this.pendingStarts.get(key);
+    if (pending) return pending;
+    const started = this.startOnce(key, options);
+    this.pendingStarts.set(key, started);
+    try { return await started; }
+    finally {
+      if (this.pendingStarts.get(key) === started) this.pendingStarts.delete(key);
+    }
   }
 
   get(key: string): PiProcess | undefined {
@@ -32,13 +38,61 @@ export class PiManager {
   }
 
   async shutdownAll(): Promise<void> {
+    await Promise.allSettled(this.pendingStarts.values());
     const processes = [...this.processes.entries()];
     this.processes.clear();
     await Promise.all(processes.map(([, process]) => process.shutdown()));
+    const host = this.webHost;
+    this.webHost = undefined;
+    this.webHostStart = undefined;
+    await host?.shutdown();
   }
 
   get activeCount(): number {
     return this.processes.size;
+  }
+
+  get hostProcessCount(): number {
+    return this.webHost && !this.webHost.isClosed ? 1 : 0;
+  }
+
+  get processCount(): number {
+    return this.hostProcessCount || this.processes.size;
+  }
+
+  private async startOnce(key: string, options: PiProcessOptions): Promise<PiProcess> {
+    const process = options.web
+      ? await PiProcess.attachWeb(await this.ensureWebHost(options), options)
+      : PiProcess.start(options);
+    process.once("exit", () => {
+      if (this.processes.get(key) === process) this.processes.delete(key);
+    });
+    this.processes.set(key, process);
+    return process;
+  }
+
+  private async ensureWebHost(options: PiProcessOptions): Promise<PiOrbitHost> {
+    if (this.webHost && !this.webHost.isClosed) return this.webHost;
+    if (this.webHostStart) return this.webHostStart;
+    const starting = (async () => {
+      const host = new PiOrbitHost(options);
+      host.once("exit", () => {
+        if (this.webHost === host) this.webHost = undefined;
+      });
+      try {
+        await host.ready();
+        this.webHost = host;
+        return host;
+      } catch (error) {
+        await host.shutdown().catch(() => undefined);
+        throw error;
+      }
+    })();
+    this.webHostStart = starting;
+    try { return await starting; }
+    finally {
+      if (this.webHostStart === starting) this.webHostStart = undefined;
+    }
   }
 }
 

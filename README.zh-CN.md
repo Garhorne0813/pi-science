@@ -30,7 +30,7 @@
 - **文献引用真实可验证。**零配置直连 Crossref/arXiv/PubMed 检索，内联 DOI 渲染为可点击的来源——绝不编造参考文献。
 - **架构级 local-first。**工作区就是你机器上的普通文件夹。除了你配置的 LLM 调用（也支持 Ollama、LM Studio 等纯本地端点），任何数据不离开本机。未发表的数据始终属于你。
 
-每个项目独立保存对话、文件、实验运行、产物谱系和审核后的项目知识；每个对话使用独立 Pi 进程，因此多个 session 可以并行执行，互不阻塞。
+每个项目独立保存对话、文件、实验运行、产物谱系和审核后的项目知识；对话在共享 Pi Host 内使用隔离 runtime，因此多个 session 可以并行执行，互不阻塞。
 
 ## 快速开始
 
@@ -81,15 +81,6 @@ pi-science stop             # 停止本仓库启动的服务
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 ```
 
-### 本地服务
-
-| 服务 | 地址 | 用途 |
-|---|---|---|
-| Web 应用 | `http://127.0.0.1:5173` | 主科研工作区 |
-| Node 控制面 | `http://127.0.0.1:8787` | 会话、SSE、文件、任务、设置和项目 API |
-| Python 运行时 | `http://127.0.0.1:8788` | 内部科学服务与计算内核 |
-| API 文档 | `http://127.0.0.1:8787/docs` | 交互式 API 参考 |
-
 启动后进入 **Settings → LLM**，配置提供商和默认模型即可开始使用。
 
 ## 核心能力
@@ -97,7 +88,7 @@ PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 | 领域 | Pi-Science 提供的能力 |
 |---|---|
 | 智能体工作区 | 流式对话、工具卡片、Markdown、LaTeX、斜杠命令和交互式扩展请求 |
-| 并行会话 | 每个 session 使用独立 Pi 进程，包括恢复和分叉的旧会话 |
+| 并行会话 | 活跃、恢复和分叉的对话在同一个 Pi Host 内使用相互隔离的 runtime |
 | 科学文件 | 原生预览分子结构、FITS、基因组、相图、3D 模型、表格、办公文档、媒体和代码 |
 | 可复现性 | 产物哈希、生成代码与差异、环境快照、谱系历史和一键复现 |
 | 项目记忆 | Reviewer 提案、人工审核、证据链接、项目版本、研究循环和 Pareto 前沿 |
@@ -122,43 +113,9 @@ Pi-Science 可以直接在浏览器中渲染常见科研格式。
 
 ## 系统架构
 
-```mermaid
-flowchart LR
-    UI[React Web 应用] --> CP[Node / TypeScript 控制面]
-    CP --> P1[Pi 进程 · session A]
-    CP --> P2[Pi 进程 · session B]
-    CP --> PN[Pi 进程 · session N]
-    CP --> PY[Python 科学运行时]
-    PY --> K[Python / R 内核]
-    CP --> WS[(工作区文件与 .pi-science 元数据)]
-```
-
-- **React 前端**负责对话、项目记忆、文件检查器、Notebook、实验运行、技能和设置界面。
-- **Node 控制面**负责对话进程、session API、实时 SSE、文件、任务、谱系和应用设置。
-- **Python 运行时**提供科学服务和计算内核。
-- session 同时按 workspace 和 session ID 隔离。空闲 Pi 进程默认在 30 分钟后回收；设置 `PI_SCIENCE_IDLE_RUNTIME_MS=0` 可关闭回收。
-
-深入设计说明见[研究循环架构（ADR）](docs/adr-research-loop-subagents.md)。
-
-## 项目与工作区
-
-每个初始化后的项目都是一个 workspace。项目运行状态保存在 `.pi-science/`，智能体指令和技能使用 Pi 的标准目录。
-
-```text
-project/
-├── AGENTS.md
-├── .pi/
-│   ├── skills/
-│   └── agents/
-├── .pi-science/
-│   ├── sessions/
-│   ├── artifacts.jsonl
-│   ├── provenance.jsonl
-│   └── research-records-v2.jsonl
-└── 你的科研文件
-```
-
-项目记忆按需创建。发现、结论和任务只有在用户确认后，才会进入正式项目记录。
+Pi-Science 使用 local-first 控制面、一个承载隔离 agent runtime 的共享 Pi Orbit
+Web Host，以及按需启动的科学计算服务。进程归属、服务边界、工作区状态、生命周期和
+安全设计详见[架构文档](docs/architecture.zh-CN.md)。
 
 ## 斜杠命令
 
@@ -207,7 +164,7 @@ uv run --directory backend pytest -q
 ```bash
 pnpm smoke
 pnpm uat:conversation
-PI_CLI_PATH=/absolute/path/to/pi pnpm smoke:real-pi
+PI_CLI_PATH=/absolute/path/to/pi-orbit pnpm smoke:real-pi
 ```
 
 前端专项 UAT：
@@ -221,8 +178,9 @@ npm run test:uat:office
 
 ## 文档
 
+- [架构文档](docs/architecture.zh-CN.md)
 - [研究循环架构（ADR）](docs/adr-research-loop-subagents.md)
-- 运行栈启动后访问 `http://127.0.0.1:8787/docs` 查看交互式 API 参考
+- 运行栈启动后可查看交互式 API 参考
 
 ## 参与贡献
 

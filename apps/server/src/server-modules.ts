@@ -34,11 +34,11 @@ export function createServerModules(config?: ServerConfig): ServerModules {
   const sessionRepository = new SessionRepository();
   const piManager = new PiManager();
   const environments = new WorkspaceEnvironmentService(config?.pythonExecutable);
-  const projectReview = new ProjectReviewService(new PiReviewSubagentRunner(environments), sessionRepository);
+  const projectReview = new ProjectReviewService(new PiReviewSubagentRunner(environments, piManager), sessionRepository);
   const sessions = new NodeSessionService(events, piManager, sessionRepository, environments, projectReview);
   const settings = new SettingsStore();
   const jobs = new JobCoordinator(environments);
-  const research = new ResearchLoopCoordinator(jobs, new PiResearchSubagentRunner(environments));
+  const research = new ResearchLoopCoordinator(jobs, new PiResearchSubagentRunner(environments, piManager));
   const scientificRuntime = new ScientificRuntimeManager({
     origin: config?.pythonOrigin ?? "http://127.0.0.1:8788",
     managed: config?.manageScientificRuntime,

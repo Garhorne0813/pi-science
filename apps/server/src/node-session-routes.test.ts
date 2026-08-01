@@ -18,6 +18,7 @@ const original = {
   node: process.env.PI_NODE_PATH,
   log: process.env.FAKE_PI_LOG,
   mode: process.env.FAKE_PI_MODE,
+  piMode: process.env.PI_SCIENCE_PI_MODE,
 };
 
 beforeEach(async () => {
@@ -51,13 +52,14 @@ beforeEach(async () => {
   process.env.PI_SCIENCE_HOME = join(root, "data");
   process.env.PI_CLI_PATH = script;
   process.env.PI_NODE_PATH = process.execPath;
+  process.env.PI_SCIENCE_PI_MODE = "rpc";
   process.env.FAKE_PI_LOG = join(root, "rpc.jsonl");
 });
 
 afterEach(async () => {
   await nodeSessionService.shutdownAll();
   for (const [key, value] of Object.entries(original)) {
-    const environmentKey = key === "home" ? "PI_SCIENCE_HOME" : key === "cli" ? "PI_CLI_PATH" : key === "node" ? "PI_NODE_PATH" : key === "mode" ? "FAKE_PI_MODE" : "FAKE_PI_LOG";
+    const environmentKey = key === "home" ? "PI_SCIENCE_HOME" : key === "cli" ? "PI_CLI_PATH" : key === "node" ? "PI_NODE_PATH" : key === "mode" ? "FAKE_PI_MODE" : key === "piMode" ? "PI_SCIENCE_PI_MODE" : "FAKE_PI_LOG";
     if (value === undefined) delete process.env[environmentKey];
     else process.env[environmentKey] = value;
   }
@@ -87,6 +89,30 @@ function app() {
 }
 
 describe("native Node conversation routes", () => {
+  it("maps stable Pi Orbit failures to actionable HTTP responses", async () => {
+    for (const [code, statusCode] of [
+      ["project_trust_required", 409],
+      ["runtime_workspace_mismatch", 409],
+      ["session_in_use", 409],
+      ["runtime_busy", 409],
+      ["runtime_initialization_failed", 422],
+      ["runtime_capacity_exceeded", 429],
+      ["agent_turn_capacity_exceeded", 429],
+      ["runtime_evicted", 410],
+      ["runtime_not_found", 404],
+    ] as const) {
+      const service = {
+        async create() { return { error: "Pi Orbit failure", code, diagnostics: [{ type: "error", message: "detail" }] }; },
+      } as unknown as NodeSessionService;
+      const server = Fastify({ logger: false });
+      registerNodeSessionRoutes(server, service, sessionRepository);
+      const response = await server.inject({ method: "POST", url: "/api/sessions", payload: { cwd: "/tmp/workspace" } });
+      expect(response.statusCode).toBe(statusCode);
+      expect(response.json()).toMatchObject({ ok: false, code, diagnostics: [{ message: "detail" }] });
+      await server.close();
+    }
+  });
+
   it("lists an active blank session and switches repeatedly between persisted sessions", async () => {
     const cwd = await workspaceWithSessions("session-a", "session-b");
     const server = app();

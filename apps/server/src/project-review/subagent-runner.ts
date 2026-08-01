@@ -1,7 +1,8 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { metadataRoot } from "../persistence.js";
-import { PiProcess, type PiEvent } from "../pi-process.js";
+import { PiManager, piManager } from "../pi-manager.js";
+import type { PiProcess, PiEvent } from "../pi-process.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "../pi-runtime-launch.js";
 import type { WorkspaceEnvironmentService } from "../workspace-environment.js";
 import { knowledgeTypes, parseReviewResult, type ConversationExcerpt, type ReviewRunRequest, type ReviewRunResult, type ReviewSubagentRunner } from "./types.js";
@@ -10,13 +11,16 @@ const RESPONSE_LIMIT_BYTES = 2_000_000;
 const RUN_TIMEOUT_MS = 5 * 60_000;
 const REPAIR_ATTEMPTS = 1;
 
-/** Runs one bounded reviewer turn in a throwaway Pi process. Deliberately a
+/** Runs one bounded reviewer turn in a throwaway Pi Orbit runtime. Deliberately a
  *  sibling of the research-loop runner rather than a shared abstraction: the
  *  two have different lifecycles (one-shot vs. long-lived loop). */
 export class PiReviewSubagentRunner implements ReviewSubagentRunner {
-  private readonly active = new Set<PiProcess>();
+  private readonly active = new Map<PiProcess, string>();
 
-  constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment">) {}
+  constructor(
+    private readonly environments: Pick<WorkspaceEnvironmentService, "environment">,
+    private readonly manager: PiManager = piManager,
+  ) {}
 
   async run(request: ReviewRunRequest): Promise<ReviewRunResult> {
     const sessionDir = join(metadataRoot(request.cwd), "review-sessions", request.run_id);
@@ -25,10 +29,12 @@ export class PiReviewSubagentRunner implements ReviewSubagentRunner {
     if (!options) throw new Error("Pi CLI is not configured");
     const index = options.args.indexOf("--session-dir");
     if (index >= 0) options.args[index + 1] = sessionDir;
+    if (options.web) options.web.runtime.sessionDir = sessionDir;
     options.requestTimeoutMs = 30_000;
 
-    const process = PiProcess.start(options);
-    this.active.add(process);
+    const managerKey = `review:${request.run_id}`;
+    const process = await this.manager.start(managerKey, options);
+    this.active.set(process, managerKey);
     const deadline = Date.now() + RUN_TIMEOUT_MS;
     let text = "";
     let settle: (() => void) | null = null;
@@ -85,12 +91,12 @@ export class PiReviewSubagentRunner implements ReviewSubagentRunner {
       process.removeAllListeners("event");
       process.removeAllListeners("exit");
       this.active.delete(process);
-      await process.shutdown().catch(() => undefined);
+      await this.manager.stop(managerKey).catch(() => undefined);
     }
   }
 
   async shutdown(): Promise<void> {
-    await Promise.allSettled([...this.active].map((process) => process.shutdown()));
+    await Promise.allSettled([...this.active.values()].map((managerKey) => this.manager.stop(managerKey)));
     this.active.clear();
   }
 }

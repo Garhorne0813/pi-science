@@ -3,17 +3,21 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { researchAgentResultSchema } from "@pi-science/contracts";
 import { metadataRoot } from "../persistence.js";
-import { PiProcess, type PiEvent } from "../pi-process.js";
+import { PiManager, piManager } from "../pi-manager.js";
+import type { PiProcess, PiEvent } from "../pi-process.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "../pi-runtime-launch.js";
 import type { WorkspaceEnvironmentService } from "../workspace-environment.js";
 import type { AgentRunRequest, AgentRunResult, AgentRunUsage, ResearchSubagentRunner } from "./types.js";
 
-type ActiveRun = { process: PiProcess; state: "running" | "completed" | "failed"; usage: AgentRunUsage };
+type ActiveRun = { managerKey: string; process: PiProcess; state: "running" | "completed" | "failed"; usage: AgentRunUsage };
 
 export class PiResearchSubagentRunner implements ResearchSubagentRunner {
   private readonly active = new Map<string, ActiveRun>();
 
-  constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment">) {}
+  constructor(
+    private readonly environments: Pick<WorkspaceEnvironmentService, "environment">,
+    private readonly manager: PiManager = piManager,
+  ) {}
 
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
     const runId = request.operation_id || `agent-${randomUUID().replaceAll("-", "").slice(0, 16)}`;
@@ -25,10 +29,12 @@ export class PiResearchSubagentRunner implements ResearchSubagentRunner {
     if (!options) throw new Error("Pi CLI is not configured");
     const index = options.args.indexOf("--session-dir");
     if (index >= 0) options.args[index + 1] = sessionDir;
+    if (options.web) options.web.runtime.sessionDir = sessionDir;
     options.requestTimeoutMs = 30_000;
 
-    const process = PiProcess.start(options);
-    const active: ActiveRun = { process, state: "running", usage: { model_tokens: 0, cost_usd: 0 } };
+    const managerKey = `research:${runId}`;
+    const process = await this.manager.start(managerKey, options);
+    const active: ActiveRun = { managerKey, process, state: "running", usage: { model_tokens: 0, cost_usd: 0 } };
     this.active.set(runId, active);
     let text = "";
     let settle: (() => void) | null = null;
@@ -102,7 +108,7 @@ export class PiResearchSubagentRunner implements ResearchSubagentRunner {
     } finally {
       process.removeAllListeners("event");
       process.removeAllListeners("exit");
-      await process.shutdown().catch(() => undefined);
+      await this.manager.stop(managerKey).catch(() => undefined);
       this.trimRuns();
     }
   }
@@ -120,11 +126,11 @@ export class PiResearchSubagentRunner implements ResearchSubagentRunner {
     const run = this.active.get(runId);
     if (!run || run.state !== "running") return;
     run.state = "failed";
-    await run.process.shutdown();
+    await this.manager.stop(run.managerKey);
   }
 
   async shutdown(): Promise<void> {
-    await Promise.allSettled([...this.active.values()].filter((run) => run.state === "running").map((run) => run.process.shutdown()));
+    await Promise.allSettled([...this.active.values()].filter((run) => run.state === "running").map((run) => this.manager.stop(run.managerKey)));
   }
 
   private trimRuns(): void {
