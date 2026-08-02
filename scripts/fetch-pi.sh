@@ -54,12 +54,20 @@ if [ ! -x "$pi_cli" ]; then
   curl --fail --location --silent --show-error -o "$download_dir/$archive" "$release_url/$archive"
   curl --fail --location --silent --show-error -o "$download_dir/SHA256SUMS" "$release_url/SHA256SUMS"
 
-  expected="$(awk -v name="$archive" '$2 == name || $2 == "*" name { print $1; exit }' "$download_dir/SHA256SUMS")"
+  # Parse SHA256SUMS without awk: the default awk on this machine is a broken
+  # miniconda gawk (dyld libintl failure), so a plain shell loop is safer.
+  expected=""
+  while read -r hash_value name_entry; do
+    name_entry="${name_entry#\*}"
+    if [ "$name_entry" = "$archive" ]; then expected="$hash_value"; break; fi
+  done < "$download_dir/SHA256SUMS"
   [ -n "$expected" ] || { echo "ERROR: $archive is missing from SHA256SUMS." >&2; exit 1; }
   if command -v shasum >/dev/null 2>&1; then
-    actual="$(shasum -a 256 "$download_dir/$archive" | awk '{print $1}')"
+    actual="$(shasum -a 256 "$download_dir/$archive")"
+    actual="${actual%% *}"
   elif command -v sha256sum >/dev/null 2>&1; then
-    actual="$(sha256sum "$download_dir/$archive" | awk '{print $1}')"
+    actual="$(sha256sum "$download_dir/$archive")"
+    actual="${actual%% *}"
   else
     echo "ERROR: shasum or sha256sum is required to verify Pi Orbit." >&2
     exit 1
