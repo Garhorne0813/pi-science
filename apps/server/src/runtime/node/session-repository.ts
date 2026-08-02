@@ -2,10 +2,12 @@ import { open, readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
+import { readProject } from "../../project/project-registry.js";
 
 export interface SessionInfoRecord {
   id: string;
   cwd: string;
+  project_id: string | null;
   name: null;
   created_at: string | null;
   updated_at: string | null;
@@ -276,10 +278,14 @@ export class SessionRepository {
   }
 
   async list(cwd: string): Promise<SessionInfoRecord[]> {
-    const files = await sessionFilesWithMtime(sessionsRoot(cwd));
+    const [files, project] = await Promise.all([
+      sessionFilesWithMtime(sessionsRoot(cwd)),
+      readProject(cwd),
+    ]);
     return files.map(({ header, modified }) => ({
       id: String(header.id),
       cwd: typeof header.cwd === "string" ? header.cwd : resolve(cwd),
+      project_id: project?.id ?? (typeof header.project_id === "string" ? header.project_id : null),
       name: null,
       created_at: typeof header.timestamp === "string" ? header.timestamp : null,
       updated_at: modified.toISOString(),

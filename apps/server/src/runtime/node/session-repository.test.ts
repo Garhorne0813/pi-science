@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { invalidateSessionFileCache, SessionRepository } from "./session-repository.js";
+import { ensureProject } from "../../project/project-registry.js";
 
 const tempDirs: string[] = [];
 
@@ -26,6 +27,17 @@ afterEach(async () => {
 });
 
 describe("SessionRepository cache", () => {
+  it("associates every listed session with the workspace project id", async () => {
+    const cwd = await makeWorkspace();
+    const project = await ensureProject(cwd);
+    const repo = new SessionRepository();
+    await writeFile(join(cwd, ".pi-science", "sessions", "project-session.jsonl"), sessionHeader("project-session", cwd), "utf8");
+
+    await expect(repo.list(cwd)).resolves.toEqual([
+      expect.objectContaining({ id: "project-session", project_id: project.id }),
+    ]);
+  });
+
   it("returns fresh results after explicit cache invalidation", async () => {
     const cwd = await makeWorkspace();
     const repo = new SessionRepository();

@@ -129,6 +129,7 @@ project/
 │   ├── skills/
 │   └── agents/
 ├── .pi-science/
+│   ├── project.json           # 稳定项目身份与显示元数据
 │   ├── sessions/             # 持久化的 Pi session JSONL 文件
 │   ├── agent/                # 项目级 runtime 配置回退目录
 │   ├── runs/                 # 执行工作区与输出
@@ -140,6 +141,10 @@ project/
 ```
 
 审核后的项目记忆按需创建。Agent 发现只有在用户接受后，才会成为正式项目知识。
+
+外部 workspace 通过打开 workspace 的 API 显式注册。其规范化路径会写入全局
+`registered-workspaces.json`，因此重启后仍可重新发现；它与表示用户收藏的
+`pinned.json` 分开保存。
 
 ### 包隔离
 
@@ -155,6 +160,8 @@ Notebook kernel 都会把该环境放在 `PATH` 最前面；`pip` 被配置为�
 - Pi Orbit Host 只监听本机地址，控制面的每个请求都需要随机生成的 bearer token。
 - Token 只保留在后端；不会向浏览器 origin 开放 Host 的直接 CORS 访问。
 - 创建 runtime 前会规范化并校验 workspace 路径。
+- 每个已注册 workspace 在 `.pi-science/project.json` 中拥有稳定的项目身份；
+  session 列表通过该清单解析 `project_id`。
 - 注册后的 workspace 位于应用信任边界内。控制面会在创建 runtime 前记录 Pi Orbit
   项目 trust，因此只应注册你信任其中项目指令与技能的 workspace。
 - Runtime identity 同时包含 workspace 和 session identity，防止通过另一个 workspace

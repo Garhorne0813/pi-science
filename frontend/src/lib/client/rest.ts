@@ -5,7 +5,7 @@ import { request, responseError } from "./http";
 import { cacheMessages } from "./message-cache";
 import type { HistoryMessage, InteractionResponse, SessionInfo, SessionState } from "./types";
 
-export async function createSession(baseUrl: string, cwd: string, model?: string): Promise<{ id: string }> {
+export async function createSession(baseUrl: string, cwd: string, model?: string): Promise<{ id: string; cwd?: string; project_id?: string }> {
   const config = model ? { model } : {};
   const res = await request(`${baseUrl}/api/sessions`, {
     method: "POST",

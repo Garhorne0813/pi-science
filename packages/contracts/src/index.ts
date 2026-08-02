@@ -20,6 +20,7 @@ export const createSessionRequestSchema = z.object({
 export const createSessionResponseSchema = z.object({
   id: z.string().min(1),
   cwd: z.string().min(1),
+  project_id: z.string().min(1).optional(),
 });
 
 export const sessionInfoSchema = z.object({
@@ -28,6 +29,7 @@ export const sessionInfoSchema = z.object({
   name: z.string().nullish(),
   created_at: z.string().nullish(),
   updated_at: z.string().nullish(),
+  project_id: z.string().min(1).nullish(),
 });
 
 export const sessionStateSchema = z.object({
@@ -58,6 +60,7 @@ export const historyMessageSchema = z.object({
 export const workspaceInfoSchema = z.object({
   name: z.string().min(1),
   path: z.string().min(1),
+  project_id: z.string().min(1).optional(),
   session_count: z.number().int().nonnegative().default(0),
   last_modified: z.string().default(""),
 });
