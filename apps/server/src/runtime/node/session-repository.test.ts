@@ -173,6 +173,39 @@ describe("SessionRepository cache", () => {
 });
 
 describe("SessionRepository messages streaming", () => {
+  it("returns newest history pages with an opaque cursor", async () => {
+    const cwd = await makeWorkspace();
+    const repo = new SessionRepository();
+    const lines = [
+      sessionHeader("paged", cwd),
+      messageLine("m1", "user", "one"),
+      messageLine("m2", "assistant", "two"),
+      messageLine("m3", "user", "three"),
+      messageLine("m4", "assistant", "four"),
+    ];
+    await writeFile(join(cwd, ".pi-science", "sessions", "paged.jsonl"), lines.join(""), "utf8");
+
+    const latest = await repo.messagesPage(cwd, "paged", { limit: 2 });
+    expect(latest.messages.map((message) => message.id)).toEqual(["m3", "m4"]);
+    expect(latest.has_more).toBe(true);
+    expect(latest.next_cursor).toEqual(expect.any(String));
+    expect(latest.snapshot_version).toContain(":");
+
+    const older = await repo.messagesPage(cwd, "paged", { limit: 2, before: latest.next_cursor! });
+    expect(older.messages.map((message) => message.id)).toEqual(["m1", "m2"]);
+    expect(older.has_more).toBe(false);
+    expect(older.next_cursor).toBeNull();
+  });
+
+  it("rejects malformed history cursors and oversized pages", async () => {
+    const cwd = await makeWorkspace();
+    const repo = new SessionRepository();
+    await writeFile(join(cwd, ".pi-science", "sessions", "limits.jsonl"), sessionHeader("limits", cwd), "utf8");
+
+    await expect(repo.messagesPage(cwd, "limits", { limit: 101 })).rejects.toThrow("history limit");
+    await expect(repo.messagesPage(cwd, "limits", { before: "not-a-cursor" })).rejects.toThrow("invalid history cursor");
+  });
+
   it("reads messages from a multi-line JSONL file", async () => {
     const cwd = await makeWorkspace();
     const repo = new SessionRepository();

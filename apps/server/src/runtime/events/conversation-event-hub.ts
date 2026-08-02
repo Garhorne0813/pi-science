@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { durableEventStore, type SseEventRecord } from "./event-store.js";
 import type { PiEvent, PiProcess } from "../pi/pi-process.js";
@@ -14,6 +13,7 @@ type Subscriber = {
 type EventStore = {
   append(cwd: string, sessionId: string, event: SseEventRecord): Promise<void>;
   readAfter(cwd: string, sessionId: string, lastEventId?: string | null): Promise<SseEventRecord[]>;
+  nextSequence?: (cwd: string, sessionId: string) => Promise<number>;
 };
 
 type BindingOptions = {
@@ -33,10 +33,17 @@ type TurnState = {
 };
 
 type StderrChunk = { text: string; at: number; turn: number };
+type PendingText = {
+  cwd: string;
+  sessionId: string;
+  payload: Record<string, unknown>;
+  timer: ReturnType<typeof setTimeout>;
+};
 
 const MAX_EVENT_TEXT = 20_000;
 const MAX_SUBSCRIBER_REPLAY_PENDING = 2_000;
 const STDERR_WINDOW_MS = 30_000;
+const TEXT_BATCH_MS = 50;
 
 function streamKey(cwd: string, sessionId: string): string {
   return `${resolve(cwd)}\0${sessionId}`;
@@ -82,6 +89,14 @@ function recordKey(record: SseEventRecord): string {
   return record.id ?? `${record.created_at}\0${record.event ?? ""}\0${record.data}`;
 }
 
+function sequenceFromCursor(id: string | null): number {
+  if (!id) return 0;
+  const separator = id.lastIndexOf(":");
+  const value = separator >= 0 ? id.slice(separator + 1) : id;
+  const sequence = Number(value);
+  return /^\d+$/.test(value) && Number.isSafeInteger(sequence) ? sequence : 0;
+}
+
 function modelError(event: PiEvent): string | null {
   if (event.type !== "message_end") return null;
   const message = (event.message && typeof event.message === "object" ? event.message : event) as Record<string, unknown>;
@@ -91,10 +106,11 @@ function modelError(event: PiEvent): string | null {
 }
 
 export class ConversationEventHub {
-  private readonly epoch = randomUUID();
   private readonly sequences = new Map<string, number>();
+  private readonly sequenceInitializers = new Map<string, Promise<void>>();
   private readonly subscribers = new Map<string, Set<Subscriber>>();
   private readonly publishing = new Map<string, Promise<void>>();
+  private readonly pendingText = new Map<string, PendingText>();
   private readonly turns = new Map<string, TurnState>();
   private readonly bound = new WeakSet<PiProcess>();
   private readonly expectedExits = new WeakSet<PiProcess>();
@@ -105,6 +121,7 @@ export class ConversationEventHub {
     // Process exit handlers append terminal records through their event queue.
     // Yield once so those publishes are registered before taking the snapshot.
     await new Promise<void>((resolve) => setImmediate(resolve));
+    await Promise.all([...this.pendingText.values()].map((pending) => this.flushPendingText(pending.cwd, pending.sessionId)));
     await Promise.allSettled([...this.publishing.values()]);
   }
 
@@ -144,7 +161,12 @@ export class ConversationEventHub {
       if (event.type === "agent_settled") options.onBusy(false);
       eventQueue = eventQueue.catch(() => undefined).then(async () => {
         for (const normalized of this.normalize(cwd, sessionId, event)) {
-          await this.publish(cwd, sessionId, normalized);
+          if (normalized.type === "text.updated") {
+            await this.queueText(cwd, sessionId, normalized);
+          } else {
+            await this.flushPendingText(cwd, sessionId);
+            await this.publish(cwd, sessionId, normalized);
+          }
         }
         await Promise.resolve(options.observe?.(event, sessionId)).catch(() => undefined);
       });
@@ -220,11 +242,12 @@ export class ConversationEventHub {
     const key = streamKey(cwd, sessionId);
     const previous = this.publishing.get(key) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(async () => {
+      await this.ensureSequence(cwd, sessionId, key);
       const sequence = (this.sequences.get(key) ?? 0) + 1;
       this.sequences.set(key, sequence);
       const record: SseEventRecord = {
         event: String(payload.type ?? "runtime.event"),
-        id: `${this.epoch}:${sequence}`,
+        id: String(sequence),
         data: JSON.stringify(safeValue(payload)),
         created_at: new Date().toISOString(),
       };
@@ -250,6 +273,60 @@ export class ConversationEventHub {
       if (this.publishing.get(key) === next) this.publishing.delete(key);
     }, () => { if (this.publishing.get(key) === next) this.publishing.delete(key); });
     return next;
+  }
+
+  private async ensureSequence(cwd: string, sessionId: string, key: string): Promise<void> {
+    if (this.sequences.has(key) || !this.eventStore.nextSequence) return;
+    const existing = this.sequenceInitializers.get(key);
+    if (existing) return existing;
+    let initialization!: Promise<void>;
+    initialization = Promise.resolve(this.eventStore.nextSequence(cwd, sessionId)).then((sequence) => {
+      const current = this.sequences.get(key) ?? 0;
+      if (Number.isSafeInteger(sequence) && sequence >= 0) this.sequences.set(key, Math.max(current, sequence));
+    }).catch(() => undefined).finally(() => {
+      if (this.sequenceInitializers.get(key) === initialization) this.sequenceInitializers.delete(key);
+    });
+    this.sequenceInitializers.set(key, initialization);
+    return initialization;
+  }
+
+  private async queueText(cwd: string, sessionId: string, payload: Record<string, unknown>): Promise<void> {
+    const key = streamKey(cwd, sessionId);
+    const existing = this.pendingText.get(key);
+    if (existing && existing.payload.partId !== payload.partId) await this.flushPendingText(cwd, sessionId);
+    const current = this.pendingText.get(key);
+    if (current) {
+      const incomingText = String(payload.text ?? "");
+      if (payload.replace === true) {
+        current.payload = { ...current.payload, ...payload, text: cap(incomingText) };
+      } else {
+        current.payload = {
+          ...current.payload,
+          ...payload,
+          text: cap(`${String(current.payload.text ?? "")}${incomingText}`),
+          ...(current.payload.replace === true ? { replace: true } : {}),
+        };
+      }
+      return;
+    }
+    const pending: PendingText = {
+      cwd,
+      sessionId,
+      payload: { ...payload, text: cap(payload.text) },
+      timer: setTimeout(() => {
+        void this.flushPendingText(cwd, sessionId).catch(() => undefined);
+      }, TEXT_BATCH_MS),
+    };
+    this.pendingText.set(key, pending);
+  }
+
+  private async flushPendingText(cwd: string, sessionId: string): Promise<void> {
+    const key = streamKey(cwd, sessionId);
+    const pending = this.pendingText.get(key);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingText.delete(key);
+    await this.publish(cwd, sessionId, pending.payload);
   }
 
   private eventSessionId(event: PiEvent): string | null {

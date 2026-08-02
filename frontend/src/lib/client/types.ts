@@ -37,6 +37,13 @@ export interface HistoryMessage {
   timestamp?: string;
 }
 
+export interface SessionMessagePage {
+  messages: HistoryMessage[];
+  next_cursor: string | null;
+  has_more: boolean;
+  snapshot_version: string;
+}
+
 export interface SessionState {
   id: string;
   cwd: string;

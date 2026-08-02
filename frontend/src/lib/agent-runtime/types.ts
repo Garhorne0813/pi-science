@@ -25,6 +25,10 @@ export interface RuntimeState {
 
   // Thread
   thread: Thread;
+  historyCursor: string | null;
+  historyHasMore: boolean;
+  historyLoading: boolean;
+  historySnapshotVersion: string;
   working: boolean;
   model: string | null;
   thinking: string | null;
@@ -49,6 +53,7 @@ export interface RuntimeState {
   respondToInteraction: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => Promise<void>;
   loadSessions: (cwd?: string) => Promise<SessionInfo[]>;
   loadSession: (sessionId: string) => Promise<void>;
+  loadOlderMessages: () => Promise<number>;
   forkSession: (sessionId: string) => Promise<string>;
   createNewSession: () => Promise<string>;
   deleteSession: (sessionId: string) => Promise<void>;

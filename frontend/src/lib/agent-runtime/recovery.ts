@@ -11,7 +11,7 @@ import { useRuntimeStore } from "./store";
 export async function resyncCompletedHistory(sessionId: string, cwd: string): Promise<void> {
   const generation = generations.connection;
   try {
-    const messages = await getClient().getMessages(sessionId, cwd);
+    const history = await getClient().getMessagesPage(sessionId, cwd);
     const current = useRuntimeStore.getState();
     if (
       generation !== generations.connection
@@ -25,11 +25,17 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
     // the turn: live ids (user-<ts>, SSE partId) can never match REST ids
     // (JSONL message ids). Only a racing empty snapshot needs the guard — the
     // file may not have flushed yet, so keep the visible live thread.
-    if (messages.length === 0 && current.thread.blocks.length > 0) {
+    if (history.messages.length === 0 && current.thread.blocks.length > 0) {
       // The snapshot is stale (file not flushed yet) — keep the live thread.
       return;
     }
-    useRuntimeStore.setState({ thread: threadFromMessages(messages) });
+    useRuntimeStore.setState({
+      thread: threadFromMessages(history.messages),
+      historyCursor: history.next_cursor,
+      historyHasMore: history.has_more,
+      historyLoading: false,
+      historySnapshotVersion: history.snapshot_version,
+    });
   } catch (error) {
     console.error("Failed to resynchronize completed conversation:", error);
   }
@@ -79,8 +85,8 @@ export async function reconcileAfterGap(
   cwd: string,
 ): Promise<void> {
   const client = getClient();
-  const [messagesResult, stateResult] = await Promise.allSettled([
-    client.getMessages(sessionId, cwd),
+  const [historyResult, stateResult] = await Promise.allSettled([
+    client.getMessagesPage(sessionId, cwd),
     client.getSessionState(sessionId, cwd),
   ]);
   const current = useRuntimeStore.getState();
@@ -106,14 +112,18 @@ export async function reconcileAfterGap(
   }
   // History recovery is independent from busy state. Merge the REST snapshot
   // with live blocks so a text.updated arriving during this request is kept.
-  if (messagesResult.status === "fulfilled") {
+  if (historyResult.status === "fulfilled") {
     useRuntimeStore.setState((state) => ({
-      thread: mergeHistoryWithLive(threadFromMessages(messagesResult.value), state.thread),
+      thread: mergeHistoryWithLive(threadFromMessages(historyResult.value.messages), state.thread),
+      historyCursor: historyResult.value.next_cursor,
+      historyHasMore: historyResult.value.has_more,
+      historyLoading: false,
+      historySnapshotVersion: historyResult.value.snapshot_version,
     }));
     backfillSessionName(cwd, sessionId, useRuntimeStore.getState().thread);
   }
   useRuntimeStore.setState({
-    status: messagesResult.status === "fulfilled" && stateResult.status === "fulfilled" ? "ready" : "error",
+    status: historyResult.status === "fulfilled" && stateResult.status === "fulfilled" ? "ready" : "error",
   });
   void loadSessionsInternal();
 }
@@ -196,6 +206,10 @@ export function recoverMissingSession(sessionId: string, cwd: string, client?: P
     activeSessionId: null,
     sessions: current.sessions.filter((session) => session.id !== sessionId),
     thread: emptyThread(),
+    historyCursor: null,
+    historyHasMore: false,
+    historyLoading: false,
+    historySnapshotVersion: "",
     working: false,
     status: "ready",
     model: null,

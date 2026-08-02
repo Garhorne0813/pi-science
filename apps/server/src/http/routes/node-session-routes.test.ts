@@ -134,6 +134,40 @@ describe("native Node conversation routes", () => {
     await server.close();
   });
 
+  it("serves older history pages from an opaque cursor and rejects invalid pagination", async () => {
+    const cwd = await workspaceWithSessions("session-page");
+    await writeFile(join(cwd, ".pi-science", "sessions", "session-page.jsonl"), [
+      JSON.stringify({ type: "session", id: "session-page", cwd, timestamp: "2026-07-23T00:00:00.000Z" }),
+      ...["m1", "m2", "m3"].map((id) => JSON.stringify({
+        type: "message",
+        id,
+        message: { role: "user", content: [{ type: "text", text: id }] },
+      })),
+    ].join("\n") + "\n", "utf8");
+    const server = app();
+
+    const first = await server.inject({ method: "GET", url: `/api/sessions/session-page/messages?cwd=${encodeURIComponent(cwd)}&limit=2` });
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({
+      messages: [{ id: "m2" }, { id: "m3" }],
+      has_more: true,
+      next_cursor: expect.any(String),
+      snapshot_version: expect.any(String),
+    });
+
+    const cursor = first.json().next_cursor as string;
+    const second = await server.inject({
+      method: "GET",
+      url: `/api/sessions/session-page/messages?cwd=${encodeURIComponent(cwd)}&before=${encodeURIComponent(cursor)}&limit=2`,
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toMatchObject({ messages: [{ id: "m1" }], has_more: false, next_cursor: null });
+
+    expect((await server.inject({ method: "GET", url: `/api/sessions/session-page/messages?cwd=${encodeURIComponent(cwd)}&limit=0` })).statusCode).toBe(400);
+    expect((await server.inject({ method: "GET", url: `/api/sessions/session-page/messages?cwd=${encodeURIComponent(cwd)}&before=not-a-cursor` })).statusCode).toBe(400);
+    await server.close();
+  });
+
   it("enforces busy status and owns fork, interaction, commands, model, export, and exact delete routes", async () => {
     const cwd = await workspaceWithSessions("session-a", "session-b");
     const server = app();

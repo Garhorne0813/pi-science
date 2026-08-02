@@ -29,8 +29,24 @@ export function registerSessionReadRoutes(app: FastifyInstance, sessionRepositor
 
   app.get<{ Params: { session_id: string } }>("/api/sessions/:session_id/messages", async (request, reply) => {
     try {
-      return { messages: await sessionRepository.messages(await validateWorkspaceCwd(queryCwd(request)), request.params.session_id) };
+      const query = request.query as { cwd?: unknown; before?: unknown; limit?: unknown };
+      const before = query.before === undefined ? undefined : String(query.before);
+      const limit = query.limit === undefined ? undefined : Number(query.limit);
+      if (
+        (query.before !== undefined && (!before || before === "undefined"))
+        || (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 100))
+      ) {
+        return reply.code(400).send({ error: "invalid history pagination parameters" });
+      }
+      return await sessionRepository.messagesPage(
+        await validateWorkspaceCwd(queryCwd(request)),
+        request.params.session_id,
+        { before, limit },
+      );
     } catch (error) {
+      if (String(error).includes("history cursor") || String(error).includes("history limit")) {
+        return reply.code(400).send({ error: String(error) });
+      }
       return reply.code(403).send({ error: String(error) });
     }
   });

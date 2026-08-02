@@ -3,7 +3,7 @@
 
 import { request, responseError } from "./http";
 import { cacheMessages } from "./message-cache";
-import type { HistoryMessage, InteractionResponse, SessionInfo, SessionState } from "./types";
+import type { HistoryMessage, InteractionResponse, SessionInfo, SessionMessagePage, SessionState } from "./types";
 
 export async function createSession(baseUrl: string, cwd: string, model?: string): Promise<{ id: string; cwd?: string; project_id?: string }> {
   const config = model ? { model } : {};
@@ -30,18 +30,36 @@ export async function listSessions(baseUrl: string, cwd: string): Promise<Sessio
   return Array.isArray(data) ? data : [];
 }
 
-export async function getMessages(baseUrl: string, sessionId: string, cwd?: string): Promise<HistoryMessage[]> {
-  const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
-  const res = await request(`${baseUrl}/api/sessions/${sessionId}/messages${params}`);
+export async function getMessagesPage(
+  baseUrl: string,
+  sessionId: string,
+  cwd?: string,
+  options: { before?: string | null; limit?: number } = {},
+): Promise<SessionMessagePage> {
+  const params = new URLSearchParams();
+  if (cwd) params.set("cwd", cwd);
+  if (options.before) params.set("before", options.before);
+  if (options.limit !== undefined) params.set("limit", String(options.limit));
+  const query = params.toString();
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/messages${query ? `?${query}` : ""}`);
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.ok === false) {
     throw new Error(responseError(data, `Load messages failed: ${res.statusText}`));
   }
-  const messages = data.messages ?? [];
+  const messages = Array.isArray(data.messages) ? data.messages as HistoryMessage[] : [];
   // Persist to the local cache so the next switch to this session can
   // render instantly before the network response arrives.
-  if (cwd) cacheMessages(cwd, sessionId, messages);
-  return messages;
+  if (cwd && !options.before) cacheMessages(cwd, sessionId, messages);
+  return {
+    messages,
+    next_cursor: typeof data.next_cursor === "string" ? data.next_cursor : null,
+    has_more: data.has_more === true,
+    snapshot_version: typeof data.snapshot_version === "string" ? data.snapshot_version : "",
+  };
+}
+
+export async function getMessages(baseUrl: string, sessionId: string, cwd?: string): Promise<HistoryMessage[]> {
+  return (await getMessagesPage(baseUrl, sessionId, cwd)).messages;
 }
 
 export async function resumeSession(baseUrl: string, sessionId: string, cwd: string): Promise<void> {

@@ -1,6 +1,8 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { ComponentType, Ref } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowDown, ArrowUp, Loader2, Square, Plus, Sparkles, X, File, FolderOpen } from "lucide-react";
+import type { VirtuosoHandle, VirtuosoProps } from "react-virtuoso";
 import { getSessionName } from "../../lib/client/pi-science-client";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
@@ -12,7 +14,7 @@ import { SlashCommandMenu } from "../../components/SlashCommandMenu";
 import { ConversationWelcome } from "../../components/conversation/ConversationWelcome";
 import { ModelControlMenu } from "../../components/conversation/ModelControlMenu";
 import { InteractionPrompt } from "../../components/conversation/InteractionPrompt";
-import { renderBlocks } from "../../components/conversation/ConversationBlocks";
+import { groupBlocks, renderBlockGroup } from "../../components/conversation/ConversationBlocks";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
 import { visibleUserMessage } from "../../lib/files";
 import { useTranslation } from "react-i18next";
@@ -21,6 +23,12 @@ import { useTurnEffects } from "../../hooks/useTurnEffects";
 import { useModelConfig } from "../../hooks/useModelConfig";
 import { useResearchLoop } from "../../hooks/useResearchLoop";
 import { useComposer } from "../../hooks/useComposer";
+import type { ThreadBlock } from "../../types/thread";
+
+type ConversationVirtuosoProps = VirtuosoProps<ThreadBlock[], unknown> & { ref?: Ref<VirtuosoHandle> };
+const LazyVirtuoso = lazy(() => import("react-virtuoso").then(({ Virtuoso }) => ({
+  default: Virtuoso as unknown as ComponentType<ConversationVirtuosoProps>,
+})));
 
 export function LiveSessionPage() {
   const { t } = useTranslation();
@@ -33,6 +41,9 @@ export function LiveSessionPage() {
   const thread = useRuntimeStore((s) => s.thread);
   const sessions = useRuntimeStore((s) => s.sessions);
   const working = useRuntimeStore((s) => s.working);
+  const historyHasMore = useRuntimeStore((s) => s.historyHasMore);
+  const historyLoading = useRuntimeStore((s) => s.historyLoading);
+  const loadOlderMessages = useRuntimeStore((s) => s.loadOlderMessages);
   const connect = useRuntimeStore((s) => s.connect);
   const disconnect = useRuntimeStore((s) => s.disconnect);
   const sendPrompt = useRuntimeStore((s) => s.sendPrompt);
@@ -46,15 +57,18 @@ export function LiveSessionPage() {
   const pendingInteraction = useRuntimeStore((s) => s.pendingInteraction);
   const respondToInteraction = useRuntimeStore((s) => s.respondToInteraction);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
   const followOutputRef = useRef(true);
   const [showScrollDown, setShowScrollDown] = useState(false);
+  const [virtualFirstItemIndex, setVirtualFirstItemIndex] = useState(100_000);
 
   // A new session (or a reconnect) starts at the bottom: never inherit the
   // "user scrolled up" state of the previous session on this route.
   useEffect(() => {
     followOutputRef.current = true;
     setShowScrollDown(false);
-  }, [sessionId]);
+    setVirtualFirstItemIndex(100_000);
+  }, [sessionId, workspaceCwd]);
   const [reviewingProject, setReviewingProject] = useState(false);
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
   const removeWorkspaceReference = useUiStore((state) => state.removeWorkspaceReference);
@@ -70,17 +84,42 @@ export function LiveSessionPage() {
     };
   }, [sessionId, workspaceCwd, connect, disconnect]);
 
-  useLayoutEffect(() => {
-    const scroller = scrollRef.current;
-    if (scroller && followOutputRef.current) scroller.scrollTop = scroller.scrollHeight;
-  }, [thread.blocks]);
-
-  const handleThreadScroll = () => {
+  const handleThreadScroll = useCallback(() => {
     const scroller = scrollRef.current;
     if (!scroller) return;
     const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 96;
     followOutputRef.current = nearBottom;
     setShowScrollDown(!nearBottom);
+  }, []);
+
+  const attachScroller = useCallback((element: Window | HTMLElement | null) => {
+    if (scrollRef.current) scrollRef.current.removeEventListener("scroll", handleThreadScroll);
+    scrollRef.current = element instanceof HTMLElement ? element as HTMLDivElement : null;
+    if (scrollRef.current) {
+      // Keep the stable class hook used by the conversation rail and by
+      // integrations that locate the active conversation scroller.
+      scrollRef.current.classList.add("overflow-y-auto");
+      scrollRef.current.addEventListener("scroll", handleThreadScroll);
+    }
+  }, [handleThreadScroll]);
+
+  useLayoutEffect(() => {
+    if (followOutputRef.current) {
+      if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "auto" });
+    }
+  }, [thread.blocks]);
+
+  const blockGroups = useMemo(() => groupBlocks(thread.blocks), [thread.blocks]);
+
+  const handleLoadOlder = async () => {
+    if (!historyHasMore || historyLoading) return;
+    const previousGroupCount = blockGroups.length;
+    const loadedMessages = await loadOlderMessages();
+    if (!loadedMessages) return;
+    const nextGroupCount = groupBlocks(useRuntimeStore.getState().thread.blocks).length;
+    const addedGroups = Math.max(0, nextGroupCount - previousGroupCount);
+    if (addedGroups > 0) setVirtualFirstItemIndex((current) => current - addedGroups);
   };
 
   const { suggestions, setSuggestions } = useTurnEffects(working, thread.blocks);
@@ -96,13 +135,30 @@ export function LiveSessionPage() {
   const handleNavSelect = (id: string) => {
     // Stop the follow-output effect from yanking the viewport back to the bottom.
     followOutputRef.current = false;
-    document.getElementById(`user-msg-${id}`)?.scrollIntoView({ behavior: smoothScroll() ? "smooth" : "auto", block: "start" });
+    const target = document.getElementById(`user-msg-${id}`);
+    if (target) {
+      target.scrollIntoView({ behavior: smoothScroll() ? "smooth" : "auto", block: "start" });
+      return;
+    }
+    const groupIndex = blockGroups.findIndex((group) => group.some((block) => block.id === id));
+    if (groupIndex >= 0) {
+      virtuosoRef.current?.scrollToIndex({
+        index: virtualFirstItemIndex + groupIndex,
+        align: "start",
+        behavior: smoothScroll() ? "smooth" : "auto",
+      });
+    } else {
+      document.getElementById(`user-msg-${id}`)?.scrollIntoView({ behavior: smoothScroll() ? "smooth" : "auto", block: "start" });
+    }
   };
   const scrollToBottom = () => {
-    const scroller = scrollRef.current;
-    if (!scroller) return;
     followOutputRef.current = true;
-    scroller.scrollTo({ top: scroller.scrollHeight, behavior: smoothScroll() ? "smooth" : "auto" });
+    const scroller = scrollRef.current;
+    if (scroller) {
+      scroller.scrollTo({ top: scroller.scrollHeight, behavior: smoothScroll() ? "smooth" : "auto" });
+      scroller.scrollTop = scroller.scrollHeight;
+    }
+    virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: smoothScroll() ? "smooth" : "auto" });
   };
   const model = useModelConfig(workspaceCwd, sessionId);
 
@@ -177,11 +233,18 @@ export function LiveSessionPage() {
           the welcome copy hangs off its bottom edge. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         {/* Thread */}
-        <div ref={scrollRef} onScroll={handleThreadScroll} className={cn("flex-1 overflow-y-auto [overflow-anchor:none]", showWelcome && "flex flex-col justify-end")}>
+        <div className={cn("flex-1 overflow-hidden [overflow-anchor:none]", showWelcome && "flex flex-col justify-end")}>
           {/* 824 = 760 composer column + the px-8 gutters, so thread content lines up with the composer's edges.
               w-full is required: an auto horizontal margin on a flex item suppresses the stretch,
               which would shrink this column to its widest child and centre it. */}
-          <div className={cn("mx-auto w-full max-w-[824px] flex flex-col px-8", showWelcome ? "gap-3 pt-6 pb-3" : "gap-4 py-6")}>
+          <div className={cn(
+            thread.blocks.length > 0
+              ? "h-full w-full"
+              : cn(
+                "mx-auto flex w-full max-w-[824px] flex-col px-8",
+                showWelcome ? "gap-3 pb-3 pt-6" : "gap-4 py-6",
+              ),
+          )}>
             {thread.blocks.length === 0 && !working && status === "connecting" && activeSessionId && (
               <div className="flex items-center gap-2 py-4 text-sm text-muted">
                 <Loader2 size={14} className="animate-spin text-accent" />
@@ -190,21 +253,73 @@ export function LiveSessionPage() {
             )}
             {showWelcome && <ConversationWelcome />}
             {showWelcome && modePicker}
-            {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
-            {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
-            {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error">{research.error}</div>}
-            {renderBlocks(thread.blocks, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" })}
-            {pendingInteraction && (
-              <InteractionPrompt
-                interaction={pendingInteraction}
-                onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
-              />
-            )}
-            {working && !pendingInteraction && (
-              <div className="flex items-center gap-2 text-sm text-muted py-4">
-                <Loader2 size={14} className="animate-spin text-accent" />
-                Working…
-              </div>
+            {thread.blocks.length > 0 ? (
+              <Suspense fallback={<div ref={attachScroller} className="h-full overflow-y-auto" />}>
+                <LazyVirtuoso
+                  key={`${workspaceCwd}:${activeSessionId ?? "new"}`}
+                  ref={virtuosoRef}
+                  scrollerRef={attachScroller}
+                  firstItemIndex={virtualFirstItemIndex}
+                  data={blockGroups}
+                  initialItemCount={Math.min(blockGroups.length, 20)}
+                  startReached={() => void handleLoadOlder()}
+                  increaseViewportBy={{ top: 600, bottom: 800 }}
+                  components={{
+                    Header: () => (
+                      <div className="mx-auto flex w-full max-w-[824px] flex-col gap-4 px-8 pb-2 pt-6">
+                        {historyLoading && (
+                          <div className="flex items-center gap-2 text-xs text-muted" role="status">
+                            <Loader2 size={13} className="animate-spin text-accent" />
+                            Loading earlier messages…
+                          </div>
+                        )}
+                        {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
+                        {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
+                        {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error">{research.error}</div>}
+                      </div>
+                    ),
+                    Footer: () => (
+                      <div className="mx-auto flex w-full max-w-[824px] flex-col gap-4 px-8 pb-6 pt-2">
+                        {pendingInteraction && (
+                          <InteractionPrompt
+                            interaction={pendingInteraction}
+                            onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
+                          />
+                        )}
+                        {working && !pendingInteraction && (
+                          <div className="flex items-center gap-2 py-4 text-sm text-muted">
+                            <Loader2 size={14} className="animate-spin text-accent" />
+                            Working…
+                          </div>
+                        )}
+                      </div>
+                    ),
+                  }}
+                  itemContent={(_index, group) => (
+                    <div className="mx-auto w-full max-w-[824px] px-8 pb-4">
+                      {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" })}
+                    </div>
+                  )}
+                />
+              </Suspense>
+            ) : (
+              <>
+                {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
+                {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
+                {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error">{research.error}</div>}
+                {pendingInteraction && (
+                  <InteractionPrompt
+                    interaction={pendingInteraction}
+                    onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
+                  />
+                )}
+                {working && !pendingInteraction && (
+                  <div className="flex items-center gap-2 py-4 text-sm text-muted">
+                    <Loader2 size={14} className="animate-spin text-accent" />
+                    Working…
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
