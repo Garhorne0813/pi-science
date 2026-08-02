@@ -1,8 +1,9 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildPiProcessOptions, loadDefaultPiConfig } from "./pi-runtime-launch.js";
+import { buildPiProcessOptions, loadDefaultPiConfig, resetWebRuntimeAllocation } from "./pi-runtime-launch.js";
 
 const cleanup: string[] = [];
 const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, tsx: process.env.PI_TSX_PATH, tsconfig: process.env.PI_TSCONFIG_PATH, piMode: process.env.PI_SCIENCE_PI_MODE };
@@ -14,6 +15,8 @@ beforeEach(async () => {
   process.env.PI_SCIENCE_HOME = join(root, "control-home");
   process.env.PI_CLI_PATH = join(root, "fake-pi.mjs");
   delete process.env.PI_SCIENCE_PI_MODE;
+  // The shared port/token singleton must not leak across tests.
+  resetWebRuntimeAllocation();
 });
 
 afterEach(async () => {
@@ -171,6 +174,38 @@ describe("Pi runtime custom provider materialization", () => {
     expect(options.web?.authToken).toBeTruthy();
     expect(options.env?.PI_ORBIT_AUTH_TOKEN).toBe(options.web?.authToken);
     expect(options.web?.runtime).toMatchObject({ cwd, sessionDir: join(cwd, ".pi-science", "sessions") });
+  });
+
+  it("reuses the shared web port and token until reset allocates fresh ones", () => {
+    const cwd = join(tmpdir(), `pi-runtime-shared-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    mkdirSync(cwd, { recursive: true });
+    const first = buildPiProcessOptions(cwd)!;
+    const second = buildPiProcessOptions(cwd)!;
+    expect(second.web?.baseUrl).toBe(first.web?.baseUrl);
+    expect(second.web?.authToken).toBe(first.web?.authToken);
+
+    // A host start failure (e.g. EADDRINUSE) resets the singleton so the next
+    // attempt self-heals with a different port/token.
+    resetWebRuntimeAllocation();
+    const after = buildPiProcessOptions(cwd)!;
+    expect(after.web?.baseUrl).not.toBe(first.web?.baseUrl);
+    expect(after.web?.authToken).not.toBe(first.web?.authToken);
+  });
+
+  it("reuses one port and auth token across calls instead of leaking new ones", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-shared-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+
+    const first = buildPiProcessOptions(cwd)!;
+    const second = buildPiProcessOptions(cwd)!;
+    const third = buildPiProcessOptions(cwd)!;
+
+    expect(second.web?.baseUrl).toBe(first.web?.baseUrl);
+    expect(third.web?.baseUrl).toBe(first.web?.baseUrl);
+    expect(second.web?.authToken).toBe(first.web?.authToken);
+    expect(third.env?.PI_ORBIT_AUTH_TOKEN).toBe(first.env?.PI_ORBIT_AUTH_TOKEN);
   });
 
   it("surfaces models.json deletion failures except for a missing file", async () => {

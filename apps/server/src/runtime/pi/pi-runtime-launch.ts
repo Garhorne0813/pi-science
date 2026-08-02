@@ -6,17 +6,31 @@ import type { PiConfig } from "@pi-science/contracts";
 import type { PiProcessOptions } from "./pi-process.js";
 import { configRoot } from "../../storage/persistence.js";
 
-const allocatedWebPorts = new Set<number>();
+// The Pi Orbit host is a singleton per control plane: one port + one auth
+// token are allocated on the first buildPiProcessOptions call and reused by
+// every later call. Per-call allocation would grow an ever-unused pool (only
+// the first options object actually starts the host) until the pool is
+// exhausted and session creation fails hard.
+let sharedWebPort: number | null = null;
+let sharedWebToken: string | null = null;
 
-function allocateWebPort(): number {
-  for (let attempt = 0; attempt < 40_000; attempt += 1) {
-    const port = randomInt(20_000, 60_000);
-    if (!allocatedWebPorts.has(port)) {
-      allocatedWebPorts.add(port);
-      return port;
-    }
-  }
-  throw new Error("unable to allocate a unique Pi Orbit port");
+function webPort(): number {
+  if (sharedWebPort === null) sharedWebPort = randomInt(20_000, 60_000);
+  return sharedWebPort;
+}
+
+function webAuthToken(): string {
+  if (sharedWebToken === null) sharedWebToken = randomUUID();
+  return sharedWebToken;
+}
+
+/** Forget the shared port/token so the next call allocates fresh values.
+ *  Called after a host start failure (e.g. EADDRINUSE: the single port is
+ *  taken by another process) so the next attempt picks a new port and can
+ *  self-heal without a control-plane restart. */
+export function resetWebRuntimeAllocation(): void {
+  sharedWebPort = null;
+  sharedWebToken = null;
 }
 
 export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: [], extensions: [] }, sessionPath?: string, workspaceEnvironment: NodeJS.ProcessEnv = {}): PiProcessOptions | null {
@@ -30,8 +44,8 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
   const args: string[] = [];
   let command = nodePath;
   const useRpcMode = process.env.PI_SCIENCE_PI_MODE === "rpc";
-  const webPort = useRpcMode ? 0 : allocateWebPort();
-  const webAuthToken = useRpcMode ? "" : randomUUID();
+  const reservedWebPort = useRpcMode ? 0 : webPort();
+  const reservedWebToken = useRpcMode ? "" : webAuthToken();
   const seededSkills = seedWorkspaceAssets(cwd);
   if (cliPath.endsWith(".ts")) {
     const tsxPath = process.env.PI_TSX_PATH || findAdjacentRuntime(cliPath, join("node_modules", ".bin", "tsx"));
@@ -47,7 +61,7 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
   const sessionDir = join(cwd, ".pi-science", "sessions");
   args.push("--mode", useRpcMode ? "rpc" : "web");
   if (useRpcMode) args.push("--session-dir", sessionDir);
-  else args.push("--host", "127.0.0.1", "--port", String(webPort), "--web-app-managed", "--no-session");
+  else args.push("--host", "127.0.0.1", "--port", String(reservedWebPort), "--web-app-managed", "--no-session");
   // Pi Science workspaces own their .pi/skills/ resources; trust them by
   // default so project-built-in skills are available to the managed runtime.
   args.push("--approve");
@@ -76,7 +90,7 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
     PI_WORKSPACE_DIR: resolve(cwd),
     CONTEXT_MODE_DATA_DIR: agentDir,
     CONTEXT_MODE_DIR: join(agentDir, "context-mode"),
-    ...(!useRpcMode ? { PI_ORBIT_AUTH_TOKEN: webAuthToken } : {}),
+    ...(!useRpcMode ? { PI_ORBIT_AUTH_TOKEN: reservedWebToken } : {}),
     ...(!useRpcMode ? {
       PI_ORBIT_MAX_RUNTIMES: process.env.PI_ORBIT_MAX_RUNTIMES ?? "256",
       PI_ORBIT_MAX_CONCURRENT_TURNS: process.env.PI_ORBIT_MAX_CONCURRENT_TURNS ?? "16",
@@ -102,8 +116,8 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
     env,
     ...(!useRpcMode ? {
       web: {
-        baseUrl: `http://127.0.0.1:${webPort}`,
-        authToken: webAuthToken,
+        baseUrl: `http://127.0.0.1:${reservedWebPort}`,
+        authToken: reservedWebToken,
         runtime: {
           cwd: resolve(cwd),
           sessionDir,

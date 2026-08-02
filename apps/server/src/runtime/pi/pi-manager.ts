@@ -1,5 +1,6 @@
 import { PiProcess, type PiProcessOptions, type PiResult } from "./pi-process.js";
 import { PiOrbitHost } from "./pi-orbit-host.js";
+import { resetWebRuntimeAllocation } from "./pi-runtime-launch.js";
 
 export class PiManager {
   private readonly processes = new Map<string, PiProcess>();
@@ -41,11 +42,28 @@ export class PiManager {
     await Promise.allSettled(this.pendingStarts.values());
     const processes = [...this.processes.entries()];
     this.processes.clear();
-    await Promise.all(processes.map(([, process]) => process.shutdown()));
     const host = this.webHost;
     this.webHost = undefined;
     this.webHostStart = undefined;
-    await host?.shutdown();
+    if (host) {
+      // The host is being torn down anyway: per-runtime dispose would wait up
+      // to the full dispose budget on a process that is about to die. Detach
+      // the web runtimes (stop their event streams, mark them closed) and kill
+      // the host directly instead.
+      //
+      // Invariant: a manager never mixes web and RPC processes — the mode
+      // comes from the process-wide PI_SCIENCE_PI_MODE env. If that ever
+      // changes, RPC processes attached to this manager must be shut down
+      // individually here (detachFromHost on an RPC process would only mark
+      // it closed and leak the OS process).
+      for (const [, process] of processes) {
+        if (process.attachedToHost) process.detachFromHost();
+        else await process.shutdown();
+      }
+      await host.shutdown();
+      return;
+    }
+    await Promise.all(processes.map(([, process]) => process.shutdown()));
   }
 
   get activeCount(): number {
@@ -85,6 +103,10 @@ export class PiManager {
         return host;
       } catch (error) {
         await host.shutdown().catch(() => undefined);
+        // The singleton port may be taken by another process (EADDRINUSE);
+        // forget it so the next attempt allocates a fresh port/token and can
+        // self-heal without restarting the control plane.
+        resetWebRuntimeAllocation();
         throw error;
       }
     })();
