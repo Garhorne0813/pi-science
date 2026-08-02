@@ -1,13 +1,23 @@
 // Shared accessor for the workspace project-knowledge state document. Both the
 // project-knowledge routes and the reviewer that appends proposals to the inbox
 // read and write it, so the shape lives here rather than inside either caller.
-import { readJson, workspaceFile } from "../storage/persistence.js";
+import { readJson, withFileWriteLock, writeJsonAtomic, workspaceFile } from "../storage/persistence.js";
+import {
+  normalizeMemoryRecord,
+  projectMemoryLedgerPath,
+  readMemoryLedgerUnlocked,
+  type MemoryProposal,
+  type MemoryRecord,
+  type MemorySource,
+  type MemoryDecision,
+  writeMemoryLedgerUnlocked,
+} from "../memory/ledger.js";
 
-export type Source = { session_id?: string | null; message_ids: string[]; files: string[]; run_ids: string[]; citations: string[] };
+export type Source = MemorySource;
 export type Policy = { auto_review: boolean; reminder_threshold: number; max_directory_depth: number; minimum_files_for_new_category: number; locked_paths: string[]; naming_pattern: string; accepted_counts: Record<string, number>; rejected_counts: Record<string, number>; external_services_allowed: boolean; allowed_egress_domains: string[]; blocked_data_classes: string[]; updated_at: string };
-export type Item = { id: string; type: string; title: string; summary: string; confidence: string; importance: string; status: string; source: Source; related_files: string[]; conflicts_with: string[]; supersedes: string[]; proposal_id?: string; created_at: string; updated_at: string; [key: string]: unknown };
-export type Proposal = Item & { proposal_type: "knowledge" | "file_operation"; knowledge_type?: string; reason: string; operations: unknown[]; decision_reason?: string | null; applied_history_id?: string | null };
-export type ProjectState = { items: Item[]; proposals: Proposal[]; project_versions: Array<{ id: string; created_at: string; reason: string; knowledge_count: number; content: string }>; policy: Policy; history: Array<Record<string, unknown>> };
+export type Item = MemoryRecord;
+export type Proposal = MemoryProposal;
+export type ProjectState = { items: Item[]; proposals: Proposal[]; decisions: MemoryDecision[]; project_versions: Array<{ id: string; created_at: string; reason: string; knowledge_count: number; content: string }>; policy: Policy; history: Array<Record<string, unknown>> };
 
 // `auto_review` defaults to false: an automatic model call after every settled turn spends the
 // user's budget, so it must be opted into. A workspace that already stored a policy keeps its own
@@ -21,9 +31,12 @@ export function timestamp(): string { return new Date().toISOString(); }
  *  repaired repeatedly without creating duplicates. */
 export function knowledgeItemFromProposal(proposal: Proposal): Item {
   const at = proposal.updated_at || proposal.created_at || timestamp();
-  return {
+  return normalizeMemoryRecord({
+    ...proposal,
     id: `knowledge-${proposal.id.replace(/^proposal-/, "")}`,
+    scope: proposal.scope ?? "project",
     type: proposal.knowledge_type ?? proposal.type ?? "finding",
+    kind: proposal.knowledge_type ?? proposal.kind ?? proposal.type ?? "finding",
     title: proposal.title,
     summary: proposal.summary,
     confidence: proposal.confidence,
@@ -34,9 +47,10 @@ export function knowledgeItemFromProposal(proposal: Proposal): Item {
     conflicts_with: proposal.conflicts_with,
     supersedes: proposal.supersedes,
     proposal_id: proposal.id,
+    approval: { required: "manual", status: "approved", actor: "user", decided_at: at, reason: null, policy_version: null },
     created_at: at,
     updated_at: at,
-  };
+  }, { scope: proposal.scope ?? "project", projectId: proposal.project_id, sessionId: proposal.session_id, at });
 }
 
 /** Idempotently materialize a knowledge item for a proposal. */
@@ -49,11 +63,13 @@ export function ensureKnowledgeItem(state: ProjectState, proposal: Proposal): It
   return item;
 }
 
-export async function readProjectState(cwd: string): Promise<ProjectState> {
+async function readProjectStateUnlocked(cwd: string): Promise<ProjectState> {
   const value = await readJson<Partial<ProjectState>>(statePath(cwd), {});
+  const ledger = await readMemoryLedgerUnlocked(cwd);
   const current: ProjectState = {
-    items: Array.isArray(value.items) ? value.items : [],
-    proposals: Array.isArray(value.proposals) ? value.proposals : [],
+    items: ledger.records,
+    proposals: ledger.proposals,
+    decisions: ledger.decisions,
     project_versions: Array.isArray(value.project_versions) ? value.project_versions : [],
     policy: { ...defaultPolicy(), ...(value.policy ?? {}) },
     history: Array.isArray(value.history) ? value.history : [],
@@ -65,4 +81,32 @@ export async function readProjectState(cwd: string): Promise<ProjectState> {
     if (proposal.status === "accepted") ensureKnowledgeItem(current, proposal);
   }
   return current;
+}
+
+/** Read project metadata and the canonical memory ledger under one workspace lock. */
+export async function readProjectState(cwd: string): Promise<ProjectState> {
+  return withFileWriteLock(projectMemoryLedgerPath(cwd), () => readProjectStateUnlocked(cwd));
+}
+
+async function persistProjectStateUnlocked(cwd: string, state: ProjectState): Promise<void> {
+  const ledger = await readMemoryLedgerUnlocked(cwd);
+  await writeMemoryLedgerUnlocked(cwd, { ...ledger, records: state.items, proposals: state.proposals, decisions: state.decisions });
+  // Keep the old document as a compatibility projection for older clients and
+  // local tooling. New memory reads always prefer memory/ledger.json.
+  await writeJsonAtomic(statePath(cwd), state);
+}
+
+/** Persist both canonical memory and the legacy project-state projection. */
+export async function writeProjectState(cwd: string, state: ProjectState): Promise<void> {
+  await withFileWriteLock(projectMemoryLedgerPath(cwd), () => persistProjectStateUnlocked(cwd, state));
+}
+
+/** Serialize a read/modify/write operation so memory decisions cannot overwrite each other. */
+export async function mutateProjectState<T>(cwd: string, operation: (state: ProjectState) => Promise<T> | T): Promise<T> {
+  return withFileWriteLock(projectMemoryLedgerPath(cwd), async () => {
+    const current = await readProjectStateUnlocked(cwd);
+    const result = await operation(current);
+    await persistProjectStateUnlocked(cwd, current);
+    return result;
+  });
 }
