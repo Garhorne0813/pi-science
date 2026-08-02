@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConversationEventHub } from "./conversation-event-hub.js";
-import type { SseEventRecord } from "./event-store.js";
+import { DurableEventStore, type SseEventRecord } from "./event-store.js";
 import type { PiProcess } from "../pi/pi-process.js";
 
 const workspaces: string[] = [];
@@ -137,9 +137,26 @@ describe("central conversation event hub", () => {
     await eventually(() => received.some((event) => event.type === "session.idle"));
 
     const text = received.filter((event) => event.type === "text.updated");
-    expect(text.slice(0, 2).map((event) => event.text)).toEqual(["Hel", "lo"]);
-    expect(text[2]?.partId).not.toBe(text[3]?.partId);
+    expect(text).toHaveLength(4);
+    expect(text[0]).toMatchObject({ text: "Hello", partId: "m1" });
+    expect(text[1]?.partId).not.toBe(text[2]?.partId);
     expect(text.at(-1)).toMatchObject({ text: "replacement", replace: true, partId: "m2" });
+  });
+
+  it("continues the durable cursor sequence after the hub is recreated", async () => {
+    const cwd = await workspace();
+    const store = new DurableEventStore();
+    const firstHub = new ConversationEventHub(store);
+    await firstHub.publish(cwd, "session-restart", { type: "status.updated", sessionId: "session-restart", status: "first" });
+    const first = await store.readAfter(cwd, "session-restart");
+
+    const secondHub = new ConversationEventHub(store);
+    await secondHub.publish(cwd, "session-restart", { type: "status.updated", sessionId: "session-restart", status: "second" });
+    const all = await store.readAfter(cwd, "session-restart");
+
+    expect(first[0]?.id).toBe("1");
+    expect(all.map((record) => record.id)).toEqual(["1", "2"]);
+    expect((await store.readAfter(cwd, "session-restart", first[0]?.id)).map((record) => record.id)).toEqual(["2"]);
   });
 
   it("does not classify tool, interaction, or artifact-only turns as empty", async () => {

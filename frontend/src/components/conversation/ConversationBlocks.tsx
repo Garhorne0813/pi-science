@@ -14,27 +14,40 @@ import { parseSuggestions } from "../../lib/conversation";
 import { MessageActions } from "./MessageActions";
 
 /** Render blocks, grouping consecutive tool cards together. */
-export function renderBlocks(blocks: ThreadBlock[], codeRunner: CodeRunner) {
-  const result: React.ReactNode[] = [];
+export function groupBlocks(blocks: ThreadBlock[]): ThreadBlock[][] {
+  const groups: ThreadBlock[][] = [];
   let toolGroup: ToolCallBlock[] = [];
-  const actionTextByBlock = agentActionTextByBlock(blocks);
-
-  for (let i = 0; i < blocks.length; i++) {
-    const block = blocks[i];
-    if (block.kind === "tool") {
-      toolGroup.push(block);
-    } else {
-      if (toolGroup.length > 0) {
-        result.push(<ToolGroup key={toolGroup[0].id} blocks={toolGroup} />);
-        toolGroup = [];
-      }
-      result.push(<BlockRenderer key={block.id} block={block} actionText={actionTextByBlock.get(block.id)} codeRunner={codeRunner} />);
+  const flushTools = () => {
+    if (toolGroup.length > 0) groups.push(toolGroup);
+    toolGroup = [];
+  };
+  for (const block of blocks) {
+    if (block.kind === "tool") toolGroup.push(block);
+    else {
+      flushTools();
+      groups.push([block]);
     }
   }
-  if (toolGroup.length > 0) {
-    result.push(<ToolGroup key={toolGroup[0].id} blocks={toolGroup} />);
+  flushTools();
+  return groups;
+}
+
+export function renderBlockGroup(blocks: ThreadBlock[], codeRunner: CodeRunner) {
+  const result: React.ReactNode[] = [];
+  const actionTextByBlock = agentActionTextByBlock(blocks);
+  if (blocks.every((block): block is ToolCallBlock => block.kind === "tool")) {
+    if (blocks.length > 1) result.push(<ToolGroup key={blocks[0].id} blocks={blocks} />);
+    else if (blocks[0]) result.push(<ToolCard key={blocks[0].id} block={blocks[0]} />);
+    return result;
+  }
+  for (const block of blocks) {
+    result.push(<BlockRenderer key={block.id} block={block} actionText={actionTextByBlock.get(block.id)} codeRunner={codeRunner} />);
   }
   return result;
+}
+
+export function renderBlocks(blocks: ThreadBlock[], codeRunner: CodeRunner) {
+  return groupBlocks(blocks).flatMap((group) => renderBlockGroup(group, codeRunner));
 }
 
 /* ── Block Renderers ── */

@@ -10,7 +10,7 @@ import { clearCachedMessages, readCachedMessages } from "./message-cache";
 import * as rest from "./rest";
 import { clearSessionName } from "./session-names";
 import { SseTransport } from "./sse-transport";
-import type { HistoryMessage, InteractionResponse, PiScienceEvent, SessionInfo, SessionState } from "./types";
+import type { HistoryMessage, InteractionResponse, PiScienceEvent, SessionInfo, SessionMessagePage, SessionState } from "./types";
 
 export type {
   AvailableModel,
@@ -18,6 +18,7 @@ export type {
   InteractionResponse,
   PiScienceEvent,
   SessionInfo,
+  SessionMessagePage,
   SessionState,
 } from "./types";
 export { clampThinkingLevel, conversationModelOptions } from "./models";
@@ -63,6 +64,14 @@ export class PiScienceClient {
 
   async getMessages(sessionId: string, cwd?: string): Promise<HistoryMessage[]> {
     return rest.getMessages(this.baseUrl, sessionId, cwd);
+  }
+
+  async getMessagesPage(
+    sessionId: string,
+    cwd?: string,
+    options: { before?: string | null; limit?: number } = {},
+  ): Promise<SessionMessagePage> {
+    return rest.getMessagesPage(this.baseUrl, sessionId, cwd, options);
   }
 
   /** Return the most recently cached message snapshot for a session, or null.

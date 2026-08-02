@@ -12,7 +12,7 @@ import {
   type SessionInfo,
 } from "../client/pi-science-client";
 import { appendRuntimeError, isMissingSessionError } from "./errors";
-import { emptyThread, mergeHistoryWithLive, resetTurnBuffer, threadFromMessages } from "./event-fold";
+import { emptyThread, mergeHistoryWithLive, prependHistoryMessages, resetTurnBuffer, threadFromMessages } from "./event-fold";
 import { generations, turnState } from "./generations";
 import { registerEventListener } from "./listener";
 import { applyPromptSessionName, backfillSessionName } from "./naming";
@@ -43,6 +43,10 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       if (targetChanged) {
         set({
           thread: emptyThread(),
+          historyCursor: null,
+          historyHasMore: false,
+          historyLoading: false,
+          historySnapshotVersion: "",
           sessions: state.cwd !== cwd ? [] : state.sessions,
           activeSessionId: sessionId ?? null,
           working: false,
@@ -67,7 +71,16 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           // lazily on the first send/new-session action avoids StrictMode ghost
           // sessions and empty records created merely by navigation.
           client.disconnect();
-          set({ activeSessionId: null, thread: { blocks: [], index: {}, loaded: true }, status: "ready", working: false });
+          set({
+            activeSessionId: null,
+            thread: { blocks: [], index: {}, loaded: true },
+            historyCursor: null,
+            historyHasMore: false,
+            historyLoading: false,
+            historySnapshotVersion: "",
+            status: "ready",
+            working: false,
+          });
           void loadSessionsInternal();
           return;
         }
@@ -86,7 +99,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
 
         client.connect(targetSessionId, cwd);
         const [messagesResult, runtimeStateResult] = await Promise.allSettled([
-          client.getMessages(targetSessionId, cwd),
+          client.getMessagesPage(targetSessionId, cwd),
           client.getSessionState(targetSessionId, cwd),
         ]);
         if (generation !== generations.connection) return;
@@ -103,9 +116,12 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         const liveActivityArrived = generations.activity !== connectActivityGeneration;
         if (messagesResult.status === "fulfilled") {
           nextState.thread = mergeHistoryWithLive(
-            threadFromMessages(messagesResult.value),
+            threadFromMessages(messagesResult.value.messages),
             get().thread,
           );
+          nextState.historyCursor = messagesResult.value.next_cursor;
+          nextState.historyHasMore = messagesResult.value.has_more;
+          nextState.historySnapshotVersion = messagesResult.value.snapshot_version;
         }
         if (runtimeStateResult.status === "fulfilled") {
           const runtimeState = runtimeStateResult.value;
@@ -321,10 +337,14 @@ export function createRuntimeActions(set: SetState, get: GetState) {
             clearCachedMessages(cwd, activeSessionId);
             client.clearCursor(cwd, activeSessionId);
             const movedName = moveSessionName(cwd, activeSessionId, nextSessionId);
-            client.connect(nextSessionId, cwd);
+              client.connect(nextSessionId, cwd);
             set({
               client,
               activeSessionId: nextSessionId,
+              historyCursor: null,
+              historyHasMore: false,
+              historyLoading: false,
+              historySnapshotVersion: "",
               model: result.model ?? model,
               thinking: result.thinking ?? thinking ?? current.thinking,
               status: result.restarted ? "connecting" : "ready",
@@ -416,6 +436,36 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       await get().connect(cwd, sessionId);
     },
 
+    loadOlderMessages: async () => {
+      const state = get();
+      if (!state.activeSessionId || !state.historyHasMore || !state.historyCursor || state.historyLoading) return 0;
+      const sessionId = state.activeSessionId;
+      const cwd = state.cwd;
+      const cursor = state.historyCursor;
+      set({ historyLoading: true });
+      try {
+        const page = await getClient().getMessagesPage(sessionId, cwd, { before: cursor });
+        const current = get();
+        if (current.activeSessionId !== sessionId || current.cwd !== cwd) return 0;
+        set({
+          thread: prependHistoryMessages(current.thread, page.messages),
+          historyCursor: page.next_cursor,
+          historyHasMore: page.has_more,
+          historySnapshotVersion: page.snapshot_version,
+        });
+        return page.messages.length;
+      } catch (error) {
+        const current = get();
+        if (current.activeSessionId === sessionId && current.cwd === cwd) {
+          appendRuntimeError(error, sessionId, cwd);
+        }
+        return 0;
+      } finally {
+        const current = get();
+        if (current.activeSessionId === sessionId && current.cwd === cwd) set({ historyLoading: false });
+      }
+    },
+
     forkSession: async (sessionId: string) => {
       const { cwd } = get();
       const client = getClient();
@@ -430,10 +480,15 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       set({ activeSessionId: result.id, status: "connecting", pendingInteraction: null });
       registerEventListener(client);
       client.connect(result.id, cwd);
-      let messages: HistoryMessage[] = [];
+      let history = {
+        messages: [] as HistoryMessage[],
+        next_cursor: null as string | null,
+        has_more: false,
+        snapshot_version: "",
+      };
       let historyError: unknown = null;
       try {
-        messages = await client.getMessages(result.id, cwd);
+        history = await client.getMessagesPage(result.id, cwd);
       } catch (error) {
         // The clone already succeeded and changed the backend's active session.
         // Do not strand the UI on the parent route merely because the immediate
@@ -443,7 +498,11 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       set({
         client,
         activeSessionId: result.id,
-        thread: threadFromMessages(messages),
+        thread: threadFromMessages(history.messages),
+        historyCursor: history.next_cursor,
+        historyHasMore: history.has_more,
+        historyLoading: false,
+        historySnapshotVersion: history.snapshot_version,
         working: false,
         sessions: [
           { id: result.id, cwd, project_id: get().sessions.find((session) => session.cwd === cwd)?.project_id ?? null, name: "New Session" },
@@ -476,6 +535,10 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           client,
           activeSessionId: result.id,
           thread: currentThread.blocks.length > 0 ? currentThread : emptyThread(),
+          historyCursor: null,
+          historyHasMore: false,
+          historyLoading: false,
+          historySnapshotVersion: "",
           working: false,
           status: "connecting",
           pendingInteraction: null,

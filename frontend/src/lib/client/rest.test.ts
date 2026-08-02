@@ -55,4 +55,24 @@ describe("PiScienceClient REST calls", () => {
     await expect(client.listSessions("/workspace")).rejects.toThrow("session index unavailable");
     await expect(client.sendPrompt("session-a", "hello", "/workspace")).rejects.toThrow("Invalid API key");
   });
+
+  it("requests paginated history and returns the cursor metadata", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      messages: [{ id: "m2", role: "assistant", content: [] }],
+      next_cursor: "eyJ2IjoxLCJvIjoxMjN9",
+      has_more: true,
+      snapshot_version: "456:789",
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PiScienceClient();
+
+    const page = await client.getMessagesPage("session-a", "/workspace", { before: "cursor/1", limit: 25 });
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/sessions/session-a/messages?cwd=%2Fworkspace&before=cursor%2F1&limit=25");
+    expect(page).toMatchObject({ next_cursor: "eyJ2IjoxLCJvIjoxMjN9", has_more: true, snapshot_version: "456:789" });
+    expect(page.messages[0]?.id).toBe("m2");
+  });
 });

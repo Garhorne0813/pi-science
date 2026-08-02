@@ -99,6 +99,33 @@ function parseRecords(text: string): SseEventRecord[] {
   });
 }
 
+function sequenceFromCursor(id: string | null): number | null {
+  if (!id) return null;
+  const separator = id.lastIndexOf(":");
+  const value = separator >= 0 ? id.slice(separator + 1) : id;
+  if (!/^\d+$/.test(value)) return null;
+  const sequence = Number(value);
+  return Number.isSafeInteger(sequence) ? sequence : null;
+}
+
+function compareEventRecords(left: SseEventRecord, right: SseEventRecord): number {
+  const leftId = String(left.id ?? "");
+  const rightId = String(right.id ?? "");
+  const leftSeparator = leftId.lastIndexOf(":");
+  const rightSeparator = rightId.lastIndexOf(":");
+  const leftEpoch = leftSeparator >= 0 ? leftId.slice(0, leftSeparator) : "";
+  const rightEpoch = rightSeparator >= 0 ? rightId.slice(0, rightSeparator) : "";
+  const leftSequence = sequenceFromCursor(left.id);
+  const rightSequence = sequenceFromCursor(right.id);
+  if (leftSequence !== null && rightSequence !== null && leftEpoch === rightEpoch) {
+    const sequence = leftSequence - rightSequence;
+    if (sequence) return sequence;
+  }
+  const time = left.created_at.localeCompare(right.created_at);
+  if (time) return time;
+  return leftId.localeCompare(rightId);
+}
+
 export class DurableEventStore {
   private readonly writes = new Map<string, Promise<void>>();
 
@@ -118,6 +145,11 @@ export class DurableEventStore {
     return next;
   }
 
+  async nextSequence(cwd: string, sessionId: string): Promise<number> {
+    const records = await this.readAfter(cwd, sessionId);
+    return records.reduce((maximum, record) => Math.max(maximum, sequenceFromCursor(record.id) ?? 0), 0);
+  }
+
   async readAfter(cwd: string, sessionId: string, lastEventId?: string | null): Promise<SseEventRecord[]> {
     const paths = [eventPath(cwd, sessionId), fallbackEventPath(cwd, sessionId)];
     const batches = await Promise.all(paths.map((path) => readParsedEvents(path)));
@@ -126,21 +158,7 @@ export class DurableEventStore {
       const key = record.id ?? `${record.created_at}:${record.event}:${record.data}`;
       unique.set(key, record);
     }
-    const events = [...unique.values()].sort((left, right) => {
-      const leftId = String(left.id ?? "");
-      const rightId = String(right.id ?? "");
-      const leftSeparator = leftId.lastIndexOf(":");
-      const rightSeparator = rightId.lastIndexOf(":");
-      const leftEpoch = leftSeparator >= 0 ? leftId.slice(0, leftSeparator) : "";
-      const rightEpoch = rightSeparator >= 0 ? rightId.slice(0, rightSeparator) : "";
-      if (leftEpoch && leftEpoch === rightEpoch) {
-        const sequence = Number(leftId.slice(leftSeparator + 1)) - Number(rightId.slice(rightSeparator + 1));
-        if (sequence) return sequence;
-      }
-      const time = left.created_at.localeCompare(right.created_at);
-      if (time) return time;
-      return String(left.id ?? "").localeCompare(String(right.id ?? ""));
-    });
+    const events = [...unique.values()].sort(compareEventRecords);
     if (!lastEventId) return events.map((event) => ({ ...event }));
     const index = events.findIndex((event) => event.id === lastEventId);
     if (index !== -1) return events.slice(index + 1).map((event) => ({ ...event }));

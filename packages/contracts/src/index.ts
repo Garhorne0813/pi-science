@@ -57,6 +57,13 @@ export const historyMessageSchema = z.object({
   timestamp: z.string().nullish(),
 });
 
+export const sessionMessagePageSchema = z.object({
+  messages: z.array(historyMessageSchema),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
+  snapshot_version: z.string(),
+});
+
 export const workspaceInfoSchema = z.object({
   name: z.string().min(1),
   path: z.string().min(1),
@@ -177,6 +184,7 @@ export type CreateSessionResponse = z.infer<typeof createSessionResponseSchema>;
 export type SessionInfo = z.infer<typeof sessionInfoSchema>;
 export type SessionState = z.infer<typeof sessionStateSchema>;
 export type HistoryMessage = z.infer<typeof historyMessageSchema>;
+export type SessionMessagePage = z.infer<typeof sessionMessagePageSchema>;
 export type WorkspaceInfo = z.infer<typeof workspaceInfoSchema>;
 export type FileListEntry = z.infer<typeof fileListEntrySchema>;
 export type SessionEvent = z.infer<typeof sessionEventSchema>;

@@ -23,6 +23,13 @@ export interface SessionMessageRecord {
   timestamp?: string | null;
 }
 
+export interface SessionMessagePage {
+  messages: SessionMessageRecord[];
+  next_cursor: string | null;
+  has_more: boolean;
+  snapshot_version: string;
+}
+
 interface SessionFile {
   path: string;
   header: Record<string, unknown>;
@@ -36,6 +43,115 @@ interface CachedFile {
 
 function sessionsRoot(cwd: string): string {
   return join(resolve(cwd), ".pi-science", "sessions");
+}
+
+const HISTORY_PAGE_SIZE = 50;
+const HISTORY_PAGE_MAX_SIZE = 100;
+const HISTORY_SCAN_CHUNK_BYTES = 64 * 1024;
+
+function snapshotVersion(size: number, mtimeMs: number): string {
+  return `${size}:${mtimeMs}`;
+}
+
+function encodeMessageCursor(offset: number): string {
+  return Buffer.from(JSON.stringify({ v: 1, o: Math.max(0, Math.floor(offset)) })).toString("base64url");
+}
+
+function decodeMessageCursor(cursor: string): number {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("invalid history cursor");
+  }
+  if (!parsed || typeof parsed !== "object") throw new Error("invalid history cursor");
+  const value = parsed as { v?: unknown; o?: unknown };
+  if (value.v !== 1 || typeof value.o !== "number" || !Number.isSafeInteger(value.o) || value.o < 0) {
+    throw new Error("invalid history cursor");
+  }
+  return value.o;
+}
+
+function parseMessageLine(line: string): SessionMessageRecord | null {
+  if (!line.trim()) return null;
+  try {
+    const entry = JSON.parse(line) as Record<string, unknown>;
+    if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") return null;
+    const message = entry.message as Record<string, unknown>;
+    return {
+      id: typeof entry.id === "string" ? entry.id : "",
+      role: typeof message.role === "string" ? message.role : "",
+      content: Array.isArray(message.content) ? message.content as Array<Record<string, unknown>> : [],
+      toolCallId: typeof message.toolCallId === "string" ? message.toolCallId : undefined,
+      toolName: typeof message.toolName === "string" ? message.toolName : undefined,
+      isError: typeof message.isError === "boolean" ? message.isError : false,
+      timestamp: typeof entry.timestamp === "string" ? entry.timestamp : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read the newest messages without loading the complete JSONL file. The
+ * cursor points to a byte offset at the beginning of the oldest returned line;
+ * the next request scans strictly before that offset.
+ */
+async function readMessagePage(
+  path: string,
+  endOffset: number,
+  limit: number,
+): Promise<{ messages: SessionMessageRecord[]; hasMore: boolean; nextOffset: number | null }> {
+  const handle = await open(path, "r");
+  try {
+    const metadata = await handle.stat();
+    let scanPosition = Math.min(Math.max(0, endOffset), metadata.size);
+    let pending = Buffer.alloc(0);
+    const selected: Array<{ message: SessionMessageRecord; offset: number }> = [];
+    let hasMore = false;
+
+    while (scanPosition > 0 && selected.length <= limit) {
+      const chunkStart = Math.max(0, scanPosition - HISTORY_SCAN_CHUNK_BYTES);
+      const chunk = Buffer.alloc(scanPosition - chunkStart);
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, chunkStart);
+      if (bytesRead === 0) break;
+      pending = Buffer.concat([chunk.subarray(0, bytesRead), pending]);
+
+      let cursor = pending.length;
+      if (cursor > 0 && pending[cursor - 1] === 0x0a) cursor -= 1;
+      while (cursor > 0) {
+        const newline = pending.lastIndexOf(0x0a, cursor - 1);
+        const lineStart = newline + 1;
+        // The first line may be split across two backwards-read chunks. Keep
+        // it in `pending` until the preceding chunk supplies the rest.
+        if (lineStart === 0 && chunkStart > 0) break;
+        const message = parseMessageLine(pending.subarray(lineStart, cursor).toString("utf8"));
+        if (message) {
+          if (selected.length < limit) {
+            selected.push({ message, offset: chunkStart + lineStart });
+          } else {
+            hasMore = true;
+            break;
+          }
+        }
+        cursor = newline;
+        if (newline < 0) break;
+      }
+      if (hasMore) break;
+      pending = cursor > 0 ? pending.subarray(0, cursor) : Buffer.alloc(0);
+      scanPosition = chunkStart;
+    }
+
+    const nextOffset = hasMore && selected.length > 0 ? selected[selected.length - 1]!.offset : null;
+    const messages = selected.reverse().map(({ message }) => message);
+    return {
+      messages,
+      hasMore,
+      nextOffset,
+    };
+  } finally {
+    await handle.close();
+  }
 }
 
 // A candidate is every `.jsonl` file discovered while scanning, whether or not
@@ -292,6 +408,35 @@ export class SessionRepository {
     }));
   }
 
+  async messagesPage(
+    cwd: string,
+    sessionId: string,
+    options: { before?: string; limit?: number } = {},
+  ): Promise<SessionMessagePage> {
+    const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
+    if (!file) {
+      return { messages: [], next_cursor: null, has_more: false, snapshot_version: "0:0" };
+    }
+    let metadata;
+    try {
+      metadata = await stat(file.path);
+    } catch {
+      return { messages: [], next_cursor: null, has_more: false, snapshot_version: "0:0" };
+    }
+    const requestedLimit = options.limit ?? HISTORY_PAGE_SIZE;
+    if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > HISTORY_PAGE_MAX_SIZE) {
+      throw new Error(`history limit must be an integer between 1 and ${HISTORY_PAGE_MAX_SIZE}`);
+    }
+    const endOffset = options.before ? decodeMessageCursor(options.before) : metadata.size;
+    const page = await readMessagePage(file.path, endOffset, requestedLimit);
+    return {
+      messages: page.messages,
+      next_cursor: page.nextOffset === null ? null : encodeMessageCursor(page.nextOffset),
+      has_more: page.hasMore,
+      snapshot_version: snapshotVersion(metadata.size, metadata.mtimeMs),
+    };
+  }
+
   async messages(cwd: string, sessionId: string): Promise<SessionMessageRecord[]> {
     const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
     if (!file) return [];
@@ -306,23 +451,8 @@ export class SessionRepository {
         crlfDelay: Infinity,
       });
       for await (const line of rl) {
-        if (!line.trim()) continue;
-        try {
-          const entry = JSON.parse(line) as Record<string, unknown>;
-          if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") continue;
-          const message = entry.message as Record<string, unknown>;
-          rows.push({
-            id: typeof entry.id === "string" ? entry.id : "",
-            role: typeof message.role === "string" ? message.role : "",
-            content: Array.isArray(message.content) ? message.content as Array<Record<string, unknown>> : [],
-            toolCallId: typeof message.toolCallId === "string" ? message.toolCallId : undefined,
-            toolName: typeof message.toolName === "string" ? message.toolName : undefined,
-            isError: typeof message.isError === "boolean" ? message.isError : false,
-            timestamp: typeof entry.timestamp === "string" ? entry.timestamp : null,
-          });
-        } catch {
-          continue;
-        }
+        const message = parseMessageLine(line);
+        if (message) rows.push(message);
       }
     } catch {
       return [];

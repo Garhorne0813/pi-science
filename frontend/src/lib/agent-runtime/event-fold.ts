@@ -244,6 +244,27 @@ export function threadFromMessages(messages: HistoryMessage[]): Thread {
   return { blocks, index, loaded: true };
 }
 
+/** Prepend an older history page while keeping any live tail already visible. */
+export function prependHistoryMessages(current: Thread, messages: HistoryMessage[]): Thread {
+  const older = threadFromMessages(messages).blocks;
+  if (older.length === 0) return current;
+  const existingIds = new Set(current.blocks.map((block) => block.id));
+  const existingToolCalls = new Set(
+    current.blocks
+      .filter((block): block is Extract<ThreadBlock, { kind: "tool" }> => block.kind === "tool")
+      .map((block) => block.callId),
+  );
+  const uniqueOlder = older.filter((block) => {
+    if (existingIds.has(block.id)) return false;
+    if (block.kind === "tool" && existingToolCalls.has(block.callId)) return false;
+    return true;
+  });
+  const blocks = [...uniqueOlder, ...current.blocks];
+  const index: Record<string, number> = {};
+  blocks.forEach((block, position) => { index[block.id] = position; });
+  return { blocks, index, loaded: true };
+}
+
 export function mergeHistoryWithLive(history: Thread, live: Thread): Thread {
   if (live.blocks.length === 0) return history;
   const ids = new Set(history.blocks.map((block) => block.id));
