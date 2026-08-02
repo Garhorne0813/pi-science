@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { ComponentType, Ref } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowDown, ArrowUp, Loader2, Square, Plus, Sparkles, X, File, FolderOpen } from "lucide-react";
-import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import type { VirtuosoHandle, VirtuosoProps } from "react-virtuoso";
 import { getSessionName } from "../../lib/client/pi-science-client";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
@@ -22,6 +23,12 @@ import { useTurnEffects } from "../../hooks/useTurnEffects";
 import { useModelConfig } from "../../hooks/useModelConfig";
 import { useResearchLoop } from "../../hooks/useResearchLoop";
 import { useComposer } from "../../hooks/useComposer";
+import type { ThreadBlock } from "../../types/thread";
+
+type ConversationVirtuosoProps = VirtuosoProps<ThreadBlock[], unknown> & { ref?: Ref<VirtuosoHandle> };
+const LazyVirtuoso = lazy(() => import("react-virtuoso").then(({ Virtuoso }) => ({
+  default: Virtuoso as unknown as ComponentType<ConversationVirtuosoProps>,
+})));
 
 export function LiveSessionPage() {
   const { t } = useTranslation();
@@ -247,52 +254,54 @@ export function LiveSessionPage() {
             {showWelcome && <ConversationWelcome />}
             {showWelcome && modePicker}
             {thread.blocks.length > 0 ? (
-              <Virtuoso
-                key={`${workspaceCwd}:${activeSessionId ?? "new"}`}
-                ref={virtuosoRef}
-                scrollerRef={attachScroller}
-                firstItemIndex={virtualFirstItemIndex}
-                data={blockGroups}
-                initialItemCount={Math.min(blockGroups.length, 20)}
-                startReached={() => void handleLoadOlder()}
-                increaseViewportBy={{ top: 600, bottom: 800 }}
-                components={{
-                  Header: () => (
-                    <div className="mx-auto flex w-full max-w-[824px] flex-col gap-4 px-8 pb-2 pt-6">
-                      {historyLoading && (
-                        <div className="flex items-center gap-2 text-xs text-muted" role="status">
-                          <Loader2 size={13} className="animate-spin text-accent" />
-                          Loading earlier messages…
-                        </div>
-                      )}
-                      {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
-                      {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
-                      {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error">{research.error}</div>}
+              <Suspense fallback={<div ref={attachScroller} className="h-full overflow-y-auto" />}>
+                <LazyVirtuoso
+                  key={`${workspaceCwd}:${activeSessionId ?? "new"}`}
+                  ref={virtuosoRef}
+                  scrollerRef={attachScroller}
+                  firstItemIndex={virtualFirstItemIndex}
+                  data={blockGroups}
+                  initialItemCount={Math.min(blockGroups.length, 20)}
+                  startReached={() => void handleLoadOlder()}
+                  increaseViewportBy={{ top: 600, bottom: 800 }}
+                  components={{
+                    Header: () => (
+                      <div className="mx-auto flex w-full max-w-[824px] flex-col gap-4 px-8 pb-2 pt-6">
+                        {historyLoading && (
+                          <div className="flex items-center gap-2 text-xs text-muted" role="status">
+                            <Loader2 size={13} className="animate-spin text-accent" />
+                            Loading earlier messages…
+                          </div>
+                        )}
+                        {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
+                        {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
+                        {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error">{research.error}</div>}
+                      </div>
+                    ),
+                    Footer: () => (
+                      <div className="mx-auto flex w-full max-w-[824px] flex-col gap-4 px-8 pb-6 pt-2">
+                        {pendingInteraction && (
+                          <InteractionPrompt
+                            interaction={pendingInteraction}
+                            onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
+                          />
+                        )}
+                        {working && !pendingInteraction && (
+                          <div className="flex items-center gap-2 py-4 text-sm text-muted">
+                            <Loader2 size={14} className="animate-spin text-accent" />
+                            Working…
+                          </div>
+                        )}
+                      </div>
+                    ),
+                  }}
+                  itemContent={(_index, group) => (
+                    <div className="mx-auto w-full max-w-[824px] px-8 pb-4">
+                      {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" })}
                     </div>
-                  ),
-                  Footer: () => (
-                    <div className="mx-auto flex w-full max-w-[824px] flex-col gap-4 px-8 pb-6 pt-2">
-                      {pendingInteraction && (
-                        <InteractionPrompt
-                          interaction={pendingInteraction}
-                          onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
-                        />
-                      )}
-                      {working && !pendingInteraction && (
-                        <div className="flex items-center gap-2 py-4 text-sm text-muted">
-                          <Loader2 size={14} className="animate-spin text-accent" />
-                          Working…
-                        </div>
-                      )}
-                    </div>
-                  ),
-                }}
-                itemContent={(_index, group) => (
-                  <div className="mx-auto w-full max-w-[824px] px-8 pb-4">
-                    {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" })}
-                  </div>
-                )}
-              />
+                  )}
+                />
+              </Suspense>
             ) : (
               <>
                 {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}

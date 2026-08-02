@@ -31,6 +31,7 @@ export default defineConfig({
           if (id.includes("node_modules/docx-preview")) return "vendor-docx";
           if (id.includes("node_modules/pptx-preview")) return "vendor-pptx";
           if (id.includes("node_modules/exceljs")) return "vendor-exceljs";
+          if (id.includes("node_modules/react-virtuoso")) return "vendor-virtuoso";
           if (
             id.includes("node_modules/react") ||
             id.includes("node_modules/react-dom") ||
