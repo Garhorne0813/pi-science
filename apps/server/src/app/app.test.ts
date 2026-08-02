@@ -1,9 +1,10 @@
 import Fastify from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { access, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./app.js";
+import { createServerModules } from "./server-modules.js";
 import type { ServerConfig } from "../config/config.js";
 
 const openApps: Array<{ close(): Promise<unknown> }> = [];
@@ -104,6 +105,33 @@ describe("Node control plane", () => {
     const response = await app.inject({ method: "GET", url: "/api/kernels/slow" });
     expect(response.statusCode).toBe(504);
     expect(response.json()).toMatchObject({ error: "scientific runtime unavailable" });
+  });
+
+  it("tears down the shared Pi runtime manager on close even when nodePiManager is off", async () => {
+    const modules = createServerModules(config("http://127.0.0.1:1", { nodePiManager: false }));
+    const shutdownSpy = vi.spyOn(modules.piManager, "shutdownAll").mockResolvedValue(undefined);
+    const app = buildApp(config("http://127.0.0.1:1", { nodePiManager: false }), modules);
+    openApps.push(app);
+
+    await app.close();
+
+    // The node session service hook is gated on nodePiManager, but the shared
+    // manager also owns research/review subagent runtimes, so its onClose hook
+    // must run unconditionally exactly once.
+    expect(shutdownSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls the shared Pi runtime manager teardown exactly twice when nodePiManager is on (idempotent no-ops)", async () => {
+    const modules = createServerModules(config("http://127.0.0.1:1", { nodePiManager: true }));
+    const shutdownSpy = vi.spyOn(modules.piManager, "shutdownAll").mockResolvedValue(undefined);
+    const app = buildApp(config("http://127.0.0.1:1", { nodePiManager: true }), modules);
+    openApps.push(app);
+
+    await app.close();
+
+    // One call from the session service (nodePiManager on) and one from the
+    // unconditional hook; the second is a no-op because the maps were cleared.
+    expect(shutdownSpy).toHaveBeenCalledTimes(2);
   });
 
   it("survives a refused upstream connection instead of replying twice", async () => {

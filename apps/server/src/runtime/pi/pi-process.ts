@@ -41,12 +41,30 @@ interface PendingRequest {
   timer: NodeJS.Timeout;
 }
 
+/** Total time budget for disposing a busy web runtime; configurable for tests.
+ *  Defaults above the 45s prompt reconciliation deadline so a long turn that
+ *  does not abort promptly still fits inside the budget. */
+function disposeBudgetMs(): number {
+  const configured = Number(process.env.PI_SCIENCE_DISPOSE_TIMEOUT_MS ?? 0);
+  return configured > 0 ? configured : 60_000;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class PiProcess extends EventEmitter {
   readonly child: ChildProcess;
   readonly runtimeIdentity: PiOrbitRuntimeDescriptor | undefined;
   private readonly pending = new Map<string, PendingRequest>();
   private readonly requestTimeoutMs: number;
   private readonly webHost: PiOrbitHost | undefined;
+
+  /** True when this process is a runtime inside the shared Pi Orbit host
+   *  (as opposed to a standalone RPC process). */
+  get attachedToHost(): boolean {
+    return this.webHost !== undefined;
+  }
   private readonly runtimeId: string | undefined;
   private eventAbort: AbortController | undefined;
   private closed = false;
@@ -152,10 +170,7 @@ export class PiProcess extends EventEmitter {
 
   async shutdown(): Promise<void> {
     if (this.closed) return;
-    this.closed = true;
-    this.eventAbort?.abort();
-    this.removeHostListeners?.();
-    this.removeHostListeners = undefined;
+    this.detachFromHost();
     if (this.webHost) {
       await this.disposeWebRuntime();
       return;
@@ -334,22 +349,48 @@ export class PiProcess extends EventEmitter {
     }
   }
 
+  /** Mark the process closed and stop its event stream without disposing the
+   *  web runtime. Used when the host itself is being torn down (shutdownAll),
+   *  where per-runtime dispose would just burn the budget waiting on a process
+   *  that is about to die anyway. */
+  detachFromHost(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.eventAbort?.abort();
+    this.removeHostListeners?.();
+    this.removeHostListeners = undefined;
+  }
+
   private async disposeWebRuntime(): Promise<void> {
     const path = this.runtimePath();
+    const budget = disposeBudgetMs();
+    const deadline = Date.now() + Math.max(budget, 250);
+    let delay = 250;
     try {
-      await this.webHost!.request("POST", `${path}/abort`, undefined, Math.min(this.requestTimeoutMs, 2_000));
-      const deadline = Date.now() + 2_000;
-      while (Date.now() < deadline) {
-        const state = await this.webHost!.request("GET", path, undefined, Math.min(this.requestTimeoutMs, 1_000));
-        if (!state.ok) break;
-        const descriptor = await state.json() as { busy?: unknown };
-        if (descriptor.busy !== true) break;
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      const deleted = await this.webHost!.request("DELETE", path, undefined, Math.min(this.requestTimeoutMs, 2_000));
-      if (!deleted.ok && deleted.status !== 404 && !this.webHost!.isClosed) {
-        this.emit("stderr", `Unable to dispose Pi Orbit runtime: ${await this.webHost!.responseError(deleted)}\n`);
-      }
+      // Abort is best-effort: a busy host may reject it, but the poll below
+      // still observes the state and retries DELETE until the budget runs out.
+      await this.webHost!.request("POST", `${path}/abort`, undefined, Math.min(this.requestTimeoutMs, 2_000)).catch(() => undefined);
+      do {
+        if (this.webHost!.isClosed) return;
+        const state = await this.webHost!.request("GET", path, undefined, Math.min(this.requestTimeoutMs, 1_000)).catch(() => undefined);
+        if (state) {
+          if (state.status === 404) return;
+          if (state.ok) {
+            const descriptor = await state.json().catch(() => ({})) as { busy?: unknown };
+            if (descriptor.busy !== true) {
+              const deleted = await this.webHost!.request("DELETE", path, undefined, Math.min(this.requestTimeoutMs, 2_000)).catch(() => undefined);
+              if (!deleted) { await sleep(delay); delay = Math.min(delay * 2, 1_000); continue; }
+              if (deleted.ok || deleted.status === 404) return;
+              if (deleted.status === 409) { await sleep(delay); delay = Math.min(delay * 2, 1_000); continue; }
+              if (!this.webHost!.isClosed) this.emit("stderr", `Unable to dispose Pi Orbit runtime: ${await this.webHost!.responseError(deleted)}\n`);
+              return;
+            }
+          }
+        }
+        await sleep(delay);
+        delay = Math.min(delay * 2, 1_000);
+      } while (Date.now() < deadline);
+      if (!this.webHost!.isClosed) this.emit("stderr", `Unable to dispose Pi Orbit runtime within ${budget}ms: runtime stayed busy\n`);
     } catch (error) {
       if (!this.webHost!.isClosed) this.emit("stderr", `Unable to dispose Pi Orbit runtime: ${String(error)}\n`);
     }

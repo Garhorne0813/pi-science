@@ -181,7 +181,10 @@ the Notebooks page or through `GET/POST /api/environments/workspace`.
 ## Lifecycle and recovery
 
 - Conversation runtimes are reclaimed after 30 minutes of inactivity by
-  default. `PI_SCIENCE_IDLE_RUNTIME_MS=0` disables that control-plane cleanup.
+  default. `PI_SCIENCE_IDLE_RUNTIME_MS=0` disables that control-plane cleanup;
+  the Pi Orbit host evicts idle runtimes after `PI_ORBIT_IDLE_TIMEOUT_MS` (default 24h).
+- Deleting a busy runtime waits up to `PI_SCIENCE_DISPOSE_TIMEOUT_MS` (default 60s) for
+  it to settle before giving up; control-plane shutdown skips this and kills the host directly.
 - The shared Pi Orbit host remains alive while the Node control plane is alive,
   even when it currently contains no conversation runtimes.
 - A managed Python worker starts on the first scientific request and is stopped

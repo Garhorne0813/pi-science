@@ -130,6 +130,9 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     for (const result of results) if (result.status === "rejected") app.log.error({ err: result.reason }, "research loop recovery failed");
   });
   if (config.nodePiManager) app.addHook("onClose", async () => nodeSessionService.shutdownAll());
+  // Unconditional: research/review subagent runtimes use the same shared
+  // manager, so the host must be torn down even when nodePiManager is off.
+  // The second call is a no-op when the first already ran (maps are cleared).
   app.addHook("onClose", async () => piManager.shutdownAll());
   app.addHook("onClose", async () => scientificRuntime.shutdown());
   app.addHook("onClose", async () => research.shutdown());
