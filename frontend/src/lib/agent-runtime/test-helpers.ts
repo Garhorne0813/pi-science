@@ -103,6 +103,7 @@ export function installRuntimeTestEnvironment(): void {
       compactionEnabled: true,
       compactionThresholdPercent: null,
       pendingInteraction: null,
+      pendingQuestionnaire: null,
       fileRevision: 0,
       draft: "",
     });

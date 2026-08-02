@@ -24,6 +24,7 @@ export class SseTransport {
   private static SSE_EVENTS = [
     "text.updated", "tool.updated", "session.idle", "error",
     "question.asked", "permission.asked", "compaction.updated", "artifact.published",
+    "questionnaire.asked", "questionnaire.finished",
     "agent_start", "agent_end", "status.updated", "session.replaced", "stream.gap",
   ];
 

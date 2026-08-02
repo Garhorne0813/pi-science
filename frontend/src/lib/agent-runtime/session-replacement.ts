@@ -85,6 +85,7 @@ export function applySessionReplacements(replacements: SessionReplacement[]): st
     working: false,
     status: "connecting",
     pendingInteraction: null,
+    pendingQuestionnaire: null,
   });
 
   replaceBrowserSessionRoute(previousActiveId, nextActiveId);

@@ -5,12 +5,28 @@ set -euo pipefail
 
 PI_ORBIT_VERSION="${PI_ORBIT_VERSION:-0.1.0}"
 PI_ORBIT_RELEASE_REPO="${PI_ORBIT_RELEASE_REPO:-Garhorne0813/pi-orbit}"
+RPIV_ASK_USER_QUESTION_VERSION="${RPIV_ASK_USER_QUESTION_VERSION:-2.3.1}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 RUNTIME_DIR="$PROJECT_DIR/runtime/pi"
 CLI_MARKER="$RUNTIME_DIR/.cli-path"
 
 mkdir -p "$RUNTIME_DIR"
+
+install_rpiv_ask_user_question() {
+  command -v npm >/dev/null 2>&1 || {
+    echo "ERROR: npm is required to install @juicesharp/rpiv-ask-user-question." >&2
+    exit 1
+  }
+  echo "==> Installing @juicesharp/rpiv-ask-user-question@$RPIV_ASK_USER_QUESTION_VERSION..."
+  npm install \
+    --prefix "$RUNTIME_DIR" \
+    --no-save \
+    --no-package-lock \
+    --ignore-scripts \
+    --omit=dev \
+    "@juicesharp/rpiv-ask-user-question@$RPIV_ASK_USER_QUESTION_VERSION"
+}
 
 # Local source is an explicit development override. This avoids silently using
 # a nearby checkout whose generated dist packages may be stale.
@@ -26,6 +42,7 @@ if [ -n "${PI_ORBIT_REPO:-}" ]; then
   }
   printf '%s\n' "$LOCAL_PI_REPO/packages/coding-agent/src/cli.ts" > "$CLI_MARKER"
   printf '%s\n' "$LOCAL_PI_REPO" > "$RUNTIME_DIR/.dev-repo-path"
+  install_rpiv_ask_user_question
   echo "==> Pi Orbit dev runtime ready: $LOCAL_PI_REPO"
   exit 0
 fi
@@ -83,5 +100,6 @@ fi
   echo "ERROR: Installed Pi Orbit does not support app-managed Web Mode: $pi_cli" >&2
   exit 1
 }
+install_rpiv_ask_user_question
 printf '%s\n' "$pi_cli" > "$CLI_MARKER"
 echo "==> Pi Orbit $PI_ORBIT_VERSION ready: $pi_cli"

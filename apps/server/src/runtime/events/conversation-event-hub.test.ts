@@ -180,6 +180,56 @@ describe("central conversation event hub", () => {
     expect(received.filter((event) => event.type === "error")).toEqual([]);
   });
 
+  it("publishes a structured questionnaire and marks its browser response request", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub();
+    const process = new EventEmitter() as PiProcess;
+    const received: Array<Record<string, unknown>> = [];
+    hub.bind(cwd, process, { activeSessionId: () => "session-questionnaire", onBusy: () => undefined, onExit: () => undefined });
+    await hub.subscribe(cwd, "session-questionnaire", undefined, (record) => received.push(JSON.parse(record.data)));
+
+    process.emit("event", { type: "agent_start" });
+    process.emit("event", {
+      type: "tool_execution_start",
+      toolCallId: "call-q1",
+      toolName: "ask_user_question",
+      args: {
+        questions: [{
+          question: "Which mode?",
+          header: "Mode",
+          options: [
+            { label: "Fast", description: "Low latency", preview: "**fast**" },
+            { label: "Safe", description: "Conservative" },
+          ],
+        }],
+      },
+    });
+    process.emit("event", {
+      type: "extension_ui_request",
+      id: "request-q1",
+      method: "input",
+      title: "pi-science-questionnaire-v1:call-q1",
+      placeholder: "pi-science-questionnaire-response",
+    });
+    process.emit("event", { type: "tool_execution_end", toolCallId: "call-q1", toolName: "ask_user_question", result: "done", isError: false });
+    await eventually(() => received.some((event) => event.type === "questionnaire.finished"));
+
+    const questionnaireAsked = received.find((event) => event.type === "questionnaire.asked");
+    expect(questionnaireAsked).toMatchObject({ toolCallId: "call-q1" });
+    const askedQuestions = questionnaireAsked?.questions as Array<{ options?: Array<Record<string, unknown>> }> | undefined;
+    expect(askedQuestions?.[0]?.options?.[0]).toMatchObject({
+      label: "Fast",
+      preview: "**fast**",
+    });
+    expect(received.find((event) => event.type === "question.asked")).toMatchObject({
+      requestId: "request-q1",
+      method: "input",
+      title: "Questionnaire",
+      questionnaire: true,
+      toolCallId: "call-q1",
+    });
+  });
+
   it("finishes derived artifact publication before session idle", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();

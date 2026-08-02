@@ -97,7 +97,7 @@ describe("runtime event subscription", () => {
   });
 
   it("shows work immediately, handles extension questions, and settles on idle", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url.includes("/messages")) return jsonResponse({ messages: [] });
       if (url.includes("/state")) return jsonResponse(state("session-a"));
@@ -129,6 +129,52 @@ describe("runtime event subscription", () => {
     source.emit("session.idle", { type: "session.idle", sessionId: "session-a" });
     expect(useRuntimeStore.getState().working).toBe(false);
     expect(useRuntimeStore.getState().status).toBe("ready");
+  });
+
+  it("routes the structured questionnaire request through the browser bridge", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-questionnaire"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      if (url.includes("/interactions/")) return jsonResponse({ ok: true });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await useRuntimeStore.getState().connect("/workspace", "session-questionnaire");
+    const source = FakeEventSource.instances[0];
+    source.open();
+
+    source.emit("questionnaire.asked", {
+      type: "questionnaire.asked",
+      sessionId: "session-questionnaire",
+      toolCallId: "call-q1",
+      questions: [{
+        question: "Which mode?",
+        header: "Mode",
+        multiSelect: false,
+        options: [{ label: "Fast", description: "Low latency", preview: "**fast**" }, { label: "Safe", description: "Conservative" }],
+      }],
+    });
+    source.emit("question.asked", {
+      type: "question.asked",
+      sessionId: "session-questionnaire",
+      requestId: "request-q1",
+      method: "input",
+      title: "Questionnaire",
+      questionnaire: true,
+      toolCallId: "call-q1",
+    });
+
+    expect(useRuntimeStore.getState().pendingQuestionnaire?.questions[0]?.options[0]?.preview).toBe("**fast**");
+    expect(useRuntimeStore.getState().pendingInteraction).toMatchObject({ questionnaire: true, requestId: "request-q1" });
+
+    await useRuntimeStore.getState().respondToInteraction({ value: JSON.stringify({ cancelled: false, answers: [{ questionIndex: 0, kind: "option", answer: "Fast" }] }) });
+    const interactionCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/interactions/"));
+    expect(JSON.parse(String(interactionCall?.[1]?.body))).toMatchObject({ value: expect.stringContaining('"Fast"') });
+
+    source.emit("questionnaire.finished", { type: "questionnaire.finished", sessionId: "session-questionnaire", toolCallId: "call-q1" });
+    expect(useRuntimeStore.getState().pendingQuestionnaire).toBeNull();
   });
 
   it("keeps a locally rendered command when an extension handles it without an agent turn", async () => {

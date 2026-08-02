@@ -12,6 +12,7 @@ const EXTENSION_DESCRIPTION_KEYS: Record<string, string> = {
   "pi-subagents": "settings.extensionsPage.description.subagents",
   "pi-web-access": "settings.extensionsPage.description.webAccess",
   "context-mode": "settings.extensionsPage.description.contextMode",
+  "rpiv-ask-user-question": "settings.extensionsPage.description.askUserQuestion",
 };
 
 export function ExtensionsTab({ workspaceCwd }: { workspaceCwd: string | null }) {

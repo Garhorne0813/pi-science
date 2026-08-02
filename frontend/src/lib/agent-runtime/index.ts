@@ -9,4 +9,11 @@
 export { useRuntimeStore } from "./store";
 export { applySessionReplacements } from "./session-replacement";
 export { convertHistoryToBlocks } from "./event-fold";
-export type { PendingInteraction, RuntimeState, SessionReplacement } from "./types";
+export type {
+  PendingInteraction,
+  PendingQuestionnaire,
+  QuestionnaireOption,
+  QuestionnaireQuestion,
+  RuntimeState,
+  SessionReplacement,
+} from "./types";

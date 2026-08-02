@@ -13,6 +13,17 @@ import { configRoot } from "../../storage/persistence.js";
 // exhausted and session creation fails hard.
 let sharedWebPort: number | null = null;
 let sharedWebToken: string | null = null;
+const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
+const BROWSER_QUESTIONNAIRE_ADAPTER = join(
+  PROJECT_ROOT,
+  "apps",
+  "server",
+  "src",
+  "runtime",
+  "pi",
+  "extensions",
+  "pi-science-ask-user-question-web.ts",
+);
 
 function webPort(): number {
   if (sharedWebPort === null) sharedWebPort = randomInt(20_000, 60_000);
@@ -70,7 +81,7 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
   if (effectiveThinking) args.push("--thinking", effectiveThinking);
   if (useRpcMode && sessionPath) args.push("--session", sessionPath);
   for (const skill of useRpcMode ? [...seededSkills, ...config.skills] : config.skills) args.push("--skill", skill);
-  for (const extension of config.extensions) args.push("-e", extension);
+  for (const extension of ensureBrowserQuestionnaireAdapter(config.extensions)) args.push("-e", extension);
   const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
   let agentDir = join(dataRoot, "pi-agent", useRpcMode ? workspaceKey : "web-host");
   try {
@@ -176,9 +187,11 @@ export function loadDefaultPiConfig(): PiConfig {
     provider: null,
     api_key: null,
     skills: Array.isArray(settings.skill_paths) ? settings.skill_paths.map(String).filter(Boolean) : [],
-    extensions: Array.isArray(settings.extension_paths)
-      ? settings.extension_paths.map(String).filter(Boolean)
-      : runtimeExtensionStatus().filter((item) => item.installed && (item.id !== "context-mode" || process.env.PI_SCIENCE_ENABLE_CONTEXT_MODE === "1")).map((item) => item.path!).filter(Boolean),
+    extensions: ensureBrowserQuestionnaireAdapter(
+      Array.isArray(settings.extension_paths)
+        ? settings.extension_paths.map(String).filter(Boolean)
+        : runtimeExtensionStatus().filter((item) => item.installed && (item.id !== "context-mode" || process.env.PI_SCIENCE_ENABLE_CONTEXT_MODE === "1")).map((item) => item.path!).filter(Boolean),
+    ),
   };
 }
 
@@ -187,11 +200,13 @@ const EXTENSIONS = [
   { id: "pi-subagents", name: "Subagents", description: "Adds focused scientific subagents." },
   { id: "pi-web-access", name: "Web Access", description: "Adds web search, URL fetching, and media extraction." },
   { id: "context-mode", name: "Context Mode", description: "Optional sandboxed context index.", entrypoints: ["build/adapters/pi/extension.js"] },
+  { id: "rpiv-ask-user-question", packageName: "@juicesharp/rpiv-ask-user-question", name: "Ask User Question", description: "Adds structured multi-question prompts with previews, multi-select, custom answers, and notes." },
 ] as const;
 
 export function runtimeExtensionStatus(cliPath = process.env.PI_CLI_PATH ?? ""): Array<{ id: string; name: string; description: string; installed: boolean; path: string | null }> {
   return EXTENSIONS.map((extension) => {
-    const path = findRuntimeExtension(extension.id, cliPath, "entrypoints" in extension ? [...extension.entrypoints] : []);
+    const packageName = "packageName" in extension ? extension.packageName : extension.id;
+    const path = findRuntimeExtension(packageName, cliPath, "entrypoints" in extension ? [...extension.entrypoints] : []);
     return { id: extension.id, name: extension.name, description: extension.description, installed: Boolean(path), path };
   });
 }
@@ -199,6 +214,8 @@ export function runtimeExtensionStatus(cliPath = process.env.PI_CLI_PATH ?? ""):
 function findRuntimeExtension(packageName: string, cliPath: string, extraEntrypoints: string[]): string | null {
   if (!cliPath) return null;
   const roots: string[] = [];
+  const managedRuntimeRoot = join(PROJECT_ROOT, "runtime", "pi");
+  if (existsSync(managedRuntimeRoot)) roots.push(managedRuntimeRoot);
   let current = dirname(resolve(cliPath));
   for (let depth = 0; depth < 12; depth += 1) {
     if (!roots.includes(current)) roots.push(current);
@@ -220,6 +237,26 @@ function findRuntimeExtension(packageName: string, cliPath: string, extraEntrypo
     }
   }
   return null;
+}
+
+/**
+ * Pi keeps the first registration for a tool name. Put the Pi-Science browser
+ * bridge before the upstream package whenever that package is present, while
+ * leaving manually configured extension lists untouched unless they include
+ * the questionnaire package itself.
+ */
+function ensureBrowserQuestionnaireAdapter(paths: string[]): string[] {
+  if (!existsSync(BROWSER_QUESTIONNAIRE_ADAPTER)) return paths;
+  const hasQuestionnairePackage = paths.some((path) => path.includes("rpiv-ask-user-question"));
+  if (!hasQuestionnairePackage) return paths;
+  // Pi rejects duplicate tool registrations instead of applying a last-wins
+  // rule. The browser bridge implements the same public tool contract, so the
+  // upstream package is installed for native Pi hosts but omitted from this
+  // managed Web/RPC process when the bridge is active.
+  return [
+    BROWSER_QUESTIONNAIRE_ADAPTER,
+    ...paths.filter((path) => path !== BROWSER_QUESTIONNAIRE_ADAPTER && !path.includes("rpiv-ask-user-question")),
+  ];
 }
 
 function readSettings(dataRoot: string): Record<string, any> {

@@ -44,6 +44,7 @@ const MAX_EVENT_TEXT = 20_000;
 const MAX_SUBSCRIBER_REPLAY_PENDING = 2_000;
 const STDERR_WINDOW_MS = 30_000;
 const TEXT_BATCH_MS = 50;
+const BROWSER_QUESTIONNAIRE_REQUEST_PREFIX = "pi-science-questionnaire-v1:";
 
 function streamKey(cwd: string, sessionId: string): string {
   return `${resolve(cwd)}\0${sessionId}`;
@@ -67,6 +68,44 @@ function safeValue(value: unknown, depth = 0): unknown {
     return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 200).map(([key, item]) => [key, safeValue(item, depth + 1)]));
   }
   return value;
+}
+
+function questionnairePayload(sessionId: string, toolCallId: string, args: unknown): Record<string, unknown> | null {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return null;
+  const rawQuestions = (args as Record<string, unknown>).questions;
+  if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) return null;
+  const questions = rawQuestions.slice(0, 4).flatMap((rawQuestion) => {
+    if (!rawQuestion || typeof rawQuestion !== "object" || Array.isArray(rawQuestion)) return [];
+    const question = rawQuestion as Record<string, unknown>;
+    const rawOptions = Array.isArray(question.options) ? question.options : [];
+    return [{
+      question: cap(question.question),
+      header: cap(question.header, 200),
+      multiSelect: question.multiSelect === true,
+      options: rawOptions.slice(0, 4).flatMap((rawOption) => {
+        if (!rawOption || typeof rawOption !== "object" || Array.isArray(rawOption)) return [];
+        const option = rawOption as Record<string, unknown>;
+        return [{
+          label: cap(option.label, 500),
+          description: cap(option.description),
+          ...(typeof option.preview === "string" && option.preview.length > 0 ? { preview: cap(option.preview) } : {}),
+        }];
+      }),
+    }];
+  });
+  return { type: "questionnaire.asked", sessionId, toolCallId, questions };
+}
+
+function browserQuestionnaireRequestId(title: unknown): string | null {
+  if (typeof title !== "string" || !title.startsWith(BROWSER_QUESTIONNAIRE_REQUEST_PREFIX)) return null;
+  const encoded = title.slice(BROWSER_QUESTIONNAIRE_REQUEST_PREFIX.length);
+  if (!encoded) return null;
+  try {
+    const value = decodeURIComponent(encoded);
+    return value || null;
+  } catch {
+    return null;
+  }
 }
 
 function assistantText(event: PiEvent): { type: string; text: string; messageId: string; contentIndex: string } | null {
@@ -400,20 +439,49 @@ export class ConversationEventHub {
         turn.activeAnonymousKey = typeof message.id === "string" && message.id ? null : partId;
         return [{ type: "text.updated", sessionId, partId, text: "" }];
       }
-      case "tool_execution_start":
+      case "tool_execution_start": {
         turn.hadActivity = true;
-        return [{ type: "tool.updated", sessionId, callId: String(event.toolCallId ?? ""), tool: String(event.toolName ?? "unknown"), status: "running", input: safeValue(event.args ?? {}), startedAt: new Date().toISOString() }];
+        const callId = String(event.toolCallId ?? "");
+        const tool = String(event.toolName ?? "unknown");
+        const records: Record<string, unknown>[] = [];
+        if (tool === "ask_user_question") {
+          const questionnaire = questionnairePayload(sessionId, callId, event.args);
+          if (questionnaire) records.push(questionnaire);
+        }
+        records.push({ type: "tool.updated", sessionId, callId, tool, status: "running", input: safeValue(event.args ?? {}), startedAt: new Date().toISOString() });
+        return records;
+      }
       case "tool_execution_update":
         turn.hadActivity = true;
         return [{ type: "tool.updated", sessionId, callId: String(event.toolCallId ?? ""), tool: String(event.toolName ?? ""), status: "running", partialOutput: cap(event.partialResult) }];
-      case "tool_execution_end":
+      case "tool_execution_end": {
         turn.hadActivity = true;
-        return [{ type: "tool.updated", sessionId, callId: String(event.toolCallId ?? ""), tool: String(event.toolName ?? ""), status: event.isError ? "error" : "done", output: cap(event.result), endedAt: new Date().toISOString() }];
+        const callId = String(event.toolCallId ?? "");
+        const tool = String(event.toolName ?? "");
+        const records: Record<string, unknown>[] = [];
+        if (tool === "ask_user_question") records.push({ type: "questionnaire.finished", sessionId, toolCallId: callId, cancelled: event.isError === true });
+        records.push({ type: "tool.updated", sessionId, callId, tool, status: event.isError ? "error" : "done", output: cap(event.result), endedAt: new Date().toISOString() });
+        return records;
+      }
       case "extension_ui_request": {
         turn.hadActivity = true;
         const method = String(event.method ?? "");
         if (method === "confirm") return [{ type: "permission.asked", sessionId, requestId: String(event.id ?? ""), title: String(event.title ?? "Confirmation"), message: cap(event.message) }];
-        if (["select", "input", "editor"].includes(method)) return [{ type: "question.asked", sessionId, requestId: String(event.id ?? ""), method, title: String(event.title ?? "Question"), message: cap(event.message), options: safeValue(event.options ?? []), placeholder: String(event.placeholder ?? ""), prefill: String(event.prefill ?? "") }];
+        if (["select", "input", "editor"].includes(method)) {
+          const toolCallId = browserQuestionnaireRequestId(event.title);
+          return [{
+            type: "question.asked",
+            sessionId,
+            requestId: String(event.id ?? ""),
+            method,
+            title: toolCallId ? "Questionnaire" : String(event.title ?? "Question"),
+            message: cap(toolCallId ? "Complete the questionnaire to continue." : event.message),
+            options: safeValue(event.options ?? []),
+            placeholder: String(event.placeholder ?? ""),
+            prefill: String(event.prefill ?? ""),
+            ...(toolCallId ? { questionnaire: true, toolCallId } : {}),
+          }];
+        }
         return [];
       }
       case "artifact_published":
