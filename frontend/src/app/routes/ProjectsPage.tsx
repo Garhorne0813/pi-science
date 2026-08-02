@@ -14,6 +14,7 @@ import { workspacePathLeaf } from "../../lib/workspace";
 interface Workspace {
   name: string;
   path: string;
+  project_id: string;
   session_count: number;
   last_modified: string;
 }

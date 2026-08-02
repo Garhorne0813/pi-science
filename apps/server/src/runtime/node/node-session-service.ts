@@ -13,6 +13,7 @@ import type { ProjectReviewService } from "../../project-review/service.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { SessionRepository, invalidateSessionFileCache, sessionRepository } from "./session-repository.js";
 import { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
+import { ensureProject } from "../../project/project-registry.js";
 
 type RuntimeFailure = { error: string; code: string; diagnostics?: unknown };
 type ServiceFailure = RuntimeFailure & { success: false };
@@ -99,10 +100,11 @@ export class NodeSessionService {
     this.log = log;
   }
 
-  async create(body: CreateSessionRequest): Promise<{ id: string; cwd: string } | RuntimeFailure & { sessionId?: string }> {
+  async create(body: CreateSessionRequest): Promise<{ id: string; cwd: string; project_id: string } | RuntimeFailure & { sessionId?: string }> {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(body.cwd); }
     catch (error) { return { error: String(error), code: "workspace_invalid" }; }
+    const project = await ensureProject(cwd);
     await mkdir(resolve(cwd, ".pi-science", "sessions"), { recursive: true });
     return this.withLock(`create:${cwd}`, async () => {
       let runtime: RuntimeRecord | undefined;
@@ -116,7 +118,7 @@ export class NodeSessionService {
       if (!configured.success) { await this.cleanupRuntime(runtime); return { error: String(configured.error ?? "unable to configure session"), code: String(configured.code ?? "runtime_error") }; }
       this.registerRuntime(runtime);
       invalidateSessionFileCache(cwd);
-      return { id: runtime.activeSessionId, cwd };
+      return { id: runtime.activeSessionId, cwd, project_id: project.id };
     });
   }
 

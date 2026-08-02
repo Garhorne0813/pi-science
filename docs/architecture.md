@@ -139,6 +139,7 @@ project/
 │   ├── skills/
 │   └── agents/
 ├── .pi-science/
+│   ├── project.json           # stable project identity and display metadata
 │   ├── sessions/             # persisted Pi session JSONL files
 │   ├── agent/                # project-local fallback runtime config
 │   ├── runs/                 # execution workspaces and outputs
@@ -151,6 +152,11 @@ project/
 
 Reviewed project memory is created lazily. Agent findings do not become formal
 project knowledge until the user accepts them.
+
+External workspaces are explicitly registered through the workspace-open API.
+Their canonical paths are persisted in the global
+`registered-workspaces.json` registry so they can be rediscovered after a
+restart; this is separate from `pinned.json`, which represents user favorites.
 
 ### Package isolation
 
@@ -170,6 +176,9 @@ the Notebooks page or through `GET/POST /api/environments/workspace`.
 - The token remains in the backend; browser origins are not granted direct CORS
   access to the host.
 - Workspace paths are canonicalized and validated before runtime creation.
+- Each registered workspace owns a stable project identity in
+  `.pi-science/project.json`; session listings resolve their `project_id` from
+  that manifest.
 - A registered workspace is inside the application trust boundary. The control
   plane records Pi Orbit project trust before creating a runtime, so users should
   register only workspaces whose instructions and skills they trust.

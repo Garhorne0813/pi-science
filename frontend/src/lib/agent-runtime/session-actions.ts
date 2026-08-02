@@ -446,7 +446,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         thread: threadFromMessages(messages),
         working: false,
         sessions: [
-          { id: result.id, cwd, name: "New Session" },
+          { id: result.id, cwd, project_id: get().sessions.find((session) => session.cwd === cwd)?.project_id ?? null, name: "New Session" },
           ...get().sessions.filter((session) => session.id !== result.id),
         ].slice(0, 50),
       });
@@ -482,7 +482,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         });
         optimisticSessionIds.add(result.id);
         client.connect(result.id, requestCwd);
-        const newSession: SessionInfo = { id: result.id, cwd: requestCwd, name: "New Session" };
+        const newSession: SessionInfo = { id: result.id, cwd: requestCwd, project_id: result.project_id ?? null, name: "New Session" };
         set((s) => ({
           sessions: [
             newSession,

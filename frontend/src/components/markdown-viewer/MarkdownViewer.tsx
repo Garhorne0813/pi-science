@@ -1,7 +1,11 @@
-import { isValidElement, useCallback } from "react";
+import { isValidElement, useCallback, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { File } from "lucide-react";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
+import { Check, Copy, File } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/ui";
 import { fenceLanguage, runnableLanguage } from "@/lib/conversation";
 import { RunnableCodeBlock } from "../conversation/RunnableCodeBlock";
@@ -76,6 +80,66 @@ function reactText(node: React.ReactNode): string {
   return "";
 }
 
+/** Extract the original TeX that rehype-katex keeps in its MathML annotation. */
+function mathSource(node: React.ReactNode): string | null {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const source = mathSource(child);
+      if (source !== null) return source;
+    }
+    return null;
+  }
+  if (!isValidElement(node)) return null;
+  const props = node.props as { encoding?: unknown; children?: React.ReactNode };
+  if (props.encoding === "application/x-tex") return reactText(props.children);
+  return mathSource(props.children);
+}
+
+function MathBlock({ children, variant }: { children?: React.ReactNode; variant: Variant }) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const source = mathSource(children);
+
+  const copy = async () => {
+    if (source === null) return;
+    try {
+      await navigator.clipboard.writeText(source);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard access can be unavailable outside a secure browser context.
+    }
+  };
+
+  return (
+    <div
+      className={cn(
+        "katex-display group relative my-4 overflow-x-auto rounded-lg border px-4 pb-3 pt-7",
+        variant === "chat"
+          ? "border-border bg-surface-2/50"
+          : "border-[#e6ddd2] bg-[#faf6f2]",
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => void copy()}
+        disabled={source === null}
+        aria-label={copied ? t("conversation.copied") : t("conversation.copy")}
+        title={copied ? t("conversation.copied") : t("conversation.copy")}
+        className={cn(
+          "absolute right-2 top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded border opacity-70 transition-opacity hover:opacity-100 disabled:cursor-default disabled:opacity-40",
+          variant === "chat"
+            ? "border-border bg-surface text-muted hover:text-text"
+            : "border-[#e2d5c8] bg-white/80 text-[#8d7b6b] hover:text-[#bf5a34]",
+        )}
+      >
+        {copied ? <Check size={12} /> : <Copy size={12} />}
+      </button>
+      {children}
+    </div>
+  );
+}
+
 const FILE_HREF = /^(?!(?:https?:\/\/|mailto:|#|data:|file:))/i;
 export function MarkdownViewer({
   children,
@@ -104,7 +168,8 @@ export function MarkdownViewer({
   return (
     <div className={cn(s.root, className)}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[[rehypeKatex, { throwOnError: false }]]}
         components={{
           p: ({ children }) => <p className={s.p}>{children}</p>,
           a: ({ children, href: rawHref }) => {
@@ -131,6 +196,16 @@ export function MarkdownViewer({
             );
           },
           code: ({ children }) => <code className={s.code}>{children}</code>,
+          span: ({ children, className, node: _node, ...props }) => {
+            if (className === "katex-display") {
+              return <MathBlock variant={variant}>{children}</MathBlock>;
+            }
+            return (
+              <span {...props} className={className}>
+                {children}
+              </span>
+            );
+          },
           // Block code: the plain wrapper — its inner <code> is restyled via [&_code].
           // In chat with a codeRunner, python fences become executable blocks.
           pre: ({ children }) => {

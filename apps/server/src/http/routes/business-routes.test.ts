@@ -178,9 +178,40 @@ describe("native control-plane business routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual([
-      expect.objectContaining({ name: "counted-workspace", path: cwd, session_count: 2 }),
+      expect.objectContaining({ name: "counted-workspace", path: cwd, project_id: expect.stringMatching(/^project_/), session_count: 2 }),
     ]);
     expect(response.json()[0].last_modified).not.toBe("");
+    const project = JSON.parse(await readFile(join(cwd, ".pi-science", "project.json"), "utf8")) as { id?: string; name?: string };
+    expect(project).toMatchObject({ id: response.json()[0].project_id, name: "counted-workspace" });
+  });
+
+  it("persists an external workspace registration for discovery after restart", async () => {
+    const sandbox = join(tmpdir(), `pi-science-external-registration-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const managed = join(sandbox, "managed");
+    const external = join(sandbox, "external-project");
+    const home = join(sandbox, "home");
+    tempDirs.push(sandbox);
+    await mkdir(external, { recursive: true });
+    process.env.PI_SCIENCE_WORKSPACES = managed;
+    process.env.PI_SCIENCE_HOME = home;
+
+    const app = buildApp(config());
+    apps.push(app);
+    const opened = await app.inject({ method: "POST", url: "/api/workspaces/open", payload: { path: external } });
+    const canonicalExternal = await realpath(external);
+
+    expect(opened.statusCode).toBe(200);
+    expect(opened.json()).toMatchObject({ path: canonicalExternal, project_id: expect.stringMatching(/^project_/) });
+    expect(JSON.parse(await readFile(join(home, "registered-workspaces.json"), "utf8"))).toEqual([canonicalExternal]);
+
+    await app.close();
+    apps.splice(apps.indexOf(app), 1);
+    const restarted = buildApp(config());
+    apps.push(restarted);
+    const listed = await restarted.inject({ method: "GET", url: "/api/workspaces" });
+    expect(listed.json()).toEqual([
+      expect.objectContaining({ path: canonicalExternal, project_id: opened.json().project_id }),
+    ]);
   });
 
   it("installs a demo workspace from the shipped assets and reuses it on a repeat install", async () => {
