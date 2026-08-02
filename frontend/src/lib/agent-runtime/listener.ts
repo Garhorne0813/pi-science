@@ -10,7 +10,7 @@ import { reconcileAfterGap, reconcileWorkingState, recoverMissingSession, resync
 import { applySessionReplacements } from "./session-replacement";
 import { loadSessionsInternal, optimisticSessionIds } from "./sessions";
 import { useRuntimeStore } from "./store";
-import type { PendingInteraction } from "./types";
+import type { PendingInteraction, PendingQuestionnaire } from "./types";
 
 /** The client whose stream is currently folded into the store, and the
  *  unsubscribe handle for that subscription. Re-registering for the same
@@ -30,6 +30,35 @@ let optimisticRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
 function clearOptimisticRetry(): void {
   if (optimisticRetryTimer) { clearTimeout(optimisticRetryTimer); optimisticRetryTimer = null; }
+}
+
+function questionnaireQuestions(value: unknown): PendingQuestionnaire["questions"] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((rawQuestion) => {
+    if (!rawQuestion || typeof rawQuestion !== "object" || Array.isArray(rawQuestion)) return [];
+    const question = rawQuestion as Record<string, unknown>;
+    const options = Array.isArray(question.options)
+      ? question.options.flatMap((rawOption) => {
+        if (!rawOption || typeof rawOption !== "object" || Array.isArray(rawOption)) return [];
+        const option = rawOption as Record<string, unknown>;
+        const label = typeof option.label === "string" ? option.label : "";
+        if (!label) return [];
+        return [{
+          label,
+          description: typeof option.description === "string" ? option.description : "",
+          ...(typeof option.preview === "string" && option.preview ? { preview: option.preview } : {}),
+        }];
+      })
+      : [];
+    const prompt = typeof question.question === "string" ? question.question : "";
+    if (!prompt || options.length === 0) return [];
+    return [{
+      question: prompt,
+      header: typeof question.header === "string" ? question.header : "",
+      multiSelect: question.multiSelect === true,
+      options,
+    }];
+  });
 }
 
 export function registerEventListener(client: PiScienceClient) {
@@ -142,6 +171,26 @@ export function registerEventListener(client: PiScienceClient) {
       return;
     }
 
+    if (event.type === "questionnaire.asked") {
+      const questions = questionnaireQuestions(event.questions);
+      if (questions.length === 0) return;
+      ++generations.activity;
+      useRuntimeStore.setState({
+        working: true,
+        status: "ready",
+        pendingQuestionnaire: {
+          toolCallId: String(event.toolCallId || ""),
+          questions,
+        },
+      });
+      return;
+    }
+
+    if (event.type === "questionnaire.finished") {
+      useRuntimeStore.setState({ pendingQuestionnaire: null });
+      return;
+    }
+
     if (event.type === "permission.asked" || event.type === "question.asked") {
       ++generations.activity;
       const method = event.type === "permission.asked"
@@ -158,6 +207,7 @@ export function registerEventListener(client: PiScienceClient) {
           options: Array.isArray(event.options) ? event.options as PendingInteraction["options"] : [],
           placeholder: String(event.placeholder || ""),
           prefill: String(event.prefill || ""),
+          ...(event.questionnaire === true ? { questionnaire: true, toolCallId: String(event.toolCallId || "") } : {}),
         },
       });
       return;
@@ -186,6 +236,7 @@ export function registerEventListener(client: PiScienceClient) {
         working: false,
         status: successful ? "ready" : "error",
         pendingInteraction: null,
+        pendingQuestionnaire: null,
         fileRevision: (state.fileRevision ?? 0) + 1,
       });
       if (successful && state.activeSessionId && event.handledWithoutTurn !== true) {
@@ -198,7 +249,7 @@ export function registerEventListener(client: PiScienceClient) {
         useRuntimeStore.setState({ status: "connecting" });
       } else {
         turnState.errored = true;
-        useRuntimeStore.setState({ working: false, status: "error", pendingInteraction: null });
+        useRuntimeStore.setState({ working: false, status: "error", pendingInteraction: null, pendingQuestionnaire: null });
       }
     }
 

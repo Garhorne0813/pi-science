@@ -30,6 +30,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   compactionEnabled: true,
   compactionThresholdPercent: null,
   pendingInteraction: null,
+  pendingQuestionnaire: null,
   fileRevision: 0,
   draft: "",
 

@@ -11,6 +11,27 @@ export interface PendingInteraction {
   options?: Array<string | { label?: string; value?: string }>;
   placeholder?: string;
   prefill?: string;
+  /** True for the Pi-Science structured questionnaire bridge request. */
+  questionnaire?: boolean;
+  toolCallId?: string;
+}
+
+export interface QuestionnaireOption {
+  label: string;
+  description: string;
+  preview?: string;
+}
+
+export interface QuestionnaireQuestion {
+  question: string;
+  header: string;
+  multiSelect: boolean;
+  options: QuestionnaireOption[];
+}
+
+export interface PendingQuestionnaire {
+  toolCallId: string;
+  questions: QuestionnaireQuestion[];
 }
 
 export interface RuntimeState {
@@ -38,6 +59,7 @@ export interface RuntimeState {
   compactionEnabled: boolean;
   compactionThresholdPercent: number | null;
   pendingInteraction: PendingInteraction | null;
+  pendingQuestionnaire: PendingQuestionnaire | null;
   /** Increments after a turn settles so workspace file views can reload. */
   fileRevision: number;
 

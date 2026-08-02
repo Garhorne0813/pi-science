@@ -124,6 +124,19 @@ describe("Pi runtime custom provider materialization", () => {
     expect(extensions).not.toContain("pi-subagents/index.ts");
   });
 
+  it("uses the Pi-Science questionnaire bridge instead of registering the upstream duplicate tool", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-questionnaire-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    const upstream = join(cwd, "node_modules", "@juicesharp", "rpiv-ask-user-question", "index.ts");
+    const options = buildPiProcessOptions(cwd, { skills: [], extensions: [upstream] })!;
+    const extensions = options.args.flatMap((arg, index) => arg === "-e" ? [options.args[index + 1]] : []);
+    const adapter = join(import.meta.dirname, "extensions", "pi-science-ask-user-question-web.ts");
+
+    expect(extensions[0]).toBe(adapter);
+    expect(extensions).not.toContain(upstream);
+  });
+
   it("runs a source TypeScript CLI through the adjacent tsx runtime", async () => {
     const piRoot = join(tmpdir(), `pi-source-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(piRoot);

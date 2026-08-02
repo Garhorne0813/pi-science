@@ -58,6 +58,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           compactionEnabled: true,
           compactionThresholdPercent: null,
           pendingInteraction: null,
+          pendingQuestionnaire: null,
         });
       }
       set({ status: "connecting", cwd });
@@ -189,7 +190,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       // Unmounting the conversation view does not stop the backend turn. Keep
       // the stop/busy state so workspace-level controls cannot race the active
       // agent merely because the user opened Files or Knowledge.
-      set({ status: "offline", pendingInteraction: null });
+      set({ status: "offline", pendingInteraction: null, pendingQuestionnaire: null });
     },
 
     sendPrompt: async (message: string): Promise<string | null> => {
@@ -299,7 +300,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         await getClient().abort(activeSessionId, cwd);
         const current = get();
         if (current.activeSessionId === activeSessionId && current.cwd === cwd) {
-          set({ working: false, status: "ready", pendingInteraction: null });
+          set({ working: false, status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
         }
       } catch (error) {
         const current = get();
@@ -477,7 +478,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       ++generations.activity;
       ++generations.localMutation;
       optimisticSessionIds.add(result.id);
-      set({ activeSessionId: result.id, status: "connecting", pendingInteraction: null });
+      set({ activeSessionId: result.id, status: "connecting", pendingInteraction: null, pendingQuestionnaire: null });
       registerEventListener(client);
       client.connect(result.id, cwd);
       let history = {
@@ -542,6 +543,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           working: false,
           status: "connecting",
           pendingInteraction: null,
+          pendingQuestionnaire: null,
         });
         optimisticSessionIds.add(result.id);
         client.connect(result.id, requestCwd);

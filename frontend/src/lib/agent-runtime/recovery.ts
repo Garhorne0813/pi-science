@@ -163,7 +163,7 @@ export async function reconcilePromptAfterLateStream(
         || runtimeState.pending_message_count > 0;
       if (!runtimeWorking) {
         ++generations.activity;
-        useRuntimeStore.setState({ working: false, status: "ready", pendingInteraction: null });
+        useRuntimeStore.setState({ working: false, status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
         void resyncCompletedHistory(sessionId, cwd);
         void loadSessionsInternal();
         return;
@@ -220,5 +220,6 @@ export function recoverMissingSession(sessionId: string, cwd: string, client?: P
     compactionEnabled: true,
     compactionThresholdPercent: null,
     pendingInteraction: null,
+    pendingQuestionnaire: null,
   });
 }

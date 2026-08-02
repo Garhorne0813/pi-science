@@ -14,6 +14,7 @@ import { SlashCommandMenu } from "../../components/SlashCommandMenu";
 import { ConversationWelcome } from "../../components/conversation/ConversationWelcome";
 import { ModelControlMenu } from "../../components/conversation/ModelControlMenu";
 import { InteractionPrompt } from "../../components/conversation/InteractionPrompt";
+import { QuestionnairePrompt } from "../../components/conversation/QuestionnairePrompt";
 import { groupBlocks, renderBlockGroup } from "../../components/conversation/ConversationBlocks";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
 import { visibleUserMessage } from "../../lib/files";
@@ -55,6 +56,7 @@ export function LiveSessionPage() {
   const compactionEnabled = useRuntimeStore((s) => s.compactionEnabled);
   const compactionThresholdPercent = useRuntimeStore((s) => s.compactionThresholdPercent);
   const pendingInteraction = useRuntimeStore((s) => s.pendingInteraction);
+  const pendingQuestionnaire = useRuntimeStore((s) => s.pendingQuestionnaire);
   const respondToInteraction = useRuntimeStore((s) => s.respondToInteraction);
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
@@ -186,6 +188,25 @@ export function LiveSessionPage() {
   // shipped default and the only control that does something when auto review is off.
   const autoReviewOn = useReviewPolicy(workspaceCwd).data?.auto_review === true;
 
+  const renderInteractionPrompt = () => {
+    if (pendingQuestionnaire && pendingInteraction?.questionnaire) {
+      return (
+        <QuestionnairePrompt
+          questionnaire={pendingQuestionnaire}
+          interaction={pendingInteraction}
+          onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
+        />
+      );
+    }
+    if (!pendingInteraction) return null;
+    return (
+      <InteractionPrompt
+        interaction={pendingInteraction}
+        onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
+      />
+    );
+  };
+
   const handleProjectReview = async () => {
     if (reviewingProject || working) return;
     setReviewingProject(true);
@@ -280,12 +301,7 @@ export function LiveSessionPage() {
                     ),
                     Footer: () => (
                       <div className="mx-auto flex w-full max-w-[824px] flex-col gap-4 px-8 pb-6 pt-2">
-                        {pendingInteraction && (
-                          <InteractionPrompt
-                            interaction={pendingInteraction}
-                            onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
-                          />
-                        )}
+                        {renderInteractionPrompt()}
                         {working && !pendingInteraction && (
                           <div className="flex items-center gap-2 py-4 text-sm text-muted">
                             <Loader2 size={14} className="animate-spin text-accent" />
@@ -307,12 +323,7 @@ export function LiveSessionPage() {
                 {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
                 {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
                 {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error">{research.error}</div>}
-                {pendingInteraction && (
-                  <InteractionPrompt
-                    interaction={pendingInteraction}
-                    onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
-                  />
-                )}
+                {renderInteractionPrompt()}
                 {working && !pendingInteraction && (
                   <div className="flex items-center gap-2 py-4 text-sm text-muted">
                     <Loader2 size={14} className="animate-spin text-accent" />
