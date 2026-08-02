@@ -130,6 +130,8 @@ project/
 │   └── agents/
 ├── .pi-science/
 │   ├── project.json           # 稳定项目身份与显示元数据
+│   ├── memory/
+│   │   └── ledger.json       # 项目记忆规范存储（记录、提案、决策）
 │   ├── sessions/             # 持久化的 Pi session JSONL 文件
 │   ├── agent/                # 项目级 runtime 配置回退目录
 │   ├── runs/                 # 执行工作区与输出
@@ -141,6 +143,10 @@ project/
 ```
 
 审核后的项目记忆按需创建。Agent 发现只有在用户接受后，才会成为正式项目知识。
+
+Memory Ledger 是项目记忆的规范存储：它把现有项目知识、审核提案、证据引用、审批状态
+和决策审计事件统一放在一起。已有的 `.pi-science/project-state.json` 会在第一次读取时
+迁移，并继续作为旧客户端和本地工具的兼容投影保留。
 
 外部 workspace 通过打开 workspace 的 API 显式注册。其规范化路径会写入全局
 `registered-workspaces.json`，因此重启后仍可重新发现；它与表示用户收藏的

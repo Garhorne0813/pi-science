@@ -140,6 +140,8 @@ project/
 │   └── agents/
 ├── .pi-science/
 │   ├── project.json           # stable project identity and display metadata
+│   ├── memory/
+│   │   └── ledger.json       # canonical memory ledger (records, proposals, decisions)
 │   ├── sessions/             # persisted Pi session JSONL files
 │   ├── agent/                # project-local fallback runtime config
 │   ├── runs/                 # execution workspaces and outputs
@@ -152,6 +154,12 @@ project/
 
 Reviewed project memory is created lazily. Agent findings do not become formal
 project knowledge until the user accepts them.
+
+The memory ledger is the canonical project-memory store. It keeps the existing
+project knowledge records and review proposals together with evidence references,
+approval state, and decision audit events. Existing `.pi-science/project-state.json`
+files are migrated on first read and retained as a compatibility projection for
+older clients and local tooling.
 
 External workspaces are explicitly registered through the workspace-open API.
 Their canonical paths are persisted in the global

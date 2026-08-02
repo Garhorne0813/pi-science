@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import { withFileWriteLock, writeJsonAtomic } from "../storage/persistence.js";
+import { readProject } from "../project/project-registry.js";
 import { sessionRepository, type SessionMessageRecord, type SessionRepository } from "../runtime/node/session-repository.js";
-import { readProjectState, statePath, timestamp, type Proposal } from "./project-state.js";
+import { mutateProjectState, readProjectState, timestamp, type Proposal } from "./project-state.js";
 import type { ConversationExcerpt, ExcerptMessage, ReviewProposal, ReviewSubagentRunner } from "./types.js";
 
 const MAX_MESSAGES = 40;
@@ -47,8 +47,8 @@ export class ProjectReviewService {
     const result = await this.runner.run({ run_id: runId, cwd, session_id: sessionId, excerpt });
     const proposed = result.output.proposals.slice(0, MAX_PROPOSALS);
     if (!proposed.length) return nothing("No durable project knowledge was found in this conversation");
-    return await withFileWriteLock(statePath(cwd), async () => {
-      const current = await readProjectState(cwd);
+    const projectId = (await readProject(cwd).catch(() => null))?.id ?? null;
+    return await mutateProjectState(cwd, (current) => {
       const known = new Set([...current.proposals.filter((item) => item.status === "pending"), ...current.items.filter((item) => item.status === "active")].map((item) => item.title.trim().toLowerCase()));
       const created: Proposal[] = [];
       let skipped = 0;
@@ -56,9 +56,9 @@ export class ProjectReviewService {
         const key = item.title.trim().toLowerCase();
         if (known.has(key)) { skipped += 1; continue; }
         known.add(key);
-        created.push(toProposal(item, sessionId));
+        created.push(toProposal(item, sessionId, projectId));
       }
-      if (created.length) { current.proposals.push(...created); await writeJsonAtomic(statePath(cwd), current); }
+      if (created.length) current.proposals.push(...created);
       return { run_id: runId, created: created.length, skipped, proposal_ids: created.map((item) => item.id), message: reviewMessage(created.length, skipped) };
     });
   }
@@ -70,24 +70,29 @@ function reviewMessage(created: number, skipped: number): string {
   return "No durable project knowledge was found in this conversation";
 }
 
-function toProposal(item: ReviewProposal, sessionId: string): Proposal {
+function toProposal(item: ReviewProposal, sessionId: string, projectId: string | null): Proposal {
   const at = timestamp();
   return {
     id: `proposal-${randomUUID().replaceAll("-", "").slice(0, 12)}`,
     proposal_type: "knowledge",
     knowledge_type: item.knowledge_type,
     type: item.knowledge_type,
+    kind: item.knowledge_type,
+    scope: "project",
+    project_id: projectId,
+    session_id: sessionId,
     title: item.title,
     summary: item.summary,
     reason: item.reason,
     confidence: item.confidence,
     importance: item.importance,
     status: "pending",
-    source: { session_id: sessionId, message_ids: item.message_ids, files: item.related_files, run_ids: [], citations: [] },
+    source: { project_id: projectId, session_id: sessionId, message_ids: item.message_ids, files: item.related_files, run_ids: [], citations: [], evidence: [] },
     source_message_ids: item.message_ids,
     related_files: item.related_files,
     conflicts_with: [],
     supersedes: [],
+    approval: { required: "manual", status: "pending", actor: null, decided_at: null, reason: null, policy_version: null },
     operations: [],
     decision_reason: null,
     applied_history_id: null,

@@ -115,6 +115,12 @@ describe("POST /api/project-knowledge/review", () => {
       operations: [],
       source: { session_id: "session-a", message_ids: ["message-0"], files: ["notes.md"], run_ids: [], citations: [] },
     });
+    const ledger = JSON.parse(await readFile(join(cwd, ".pi-science", "memory", "ledger.json"), "utf8")) as { proposals: Array<Record<string, unknown>> };
+    expect(ledger.proposals[0]).toMatchObject({ scope: "project", approval: { required: "manual", status: "pending" } });
+    expect((ledger.proposals[0]?.source as { evidence?: unknown[] }).evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "message", locator: "session-a@message-0" }),
+      expect.objectContaining({ kind: "file", locator: "notes.md" }),
+    ]));
 
     const listed = await app.inject({ method: "GET", url: `/api/project-knowledge/proposals?cwd=${encodeURIComponent(cwd)}&status=pending` });
     expect(listed.json().pending_count).toBe(1);
@@ -155,6 +161,34 @@ describe("POST /api/project-knowledge/review", () => {
     expect(state.items).toHaveLength(2);
     expect(state.items.map((item) => item.proposal_id)).toEqual(proposalIds);
     expect(state.items.map((item) => item.title)).toEqual(["Buffer pH drifts", "Use fresh buffer"]);
+    const ledger = JSON.parse(await readFile(join(cwd, ".pi-science", "memory", "ledger.json"), "utf8")) as { records: Array<Record<string, unknown>>; decisions: Array<Record<string, unknown>> };
+    expect(ledger.records).toHaveLength(2);
+    expect(ledger.records.every((item) => (item.approval as { status?: string }).status === "approved")).toBe(true);
+    expect(ledger.decisions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ target_id: proposalIds[0], action: "accepted", actor: "user" }),
+      expect.objectContaining({ target_id: proposalIds[1], action: "accepted", actor: "user" }),
+    ]));
+  });
+
+  it("serializes concurrent proposal decisions without losing either update", async () => {
+    const cwd = await workspace();
+    const runner = new FakeReviewRunner([
+      { knowledge_type: "finding", title: "First durable finding", summary: "First result." },
+      { knowledge_type: "decision", title: "Second durable decision", summary: "Second result." },
+    ]);
+    const app = buildApp(config(), { ...createServerModules(config()), projectReview: new ProjectReviewService(runner) });
+    apps.push(app);
+
+    const reviewed = await app.inject({ method: "POST", url: "/api/project-knowledge/review", payload: { cwd, session_id: "session-a" } });
+    const proposalIds = reviewed.json().proposal_ids as string[];
+    const responses = await Promise.all(proposalIds.map((proposalId) => app.inject({ method: "POST", url: `/api/project-knowledge/proposals/${proposalId}/accept?cwd=${encodeURIComponent(cwd)}`, payload: {} })));
+
+    expect(responses.map((response) => response.statusCode)).toEqual([200, 200]);
+    const state = await readState(cwd);
+    expect(state.proposals.every((proposal) => proposal.status === "accepted")).toBe(true);
+    expect(state.items.map((item) => item.proposal_id).sort()).toEqual([...proposalIds].sort());
+    const ledger = JSON.parse(await readFile(join(cwd, ".pi-science", "memory", "ledger.json"), "utf8")) as { decisions: Array<Record<string, unknown>> };
+    expect(ledger.decisions.filter((decision) => decision.action === "accepted")).toHaveLength(2);
   });
 
   it("recovers accepted knowledge proposals written without corresponding items", async () => {
