@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Package, Puzzle, Wrench, Check, X, ChevronRight, ShieldCheck, AlertTriangle, RotateCcw, Loader2 } from "lucide-react";
 import { WorkspacePage, WorkspacePageHeader } from "../../components/layout/WorkspacePage";
-import { skillsApi, skillsKey } from "../../lib/skills";
+import { skillsApi, skillsKey, type SkillReadiness } from "../../lib/skills";
+import { SkillReadinessBadge, RequirementStatusList } from "../../components/skills/SkillReadiness";
 import { settingsApi, invalidateSettings } from "../../lib/settings";
 import { apiRequest } from "../../lib/client/api";
 import { queryClient } from "../../lib/client/query-client";
@@ -51,9 +52,19 @@ export function SkillsPage() {
   const [error, setError] = useState<string | null>(null);
   const [configured, setConfigured] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
+  const [readiness, setReadiness] = useState<Record<string, SkillReadiness>>({});
+  const [readinessErrors, setReadinessErrors] = useState<Record<string, string>>({});
+  const [readinessLoading, setReadinessLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    // Workspace switch: drop stale readiness state from the previous cwd.
+    setReadiness({});
+    setReadinessErrors({});
+    setReadinessLoading(false);
+    setSelected(null);
+    setLoading(true);
+    setError(null);
     Promise.all([
       skillsApi.list<Skill>(cwd),
       skillsApi.tools<Tool>(),
@@ -64,6 +75,39 @@ export function SkillsPage() {
       setSkills(skillData.map((item: Skill) => ({ ...item, enabled: enabled.get(item.name) ?? item.enabled ?? true })));
       setTools(toolData);
       setConfigured(settingsData.configured === true);
+      // Dependency readiness only matters for skills that declare requirements.
+      const withRequirements = skillData.filter((item: Skill) => (item.requirements?.length ?? 0) > 0);
+      if (withRequirements.length > 0) {
+        setReadinessLoading(true);
+        // Bounded concurrency (4): per-skill failures are recorded, never fatal.
+        const results: Array<{ id: string; value: SkillReadiness } | { id: string; error: string }> = new Array(withRequirements.length);
+        let next = 0;
+        const probe = async () => {
+          while (next < withRequirements.length) {
+            const index = next++;
+            const item = withRequirements[index];
+            try {
+              results[index] = { id: item.skill_id, value: await skillsApi.readiness(item.skill_id, cwd) };
+            } catch (cause) {
+              results[index] = { id: item.skill_id, error: cause instanceof Error ? cause.message : String(cause) };
+            }
+          }
+        };
+        Promise.all(Array.from({ length: Math.min(4, withRequirements.length) }, () => probe())).then(() => {
+          if (cancelled) return;
+          const loaded: Record<string, SkillReadiness> = {};
+          const failed: Record<string, string> = {};
+          for (const entry of results) {
+            if (!entry) continue;
+            if ("value" in entry) loaded[entry.id] = entry.value;
+            else failed[entry.id] = entry.error;
+          }
+          setReadiness(loaded);
+          setReadinessErrors(failed);
+        }).finally(() => {
+          if (!cancelled) setReadinessLoading(false);
+        });
+      }
     }).catch((cause) => {
       if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
     }).finally(() => {
@@ -155,7 +199,7 @@ export function SkillsPage() {
 
         {builtin.length > 0 && (
           <Section title={t("skills.builtin")} icon={<Puzzle size={15} />} count={builtin.length}>
-            {builtin.map(s => <SkillRow key={s.skill_id || s.name} skill={s} tag={t("skills.tagBuiltin")} onSelect={setSelected} onToggle={toggleSkill} saving={saving === s.name} />)}
+            {builtin.map(s => <SkillRow key={s.skill_id || s.name} skill={s} tag={t("skills.tagBuiltin")} onSelect={setSelected} onToggle={toggleSkill} saving={saving === s.name} readiness={readiness[s.skill_id]} readinessError={readinessErrors[s.skill_id]} readinessLoading={readinessLoading} />)}
           </Section>
         )}
 
@@ -163,7 +207,7 @@ export function SkillsPage() {
           {project.length === 0 ? (
             <Empty>{t("skills.noProject")}</Empty>
           ) : (
-            project.map(s => <SkillRow key={s.skill_id || s.name} skill={s} tag={t("skills.tagProject")} onSelect={setSelected} onToggle={toggleSkill} saving={saving === s.name} />)
+            project.map(s => <SkillRow key={s.skill_id || s.name} skill={s} tag={t("skills.tagProject")} onSelect={setSelected} onToggle={toggleSkill} saving={saving === s.name} readiness={readiness[s.skill_id]} readinessError={readinessErrors[s.skill_id]} readinessLoading={readinessLoading} />)
           )}
         </Section>
 
@@ -171,11 +215,11 @@ export function SkillsPage() {
           {user.length === 0 ? (
             <Empty>{t("skills.noUser")}</Empty>
           ) : (
-            user.map(s => <SkillRow key={s.skill_id || s.name} skill={s} tag={t("skills.tagUser")} onSelect={setSelected} onToggle={toggleSkill} saving={saving === s.name} />)
+            user.map(s => <SkillRow key={s.skill_id || s.name} skill={s} tag={t("skills.tagUser")} onSelect={setSelected} onToggle={toggleSkill} saving={saving === s.name} readiness={readiness[s.skill_id]} readinessError={readinessErrors[s.skill_id]} readinessLoading={readinessLoading} />)
           )}
         </Section>
 
-        {selected && <SkillDetail skill={selected} onClose={() => setSelected(null)} />}
+        {selected && <SkillDetail skill={selected} readiness={readiness[selected.skill_id]} readinessError={readinessErrors[selected.skill_id]} onClose={() => setSelected(null)} />}
     </WorkspacePage>
   );
 }
@@ -193,7 +237,7 @@ function Section({ title, icon, count, children }: { title: string; icon: React.
   );
 }
 
-function SkillRow({ skill, tag, onSelect, onToggle, saving }: { skill: Skill; tag: string; onSelect: (skill: Skill) => void; onToggle: (skill: Skill, enabled: boolean) => void; saving: boolean }) {
+function SkillRow({ skill, tag, onSelect, onToggle, saving, readiness, readinessError, readinessLoading }: { skill: Skill; tag: string; onSelect: (skill: Skill) => void; onToggle: (skill: Skill, enabled: boolean) => void; saving: boolean; readiness?: SkillReadiness; readinessError?: string; readinessLoading?: boolean }) {
   const { t } = useTranslation();
   const valid = skill.validation?.valid !== false;
   return (
@@ -207,6 +251,7 @@ function SkillRow({ skill, tag, onSelect, onToggle, saving }: { skill: Skill; ta
           </div>
           <div className="text-xs text-muted line-clamp-2">{skill.description}</div>
         </div>
+        {skill.requirements?.length ? <SkillReadinessBadge readiness={readiness} loading={readinessLoading} error={readinessError} /> : null}
         <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-xs text-muted ring-1 ring-border">{tag}</span>
         <ChevronRight size={15} className="mt-0.5 shrink-0 text-muted" />
       </button>
@@ -218,7 +263,7 @@ function SkillRow({ skill, tag, onSelect, onToggle, saving }: { skill: Skill; ta
   );
 }
 
-function SkillDetail({ skill, onClose }: { skill: Skill; onClose: () => void }) {
+function SkillDetail({ skill, readiness, readinessError, onClose }: { skill: Skill; readiness?: SkillReadiness; readinessError?: string; onClose: () => void }) {
   const { t } = useTranslation();
   const valid = skill.validation?.valid !== false;
   return (
@@ -245,6 +290,8 @@ function SkillDetail({ skill, onClose }: { skill: Skill; onClose: () => void }) 
           {!!skill.files?.length && <div><span className="font-medium text-text">{t("skills.files")}:</span> {skill.files.length}</div>}
         </div>
       ) : null}
+      {readiness ? <RequirementStatusList readiness={readiness} /> : null}
+      {readinessError ? <p role="alert" className="mt-2 text-xs text-muted">{t("skills.readinessError")}: {readinessError}</p> : null}
       {!!skill.validation?.errors?.length && <ul className="mt-2 list-disc pl-4 text-xs text-error">{skill.validation.errors.map((item) => <li key={item}>{item}</li>)}</ul>}
       {!!skill.validation?.warnings?.length && <ul className="mt-2 list-disc pl-4 text-xs text-warn">{skill.validation.warnings.map((item) => <li key={item}>{item}</li>)}</ul>}
     </div>

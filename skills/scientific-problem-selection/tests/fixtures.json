@@ -1,0 +1,27 @@
+[
+  {
+    "prompt": "I have an idea for a project: using passive acoustic monitoring to track bat colony health across seasons. Help me evaluate it.",
+    "expected_trigger": true,
+    "trigger_terms": ["idea for a project", "evaluate", "problem selection"]
+  },
+  {
+    "prompt": "I'm stuck on my research — my protein docking results are inconsistent between replicates and I don't know why.",
+    "expected_trigger": true,
+    "trigger_terms": ["stuck", "research", "troubleshoot"]
+  },
+  {
+    "prompt": "What should I work on next: extend the existing synthesis method or start the characterization study? I need strategic advice.",
+    "expected_trigger": true,
+    "trigger_terms": ["what should I work on", "strategic advice", "decision"]
+  },
+  {
+    "prompt": "Plot a bar chart of the CSV columns and save it as PNG.",
+    "expected_trigger": false,
+    "trigger_terms": ["plot", "bar chart"]
+  },
+  {
+    "prompt": "Summarize this paper's abstract into two sentences.",
+    "expected_trigger": false,
+    "trigger_terms": ["summarize", "abstract"]
+  }
+]

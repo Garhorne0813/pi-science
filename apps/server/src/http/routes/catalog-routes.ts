@@ -9,6 +9,7 @@ import { probeMcpHealth, type McpDefinition } from "../../security/mcp-health.js
 import { egressAuditEnabled, recordEgress } from "../../security/egress-audit.js";
 import { sessionRepository } from "../../runtime/node/session-repository.js";
 import { catalog as skillCatalog, getSkillInfo, validateDirectory as validateSkillDir } from "../../catalog/skill-catalog.js";
+import { probeRequirements } from "../../catalog/skill-requirements.js";
 import type { JobCoordinator } from "../../runtime/jobs/job-coordinator.js";
 import type { ResearchLoopCoordinator } from "../../research-loop/coordinator.js";
 import { findExecutable, pathIsInside, userHome } from "../../support/platform-utils.js";
@@ -215,6 +216,13 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
     if (!root) return;
     const item = await getSkillInfo(request.params.skill_id, root);
     return item ?? reply.code(404).send({ error: "Skill not found" });
+  });
+  app.get<{ Params: { skill_id: string } }>("/api/skills/:skill_id/readiness", async (request, reply) => {
+    const root = await ws(request, reply);
+    if (!root) return;
+    const item = await getSkillInfo(request.params.skill_id, root);
+    if (!item) return reply.code(404).send({ error: "Skill not found" });
+    return probeRequirements(item.skill_id, item.requirements);
   });
   app.get("/api/skills/tools", async () => {
     return Promise.all(catalogToolCommands().map(async ([name, command]) => {
