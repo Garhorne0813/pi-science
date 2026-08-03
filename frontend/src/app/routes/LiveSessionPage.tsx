@@ -47,7 +47,6 @@ export function LiveSessionPage() {
   const loadOlderMessages = useRuntimeStore((s) => s.loadOlderMessages);
   const connect = useRuntimeStore((s) => s.connect);
   const disconnect = useRuntimeStore((s) => s.disconnect);
-  const sendPrompt = useRuntimeStore((s) => s.sendPrompt);
   const abort = useRuntimeStore((s) => s.abort);
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
   const contextTokens = useRuntimeStore((s) => s.contextTokens);
@@ -364,7 +363,7 @@ export function LiveSessionPage() {
                   key={suggestion}
                   type="button"
                   disabled={!model.selectedModel || reviewingProject}
-                  onClick={() => { setSuggestions([]); void sendPrompt(suggestion).catch(() => undefined); }}
+                  onClick={() => { setSuggestions([]); setInput(suggestion); composer.inputRef.current?.focus(); }}
                   className="min-h-9 rounded-full border border-border bg-surface px-3 py-1 text-left text-xs text-muted transition-colors hover:text-text disabled:opacity-50"
                 >
                   {suggestion}

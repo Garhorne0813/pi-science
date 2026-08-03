@@ -73,6 +73,15 @@ describe("ConversationNavRail", () => {
     expect(onSelect).toHaveBeenCalledWith("u2");
   });
 
+  it("highlights the clicked entry immediately, without waiting for the observer", () => {
+    renderRail();
+    fireEvent.click(screen.getByRole("button", { name: "Second question about data" }));
+    // No observer callback was fired — the highlight must come from the click.
+    const button = screen.getByRole("button", { name: "Second question about data" });
+    expect(button).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: "First question about models" })).not.toHaveAttribute("aria-current");
+  });
+
   it("highlights the intersecting entry from the observer callback", () => {
     renderRail();
     const io = IOStub.instances[IOStub.instances.length - 1];

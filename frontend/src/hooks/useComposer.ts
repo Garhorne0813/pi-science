@@ -23,8 +23,12 @@ export function useComposer(params: {
     draft: ResearchLoopDraft | null;
     intent: (text: string) => Promise<{ kind: "draft" } | { kind: "conversation"; message: string } | null>;
   };
+  /** Fired right before a real message is dispatched (after slash-command and
+   *  research-draft branches, so /compact, /export and draft detours never
+   *  trigger it). */
+  onSend?: () => void;
 }) {
-  const { cwd, conversationKey = null, selectedModel, reviewingProject, setReviewNotice, research } = params;
+  const { cwd, conversationKey = null, selectedModel, reviewingProject, setReviewNotice, research, onSend } = params;
   const { t } = useTranslation();
   const { toast } = useFeedback();
   const navigate = useNavigate();
@@ -130,6 +134,7 @@ export function useComposer(params: {
     setInput("");
     setFiles([]);
     clearWorkspaceReferences(cwd);
+    onSend?.();
     void sendPrompt(message)
       .then((sentSessionId) => {
         // A first prompt on a workspace landing route (no :sessionId segment)

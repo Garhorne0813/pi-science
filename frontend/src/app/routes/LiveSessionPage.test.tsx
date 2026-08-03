@@ -450,6 +450,35 @@ describe("turn-completion effects", () => {
     act(() => { useRuntimeStore.setState({ working: false }); });
     await waitFor(() => expect(openInspector).toHaveBeenCalledTimes(1));
   });
+
+  it("fills the composer draft with a clicked suggestion instead of sending it", async () => {
+    const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
+    useRuntimeStore.setState({ sendPrompt });
+    await renderReady();
+
+    act(() => { useRuntimeStore.setState({ working: true }); });
+    act(() => {
+      useRuntimeStore.setState({
+        working: false,
+        thread: {
+          blocks: [agentBlock("a1", "Saved outputs/plot.png\n<!--suggest: plot residuals-->")],
+          index: { a1: 0 },
+          loaded: true,
+        },
+      });
+    });
+
+    const suggestion = await screen.findByRole("button", { name: "plot residuals" });
+    fireEvent.click(suggestion);
+
+    // Draft filled, nothing dispatched.
+    await waitFor(() => expect(useRuntimeStore.getState().draft).toBe("plot residuals"));
+    expect(sendPrompt).not.toHaveBeenCalled();
+    // Composer textarea gains focus after picking a suggestion.
+    expect(document.activeElement).toBe(textarea());
+    // Chips disappear after picking one.
+    expect(screen.queryByLabelText("Suggested follow-ups")).toBeNull();
+  });
 });
 
 
