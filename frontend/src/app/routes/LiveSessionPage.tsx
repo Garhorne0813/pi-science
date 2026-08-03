@@ -62,6 +62,20 @@ export function LiveSessionPage() {
   const followOutputRef = useRef(true);
   const [showScrollDown, setShowScrollDown] = useState(false);
   const [virtualFirstItemIndex, setVirtualFirstItemIndex] = useState(100_000);
+  // Scroll-correction timers (nav targeting / post-send snap) are tracked so a
+  // newer interaction or an unmount cancels stale callbacks before they touch
+  // the next session's page. sessionRef guards against cross-session staleness.
+  const scrollTimersRef = useRef<number[]>([]);
+  const sessionRef = useRef(sessionId);
+  useEffect(() => {
+    sessionRef.current = sessionId;
+  }, [sessionId]);
+  useEffect(() => {
+    return () => {
+      for (const handle of scrollTimersRef.current) window.clearTimeout(handle);
+      scrollTimersRef.current = [];
+    };
+  }, []);
 
   // A new session (or a reconnect) starts at the bottom: never inherit the
   // "user scrolled up" state of the previous session on this route.
@@ -111,6 +125,26 @@ export function LiveSessionPage() {
     }
   }, [thread.blocks]);
 
+  // When a new turn starts (user sends a message or the agent resumes), snap
+  // the view back to the newest content. The user may have scrolled up to read
+  // history; sending a message — or receiving live output — must always bring
+  // the latest message into view instead of leaving the thread pinned to the
+  // old position.
+  const wasWorking = useRef(false);
+  useEffect(() => {
+    if (working && !wasWorking.current) {
+      // Only snap to the bottom on a NEW turn if the user is not deliberately
+      // reading history (followOutputRef stays false after a nav click).
+      if (followOutputRef.current === false) return;
+      followOutputRef.current = true;
+      setShowScrollDown(false);
+      const scroller = scrollRef.current;
+      if (scroller) scroller.scrollTop = scroller.scrollHeight;
+      virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "auto" });
+    }
+    wasWorking.current = working;
+  }, [working]);
+
   const blockGroups = useMemo(() => groupBlocks(thread.blocks), [thread.blocks]);
 
   const handleLoadOlder = async () => {
@@ -133,23 +167,67 @@ export function LiveSessionPage() {
     }), [thread.blocks, t]);
 
   const smoothScroll = () => !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  // Runs fn after `delay` only while the page still shows the same session;
+  // every pending handle is tracked so newer interactions/unmount can cancel.
+  const scheduleSessionScoped = (fn: () => void, delay: number) => {
+    const scheduledSession = sessionRef.current;
+    const handle = window.setTimeout(() => {
+      if (sessionRef.current !== scheduledSession) return;
+      fn();
+    }, delay);
+    scrollTimersRef.current.push(handle);
+  };
+  const cancelPendingScrollTimers = () => {
+    for (const handle of scrollTimersRef.current) window.clearTimeout(handle);
+    scrollTimersRef.current = [];
+  };
   const handleNavSelect = (id: string) => {
     // Stop the follow-output effect from yanking the viewport back to the bottom.
     followOutputRef.current = false;
-    const target = document.getElementById(`user-msg-${id}`);
-    if (target) {
-      target.scrollIntoView({ behavior: smoothScroll() ? "smooth" : "auto", block: "start" });
-      return;
+    // A new navigation supersedes any pending correction timers from a
+    // previous one (rapid consecutive clicks, session switch).
+    cancelPendingScrollTimers();
+    const scrollToExact = () => {
+      const target = document.getElementById(`user-msg-${id}`);
+      if (!target) return false;
+      // Instant positioning (behavior "auto"): a smooth animation would race
+      // the getBoundingClientRect offset check below.
+      target.scrollIntoView({ behavior: "auto", block: "start" });
+      return true;
+    };
+    // Fast path: the target is already mounted and Virtuoso's native layout
+    // can honor a direct scroll (recent messages, short threads). Check the
+    // result: if the target is not near the viewport top afterwards, fall
+    // through to the Virtuoso scrollToIndex path (virtualized lists position
+    // items absolutely, so a native scrollIntoView can land mid-list).
+    const scrollerNow = scrollRef.current;
+    const beforeTop = scrollerNow?.scrollTop ?? -1;
+    if (scrollToExact() && scrollerNow) {
+      const target = document.getElementById(`user-msg-${id}`);
+      if (target) {
+        const r = target.getBoundingClientRect();
+        const vr = scrollerNow.getBoundingClientRect();
+        const offset = r.top - vr.top;
+        if (offset >= -20 && offset < 300) return;
+      }
+      scrollerNow.scrollTop = beforeTop;
     }
     const groupIndex = blockGroups.findIndex((group) => group.some((block) => block.id === id));
     if (groupIndex >= 0) {
+      // Virtuoso's scrollToIndex takes the 0-based data index (its data-index
+      // attribute), NOT firstItemIndex + dataIndex — the latter overflows for
+      // long conversations and clamps to the last item.
       virtuosoRef.current?.scrollToIndex({
-        index: virtualFirstItemIndex + groupIndex,
+        index: groupIndex,
         align: "start",
-        behavior: smoothScroll() ? "smooth" : "auto",
+        behavior: "auto",
       });
+      // After Virtuoso mounts the group, scroll again so the target lands at
+      // the top of the viewport exactly (height estimation is inexact).
+      scheduleSessionScoped(() => { if (!scrollToExact()) scheduleSessionScoped(scrollToExact, 250); }, 120);
+      scheduleSessionScoped(scrollToExact, 350);
     } else {
-      document.getElementById(`user-msg-${id}`)?.scrollIntoView({ behavior: smoothScroll() ? "smooth" : "auto", block: "start" });
+      scrollToExact();
     }
   };
   const scrollToBottom = () => {
@@ -179,6 +257,24 @@ export function LiveSessionPage() {
     reviewingProject,
     setReviewNotice,
     research: { mode: research.mode, draft: research.draft, intent: research.intent },
+    onSend: () => {
+      // The user sent a message while possibly scrolled up in history: snap
+      // back to the newest content so the fresh reply is immediately visible.
+      followOutputRef.current = true;
+      setShowScrollDown(false);
+      // A new send supersedes pending corrections from an earlier one.
+      cancelPendingScrollTimers();
+      const snapToBottom = () => {
+        const scroller = scrollRef.current;
+        if (scroller) scroller.scrollTop = scroller.scrollHeight;
+        virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "auto" });
+      };
+      snapToBottom();
+      // The optimistic user block lands right after; scroll again once the
+      // block list has grown so the new message is actually in view.
+      scheduleSessionScoped(snapToBottom, 50);
+      scheduleSessionScoped(snapToBottom, 200);
+    },
   });
   const { input, setInput, files, setFiles, workspaceReferences } = composer;
   const modelControlsDisabled = working || reviewingProject || model.configuringModel;
@@ -235,6 +331,31 @@ export function LiveSessionPage() {
   const modePicker = !research.draft && !research.activeLoop
     ? <ResearchModePicker className={showWelcome ? "px-0 pb-0" : undefined} selected={research.mode} disabled={working || reviewingProject || research.busy} onSelect={(mode, prompt) => { const selected = research.mode === mode ? null : mode; research.setMode(selected); research.setPrompt(selected ? prompt : t("conversation.defaultPrompt")); composer.inputRef.current?.focus(); }} />
     : null;
+
+  // Follow-up suggestion chips: shown above the research-mode picker, clicking
+  // one drops the suggestion into the composer (the user may tweak or append
+  // to it) instead of sending it directly. Not shown on the blank welcome page.
+  const suggestionChips = suggestions.length > 0 && !working && !research.draft && !research.activeLoop && !input.trim() ? (
+    <div className="mx-auto flex max-w-[760px] flex-wrap gap-2 px-1 pb-2" aria-label={t("conversation.suggestions")}>
+      {suggestions.map((suggestion) => (
+        <button
+          key={suggestion}
+          type="button"
+          disabled={!model.selectedModel || reviewingProject}
+          onClick={() => {
+            // Put the suggestion into the composer instead of sending it
+            // immediately: the user may want to tweak or append to it.
+            setSuggestions([]);
+            setInput(suggestion);
+            composer.inputRef.current?.focus();
+          }}
+          className="min-h-9 rounded-full border border-border bg-surface px-3 py-1 text-left text-xs text-muted transition-colors hover:text-text disabled:opacity-50"
+        >
+          {suggestion}
+        </button>
+      ))}
+    </div>
+  ) : null;
 
   return (
     <div className="flex flex-col h-full">
@@ -343,6 +464,7 @@ export function LiveSessionPage() {
         <div className={cn("px-8 shrink-0", showWelcome ? "py-0" : "pb-5 pt-2")}>
           {!showWelcome && (
             <div className="relative mx-auto max-w-[760px]">
+              {suggestionChips}
               {modePicker}
               {showScrollDown && (
                 <button
@@ -354,21 +476,6 @@ export function LiveSessionPage() {
                   <ArrowDown size={15} />
                 </button>
               )}
-            </div>
-          )}
-          {suggestions.length > 0 && !working && !research.draft && !research.activeLoop && !input.trim() && (
-            <div className="mx-auto flex max-w-[760px] flex-wrap gap-2 px-1 pb-2" aria-label={t("conversation.suggestions")}>
-              {suggestions.map((suggestion) => (
-                <button
-                  key={suggestion}
-                  type="button"
-                  disabled={!model.selectedModel || reviewingProject}
-                  onClick={() => { setSuggestions([]); setInput(suggestion); composer.inputRef.current?.focus(); }}
-                  className="min-h-9 rounded-full border border-border bg-surface px-3 py-1 text-left text-xs text-muted transition-colors hover:text-text disabled:opacity-50"
-                >
-                  {suggestion}
-                </button>
-              ))}
             </div>
           )}
           <div

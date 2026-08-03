@@ -808,3 +808,142 @@ describe("header settings entry", () => {
     expect(screen.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
   });
 });
+
+describe("scroll and nav behavior (docs/markdown.md §3.16 a/b/d)", () => {
+  it("snaps to the bottom when a new turn starts (working false→true)", async () => {
+    useRuntimeStore.setState({
+      thread: { blocks: [userBlock("u1", "First question"), agentBlock("a1", "first reply")], index: { u1: 0, a1: 1 }, loaded: true },
+    });
+    await renderReady();
+    const scroller = document.querySelector(".virtuoso-scroller") ?? document.querySelector(".overflow-y-auto");
+    expect(scroller).not.toBeNull();
+    Object.defineProperty(scroller!, "scrollHeight", { value: 4000, configurable: true });
+    (scroller as HTMLElement).scrollTop = 0;
+    act(() => { useRuntimeStore.setState({ working: true }); });
+    expect((scroller as HTMLElement).scrollTop).toBe(4000);
+  });
+
+  it("does not snap when the user is reading history (followOutputRef false)", async () => {
+    useRuntimeStore.setState({
+      thread: { blocks: [userBlock("u1", "First question"), agentBlock("a1", "first reply")], index: { u1: 0, a1: 1 }, loaded: true },
+    });
+    await renderReady();
+    const scroller = (document.querySelector(".virtuoso-scroller") ?? document.querySelector(".overflow-y-auto")) as HTMLElement;
+    Object.defineProperty(scroller, "scrollHeight", { value: 4000, configurable: true });
+    Object.defineProperty(scroller, "clientHeight", { value: 100, configurable: true });
+    scroller.scrollTop = 3000;
+    fireEvent.scroll(scroller); // nearBottom=false → followOutputRef=false
+    act(() => { useRuntimeStore.setState({ working: true }); });
+    expect(scroller.scrollTop).toBe(3000);
+  });
+
+  it("renders suggestion chips above the research-mode picker", async () => {
+    await renderReady();
+    act(() => { useRuntimeStore.setState({ working: true }); });
+    act(() => {
+      useRuntimeStore.setState({
+        working: false,
+        thread: {
+          blocks: [agentBlock("a1", "Saved outputs/plot.png\n<!--suggest: plot residuals-->")],
+          index: { a1: 0 },
+          loaded: true,
+        },
+      });
+    });
+    const chips = await screen.findByLabelText("Suggested follow-ups");
+    // The chips container must be the first child of the picker column, i.e.
+    // rendered ABOVE the research-mode picker (docs §3.16 d).
+    expect(chips.parentElement?.firstElementChild).toBe(chips);
+  });
+
+  it("nav click scrolls the target into view via the fast path", async () => {
+    useRuntimeStore.setState({
+      thread: {
+        blocks: [userBlock("u1", "First question"), agentBlock("a1", "first reply")],
+        index: { u1: 0, a1: 1 },
+        loaded: true,
+      },
+    });
+    await renderReady();
+    const scrollIntoViewSpy = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
+    try {
+      fireEvent.click(await screen.findByRole("button", { name: "First question" }));
+      expect(scrollIntoViewSpy).toHaveBeenCalled();
+      const targetCall = scrollIntoViewSpy.mock.calls.find(
+        (_args, index) => (scrollIntoViewSpy.mock.instances[index] as HTMLElement | null)?.id === "user-msg-u1",
+      );
+      expect(targetCall).toBeDefined();
+      expect(targetCall![0]).toMatchObject({ behavior: "auto", block: "start" });
+    } finally {
+      scrollIntoViewSpy.mockRestore();
+    }
+  });
+
+  it("falls back to group scroll when the fast path lands off-target", async () => {
+    useRuntimeStore.setState({
+      thread: {
+        blocks: [userBlock("u1", "First question"), agentBlock("a1", "first reply")],
+        index: { u1: 0, a1: 1 },
+        loaded: true,
+      },
+    });
+    await renderReady();
+    const target = document.getElementById("user-msg-u1");
+    expect(target).not.toBeNull();
+    // Make the fast-path offset check reject: target sits far below the viewport.
+    const fakeRect = {
+      top: 1200, bottom: 1300, left: 0, right: 0, x: 0, y: 1200, width: 100, height: 100,
+      toJSON: () => ({}),
+    } as DOMRect;
+    const originalRect = target!.getBoundingClientRect.bind(target!);
+    target!.getBoundingClientRect = () => fakeRect;
+    const scrollIntoViewSpy = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
+    try {
+      fireEvent.click(await screen.findByRole("button", { name: "First question" }));
+      // Fast path rejected → Virtuoso scrollToIndex path schedules re-scrolls.
+      await waitFor(() => {
+        const targetCalls = scrollIntoViewSpy.mock.calls.filter(
+          (_args, index) => (scrollIntoViewSpy.mock.instances[index] as HTMLElement | null)?.id === "user-msg-u1",
+        );
+        expect(targetCalls.length).toBeGreaterThanOrEqual(2);
+      }, { timeout: 2000 });
+    } finally {
+      scrollIntoViewSpy.mockRestore();
+      target!.getBoundingClientRect = originalRect;
+    }
+  });
+
+  it("cancels pending nav-correction timers on unmount", async () => {
+    useRuntimeStore.setState({
+      thread: {
+        blocks: [userBlock("u1", "First question"), agentBlock("a1", "first reply")],
+        index: { u1: 0, a1: 1 },
+        loaded: true,
+      },
+    });
+    const view = await renderReady();
+    const target = document.getElementById("user-msg-u1");
+    expect(target).not.toBeNull();
+    // Force the fast-path offset check to reject so the group-scroll branch
+    // schedules its 120/350ms correction timers before we unmount.
+    const fakeRect = {
+      top: 1200, bottom: 1300, left: 0, right: 0, x: 0, y: 1200, width: 100, height: 100,
+      toJSON: () => ({}),
+    } as DOMRect;
+    const originalRect = target!.getBoundingClientRect.bind(target!);
+    target!.getBoundingClientRect = () => fakeRect;
+    const scrollIntoViewSpy = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
+    try {
+      fireEvent.click(await screen.findByRole("button", { name: "First question" }));
+      view.unmount();
+      const callsAtUnmount = scrollIntoViewSpy.mock.calls.length;
+      // Longer than both correction delays: stale callbacks must have been
+      // cancelled by the unmount cleanup, not fired afterwards.
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect(scrollIntoViewSpy.mock.calls.length).toBe(callsAtUnmount);
+    } finally {
+      scrollIntoViewSpy.mockRestore();
+      target!.getBoundingClientRect = originalRect;
+    }
+  });
+});
