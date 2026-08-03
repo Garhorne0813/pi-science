@@ -7,22 +7,31 @@
  */
 
 import { createHash } from "node:crypto";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import {
   skillMetadataSchema,
+  type SkillContent,
   type SkillFile,
   type SkillInfo,
   type SkillMetadata,
   type SkillValidation,
 } from "@pi-science/contracts";
+import { pathIsInside } from "../support/platform-utils.js";
 
 const FRONT_MATTER = /^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/;
 const SOURCE_RANK: Record<string, number> = { project: 0, user: 1, builtin: 2 };
 const MAX_SKILL_BYTES = 2 * 1024 * 1024;
 const MAX_REFERENCE_BYTES = 512 * 1024;
+// Claude Code Agent Skills top-level fields that pi-science parses but does
+// not enforce. Accepting them keeps front matter parseable, but surfacing a
+// warning prevents authors from believing Claude-only semantics apply here.
+const CLAUDE_ONLY_FIELDS = ["allowed-tools", "disable-model-invocation", "model"];
+// Progressive disclosure budget: the description is surfaced to the model at
+// discovery time, so an overlong one inflates every conversation's context.
+const MAX_DESCRIPTION_BYTES = 1024;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -117,6 +126,12 @@ async function readFrontMatter(path: string): Promise<FrontMatterResult> {
   } catch (exc) {
     return { payload: {}, errors: [`unable to read SKILL.md: ${exc}`] };
   }
+  // Normalize CRLF -> LF before front-matter extraction and YAML parsing.
+  // The yaml package keeps a trailing \r in scalar values on CRLF input
+  // (e.g. risk: low\r), which fails enum validation; block scalars can fail
+  // parsing outright. This defends user-provided skills edited on Windows
+  // even when the repo itself is LF (see .gitattributes).
+  text = text.replace(/\r\n/g, "\n");
   const match = text.match(FRONT_MATTER);
   if (!match) {
     return { payload: {}, errors: ["SKILL.md must start with YAML front matter"] };
@@ -161,8 +176,24 @@ function normaliseThirdParty(value: unknown): Record<string, unknown>[] {
   });
 }
 
-function metadataWarnings(metadata: SkillMetadata): string[] {
+function metadataWarnings(metadata: SkillMetadata, payload: Record<string, unknown>, dirName: string, files: SkillFile[]): string[] {
   const warnings: string[] = [];
+  const licenseDeclared = typeof payload.license === "string" && payload.license.trim() !== "";
+  if (!licenseDeclared) {
+    warnings.push('license is not declared in front matter; defaulted to "UNLICENSED"');
+  }
+  if (metadata.description.length > MAX_DESCRIPTION_BYTES) {
+    warnings.push(`description exceeds ${MAX_DESCRIPTION_BYTES} characters; keep the first line short so discovery stays cheap (progressive disclosure)`);
+  }
+  if (dirName !== metadata.name) {
+    warnings.push(`directory name "${dirName}" does not match skill name "${metadata.name}"`);
+  }
+  for (const field of CLAUDE_ONLY_FIELDS) {
+    if (field in payload) warnings.push(`field "${field}" is a Claude Code Agent Skills field and is not honored by pi-science`);
+  }
+  for (const file of files) {
+    if (file.size > MAX_REFERENCE_BYTES) warnings.push(`file ${file.path} exceeds ${MAX_REFERENCE_BYTES} bytes; large files slow seeding and digest computation`);
+  }
   if (metadata.third_party.length > 0 && !metadata.third_party.some((item) => item.license)) {
     warnings.push("third_party entries do not declare a license");
   }
@@ -207,10 +238,11 @@ async function skillFiles(directory: string, sourceRoot: string): Promise<SkillF
 
 function locationOf(skill: DiscoveredSkill): string {
   const rel = relative(skill.sourceRoot, skill.sourcePath);
+  // Display paths are always posix-style, regardless of host separators.
   if (rel.startsWith("..") || rel === "") {
-    return skill.sourcePath.split(sep).at(-1) ?? skill.sourcePath;
+    return (skill.sourcePath.split(sep).at(-1) ?? skill.sourcePath).split(sep).join("/");
   }
-  return rel;
+  return rel.split(sep).join("/");
 }
 
 export async function parseSkill(path: string, source: string, sourceRoot: string): Promise<DiscoveredSkill> {
@@ -242,10 +274,14 @@ export async function parseSkill(path: string, source: string, sourceRoot: strin
   }
 
   const files = await skillFiles(dirname(path), sourceRoot);
+  if (source === "builtin" && (typeof payload.license !== "string" || payload.license.trim() === "")) {
+    validationErrors.push("builtin skills must declare a license in front matter");
+  }
+  const dirName = dirname(path).split(sep).at(-1) ?? "";
   const validation: SkillValidation = {
     valid: validationErrors.length === 0,
     errors: validationErrors,
-    warnings: metadataWarnings(metadata),
+    warnings: metadataWarnings(metadata, payload, dirName, files),
     checked_at: now(),
   };
 
@@ -333,6 +369,7 @@ function toSkillInfo(record: DiscoveredSkill, enabled: boolean, shadowed: string
     category: record.metadata.category,
     license: record.metadata.license,
     risk: record.metadata.risk,
+    compatibility: typeof record.metadata.compatibility === "string" ? record.metadata.compatibility : record.metadata.compatibility == null ? undefined : JSON.stringify(record.metadata.compatibility),
     quality,
     location: locationOf(record),
     source: record.source as SkillInfo["source"],
@@ -369,6 +406,65 @@ export async function getSkillInfo(skillId: string, cwd: string = "."): Promise<
   const found = record.find((r) => r.skillId === skillId || r.metadata.name === skillId);
   if (!found) return null;
   return toSkillInfo(found, true, []);
+}
+
+export type SkillContentResult =
+  | { ok: true; content: SkillContent }
+  | { ok: false; error: "not-found" | "unavailable" | "too-large" };
+
+/**
+ * Read the effective SKILL.md for a skill (project > user > builtin
+ * precedence, matching discovery). The client never supplies a path:
+ * the winning discovery record is resolved and contained inside its
+ * source root (realpath check) before any read, so a symlink planted in
+ * a skills directory cannot leak workspace-external files.
+ */
+export async function getSkillContent(skillId: string, cwd: string = "."): Promise<SkillContentResult> {
+  const record = (await discover(cwd)).find((r) => r.skillId === skillId || r.metadata.name === skillId);
+  if (!record) return { ok: false, error: "not-found" };
+  // Project skills are managed state under <workspace>/.pi/skills; user and
+  // builtin sources treat their scan root as the containment boundary.
+  const allowedRoot = record.source === "project" ? join(resolve(cwd), ".pi", "skills") : record.sourceRoot;
+  let canonicalRoot: string;
+  try {
+    canonicalRoot = await realpath(allowedRoot);
+  } catch {
+    return { ok: false, error: "not-found" };
+  }
+  let canonicalPath: string;
+  try {
+    canonicalPath = await realpath(record.sourcePath);
+  } catch {
+    return { ok: false, error: "not-found" };
+  }
+  if (!pathIsInside(canonicalRoot, canonicalPath)) {
+    return { ok: false, error: "unavailable" };
+  }
+  let info;
+  try {
+    info = await stat(canonicalPath);
+  } catch {
+    return { ok: false, error: "not-found" };
+  }
+  if (!info.isFile()) return { ok: false, error: "unavailable" };
+  if (info.size > MAX_SKILL_BYTES) return { ok: false, error: "too-large" };
+  let content: string;
+  try {
+    content = await readFile(canonicalPath, "utf8");
+  } catch {
+    return { ok: false, error: "not-found" };
+  }
+  return {
+    ok: true,
+    content: {
+      skill_id: record.skillId,
+      name: record.metadata.name,
+      digest: createHash("sha256").update(content).digest("hex").slice(0, 16),
+      source: record.source as SkillContent["source"],
+      location: locationOf(record),
+      content,
+    },
+  };
 }
 
 export async function validateDirectory(directory: string): Promise<SkillValidation[]> {

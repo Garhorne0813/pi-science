@@ -37,6 +37,7 @@ dev = [
 ]
 science = [
     "Pillow>=10.0",
+    "numpy>=1.26",
 ]
 
 [build-system]

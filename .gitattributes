@@ -1,0 +1,7 @@
+# Force LF line endings for text files that are parsed as YAML/markdown.
+# Windows checkouts (git autocrlf) previously turned SKILL.md into CRLF,
+# which broke the yaml parser (values parsed with a trailing \r).
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf

@@ -65,3 +65,6 @@ workspaces/
 
 # Command-execution temp leftovers
 _tmp_*
+
+# Orchestration intermediates
+.pi-subagents/

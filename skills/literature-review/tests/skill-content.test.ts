@@ -65,6 +65,21 @@ describe("literature-review skill content", () => {
     expect(body).toContain("never invent a DOI");
     expect(body).toContain("Never silently substitute memory");
 
+    // Local control-plane gateway with the sensitive-term hard gate.
+    expect(body).toContain("/api/literature/search");
+    expect(body).toContain("/api/literature/approve");
+    expect(body).toContain("approvedToken");
+    expect(body).toContain("\"blocked\": true");
+    expect(body).toContain("no request leaves the machine");
+    expect(body).toContain("expires after 5 minutes");
+    expect(body).toContain("single-use");
+    expect(body).toContain("PI_SCIENCE_PORT");
+
+    // Gateway provider coverage and disclosed outbound domains.
+    expect(body).toContain("rest.uniprot.org");
+    expect(body).toContain("pubchem.ncbi.nlm.nih.gov");
+    expect(body).toContain("Crossref, which remains direct-curl-only");
+
     // Crossref command shape and polite-pool convention.
     expect(body).toContain(
       'curl -s "https://api.crossref.org/works?query=<terms>&rows=10&select=DOI,title,author,issued,container-title,is-referenced-by-count"',

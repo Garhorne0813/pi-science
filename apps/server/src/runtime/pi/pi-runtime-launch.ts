@@ -1,7 +1,7 @@
 import { createHash, randomInt, randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import type { PiConfig } from "@pi-science/contracts";
 import type { PiProcessOptions } from "./pi-process.js";
 import { configRoot } from "../../storage/persistence.js";
@@ -142,25 +142,163 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
   };
 }
 
-function seedWorkspaceAssets(cwd: string): string[] {
+export function seedWorkspaceAssets(cwd: string): string[] {
   const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
+  // The workspace metadata dirs are managed state. A symlink (or plain file)
+  // left at cwd/.pi or cwd/.pi-science would make every write below (skills
+  // mirror, stale cleanup) land inside — and delete from — the linked
+  // location, so replace foreign entries before any mkdir/cp runs.
+  replaceForeignEntry(join(cwd, ".pi-science"));
+  replaceForeignEntry(join(cwd, ".pi"));
   const metadata = join(cwd, ".pi-science");
   mkdirSync(metadata, { recursive: true });
   const agents = join(cwd, "AGENTS.md");
   const sourceAgents = join(projectRoot, "harness", "AGENTS.md");
-  if (!existsSync(agents) && existsSync(sourceAgents)) cpSync(sourceAgents, agents);
+  if (existsSync(sourceAgents)) {
+    // A dangling (or external-pointing) AGENTS.md symlink makes existsSync
+    // report "missing" while cpSync still targets the link: the write aborts
+    // with a C++ exception (exit 134) or lands outside the workspace. Drop
+    // any symlink/non-file placeholder before deciding whether to seed.
+    removeUnlinkable(agents);
+    if (!existsSync(agents)) cpSync(sourceAgents, agents);
+  }
   const sourceSkills = join(projectRoot, "skills");
   const targetSkills = join(cwd, ".pi", "skills");
+  // The .pi/skills tree is managed state: if a previous seed or the runtime
+  // left a symlink (or plain file) here, remove it first. Never seed through
+  // a symlink — it would write to and delete from wherever the link points.
+  replaceForeignEntry(targetSkills);
   mkdirSync(targetSkills, { recursive: true });
   const result: string[] = [];
   for (const name of readdirSync(sourceSkills, { withFileTypes: true })) {
-    if (!name.isDirectory() || !existsSync(join(sourceSkills, name.name, "SKILL.md"))) continue;
+    if (!name.isDirectory()) continue;
+    const skillMarkdown = join(sourceSkills, name.name, "SKILL.md");
+    let skillMdInfo;
+    try {
+      skillMdInfo = lstatSync(skillMarkdown);
+    } catch {
+      continue;
+    }
+    // Refuse to seed from a symlinked SKILL.md; only real files count.
+    if (!skillMdInfo.isFile()) continue;
+    const source = join(sourceSkills, name.name);
     const target = join(targetSkills, name.name);
-    mkdirSync(target, { recursive: true });
-    cpSync(join(sourceSkills, name.name, "SKILL.md"), join(target, "SKILL.md"));
+    seedSkillTree(source, target);
     result.push(target);
   }
   return result;
+}
+
+// Remove a symlink or non-directory blocking a managed directory path so
+// mkdirSync/cpSync below never follows or collides with a foreign entry.
+function replaceForeignEntry(path: string): void {
+  let info;
+  try {
+    info = lstatSync(path);
+  } catch {
+    return;
+  }
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    rmSync(path, { recursive: true, force: true });
+  }
+}
+
+// Mirror a builtin skill into the workspace .pi/skills/ tree. Copies the
+// whole directory (SKILL.md plus helpers, references, assets, and requirement
+// manifests) so scripted skills work offline; refuses symlinks and anything
+// escaping the skill directory; and removes stale entries that no longer
+// exist upstream so removed helpers cannot linger in workspaces.
+function seedSkillTree(source: string, target: string): void {
+  // The tree root is managed state: a symlink (or file) left here by a
+  // previous seed or the runtime is removed before anything is written —
+  // never write through it, and never let stale-entry cleanup delete from
+  // wherever it points.
+  replaceForeignEntry(target);
+  mkdirSync(target, { recursive: true });
+  const pending: Array<{ source: string; target: string }> = [{ source, target }];
+  while (pending.length > 0) {
+    const { source: from, target: to } = pending.pop()!;
+    for (const entry of readdirSync(from, { withFileTypes: true })) {
+      if (entry.name === "." || entry.name === "..") continue;
+      const fromPath = join(from, entry.name);
+      const toPath = join(to, entry.name);
+      // Never follow symlinks from the skill tree, and never write through a
+      // symlink that a previous seed or the runtime may have left behind.
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        // Directory entries are written later (children), so guard the target
+        // now: a stale symlink here would let later writes leak outside, and
+        // a foreign file would break directory creation with ENOTDIR.
+        let info;
+        try {
+          info = lstatSync(toPath);
+        } catch {
+          /* missing: fine */
+        }
+        if (info && (info.isSymbolicLink() || !info.isDirectory())) {
+          rmSync(toPath, { recursive: true, force: true });
+        }
+        pending.push({ source: fromPath, target: toPath });
+      } else if (entry.isFile()) {
+        removeUnlinkable(toPath);
+        cpSync(fromPath, toPath);
+      }
+    }
+  }
+  removeStaleEntries(source, target);
+}
+
+// Remove a symlink or a directory in the way of an incoming file (and a file
+// in the way of an incoming directory, handled by the recursive rm below) so
+// cpSync never follows or collides with a foreign entry.
+function removeUnlinkable(path: string): void {
+  let info;
+  try {
+    info = lstatSync(path);
+  } catch {
+    return;
+  }
+  if (info.isSymbolicLink() || info.isDirectory()) rmSync(path, { recursive: true, force: true });
+}
+
+function removeStaleEntries(source: string, target: string): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(target);
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    const sourcePath = join(source, name);
+    const targetPath = join(target, name);
+    let targetInfo;
+    try {
+      targetInfo = lstatSync(targetPath);
+    } catch {
+      continue;
+    }
+    if (targetInfo.isSymbolicLink()) {
+      console.warn(`[pi-science] removing stale seeded entry: ${targetPath} (foreign symlink)`);
+      rmSync(targetPath, { recursive: true, force: true });
+      continue;
+    }
+    let sourceInfo;
+    try {
+      sourceInfo = statSync(sourcePath);
+    } catch {
+      // No upstream counterpart: the entry is stale (or the upstream tree
+      // changed shape), so drop it to keep the mirror exact.
+      console.warn(`[pi-science] removing stale seeded entry: ${targetPath} (no upstream counterpart)`);
+      rmSync(targetPath, { recursive: true, force: true });
+      continue;
+    }
+    if (targetInfo.isDirectory() && sourceInfo.isDirectory()) {
+      removeStaleEntries(sourcePath, targetPath);
+    } else if (targetInfo.isDirectory() !== sourceInfo.isDirectory()) {
+      console.warn(`[pi-science] removing stale seeded entry: ${targetPath} (type mismatch with upstream)`);
+      rmSync(targetPath, { recursive: true, force: true });
+    }
+  }
 }
 
 function findAdjacentRuntime(sourcePath: string, relativePath: string): string | null {
@@ -175,7 +313,7 @@ function findAdjacentRuntime(sourcePath: string, relativePath: string): string |
   return null;
 }
 
-export function loadDefaultPiConfig(): PiConfig {
+export function loadDefaultPiConfig(runtimeRoots?: string[]): PiConfig {
   const dataRoot = configRoot();
   const settings = readSettings(dataRoot);
   return {
@@ -190,7 +328,7 @@ export function loadDefaultPiConfig(): PiConfig {
     extensions: ensureBrowserQuestionnaireAdapter(
       Array.isArray(settings.extension_paths)
         ? settings.extension_paths.map(String).filter(Boolean)
-        : runtimeExtensionStatus().filter((item) => item.installed && (item.id !== "context-mode" || process.env.PI_SCIENCE_ENABLE_CONTEXT_MODE === "1")).map((item) => item.path!).filter(Boolean),
+        : runtimeExtensionStatus(undefined, runtimeRoots).filter((item) => item.installed && (item.id !== "context-mode" || process.env.PI_SCIENCE_ENABLE_CONTEXT_MODE === "1")).map((item) => item.path!).filter(Boolean),
     ),
   };
 }
@@ -203,25 +341,31 @@ const EXTENSIONS = [
   { id: "rpiv-ask-user-question", packageName: "@juicesharp/rpiv-ask-user-question", name: "Ask User Question", description: "Adds structured multi-question prompts with previews, multi-select, custom answers, and notes." },
 ] as const;
 
-export function runtimeExtensionStatus(cliPath = process.env.PI_CLI_PATH ?? ""): Array<{ id: string; name: string; description: string; installed: boolean; path: string | null }> {
+export function runtimeExtensionStatus(cliPath = process.env.PI_CLI_PATH ?? "", overrideRoots?: string[]): Array<{ id: string; name: string; description: string; installed: boolean; path: string | null }> {
   return EXTENSIONS.map((extension) => {
     const packageName = "packageName" in extension ? extension.packageName : extension.id;
-    const path = findRuntimeExtension(packageName, cliPath, "entrypoints" in extension ? [...extension.entrypoints] : []);
+    const path = findRuntimeExtension(packageName, cliPath, "entrypoints" in extension ? [...extension.entrypoints] : [], overrideRoots);
     return { id: extension.id, name: extension.name, description: extension.description, installed: Boolean(path), path };
   });
 }
 
-function findRuntimeExtension(packageName: string, cliPath: string, extraEntrypoints: string[]): string | null {
+function findRuntimeExtension(packageName: string, cliPath: string, extraEntrypoints: string[], overrideRoots?: string[]): string | null {
   if (!cliPath) return null;
   const roots: string[] = [];
-  const managedRuntimeRoot = join(PROJECT_ROOT, "runtime", "pi");
-  if (existsSync(managedRuntimeRoot)) roots.push(managedRuntimeRoot);
-  let current = dirname(resolve(cliPath));
-  for (let depth = 0; depth < 12; depth += 1) {
-    if (!roots.includes(current)) roots.push(current);
-    const parent = dirname(current);
-    if (parent === current) break;
-    current = parent;
+  if (overrideRoots) {
+    // Test/injection hook: use exactly the supplied roots so a managed
+    // runtime checkout elsewhere cannot shadow the scenario under test.
+    roots.push(...overrideRoots);
+  } else {
+    const managedRuntimeRoot = join(PROJECT_ROOT, "runtime", "pi");
+    if (existsSync(managedRuntimeRoot)) roots.push(managedRuntimeRoot);
+    let current = dirname(resolve(cliPath));
+    for (let depth = 0; depth < 12; depth += 1) {
+      if (!roots.includes(current)) roots.push(current);
+      const parent = dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
   }
   for (const root of roots) {
     const packageDir = join(root, "node_modules", packageName);

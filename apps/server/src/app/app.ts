@@ -15,6 +15,7 @@ import { registerSettingsRoutes } from "../http/routes/settings-routes.js";
 import { registerRunEndpointRoutes } from "../http/routes/run-endpoint-routes.js";
 import { knownWorkspacePaths, registerCatalogRoutes } from "../http/routes/catalog-routes.js";
 import { registerProjectRoutes } from "../http/routes/project-routes.js";
+import { registerLiteratureRoutes } from "../http/routes/literature-routes.js";
 import { createServerModules, type ServerModules } from "./server-modules.js";
 import { registerEnvironmentRoutes } from "../http/routes/environment-routes.js";
 import { validateWorkspaceCwd } from "../security/workspace-security.js";
@@ -125,6 +126,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeRuns !== false) registerRunEndpointRoutes(app);
   if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, research);
   if (config.nodeProject !== false) registerProjectRoutes(app, research, projectReview);
+  if (config.nodeLiterature !== false) registerLiteratureRoutes(app);
   app.addHook("onReady", async () => {
     const results = await Promise.allSettled((await knownWorkspacePaths()).map((cwd) => research.reconcile(cwd)));
     for (const result of results) if (result.status === "rejected") app.log.error({ err: result.reason }, "research loop recovery failed");

@@ -5,8 +5,11 @@ import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 import { configPath, readJson, withFileWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
+import { probeMcpHealth, type McpDefinition } from "../../security/mcp-health.js";
+import { egressAuditEnabled, recordEgress } from "../../security/egress-audit.js";
 import { sessionRepository } from "../../runtime/node/session-repository.js";
-import { catalog as skillCatalog, getSkillInfo, validateDirectory as validateSkillDir } from "../../catalog/skill-catalog.js";
+import { catalog as skillCatalog, getSkillContent, getSkillInfo, validateDirectory as validateSkillDir } from "../../catalog/skill-catalog.js";
+import { probeRequirements } from "../../catalog/skill-requirements.js";
 import type { JobCoordinator } from "../../runtime/jobs/job-coordinator.js";
 import type { ResearchLoopCoordinator } from "../../research-loop/coordinator.js";
 import { findExecutable, pathIsInside, userHome } from "../../support/platform-utils.js";
@@ -214,6 +217,27 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
     const item = await getSkillInfo(request.params.skill_id, root);
     return item ?? reply.code(404).send({ error: "Skill not found" });
   });
+  app.get<{ Params: { skill_id: string } }>("/api/skills/:skill_id/readiness", async (request, reply) => {
+    const root = await ws(request, reply);
+    if (!root) return;
+    const item = await getSkillInfo(request.params.skill_id, root);
+    if (!item) return reply.code(404).send({ error: "Skill not found" });
+    return probeRequirements(item.skill_id, item.requirements);
+  });
+  // Read-only preview of the effective SKILL.md (project > user > builtin).
+  // The path is never client-supplied: the winning discovery record is
+  // resolved with realpath containment inside its source root.
+  app.get<{ Params: { skill_id: string } }>("/api/skills/:skill_id/content", async (request, reply) => {
+    const root = await ws(request, reply);
+    if (!root) return;
+    const result = await getSkillContent(request.params.skill_id, root);
+    if (!result.ok) {
+      if (result.error === "not-found") return reply.code(404).send({ error: "Skill not found" });
+      if (result.error === "unavailable") return reply.code(403).send({ error: "Skill content unavailable" });
+      return reply.code(413).send({ error: "Skill content exceeds the size limit" });
+    }
+    return result.content;
+  });
   app.get("/api/skills/tools", async () => {
     return Promise.all(catalogToolCommands().map(async ([name, command]) => {
       return { name, found: Boolean(await findExecutable(command)) };
@@ -242,10 +266,71 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
     };
   });
 
-  // ── MCP catalog ──
-  app.get("/api/mcp/catalog", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const paths = [join(root, ".mcp.json"), join(root, ".pi", "mcp.json"), configPath("mcp.json")]; let source: string | undefined; let definitions: Record<string, unknown> = {}; for (const path of paths) { try { definitions = ((JSON.parse(await readFile(path, "utf8")) as { mcpServers?: unknown }).mcpServers ?? {}) as Record<string, unknown>; source = path; break; } catch { /* try next */ } } const config = await readJson<{ mcp_servers?: string[] }>(configPath("config.json"), {}); const ids = Object.keys(definitions); const enabled = Array.isArray(config.mcp_servers) ? new Set(config.mcp_servers) : new Set(ids); const servers = ids.sort().map((id) => { const definition = definitions[id] as Record<string, unknown> | undefined ?? {}; const remote = Boolean(definition.url); return { id, name: String(definition.name ?? id), description: String(definition.description ?? ""), transport: remote ? String(definition.transport ?? "http") : definition.command ? "stdio" : "unknown", enabled: enabled.has(id), auth: definition.required_env ? "missing" : "unknown", data_egress: remote ? "remote" : "local", terms_url: definition.terms_url ?? null, privacy_url: definition.privacy_url ?? null, license: definition.license ?? null, tags: Array.isArray(definition.tags) ? definition.tags : [], tools: Array.isArray(definition.tools) ? definition.tools : [] }; }); return { servers, config_path: source ?? null }; });
-  app.get<{ Params: { server_id: string } }>("/api/mcp/health/:server_id", async (request, reply) => { const catalog = await app.inject({ method: "GET", url: `/api/mcp/catalog?cwd=${encodeURIComponent(q(request, "cwd"))}` }); const server = (catalog.json() as { servers: Array<Record<string, unknown>> }).servers.find((item) => item.id === request.params.server_id); if (!server) return reply.code(404).send({ error: "MCP server not found" }); return { ...server, health: server.enabled ? "unknown" : "blocked", error: server.enabled ? null : "server disabled" }; });
-  app.get<{ Params: { server_id: string } }>("/api/mcp/egress/:server_id", async (request, reply) => { const catalog = await app.inject({ method: "GET", url: `/api/mcp/catalog?cwd=${encodeURIComponent(q(request, "cwd"))}` }); const server = (catalog.json() as { servers: Array<Record<string, unknown>> }).servers.find((item) => item.id === request.params.server_id); if (!server) return reply.code(404).send({ error: "MCP server not found" }); return { server: request.params.server_id, data_egress: server.data_egress, transport: server.transport, terms_url: server.terms_url, privacy_url: server.privacy_url, tools: server.tools, warning: server.data_egress === "remote" ? "Review the destination and data class before sending user files or sequences." : null }; });
+async function loadMcpDefinitions(root: string): Promise<{ definitions: Record<string, unknown>; source: string | null }> {
+  const paths = [join(root, ".mcp.json"), join(root, ".pi", "mcp.json"), configPath("mcp.json")];
+  for (const path of paths) {
+    try {
+      const definitions = ((JSON.parse(await readFile(path, "utf8")) as { mcpServers?: unknown }).mcpServers ?? {}) as Record<string, unknown>;
+      return { definitions, source: path };
+    } catch { /* try next */ }
+  }
+  return { definitions: {}, source: null };
+}
+
+function summarizeMcpServers(definitions: Record<string, unknown>, enabled: ReadonlySet<string>): Array<Record<string, unknown>> {
+  return Object.keys(definitions).sort().map((id) => {
+    const definition = (definitions[id] as Record<string, unknown> | undefined) ?? {};
+    const remote = Boolean(definition.url);
+    return {
+      id,
+      name: String(definition.name ?? id),
+      description: String(definition.description ?? ""),
+      transport: remote ? String(definition.transport ?? "http") : definition.command ? "stdio" : "unknown",
+      enabled: enabled.has(id),
+      auth: definition.required_env ? "missing" : "unknown",
+      data_egress: remote ? "remote" : "local",
+      terms_url: definition.terms_url ?? null,
+      privacy_url: definition.privacy_url ?? null,
+      license: definition.license ?? null,
+      tags: Array.isArray(definition.tags) ? definition.tags : [],
+      tools: Array.isArray(definition.tools) ? definition.tools : [],
+    };
+  });
+}
+
+async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<string>> {
+  const config = await readJson<{ mcp_servers?: string[] }>(configPath("config.json"), {});
+  return Array.isArray(config.mcp_servers) ? new Set(config.mcp_servers) : new Set(Object.keys(definitions));
+}
+
+// ── MCP catalog ──
+  app.get("/api/mcp/catalog", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const { definitions, source } = await loadMcpDefinitions(root); const servers = summarizeMcpServers(definitions, await mcpEnabledSet(definitions)); return { servers, config_path: source }; });
+  app.get<{ Params: { server_id: string } }>("/api/mcp/health/:server_id", async (request, reply) => {
+    const root = await ws(request, reply);
+    if (!root) return;
+    const { definitions } = await loadMcpDefinitions(root);
+    const definition = definitions[request.params.server_id];
+    if (!definition) return reply.code(404).send({ error: "MCP server not found" });
+    const enabled = await mcpEnabledSet(definitions);
+    const server = summarizeMcpServers(definitions, enabled).find((item) => item.id === request.params.server_id);
+    if (!server) return reply.code(404).send({ error: "MCP server not found" });
+    if (!server.enabled) return { ...server, health: "blocked", error: "server disabled", checked_at: Date.now() / 1000 };
+    const result = await probeMcpHealth(definition as McpDefinition);
+    return { ...server, health: result.health, error: result.error, checked_at: Date.now() / 1000 };
+  });
+  app.get<{ Params: { server_id: string } }>("/api/mcp/egress/:server_id", async (request, reply) => {
+    const root = await ws(request, reply);
+    if (!root) return;
+    const { definitions } = await loadMcpDefinitions(root);
+    const server = summarizeMcpServers(definitions, new Set(Object.keys(definitions))).find((item) => item.id === request.params.server_id);
+    if (!server) return reply.code(404).send({ error: "MCP server not found" });
+    const auditEnabled = await egressAuditEnabled();
+    if (server.data_egress === "remote" && auditEnabled) {
+      const url = typeof (definitions[request.params.server_id] as Record<string, unknown> | undefined)?.url === "string" ? String((definitions[request.params.server_id] as Record<string, unknown>).url) : "";
+      await recordEgress({ connector_type: "mcp", connector_id: request.params.server_id, target_domain: url, approved: false, note: "egress_review" });
+    }
+    return { server: request.params.server_id, data_egress: server.data_egress, transport: server.transport, terms_url: server.terms_url, privacy_url: server.privacy_url, tools: server.tools, warning: server.data_egress === "remote" ? "Review the destination and data class before sending user files or sequences." : null, audit_enabled: auditEnabled };
+  });
 
   // ── Workspaces ──
   app.get("/api/workspaces", async () => { const result = await Promise.all((await knownWorkspacePaths()).map((path) => workspaceInfo(path))); return result.sort((left, right) => String(right.last_modified).localeCompare(String(left.last_modified))); });

@@ -81,6 +81,9 @@ jobs:
       - name: Test Python scientific runtime
         run: uv run --directory backend pytest -q
 
+      - name: Test skill Python helpers
+        run: uv run --directory backend --extra science pytest ../skills/single-cell-rna-qc/tests -q
+
       - name: Run control-plane smoke test
         if: runner.os != 'Windows'
         run: bash scripts/smoke-control-plane.sh

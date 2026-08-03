@@ -1,0 +1,22 @@
+[
+  {
+    "prompt": "Run QC on counts.csv: compute per-cell metrics and filter low-quality cells with MAD outlier detection.",
+    "expected_trigger": true,
+    "trigger_terms": ["QC", "MAD", "filter", "low-quality cells"]
+  },
+  {
+    "prompt": "Assess the quality of this single-cell RNA-seq count matrix and report mitochondrial fraction per cell.",
+    "expected_trigger": true,
+    "trigger_terms": ["single-cell RNA-seq", "quality", "mitochondrial"]
+  },
+  {
+    "prompt": "Find differentially expressed genes between treated and control groups in the h5ad file.",
+    "expected_trigger": false,
+    "trigger_terms": ["differentially expressed", "h5ad"]
+  },
+  {
+    "prompt": "Cluster the cells with leiden and draw a UMAP.",
+    "expected_trigger": false,
+    "trigger_terms": ["leiden", "UMAP"]
+  }
+]

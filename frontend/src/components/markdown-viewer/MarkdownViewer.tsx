@@ -116,7 +116,7 @@ function MathBlock({ children, variant }: { children?: React.ReactNode; variant:
       className={cn(
         "katex-display group relative my-4 overflow-x-auto rounded-lg border px-4 pb-3 pt-7",
         variant === "chat"
-          ? "border-border bg-surface-2/50"
+          ? "border-border bg-[color-mix(in_srgb,var(--surface-2)_50%,transparent)]"
           : "border-[#e6ddd2] bg-[#faf6f2]",
       )}
     >
