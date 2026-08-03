@@ -30,6 +30,8 @@
 
 export type SensitiveCategory = "dna-sequence" | "protein-sequence" | "compound-identifier" | "clinical-identifier" | "custom";
 
+export const SENSITIVE_CATEGORIES: readonly SensitiveCategory[] = ["dna-sequence", "protein-sequence", "compound-identifier", "clinical-identifier", "custom"];
+
 export type SensitiveTermResult = {
   matched: boolean;
   categories: SensitiveCategory[];
