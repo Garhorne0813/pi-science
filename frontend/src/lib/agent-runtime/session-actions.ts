@@ -230,6 +230,11 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       set({ client, working: true });
 
       applyPromptSessionName(cwd, activeSessionId, message);
+      // Baseline for the late-stream monitor: any assistant message persisted
+      // after this instant belongs to the turn being sent. Captured before the
+      // HTTP acknowledgement so a fast reply can never be attributed to a
+      // previous turn (nor a slow monitor to the wrong prompt).
+      const promptTimestamp = Date.now();
       try {
         await client.sendPrompt(activeSessionId, message, cwd);
         if (!streamWasOpen) {
@@ -239,6 +244,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
             activeSessionId,
             cwd,
             monitorGeneration,
+            promptTimestamp,
           );
         }
         return activeSessionId;

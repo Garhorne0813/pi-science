@@ -128,13 +128,25 @@ export async function reconcileAfterGap(
   void loadSessionsInternal();
 }
 
+/** How many consecutive idle REST rounds with no confirmed reply before the
+ *  late-stream monitor gives up and settles the UI anyway. While the stream
+ *  is open each 250 ms tick is a round (~30 s for 120); while it is closed a
+ *  round runs every 4 ticks (~1 s, ~2 min for 120). Each idle round performs
+ *  a state REST read and, when idle, an additional messages read. A finished
+ *  turn with no output or a wedged agent must not leave Send disabled
+ *  forever. */
+const DEFAULT_IDLE_LIMIT_TICKS = 120;
+
 export async function reconcilePromptAfterLateStream(
   client: PiScienceClient,
   sessionId: string,
   cwd: string,
   monitorGeneration: number,
+  promptTimestamp?: number,
+  idleLimitTicks = DEFAULT_IDLE_LIMIT_TICKS,
 ): Promise<void> {
   let ticks = 0;
+  let idleTicks = 0;
   while (true) {
     await new Promise((resolve) => globalThis.setTimeout(resolve, 250));
     const current = useRuntimeStore.getState();
@@ -162,12 +174,35 @@ export async function reconcilePromptAfterLateStream(
         || runtimeState.is_compacting
         || runtimeState.pending_message_count > 0;
       if (!runtimeWorking) {
+        // Authoritative idle is not proof the turn finished: an agent can be
+        // briefly idle between tool calls. Only settle once THIS turn's reply
+        // is visible in the persisted history (an assistant message written
+        // after the prompt was sent) — otherwise an early resync could drop
+        // the late reply. Without a prompt baseline (defensive), never assume
+        // a reply; the idle cap settles the monitor either way.
+        const replyConfirmed = promptTimestamp !== undefined
+          && await turnHasNewAssistantReply(client, sessionId, cwd, promptTimestamp);
+        if (!replyConfirmed) {
+          idleTicks += 1;
+          if (idleTicks < idleLimitTicks) continue;
+        }
+        // Re-check before settling: the reply confirmation awaited a REST
+        // round, during which the monitor may have been superseded or the
+        // turn resumed working.
+        const recheck = useRuntimeStore.getState();
+        if (
+          monitorGeneration !== generations.promptMonitor
+          || recheck.activeSessionId !== sessionId
+          || recheck.cwd !== cwd
+          || !recheck.working
+        ) return;
         ++generations.activity;
         useRuntimeStore.setState({ working: false, status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
         void resyncCompletedHistory(sessionId, cwd);
         void loadSessionsInternal();
         return;
       }
+      idleTicks = 0;
       // Once the stream is open while the runtime is authoritatively busy, its
       // subscriber is attached and will receive the eventual terminal event.
       if (streamOpen) return;
@@ -175,6 +210,34 @@ export async function reconcilePromptAfterLateStream(
       // Keep polling while the stream is still connecting. Transport failure
       // handling remains responsible for the visible connection status.
     }
+  }
+}
+
+/** True when the persisted conversation already contains an assistant message
+ *  written after the prompt was sent — i.e. this turn produced a reply that a
+ *  history resync will find. The scan starts from the newest message; an
+ *  assistant message without a parseable timestamp cannot be attributed to
+ *  this turn and counts as unconfirmed. */
+async function turnHasNewAssistantReply(
+  client: PiScienceClient,
+  sessionId: string,
+  cwd: string,
+  promptTimestamp: number,
+): Promise<boolean> {
+  try {
+    const page = await client.getMessagesPage(sessionId, cwd);
+    const messages = page.messages;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i].role !== "assistant") continue;
+      const timestamp = messages[i].timestamp;
+      if (!timestamp) return false;
+      const parsed = Date.parse(timestamp);
+      if (Number.isNaN(parsed)) return false;
+      return parsed > promptTimestamp;
+    }
+    return false;
+  } catch {
+    return false;
   }
 }
 
