@@ -131,4 +131,19 @@ describe("getSkillContent", () => {
     expect(result.content.source).toBe("builtin");
     expect(result.content.content).toContain("BUILTIN BODY");
   });
+
+  it("parses a CRLF-formatted SKILL.md without leaking \\r into YAML values (Windows checkout)", async () => {
+    const cwd = tmp();
+    const crlf = SKILL_TEMPLATE("alpha", "CRLF BODY")
+      .replace("license: MIT", "license: MIT\nrisk: low")
+      .replaceAll("\n", "\r\n");
+    await projectSkill(cwd, "alpha", crlf);
+    const result = await getSkillContent("alpha", cwd);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Without CRLF normalization the yaml package keeps a trailing \r
+    // (e.g. name: "alpha\r", risk: "low\r"), failing schema enums.
+    expect(result.content.name).toBe("alpha");
+    expect(result.content.content).toContain("CRLF BODY");
+  });
 });

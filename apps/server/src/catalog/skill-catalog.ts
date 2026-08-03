@@ -126,6 +126,12 @@ async function readFrontMatter(path: string): Promise<FrontMatterResult> {
   } catch (exc) {
     return { payload: {}, errors: [`unable to read SKILL.md: ${exc}`] };
   }
+  // Normalize CRLF -> LF before front-matter extraction and YAML parsing.
+  // The yaml package keeps a trailing \r in scalar values on CRLF input
+  // (e.g. risk: low\r), which fails enum validation; block scalars can fail
+  // parsing outright. This defends user-provided skills edited on Windows
+  // even when the repo itself is LF (see .gitattributes).
+  text = text.replace(/\r\n/g, "\n");
   const match = text.match(FRONT_MATTER);
   if (!match) {
     return { payload: {}, errors: ["SKILL.md must start with YAML front matter"] };
