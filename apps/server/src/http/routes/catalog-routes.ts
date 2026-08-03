@@ -8,7 +8,7 @@ import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { probeMcpHealth, type McpDefinition } from "../../security/mcp-health.js";
 import { egressAuditEnabled, recordEgress } from "../../security/egress-audit.js";
 import { sessionRepository } from "../../runtime/node/session-repository.js";
-import { catalog as skillCatalog, getSkillInfo, validateDirectory as validateSkillDir } from "../../catalog/skill-catalog.js";
+import { catalog as skillCatalog, getSkillContent, getSkillInfo, validateDirectory as validateSkillDir } from "../../catalog/skill-catalog.js";
 import { probeRequirements } from "../../catalog/skill-requirements.js";
 import type { JobCoordinator } from "../../runtime/jobs/job-coordinator.js";
 import type { ResearchLoopCoordinator } from "../../research-loop/coordinator.js";
@@ -223,6 +223,20 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
     const item = await getSkillInfo(request.params.skill_id, root);
     if (!item) return reply.code(404).send({ error: "Skill not found" });
     return probeRequirements(item.skill_id, item.requirements);
+  });
+  // Read-only preview of the effective SKILL.md (project > user > builtin).
+  // The path is never client-supplied: the winning discovery record is
+  // resolved with realpath containment inside its source root.
+  app.get<{ Params: { skill_id: string } }>("/api/skills/:skill_id/content", async (request, reply) => {
+    const root = await ws(request, reply);
+    if (!root) return;
+    const result = await getSkillContent(request.params.skill_id, root);
+    if (!result.ok) {
+      if (result.error === "not-found") return reply.code(404).send({ error: "Skill not found" });
+      if (result.error === "unavailable") return reply.code(403).send({ error: "Skill content unavailable" });
+      return reply.code(413).send({ error: "Skill content exceeds the size limit" });
+    }
+    return result.content;
   });
   app.get("/api/skills/tools", async () => {
     return Promise.all(catalogToolCommands().map(async ([name, command]) => {

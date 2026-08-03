@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { artifactManifestSchema, createResearchLoopSchema, createSessionRequestSchema, gatewayHealthSchema, jobRecordSchema, piRpcCommandSchema, researchLoopSchema, sessionEventSchema } from "./index.js";
+import { artifactManifestSchema, createResearchLoopSchema, createSessionRequestSchema, gatewayHealthSchema, jobRecordSchema, piRpcCommandSchema, researchLoopSchema, sessionEventSchema, skillContentSchema } from "./index.js";
 
 describe("gateway contracts", () => {
   it("accepts a healthy Node gateway response", () => {
@@ -33,5 +33,24 @@ describe("gateway contracts", () => {
       stop_conditions: { target_metrics: {}, patience: 3, min_improvement: 0 },
       created_at: "now", updated_at: "now",
     }).task_type).toBe("research_loop");
+  });
+
+  it("validates skill content and rejects absolute locations", () => {
+    expect(skillContentSchema.parse({
+      skill_id: "s1", name: "alpha", digest: "0123456789abcdef",
+      source: "builtin", location: "alpha/SKILL.md", content: "---\nname: alpha\n---\n",
+    })).toMatchObject({ source: "builtin" });
+    expect(() => skillContentSchema.parse({
+      skill_id: "s1", name: "alpha", digest: "0123456789abcdef",
+      source: "builtin", location: "/etc/SKILL.md", content: "x",
+    })).toThrow();
+    expect(() => skillContentSchema.parse({
+      skill_id: "s1", name: "alpha", digest: "0123456789abcdef",
+      source: "root", location: "alpha/SKILL.md", content: "x",
+    })).toThrow();
+    expect(() => skillContentSchema.parse({
+      skill_id: "s1", name: "alpha", digest: "0123456789abcdef",
+      source: "builtin", location: "alpha/SKILL.md",
+    })).toThrow();
   });
 });

@@ -7,17 +7,19 @@
  */
 
 import { createHash } from "node:crypto";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import {
   skillMetadataSchema,
+  type SkillContent,
   type SkillFile,
   type SkillInfo,
   type SkillMetadata,
   type SkillValidation,
 } from "@pi-science/contracts";
+import { pathIsInside } from "../support/platform-utils.js";
 
 const FRONT_MATTER = /^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/;
 const SOURCE_RANK: Record<string, number> = { project: 0, user: 1, builtin: 2 };
@@ -397,6 +399,65 @@ export async function getSkillInfo(skillId: string, cwd: string = "."): Promise<
   const found = record.find((r) => r.skillId === skillId || r.metadata.name === skillId);
   if (!found) return null;
   return toSkillInfo(found, true, []);
+}
+
+export type SkillContentResult =
+  | { ok: true; content: SkillContent }
+  | { ok: false; error: "not-found" | "unavailable" | "too-large" };
+
+/**
+ * Read the effective SKILL.md for a skill (project > user > builtin
+ * precedence, matching discovery). The client never supplies a path:
+ * the winning discovery record is resolved and contained inside its
+ * source root (realpath check) before any read, so a symlink planted in
+ * a skills directory cannot leak workspace-external files.
+ */
+export async function getSkillContent(skillId: string, cwd: string = "."): Promise<SkillContentResult> {
+  const record = (await discover(cwd)).find((r) => r.skillId === skillId || r.metadata.name === skillId);
+  if (!record) return { ok: false, error: "not-found" };
+  // Project skills are managed state under <workspace>/.pi/skills; user and
+  // builtin sources treat their scan root as the containment boundary.
+  const allowedRoot = record.source === "project" ? join(resolve(cwd), ".pi", "skills") : record.sourceRoot;
+  let canonicalRoot: string;
+  try {
+    canonicalRoot = await realpath(allowedRoot);
+  } catch {
+    return { ok: false, error: "not-found" };
+  }
+  let canonicalPath: string;
+  try {
+    canonicalPath = await realpath(record.sourcePath);
+  } catch {
+    return { ok: false, error: "not-found" };
+  }
+  if (!pathIsInside(canonicalRoot, canonicalPath)) {
+    return { ok: false, error: "unavailable" };
+  }
+  let info;
+  try {
+    info = await stat(canonicalPath);
+  } catch {
+    return { ok: false, error: "not-found" };
+  }
+  if (!info.isFile()) return { ok: false, error: "unavailable" };
+  if (info.size > MAX_SKILL_BYTES) return { ok: false, error: "too-large" };
+  let content: string;
+  try {
+    content = await readFile(canonicalPath, "utf8");
+  } catch {
+    return { ok: false, error: "not-found" };
+  }
+  return {
+    ok: true,
+    content: {
+      skill_id: record.skillId,
+      name: record.metadata.name,
+      digest: createHash("sha256").update(content).digest("hex").slice(0, 16),
+      source: record.source as SkillContent["source"],
+      location: locationOf(record),
+      content,
+    },
+  };
 }
 
 export async function validateDirectory(directory: string): Promise<SkillValidation[]> {

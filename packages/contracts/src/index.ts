@@ -412,4 +412,26 @@ export type SkillRequirement = z.infer<typeof skillRequirementSchema>;
 export type SkillMetadata = z.infer<typeof skillMetadataSchema>;
 export type SkillValidation = z.infer<typeof skillValidationSchema>;
 export type SkillFile = z.infer<typeof skillFileSchema>;
+export const skillContentSchema = z.object({
+  skill_id: z.string().min(1),
+  name: z.string().min(1),
+  digest: z.string().min(1),
+  source: z.enum(["builtin", "project", "user"]),
+  // Relative/display path (e.g. ".pi/skills/x/SKILL.md") — never an absolute path.
+  location: z
+    .string()
+    .min(1)
+    .refine(
+      (value) =>
+        !value.startsWith("/") &&
+        !value.startsWith("\\") &&
+        !/^[A-Za-z]:[\\/]/.test(value) &&
+        !value.startsWith("~/") &&
+        !value.startsWith("~\\"),
+      "location must be a relative display path",
+    ),
+  content: z.string(),
+}).passthrough();
+
+export type SkillContent = z.infer<typeof skillContentSchema>;
 export type SkillInfo = z.infer<typeof skillInfoSchema>;
