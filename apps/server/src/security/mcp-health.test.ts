@@ -28,7 +28,12 @@ afterEach(() => {
 function withPathExecutable(name: string): NodeJS.ProcessEnv {
   const directory = mkdtempSync(join(tmpdir(), "pi-mcp-health-"));
   cleanups.push(directory);
-  writeFileSync(join(directory, name), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  // findExecutable resolves bare commands via PATHEXT on win32 (no extension
+  // resolution elsewhere), so the fixture must carry a recognized extension
+  // there or the executable lookup fails before env checks run.
+  const isWin = process.platform === "win32";
+  const fileName = isWin ? `${name}.cmd` : name;
+  writeFileSync(join(directory, fileName), isWin ? "@echo off\r\nexit /b 0\r\n" : "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   return { ...process.env, PATH: directory };
 }
 

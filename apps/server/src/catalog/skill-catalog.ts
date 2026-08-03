@@ -232,10 +232,11 @@ async function skillFiles(directory: string, sourceRoot: string): Promise<SkillF
 
 function locationOf(skill: DiscoveredSkill): string {
   const rel = relative(skill.sourceRoot, skill.sourcePath);
+  // Display paths are always posix-style, regardless of host separators.
   if (rel.startsWith("..") || rel === "") {
-    return skill.sourcePath.split(sep).at(-1) ?? skill.sourcePath;
+    return (skill.sourcePath.split(sep).at(-1) ?? skill.sourcePath).split(sep).join("/");
   }
-  return rel;
+  return rel.split(sep).join("/");
 }
 
 export async function parseSkill(path: string, source: string, sourceRoot: string): Promise<DiscoveredSkill> {
