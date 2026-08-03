@@ -23,6 +23,13 @@ const FRONT_MATTER = /^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/;
 const SOURCE_RANK: Record<string, number> = { project: 0, user: 1, builtin: 2 };
 const MAX_SKILL_BYTES = 2 * 1024 * 1024;
 const MAX_REFERENCE_BYTES = 512 * 1024;
+// Claude Code Agent Skills top-level fields that pi-science parses but does
+// not enforce. Accepting them keeps front matter parseable, but surfacing a
+// warning prevents authors from believing Claude-only semantics apply here.
+const CLAUDE_ONLY_FIELDS = ["allowed-tools", "disable-model-invocation", "model"];
+// Progressive disclosure budget: the description is surfaced to the model at
+// discovery time, so an overlong one inflates every conversation's context.
+const MAX_DESCRIPTION_BYTES = 1024;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -161,8 +168,24 @@ function normaliseThirdParty(value: unknown): Record<string, unknown>[] {
   });
 }
 
-function metadataWarnings(metadata: SkillMetadata): string[] {
+function metadataWarnings(metadata: SkillMetadata, payload: Record<string, unknown>, dirName: string, files: SkillFile[]): string[] {
   const warnings: string[] = [];
+  const licenseDeclared = typeof payload.license === "string" && payload.license.trim() !== "";
+  if (!licenseDeclared) {
+    warnings.push('license is not declared in front matter; defaulted to "UNLICENSED"');
+  }
+  if (metadata.description.length > MAX_DESCRIPTION_BYTES) {
+    warnings.push(`description exceeds ${MAX_DESCRIPTION_BYTES} characters; keep the first line short so discovery stays cheap (progressive disclosure)`);
+  }
+  if (dirName !== metadata.name) {
+    warnings.push(`directory name "${dirName}" does not match skill name "${metadata.name}"`);
+  }
+  for (const field of CLAUDE_ONLY_FIELDS) {
+    if (field in payload) warnings.push(`field "${field}" is a Claude Code Agent Skills field and is not honored by pi-science`);
+  }
+  for (const file of files) {
+    if (file.size > MAX_REFERENCE_BYTES) warnings.push(`file ${file.path} exceeds ${MAX_REFERENCE_BYTES} bytes; large files slow seeding and digest computation`);
+  }
   if (metadata.third_party.length > 0 && !metadata.third_party.some((item) => item.license)) {
     warnings.push("third_party entries do not declare a license");
   }
@@ -242,10 +265,14 @@ export async function parseSkill(path: string, source: string, sourceRoot: strin
   }
 
   const files = await skillFiles(dirname(path), sourceRoot);
+  if (source === "builtin" && (typeof payload.license !== "string" || payload.license.trim() === "")) {
+    validationErrors.push("builtin skills must declare a license in front matter");
+  }
+  const dirName = dirname(path).split(sep).at(-1) ?? "";
   const validation: SkillValidation = {
     valid: validationErrors.length === 0,
     errors: validationErrors,
-    warnings: metadataWarnings(metadata),
+    warnings: metadataWarnings(metadata, payload, dirName, files),
     checked_at: now(),
   };
 
@@ -333,6 +360,7 @@ function toSkillInfo(record: DiscoveredSkill, enabled: boolean, shadowed: string
     category: record.metadata.category,
     license: record.metadata.license,
     risk: record.metadata.risk,
+    compatibility: typeof record.metadata.compatibility === "string" ? record.metadata.compatibility : record.metadata.compatibility == null ? undefined : JSON.stringify(record.metadata.compatibility),
     quality,
     location: locationOf(record),
     source: record.source as SkillInfo["source"],

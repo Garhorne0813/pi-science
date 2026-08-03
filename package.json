@@ -9,7 +9,7 @@
     "build": "pnpm --filter @pi-science/contracts build && pnpm --filter @pi-science/server build && pnpm --filter frontend build",
     "dev:server": "pnpm --filter @pi-science/server dev",
     "test": "pnpm --filter @pi-science/contracts test && pnpm --filter @pi-science/server test && pnpm --filter frontend test && pnpm test:skills",
-    "test:skills": "pnpm --filter @pi-science/server exec vitest run --dir ../../skills/literature-review/tests",
+    "test:skills": "pnpm --filter @pi-science/server exec vitest run --dir ../../skills",
     "typecheck": "pnpm --filter @pi-science/contracts typecheck && pnpm --filter @pi-science/server typecheck && pnpm --filter frontend typecheck",
     "smoke": "bash scripts/smoke-control-plane.sh",
     "smoke:native-readonly": "bash scripts/smoke-control-plane.sh --native-readonly",

@@ -117,7 +117,9 @@ describe("Pi runtime custom provider materialization", () => {
     await writeFile(join(runtimeRoot, "node_modules", "pi-subagents", "package.json"), JSON.stringify({ pi: { extensions: ["src/extension.ts"] } }), "utf8");
     process.env.PI_CLI_PATH = cli;
 
-    const options = buildPiProcessOptions(cwd, loadDefaultPiConfig())!;
+    // Inject the test runtime root explicitly: without it, a vendored
+    // managed runtime checkout (runtime/pi) shadows this tmpdir scenario.
+    const options = buildPiProcessOptions(cwd, loadDefaultPiConfig([runtimeRoot]))!;
     const extensions = options.args.flatMap((arg, index) => arg === "-e" ? [options.args[index + 1]] : []);
 
     expect(extensions.filter((path) => path === extension)).toHaveLength(1);

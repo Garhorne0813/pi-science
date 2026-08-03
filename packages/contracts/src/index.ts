@@ -351,7 +351,15 @@ export const skillMetadataSchema = z.object({
   name: z.string().min(1).max(80).regex(/^[a-z0-9][a-z0-9._-]*$/),
   description: z.string().min(1).max(4000),
   version: z.string().max(80).default("0.1.0"),
-  license: z.string().max(120).default("Apache-2.0"),
+  // Skills must declare their license explicitly; "UNLICENSED" (never a
+  // silent Apache-2.0 assumption) is the fallback until an author declares
+  // one. Catalog validation warns on the undeclared case and rejects builtin
+  // skills that omit it.
+  license: z.string().max(120).default("UNLICENSED"),
+  // Agent Skills interop hint (e.g. "claude", "pi", "*"). Accepts lists or
+  // scalars from foreign front matter; pi-science never enforces
+  // Claude-only semantics. Non-string values are coerced downstream.
+  compatibility: z.union([z.string(), z.array(z.string()), z.number(), z.boolean()]).nullish().catch(undefined),
   category: z.string().max(80).default("general"),
   requirements: z.array(skillRequirementSchema).default([]),
   third_party: z.array(skillThirdPartySchema).default([]),
@@ -383,6 +391,7 @@ export const skillInfoSchema = z.object({
   version: z.string(),
   category: z.string(),
   license: z.string(),
+  compatibility: z.string().nullish(),
   risk: z.enum(["low", "medium", "high"]),
   quality: z.enum(["draft", "validated", "verified", "deprecated"]).default("draft"),
   location: z.string(),
