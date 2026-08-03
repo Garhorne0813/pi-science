@@ -589,10 +589,18 @@ export function createRuntimeActions(set: SetState, get: GetState) {
     },
 
     deleteSession: async (sessionId: string) => {
-      const { cwd } = get();
+      const { cwd, activeSessionId } = get();
       await getClient().deleteSession(sessionId, cwd);
-      optimisticSessionIds.delete(sessionId);
-      set((state) => ({ sessions: state.sessions.filter((session) => session.id !== sessionId) }));
+      if (activeSessionId === sessionId) {
+        // Deleting the active conversation must clear its cursor/history/thread
+        // state, not just drop the list row — reuse the full recovery reset.
+        // Pass the client so the reset also disconnects any live SSE stream for
+        // the deleted session (missing client leaves a phantom error state).
+        recoverMissingSession(sessionId, cwd, getClient());
+      } else {
+        optimisticSessionIds.delete(sessionId);
+        set((state) => ({ sessions: state.sessions.filter((session) => session.id !== sessionId) }));
+      }
       await loadSessionsInternal();
     },
 

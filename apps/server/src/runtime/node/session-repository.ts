@@ -393,6 +393,18 @@ export class SessionRepository {
     return (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId)?.path ?? null;
   }
 
+  /** Delete-path lookup that bypasses the scan cache entirely and re-reads the
+   *  session directory straight from disk. The cached path may be stale right
+   *  after a runtime is killed (the JSONL is flushed by the dying process), so
+   *  delete() must not trust it — otherwise the file survives and the session
+   *  resurrects on the next list. Callers should invalidate the cache first so
+   *  the fresh scan cannot be poisoned by an in-flight stale one. */
+  async findPathOnDisk(cwd: string, sessionId: string): Promise<string | null> {
+    const root = sessionsRoot(cwd);
+    const scan = await performScan(root);
+    return filesFromDirs(scan?.dirs ?? {}).find(({ header }) => header.id === sessionId)?.path ?? null;
+  }
+
   async list(cwd: string): Promise<SessionInfoRecord[]> {
     const [files, project] = await Promise.all([
       sessionFilesWithMtime(sessionsRoot(cwd)),

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { useRuntimeStore } from "./index";
+import { emptyThread } from "./event-fold";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
 
@@ -339,6 +340,36 @@ describe("runtime session actions", () => {
     await useRuntimeStore.getState().abort();
     expect(useRuntimeStore.getState().working).toBe(false);
     expect(useRuntimeStore.getState().status).toBe("ready");
+  });
+
+  it("clears active conversation state when deleting the active session", async () => {
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: "active-to-delete",
+      sessions: [{ id: "active-to-delete", cwd: "/workspace", created_at: "2026-01-01T00:00:00Z" }],
+      historyCursor: "cursor-123",
+      historyHasMore: true,
+      thread: { blocks: [{ id: "b1", kind: "text", text: "draft" } as never], index: { b1: 0 }, loaded: true },
+      pendingQuestionnaire: { id: "q1", questions: [] } as never,
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/sessions/active-to-delete")) return jsonResponse({ ok: true });
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().deleteSession("active-to-delete");
+
+    const state = useRuntimeStore.getState();
+    expect(state.activeSessionId).toBeNull();
+    expect(state.sessions).toEqual([]);
+    expect(state.historyCursor).toBeNull();
+    expect(state.historyHasMore).toBe(false);
+    expect(state.thread).toEqual(emptyThread());
+    expect(state.pendingQuestionnaire).toBeNull();
+    expect(state.status).toBe("ready");
+    vi.unstubAllGlobals();
   });
 
   it("removes deleted durable sessions instead of resurrecting them as optimistic", async () => {

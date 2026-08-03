@@ -1,6 +1,6 @@
-import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { conversationEventHub } from "../events/conversation-event-hub.js";
 import { NodeSessionService } from "./node-session-service.js";
@@ -338,6 +338,35 @@ describe("Node session lifecycle", () => {
     expect(publish).toHaveBeenCalledWith(blankCwd, (created as { id: string }).id, expect.objectContaining({ type: "session.replaced" }));
     publish.mockRestore();
     await blankService.shutdownAll();
+  });
+
+  it("deletes a session whose JSONL appears only after runtime cleanup", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions();
+    const sessionId = "flush-late";
+    const file = join(cwd, ".pi-science", "sessions", `${sessionId}.jsonl`);
+    // An active runtime whose JSONL is written only when it is torn down —
+    // the flush the delete path must wait for before it re-reads the disk.
+    (service as unknown as { runtimes: Map<string, unknown> }).runtimes.set(
+      `${resolve(cwd)}\0${sessionId}`,
+      { activeSessionId: sessionId, busy: false, closing: false } as never,
+    );
+    vi.spyOn(service as unknown as { cleanupRuntime: () => Promise<void> }, "cleanupRuntime").mockImplementation(async () => {
+      await writeFile(file, `${JSON.stringify({ type: "session", id: sessionId, cwd, timestamp: new Date().toISOString() })}\n`, "utf8");
+    });
+    await expect(service.delete(sessionId, cwd)).resolves.toEqual({ success: true });
+    await expect(stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+    // cleanupRuntime is mocked here, so the entry stays in the map — drop it
+    // before shutdownAll so the teardown does not touch a fake runtime.
+    (service as unknown as { runtimes: Map<string, unknown> }).runtimes.delete(`${resolve(cwd)}\0${sessionId}`);
+    await service.shutdownAll();
+  });
+
+  it("treats a ghost session (no file, no runtime) as successfully deleted", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions();
+    await expect(service.delete("ghost-session", cwd)).resolves.toEqual({ success: true });
+    await service.shutdownAll();
   });
 });
 

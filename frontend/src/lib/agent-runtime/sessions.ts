@@ -8,9 +8,14 @@ import { useRuntimeStore } from "./store";
  *  the store actions add on create/fork and drop on delete/remove. */
 export const optimisticSessionIds = new Set<string>();
 
+/** Monotonic request counter so a stale in-flight list cannot overwrite a
+ *  fresher one that resolved later (slow first request vs fast second). */
+let sessionsListVersion = 0;
+
 export async function loadSessionsInternal(cwdOverride?: string): Promise<SessionInfo[]> {
   const state = useRuntimeStore.getState();
   const requestedCwd = cwdOverride ?? state.cwd;
+  const requestVersion = ++sessionsListVersion;
   if (cwdOverride && state.cwd !== cwdOverride) {
     useRuntimeStore.setState({ cwd: cwdOverride, sessions: [], activeSessionId: null });
   }
@@ -19,6 +24,12 @@ export async function loadSessionsInternal(cwdOverride?: string): Promise<Sessio
     const fromDisk = await client.listSessions(requestedCwd);
     const current = useRuntimeStore.getState();
     if (current.cwd !== requestedCwd) return [];
+    if (requestVersion !== sessionsListVersion) {
+      // A newer load superseded this one. Never overwrite the fresher list,
+      // but return the current authoritative list (callers like ProjectsLayout
+      // drive auto-navigation from the returned sessions).
+      return current.sessions.slice(0, 50);
+    }
     // Inject names from localStorage
     const named = fromDisk.map((s: SessionInfo) => ({
       ...s,

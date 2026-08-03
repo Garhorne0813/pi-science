@@ -206,6 +206,10 @@ describe("native Node conversation routes", () => {
     expect(deleted.statusCode).toBe(200);
     await expect(access(join(cwd, ".pi-science", "sessions", "session-b.jsonl"))).rejects.toThrow();
     await expect(readFile(join(cwd, ".pi-science", "sessions", "session-a.jsonl"), "utf8")).resolves.toContain('"id":"session-a"');
+    // Deleting a session that never existed is idempotent success (ghost).
+    const ghost = await server.inject({ method: "DELETE", url: `/api/sessions/ghost-no-such?${query}` });
+    expect(ghost.statusCode).toBe(200);
+    expect(ghost.json()).toMatchObject({ ok: true });
 
     const log = await readFile(process.env.FAKE_PI_LOG!, "utf8");
     expect(log).toContain('"type":"set_model","provider":"openrouter","modelId":"openai/gpt-5.1"');

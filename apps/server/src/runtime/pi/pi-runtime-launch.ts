@@ -170,6 +170,9 @@ export function seedWorkspaceAssets(cwd: string): string[] {
   replaceForeignEntry(targetSkills);
   mkdirSync(targetSkills, { recursive: true });
   const result: string[] = [];
+  // The packaged checkout may ship without a skills/ directory (source-only
+  // archives). Missing project skills must not break session creation.
+  if (!existsSync(sourceSkills)) return result;
   for (const name of readdirSync(sourceSkills, { withFileTypes: true })) {
     if (!name.isDirectory()) continue;
     const skillMarkdown = join(sourceSkills, name.name, "SKILL.md");

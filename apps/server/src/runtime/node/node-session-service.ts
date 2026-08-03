@@ -390,13 +390,21 @@ export class NodeSessionService {
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
     return this.withLock(`${cwd}\0${sessionId}`, async () => {
       const runtime = this.runtimes.get(runtimeKey(cwd, sessionId));
-      const path = await this.repository.findPath(cwd, sessionId);
       if (runtime?.activeSessionId === sessionId) {
         if (runtime.busy) return { success: false, code: "busy", error: "cannot delete a conversation while it is running" };
+        // Stop the runtime first: its JSONL is flushed by the dying process, so
+        // the on-disk file may only exist (or be rewritten) after cleanup.
         await this.cleanupRuntime(runtime);
       }
+      // After cleanup the disk is authoritative. Invalidate the scan cache so
+      // the lookup below cannot be served from (or overwritten by) a stale
+      // in-flight scan that predates the flush.
+      invalidateSessionFileCache(cwd);
+      const path = await this.repository.findPathOnDisk(cwd, sessionId);
       if (!path) {
-        return runtime?.activeSessionId === sessionId ? { success: true } : { success: false, code: "not_found", error: "session not found" };
+        // The file is already gone (ghost 404) or was never durable — nothing
+        // left to delete, so the delete itself succeeded.
+        return { success: true };
       }
       try { await unlink(path); }
       catch (error) { return { success: false, code: "delete_failed", error: String(error) }; }
