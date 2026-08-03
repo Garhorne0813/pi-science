@@ -34,6 +34,43 @@ PROMPT_TEMPLATE = (
 )
 
 
+def load_dataset_tag(data: str | Path) -> str:
+    """Return the dataset tag recorded in a problems payload ("preview" when absent).
+
+    Only the JSON produced by fetch_dataset.py carries the field; inline arrays
+    and synthetic fixtures default to "preview".
+    """
+    path = Path(data)
+    if not path.exists():
+        return "preview"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "preview"
+    if isinstance(payload, dict) and isinstance(payload.get("dataset"), str):
+        return payload["dataset"]
+    return "preview"
+
+
+def build_prompt(problem: dict, dataset: str = "preview", cache_dir: str | None = None) -> str:
+    """Build the per-sample prompt; for the gated full set, point at the local
+    data zip for the problem so models with file access can analyze it.
+
+    If the zip is not present in the cache, say so explicitly instead of
+    referencing a path that does not exist."""
+    prompt = PROMPT_TEMPLATE.format(question=problem["question"])
+    if dataset == "full" and cache_dir is not None:
+        zip_path = Path(cache_dir) / "data" / f"{problem['id']}.zip"
+        if zip_path.is_file():
+            prompt += (
+                f"\n\n[Data files for this problem are available in the local cache at "
+                f"{zip_path}; use them if you can access files.]"
+            )
+        else:
+            prompt += f"\n\n[data file not downloaded: {problem['id']}.zip]"
+    return prompt
+
+
 def load_problems(data: str | Path, limit: int | None) -> list[dict]:
     path = Path(data)
     if not path.exists() and not data.startswith("["):
@@ -63,6 +100,8 @@ def make_client(args: argparse.Namespace) -> LLMClient:
 
 def run(args: argparse.Namespace) -> Path:
     problems = load_problems(args.data, args.limit)
+    dataset = load_dataset_tag(args.data)
+    cache_dir = str(Path(args.data).resolve().parent)
     client = make_client(args)
     out_dir = Path(args.out) if args.out else (ROOT / "runs" / time.strftime("%Y%m%dT%H%M%SZ"))
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -71,7 +110,7 @@ def run(args: argparse.Namespace) -> Path:
     with open(record_path, "w", encoding="utf-8") as handle:
         for problem in problems:
             sample_id = problem["id"]
-            prompt = PROMPT_TEMPLATE.format(question=problem["question"])
+            prompt = build_prompt(problem, dataset=dataset, cache_dir=cache_dir)
             try:
                 response, usage, started, finished = client.complete(prompt, args.seed)
                 status = "ok"
@@ -109,6 +148,7 @@ def run(args: argparse.Namespace) -> Path:
         "seed": args.seed,
         "smoke": args.smoke,
         "limit": args.limit,
+        "dataset": dataset,
         "problems": len(problems),
         "record_count": len(problems),
         "started_at_utc": datetime.datetime.now(datetime.UTC).isoformat(),

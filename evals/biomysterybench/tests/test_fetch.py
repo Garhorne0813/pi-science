@@ -27,6 +27,13 @@ class FakeResponse:
     def raise_for_status(self) -> None:
         return None
 
+    def iter_content(self, chunk_size: int = 1 << 20):
+        for index in range(0, len(self.content), chunk_size):
+            yield self.content[index : index + chunk_size]
+
+    def close(self) -> None:
+        return None
+
 
 def make_zip_bytes() -> bytes:
     buffer = io.BytesIO()
@@ -53,7 +60,7 @@ def fake_downloads(monkeypatch: pytest.MonkeyPatch) -> dict[str, bytes]:
         "problems.parquet": b"not-a-real-parquet",
         "data.zip": make_zip_bytes(),
     }
-    monkeypatch.setattr(fetch_dataset.requests, "get", lambda url, timeout: FakeResponse(contents[url.rsplit("/", 1)[-1]]))
+    monkeypatch.setattr(fetch_dataset.requests, "get", lambda url, timeout, stream=False: FakeResponse(contents[url.rsplit("/", 1)[-1]]))
 
     real_sha256_file = fetch_dataset.sha256_file
 
@@ -111,7 +118,7 @@ class TestFetchHashMismatch:
             "problems.parquet": b"bytes",
             "data.zip": make_zip_bytes(),
         }
-        monkeypatch.setattr(fetch_dataset.requests, "get", lambda url, timeout: FakeResponse(contents[url.rsplit("/", 1)[-1]]))
+        monkeypatch.setattr(fetch_dataset.requests, "get", lambda url, timeout, stream=False: FakeResponse(contents[url.rsplit("/", 1)[-1]]))
         monkeypatch.setattr(fetch_dataset, "sha256_file", lambda path: "0" * 64)
 
         with pytest.raises(SystemExit) as exc:
@@ -126,7 +133,7 @@ class TestFetchHashMismatch:
             "problems.parquet": b"bytes",
             "data.zip": make_zip_bytes(),
         }
-        monkeypatch.setattr(fetch_dataset.requests, "get", lambda url, timeout: FakeResponse(contents[url.rsplit("/", 1)[-1]]))
+        monkeypatch.setattr(fetch_dataset.requests, "get", lambda url, timeout, stream=False: FakeResponse(contents[url.rsplit("/", 1)[-1]]))
         monkeypatch.setattr(fetch_dataset, "sha256_file", lambda path: "0" * 64)
 
         base = fetch_dataset.fetch(tmp_path, verify=False)

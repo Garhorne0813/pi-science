@@ -19,5 +19,22 @@
     }
   },
   "score_version": "0.1.0",
-  "note": "fetch_dataset.py verifies downloaded files against the sha256 values above and records observed hashes in the fetch manifest under the cache directory."
+  "note": "fetch_dataset.py verifies downloaded files against the sha256 values above and records observed hashes in the fetch manifest under the cache directory.",
+  "datasets": {
+    "full": {
+      "dataset": "Anthropic/BioMysteryBench-full",
+      "revision": "b5a889c4757214ec9a6ade876b734f920a7799db",
+      "retrieved_at": "2026-08-03",
+      "gated": true,
+      "license": "cc-by-4.0",
+      "license_terms": "evaluation-and-benchmarking-only (same terms as the preview dataset): benchmark content (problem statements, answer rubrics, task formulation) may be used to construct evaluation prompts at inference time and to publish benchmark results with attribution to Anthropic; it must NOT be used to train, fine-tune, reinforce, or distill any model. Repository-local fixtures are synthetic and not derived from the benchmark.",
+      "files": {
+        "problems.csv": {
+          "size": 63421,
+          "sha256": "2148d3b63842a410644924525f0ad22d7e338d0beb87ea18ba6540497381dbb9"
+        }
+      },
+      "note": "gated:auto — needs an authenticated HuggingFace account that has accepted the dataset terms; per-problem data files (data/hbNNN.zip) are listed via the tree API at fetch time and their observed sha256 recorded in the cache fetch-manifest."
+    }
+  }
 }
