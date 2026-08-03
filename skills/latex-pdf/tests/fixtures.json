@@ -1,0 +1,12 @@
+[
+  {"prompt": "Generate a two-page paper draft as a PDF with equations", "expected_trigger": true, "trigger_terms": ["paper", "pdf", "equations"]},
+  {"prompt": "Compile main.tex into a PDF report", "expected_trigger": true, "trigger_terms": ["compile", "tex", "pdf"]},
+  {"prompt": "Write a resume as a .tex file", "expected_trigger": true, "trigger_terms": ["resume", "tex"]},
+  {"prompt": "Make a beamer slide deck about our latest results", "expected_trigger": true, "trigger_terms": ["beamer", "slides"]},
+  {"prompt": "Fix the compilation error in thesis.tex", "expected_trigger": true, "trigger_terms": ["compilation error", "tex"]},
+  {"prompt": "Summarize this PDF paper into bullet points", "expected_trigger": false, "trigger_terms": ["latex", "tex", "compile"]},
+  {"prompt": "Convert results.csv to xlsx", "expected_trigger": false, "trigger_terms": ["latex", "pdf"]},
+  {"prompt": "Rename main.tex to paper.tex", "expected_trigger": false, "trigger_terms": ["latex", "compile"]},
+  {"prompt": "Write quick meeting notes in markdown", "expected_trigger": false, "trigger_terms": ["latex", "pdf", "tex"]},
+  {"prompt": "Create a poster about the phase analysis results", "expected_trigger": true, "trigger_terms": ["poster", "results"]}
+]
