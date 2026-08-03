@@ -1,7 +1,7 @@
 /** Recovery paths: authoritative REST re-reads after a stream gap, a late
  *  stream attach or a transport failure, and the missing-session reset. */
 
-import { clearCachedMessages, clearSessionName, getClient, type PiScienceClient } from "../client/pi-science-client";
+import { clearCachedMessages, clearAiTitle, clearSessionName, getClient, type PiScienceClient } from "../client/pi-science-client";
 import { emptyThread, mergeHistoryWithLive, resetTurnBuffer, threadFromMessages } from "./event-fold";
 import { generations, turnState } from "./generations";
 import { backfillSessionName } from "./naming";
@@ -265,6 +265,7 @@ export function recoverMissingSession(sessionId: string, cwd: string, client?: P
   clearCachedMessages(cwd, sessionId);
   client?.clearCursor(cwd, sessionId);
   clearSessionName(cwd, sessionId);
+  clearAiTitle(cwd, sessionId);
   useRuntimeStore.setState({
     activeSessionId: null,
     sessions: current.sessions.filter((session) => session.id !== sessionId),

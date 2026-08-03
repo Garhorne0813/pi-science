@@ -8,7 +8,7 @@
 
 import { clearCachedMessages, readCachedMessages } from "./message-cache";
 import * as rest from "./rest";
-import { clearSessionName } from "./session-names";
+import { clearAiTitle, clearAiTitleAttempted, clearSessionName } from "./session-names";
 import { SseTransport } from "./sse-transport";
 import type { HistoryMessage, InteractionResponse, PiScienceEvent, SessionInfo, SessionMessagePage, SessionState } from "./types";
 
@@ -22,7 +22,7 @@ export type {
   SessionState,
 } from "./types";
 export { clampThinkingLevel, conversationModelOptions } from "./models";
-export { clearSessionName, deriveSessionName, getSessionName, moveSessionName, setSessionName } from "./session-names";
+export { aiTitleAttemptedAt, clearAiTitle, clearAiTitleAttempted, clearSessionName, deriveSessionName, getSessionName, hasAiTitle, markAiTitle, markAiTitleAttempted, moveSessionName, setSessionName } from "./session-names";
 export { clearCachedMessages } from "./message-cache";
 
 // ── Client ──
@@ -117,6 +117,8 @@ export class PiScienceClient {
       this.transport.clearCursor(cwd, sessionId);
       clearCachedMessages(cwd, sessionId);
       clearSessionName(cwd, sessionId);
+      clearAiTitle(cwd, sessionId);
+      clearAiTitleAttempted(cwd, sessionId);
     }
   }
 
@@ -134,6 +136,11 @@ export class PiScienceClient {
     cwd?: string,
   ): Promise<void> {
     return rest.respondToInteraction(this.baseUrl, sessionId, requestId, response, cwd);
+  }
+
+  /** Ask the control plane to generate an AI title via an isolated Pi runtime. */
+  async generateSessionTitle(sessionId: string, cwd: string): Promise<string | null> {
+    return rest.generateSessionTitle(this.baseUrl, sessionId, cwd);
   }
 
   // ── SSE ──

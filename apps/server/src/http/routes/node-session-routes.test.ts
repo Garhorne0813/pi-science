@@ -89,6 +89,47 @@ function app() {
 }
 
 describe("native Node conversation routes", () => {
+  it("generates an AI title for an existing session and 404s unknown sessions", async () => {
+    const cwd = await workspaceWithSessions("session-title");
+    const aiTitleService = {
+      async generateTitle(workspace: string, sessionId: string) {
+        expect(workspace).toBe(cwd);
+        expect(sessionId).toBe("session-title");
+        return "AI 标题";
+      },
+    };
+    const server = Fastify({ logger: false });
+    registerNodeSessionRoutes(server, nodeSessionService, sessionRepository, aiTitleService as never);
+    const ok = await server.inject({ method: "POST", url: `/api/sessions/session-title/title?cwd=${encodeURIComponent(cwd)}` });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toEqual({ ok: true, title: "AI 标题" });
+    const missing = await server.inject({ method: "POST", url: `/api/sessions/no-such/title?cwd=${encodeURIComponent(cwd)}` });
+    expect(missing.statusCode).toBe(404);
+    await server.close();
+  });
+
+  it("rejects a title request for an invalid workspace with 403", async () => {
+    const aiTitleService = {
+      async generateTitle() {
+        throw new Error("must not be reached");
+      },
+    };
+    const server = Fastify({ logger: false });
+    registerNodeSessionRoutes(server, nodeSessionService, sessionRepository, aiTitleService as never);
+    const response = await server.inject({ method: "POST", url: "/api/sessions/session-title/title?cwd=/definitely/not/a/workspace" });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ ok: false, code: "workspace_invalid" });
+    await server.close();
+  });
+
+  it("returns 404 when the title service is not configured", async () => {
+    const cwd = await workspaceWithSessions("session-title");
+    const server = app();
+    const response = await server.inject({ method: "POST", url: `/api/sessions/session-title/title?cwd=${encodeURIComponent(cwd)}` });
+    expect(response.statusCode).toBe(404);
+    await server.close();
+  });
+
   it("maps stable Pi Orbit failures to actionable HTTP responses", async () => {
     for (const [code, statusCode] of [
       ["project_trust_required", 409],
