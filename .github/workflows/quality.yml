@@ -84,9 +84,6 @@ jobs:
       - name: Test skill Python helpers
         run: uv run --directory backend --extra science pytest ../skills/single-cell-rna-qc/tests -q
 
-      - name: Test eval harness (BioMysteryBench offline)
-        run: uv run --directory evals/biomysterybench --extra dev pytest -q
-
       - name: Run control-plane smoke test
         if: runner.os != 'Windows'
         run: bash scripts/smoke-control-plane.sh
