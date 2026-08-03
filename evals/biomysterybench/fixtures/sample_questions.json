@@ -1,0 +1,23 @@
+[
+  {
+    "id": "syn-001",
+    "question": "Synthetic contract sample: how many rows does the provided CSV contain? (answer: 42)",
+    "answer_rubric": "The answer must state the number 42.",
+    "allowed_domains": "",
+    "human_solvable": true
+  },
+  {
+    "id": "syn-002",
+    "question": "Synthetic contract sample: name the organism in the provided sequence data. (answer: Escherichia coli)",
+    "answer_rubric": "The answer must contain Escherichia coli.",
+    "allowed_domains": "",
+    "human_solvable": true
+  },
+  {
+    "id": "syn-003",
+    "question": "Synthetic contract sample: report the p-value threshold used. (answer: 0.05)",
+    "answer_rubric": "The answer must mention a threshold of 0.05.",
+    "allowed_domains": "",
+    "human_solvable": true
+  }
+]
