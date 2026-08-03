@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { INSPECTOR_MAX, INSPECTOR_MIN, useUiStore } from "@/lib/ui";
 import { cn } from "@/lib/ui";
 
@@ -30,6 +30,7 @@ export function RightPane({
   // While dragging, the live width lives here; the store (and localStorage)
   // are only written on pointer-up.
   const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const dragWidthRef = useRef<number | null>(null);
   const dragging = dragWidth !== null;
 
   // Maximized never outlives the pane — closing it returns the next pane
@@ -43,29 +44,45 @@ export function RightPane({
     );
 
   const onDividerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
+    dragWidthRef.current = inspectorWidth;
     setDragWidth(inspectorWidth);
   };
 
   const onDividerPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragging) return;
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
     // The pane ends at the window's right edge, so the width is whatever is
     // right of the pointer.
     const w = window.innerWidth - e.clientX;
     if (w < COLLAPSE_BELOW) {
       // Snap closed — the pane unmounts, which also ends the drag.
+      dragWidthRef.current = null;
       setDragWidth(null);
       onClose();
       return;
     }
-    setDragWidth(clamp(w));
+    const nextWidth = clamp(w);
+    dragWidthRef.current = nextWidth;
+    setDragWidth(nextWidth);
   };
 
-  const onDividerPointerUp = () => {
-    if (!dragging) return;
-    setInspectorWidth(dragWidth);
+  const onDividerPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    const nextWidth = dragWidthRef.current;
+    if (nextWidth !== null) setInspectorWidth(nextWidth);
+    dragWidthRef.current = null;
     setDragWidth(null);
+  };
+
+  const onDividerKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const delta = e.key === "ArrowLeft" ? 16 : -16;
+    setInspectorWidth(clamp(inspectorWidth + delta));
   };
 
   if (inspectorMaximized) {
@@ -82,11 +99,18 @@ export function RightPane({
       {/* Drag divider: resize within [INSPECTOR_MIN, INSPECTOR_MAX]; dragging
           far right snaps the pane closed. */}
       <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整预览栏宽度"
+        aria-valuemin={INSPECTOR_MIN}
+        aria-valuemax={INSPECTOR_MAX}
+        aria-valuenow={dragWidth ?? inspectorWidth}
         onPointerDown={onDividerPointerDown}
         onPointerMove={onDividerPointerMove}
         onPointerUp={onDividerPointerUp}
         onPointerCancel={onDividerPointerUp}
-        className="group absolute inset-y-0 left-0 z-10 w-[5px] cursor-col-resize"
+        onKeyDown={onDividerKeyDown}
+        className="group absolute inset-y-0 left-0 z-10 w-2 cursor-col-resize touch-none select-none"
       >
         <div
           className={cn(
