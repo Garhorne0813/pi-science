@@ -109,7 +109,7 @@ describe("AiTitleService", () => {
       },
     };
     process.env.PI_CLI_PATH = "/nonexistent-pi-cli";
-    const factory = new PiTitleRuntimeFactory(manager as never);
+    const factory = new PiTitleRuntimeFactory(manager as never, { environment: async () => ({}) } as never);
     const runtime = await factory.start(cwd);
     await runtime.dispose();
     expect(stopped).toHaveLength(1);

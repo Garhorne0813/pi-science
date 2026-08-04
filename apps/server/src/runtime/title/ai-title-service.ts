@@ -27,9 +27,17 @@ export interface TitleRuntime {
 
 /** Production factory: a real Pi Orbit runtime via PiManager. */
 export class PiTitleRuntimeFactory {
-  private readonly environments = new WorkspaceEnvironmentService();
+  private readonly environments: WorkspaceEnvironmentService;
 
-  constructor(private readonly manager: PiManager) {}
+  constructor(
+    private readonly manager: PiManager,
+    environments?: WorkspaceEnvironmentService,
+  ) {
+    // Injectable for tests: the real service provisions a python venv in the
+    // workspace (spawn python -m venv), which is far too slow for CI units
+    // that only verify dispose routing.
+    this.environments = environments ?? new WorkspaceEnvironmentService();
+  }
 
   async start(cwd: string): Promise<TitleRuntime> {
     const config = loadDefaultPiConfig();
