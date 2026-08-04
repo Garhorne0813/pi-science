@@ -35,6 +35,31 @@ const questionnaire: PendingQuestionnaire = {
   ],
 };
 
+const outOfOrderQuestionnaire: PendingQuestionnaire = {
+  toolCallId: "call-out-of-order",
+  questions: [
+    questionnaire.questions[0]!,
+    {
+      question: "Which transport should we use?",
+      header: "Transport",
+      multiSelect: false,
+      options: [
+        { label: "Local", description: "Run beside the current session." },
+        { label: "Remote", description: "Run on a remote worker." },
+      ],
+    },
+    {
+      question: "Which output format should we use?",
+      header: "Format",
+      multiSelect: false,
+      options: [
+        { label: "JSON", description: "Structured machine-readable output." },
+        { label: "CSV", description: "Tabular output." },
+      ],
+    },
+  ],
+};
+
 describe("QuestionnairePrompt", () => {
   it("answers through the accordion with auto-advance and submits a structured payload", () => {
     const onRespond = vi.fn();
@@ -83,6 +108,75 @@ describe("QuestionnairePrompt", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onRespond).toHaveBeenLastCalledWith({ cancelled: true });
+  });
+
+  it("toggles the custom editor and clears its draft from the inner cancel", () => {
+    const onRespond = vi.fn();
+    const singleQuestion = { ...questionnaire, toolCallId: "call-custom-toggle", questions: [questionnaire.questions[0]!] };
+    render(<QuestionnairePrompt questionnaire={singleQuestion} interaction={interaction} onRespond={onRespond} />);
+
+    const customToggle = screen.getByRole("button", { name: /Type something/ });
+    expect(customToggle).toHaveAttribute("aria-expanded", "false");
+    expect(customToggle).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(customToggle);
+    expect(customToggle).toHaveAttribute("aria-expanded", "true");
+    expect(customToggle).toHaveAttribute("aria-pressed", "true");
+    const customTextarea = screen.getByRole("textbox", { name: "Your answer" });
+    fireEvent.change(customTextarea, { target: { value: "A draft to discard" } });
+
+    // The same control closes and reopens the editor without losing its draft.
+    fireEvent.click(customToggle);
+    expect(customToggle).toHaveAttribute("aria-expanded", "false");
+    expect(customToggle).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(customToggle);
+    expect(screen.getByRole("textbox", { name: "Your answer" })).toHaveValue("A draft to discard");
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]!);
+    expect(customToggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(customToggle);
+    expect(screen.getByRole("textbox", { name: "Your answer" })).toHaveValue("");
+  });
+
+  it("advances to the first incomplete question and only opens review when all are answered", () => {
+    const onRespond = vi.fn();
+    render(<QuestionnairePrompt questionnaire={outOfOrderQuestionnaire} interaction={interaction} onRespond={onRespond} />);
+
+    // Answer Q2 first: auto-advance must return to Q1, not scan only forward.
+    fireEvent.click(screen.getByRole("button", { name: /Which transport should we use\?/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Remote.*Run on a remote worker/ }));
+    expect(screen.getByRole("button", { name: /Fast.*Prioritize turnaround time/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Fast.*Prioritize turnaround time/ }));
+    expect(screen.getByRole("button", { name: /JSON.*Structured machine-readable output/ })).toBeInTheDocument();
+
+    // Editing an already completed question must not auto-advance away from it.
+    fireEvent.click(screen.getByRole("button", { name: /Which execution mode should we use\?/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Safe.*Prioritize conservative changes/ }));
+    expect(screen.getByRole("button", { name: /Safe.*Prioritize conservative changes/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /JSON.*Structured machine-readable output/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Which output format should we use\?/ }));
+    fireEvent.click(screen.getByRole("button", { name: /JSON.*Structured machine-readable output/ }));
+    expect(screen.getByRole("button", { name: "Hide review" })).toBeInTheDocument();
+  });
+
+  it("names the progressbar and textareas and links accordion headers to panels", () => {
+    const onRespond = vi.fn();
+    const singleQuestion = { ...questionnaire, toolCallId: "call-a11y", questions: [questionnaire.questions[0]!] };
+    render(<QuestionnairePrompt questionnaire={singleQuestion} interaction={interaction} onRespond={onRespond} />);
+
+    expect(screen.getByRole("progressbar")).toHaveAccessibleName("0 of 1 answered");
+    const header = screen.getByRole("button", { name: /Which execution mode should we use\?/ });
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    const panelId = header.getAttribute("aria-controls");
+    expect(panelId).toBeTruthy();
+    expect(document.getElementById(panelId!)).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Type something/ }));
+    expect(screen.getByRole("textbox", { name: "Your answer" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Notes for this question/ }));
+    expect(screen.getByRole("textbox", { name: "Notes for this question" })).toBeInTheDocument();
   });
 
   it("toggles the answer summary and jumps back to a question from it", () => {

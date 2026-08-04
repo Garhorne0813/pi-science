@@ -73,12 +73,18 @@ export function QuestionnairePrompt({
     setAnswers((previous) => previous.map((item, itemIndex) => itemIndex === index ? answer : item));
   };
 
-  // After the FIRST answer to a question, open the next unanswered one so the
-  // user flows forward instead of being stuck on the question they finished.
-  const advanceIfFirstAnswer = (index: number, wasAnswered: boolean) => {
+  // After the FIRST answer to a question, open the first unanswered one so an
+  // out-of-order answer still returns to the earliest incomplete question.
+  const advanceIfFirstAnswer = (index: number, wasAnswered: boolean, nextAnswer: QuestionnaireAnswer) => {
     if (wasAnswered) return;
-    const nextUnanswered = answers.findIndex((answer, itemIndex) => itemIndex > index && !answer);
-    if (nextUnanswered >= 0) setOpenIndex(nextUnanswered);
+    const nextAnswers = answers.map((answer, itemIndex) => itemIndex === index ? nextAnswer : answer);
+    const nextUnanswered = nextAnswers.findIndex((answer) => !answer);
+    if (nextUnanswered >= 0) {
+      setSummaryOpen(false);
+      setOpenIndex(nextUnanswered);
+    } else {
+      setSummaryOpen(true);
+    }
   };
 
   const chooseOption = (optionIndex: number) => {
@@ -101,49 +107,58 @@ export function QuestionnairePrompt({
       setCustomOpen((previous) => previous.map((value, index) => index === openIndex ? false : value));
       return;
     }
-    updateAnswer(openIndex, {
+    const nextAnswer: QuestionnaireAnswer = {
       questionIndex: openIndex,
       question: question.question,
       kind: "option",
       answer: option.label,
       ...(option.preview ? { preview: option.preview } : {}),
-    });
+    };
+    updateAnswer(openIndex, nextAnswer);
     setCustomOpen((previous) => previous.map((value, index) => index === openIndex ? false : value));
-    advanceIfFirstAnswer(openIndex, wasAnswered);
+    advanceIfFirstAnswer(openIndex, wasAnswered, nextAnswer);
   };
 
-  const openCustomAnswer = () => {
-    setCustomOpen((previous) => previous.map((value, index) => index === openIndex ? true : value));
-    if (answers[openIndex]?.kind === "custom") {
-      setCustomDrafts((previous) => previous.map((value, index) => index === openIndex ? (answers[openIndex]?.answer ?? value) : value));
+  const toggleCustomAnswer = (index: number) => {
+    const isOpen = Boolean(customOpen[index]);
+    setCustomOpen((previous) => previous.map((value, itemIndex) => itemIndex === index ? !value : value));
+    if (!isOpen && answers[index]?.kind === "custom") {
+      setCustomDrafts((previous) => previous.map((value, itemIndex) => itemIndex === index ? (answers[index]?.answer ?? value) : value));
     }
   };
 
-  const saveCustomAnswer = () => {
-    const question = questions[openIndex];
-    const wasAnswered = Boolean(answers[openIndex]);
-    updateAnswer(openIndex, {
-      questionIndex: openIndex,
+  const cancelCustomAnswer = (index: number) => {
+    setCustomDrafts((previous) => previous.map((value, itemIndex) => itemIndex === index ? "" : value));
+    setCustomOpen((previous) => previous.map((value, itemIndex) => itemIndex === index ? false : value));
+  };
+
+  const saveCustomAnswer = (index: number) => {
+    const question = questions[index];
+    const wasAnswered = Boolean(answers[index]);
+    const nextAnswer: QuestionnaireAnswer = {
+      questionIndex: index,
       question: question.question,
       kind: "custom",
-      answer: customDrafts[openIndex] ?? "",
-    });
-    setCustomOpen((previous) => previous.map((value, index) => index === openIndex ? false : value));
-    advanceIfFirstAnswer(openIndex, wasAnswered);
+      answer: customDrafts[index] ?? "",
+    };
+    updateAnswer(index, nextAnswer);
+    setCustomOpen((previous) => previous.map((value, itemIndex) => itemIndex === index ? false : value));
+    advanceIfFirstAnswer(index, wasAnswered, nextAnswer);
   };
 
   const markEmptyMulti = () => {
     const question = questions[openIndex];
     if (!question.multiSelect) return;
     const wasAnswered = Boolean(answers[openIndex]);
-    updateAnswer(openIndex, {
+    const nextAnswer: QuestionnaireAnswer = {
       questionIndex: openIndex,
       question: question.question,
       kind: "multi",
       answer: null,
       selected: [],
-    });
-    advanceIfFirstAnswer(openIndex, wasAnswered);
+    };
+    updateAnswer(openIndex, nextAnswer);
+    advanceIfFirstAnswer(openIndex, wasAnswered, nextAnswer);
   };
 
   const toggleQuestion = (index: number) => {
@@ -169,6 +184,7 @@ export function QuestionnairePrompt({
   };
 
   const cancel = () => onRespond({ cancelled: true });
+  const componentId = interaction.requestId.replace(/[^a-zA-Z0-9_-]/g, "-");
 
   return (
     <section data-request-id={interaction.requestId} className="overflow-hidden rounded-card border border-accent/35 bg-surface shadow-card animate-fadeIn" aria-label={t("questionnaire.title")}>
@@ -182,7 +198,7 @@ export function QuestionnairePrompt({
             <div className="mt-0.5 text-xs text-muted">{t("questionnaire.progress", { answered: answeredCount, total: questions.length })}</div>
           </div>
         </div>
-        <div className="mt-3 h-1 overflow-hidden rounded-full bg-surface-2" role="progressbar" aria-valuemin={0} aria-valuemax={questions.length} aria-valuenow={answeredCount}>
+        <div className="mt-3 h-1 overflow-hidden rounded-full bg-surface-2" role="progressbar" aria-label={t("questionnaire.progress", { answered: answeredCount, total: questions.length })} aria-valuemin={0} aria-valuemax={questions.length} aria-valuenow={answeredCount}>
           <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${(answeredCount / questions.length) * 100}%` }} />
         </div>
       </div>
@@ -193,12 +209,16 @@ export function QuestionnairePrompt({
           const open = openIndex === index;
           const answered = Boolean(answers[index]);
           const currentAnswer = answers[index] ?? null;
+          const headerId = `questionnaire-header-${componentId}-${index}`;
+          const panelId = `questionnaire-panel-${componentId}-${index}`;
           return (
             <div key={`${question.header}-${index}`} className={cn(open && "bg-surface-2/25")}>
               <button
+                id={headerId}
                 type="button"
                 onClick={() => toggleQuestion(index)}
                 aria-expanded={open}
+                aria-controls={panelId}
                 className="flex w-full items-center gap-2.5 px-4 py-3 text-left"
               >
                 <span className={cn(
@@ -214,8 +234,8 @@ export function QuestionnairePrompt({
                 <ChevronDown size={14} className={cn("shrink-0 text-muted transition-transform", open && "rotate-180")} />
               </button>
 
-              {open && (
-                <div className="px-4 pb-4 sm:px-5">
+              <div id={panelId} role="region" aria-labelledby={headerId} hidden={!open} className="px-4 pb-4 sm:px-5">
+                {open && (
                   <div className="mt-1 grid gap-2">
                     {question.options.map((option, optionIndex) => {
                       const selected = question.multiSelect
@@ -260,8 +280,9 @@ export function QuestionnairePrompt({
 
                     <button
                       type="button"
-                      aria-pressed={currentAnswer?.kind === "custom" || customOpen[index]}
-                      onClick={openCustomAnswer}
+                      aria-expanded={customOpen[index]}
+                      aria-pressed={customOpen[index]}
+                      onClick={() => toggleCustomAnswer(index)}
                       className={cn(
                         "flex w-full items-center gap-3 rounded-input border border-dashed px-3 py-2.5 text-left text-sm transition-colors",
                         currentAnswer?.kind === "custom" || customOpen[index] ? "border-accent bg-accent/10 text-text" : "border-border text-muted hover:border-accent/55 hover:text-text",
@@ -273,8 +294,9 @@ export function QuestionnairePrompt({
 
                     {customOpen[index] && (
                       <div className="rounded-input border border-accent/30 bg-accent/5 p-3">
-                        <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-text"><PenLine size={13} className="text-accent" />{t("questionnaire.customLabel")}</div>
+                        <label htmlFor={`questionnaire-custom-${componentId}-${index}`} className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-text"><PenLine size={13} className="text-accent" />{t("questionnaire.customLabel")}</label>
                         <textarea
+                          id={`questionnaire-custom-${componentId}-${index}`}
                           autoFocus
                           value={customDrafts[index] ?? ""}
                           onChange={(event) => setCustomDrafts((previous) => previous.map((value, itemIndex) => itemIndex === index ? event.target.value : value))}
@@ -283,8 +305,8 @@ export function QuestionnairePrompt({
                           className="w-full resize-y rounded-input border border-border bg-surface px-3 py-2 text-sm text-text outline-none focus:border-accent"
                         />
                         <div className="mt-2 flex justify-end gap-2">
-                          <button type="button" onClick={() => setCustomOpen((previous) => previous.map((value, itemIndex) => itemIndex === index ? false : value))} className="rounded-input px-2.5 py-1.5 text-xs text-muted hover:bg-surface-2">{t("common.cancel")}</button>
-                          <button type="button" onClick={saveCustomAnswer} className="rounded-input bg-accent px-2.5 py-1.5 text-xs text-accent-fg">{t("questionnaire.saveAnswer")}</button>
+                          <button type="button" onClick={() => cancelCustomAnswer(index)} className="rounded-input px-2.5 py-1.5 text-xs text-muted hover:bg-surface-2">{t("common.cancel")}</button>
+                          <button type="button" onClick={() => saveCustomAnswer(index)} className="rounded-input bg-accent px-2.5 py-1.5 text-xs text-accent-fg">{t("questionnaire.saveAnswer")}</button>
                         </div>
                       </div>
                     )}
@@ -307,18 +329,22 @@ export function QuestionnairePrompt({
                         {Boolean(notes[index]?.trim()) && <span className="h-1.5 w-1.5 rounded-full bg-accent" />}
                       </button>
                       {notesOpen[index] && (
-                        <textarea
-                          value={notes[index] ?? ""}
-                          onChange={(event) => setNotes((previous) => previous.map((value, itemIndex) => itemIndex === index ? event.target.value : value))}
-                          rows={2}
-                          placeholder={t("questionnaire.notesPlaceholder")}
-                          className="mt-2 w-full resize-y rounded-input border border-border bg-surface px-3 py-2 text-sm text-text outline-none focus:border-accent"
-                        />
+                        <>
+                          <label htmlFor={`questionnaire-notes-${componentId}-${index}`} className="sr-only">{t("questionnaire.notes")}</label>
+                          <textarea
+                            id={`questionnaire-notes-${componentId}-${index}`}
+                            value={notes[index] ?? ""}
+                            onChange={(event) => setNotes((previous) => previous.map((value, itemIndex) => itemIndex === index ? event.target.value : value))}
+                            rows={2}
+                            placeholder={t("questionnaire.notesPlaceholder")}
+                            className="mt-2 w-full resize-y rounded-input border border-border bg-surface px-3 py-2 text-sm text-text outline-none focus:border-accent"
+                          />
+                        </>
                       )}
                     </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           );
         })}
