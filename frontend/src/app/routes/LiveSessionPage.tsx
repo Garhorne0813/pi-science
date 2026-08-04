@@ -1,10 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ComponentType, Ref } from "react";
+import type { ComponentType, ReactNode, Ref } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowDown, ArrowUp, Loader2, Square, Plus, Sparkles, X, File, FolderOpen } from "lucide-react";
 import type { VirtuosoHandle, VirtuosoProps } from "react-virtuoso";
 import { getSessionName } from "../../lib/client/pi-science-client";
 import { useRuntimeStore } from "../../lib/agent-runtime";
+import type { PendingInteraction } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
 import { cn } from "../../lib/ui";
 import { useRequiredWorkspaceCwd } from "../../lib/workspace";
@@ -26,10 +27,31 @@ import { useResearchLoop } from "../../hooks/useResearchLoop";
 import { useComposer } from "../../hooks/useComposer";
 import type { ThreadBlock } from "../../types/thread";
 
-type ConversationVirtuosoProps = VirtuosoProps<ThreadBlock[], unknown> & { ref?: Ref<VirtuosoHandle> };
+type ConversationVirtuosoContext = {
+  renderInteractionPrompt: () => ReactNode;
+  working: boolean;
+  pendingInteraction: PendingInteraction | null;
+};
+type ConversationVirtuosoProps = VirtuosoProps<ThreadBlock[], ConversationVirtuosoContext> & { ref?: Ref<VirtuosoHandle> };
 const LazyVirtuoso = lazy(() => import("react-virtuoso").then(({ Virtuoso }) => ({
   default: Virtuoso as unknown as ComponentType<ConversationVirtuosoProps>,
 })));
+
+/** Stable Virtuoso footer type: changing prompt/working state must update its
+ * props without remounting QuestionnairePrompt and losing accordion answers. */
+export function ConversationFooter({ context }: { context: ConversationVirtuosoContext }) {
+  return (
+    <div className="mx-auto flex w-full max-w-[824px] flex-col gap-4 px-8 pb-6 pt-2">
+      {context.renderInteractionPrompt()}
+      {context.working && !context.pendingInteraction && (
+        <div className="flex items-center gap-2 py-4 text-sm text-muted">
+          <Loader2 size={14} className="animate-spin text-accent" />
+          Working…
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function LiveSessionPage() {
   const { t } = useTranslation();
@@ -415,6 +437,7 @@ export function LiveSessionPage() {
                   initialItemCount={Math.min(blockGroups.length, 20)}
                   startReached={() => void handleLoadOlder()}
                   increaseViewportBy={{ top: 600, bottom: 800 }}
+                  context={{ renderInteractionPrompt, working, pendingInteraction }}
                   components={{
                     Header: () => (
                       <div className="mx-auto flex w-full max-w-[824px] flex-col gap-4 px-8 pb-2 pt-6">
@@ -429,17 +452,7 @@ export function LiveSessionPage() {
                         {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error">{research.error}</div>}
                       </div>
                     ),
-                    Footer: () => (
-                      <div className="mx-auto flex w-full max-w-[824px] flex-col gap-4 px-8 pb-6 pt-2">
-                        {renderInteractionPrompt()}
-                        {working && !pendingInteraction && (
-                          <div className="flex items-center gap-2 py-4 text-sm text-muted">
-                            <Loader2 size={14} className="animate-spin text-accent" />
-                            Working…
-                          </div>
-                        )}
-                      </div>
-                    ),
+                    Footer: ConversationFooter,
                   }}
                   itemContent={(_index, group) => (
                     <div className="mx-auto w-full max-w-[824px] px-8 pb-4">

@@ -118,7 +118,7 @@ export class NodeSessionService {
     await mkdir(resolve(cwd, ".pi-science", "sessions"), { recursive: true });
     return this.withLock(`create:${cwd}`, async () => {
       let runtime: RuntimeRecord | undefined;
-      const config = { ...effectiveConfig(), ...body.config };
+      const config = effectiveConfig(body.config);
       const started = await this.startRuntime(cwd, config);
       if ("error" in started) return started;
       runtime = started;
@@ -593,11 +593,13 @@ export class NodeSessionService {
         const data = state.data && typeof state.data === "object" ? state.data as Record<string, unknown> : {};
         const active = Boolean(data.busy) || Boolean(data.isStreaming) || Boolean(data.isCompacting) || Number(data.pendingMessageCount ?? 0) > 0;
         if (state.success && active && Date.now() < (runtime.operationDeadline ?? 0)) {
+          runtime.reconcileAttempts = 0;
           runtime.busy = true;
           this.scheduleOperationReconciliation(runtime, false);
           return;
         }
         if (!state.success && Date.now() < (runtime.operationDeadline ?? 0)) {
+          runtime.reconcileAttempts = 0;
           this.scheduleOperationReconciliation(runtime, false);
           return;
         }

@@ -38,13 +38,15 @@ vi.mock("../../components/conversation/ModelControlMenu", () => ({
   ),
 }));
 
-import { LiveSessionPage } from "./LiveSessionPage";
+import { ConversationFooter, LiveSessionPage } from "./LiveSessionPage";
 import { WorkspaceProvider } from "../../lib/workspace";
 import { FeedbackContext } from "../../components/feedback/feedback-context";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
 import { queryClient } from "../../lib/client/query-client";
 import { resetDynamicCommands } from "../../lib/conversation";
+import { QuestionnairePrompt } from "../../components/conversation/QuestionnairePrompt";
+import type { PendingInteraction, PendingQuestionnaire } from "../../lib/agent-runtime";
 import i18n from "../../i18n";
 import type { ThreadBlock } from "../../types/thread";
 
@@ -198,6 +200,7 @@ beforeEach(() => {
     compactionEnabled: true,
     compactionThresholdPercent: null,
     pendingInteraction: null,
+    pendingQuestionnaire: null,
     fileRevision: 0,
     draft: "",
     connect: vi.fn(async () => undefined),
@@ -481,6 +484,44 @@ describe("turn-completion effects", () => {
   });
 });
 
+
+describe("stable Virtuoso footer", () => {
+  it("preserves questionnaire answers when the stable footer rerenders", () => {
+    const interaction: PendingInteraction = {
+      requestId: "questionnaire-request",
+      method: "input",
+      title: "Questionnaire",
+      questionnaire: true,
+      toolCallId: "questionnaire-tool",
+    };
+    const questionnaire: PendingQuestionnaire = {
+      toolCallId: "questionnaire-tool",
+      questions: [{
+        question: "Which mode should we use?",
+        header: "Mode",
+        multiSelect: false,
+        options: [
+          { label: "Fast", description: "Run quickly." },
+          { label: "Careful", description: "Run with extra checks." },
+        ],
+      }],
+    };
+    const renderPrompt = () => <QuestionnairePrompt questionnaire={questionnaire} interaction={interaction} onRespond={vi.fn()} />;
+    const view = render(<ConversationFooter context={{ renderInteractionPrompt: renderPrompt, working: false, pendingInteraction: interaction }} />);
+
+    const option = screen.getByRole("button", { name: /Fast/ });
+    fireEvent.click(option);
+    expect(option).toHaveAttribute("aria-pressed", "true");
+
+    // jsdom does not reliably lay out Virtuoso's virtual footer, so this
+    // contract test rerenders the extracted Footer type directly. The same
+    // stable type is what Virtuoso receives through components.Footer.
+    view.rerender(<ConversationFooter context={{ renderInteractionPrompt: renderPrompt, working: true, pendingInteraction: interaction }} />);
+    const selectedOption = screen.getAllByRole("button", { name: /Fast/ }).find((button) => button.hasAttribute("aria-pressed"));
+    expect(selectedOption).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("region", { name: "Answer a few questions" })).toBeInTheDocument();
+  });
+});
 
 describe("model change optimistic rollback", () => {
   it("rolls back both model and thinking when the settings save fails", async () => {

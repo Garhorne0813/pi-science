@@ -4,11 +4,12 @@ import { delimiter, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { conversationEventHub } from "../events/conversation-event-hub.js";
 import { NodeSessionService } from "./node-session-service.js";
+import { loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
 import { ProjectReviewService } from "../../project-review/service.js";
 import { parseReviewResult, type ReviewRunRequest, type ReviewRunResult, type ReviewSubagentRunner } from "../../project-review/types.js";
 
 const cleanup: string[] = [];
-const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE, piMode: process.env.PI_SCIENCE_PI_MODE };
+const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE, piMode: process.env.PI_SCIENCE_PI_MODE, argsLog: process.env.FAKE_PI_ARGS_LOG };
 
 beforeEach(async () => {
   const root = join(tmpdir(), `pi-science-node-service-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -20,6 +21,7 @@ beforeEach(async () => {
     'if (process.env.FAKE_PI_FAIL_START_FILE && fs.existsSync(process.env.FAKE_PI_FAIL_START_FILE)) { process.stderr.write("forced startup failure\\n"); process.exit(1); }',
     'import readline from "node:readline";',
     'const args = process.argv.slice(2);',
+    'if (process.env.FAKE_PI_ARGS_LOG) fs.appendFileSync(process.env.FAKE_PI_ARGS_LOG, JSON.stringify(args) + "\\n");',
     'if (process.env.FAKE_PI_ENV_LOG) fs.writeFileSync(process.env.FAKE_PI_ENV_LOG, JSON.stringify({ PATH: process.env.PATH, VIRTUAL_ENV: process.env.VIRTUAL_ENV, PIP_REQUIRE_VIRTUALENV: process.env.PIP_REQUIRE_VIRTUALENV, npm_config_prefix: process.env.npm_config_prefix }));',
     'const sessionArg = args.indexOf("--session");',
     'let sessionId = sessionArg >= 0 ? JSON.parse(fs.readFileSync(args[sessionArg + 1], "utf8").split("\\n")[0]).id : `fresh-${process.pid}`;',
@@ -40,6 +42,7 @@ beforeEach(async () => {
     '  const request = JSON.parse(line);',
     '  if (log) fs.appendFileSync(log, JSON.stringify(request) + "\\n");',
     '  if (!request.id) return;',
+    '  if (request.type === "get_state" && process.env.FAKE_PI_MODE === "idle-active-idle") { stateRequests++; const probe = stateRequests - 1; const active = probe > 0 && probe % 5 === 0; return respond(request, { data: { sessionId, busy: active, isStreaming: active, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }',
     '  if (request.type === "get_state") { stateRequests++; if (process.env.FAKE_PI_MODE === "restart-fail-once" && startNumber === 2) return; if (process.env.FAKE_PI_MODE === "new-session-state-fails" && sessionId.startsWith("generated-")) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (Number(process.env.FAKE_PI_FAIL_STATE_AFTER || 0) > 0 && stateRequests > Number(process.env.FAKE_PI_FAIL_STATE_AFTER)) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (process.env.FAKE_PI_MODE === "never-starts") return respond(request, { data: { sessionId, busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); if (process.env.FAKE_PI_MODE === "delayed-agent-start") { if (stateRequests > Number(process.env.FAKE_PI_STATE_DELAY || 3)) { if (!agentStartNotified) { agentStartNotified = true; process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); } return respond(request, { data: { sessionId, busy: true, isStreaming: true, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); } return respond(request, { data: { sessionId, busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); } const orbitBusyOnly = process.env.FAKE_PI_MODE === "orbit-busy-without-agent-start"; return respond(request, { data: { sessionId, busy, isStreaming: orbitBusyOnly ? false : busy, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }',
     '  if (request.type === "switch_session") { sessionId = JSON.parse(fs.readFileSync(request.sessionPath, "utf8").split("\\n")[0]).id; return respond(request); }',
     '  if (request.type === "new_session" || request.type === "clone" || request.type === "fork") { sessionId = `generated-${++counter}-${process.pid}`; return respond(request); }',
@@ -83,6 +86,8 @@ afterEach(async () => {
   else process.env.PI_SCIENCE_PI_MODE = original.piMode;
   delete process.env.FAKE_PI_LOG;
   delete process.env.FAKE_PI_STARTS;
+  if (original.argsLog === undefined) delete process.env.FAKE_PI_ARGS_LOG;
+  else process.env.FAKE_PI_ARGS_LOG = original.argsLog;
   delete process.env.FAKE_PI_FAIL_STATE_AFTER;
   delete process.env.FAKE_PI_FAIL_START_FILE;
   delete process.env.FAKE_PI_ENV_LOG;
@@ -203,6 +208,34 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
+  it("preserves discovered defaults when create receives empty arrays and honors explicit config arrays", async () => {
+    const cwd = await workspaceWithSessions();
+    const defaultSkill = join(cwd, "default-skill");
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), JSON.stringify({ skill_paths: [defaultSkill] }), "utf8");
+    const defaults = loadDefaultPiConfig();
+    const argsLog = join(cwd, "launch-args.jsonl");
+    process.env.FAKE_PI_ARGS_LOG = argsLog;
+    const service = testService();
+
+    await expect(service.create({ cwd, config: { skills: [], extensions: [] } })).resolves.toHaveProperty("id");
+    const explicitSkill = join(cwd, "explicit-skill");
+    const explicitExtension = join(cwd, "explicit-extension.ts");
+    await expect(service.create({ cwd, config: { skills: [explicitSkill], extensions: [explicitExtension] } })).resolves.toHaveProperty("id");
+
+    const launches = (await readFile(argsLog, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as string[]);
+    expect(launches).toHaveLength(2);
+    const values = (args: string[], flag: string) => args.flatMap((arg, index) => arg === flag && args[index + 1] ? [args[index + 1]!] : []);
+    const defaultSkills = values(launches[0]!, "--skill");
+    const defaultExtensions = values(launches[0]!, "-e");
+    expect(defaultSkills).toContain(defaultSkill);
+    for (const extension of defaults.extensions) expect(defaultExtensions).toContain(extension);
+    expect(values(launches[1]!, "--skill")).toContain(explicitSkill);
+    expect(values(launches[1]!, "--skill")).not.toContain(defaultSkill);
+    expect(values(launches[1]!, "-e")).toEqual([explicitExtension]);
+    await service.shutdownAll();
+  });
+
   it("keeps other sessions independent while a turn is active and deletes exactly one session", async () => {
     const service = testService();
     const cwd = await workspaceWithSessions("session-a", "session-b");
@@ -304,6 +337,26 @@ describe("Node session lifecycle", () => {
     }));
     await expect(service.state("session-slow-start", cwd)).resolves.toMatchObject({ id: "session-slow-start" });
     await service.command("session-slow-start", cwd, "abort");
+    publish.mockRestore();
+    await service.shutdownAll();
+  });
+
+  it("resets idle reconciliation attempts after an active probe", async () => {
+    process.env.FAKE_PI_MODE = "idle-active-idle";
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-idle-active-idle");
+    const publish = vi.spyOn(conversationEventHub, "publish");
+    await service.resume("session-idle-active-idle", cwd);
+
+    await expect(service.command("session-idle-active-idle", cwd, "prompt", { message: "test" })).resolves.toMatchObject({ success: true });
+    // The fake runtime intentionally returns idle, idle, idle, idle, active,
+    // idle... so attempts must reset on the active probe instead of carrying
+    // the first four idle probes into the next idle phase.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(publish).not.toHaveBeenCalledWith(cwd, "session-idle-active-idle", expect.objectContaining({
+      message: "The prompt was accepted but the Pi runtime did not start an agent turn.",
+    }));
     publish.mockRestore();
     await service.shutdownAll();
   });
