@@ -205,16 +205,23 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
-  it("keeps auto-detected extensions when create receives empty config arrays", async () => {
+  it("keeps default extensions when create receives empty config arrays", async () => {
     const service = testService();
     const cwd = await workspaceWithSessions();
+    const upstream = join(cwd, "node_modules", "@juicesharp", "rpiv-ask-user-question", "index.ts");
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), JSON.stringify({ extension_paths: [upstream] }), "utf8");
 
-    await expect(service.create({ cwd, config: { skills: [], extensions: [] } })).resolves.toHaveProperty("id");
+    try {
+      await expect(service.create({ cwd, config: { skills: [], extensions: [] } })).resolves.toHaveProperty("id");
 
-    const args = JSON.parse(await readFile(process.env.FAKE_PI_ARGS_LOG!, "utf8")) as string[];
-    expect(args).toContain("-e");
-    expect(args).toContain(join(import.meta.dirname, "../pi/extensions/pi-science-ask-user-question-web.ts"));
-    await service.shutdownAll();
+      const args = JSON.parse(await readFile(process.env.FAKE_PI_ARGS_LOG!, "utf8")) as string[];
+      expect(args).toContain("-e");
+      expect(args).toContain(join(import.meta.dirname, "../pi/extensions/pi-science-ask-user-question-web.ts"));
+      expect(args).not.toContain(upstream);
+    } finally {
+      await service.shutdownAll();
+    }
   });
 
   it("keeps other sessions independent while a turn is active and deletes exactly one session", async () => {
