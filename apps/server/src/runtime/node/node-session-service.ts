@@ -30,10 +30,11 @@ type RuntimeRecord = {
   /** Generation token for the accepted prompt/compact reconciliation. */
   operationToken?: string;
   /** Consecutive idle re-checks while a prompt/compact was accepted but the
-   *  agent has not started its turn yet. Pi Orbit can take a moment to spin
-   *  up a turn after the HTTP ack; we must not declare failure on the first
-   *  idle probe. Only applies to the accepted-then-idle window (prompt returned
-   *  OK); a transport timeout path skips this and fails fast. */
+   *  agent has not started its turn yet. Pi Orbit may need time to resume a
+   *  session or warm a model after the HTTP ack; this is startup reconciliation,
+   *  not a timeout for the full agent response. Only applies to the
+   *  accepted-then-idle window (prompt returned OK); a transport timeout path
+   *  skips this and fails fast. */
   reconcileAttempts?: number;
   /** True when the pending operation was acknowledged via a transport timeout
    *  rather than an OK response. Those are already-dead operations: an idle
@@ -56,9 +57,11 @@ function reconciliationDelayMs(): number {
   return value > 0 ? value : 2_000;
 }
 
+/** Bounds only accepted-idle startup reconciliation while Pi Orbit resumes a
+ *  session or warms a model; it is not an agent-response timeout. */
 function reconciliationDeadlineMs(): number {
   const value = Number(process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS ?? 0);
-  return value > 0 ? value : 45_000;
+  return value > 0 ? value : 120_000;
 }
 
 function idleRuntimeMs(): number {
@@ -640,8 +643,9 @@ export class NodeSessionService {
         const operation = runtime.operationPending;
         if (!state || (state.success && !active)) {
           // An accepted prompt/compact may remain idle while Pi Orbit resumes
-          // a session or warms a model. Attempts are diagnostic only: keep
-          // probing until the operation deadline. Transport-timeout acks are
+          // a session or warms a model. This startup window is not a timeout for
+          // the full agent response. Attempts are diagnostic only: keep probing
+          // until the operation deadline. Transport-timeout acks are
           // explicitly fail-fast and do not enter this retry window. When a
           // delayed timer reaches the deadline without a probe, enter this
           // same terminal path directly.

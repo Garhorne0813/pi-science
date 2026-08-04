@@ -352,7 +352,7 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
-  it("retries idle probes after a prompt ack instead of reporting did-not-start while the turn is spinning up", async () => {
+  it("waits while Pi Orbit resumes a session or warms a model after a prompt ack", async () => {
     process.env.FAKE_PI_MODE = "delayed-agent-start";
     process.env.FAKE_PI_STATE_DELAY = "3";
     const service = testService();
@@ -405,7 +405,7 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
-  it("waits through idle probes until the reconciliation deadline before reporting did-not-start", async () => {
+  it("waits through the Pi Orbit startup reconciliation deadline before reporting did-not-start", async () => {
     process.env.FAKE_PI_MODE = "never-starts";
     process.env.PI_SCIENCE_RECONCILE_DELAY_MS = "20";
     process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS = "260";
@@ -429,12 +429,27 @@ describe("Node session lifecycle", () => {
     const didNotStartAfter = publish.mock.calls.filter((call) => (call[2] as { message?: string } | undefined)?.message === "The prompt was accepted but the Pi runtime did not start an agent turn.");
     expect(didNotStartAfter).toHaveLength(1);
 
-    // The deadline, not a fixed attempt count, bounds accepted-idle probes.
+    // The startup reconciliation deadline, not a fixed attempt count, bounds
+    // accepted-idle probes; it does not bound the full agent response.
     const log = await readFile(process.env.FAKE_PI_LOG!, "utf8");
     const promptLine = log.split("\n").findIndex((line) => line.includes('"type":"prompt"'));
     const idleProbes = log.split("\n").slice(promptLine + 1).filter((line) => line.includes('"type":"get_state"')).length;
     expect(idleProbes).toBeGreaterThanOrEqual(5);
     publish.mockRestore();
+    await service.shutdownAll();
+  });
+
+  it("uses a 120-second default for Pi Orbit startup reconciliation", async () => {
+    delete process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS;
+    process.env.FAKE_PI_MODE = "never-starts";
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-default-reconcile-deadline");
+    await service.resume("session-default-reconcile-deadline", cwd);
+
+    const acceptedAt = Date.now();
+    await expect(service.command("session-default-reconcile-deadline", cwd, "prompt", { message: "test" })).resolves.toMatchObject({ success: true });
+    const runtime = (service as unknown as { runtimes: Map<string, { operationDeadline?: number }> }).runtimes.get(`${resolve(cwd)}\0session-default-reconcile-deadline`);
+    expect(runtime?.operationDeadline).toBeGreaterThanOrEqual(acceptedAt + 120_000);
     await service.shutdownAll();
   });
 
