@@ -788,6 +788,13 @@ describe("native control-plane business routes", () => {
     expect(agents.statusCode).toBe(200);
     expect(agents.json()).toEqual({ agents: [{ name: "reviewer", path: ".pi/agents/reviewer.md" }] });
 
+    const discovery = await app.inject({ method: "GET", url: `/api/settings/subagents/discovery?cwd=${encodeURIComponent(cwd)}` });
+    expect(discovery.statusCode).toBe(200);
+    expect(discovery.json().agents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "reviewer", source: "project" }),
+      expect.objectContaining({ name: "scout", source: "builtin" }),
+    ]));
+
     const outside = await app.inject({ method: "GET", url: "/api/settings/subagents?cwd=/tmp" });
     expect(outside.statusCode).toBe(403);
   });

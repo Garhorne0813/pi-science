@@ -9,6 +9,16 @@ import { SettingsStore, type SettingsData as Settings } from "../../storage/sett
 import { loadPiAiCatalog } from "../../config/model-catalog-fallback.js";
 
 const PROVIDER_ENV: Record<string, string> = { anthropic: "ANTHROPIC_API_KEY", openai: "OPENAI_API_KEY", google: "GEMINI_API_KEY", deepseek: "DEEPSEEK_API_KEY", groq: "GROQ_API_KEY", openrouter: "OPENROUTER_API_KEY", mistral: "MISTRAL_API_KEY", xai: "XAI_API_KEY", zai: "ZAI_API_KEY", fireworks: "FIREWORKS_API_KEY", together: "TOGETHER_API_KEY" };
+const BUILTIN_SUBAGENTS = [
+  ["context-builder", "Builds grounded context for a later agent."],
+  ["delegate", "Handles a focused delegated task."],
+  ["oracle", "Provides a second opinion on difficult decisions."],
+  ["planner", "Turns context into an implementation plan."],
+  ["researcher", "Investigates a focused research question."],
+  ["reviewer", "Reviews work for correctness and quality."],
+  ["scout", "Explores the workspace and gathers context."],
+  ["worker", "Implements an approved task."],
+] as const;
 const PROVIDERS = [
   ["anthropic", "Anthropic", ["claude-opus-4-5", "claude-sonnet-4-20250514"]], ["openai", "OpenAI", ["gpt-5.1", "gpt-5.1-codex", "gpt-4o"]], ["google", "Gemini", ["gemini-2.5-pro", "gemini-2.5-flash"]], ["deepseek", "DeepSeek", ["deepseek-v4-pro", "deepseek-v4-flash"]], ["groq", "Groq", ["llama-3.3-70b-versatile"]], ["openrouter", "OpenRouter", ["openai/gpt-5.1", "anthropic/claude-sonnet-5"]], ["mistral", "Mistral", ["devstral-latest"]], ["xai", "xAI", ["grok-4.3"]], ["zai", "Z.AI", ["glm-4.7"]],
 ] as const;
@@ -290,6 +300,29 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
   app.get("/api/settings/skills", async () => { const config = await load(); return { skills: [], configured: Boolean(config.skills_configured) }; });
   app.delete("/api/settings/skills", async (_request, reply) => { await mutate((config) => { delete config.skills_configured; delete config.skill_paths; }); return respondWithReload(reply, { ok: true, message: "Skills reset to auto-discover mode" }); });
   app.get("/api/settings/extensions", async () => ({ extensions: runtimeExtensionStatus() }));
+  app.get("/api/settings/subagents/discovery", async (request, reply) => {
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(query(request, "cwd")); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+    const { readdir } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const agents = new Map<string, { name: string; description: string; source: "builtin" | "project" }>(
+      BUILTIN_SUBAGENTS.map(([name, description]) => [name, { name, description, source: "builtin" }]),
+    );
+    const directory = join(cwd, ".pi", "agents");
+    try {
+      for (const file of await readdir(directory)) {
+        if (!file.endsWith(".md")) continue;
+        const name = file.slice(0, -3);
+        const content = await readFile(join(directory, file), "utf8").catch(() => "");
+        const description = content.match(/^---[\s\S]*?^description:\s*["']?([^\n"']+)/m)?.[1]?.trim()
+          ?? content.match(/^#\s+(.+)$/m)?.[1]?.trim()
+          ?? "Project subagent";
+        agents.set(name, { name, description, source: "project" });
+      }
+    } catch { /* no project agents */ }
+    return { agents: [...agents.values()].sort((a, b) => a.name.localeCompare(b.name)) };
+  });
   app.get("/api/settings/subagents", async (request, reply) => { let cwd: string; try { cwd = await validateWorkspaceCwd(query(request, "cwd")); } catch (error) { return reply.code(403).send({ error: String(error) }); } const { readdir } = await import("node:fs/promises"); const { join, relative } = await import("node:path"); const directory = join(cwd, ".pi", "agents"); const agents: unknown[] = []; try { for (const name of await readdir(directory)) if (name.endsWith(".md")) agents.push({ name: name.slice(0, -3), path: relative(cwd, join(directory, name)).replaceAll("\\", "/") }); } catch { /* no agents */ } return { agents }; });
 }
 

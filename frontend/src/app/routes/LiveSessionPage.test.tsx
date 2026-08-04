@@ -68,6 +68,12 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
   if (url.startsWith("/api/settings/config")) {
     return Promise.resolve(jsonResponse({ ok: true, available_models: MODELS, model: "prov/m1", thinking: "high" }));
   }
+  if (url.startsWith("/api/settings/subagents/discovery")) {
+    return Promise.resolve(jsonResponse({ agents: [
+      { name: "reviewer", description: "Review work", source: "builtin" },
+      { name: "scout", description: "Gather context", source: "builtin" },
+    ] }));
+  }
   if (url.includes("/commands?")) return Promise.resolve(jsonResponse({ commands: [] }));
   if (url.startsWith("/api/project-memory/research-loops")) return Promise.resolve(jsonResponse({ loops: [] }));
   if (method === "PUT" && url.startsWith("/api/settings/model")) {
