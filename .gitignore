@@ -18,6 +18,7 @@ venv/
 /runtime/
 
 # Session data (per-workspace)
+/implementation_docs/
 .pi-science/sessions/
 .pi-science/provenance.jsonl
 .pi-science/runs.jsonl
