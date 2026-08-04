@@ -62,7 +62,7 @@ export function SettingsDialog() {
 
   return (
     <div
-      className="fixed inset-0 z-[95] flex items-start justify-center bg-black/45 p-0 md:items-center md:p-4"
+      className="fixed inset-0 z-[95] flex items-center justify-center bg-black/65 p-0 backdrop-blur-[2px] sm:p-2 md:p-4"
       role="presentation"
       onMouseDown={(event) => { if (event.target === event.currentTarget) closeSettings(); }}
       onKeyDown={(event) => { if (event.key === "Escape") closeSettings(); }}
@@ -71,32 +71,30 @@ export function SettingsDialog() {
         ref={panelRef}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="settings-dialog-title"
+        aria-label={t("nav.settings")}
         tabIndex={-1}
         onKeyDown={handlePanelKeyDown}
         className={cn(
-          "flex h-full w-full flex-col overflow-hidden bg-bg outline-none",
-          "rounded-none border-0 md:h-[min(78vh,760px)] md:w-[min(880px,calc(100vw-64px))] md:rounded-card md:border md:border-border md:shadow-pop",
+          "flex h-full w-full overflow-hidden bg-bg outline-none",
+          "rounded-none border-0 md:h-[min(80vh,820px)] md:w-[min(760px,calc(100vw-32px))] md:rounded-[16px] md:border md:border-border md:shadow-pop",
         )}
       >
-        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-faint px-5 py-3">
-          <h2 id="settings-dialog-title" className="font-serif text-base text-text">
-            {t("nav.settings")}
-            <span className="ml-2 text-xs font-normal text-muted">
-              {settingsScope ? t("settings.scope.workspace") : t("settings.scope.global")}
-            </span>
-          </h2>
-          <button
-            type="button"
-            onClick={closeSettings}
-            aria-label={t("common.close")}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-input text-muted transition-colors hover:bg-surface-2 hover:text-text"
-          >
-            <X size={16} />
-          </button>
-        </div>
-        <Suspense fallback={null}>
-          <SettingsContent scope={settingsScope} />
+        <Suspense fallback={(
+          <div className="flex min-h-0 flex-1">
+            <div className="flex w-16 shrink-0 items-start justify-center border-r border-faint bg-surface-2/20 px-2 py-3 md:w-44 md:justify-start md:px-3 md:py-4">
+              <button
+                type="button"
+                onClick={closeSettings}
+                aria-label={t("common.close")}
+                className="flex h-10 w-10 items-center justify-center rounded-input bg-surface-2/70 text-muted transition-colors hover:bg-surface-2 hover:text-text"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="flex flex-1 items-center justify-center text-sm text-muted">{t("common.loading")}</div>
+          </div>
+        )}>
+          <SettingsContent scope={settingsScope} onClose={closeSettings} />
         </Suspense>
       </div>
     </div>

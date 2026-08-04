@@ -52,16 +52,15 @@ export function MCPTab({ workspaceCwd }: { workspaceCwd: string | null }) {
     );
 
   return (
-    <div className="space-y-6">
-      <Section title={t("settings.mcpPage.title")}>
+    <div className="space-y-4">
+      <Section>
         {error && <p className="mb-3 rounded-input bg-error/10 px-3 py-2 text-[11px] text-error">{error}</p>}
-        <p className="text-[11px] text-muted mb-3">{t("settings.mcpPage.description")}</p>
         {!workspaceCwd ? (
           <p className="rounded-input border border-dashed border-border px-3 py-3 text-xs text-muted">{t("settings.mcpPage.workspaceRequired")}</p>
         ) : servers.length === 0 ? (
           <p className="text-xs text-muted">{t("settings.mcpPage.empty")}</p>
         ) : (
-          <div className="space-y-2">
+          <div>
             {servers.map((server) => (
               <McpRow key={server.id} server={server} onToggle={toggle} />
             ))}

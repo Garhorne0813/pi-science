@@ -5,15 +5,15 @@ import type { McpServer } from "../../lib/settings";
 export function McpRow({ server, onToggle }: { server: McpServer; onToggle: (id: string, on: boolean) => void }) {
   const { t } = useTranslation();
   return (
-    <div className="rounded-card border border-border bg-surface px-4 py-3">
-      <div className="flex items-start justify-between">
-        <div className="flex-1 min-w-0">
+    <div className="flex min-h-14 items-start justify-between gap-2 border-b border-faint py-2">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-text">{server.name}</span>
+            <span className="text-[13px] font-medium text-text">{server.name}</span>
             <span className="rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] text-muted">{server.transport}</span>
           </div>
-          <p className="text-[11px] text-muted mt-0.5">{server.description || server.id}</p>
-          <div className="flex items-center gap-2 mt-1.5">
+          <p className="mt-0.5 text-[11px] text-muted">{server.description || server.id}</p>
+          <div className="mt-1 flex items-center gap-2">
             <span className={cn("text-[10px]", server.health === "ready" ? "text-ok" : server.health === "error" ? "text-error" : "text-muted")}>
               {t("settings.mcpPage.health")}: {server.health}
             </span>
@@ -41,7 +41,7 @@ export function McpRow({ server, onToggle }: { server: McpServer; onToggle: (id:
             </div>
           )}
         </div>
-        <button onClick={() => onToggle(server.id, !server.enabled)} className={cn("shrink-0 rounded-full px-3 py-1 text-[11px] font-medium transition-colors", server.enabled ? "bg-ok text-white" : "bg-surface-2 text-muted hover:bg-surface hover:text-text")}>
+        <button onClick={() => onToggle(server.id, !server.enabled)} className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors", server.enabled ? "bg-ok text-white" : "bg-surface-2 text-muted hover:bg-surface hover:text-text")}>
           {server.enabled ? t("settings.actions.on") : t("settings.actions.off")}
         </button>
       </div>
