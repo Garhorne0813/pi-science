@@ -177,25 +177,39 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
   const deleteSession = useRuntimeStore((s) => s.deleteSession);
   const navigate = useNavigate();
   const location = useLocation();
+  const workspaceRoot = `/workspace/${encodeURIComponent(cwd)}`;
+  const isWorkspaceRoot = location.pathname === workspaceRoot;
+  // The store marker carries the suppression across a layout remount; the
+  // route-state target prevents a fast workspace switch from consuming it in
+  // the wrong workspace.
+  const intentionalRootLanding = location.state?.suppressAutoSessionNavFor === cwd;
   const [deleting, setDeleting] = useState<string | null>(null);
   const [forking, setForking] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    // Consumed once: after deleting the active session (or starting a new
-    // one) we deliberately landed on the blank workspace root — do not
-    // auto-open the most recent session in that case.
-    if (useUiStore.getState().suppressAutoSessionNav) {
+
+    // Session lists belong to the workspace landing only. In particular, do
+    // not reload them for ordinary navigation between files, runs, settings,
+    // or a conversation route.
+    if (!isWorkspaceRoot) return () => { cancelled = true; };
+
+    // Consume suppression only for the intentional root landing that set it.
+    // A stale marker from an interrupted/other-workspace navigation is cleared,
+    // but a normal first root entry still loads and may auto-open a session.
+    const suppressAutoNav = useUiStore.getState().suppressAutoSessionNav;
+    if (suppressAutoNav && intentionalRootLanding) {
       useUiStore.getState().setSuppressAutoSessionNav(false);
-      return;
+      return () => { cancelled = true; };
     }
+    if (suppressAutoNav) useUiStore.getState().setSuppressAutoSessionNav(false);
+
     loadSessions(cwd)
       .then((merged) => {
         if (cancelled) return;
         // Auto-load most recent session if none active
         const state = useRuntimeStore.getState();
-        const workspaceRoot = `/workspace/${encodeURIComponent(cwd)}`;
-        if (merged.length > 0 && !state.activeSessionId && location.pathname === workspaceRoot) {
+        if (merged.length > 0 && !state.activeSessionId) {
           const latest = merged[0];
           navigate(`/workspace/${encodeURIComponent(cwd)}/session/${latest.id}`);
         }
@@ -204,7 +218,7 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
         if (!cancelled) toast(error instanceof Error ? error.message : "Unable to load workspace sessions", "error");
       });
     return () => { cancelled = true; };
-  }, [cwd, loadSessions, navigate, toast, location.pathname]);
+  }, [cwd, intentionalRootLanding, isWorkspaceRoot, loadSessions, navigate, toast]);
 
   const handleDelete = async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
@@ -229,7 +243,7 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
         // back into the most recent session. replace: true keeps the landing
         // as the entry point instead of stacking history entries.
         useUiStore.getState().setSuppressAutoSessionNav(true);
-        navigate(`/workspace/${encodeURIComponent(cwd)}`, { replace: true });
+        navigate(workspaceRoot, { replace: true, state: { suppressAutoSessionNavFor: cwd } });
       }
     } catch (err) {
       toast(err instanceof Error ? err.message : "Unable to delete session", "error");
@@ -240,11 +254,15 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
 
   const handleNew = async () => {
     // Session creation is lazy: the first prompt creates the server-side
-    // session, avoiding an empty Pi process for every click. Suppress the
-    // session-list auto-nav so the blank landing is not immediately replaced
-    // by the most recent session.
+    // session, avoiding an empty Pi process for every click. A repeated click
+    // at the root is already on the intended landing, so it must not leave a
+    // suppression marker behind for the next normal root entry.
+    if (isWorkspaceRoot) {
+      useUiStore.getState().setSuppressAutoSessionNav(false);
+      return;
+    }
     useUiStore.getState().setSuppressAutoSessionNav(true);
-    navigate(`/workspace/${encodeURIComponent(cwd)}`);
+    navigate(workspaceRoot, { state: { suppressAutoSessionNavFor: cwd } });
   };
 
   const handleFork = async (e: React.MouseEvent, sessionId: string) => {
