@@ -40,7 +40,6 @@ export function AgentProfilesSection() {
 
   return (
     <Section title={t("settings.profiles.title")}>
-      <p className="mb-3 text-[11px] text-muted">{t("settings.profiles.description")}</p>
       {error && <p className="mb-2 text-[11px] text-error">{error}</p>}
       <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
         <input value={name} onChange={(event) => setName(event.target.value)} placeholder="PROFILE_NAME" className="rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] font-mono text-text outline-none" />
@@ -49,9 +48,9 @@ export function AgentProfilesSection() {
           {t("settings.profiles.create")}
         </button>
       </div>
-      <div className="mt-3 space-y-2">
+      <div className="mt-3 divide-y divide-faint border-y border-faint">
         {profiles.map((profile) => (
-          <div key={profile.name} className="rounded-input border border-border bg-surface px-3 py-2">
+          <div key={profile.name} className="min-h-14 py-2">
             <div className="flex items-center justify-between gap-2 text-xs">
               <span className="font-medium text-text">{profile.display_name}</span>
               <span className="font-mono text-[10px] text-muted">

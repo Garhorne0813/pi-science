@@ -22,11 +22,8 @@ export function ExtensionsTab({ workspaceCwd }: { workspaceCwd: string | null })
   const extensions = extensionsRead.isPending ? null : extensionsRead.data?.extensions || [];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pt-3 md:pt-4">
       <Section title={t("settings.extensionsPage.title")}>
-        <p className="text-[11px] text-muted mb-3">
-          {t("settings.extensionsPage.descriptionPrefix")} <code className="font-mono text-[11px] bg-surface-2 px-1 rounded">bash scripts/fetch-pi.sh</code> {t("settings.extensionsPage.descriptionSuffix")}
-        </p>
         {error && (
           <p role="alert" className="mb-3 text-xs text-error">
             {error}

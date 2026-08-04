@@ -12,6 +12,10 @@ describe("Pi runtime installation contract", () => {
     expect(fetchScript).toContain('curl --fail --location --silent --show-error');
     expect(fetchScript).toContain('actual="$(shasum -a 256');
     expect(fetchScript).toContain('printf \'%s\\n\' "$pi_cli" > "$CLI_MARKER"');
+    expect(fetchScript).toContain('pi-mcp-adapter@$PI_MCP_ADAPTER_VERSION');
+    expect(fetchScript).toContain('pi-subagents@$PI_SUBAGENTS_VERSION');
+    expect(fetchScript).toContain('pi-web-access@$PI_WEB_ACCESS_VERSION');
+    expect(fetchScript).toContain('context-mode@$CONTEXT_MODE_VERSION');
     expect(fetchScript).toContain('@juicesharp/rpiv-ask-user-question@$RPIV_ASK_USER_QUESTION_VERSION');
     expect(fetchScript).toContain('--no-save');
     expect(installScript).toContain('PI_CLI="$(cat "$PI_CLI_MARKER")"');

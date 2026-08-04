@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Bot, Loader2, Plus, Save, Trash2, X } from "lucide-react";
+import { Loader2, Plus, Save, Trash2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { queryClient } from "../../lib/client/query-client";
 import { settingsApi, subagentsQuery } from "../../lib/settings";
@@ -84,13 +84,6 @@ export function SubagentSettings({ workspaceCwd }: { workspaceCwd: string | null
 
   return (
     <Section title={t("settings.subagents.title")}>
-      <div className="mb-3 flex items-start gap-2 rounded-input bg-surface-2 px-3 py-2">
-        <Bot size={15} className="mt-0.5 shrink-0 text-accent" />
-        <p className="text-[11px] text-muted">
-          {t("settings.subagents.description")} <code className="font-mono">.pi/agents/</code>
-          {t("settings.subagents.descriptionSuffix")}
-        </p>
-      </div>
       {!workspaceCwd ? (
         <p className="rounded-input border border-dashed border-border px-3 py-3 text-[11px] text-muted">{t("settings.subagents.workspaceRequired")}</p>
       ) : (
@@ -101,9 +94,9 @@ export function SubagentSettings({ workspaceCwd }: { workspaceCwd: string | null
             </p>
           )}
           {notice && <p className="mb-3 rounded-input bg-ok/10 px-3 py-2 text-[11px] text-ok">{notice}</p>}
-          <div className="space-y-2">
+          <div className="divide-y divide-faint border-y border-faint">
             {agents.map((agent) => (
-              <div key={agent.name} className="flex items-start gap-3 rounded-input border border-border bg-surface px-3 py-2">
+              <div key={agent.name} className="flex min-h-14 items-start gap-3 py-2">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-mono text-xs font-medium text-text">{agent.name}</span>
@@ -140,9 +133,9 @@ export function SubagentSettings({ workspaceCwd }: { workspaceCwd: string | null
             </button>
           )}
           {draft && (
-            <div className="mt-4 rounded-card border border-border bg-surface p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-sm font-medium text-text">{agents.some((agent) => agent.name === draft.name) ? t("settings.subagents.editTitle", { name: draft.name }) : t("settings.subagents.new")}</h3>
+            <div className="mt-4 border-y border-faint py-3">
+              <div className="mb-3 flex min-h-10 items-center justify-between">
+                <h3 className="text-[13px] font-semibold text-text">{agents.some((agent) => agent.name === draft.name) ? t("settings.subagents.editTitle", { name: draft.name }) : t("settings.subagents.new")}</h3>
                 <button type="button" onClick={() => setDraft(null)} className="min-h-9 min-w-9 text-muted hover:text-text">
                   <X size={14} />
                 </button>

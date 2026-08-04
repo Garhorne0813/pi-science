@@ -1,8 +1,12 @@
-/** Heading + body wrapper shared by the settings tabs. */
-export function Section({ title, children }: { title: string; children: React.ReactNode }) {
+/** Section wrapper shared by settings pages, using the same divider heading as the page header. */
+export function Section({ title, children }: { title?: string; children: React.ReactNode }) {
   return (
     <section>
-      <h2 className="text-xs font-semibold uppercase tracking-wider text-muted mb-3">{title}</h2>
+      {title && (
+        <header className="flex shrink-0 items-end justify-between gap-4 border-b border-faint pb-3 md:pb-4">
+          <h2 className="text-[20px] font-medium tracking-tight text-text">{title}</h2>
+        </header>
+      )}
       {children}
     </section>
   );

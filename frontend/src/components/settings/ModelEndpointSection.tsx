@@ -31,16 +31,15 @@ export function ModelEndpointSection() {
   };
 
   return (
-    <details className="group overflow-hidden rounded-card border border-border bg-surface">
-      <summary className="flex cursor-pointer list-none items-center gap-3 px-5 py-4 marker:content-none">
+    <details className="group border-b border-faint">
+      <summary className="flex min-h-14 cursor-pointer list-none items-center gap-3 py-2 marker:content-none">
         <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold text-text">{t("settings.endpoints.title")}</h2>
-          <p className="mt-1 text-xs leading-relaxed text-muted">{t("settings.endpoints.description")}</p>
+          <h2 className="text-[13px] font-semibold text-text">{t("settings.endpoints.title")}</h2>
         </div>
-        {endpoints.length > 0 && <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-muted">{endpoints.length}</span>}
-        <ChevronDown size={15} className="shrink-0 text-muted transition-transform group-open:rotate-180" />
+        {endpoints.length > 0 && <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[10px] text-muted">{endpoints.length}</span>}
+        <ChevronDown size={14} className="shrink-0 text-muted transition-transform group-open:rotate-180" />
       </summary>
-      <div className="border-t border-faint px-5 py-4">
+      <div className="border-t border-faint py-3">
         {error && <p className="mb-3 rounded-input bg-error/10 px-3 py-2 text-xs text-error">{error}</p>}
         <div className="grid gap-2 sm:grid-cols-[1fr_1.5fr_auto]">
           <input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("settings.endpoints.name")} className="min-h-10 rounded-input border border-border bg-bg px-3 py-2 text-xs text-text outline-none focus:border-accent" />
@@ -49,12 +48,12 @@ export function ModelEndpointSection() {
             {t("settings.endpoints.register")}
           </button>
         </div>
-        <select value={protocol} onChange={(event) => setProtocol(event.target.value)} className="mt-2 min-h-10 rounded-input border border-border bg-bg px-3 py-2 text-xs text-text outline-none focus:border-accent">
+        <select value={protocol} onChange={(event) => setProtocol(event.target.value)} className="mt-2 min-h-9 rounded-input border border-border bg-bg px-3 py-1.5 text-xs text-text outline-none focus:border-accent">
           <option value="openai">{t("settings.endpoints.protocol.openai")}</option>
           <option value="anthropic">{t("settings.endpoints.protocol.anthropic")}</option>
           <option value="native">{t("settings.endpoints.protocol.native")}</option>
         </select>
-        <div className="mt-4 divide-y divide-faint rounded-input border border-border empty:hidden">
+        <div className="mt-3 divide-y divide-faint border-y border-faint empty:hidden">
           {endpoints.map((endpoint) => (
             <div key={endpoint.endpoint_id} className="flex min-h-11 items-center gap-3 px-3 py-2 text-xs">
               <span className="min-w-0 flex-1 truncate text-text">
