@@ -175,6 +175,30 @@ describe("runtime event subscription", () => {
 
     source.emit("questionnaire.finished", { type: "questionnaire.finished", sessionId: "session-questionnaire", toolCallId: "call-q1" });
     expect(useRuntimeStore.getState().pendingQuestionnaire).toBeNull();
+    expect(useRuntimeStore.getState().pendingInteraction).toBeNull();
+  });
+
+  it("clears an unresolved interaction when the runtime settles successfully", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    const source = FakeEventSource.instances[0];
+    source.emit("question.asked", {
+      type: "question.asked",
+      sessionId: "session-a",
+      requestId: "question-1",
+      method: "input",
+      title: "Question",
+    });
+
+    expect(useRuntimeStore.getState().pendingInteraction?.requestId).toBe("question-1");
+    source.emit("session.idle", { type: "session.idle", sessionId: "session-a" });
+    expect(useRuntimeStore.getState().pendingInteraction).toBeNull();
   });
 
   it("keeps a locally rendered command when an extension handles it without an agent turn", async () => {

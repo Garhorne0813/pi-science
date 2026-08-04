@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronLeft, ChevronRight, Eye, FileText, ListChecks, Loader2, MessageSquareText, PenLine, Send, Sparkles } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Eye, ListChecks, Loader2, MessageSquareText, PenLine, Send, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
 import { cn } from "../../lib/ui";
@@ -21,10 +21,14 @@ function emptyAnswers(questions: QuestionnaireQuestion[]): Array<QuestionnaireAn
   return questions.map(() => null);
 }
 
-function answerLabel(answer: QuestionnaireAnswer | null): string {
+function answerLabel(answer: QuestionnaireAnswer | null, noneLabel: string, customLabel: string): string {
   if (!answer) return "";
-  if (answer.kind === "multi") return answer.selected?.length ? answer.selected.join(", ") : "(none)";
-  return answer.answer || "(custom answer)";
+  if (answer.kind === "multi") return answer.selected?.length ? answer.selected.join(", ") : noneLabel;
+  return answer.answer || customLabel;
+}
+
+function replaceAt<T>(values: T[], index: number, value: T): T[] {
+  return values.map((current, currentIndex) => currentIndex === index ? value : current);
 }
 
 export function QuestionnairePrompt({
@@ -37,118 +41,161 @@ export function QuestionnairePrompt({
   onRespond: (response: InteractionResponse) => void;
 }) {
   const { t } = useTranslation();
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [review, setReview] = useState(false);
-  const [answers, setAnswers] = useState<Array<QuestionnaireAnswer | null>>(() => emptyAnswers(questionnaire.questions));
-  const [notes, setNotes] = useState<string[]>(() => questionnaire.questions.map(() => ""));
-  const [customDrafts, setCustomDrafts] = useState<string[]>(() => questionnaire.questions.map(() => ""));
-  const [customOpen, setCustomOpen] = useState<boolean[]>(() => questionnaire.questions.map(() => false));
-  const [previewIndex, setPreviewIndex] = useState(0);
+  const questions = questionnaire.questions;
+  const [openIndex, setOpenIndex] = useState(0);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [answers, setAnswers] = useState<Array<QuestionnaireAnswer | null>>(() => emptyAnswers(questions));
+  const [notes, setNotes] = useState<string[]>(() => questions.map(() => ""));
+  const [notesOpen, setNotesOpen] = useState<boolean[]>(() => questions.map(() => false));
+  const [customDrafts, setCustomDrafts] = useState<string[]>(() => questions.map(() => ""));
+  const [customOpen, setCustomOpen] = useState<boolean[]>(() => questions.map(() => false));
+  const [hoveredOption, setHoveredOption] = useState<number | null>(null);
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    setActiveIndex(0);
-    setReview(false);
+    setOpenIndex(0);
+    setSummaryOpen(false);
     setAnswers(emptyAnswers(questionnaire.questions));
     setNotes(questionnaire.questions.map(() => ""));
+    setNotesOpen(questionnaire.questions.map(() => false));
     setCustomDrafts(questionnaire.questions.map(() => ""));
     setCustomOpen(questionnaire.questions.map(() => false));
-    setPreviewIndex(0);
+    setHoveredOption(null);
+    setPreviewIndex(null);
     setSubmitting(false);
-  }, [questionnaire.toolCallId]);
+  }, [questionnaire.toolCallId, questionnaire.questions]);
 
-  const questions = questionnaire.questions;
-  const current = questions[activeIndex] ?? questions[0];
-  const currentAnswer = answers[activeIndex] ?? null;
-  const previewOptions = useMemo(
-    () => current?.options.filter((option) => Boolean(option.preview)) ?? [],
-    [current],
-  );
-  const selectedPreview = current?.options[previewIndex]?.preview;
+  if (questions.length === 0) return null;
+
   const answeredCount = answers.filter(Boolean).length;
   const canSubmit = answeredCount === questions.length && !submitting;
-
-  if (!current) return null;
+  const noneLabel = t("questionnaire.none");
+  const customLabel = t("questionnaire.custom");
 
   const updateAnswer = (index: number, answer: QuestionnaireAnswer | null) => {
-    setAnswers((previous) => previous.map((item, itemIndex) => itemIndex === index ? answer : item));
+    setAnswers((previous) => replaceAt(previous, index, answer));
   };
 
-  const chooseOption = (optionIndex: number) => {
-    const option = current.options[optionIndex];
-    if (!option) return;
-    if (current.multiSelect) {
-      const previous = currentAnswer?.kind === "multi" ? currentAnswer.selected ?? [] : [];
+  const openQuestion = (index: number) => {
+    setSummaryOpen(false);
+    setOpenIndex(Math.max(0, Math.min(index, questions.length - 1)));
+    setHoveredOption(null);
+    setPreviewIndex(null);
+  };
+
+  const openNextUnanswered = (fromIndex: number) => {
+    const isAnswered = (index: number) => index === fromIndex || Boolean(answers[index]);
+    const candidates = [
+      ...questions.slice(fromIndex + 1).map((_, index) => fromIndex + 1 + index),
+      ...questions.slice(0, fromIndex).map((_, index) => index),
+    ];
+    const nextIndex = candidates.find((index) => !isAnswered(index));
+    if (nextIndex !== undefined) openQuestion(nextIndex);
+  };
+
+  const chooseOption = (questionIndex: number, optionIndex: number) => {
+    const question = questions[questionIndex];
+    const option = question?.options[optionIndex];
+    if (!question || !option) return;
+
+    const previousAnswer = answers[questionIndex] ?? null;
+    if (question.multiSelect) {
+      const previous = previousAnswer?.kind === "multi" ? previousAnswer.selected ?? [] : [];
       const selected = previous.includes(option.label)
         ? previous.filter((label) => label !== option.label)
         : [...previous, option.label];
-      updateAnswer(activeIndex, {
-        questionIndex: activeIndex,
-        question: current.question,
+      updateAnswer(questionIndex, {
+        questionIndex,
+        question: question.question,
         kind: "multi",
         answer: null,
         selected,
       });
-      setCustomOpen((previous) => previous.map((value, index) => index === activeIndex ? false : value));
+      if (option.preview) setPreviewIndex(optionIndex);
+      if (!selected.includes(option.label) && previewIndex === optionIndex) setPreviewIndex(null);
+      setHoveredOption(null);
+      setCustomOpen((previous) => replaceAt(previous, questionIndex, false));
       return;
     }
-    setPreviewIndex(optionIndex);
-    updateAnswer(activeIndex, {
-      questionIndex: activeIndex,
-      question: current.question,
+
+    updateAnswer(questionIndex, {
+      questionIndex,
+      question: question.question,
       kind: "option",
       answer: option.label,
       ...(option.preview ? { preview: option.preview } : {}),
     });
-    setCustomOpen((previous) => previous.map((value, index) => index === activeIndex ? false : value));
+    setPreviewIndex(option.preview ? optionIndex : null);
+    setHoveredOption(null);
+    setCustomOpen((previous) => replaceAt(previous, questionIndex, false));
+    if (!previousAnswer) openNextUnanswered(questionIndex);
   };
 
-  const openCustomAnswer = () => {
-    setCustomOpen((previous) => previous.map((value, index) => index === activeIndex ? true : value));
-    if (currentAnswer?.kind === "custom") setCustomDrafts((previous) => previous.map((value, index) => index === activeIndex ? (currentAnswer.answer ?? value) : value));
+  const openCustomAnswer = (questionIndex: number) => {
+    const existingAnswer = answers[questionIndex];
+    setCustomOpen((previous) => replaceAt(previous, questionIndex, true));
+    if (existingAnswer?.kind === "custom") {
+      setCustomDrafts((previous) => replaceAt(previous, questionIndex, existingAnswer.answer ?? ""));
+    }
+    setHoveredOption(null);
+    setPreviewIndex(null);
   };
 
-  const saveCustomAnswer = () => {
-    updateAnswer(activeIndex, {
-      questionIndex: activeIndex,
-      question: current.question,
+  const saveCustomAnswer = (questionIndex: number) => {
+    const question = questions[questionIndex];
+    if (!question) return;
+    const wasAnswered = Boolean(answers[questionIndex]);
+    updateAnswer(questionIndex, {
+      questionIndex,
+      question: question.question,
       kind: "custom",
-      answer: customDrafts[activeIndex] ?? "",
+      answer: customDrafts[questionIndex] ?? "",
     });
-    setCustomOpen((previous) => previous.map((value, index) => index === activeIndex ? false : value));
+    setCustomOpen((previous) => replaceAt(previous, questionIndex, false));
+    setHoveredOption(null);
+    setPreviewIndex(null);
+    if (!wasAnswered) openNextUnanswered(questionIndex);
   };
 
-  const markEmptyMulti = () => {
-    if (!current.multiSelect) return;
-    updateAnswer(activeIndex, {
-      questionIndex: activeIndex,
-      question: current.question,
+  const markEmptyMulti = (questionIndex: number) => {
+    const question = questions[questionIndex];
+    if (!question?.multiSelect) return;
+    const wasAnswered = Boolean(answers[questionIndex]);
+    updateAnswer(questionIndex, {
+      questionIndex,
+      question: question.question,
       kind: "multi",
       answer: null,
       selected: [],
     });
+    setCustomOpen((previous) => replaceAt(previous, questionIndex, false));
+    setHoveredOption(null);
+    setPreviewIndex(null);
+    if (!wasAnswered) openNextUnanswered(questionIndex);
   };
 
-  const goToQuestion = (index: number) => {
-    setReview(false);
-    setActiveIndex(Math.max(0, Math.min(index, questions.length - 1)));
-    setPreviewIndex(0);
-  };
-
-  const next = () => {
-    if (activeIndex < questions.length - 1) {
-      goToQuestion(activeIndex + 1);
-    } else {
-      setReview(true);
+  const selectedPreviewIndex = (question: QuestionnaireQuestion, questionIndex: number): number | null => {
+    const answer = answers[questionIndex];
+    if (answer?.kind === "option") {
+      const index = question.options.findIndex((option) => option.label === answer.answer && option.preview);
+      return index >= 0 ? index : null;
     }
+    if (answer?.kind === "multi") {
+      const selected = new Set(answer.selected ?? []);
+      if (previewIndex !== null && selected.has(question.options[previewIndex]?.label ?? "") && question.options[previewIndex]?.preview) {
+        return previewIndex;
+      }
+      const index = question.options.findIndex((option) => selected.has(option.label) && option.preview);
+      return index >= 0 ? index : null;
+    }
+    return null;
   };
 
-  const previous = () => {
-    if (review) {
-      setReview(false);
-      return;
-    }
-    if (activeIndex > 0) goToQuestion(activeIndex - 1);
+  const previewVisibleFor = (question: QuestionnaireQuestion, questionIndex: number, optionIndex: number): boolean => {
+    if (!question.options[optionIndex]?.preview) return false;
+    if (hoveredOption !== null) return hoveredOption === optionIndex;
+    return selectedPreviewIndex(question, questionIndex) === optionIndex || previewIndex === optionIndex;
   };
 
   const submit = () => {
@@ -161,230 +208,252 @@ export function QuestionnairePrompt({
     onRespond({ value: JSON.stringify(payload) });
   };
 
-  const cancel = () => onRespond({ cancelled: true });
+  const previous = () => {
+    if (summaryOpen) {
+      setSummaryOpen(false);
+      return;
+    }
+    if (openIndex > 0) openQuestion(openIndex - 1);
+  };
+
+  const next = () => {
+    if (openIndex < questions.length - 1) openQuestion(openIndex + 1);
+  };
 
   return (
     <section data-request-id={interaction.requestId} className="overflow-hidden rounded-card border border-accent/35 bg-surface shadow-card animate-fadeIn" aria-label={t("questionnaire.title")}>
-      <div className="border-b border-faint bg-accent/5 px-4 py-3 sm:px-5">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 items-start gap-2.5">
-            <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-fg">
-              <Sparkles size={15} />
-            </span>
-            <div className="min-w-0">
-              <div className="text-sm font-semibold text-text">{t("questionnaire.title")}</div>
-              <div className="mt-0.5 text-xs text-muted">{t("questionnaire.progress", { answered: answeredCount, total: questions.length })}</div>
-            </div>
-          </div>
-          <button type="button" onClick={cancel} className="rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2 hover:text-text">
-            {t("common.cancel")}
-          </button>
+      <header className="border-b border-faint bg-accent/5 px-4 py-2 sm:px-5">
+        <div className="flex items-center gap-2">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent text-accent-fg">
+            <Sparkles size={13} />
+          </span>
+          <div className="min-w-0 text-sm font-semibold text-text">{t("questionnaire.title")}</div>
         </div>
-        <div className="mt-3 flex gap-1.5 overflow-x-auto pb-0.5" role="tablist" aria-label={t("questionnaire.questions")}>
-          {questions.map((question, index) => {
-            const selected = !review && activeIndex === index;
-            const answered = Boolean(answers[index]);
-            return (
-              <button
-                key={`${question.header}-${index}`}
-                type="button"
-                role="tab"
-                aria-selected={selected}
-                onClick={() => goToQuestion(index)}
-                className={cn(
-                  "flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-colors",
-                  selected ? "border-accent bg-accent text-accent-fg" : answered ? "border-ok/40 bg-ok/10 text-ok" : "border-border bg-surface text-muted hover:border-accent/50 hover:text-text",
-                )}
-              >
-                {answered ? <Check size={12} /> : <span className="font-mono text-[10px]">{index + 1}</span>}
-                <span>{question.header || t("questionnaire.question", { number: index + 1 })}</span>
-              </button>
-            );
-          })}
-          <button
-            type="button"
-            role="tab"
-            aria-selected={review}
-            onClick={() => setReview(true)}
-            className={cn(
-              "flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-colors",
-              review ? "border-accent bg-accent text-accent-fg" : "border-border bg-surface text-muted hover:border-accent/50 hover:text-text",
-            )}
-          >
-            <ListChecks size={12} />
-            {t("questionnaire.review")}
-          </button>
+        <div
+          className="mt-1 overflow-hidden rounded-full bg-accent/15"
+          role="progressbar"
+          aria-label={t("questionnaire.progress", { answered: answeredCount, total: questions.length })}
+          aria-valuemin={0}
+          aria-valuemax={questions.length}
+          aria-valuenow={answeredCount}
+        >
+          <div className="h-1 rounded-full bg-accent transition-[width]" style={{ width: `${(answeredCount / questions.length) * 100}%` }} />
         </div>
-      </div>
+      </header>
 
-      {review ? (
-        <div className="px-4 py-4 sm:px-5">
-          <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-text">
-            <ListChecks size={15} className="text-accent" />
-            {t("questionnaire.reviewTitle")}
-          </div>
-          <div className="space-y-2">
-            {questions.map((question, index) => (
-              <button
-                key={`${question.question}-${index}`}
-                type="button"
-                onClick={() => goToQuestion(index)}
-                className="flex w-full items-start justify-between gap-4 rounded-input border border-border bg-surface-2/40 px-3 py-2.5 text-left hover:border-accent/50"
-              >
-                <span className="min-w-0">
-                  <span className="block text-xs font-medium text-muted">{question.header || t("questionnaire.question", { number: index + 1 })}</span>
-                  <span className="mt-0.5 block truncate text-sm text-text">{question.question}</span>
-                </span>
-                <span className={cn("shrink-0 text-xs", answers[index] ? "text-ok" : "text-warn")}>
-                  {answers[index] ? answerLabel(answers[index]) : t("questionnaire.unanswered")}
-                </span>
-              </button>
-            ))}
-          </div>
-          <p className="mt-3 text-xs text-muted">{t("questionnaire.reviewHint")}</p>
-        </div>
-      ) : (
-        <div className="grid gap-4 px-4 py-4 sm:px-5 lg:grid-cols-[minmax(0,1fr)_minmax(220px,0.72fr)]">
-          <div className="min-w-0">
-            <div className="mb-1 text-xs font-medium uppercase tracking-[0.08em] text-accent">{current.header || t("questionnaire.question", { number: activeIndex + 1 })}</div>
-            <h2 className="text-base font-semibold leading-snug text-text">{current.question}</h2>
-            <p className="mt-1 text-xs text-muted">{current.multiSelect ? t("questionnaire.multiHint") : t("questionnaire.singleHint")}</p>
+      <div className="space-y-1.5 px-3 py-1.5 sm:px-4">
+        {questions.map((question, questionIndex) => {
+          const isOpen = openIndex === questionIndex;
+          const answer = answers[questionIndex] ?? null;
+          const answered = Boolean(answer);
+          const questionLabel = question.header || t("questionnaire.question", { number: questionIndex + 1 });
 
-            <div className="mt-4 grid gap-2">
-              {current.options.map((option, index) => {
-                const selected = current.multiSelect
-                  ? currentAnswer?.kind === "multi" && currentAnswer.selected?.includes(option.label)
-                  : currentAnswer?.kind === "option" && currentAnswer.answer === option.label;
-                return (
-                  <button
-                    key={`${option.label}-${index}`}
-                    type="button"
-                    aria-pressed={selected}
-                    onMouseEnter={() => { if (option.preview) setPreviewIndex(index); }}
-                    onClick={() => chooseOption(index)}
-                    className={cn(
-                      "group flex w-full items-start gap-3 rounded-input border px-3 py-2.5 text-left transition-colors",
-                      selected ? "border-accent bg-accent/10 ring-1 ring-accent/25" : "border-border bg-surface hover:border-accent/55 hover:bg-accent/5",
+          return (
+            <div key={`${question.question}-${questionIndex}`} className={cn("overflow-hidden rounded-input border transition-colors", isOpen ? "border-accent/35 bg-surface" : "border-border bg-surface-2/20")}>
+              <button
+                type="button"
+                aria-expanded={isOpen}
+                aria-controls={`questionnaire-question-${questionIndex}`}
+                onClick={() => openQuestion(questionIndex)}
+                className="flex w-full items-start gap-2.5 px-2.5 py-1.5 text-left transition-colors hover:bg-accent/5 sm:px-3"
+              >
+                <span className={cn("mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold", answered ? "bg-ok/10 text-ok" : "bg-accent/10 text-accent")}>
+                  {answered ? <Check size={13} /> : questionIndex + 1}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[11px] font-medium uppercase tracking-[0.06em] text-accent">{questionLabel}</span>
+                  <span className="block truncate text-sm font-medium leading-snug text-text">{question.question}</span>
+                  {!isOpen && answered && (
+                    <span className="mt-0.5 block truncate text-xs text-muted">{answerLabel(answer, noneLabel, customLabel)}</span>
+                  )}
+                </span>
+                <ChevronDown size={16} className={cn("mt-1 shrink-0 text-muted transition-transform", isOpen && "rotate-180 text-accent")} />
+              </button>
+
+              {isOpen && (
+                <div id={`questionnaire-question-${questionIndex}`} className="px-2.5 pb-2.5 sm:px-3">
+                  <div className="grid gap-1.5">
+                    {question.options.map((option, optionIndex) => {
+                      const selected = question.multiSelect
+                        ? answer?.kind === "multi" && answer.selected?.includes(option.label)
+                        : answer?.kind === "option" && answer.answer === option.label;
+                      const showPreview = previewVisibleFor(question, questionIndex, optionIndex);
+
+                      return (
+                        <div
+                          key={`${option.label}-${optionIndex}`}
+                          onMouseEnter={() => { if (option.preview) setHoveredOption(optionIndex); }}
+                          onMouseLeave={() => setHoveredOption(null)}
+                        >
+                          <button
+                            type="button"
+                            aria-pressed={Boolean(selected)}
+                            onFocus={() => { if (option.preview) setHoveredOption(optionIndex); }}
+                            onBlur={() => setHoveredOption(null)}
+                            onClick={() => chooseOption(questionIndex, optionIndex)}
+                            className={cn(
+                              "group flex w-full items-start gap-2.5 rounded-input border px-2.5 py-1.5 text-left transition-colors",
+                              selected ? "border-accent bg-accent/10 ring-1 ring-accent/25" : "border-border bg-surface hover:border-accent/55 hover:bg-accent/5",
+                            )}
+                          >
+                            <span className={cn(
+                              "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center border text-[10px]",
+                              question.multiSelect ? "rounded" : "rounded-full",
+                              selected ? "border-accent bg-accent text-accent-fg" : "border-border bg-surface-2 text-muted group-hover:border-accent/50",
+                            )}>
+                              {question.multiSelect
+                                ? selected && <Check size={11} />
+                                : selected && <span className="h-1.5 w-1.5 rounded-full bg-accent-fg" />}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="flex items-center gap-1.5 text-sm font-medium text-text">
+                                <span className="truncate">{option.label}</span>
+                                {option.preview && (
+                                  <span className="shrink-0 text-accent">
+                                    <Eye size={12} aria-label={t("questionnaire.hasPreview")} />
+                                  </span>
+                                )}
+                              </span>
+                              {option.description && <span className="mt-0.5 block text-xs leading-snug text-muted">{option.description}</span>}
+                            </span>
+                          </button>
+                          {showPreview && option.preview && (
+                            <div className="mt-1 max-h-44 overflow-auto rounded-input border border-accent/25 bg-accent/5 px-2.5 py-1.5 text-xs text-text">
+                              <MarkdownViewer>{option.preview}</MarkdownViewer>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    <button
+                      type="button"
+                      aria-pressed={answer?.kind === "custom" || customOpen[questionIndex]}
+                      onClick={() => openCustomAnswer(questionIndex)}
+                      className={cn(
+                        "flex w-full items-center gap-2.5 rounded-input border border-dashed px-2.5 py-1.5 text-left text-sm transition-colors",
+                        answer?.kind === "custom" || customOpen[questionIndex] ? "border-accent bg-accent/10 text-text" : "border-border text-muted hover:border-accent/55 hover:text-text",
+                      )}
+                    >
+                      <PenLine size={14} className="ml-0.5 shrink-0 text-accent" />
+                      <span className="truncate">{t("questionnaire.custom")}</span>
+                    </button>
+
+                    {question.multiSelect && (
+                      <button type="button" onClick={() => markEmptyMulti(questionIndex)} className="self-start px-1 text-xs text-muted underline decoration-border underline-offset-2 hover:text-text">
+                        {t("questionnaire.none")}
+                      </button>
                     )}
-                  >
-                    <span className={cn(
-                      "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border text-[11px]",
-                      selected ? "border-accent bg-accent text-accent-fg" : "border-border bg-surface-2 text-muted group-hover:border-accent/50",
-                    )}>
-                      {selected ? <Check size={13} /> : current.multiSelect ? <span /> : <span>{index + 1}</span>}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-2 text-sm font-medium text-text">
-                        {option.label}
-                        {option.preview && <Eye size={12} className="shrink-0 text-accent" aria-label={t("questionnaire.hasPreview")} />}
-                      </span>
-                      <span className="mt-0.5 block text-xs leading-relaxed text-muted">{option.description}</span>
-                    </span>
-                  </button>
-                );
-              })}
+                  </div>
 
-              <button
-                type="button"
-                aria-pressed={currentAnswer?.kind === "custom" || customOpen[activeIndex]}
-                onClick={openCustomAnswer}
-                className={cn(
-                  "flex w-full items-center gap-3 rounded-input border border-dashed px-3 py-2.5 text-left text-sm transition-colors",
-                  currentAnswer?.kind === "custom" || customOpen[activeIndex] ? "border-accent bg-accent/10 text-text" : "border-border text-muted hover:border-accent/55 hover:text-text",
-                )}
-              >
-                <PenLine size={15} className="ml-0.5 shrink-0 text-accent" />
-                <span>{t("questionnaire.custom")}</span>
-              </button>
+                  {customOpen[questionIndex] && (
+                    <div className="mt-2 rounded-input border border-accent/30 bg-accent/5 p-2.5">
+                      <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-text"><PenLine size={12} className="text-accent" />{t("questionnaire.customLabel")}</div>
+                      <textarea
+                        autoFocus
+                        value={customDrafts[questionIndex] ?? ""}
+                        onChange={(event) => setCustomDrafts((previous) => replaceAt(previous, questionIndex, event.target.value))}
+                        rows={2}
+                        placeholder={t("questionnaire.customPlaceholder")}
+                        className="w-full resize-y rounded-input border border-border bg-surface px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent"
+                      />
+                      <div className="mt-1.5 flex justify-end gap-1.5">
+                        <button type="button" onClick={() => setCustomOpen((previous) => replaceAt(previous, questionIndex, false))} className="rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2">{t("common.cancel")}</button>
+                        <button type="button" onClick={() => saveCustomAnswer(questionIndex)} className="rounded-input bg-accent px-2.5 py-1 text-xs text-accent-fg">{t("questionnaire.saveAnswer")}</button>
+                      </div>
+                    </div>
+                  )}
 
-              {current.multiSelect && (
-                <button type="button" onClick={markEmptyMulti} className="self-start px-1 text-xs text-muted underline decoration-border underline-offset-2 hover:text-text">
-                  {t("questionnaire.none")}
-                </button>
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      aria-expanded={notesOpen[questionIndex]}
+                      onClick={() => setNotesOpen((previous) => replaceAt(previous, questionIndex, !previous[questionIndex]))}
+                      className="flex max-w-full items-center gap-1.5 rounded-input px-1 py-0.5 text-xs text-muted transition-colors hover:bg-surface-2 hover:text-text"
+                    >
+                      <MessageSquareText size={12} className="shrink-0 text-accent" />
+                      {notes[questionIndex]?.trim() && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" aria-hidden="true" />}
+                      <span className="truncate">{notes[questionIndex]?.trim() || t("questionnaire.notes")}</span>
+                    </button>
+                    {notesOpen[questionIndex] && (
+                      <div className="mt-1.5">
+                        <label className="sr-only" htmlFor={`questionnaire-notes-${questionIndex}`}>{t("questionnaire.notes")}</label>
+                        <textarea
+                          id={`questionnaire-notes-${questionIndex}`}
+                          value={notes[questionIndex] ?? ""}
+                          onChange={(event) => setNotes((previous) => replaceAt(previous, questionIndex, event.target.value))}
+                          rows={2}
+                          placeholder={t("questionnaire.notesPlaceholder")}
+                          className="w-full resize-y rounded-input border border-border bg-surface-2/35 px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
+          );
+        })}
+      </div>
 
-            {customOpen[activeIndex] && (
-              <div className="mt-3 rounded-input border border-accent/30 bg-accent/5 p-3">
-                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-text"><PenLine size={13} className="text-accent" />{t("questionnaire.customLabel")}</div>
-                <textarea
-                  autoFocus
-                  value={customDrafts[activeIndex] ?? ""}
-                  onChange={(event) => setCustomDrafts((previous) => previous.map((value, index) => index === activeIndex ? event.target.value : value))}
-                  rows={3}
-                  placeholder={t("questionnaire.customPlaceholder")}
-                  className="w-full resize-y rounded-input border border-border bg-surface px-3 py-2 text-sm text-text outline-none focus:border-accent"
-                />
-                <div className="mt-2 flex justify-end gap-2">
-                  <button type="button" onClick={() => setCustomOpen((previous) => previous.map((value, index) => index === activeIndex ? false : value))} className="rounded-input px-2.5 py-1.5 text-xs text-muted hover:bg-surface-2">{t("common.cancel")}</button>
-                  <button type="button" onClick={saveCustomAnswer} className="rounded-input bg-accent px-2.5 py-1.5 text-xs text-accent-fg">{t("questionnaire.saveAnswer")}</button>
-                </div>
-              </div>
-            )}
-
-            <div className="mt-4 rounded-input border border-border bg-surface-2/35 p-3">
-              <label className="flex items-center gap-1.5 text-xs font-medium text-text" htmlFor={`questionnaire-notes-${activeIndex}`}>
-                <MessageSquareText size={13} className="text-accent" />
-                {t("questionnaire.notes")}
-              </label>
-              <textarea
-                id={`questionnaire-notes-${activeIndex}`}
-                value={notes[activeIndex] ?? ""}
-                onChange={(event) => setNotes((previous) => previous.map((value, index) => index === activeIndex ? event.target.value : value))}
-                rows={2}
-                placeholder={t("questionnaire.notesPlaceholder")}
-                className="mt-2 w-full resize-y rounded-input border border-border bg-surface px-3 py-2 text-sm text-text outline-none focus:border-accent"
-              />
-            </div>
-          </div>
-
-          <aside className="min-w-0 rounded-input border border-border bg-surface-2/35 p-3">
-            <div className="flex items-center gap-1.5 text-xs font-medium text-text"><FileText size={13} className="text-accent" />{t("questionnaire.preview")}</div>
-            {previewOptions.length > 0 ? (
-              <div className="mt-2">
-                <div className="mb-2 flex flex-wrap gap-1">
-                  {current.options.map((option, index) => option.preview && (
-                    <button key={`${option.label}-preview`} type="button" onClick={() => setPreviewIndex(index)} className={cn("rounded-full px-2 py-1 text-[10px]", previewIndex === index ? "bg-accent text-accent-fg" : "bg-surface text-muted hover:text-text")}>
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-                {selectedPreview ? (
-                  <div className="max-h-[280px] overflow-auto rounded-input border border-border bg-surface px-3 py-2">
-                    <MarkdownViewer>{selectedPreview}</MarkdownViewer>
-                  </div>
-                ) : (
-                  <div className="flex min-h-32 items-center justify-center rounded-input border border-dashed border-border px-4 text-center text-xs text-muted">{t("questionnaire.previewHint")}</div>
-                )}
-              </div>
-            ) : (
-              <div className="mt-2 flex min-h-32 items-center justify-center rounded-input border border-dashed border-border px-4 text-center text-xs text-muted">{t("questionnaire.noPreview")}</div>
-            )}
-          </aside>
-        </div>
-      )}
-
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-faint px-4 py-3 sm:px-5">
-        <div className="flex items-center gap-1.5 text-[11px] text-muted">
-          <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-          {review ? t("questionnaire.readyToSubmit", { answered: answeredCount, total: questions.length }) : t("questionnaire.navigationHint")}
-        </div>
-        <div className="flex items-center gap-2">
-          <button type="button" onClick={previous} disabled={!review && activeIndex === 0} className="inline-flex items-center gap-1 rounded-input border border-border px-2.5 py-1.5 text-xs text-muted hover:bg-surface-2 disabled:opacity-40">
-            <ChevronLeft size={14} />{t("common.back")}
+      <footer className="border-t border-faint">
+        <div className="px-4 pt-1.5 sm:px-5">
+          <button
+            type="button"
+            aria-expanded={summaryOpen}
+            onClick={() => setSummaryOpen((open) => !open)}
+            className="flex w-full items-center gap-1.5 rounded-input px-1 py-1 text-left text-xs text-muted transition-colors hover:bg-surface-2 hover:text-text"
+          >
+            <ListChecks size={13} className="text-accent" />
+            <span>{summaryOpen ? t("questionnaire.hideReview") : t("questionnaire.review")}</span>
+            <span className="text-[11px] text-muted">{t("questionnaire.progress", { answered: answeredCount, total: questions.length })}</span>
+            <ChevronDown size={14} className={cn("ml-auto transition-transform", summaryOpen && "rotate-180")} />
           </button>
-          {review ? (
-            <button type="button" onClick={submit} disabled={!canSubmit} className="inline-flex items-center gap-1.5 rounded-input bg-accent px-3 py-1.5 text-xs text-accent-fg disabled:opacity-50">
+        </div>
+
+        {summaryOpen && (
+          <div className="space-y-1 px-4 pb-1.5 pt-1 sm:px-5">
+            {questions.map((question, questionIndex) => {
+              const answer = answers[questionIndex] ?? null;
+              return (
+                <button
+                  key={`${question.question}-summary-${questionIndex}`}
+                  type="button"
+                  onClick={() => openQuestion(questionIndex)}
+                  className="flex w-full items-start gap-2 rounded-input border border-border bg-surface-2/35 px-2.5 py-1.5 text-left transition-colors hover:border-accent/50"
+                >
+                  <span className="w-5 shrink-0 text-[11px] font-mono text-muted">{questionIndex + 1}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium text-text">{question.header || t("questionnaire.question", { number: questionIndex + 1 })}</span>
+                    <span className="block truncate text-xs text-muted">{answer ? answerLabel(answer, noneLabel, customLabel) : t("questionnaire.unanswered")}</span>
+                  </span>
+                  {answer ? <Check size={13} className="mt-0.5 shrink-0 text-ok" /> : <span className="mt-0.5 shrink-0 text-[11px] text-warn">—</span>}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 sm:px-5">
+          <div className="flex items-center gap-1.5">
+            <button type="button" onClick={previous} disabled={openIndex === 0 && !summaryOpen} className="inline-flex items-center gap-1 rounded-input border border-border px-2 py-1 text-xs text-muted transition-colors hover:bg-surface-2 disabled:opacity-40">
+              <ChevronLeft size={13} />{t("common.back")}
+            </button>
+            <button type="button" onClick={next} disabled={openIndex === questions.length - 1} className="inline-flex items-center gap-1 rounded-input border border-border px-2 py-1 text-xs text-muted transition-colors hover:bg-surface-2 disabled:opacity-40">
+              {t("common.next")}<ChevronRight size={13} />
+            </button>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button type="button" onClick={() => onRespond({ cancelled: true })} className="inline-flex items-center rounded-input border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:bg-surface-2 hover:text-text">
+              {t("common.cancel")}
+            </button>
+            <button type="button" onClick={submit} disabled={!canSubmit} className="inline-flex items-center gap-1.5 rounded-input bg-accent px-3 py-1 text-xs text-accent-fg disabled:opacity-50">
               {submitting ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
               {submitting ? t("questionnaire.submitting") : t("questionnaire.submit")}
             </button>
-          ) : (
-            <button type="button" onClick={next} className="inline-flex items-center gap-1 rounded-input bg-accent px-3 py-1.5 text-xs text-accent-fg">
-              {activeIndex === questions.length - 1 ? t("questionnaire.review") : t("common.next")}<ChevronRight size={14} />
-            </button>
-          )}
+          </div>
         </div>
-      </div>
+      </footer>
     </section>
   );
 }

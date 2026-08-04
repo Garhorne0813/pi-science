@@ -108,7 +108,13 @@ export class NodeSessionService {
     await mkdir(resolve(cwd, ".pi-science", "sessions"), { recursive: true });
     return this.withLock(`create:${cwd}`, async () => {
       let runtime: RuntimeRecord | undefined;
-      const config = { ...effectiveConfig(), ...body.config };
+      const defaults = effectiveConfig();
+      const config = {
+        ...defaults,
+        ...body.config,
+        skills: body.config?.skills?.length ? body.config.skills : defaults.skills,
+        extensions: body.config?.extensions?.length ? body.config.extensions : defaults.extensions,
+      };
       const started = await this.startRuntime(cwd, config);
       if ("error" in started) return started;
       runtime = started;
@@ -186,6 +192,9 @@ export class NodeSessionService {
       if ("error" in activated) return activated;
       try {
         await activated.process.sendNotification(type, params);
+        if (type === "extension_ui_response" && typeof params.id === "string") {
+          this.eventHub.resolvePendingInteraction(cwd, sessionId, params.id);
+        }
         return { success: true };
       } catch (error) {
         return { success: false, code: "write_failed", error: String(error) };

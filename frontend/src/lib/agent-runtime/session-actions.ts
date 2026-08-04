@@ -18,7 +18,7 @@ import { registerEventListener } from "./listener";
 import { applyPromptSessionName, backfillSessionName } from "./naming";
 import { recoverMissingSession, reconcilePromptAfterLateStream } from "./recovery";
 import { loadSessionsInternal, optimisticSessionIds } from "./sessions";
-import type { RuntimeState } from "./types";
+import { hasActivePendingInteraction, hasPendingInteractionData, type RuntimeState } from "./types";
 
 type SetState = StoreApi<RuntimeState>["setState"];
 type GetState = StoreApi<RuntimeState>["getState"];
@@ -127,9 +127,13 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         if (runtimeStateResult.status === "fulfilled") {
           const runtimeState = runtimeStateResult.value;
           if (!liveActivityArrived) {
-            nextState.working = runtimeState.is_streaming
+            const runtimeBusy = runtimeState.is_streaming
               || runtimeState.is_compacting
               || runtimeState.pending_message_count > 0;
+            const current = get();
+            const pendingInteraction = hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire);
+            const awaitingUserInput = hasActivePendingInteraction(current.pendingInteraction, current.pendingQuestionnaire);
+            nextState.working = pendingInteraction ? !awaitingUserInput : runtimeBusy;
           }
           nextState.model = runtimeState.model ?? null;
           nextState.thinking = runtimeState.thinking ?? null;
@@ -195,8 +199,11 @@ export function createRuntimeActions(set: SetState, get: GetState) {
 
     sendPrompt: async (message: string): Promise<string | null> => {
       if (!message.trim()) return null;
-      if (get().working) throw new Error("The current conversation is still running");
-      let { activeSessionId, cwd } = get();
+      const initialState = get();
+      if (initialState.working || initialState.pendingInteraction || initialState.pendingQuestionnaire) {
+        throw new Error("The current conversation is still running");
+      }
+      let { activeSessionId, cwd } = initialState;
       const thread = get().thread;
       const userBlock: ThreadBlock = {
         kind: "user",

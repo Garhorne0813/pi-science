@@ -76,6 +76,65 @@ describe("central conversation event hub", () => {
     expect(hub.hasSubscribers(cwd, "session-live")).toBe(false);
   });
 
+  it("re-delivers pending interactions to a fresh subscriber without a cursor", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub({
+      append: async () => undefined,
+      readAfter: async () => [],
+    });
+    await hub.publish(cwd, "session-pending", { type: "questionnaire.asked", sessionId: "session-pending", toolCallId: "call-q1", questions: [] });
+    await hub.publish(cwd, "session-pending", { type: "question.asked", sessionId: "session-pending", requestId: "request-q1", questionnaire: true, toolCallId: "call-q1" });
+
+    const received: string[] = [];
+    await hub.subscribe(cwd, "session-pending", undefined, (record) => {
+      received.push(JSON.parse(record.data).type as string);
+    }, false);
+
+    expect(received).toEqual(["questionnaire.asked", "question.asked"]);
+  });
+
+  it("keeps only the latest generic interaction for refresh recovery", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
+    await hub.publish(cwd, "session-generic", { type: "question.asked", sessionId: "session-generic", requestId: "request-1" });
+    await hub.publish(cwd, "session-generic", { type: "question.asked", sessionId: "session-generic", requestId: "request-2" });
+
+    const received: Record<string, unknown>[] = [];
+    await hub.subscribe(cwd, "session-generic", undefined, (record) => {
+      received.push(JSON.parse(record.data));
+    }, false);
+
+    expect(received).toEqual([expect.objectContaining({ type: "question.asked", requestId: "request-2" })]);
+  });
+
+  it("removes the questionnaire pair when its interaction is resolved", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
+    await hub.publish(cwd, "session-resolved", { type: "questionnaire.asked", sessionId: "session-resolved", toolCallId: "call-q1", questions: [] });
+    await hub.publish(cwd, "session-resolved", { type: "question.asked", sessionId: "session-resolved", requestId: "request-q1", questionnaire: true, toolCallId: "call-q1" });
+    hub.resolvePendingInteraction(cwd, "session-resolved", "request-q1");
+
+    const received: SseEventRecord[] = [];
+    await hub.subscribe(cwd, "session-resolved", undefined, (record) => received.push(record), false);
+
+    expect(received).toHaveLength(0);
+  });
+
+  it("does not re-deliver an interaction after it has been resolved", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub({
+      append: async () => undefined,
+      readAfter: async () => [],
+    });
+    await hub.publish(cwd, "session-resolved", { type: "question.asked", sessionId: "session-resolved", requestId: "request-q1" });
+    await hub.publish(cwd, "session-resolved", { type: "questionnaire.finished", sessionId: "session-resolved", toolCallId: "call-q1" });
+
+    const received: SseEventRecord[] = [];
+    await hub.subscribe(cwd, "session-resolved", undefined, (record) => received.push(record), false);
+
+    expect(received).toHaveLength(0);
+  });
+
   it("preserves exact message_end errors and emits one durable event per Pi event", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();

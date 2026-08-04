@@ -34,6 +34,27 @@ export interface PendingQuestionnaire {
   questions: QuestionnaireQuestion[];
 }
 
+export function hasPendingInteractionData(
+  pendingInteraction: PendingInteraction | null,
+  pendingQuestionnaire: PendingQuestionnaire | null,
+): boolean {
+  return Boolean(pendingInteraction || pendingQuestionnaire);
+}
+
+/** A questionnaire is actionable only after its matching UI request arrives. */
+export function hasActivePendingInteraction(
+  pendingInteraction: PendingInteraction | null,
+  pendingQuestionnaire: PendingQuestionnaire | null,
+): boolean {
+  if (!pendingInteraction) return false;
+  if (!pendingInteraction.questionnaire) return true;
+  return Boolean(
+    pendingQuestionnaire
+    && pendingInteraction.toolCallId
+    && pendingQuestionnaire.toolCallId === pendingInteraction.toolCallId,
+  );
+}
+
 export interface RuntimeState {
   // Connection
   status: "connecting" | "ready" | "error" | "offline";

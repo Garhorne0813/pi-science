@@ -128,6 +128,17 @@ function recordKey(record: SseEventRecord): string {
   return record.id ?? `${record.created_at}\0${record.event ?? ""}\0${record.data}`;
 }
 
+function recordPayload(record: SseEventRecord): Record<string, unknown> | null {
+  try {
+    const payload = JSON.parse(record.data) as unknown;
+    return payload && typeof payload === "object" && !Array.isArray(payload)
+      ? payload as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function sequenceFromCursor(id: string | null): number {
   if (!id) return 0;
   const separator = id.lastIndexOf(":");
@@ -148,6 +159,7 @@ export class ConversationEventHub {
   private readonly sequences = new Map<string, number>();
   private readonly sequenceInitializers = new Map<string, Promise<void>>();
   private readonly subscribers = new Map<string, Set<Subscriber>>();
+  private readonly pendingInteractions = new Map<string, SseEventRecord[]>();
   private readonly publishing = new Map<string, Promise<void>>();
   private readonly pendingText = new Map<string, PendingText>();
   private readonly turns = new Map<string, TurnState>();
@@ -170,6 +182,35 @@ export class ConversationEventHub {
 
   hasSubscribers(cwd: string, sessionId: string): boolean {
     return (this.subscribers.get(streamKey(cwd, sessionId))?.size ?? 0) > 0;
+  }
+
+  resolvePendingInteraction(cwd: string, sessionId: string, requestId: string): void {
+    if (!requestId) return;
+    const key = streamKey(cwd, sessionId);
+    const pending = this.pendingInteractions.get(key);
+    if (!pending) return;
+
+    const request = pending
+      .map((record) => recordPayload(record))
+      .find((payload) => (
+        (payload?.type === "question.asked" || payload?.type === "permission.asked")
+        && payload.requestId === requestId
+      ));
+    const toolCallId = request?.questionnaire === true && typeof request.toolCallId === "string"
+      ? request.toolCallId
+      : null;
+    const remaining = pending.filter((record) => {
+      const payload = recordPayload(record);
+      if (!payload) return true;
+      if (
+        (payload.type === "question.asked" || payload.type === "permission.asked")
+        && payload.requestId === requestId
+      ) return false;
+      if (toolCallId !== null && payload.type === "questionnaire.asked" && payload.toolCallId === toolCallId) return false;
+      return true;
+    });
+    if (remaining.length > 0) this.pendingInteractions.set(key, remaining);
+    else this.pendingInteractions.delete(key);
   }
 
   bind(cwd: string, process: PiProcess, options: BindingOptions): void {
@@ -268,6 +309,15 @@ export class ConversationEventHub {
     for (const record of records) {
       if (!send(record)) return unsubscribe;
     }
+    // A page refresh has no in-memory SSE cursor. Re-deliver interactions that
+    // are still waiting for a browser response so the UI can reconstruct the
+    // prompt without replaying the whole durable conversation.
+    const pendingInteraction = this.pendingInteractions.get(key);
+    if (pendingInteraction) {
+      for (const record of pendingInteraction) {
+        if (!send(record)) return unsubscribe;
+      }
+    }
     subscriber.ready = true;
     for (const record of subscriber.pending) {
       if (!send(record)) return unsubscribe;
@@ -291,6 +341,22 @@ export class ConversationEventHub {
         created_at: new Date().toISOString(),
       };
       try { await this.eventStore.append(cwd, sessionId, record); } catch { /* live delivery must survive a persistence outage */ }
+      const type = String(payload.type ?? "");
+      if (type === "questionnaire.asked") {
+        this.pendingInteractions.set(key, [record]);
+      } else if (type === "question.asked" && payload.questionnaire === true) {
+        const pending = this.pendingInteractions.get(key) ?? [];
+        const questionnaire = pending.find((candidate) => {
+          const candidatePayload = recordPayload(candidate);
+          return candidatePayload?.type === "questionnaire.asked"
+            && candidatePayload.toolCallId === payload.toolCallId;
+        });
+        this.pendingInteractions.set(key, questionnaire ? [questionnaire, record] : [record]);
+      } else if (type === "question.asked" || type === "permission.asked") {
+        this.pendingInteractions.set(key, [record]);
+      } else if (type === "questionnaire.finished" || type === "agent_settled" || type === "session.idle") {
+        this.pendingInteractions.delete(key);
+      }
       for (const subscriber of this.subscribers.get(key) ?? []) {
         if (subscriber.cancelled) continue;
         if (subscriber.ready) {

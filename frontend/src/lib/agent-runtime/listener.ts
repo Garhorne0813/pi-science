@@ -187,7 +187,15 @@ export function registerEventListener(client: PiScienceClient) {
     }
 
     if (event.type === "questionnaire.finished") {
-      useRuntimeStore.setState({ pendingQuestionnaire: null });
+      const current = useRuntimeStore.getState();
+      const toolCallId = String(event.toolCallId || "");
+      const questionnaireMatches = current.pendingQuestionnaire?.toolCallId === toolCallId;
+      const interactionMatches = current.pendingInteraction?.questionnaire === true
+        && current.pendingInteraction.toolCallId === toolCallId;
+      useRuntimeStore.setState({
+        ...(questionnaireMatches ? { pendingQuestionnaire: null } : {}),
+        ...(interactionMatches ? { pendingInteraction: null } : {}),
+      });
       return;
     }
 

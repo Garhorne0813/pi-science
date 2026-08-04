@@ -56,6 +56,30 @@ describe("runtime session actions", () => {
     expect(current.status).toBe("ready");
   });
 
+  it("keeps a partial questionnaire busy until its bridge request arrives", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: "session-a",
+      working: true,
+      pendingQuestionnaire: { toolCallId: "call-q1", questions: [] },
+    });
+
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+
+    expect(useRuntimeStore.getState().working).toBe(true);
+    expect(useRuntimeStore.getState().pendingQuestionnaire?.toolCallId).toBe("call-q1");
+    await expect(useRuntimeStore.getState().sendPrompt("do not interrupt")).rejects.toThrow(
+      "The current conversation is still running",
+    );
+  });
+
   it("ignores a stale history response after switching sessions", async () => {
     let resolveFirst!: (response: Response) => void;
     const firstMessages = new Promise<Response>((resolve) => { resolveFirst = resolve; });
