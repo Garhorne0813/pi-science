@@ -167,28 +167,35 @@ export function ProjectsLayout() {
 
 /* ── Workspace Session List ── */
 
-function WorkspaceSessionList({ cwd }: { cwd: string }) {
+export function WorkspaceSessionList({ cwd }: { cwd: string }) {
   const { t } = useTranslation();
   const { toast } = useFeedback();
   const sessions = useRuntimeStore((s) => s.sessions);
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
   const forkSession = useRuntimeStore((s) => s.forkSession);
-  const createNewSession = useRuntimeStore((s) => s.createNewSession);
   const loadSessions = useRuntimeStore((s) => s.loadSessions);
   const deleteSession = useRuntimeStore((s) => s.deleteSession);
   const navigate = useNavigate();
+  const location = useLocation();
   const [deleting, setDeleting] = useState<string | null>(null);
   const [forking, setForking] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    // Consumed once: after deleting the active session (or starting a new
+    // one) we deliberately landed on the blank workspace root — do not
+    // auto-open the most recent session in that case.
+    if (useUiStore.getState().suppressAutoSessionNav) {
+      useUiStore.getState().setSuppressAutoSessionNav(false);
+      return;
+    }
     loadSessions(cwd)
       .then((merged) => {
         if (cancelled) return;
         // Auto-load most recent session if none active
         const state = useRuntimeStore.getState();
         const workspaceRoot = `/workspace/${encodeURIComponent(cwd)}`;
-        if (merged.length > 0 && !state.activeSessionId && window.location.pathname === workspaceRoot) {
+        if (merged.length > 0 && !state.activeSessionId && location.pathname === workspaceRoot) {
           const latest = merged[0];
           navigate(`/workspace/${encodeURIComponent(cwd)}/session/${latest.id}`);
         }
@@ -197,17 +204,32 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
         if (!cancelled) toast(error instanceof Error ? error.message : "Unable to load workspace sessions", "error");
       });
     return () => { cancelled = true; };
-  }, [cwd, loadSessions, navigate, toast]);
+  }, [cwd, loadSessions, navigate, toast, location.pathname]);
 
   const handleDelete = async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
     if (deleting) return;
     setDeleting(sessionId);
+    // Read freshness after the await: the user may have switched sessions
+    // while the delete was in flight, and we must not kick them out of the
+    // session they are now viewing.
+    const wasActive = useRuntimeStore.getState().activeSessionId === sessionId;
     try {
       await deleteSession(sessionId);
-      if (activeSessionId === sessionId) {
-        const newId = await createNewSession();
-        navigate(`/workspace/${encodeURIComponent(cwd)}/session/${newId}`);
+      // Only the active-session delete lands on the blank workspace, and only
+      // when the store agrees the session is really gone (deleteSession
+      // detaches the stream and clears activeSessionId). The user could have
+      // opened another session meanwhile, or switched workspaces.
+      const state = useRuntimeStore.getState();
+      if (wasActive && state.activeSessionId === null && state.cwd === cwd) {
+        // deleteSession already detached the stream and blanked the thread.
+        // Return to the workspace landing (blank composer) instead of creating
+        // a fresh session — the first prompt creates one lazily. Set a flag so
+        // the session-list auto-nav effect does not yank the user straight
+        // back into the most recent session. replace: true keeps the landing
+        // as the entry point instead of stacking history entries.
+        useUiStore.getState().setSuppressAutoSessionNav(true);
+        navigate(`/workspace/${encodeURIComponent(cwd)}`, { replace: true });
       }
     } catch (err) {
       toast(err instanceof Error ? err.message : "Unable to delete session", "error");
@@ -218,7 +240,10 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
 
   const handleNew = async () => {
     // Session creation is lazy: the first prompt creates the server-side
-    // session, avoiding an empty Pi process for every click.
+    // session, avoiding an empty Pi process for every click. Suppress the
+    // session-list auto-nav so the blank landing is not immediately replaced
+    // by the most recent session.
+    useUiStore.getState().setSuppressAutoSessionNav(true);
     navigate(`/workspace/${encodeURIComponent(cwd)}`);
   };
 
@@ -254,6 +279,13 @@ function WorkspaceSessionList({ cwd }: { cwd: string }) {
         ) : (
           sessions.slice(0, 30).map((s) => (
             <div key={s.id} className="group relative flex items-center rounded-input hover:bg-surface-2">
+              {/* Current-conversation indicator: a dot on the left edge; other
+                  sessions keep an invisible dot so the list does not jump. */}
+              <span
+                aria-hidden
+                className={cn("ml-1.5 h-1.5 w-1.5 shrink-0 rounded-full", activeSessionId === s.id && "bg-accent")}
+                style={activeSessionId === s.id ? undefined : { visibility: "hidden" }}
+              />
               <button
                 onClick={() => {
                   navigate(`/workspace/${encodeURIComponent(cwd)}/session/${s.id}`);

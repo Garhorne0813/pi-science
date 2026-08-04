@@ -15,6 +15,9 @@ import { MessageActions } from "./MessageActions";
 
 /** Render blocks, grouping consecutive tool cards together. */
 export function groupBlocks(blocks: ThreadBlock[]): ThreadBlock[][] {
+  // Defensive: a transient store state (e.g. mid-recovery) must never crash
+  // the whole conversation render with "blocks is not iterable".
+  if (!Array.isArray(blocks)) return [];
   const groups: ThreadBlock[][] = [];
   let toolGroup: ToolCallBlock[] = [];
   const flushTools = () => {
@@ -32,22 +35,29 @@ export function groupBlocks(blocks: ThreadBlock[]): ThreadBlock[][] {
   return groups;
 }
 
-export function renderBlockGroup(blocks: ThreadBlock[], codeRunner: CodeRunner) {
+export function renderBlockGroup(blocks: ThreadBlock[], codeRunner: CodeRunner, actionTextByBlock?: Map<string, string>) {
   const result: React.ReactNode[] = [];
-  const actionTextByBlock = agentActionTextByBlock(blocks);
+  // Compute the copy-button map across the WHOLE thread once (see
+  // renderBlocks): the guard inside agentActionTextByBlock needs the blocks
+  // that follow the agent block (e.g. tool calls) to decide whether this is
+  // the final answer. A per-group computation never sees the trailing tools,
+  // so every agent block would wrongly get a copy button.
+  const effectiveActionText = actionTextByBlock ?? agentActionTextByBlock(blocks);
   if (blocks.every((block): block is ToolCallBlock => block.kind === "tool")) {
     if (blocks.length > 1) result.push(<ToolGroup key={blocks[0].id} blocks={blocks} />);
     else if (blocks[0]) result.push(<ToolCard key={blocks[0].id} block={blocks[0]} />);
     return result;
   }
   for (const block of blocks) {
-    result.push(<BlockRenderer key={block.id} block={block} actionText={actionTextByBlock.get(block.id)} codeRunner={codeRunner} />);
+    result.push(<BlockRenderer key={block.id} block={block} actionText={effectiveActionText.get(block.id)} codeRunner={codeRunner} />);
   }
   return result;
 }
 
 export function renderBlocks(blocks: ThreadBlock[], codeRunner: CodeRunner) {
-  return groupBlocks(blocks).flatMap((group) => renderBlockGroup(group, codeRunner));
+  if (!Array.isArray(blocks)) return null;
+  const actionTextByBlock = agentActionTextByBlock(blocks);
+  return groupBlocks(blocks).flatMap((group) => renderBlockGroup(group, codeRunner, actionTextByBlock));
 }
 
 /* ── Block Renderers ── */

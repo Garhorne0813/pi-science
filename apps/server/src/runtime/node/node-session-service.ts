@@ -27,6 +27,16 @@ type RuntimeRecord = {
   busy: boolean;
   operationPending?: PendingOperation;
   operationDeadline?: number;
+  /** Consecutive idle re-checks while a prompt/compact was accepted but the
+   *  agent has not started its turn yet. Pi Orbit can take a moment to spin
+   *  up a turn after the HTTP ack; we must not declare failure on the first
+   *  idle probe. Only applies to the accepted-then-idle window (prompt returned
+   *  OK); a transport timeout path skips this and fails fast. */
+  reconcileAttempts?: number;
+  /** True when the pending operation was acknowledged via a transport timeout
+   *  rather than an OK response. Those are already-dead operations: an idle
+   *  probe must fail fast, not retry into a phantom turn. */
+  reconcileFromTimeout?: boolean;
   restartPending: boolean;
   reconcileTimer?: NodeJS.Timeout;
   idleTimer?: NodeJS.Timeout;
@@ -150,7 +160,10 @@ export class NodeSessionService {
       if (type === "prompt" || type === "compact") this.beginPendingOperation(runtime, type);
       const result = await runtime.process.sendCommand(type, params);
       if (!result.success) {
-        if ((type === "prompt" || type === "compact") && result.code === "timeout") this.scheduleOperationReconciliation(runtime, true);
+        if ((type === "prompt" || type === "compact") && result.code === "timeout") {
+          runtime.reconcileFromTimeout = true;
+          this.scheduleOperationReconciliation(runtime, true);
+        }
         else if (type === "prompt" || type === "compact") this.clearPendingOperation(runtime);
         return result;
       }
@@ -555,6 +568,8 @@ export class NodeSessionService {
     runtime.reconcileTimer = undefined;
     runtime.operationPending = operation;
     runtime.operationDeadline = Date.now() + reconciliationDeadlineMs();
+    runtime.reconcileAttempts = 0;
+    runtime.reconcileFromTimeout = false;
     runtime.busy = true;
   }
 
@@ -563,6 +578,8 @@ export class NodeSessionService {
     runtime.reconcileTimer = undefined;
     runtime.operationPending = undefined;
     runtime.operationDeadline = undefined;
+    runtime.reconcileAttempts = 0;
+    runtime.reconcileFromTimeout = false;
     runtime.busy = false;
   }
 
@@ -586,6 +603,18 @@ export class NodeSessionService {
         }
         const operation = runtime.operationPending;
         if (state.success && !active) {
+          // The HTTP ack can arrive before Pi Orbit actually starts the turn
+          // (runtime resume, model warm-up). Do not declare failure on the
+          // first idle probe: retry while the deadline remains, and only give
+          // up after several consecutive idle checks. A transport-timeout
+          // acknowledgement is already a dead operation — fail fast.
+          const attempts = (runtime.reconcileAttempts ?? 0) + 1;
+          runtime.reconcileAttempts = attempts;
+          if (!runtime.reconcileFromTimeout && attempts < 5 && Date.now() < (runtime.operationDeadline ?? 0)) {
+            runtime.busy = true;
+            this.scheduleOperationReconciliation(runtime, false);
+            return;
+          }
           this.clearPendingOperation(runtime);
           if (operation === "prompt") {
             await this.eventHub.publish(runtime.cwd, runtime.activeSessionId, {
@@ -597,6 +626,7 @@ export class NodeSessionService {
           }
           return;
         }
+        runtime.reconcileAttempts = 0;
         const sessionId = runtime.activeSessionId;
         const config = { ...runtime.config };
         this.clearPendingOperation(runtime);

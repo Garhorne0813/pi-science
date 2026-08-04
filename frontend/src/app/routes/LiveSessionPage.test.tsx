@@ -947,3 +947,71 @@ describe("scroll and nav behavior (docs/markdown.md §3.16 a/b/d)", () => {
     }
   });
 });
+
+describe("defensive thread shape and copy actions (docs/pr30markdown.md 3.4/3.5/3.6)", () => {
+  function toolBlock(id: string, tool: string): ThreadBlock {
+    return { kind: "tool", id, callId: `${id}-call`, tool, status: "done", output: "tool output" };
+  }
+
+  beforeEach(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn(async () => undefined) },
+    });
+  });
+
+  it("renders the welcome composer without crashing when thread blocks are malformed", async () => {
+    useRuntimeStore.setState({
+      thread: { blocks: "garbage" as unknown as ThreadBlock[], index: {}, loaded: true },
+    });
+    await renderReady();
+    expect(screen.getByLabelText("Send message")).toBeInTheDocument();
+  });
+
+  it("shows the copy action only on the final assistant answer, copying the merged turn text", async () => {
+    useRuntimeStore.setState({
+      thread: {
+        blocks: [
+          userBlock("u1", "do the thing"),
+          agentBlock("a1", "Let me check that for you."),
+          toolBlock("t1", "read"),
+          agentBlock("a2", "Here is the final answer."),
+        ],
+        index: { u1: 0, a1: 1, t1: 2, a2: 3 },
+        loaded: true,
+      },
+    });
+    await renderReady();
+
+    // One copy button on the user message, one on the final assistant block —
+    // the assistant narration before the tool call must not show one.
+    const copyButtons = screen.getAllByRole("button", { name: "Copy" });
+    expect(copyButtons).toHaveLength(2);
+    const userMessage = document.getElementById("user-msg-u1")!;
+    const agentCopy = copyButtons.find((button) => !userMessage.contains(button));
+    expect(agentCopy).toBeDefined();
+
+    fireEvent.click(agentCopy!);
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      "Let me check that for you.\n\nHere is the final answer.",
+    );
+  });
+
+  it("hides the copy action when the turn ends on a tool call with no final assistant answer", async () => {
+    useRuntimeStore.setState({
+      thread: {
+        blocks: [
+          userBlock("u1", "do the thing"),
+          agentBlock("a1", "Working on it."),
+          toolBlock("t1", "read"),
+        ],
+        index: { u1: 0, a1: 1, t1: 2 },
+        loaded: true,
+      },
+    });
+    await renderReady();
+
+    const copyButtons = screen.getAllByRole("button", { name: "Copy" });
+    expect(copyButtons).toHaveLength(1);
+  });
+});

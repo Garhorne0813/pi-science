@@ -9,7 +9,7 @@ import { useUiStore } from "../../lib/ui";
 import { cn } from "../../lib/ui";
 import { useRequiredWorkspaceCwd } from "../../lib/workspace";
 import { projectKnowledgeApi, useReviewPolicy } from "../../lib/knowledge";
-import { fetchDynamicCommands, resetDynamicCommands } from "../../lib/conversation";
+import { fetchDynamicCommands, resetDynamicCommands, agentActionTextByBlock } from "../../lib/conversation";
 import { SlashCommandMenu } from "../../components/SlashCommandMenu";
 import { ConversationWelcome } from "../../components/conversation/ConversationWelcome";
 import { ModelControlMenu } from "../../components/conversation/ModelControlMenu";
@@ -39,7 +39,12 @@ export function LiveSessionPage() {
   // Field-level selectors, not a whole-store subscription: a streamed token only
   // touches `thread`/`working`, so nothing that reads the other fields re-renders.
   const status = useRuntimeStore((s) => s.status);
-  const thread = useRuntimeStore((s) => s.thread);
+  const rawThread = useRuntimeStore((s) => s.thread);
+  // Defensive: transient store states (mid-recovery / mid-delete) must never
+  // crash rendering with "blocks is not iterable" — normalize to a safe shape.
+  const thread = Array.isArray(rawThread?.blocks)
+    ? rawThread
+    : { blocks: [] as ThreadBlock[], index: {} as Record<string, number>, loaded: true };
   const sessions = useRuntimeStore((s) => s.sessions);
   const working = useRuntimeStore((s) => s.working);
   const historyHasMore = useRuntimeStore((s) => s.historyHasMore);
@@ -146,6 +151,11 @@ export function LiveSessionPage() {
   }, [working]);
 
   const blockGroups = useMemo(() => groupBlocks(thread.blocks), [thread.blocks]);
+  // Copy-button eligibility computed across the WHOLE thread (not per group):
+  // agentActionTextByBlock needs the trailing tool blocks after an agent block
+  // to decide whether it is the final answer. A per-group computation would
+  // give every agent block a copy button.
+  const actionTextByBlock = useMemo(() => agentActionTextByBlock(thread.blocks), [thread.blocks]);
 
   const handleLoadOlder = async () => {
     if (!historyHasMore || historyLoading) return;
@@ -433,7 +443,7 @@ export function LiveSessionPage() {
                   }}
                   itemContent={(_index, group) => (
                     <div className="mx-auto w-full max-w-[824px] px-8 pb-4">
-                      {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" })}
+                      {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock)}
                     </div>
                   )}
                 />

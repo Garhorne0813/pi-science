@@ -25,6 +25,7 @@ beforeEach(async () => {
     'let sessionId = sessionArg >= 0 ? JSON.parse(fs.readFileSync(args[sessionArg + 1], "utf8").split("\\n")[0]).id : `fresh-${process.pid}`;',
     'let counter = 0;',
     'let stateRequests = 0;',
+    'let agentStartNotified = false;',
     'let busy = false;',
     'let modelProvider = "openrouter";',
     'let modelId = "openai/gpt-5.1";',
@@ -39,10 +40,10 @@ beforeEach(async () => {
     '  const request = JSON.parse(line);',
     '  if (log) fs.appendFileSync(log, JSON.stringify(request) + "\\n");',
     '  if (!request.id) return;',
-    '  if (request.type === "get_state") { stateRequests++; if (process.env.FAKE_PI_MODE === "restart-fail-once" && startNumber === 2) return; if (process.env.FAKE_PI_MODE === "new-session-state-fails" && sessionId.startsWith("generated-")) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (Number(process.env.FAKE_PI_FAIL_STATE_AFTER || 0) > 0 && stateRequests > Number(process.env.FAKE_PI_FAIL_STATE_AFTER)) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); const orbitBusyOnly = process.env.FAKE_PI_MODE === "orbit-busy-without-agent-start"; return respond(request, { data: { sessionId, busy, isStreaming: orbitBusyOnly ? false : busy, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }',
+    '  if (request.type === "get_state") { stateRequests++; if (process.env.FAKE_PI_MODE === "restart-fail-once" && startNumber === 2) return; if (process.env.FAKE_PI_MODE === "new-session-state-fails" && sessionId.startsWith("generated-")) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (Number(process.env.FAKE_PI_FAIL_STATE_AFTER || 0) > 0 && stateRequests > Number(process.env.FAKE_PI_FAIL_STATE_AFTER)) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (process.env.FAKE_PI_MODE === "never-starts") return respond(request, { data: { sessionId, busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); if (process.env.FAKE_PI_MODE === "delayed-agent-start") { if (stateRequests > Number(process.env.FAKE_PI_STATE_DELAY || 3)) { if (!agentStartNotified) { agentStartNotified = true; process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); } return respond(request, { data: { sessionId, busy: true, isStreaming: true, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); } return respond(request, { data: { sessionId, busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); } const orbitBusyOnly = process.env.FAKE_PI_MODE === "orbit-busy-without-agent-start"; return respond(request, { data: { sessionId, busy, isStreaming: orbitBusyOnly ? false : busy, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }',
     '  if (request.type === "switch_session") { sessionId = JSON.parse(fs.readFileSync(request.sessionPath, "utf8").split("\\n")[0]).id; return respond(request); }',
     '  if (request.type === "new_session" || request.type === "clone" || request.type === "fork") { sessionId = `generated-${++counter}-${process.pid}`; return respond(request); }',
-    '  if (request.type === "prompt") { if (process.env.FAKE_PI_MODE === "prompt-timeout") return; busy = true; respond(request); if (process.env.FAKE_PI_MODE !== "orbit-busy-without-agent-start") process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); return; }',
+    '  if (request.type === "prompt") { if (process.env.FAKE_PI_MODE === "prompt-timeout") return; busy = true; respond(request); if (process.env.FAKE_PI_MODE !== "orbit-busy-without-agent-start" && process.env.FAKE_PI_MODE !== "never-starts" && process.env.FAKE_PI_MODE !== "delayed-agent-start") process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); return; }',
     '  if (request.type === "compact") { if (process.env.FAKE_PI_MODE === "compact-timeout") return; return respond(request); }',
     '  if (request.type === "abort") { busy = false; respond(request); process.stdout.write(JSON.stringify({ type: "agent_settled", handledWithoutTurn: true }) + "\\n"); return; }',
     '  if (request.type === "get_commands") return process.env.FAKE_PI_MODE === "cancel-commands" ? respond(request, { data: { cancelled: true } }) : respond(request, { data: { commands: [{ name: "review", source: "skill" }] } });',
@@ -283,6 +284,68 @@ describe("Node session lifecycle", () => {
       message: "The prompt was accepted but the Pi runtime did not start an agent turn.",
     }));
     await service.command("session-orbit-busy", cwd, "abort");
+    publish.mockRestore();
+    await service.shutdownAll();
+  });
+
+  it("retries idle probes after a prompt ack instead of reporting did-not-start while the turn is spinning up", async () => {
+    process.env.FAKE_PI_MODE = "delayed-agent-start";
+    process.env.FAKE_PI_STATE_DELAY = "3";
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-slow-start");
+    const publish = vi.spyOn(conversationEventHub, "publish");
+    await service.resume("session-slow-start", cwd);
+
+    await expect(service.command("session-slow-start", cwd, "prompt", { message: "test" })).resolves.toMatchObject({ success: true });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(publish).not.toHaveBeenCalledWith(cwd, "session-slow-start", expect.objectContaining({
+      message: "The prompt was accepted but the Pi runtime did not start an agent turn.",
+    }));
+    await expect(service.state("session-slow-start", cwd)).resolves.toMatchObject({ id: "session-slow-start" });
+    await service.command("session-slow-start", cwd, "abort");
+    publish.mockRestore();
+    await service.shutdownAll();
+  });
+
+  it("gives up after five consecutive idle probes and reports did-not-start exactly once", async () => {
+    process.env.FAKE_PI_MODE = "never-starts";
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-never-starts");
+    const publish = vi.spyOn(conversationEventHub, "publish");
+    await service.resume("session-never-starts", cwd);
+
+    await expect(service.command("session-never-starts", cwd, "prompt", { message: "test" })).resolves.toMatchObject({ success: true });
+    await waitFor(() => publish.mock.calls.some((call) => (call[2] as { message?: string } | undefined)?.message === "The prompt was accepted but the Pi runtime did not start an agent turn."));
+    expect(publish).toHaveBeenCalledWith(cwd, "session-never-starts", expect.objectContaining({ type: "session.idle" }));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const didNotStartAfter = publish.mock.calls.filter((call) => (call[2] as { message?: string } | undefined)?.message === "The prompt was accepted but the Pi runtime did not start an agent turn.");
+    expect(didNotStartAfter).toHaveLength(1);
+
+    // Exactly five idle probes after the prompt ack — no more, no less.
+    const log = await readFile(process.env.FAKE_PI_LOG!, "utf8");
+    const promptLine = log.split("\n").findIndex((line) => line.includes('"type":"prompt"'));
+    const idleProbes = log.split("\n").slice(promptLine + 1).filter((line) => line.includes('"type":"get_state"')).length;
+    expect(idleProbes).toBe(5);
+    publish.mockRestore();
+    await service.shutdownAll();
+  });
+
+  it("fails fast on the first idle probe after a transport timeout instead of retrying", async () => {
+    process.env.FAKE_PI_MODE = "prompt-timeout";
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-timeout-failfast");
+    const publish = vi.spyOn(conversationEventHub, "publish");
+    await service.resume("session-timeout-failfast", cwd);
+    const before = await readFile(process.env.FAKE_PI_LOG!, "utf8");
+
+    await expect(service.command("session-timeout-failfast", cwd, "prompt", { message: "test" })).resolves.toMatchObject({ code: "timeout" });
+    await waitFor(() => publish.mock.calls.some((call) => (call[2] as { type?: string } | undefined)?.type === "session.idle"));
+
+    const after = await readFile(process.env.FAKE_PI_LOG!, "utf8");
+    const count = (text: string) => text.split("\n").filter((line) => line.includes('"type":"get_state"')).length;
+    // Preflight refresh + a single immediate fail-fast probe — no retry rounds.
+    expect(count(after) - count(before)).toBe(2);
     publish.mockRestore();
     await service.shutdownAll();
   });
