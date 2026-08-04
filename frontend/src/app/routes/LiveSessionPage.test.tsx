@@ -15,8 +15,21 @@
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { ComponentType, ReactNode, Ref } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import type { VirtuosoHandle } from "react-virtuoso";
+
+const { virtuosoProps } = vi.hoisted(() => ({ virtuosoProps: [] as Array<Record<string, unknown>> }));
+vi.mock("react-virtuoso", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-virtuoso")>();
+  const React = await import("react");
+  const Virtuoso = React.forwardRef((props: Record<string, unknown>, ref) => {
+    virtuosoProps.push(props);
+    return React.createElement(actual.Virtuoso, { ...props, ref: ref as Ref<VirtuosoHandle> });
+  });
+  return { ...actual, Virtuoso };
+});
 
 vi.mock("../../components/conversation/ModelControlMenu", () => ({
   // The real menu is a Radix dropdown; the behaviors under test are the page's
@@ -38,14 +51,13 @@ vi.mock("../../components/conversation/ModelControlMenu", () => ({
   ),
 }));
 
-import { ConversationFooter, LiveSessionPage } from "./LiveSessionPage";
+import { LiveSessionPage } from "./LiveSessionPage";
 import { WorkspaceProvider } from "../../lib/workspace";
 import { FeedbackContext } from "../../components/feedback/feedback-context";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
 import { queryClient } from "../../lib/client/query-client";
 import { resetDynamicCommands } from "../../lib/conversation";
-import { QuestionnairePrompt } from "../../components/conversation/QuestionnairePrompt";
 import type { PendingInteraction, PendingQuestionnaire } from "../../lib/agent-runtime";
 import i18n from "../../i18n";
 import type { ThreadBlock } from "../../types/thread";
@@ -158,6 +170,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   overrides = [];
+  virtuosoProps.length = 0;
   fetchMock.mockClear();
   vi.stubGlobal("fetch", fetchMock);
   IOStub.instances = [];
@@ -486,7 +499,37 @@ describe("turn-completion effects", () => {
 
 
 describe("stable Virtuoso footer", () => {
-  it("preserves questionnaire answers when the stable footer rerenders", () => {
+  it("uses the wired Footer, keeps its identity stable, and renders updated context", async () => {
+    type FooterContext = {
+      renderInteractionPrompt: () => ReactNode;
+      working: boolean;
+      pendingInteraction: PendingInteraction | null;
+    };
+    type VirtuosoProps = {
+      context?: FooterContext;
+      components?: { Footer?: ComponentType<{ context: FooterContext }> };
+    };
+    const latestProps = () => virtuosoProps.at(-1) as VirtuosoProps | undefined;
+
+    useRuntimeStore.setState({
+      thread: { blocks: [userBlock("u1", "Earlier question")], index: { u1: 0 }, loaded: true },
+    });
+    await renderReady();
+    await waitFor(() => expect(latestProps()?.components?.Footer).toBeDefined());
+
+    const initial = latestProps();
+    if (!initial?.components?.Footer || !initial.context) throw new Error("Virtuoso Footer was not wired");
+    const Footer = initial.components.Footer;
+    const footerView = render(<Footer context={initial.context} />);
+
+    act(() => { useRuntimeStore.setState({ working: true }); });
+    await waitFor(() => expect(latestProps()?.context?.working).toBe(true));
+    const workingProps = latestProps();
+    expect(workingProps?.components?.Footer).toBe(Footer);
+    if (!workingProps?.context) throw new Error("updated Virtuoso context was not captured");
+    footerView.rerender(<Footer context={workingProps.context} />);
+    expect(footerView.container).toHaveTextContent("Working…");
+
     const interaction: PendingInteraction = {
       requestId: "questionnaire-request",
       method: "input",
@@ -506,20 +549,28 @@ describe("stable Virtuoso footer", () => {
         ],
       }],
     };
-    const renderPrompt = () => <QuestionnairePrompt questionnaire={questionnaire} interaction={interaction} onRespond={vi.fn()} />;
-    const view = render(<ConversationFooter context={{ renderInteractionPrompt: renderPrompt, working: false, pendingInteraction: interaction }} />);
+    act(() => { useRuntimeStore.setState({ pendingInteraction: interaction, pendingQuestionnaire: questionnaire }); });
+    await waitFor(() => expect(latestProps()?.context?.pendingInteraction).toBe(interaction));
+    const questionnaireProps = latestProps();
+    expect(questionnaireProps?.components?.Footer).toBe(Footer);
+    expect(questionnaireProps?.context?.renderInteractionPrompt).not.toBe(initial.context.renderInteractionPrompt);
+    if (!questionnaireProps?.context) throw new Error("questionnaire Virtuoso context was not captured");
+    footerView.rerender(<Footer context={questionnaireProps.context} />);
+    expect(footerView.container).toHaveTextContent("Which mode should we use?");
 
-    const option = screen.getByRole("button", { name: /Fast/ });
+    const option = within(footerView.container).getByRole("button", { name: /Fast/ });
     fireEvent.click(option);
     expect(option).toHaveAttribute("aria-pressed", "true");
 
-    // jsdom does not reliably lay out Virtuoso's virtual footer, so this
-    // contract test rerenders the extracted Footer type directly. The same
-    // stable type is what Virtuoso receives through components.Footer.
-    view.rerender(<ConversationFooter context={{ renderInteractionPrompt: renderPrompt, working: true, pendingInteraction: interaction }} />);
-    const selectedOption = screen.getAllByRole("button", { name: /Fast/ }).find((button) => button.hasAttribute("aria-pressed"));
+    act(() => { useRuntimeStore.setState({ working: false }); });
+    await waitFor(() => expect(latestProps()?.context?.working).toBe(false));
+    const settledProps = latestProps();
+    expect(settledProps?.components?.Footer).toBe(Footer);
+    if (!settledProps?.context) throw new Error("settled Virtuoso context was not captured");
+    footerView.rerender(<Footer context={settledProps.context} />);
+    const selectedOption = within(footerView.container).getAllByRole("button", { name: /Fast/ }).find((button) => button.hasAttribute("aria-pressed"));
     expect(selectedOption).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("region", { name: "Answer a few questions" })).toBeInTheDocument();
+    expect(within(footerView.container).getByRole("region", { name: "Answer a few questions" })).toBeInTheDocument();
   });
 });
 
