@@ -85,7 +85,7 @@ describe("getSkillContent", () => {
     expect(result).toEqual({ ok: false, error: "not-found" });
   });
 
-  it("rejects a SKILL.md that is a symlink escaping the source root", async () => {
+  it.skipIf(process.platform === "win32")("rejects a SKILL.md that is a symlink escaping the source root", async () => {
     const cwd = tmp();
     await mkdir(join(cwd, ".pi-science"), { recursive: true });
     await mkdir(join(cwd, ".pi", "skills", "alpha"), { recursive: true });
@@ -96,7 +96,7 @@ describe("getSkillContent", () => {
     expect(result).toEqual({ ok: false, error: "unavailable" });
   });
 
-  it("rejects a SKILL.md symlink that resolves outside the user skills root", async () => {
+  it.skipIf(process.platform === "win32")("rejects a SKILL.md symlink that resolves outside the user skills root", async () => {
     const home = process.env.HOME!;
     const userDir = join(home, ".pi", "agent", "skills");
     await mkdir(join(userDir, "alpha"), { recursive: true });

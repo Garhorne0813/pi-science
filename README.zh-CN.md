@@ -40,6 +40,7 @@
 - Python 3.11 或更高版本
 - pnpm
 - 一个 LLM 提供商 API Key，或可信的 OpenAI / Anthropic 兼容本地端点
+- Windows：PowerShell 5.1 或更高版本；只有下载新的 Pi runtime 时才需要 Git Bash
 
 ### 一键安装并启动
 
@@ -60,7 +61,14 @@ bash scripts/install.sh
 bash scripts/start.sh
 ```
 
-Shell 启动器面向 macOS/Linux 设计，并计划用于 WSL；CI 当前只在 Linux 上验证其生命周期。Git Bash 仅提供 best-effort 支持，CI 不验证其进程树和信号语义；目前也不提供原生 PowerShell/CMD 启动器。它有意运行 `tsx watch` 与 Vite 开发服务器，不是生产部署服务器。安装完成后的启动过程直接调用 package-local 可执行文件，因此运行时不需要 npm 或 pnpm wrapper；安装、构建和依赖更新仍然需要 pnpm。
+Windows 使用原生 PowerShell 等价脚本：
+
+```powershell
+powershell -File scripts/install.ps1
+powershell -File scripts/start.ps1
+```
+
+Shell 启动器面向 macOS/Linux 设计，并计划用于 WSL；CI 当前只在 Linux 上验证其生命周期。PowerShell 安装器会尽量复用已有 Pi runtime；全新下载 runtime 时仍需要 Git Bash。两种启动器都会运行 `tsx watch` 与 Vite 开发服务器，因此不是生产部署服务器。安装完成后的启动过程直接调用 package-local 可执行文件，因此运行时不需要 npm 或 pnpm wrapper；安装、构建和依赖更新仍然需要 pnpm。
 
 ### `pi-science` 命令
 
@@ -73,9 +81,19 @@ pi-science status           # 查看当前运行状态
 pi-science stop             # 停止本仓库启动的服务
 ```
 
-不加 `--detach` 时，`pi-science` 会占用当前终端，Ctrl+C 停止，与 `bash scripts/start.sh` 完全一致。前台和后台启动共用一个端到端就绪期限（`PI_SCIENCE_STARTUP_TIMEOUT_SECONDS`，默认 90 秒）；后台启动失败会删除 PID 文件并回滚本 checkout 拥有的监听进程。生成的启动器只转发到当前 checkout；如果目标位置已经存在无关文件、目录或 symlink，安装器会拒绝覆盖，需要先显式移动或删除冲突项。重复运行安装器可以安全更新属于同一 checkout 的启动器。安装器通过同目录锁协调并发的 Pi-Science 安装，并以 no-clobber 提交检测已覆盖的目标替换场景；文档不声称可抵御所有主动、非协作的恶意文件系统竞态。
+Windows 安装完成并打开新终端后，可直接使用：
 
-仓库移动后，或者 `git pull` 修改了 `package.json`、`pnpm-lock.yaml`、Python 依赖元数据或 Pi runtime 版本时，需要重新运行 `scripts/install.sh`；只有源码变化时不需要重装。安装后可直接运行 `bash scripts/start.sh`。如果继续使用 `dev.sh`，但希望跳过安装：
+```powershell
+pi-science              # 启动全部服务
+pi-science start        # 启动全部服务
+pi-science status       # 查看当前状态
+pi-science stop         # 停止服务
+pi-science help         # 查看帮助
+```
+
+Windows 启动器在两个服务健康后写入 `.runtime/pi-science/run.state`，停止时优先按状态文件精确命中进程；状态文件不可用时回退到本机端口探测。不加 `--detach` 时，Bash 版 `pi-science` 会占用当前终端，Ctrl+C 停止；PowerShell 版同样只支持前台运行。两种启动器都使用端到端就绪期限（`PI_SCIENCE_STARTUP_TIMEOUT_SECONDS`，默认 90 秒）。生成的启动器会拒绝覆盖无关文件、目录、symlink 或 Windows 可执行文件冲突；重复运行安装器可以安全更新属于同一 checkout 的启动器。
+
+仓库移动后，或者 `git pull` 修改了 `package.json`、`pnpm-lock.yaml`、Python 依赖元数据或 Pi runtime 版本时，需要重新运行对应平台的安装器（`scripts/install.sh` 或 `powershell -File scripts/install.ps1`）；只有源码变化时不需要重装。安装后，macOS/Linux 可运行 `bash scripts/start.sh`，Windows 可运行 `powershell -File scripts/start.ps1`。如果继续使用 `dev.sh`，但希望跳过安装：
 
 ```bash
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
