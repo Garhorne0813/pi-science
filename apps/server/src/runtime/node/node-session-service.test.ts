@@ -66,6 +66,7 @@ beforeEach(async () => {
   process.env.PI_NODE_PATH = process.execPath;
   process.env.PI_SCIENCE_PI_MODE = "rpc";
   process.env.FAKE_PI_LOG = join(root, "rpc.jsonl");
+  process.env.FAKE_PI_ARGS_LOG = join(root, "pi-args.json");
   process.env.FAKE_PI_STARTS = join(root, "starts.txt");
   // Leave enough headroom for spawning the fake Pi under parallel CI load.
   // Timeout-specific tests still complete quickly because the fake process is
@@ -95,6 +96,7 @@ afterEach(async () => {
   if (original.piMode === undefined) delete process.env.PI_SCIENCE_PI_MODE;
   else process.env.PI_SCIENCE_PI_MODE = original.piMode;
   delete process.env.FAKE_PI_LOG;
+  delete process.env.FAKE_PI_ARGS_LOG;
   delete process.env.FAKE_PI_STARTS;
   if (original.argsLog === undefined) delete process.env.FAKE_PI_ARGS_LOG;
   else process.env.FAKE_PI_ARGS_LOG = original.argsLog;
@@ -244,6 +246,25 @@ describe("Node session lifecycle", () => {
     expect(values(launches[1]!, "--skill")).not.toContain(defaultSkill);
     expect(values(launches[1]!, "-e")).toEqual([explicitExtension]);
     await service.shutdownAll();
+  });
+
+  it("keeps default extensions when create receives empty config arrays", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions();
+    const upstream = join(cwd, "node_modules", "@juicesharp", "rpiv-ask-user-question", "index.ts");
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), JSON.stringify({ extension_paths: [upstream] }), "utf8");
+
+    try {
+      await expect(service.create({ cwd, config: { skills: [], extensions: [] } })).resolves.toHaveProperty("id");
+
+      const args = JSON.parse(await readFile(process.env.FAKE_PI_ARGS_LOG!, "utf8")) as string[];
+      expect(args).toContain("-e");
+      expect(args).toContain(join(import.meta.dirname, "../pi/extensions/pi-science-ask-user-question-web.ts"));
+      expect(args).not.toContain(upstream);
+    } finally {
+      await service.shutdownAll();
+    }
   });
 
   it("keeps other sessions independent while a turn is active and deletes exactly one session", async () => {

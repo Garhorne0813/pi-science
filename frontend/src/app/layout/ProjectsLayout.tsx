@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
-import { lazy, Suspense, useState, useEffect } from "react";
-import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Sun, Moon, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical } from "lucide-react";
+import { lazy, Suspense, useState, useEffect, useRef } from "react";
+import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical } from "lucide-react";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { InspectorShell } from "../../components/inspector/InspectorShell";
@@ -17,6 +17,9 @@ import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { workspacePathLeaf } from "../../lib/workspace";
 
+const SIDEBAR_MIN_WIDTH = 220;
+const SIDEBAR_MAX_WIDTH = 420;
+
 export function ProjectsLayout() {
   const { t } = useTranslation();
   const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed);
@@ -25,9 +28,39 @@ export function ProjectsLayout() {
   const inspectorOpen = useUiStore((s) => s.inspectorOpen);
   const inspectorData = useUiStore((s) => s.inspectorData);
   const closeInspector = useUiStore((s) => s.closeInspector);
+  const setSidebarWidth = useUiStore((s) => s.setSidebarWidth);
+  const [sidebarDragWidth, setSidebarDragWidth] = useState<number | null>(null);
+  const [sidebarDragging, setSidebarDragging] = useState(false);
+  const sidebarDragWidthRef = useRef<number | null>(null);
   const location = useLocation();
   const activeCwd = useWorkspaceCwd();
   const isWorkspace = !!activeCwd;
+  const clampSidebarWidth = (width: number) => Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
+  const beginSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    sidebarDragWidthRef.current = sidebarWidth;
+    setSidebarDragging(true);
+  };
+  const resizeSidebar = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    const sidebarLeft = event.currentTarget.parentElement?.getBoundingClientRect().left ?? 0;
+    const width = clampSidebarWidth(event.clientX - sidebarLeft);
+    sidebarDragWidthRef.current = width;
+    setSidebarDragWidth(width);
+  };
+  const finishSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (sidebarDragWidthRef.current !== null) {
+      setSidebarWidth(sidebarDragWidthRef.current);
+    }
+    sidebarDragWidthRef.current = null;
+    setSidebarDragWidth(null);
+    setSidebarDragging(false);
+  };
 
   // Close the inspector when switching workspaces — stale inspector
   // data from workspace A makes no sense after navigating to workspace B.
@@ -63,7 +96,6 @@ export function ProjectsLayout() {
           >
             <PanelLeft size={16} />
           </button>
-          <ThemeToggle className="rounded p-1.5" />
           {/* Icon-only nav */}
           <CollapsedNavItem to="/" icon={isWorkspace ? <ArrowLeft size={16} /> : <FolderOpen size={16} />} label={t("nav.projects")} />
           {!isWorkspace && <CollapsedNavItem to="/skills" icon={<Puzzle size={16} />} label={t("nav.skills")} />}
@@ -82,27 +114,24 @@ export function ProjectsLayout() {
       ) : (
         <>
         <button type="button" aria-label="Close sidebar" onClick={() => setSidebarCollapsed(true)} className="fixed inset-0 z-20 bg-black/45 md:hidden" />
-        <aside className="absolute z-30 flex h-full shrink-0 flex-col overflow-hidden border-r border-border bg-bg md:relative" style={{ width: sidebarWidth, maxWidth: "86vw" }}>
+        <aside className="absolute z-30 flex h-full shrink-0 flex-col overflow-hidden border-r border-border bg-bg md:relative" style={{ width: sidebarDragWidth ?? sidebarWidth, maxWidth: "86vw" }}>
           <div className="flex flex-col h-full px-3 py-4">
             {/* Header */}
             <div className="flex items-center justify-between mb-4 px-2">
               <h1 className="font-serif text-[20px] font-semibold tracking-tight text-text">
                 Pi-Science
               </h1>
-              <div className="flex items-center gap-0.5">
-                <ThemeToggle className="flex h-10 w-10 items-center justify-center rounded-input" />
-                <button
-                  className="flex h-10 w-10 items-center justify-center rounded-input text-muted hover:bg-surface-2 hover:text-text"
-                  onClick={() => setSidebarCollapsed(true)}
-                  aria-label="Close sidebar"
-                >
-                  <PanelLeft size={16} />
-                </button>
-              </div>
+              <button
+                className="flex h-10 w-10 translate-x-1 items-center justify-center rounded-input text-muted hover:bg-surface-2 hover:text-text"
+                onClick={() => setSidebarCollapsed(true)}
+                aria-label="Close sidebar"
+              >
+                <PanelLeft size={16} />
+              </button>
             </div>
 
             {/* Projects / Back to workspace list */}
-            <nav className="flex flex-col gap-0.5 mb-3">
+            <nav className="flex flex-col gap-px mb-2">
               <SidebarNavItem
                 to="/"
                 label={isWorkspace ? (workspacePathLeaf(activeCwd!) || t("nav.projects")) : t("nav.projects")}
@@ -135,6 +164,31 @@ export function ProjectsLayout() {
                 <SettingsNavItem cwd={activeCwd} />
               </div>
             </div>
+          </div>
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整侧边栏宽度"
+            aria-valuemin={SIDEBAR_MIN_WIDTH}
+            aria-valuemax={SIDEBAR_MAX_WIDTH}
+            aria-valuenow={sidebarDragWidth ?? sidebarWidth}
+            tabIndex={0}
+            onPointerDown={beginSidebarResize}
+            onPointerMove={resizeSidebar}
+            onPointerUp={finishSidebarResize}
+            onPointerCancel={finishSidebarResize}
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+              event.preventDefault();
+              const delta = event.key === "ArrowRight" ? 16 : -16;
+              setSidebarWidth(clampSidebarWidth(sidebarWidth + delta));
+            }}
+            className={cn(
+              "group absolute inset-y-0 right-0 z-40 hidden w-1.5 cursor-col-resize md:block",
+              sidebarDragging && "bg-accent/10",
+            )}
+          >
+            <div className="absolute inset-y-0 right-0 w-px bg-transparent transition-colors group-hover:bg-accent/50" />
           </div>
         </aside>
         </>
@@ -389,7 +443,7 @@ function SidebarNavItem({ to, label, icon, active, badge }: { to: string; label:
         if (window.innerWidth < 768) setSidebarCollapsed(true);
       }}
       className={cn(
-        "flex min-h-0 h-9 items-center gap-2 rounded-input px-2 text-[13px] text-left w-full",
+        "flex min-h-0 h-8 items-center gap-1.5 rounded-input px-1.5 text-[13px] text-left w-full",
         active ? "bg-surface-2 text-text font-medium" : "text-text/90 hover:bg-surface-2 hover:text-text",
       )}
     >
@@ -417,7 +471,7 @@ export function SettingsNavItem({ cwd, collapsed = false }: { cwd: string | null
     );
   }
   return (
-    <button onClick={handleClick} className={cn("flex h-9 min-h-0 w-full items-center gap-2 rounded-input px-2 text-left text-[13px]", settingsOpen ? "bg-surface-2 font-medium text-text" : "text-text/90 hover:bg-surface-2 hover:text-text")}>
+    <button onClick={handleClick} className={cn("flex h-8 min-h-0 w-full items-center gap-1.5 rounded-input px-1.5 text-left text-[13px]", settingsOpen ? "bg-surface-2 font-medium text-text" : "text-text/90 hover:bg-surface-2 hover:text-text")}>
       <span className="shrink-0 text-muted"><Settings size={16} /></span>
       <span className="min-w-0 flex-1 truncate">{t("nav.settings")}</span>
     </button>
@@ -428,18 +482,4 @@ function KnowledgeNavItem({ cwd, active }: { cwd: string; active: boolean }) {
   const { t } = useTranslation();
   const { data } = usePendingProposalCount(cwd, 8000);
   return <SidebarNavItem to={`/workspace/${encodeURIComponent(cwd)}/knowledge`} label={t("nav.knowledge")} icon={<Inbox size={16} />} active={active} badge={Number(data?.pending_count) || 0} />;
-}
-
-function ThemeToggle({ className }: { className?: string }) {
-  const theme = useUiStore((s) => s.theme);
-  const setTheme = useUiStore((s) => s.setTheme);
-  return (
-    <button
-      onClick={() => setTheme(theme === "light" ? "dark" : "light")}
-      className={cn("text-muted hover:bg-surface-2 hover:text-text shrink-0", className ?? "rounded-input px-2 py-1 text-xs")}
-      title="Toggle theme"
-    >
-      {theme === "light" ? <Moon size={15} /> : <Sun size={15} />}
-    </button>
-  );
 }

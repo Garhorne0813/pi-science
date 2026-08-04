@@ -87,6 +87,38 @@ describe("QuestionnairePrompt", () => {
     ]));
   });
 
+  it("auto-advances after a first custom answer or an empty multi-select answer", () => {
+    const onRespond = vi.fn();
+    const customQuestionnaire: PendingQuestionnaire = {
+      ...questionnaire,
+      toolCallId: "call-main-baseline",
+      questions: [
+        {
+          question: "Describe the experiment.",
+          header: "Experiment",
+          multiSelect: false,
+          options: [{ label: "Baseline", description: "Use the existing setup." }],
+        },
+        questionnaire.questions[1]!,
+        {
+          question: "Should the follow-up be automated?",
+          header: "Follow-up",
+          multiSelect: false,
+          options: [{ label: "Yes", description: "Run it automatically." }],
+        },
+      ],
+    };
+    render(<QuestionnairePrompt questionnaire={customQuestionnaire} interaction={interaction} onRespond={onRespond} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Type something/ }));
+    fireEvent.change(screen.getByPlaceholderText("Write a custom answer…"), { target: { value: "A bespoke experiment" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save answer" }));
+    expect(screen.getByRole("button", { name: /Outputs.*Which outputs are useful/ })).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue without selecting" }));
+    expect(screen.getByRole("button", { name: /Follow-up.*Should the follow-up be automated/ })).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("supports a custom answer, collapsible notes, and cancellation", () => {
     const onRespond = vi.fn();
     const singleQuestion = { ...questionnaire, toolCallId: "call-2", questions: [questionnaire.questions[0]!] };

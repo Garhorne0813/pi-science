@@ -40,6 +40,7 @@ Each project keeps its own conversations, files, runs, provenance, and reviewed 
 - Python 3.11 or newer
 - pnpm
 - An LLM provider API key, or a trusted OpenAI/Anthropic-compatible local endpoint
+- Windows: PowerShell 5.1 or newer; Git Bash is only required when downloading a new Pi runtime
 
 ### One-command setup
 
@@ -60,7 +61,14 @@ bash scripts/install.sh
 bash scripts/start.sh
 ```
 
-The shell launcher is designed for macOS/Linux and is intended to run under WSL; CI validates its lifecycle on Linux. Git Bash is best-effort only—CI does not validate its process-tree and signal semantics—while native PowerShell/CMD launchers are not currently provided. It deliberately runs `tsx watch` and the Vite development server; it is not a production deployment server. Starting an installed checkout invokes package-local executables directly, so npm and pnpm wrappers are not runtime requirements; pnpm is still required for installation, builds, and dependency updates.
+On Windows, use the native PowerShell equivalents:
+
+```powershell
+powershell -File scripts/install.ps1
+powershell -File scripts/start.ps1
+```
+
+The Bash launcher is designed for macOS/Linux and is intended to run under WSL; CI validates its lifecycle on Linux. The PowerShell installer reuses an existing Pi runtime when possible; a fresh runtime download still requires Git Bash. Both launchers deliberately run `tsx watch` and the Vite development server, so they are not production deployment servers. Starting an installed checkout invokes package-local executables directly, so npm and pnpm wrappers are not runtime requirements; pnpm is still required for installation, builds, and dependency updates.
 
 ### The `pi-science` command
 
@@ -73,9 +81,19 @@ pi-science status           # report what is currently running
 pi-science stop             # stop the services started from this checkout
 ```
 
-Without `--detach`, `pi-science` holds the terminal and Ctrl+C stops it, exactly like `bash scripts/start.sh`. Foreground and detached startup share one end-to-end readiness deadline (`PI_SCIENCE_STARTUP_TIMEOUT_SECONDS`, default 90 seconds); failed detached startup removes its PID file and rolls back owned listeners. The generated launcher only forwards to this checkout and refuses to overwrite an unrelated file, directory, or symlink already named `pi-science`; move such a collision explicitly before installing. Re-running the installer safely updates a launcher owned by the same checkout. A same-directory lock coordinates concurrent Pi-Science installers and the final no-clobber commit detects demonstrated destination substitutions; the installer does not claim protection from every actively hostile, non-cooperating filesystem race.
+On Windows, open a new terminal after `scripts/install.ps1` updates `PATH`, then use the foreground launcher:
 
-Re-run `scripts/install.sh` after moving the checkout or after a `git pull` changes `package.json`, `pnpm-lock.yaml`, Python dependency metadata, or the Pi runtime version. Source-only changes do not require reinstalling. After installation, use `bash scripts/start.sh`; to keep using `dev.sh` while skipping installation, run:
+```powershell
+pi-science              # start everything
+pi-science start        # start everything
+pi-science status       # report what is currently running
+pi-science stop         # stop the services
+pi-science help         # show command help
+```
+
+The Windows launcher writes `.runtime/pi-science/run.state` after both services are healthy and uses it for precise shutdown, with a local-port fallback when state is unavailable. Without `--detach`, the Bash `pi-science` command holds the terminal and Ctrl+C stops it, exactly like `bash scripts/start.sh`; the PowerShell launcher is also foreground-only. Both launchers use an end-to-end readiness deadline (`PI_SCIENCE_STARTUP_TIMEOUT_SECONDS`, default 90 seconds). The generated launchers refuse to overwrite an unrelated file, directory, symlink, or Windows executable collision; re-running the installer safely updates a launcher owned by the same checkout.
+
+Re-run the platform-appropriate installer (`scripts/install.sh` or `powershell -File scripts/install.ps1`) after moving the checkout or after a `git pull` changes `package.json`, `pnpm-lock.yaml`, Python dependency metadata, or the Pi runtime version. Source-only changes do not require reinstalling. After installation, use `bash scripts/start.sh` on macOS/Linux or `powershell -File scripts/start.ps1` on Windows; to keep using `dev.sh` while skipping installation, run:
 
 ```bash
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh

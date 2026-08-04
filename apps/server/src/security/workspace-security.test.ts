@@ -10,6 +10,7 @@ import { resolveWorkspaceFile, validateWorkspaceCwd } from "./workspace-security
 
 let root = "";
 const previousManagedRoot = process.env.PI_SCIENCE_WORKSPACES;
+const dirLinkType = process.platform === "win32" ? "junction" : "dir";
 
 beforeEach(async () => {
   // realpath the sandbox: macOS $TMPDIR is a symlink into /private.
@@ -100,7 +101,7 @@ describe("validateWorkspaceCwd", () => {
     const workspace = join(root, "target");
     const link = join(root, "link");
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
-    await symlink(workspace, link, "dir");
+    await symlink(workspace, link, dirLinkType);
     await expect(validateWorkspaceCwd(link)).resolves.toBe(workspace);
   });
 
@@ -110,7 +111,7 @@ describe("validateWorkspaceCwd", () => {
     const link = join(managed, "escape");
     await mkdir(managed, { recursive: true });
     await mkdir(outside, { recursive: true });
-    await symlink(outside, link, "dir");
+    await symlink(outside, link, dirLinkType);
     process.env.PI_SCIENCE_WORKSPACES = managed;
     await expect(validateWorkspaceCwd(link)).rejects.toThrow(/not a registered workspace/);
   });
@@ -120,7 +121,7 @@ describe("validateWorkspaceCwd", () => {
     const workspace = join(managed, "child");
     const link = join(root, "managed-link");
     await mkdir(workspace, { recursive: true });
-    await symlink(managed, link, "dir");
+    await symlink(managed, link, dirLinkType);
     process.env.PI_SCIENCE_WORKSPACES = link;
     await expect(validateWorkspaceCwd(workspace)).resolves.toBe(workspace);
   });
@@ -144,7 +145,7 @@ describe("resolveWorkspaceFile", () => {
     const outside = join(root, "outside");
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
     await mkdir(outside, { recursive: true });
-    await symlink(outside, join(workspace, "escape"), "dir");
+    await symlink(outside, join(workspace, "escape"), dirLinkType);
     await expect(resolveWorkspaceFile(workspace, join("escape", "future.txt"))).rejects.toThrow(/escapes the workspace/);
   });
 });

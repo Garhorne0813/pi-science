@@ -201,6 +201,9 @@ export class NodeSessionService {
       if ("error" in activated) return activated;
       try {
         await activated.process.sendNotification(type, params);
+        if (type === "extension_ui_response" && typeof params.id === "string") {
+          this.eventHub.resolvePendingInteraction(cwd, sessionId, params.id);
+        }
         return { success: true };
       } catch (error) {
         return { success: false, code: "write_failed", error: String(error) };

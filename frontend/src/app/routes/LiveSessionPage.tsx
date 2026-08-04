@@ -10,7 +10,7 @@ import { useUiStore } from "../../lib/ui";
 import { cn } from "../../lib/ui";
 import { useRequiredWorkspaceCwd } from "../../lib/workspace";
 import { projectKnowledgeApi, useReviewPolicy } from "../../lib/knowledge";
-import { fetchDynamicCommands, resetDynamicCommands, agentActionTextByBlock } from "../../lib/conversation";
+import { agentActionTextByBlock, fetchDynamicCommands, resetDynamicCommands } from "../../lib/conversation";
 import { SlashCommandMenu } from "../../components/SlashCommandMenu";
 import { ConversationWelcome } from "../../components/conversation/ConversationWelcome";
 import { ModelControlMenu } from "../../components/conversation/ModelControlMenu";
@@ -37,13 +37,33 @@ const LazyVirtuoso = lazy(() => import("react-virtuoso").then(({ Virtuoso }) => 
   default: Virtuoso as unknown as ComponentType<ConversationVirtuosoProps>,
 })));
 
-/** Stable Virtuoso footer type: changing prompt/working state must update its
- * props without remounting QuestionnairePrompt and losing accordion answers. */
-export function ConversationFooter({ context }: { context: ConversationVirtuosoContext }) {
+/**
+ * Keep the virtual-list footer component type stable. Defining Footer inline
+ * inside LiveSessionPage would give Virtuoso a new component type whenever a
+ * scroll update re-renders the page, unmounting the questionnaire and losing
+ * its local answer state.
+ */
+export function ConversationFooter() {
+  const pendingInteraction = useRuntimeStore((s) => s.pendingInteraction);
+  const pendingQuestionnaire = useRuntimeStore((s) => s.pendingQuestionnaire);
+  const working = useRuntimeStore((s) => s.working);
+  const respondToInteraction = useRuntimeStore((s) => s.respondToInteraction);
+
   return (
     <div className="mx-auto flex w-full max-w-[824px] flex-col gap-4 px-8 pb-6 pt-2">
-      {context.renderInteractionPrompt()}
-      {context.working && !context.pendingInteraction && (
+      {pendingQuestionnaire && pendingInteraction?.questionnaire ? (
+        <QuestionnairePrompt
+          questionnaire={pendingQuestionnaire}
+          interaction={pendingInteraction}
+          onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
+        />
+      ) : pendingInteraction ? (
+        <InteractionPrompt
+          interaction={pendingInteraction}
+          onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
+        />
+      ) : null}
+      {working && !pendingInteraction && (
         <div className="flex items-center gap-2 py-4 text-sm text-muted">
           <Loader2 size={14} className="animate-spin text-accent" />
           Working…
@@ -84,6 +104,7 @@ export function LiveSessionPage() {
   const pendingInteraction = useRuntimeStore((s) => s.pendingInteraction);
   const pendingQuestionnaire = useRuntimeStore((s) => s.pendingQuestionnaire);
   const respondToInteraction = useRuntimeStore((s) => s.respondToInteraction);
+  const interactionPending = Boolean(pendingInteraction || pendingQuestionnaire);
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const followOutputRef = useRef(true);
@@ -309,7 +330,7 @@ export function LiveSessionPage() {
     },
   });
   const { input, setInput, files, setFiles, workspaceReferences } = composer;
-  const modelControlsDisabled = working || reviewingProject || model.configuringModel;
+  const modelControlsDisabled = working || interactionPending || reviewingProject || model.configuringModel;
   // The reviewer already runs on every settled turn when the workspace opted in, so the manual
   // button would only duplicate it. Until the policy is known, show the manual button: it is the
   // shipped default and the only control that does something when auto review is off.
@@ -335,7 +356,7 @@ export function LiveSessionPage() {
   };
 
   const handleProjectReview = async () => {
-    if (reviewingProject || working) return;
+    if (reviewingProject || working || interactionPending) return;
     setReviewingProject(true);
     setReviewNotice(null);
     try {
@@ -361,7 +382,7 @@ export function LiveSessionPage() {
   // in the welcome layout it belongs to the growing top region (otherwise its
   // height would push the composer card off the vertical centre).
   const modePicker = !research.draft && !research.activeLoop
-    ? <ResearchModePicker className={showWelcome ? "px-0 pb-0" : undefined} selected={research.mode} disabled={working || reviewingProject || research.busy} onSelect={(mode, prompt) => { const selected = research.mode === mode ? null : mode; research.setMode(selected); research.setPrompt(selected ? prompt : t("conversation.defaultPrompt")); composer.inputRef.current?.focus(); }} />
+    ? <ResearchModePicker className={showWelcome ? "px-0 pb-0" : undefined} selected={research.mode} disabled={working || interactionPending || reviewingProject || research.busy} onSelect={(mode, prompt) => { const selected = research.mode === mode ? null : mode; research.setMode(selected); research.setPrompt(selected ? prompt : t("conversation.defaultPrompt")); composer.inputRef.current?.focus(); }} />
     : null;
 
   // Follow-up suggestion chips: shown above the research-mode picker, clicking
@@ -576,7 +597,7 @@ export function LiveSessionPage() {
                   <button
                     type="button"
                     onClick={() => void handleProjectReview()}
-                    disabled={working || reviewingProject}
+                    disabled={working || interactionPending || reviewingProject}
                     className="flex min-h-7 items-center gap-1 rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2 hover:text-text disabled:cursor-wait disabled:opacity-50"
                     title={t("conversation.reviewTitle")}
                   >
@@ -613,10 +634,10 @@ export function LiveSessionPage() {
                   <button
                     aria-label="Send message"
                     onClick={composer.handleSend}
-                    disabled={(!model.selectedModel && !research.mode) || reviewingProject || research.busy || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
+                    disabled={working || interactionPending || (!model.selectedModel && !research.mode) || reviewingProject || research.busy || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
                     className={cn(
                       "h-7 w-7 rounded-input flex items-center justify-center",
-                      ((model.selectedModel || research.mode) && !reviewingProject && !research.busy && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted cursor-default",
+                      ((model.selectedModel || research.mode) && !interactionPending && !reviewingProject && !research.busy && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted cursor-default",
                     )}
                   >
                     <ArrowUp size={15} />

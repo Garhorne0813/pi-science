@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Cpu, FlaskConical, Languages, Loader2, Puzzle, Server } from "lucide-react";
+import { Cpu, FlaskConical, Languages, Loader2, Puzzle, Server, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/ui";
 import { settingsApi } from "../../lib/settings";
@@ -12,18 +12,18 @@ import { MCPTab } from "./MCPTab";
 
 type Tab = "general" | "llm" | "extensions" | "mcp" | "compute";
 
-const TABS: { id: Tab; labelKey: string; icon: React.ReactNode }[] = [
-  { id: "general", labelKey: "settings.general", icon: <Languages size={14} /> },
-  { id: "llm", labelKey: "settings.llm", icon: <Cpu size={14} /> },
-  { id: "extensions", labelKey: "settings.extensions", icon: <Puzzle size={14} /> },
-  { id: "mcp", labelKey: "settings.mcp", icon: <FlaskConical size={14} /> },
-  { id: "compute", labelKey: "settings.compute", icon: <Server size={14} /> },
+const TABS: { id: Tab; labelKey: string; titleKey: string; icon: React.ReactNode }[] = [
+  { id: "general", labelKey: "settings.general", titleKey: "settings.general", icon: <Languages size={16} /> },
+  { id: "llm", labelKey: "settings.llm", titleKey: "settings.model.pageTitle", icon: <Cpu size={16} /> },
+  { id: "extensions", labelKey: "settings.extensions", titleKey: "settings.extensions", icon: <Puzzle size={16} /> },
+  { id: "mcp", labelKey: "settings.mcp", titleKey: "settings.mcpPage.title", icon: <FlaskConical size={16} /> },
+  { id: "compute", labelKey: "settings.compute", titleKey: "settings.computePage.title", icon: <Server size={16} /> },
 ];
 
 /** Settings page content: vertical navigation on the left, active tab on the
  *  right. `scope` is the workspace cwd snapshot taken when the dialog opened
  *  (`null` = global settings); it must never read the live route context. */
-export function SettingsContent({ scope }: { scope: string | null }) {
+export function SettingsContent({ scope, onClose }: { scope: string | null; onClose?: () => void }) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>("general");
   const [config, setConfig] = useState<SettingsConfig | null>(null);
@@ -33,6 +33,7 @@ export function SettingsContent({ scope }: { scope: string | null }) {
   const [showKey, setShowKey] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const activeTab = TABS.find((item) => item.id === tab) ?? TABS[0];
 
   const changeTab = (next: Tab) => {
     setTab(next);
@@ -133,50 +134,71 @@ export function SettingsContent({ scope }: { scope: string | null }) {
     }
   };
 
-  if (loading)
-    return (
-      <div className="flex flex-1 items-center justify-center text-sm text-muted">
-        <Loader2 size={18} className="mr-2 animate-spin" />
-        {t("common.loading")}
-      </div>
-    );
-
   return (
-    <div className="flex min-h-0 flex-1">
-      {/* Vertical navigation */}
-      <nav role="tablist" aria-orientation="vertical" aria-label={t("nav.settings")} onKeyDown={handleNavKeyDown} className="flex w-12 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border px-2 py-3 md:w-52 md:px-3">
-        {TABS.map((item) => (
+    <div className="flex min-h-0 min-w-0 flex-1">
+      {/* Settings navigation */}
+      <aside className="flex w-16 shrink-0 flex-col border-r border-faint bg-surface-2/20 px-2 py-3 md:w-44 md:px-3 md:py-4">
+        <div className="flex shrink-0 items-center">
           <button
-            key={item.id}
             type="button"
-            role="tab"
-            id={`settings-tab-${item.id}`}
-            aria-selected={tab === item.id}
-            aria-controls="settings-tabpanel"
-            aria-label={t(item.labelKey)}
-            onClick={() => changeTab(item.id)}
-            title={t(item.labelKey)}
-            className={cn(
-              "relative flex min-h-10 items-center gap-2 rounded-input px-2 text-left text-xs font-medium transition-colors",
-              tab === item.id ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2 hover:text-text",
-              tab === item.id && "after:absolute after:left-0 after:top-1/2 after:h-4 after:w-0.5 after:-translate-y-1/2 after:rounded-full after:bg-accent",
-            )}
+            onClick={onClose}
+            aria-label={t("common.close")}
+            title={t("common.close")}
+            className="flex h-10 w-10 items-center justify-center rounded-input bg-surface-2/70 text-muted transition-colors hover:bg-surface-2 hover:text-text"
           >
-            <span className="shrink-0" aria-hidden="true">{item.icon}</span>
-            <span className="hidden truncate md:inline">{t(item.labelKey)}</span>
+            <X size={16} />
           </button>
-        ))}
-      </nav>
+        </div>
+        <div className="sr-only">{scope ? t("settings.scope.workspace") : t("settings.scope.global")}</div>
+        <nav role="tablist" aria-orientation="vertical" aria-label={t("nav.settings")} onKeyDown={handleNavKeyDown} className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pt-4 md:pt-3">
+          {TABS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="tab"
+              id={`settings-tab-${item.id}`}
+              aria-selected={tab === item.id}
+              aria-controls="settings-tabpanel"
+              aria-label={t(item.labelKey)}
+              onClick={() => changeTab(item.id)}
+              title={t(item.labelKey)}
+              className={cn(
+                "relative flex h-8 min-h-0 w-full items-center justify-center gap-1.5 rounded-input px-1.5 text-left text-[13px] font-medium transition-colors md:justify-start md:px-1.5",
+                tab === item.id ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2 hover:text-text",
+              )}
+            >
+              <span className="shrink-0" aria-hidden="true">{item.icon}</span>
+              <span className="hidden min-w-0 truncate md:inline">{t(item.labelKey)}</span>
+            </button>
+          ))}
+        </nav>
+      </aside>
 
       {/* Active tab */}
-      <div ref={scrollRef} id="settings-tabpanel" role="tabpanel" aria-labelledby={`settings-tab-${tab}`} className="settings-page min-w-0 flex-1 overflow-y-auto [&_button]:!min-h-9">
-        <div className="mx-auto max-w-[720px] px-6 py-6 md:px-8 md:py-8">
-          {error && <p role="alert" className="mb-4 rounded-input bg-error/10 px-3 py-2 text-[11px] text-error">{error}</p>}
-          {tab === "general" && <GeneralTab />}
-          {tab === "llm" && <LLMTab config={config} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} saveModel={saveModel} saveCompaction={saveCompaction} onConfigReload={loadConfig} />}
-          {tab === "extensions" && <ExtensionsTab workspaceCwd={scope} />}
-          {tab === "mcp" && <MCPTab workspaceCwd={scope} />}
-          {tab === "compute" && <ComputeSettings workspaceCwd={scope} />}
+      <div ref={scrollRef} id="settings-tabpanel" role="tabpanel" aria-labelledby={`settings-tab-${tab}`} className="settings-page min-w-0 flex-1 overflow-y-auto">
+        <div className="mx-auto flex min-h-full w-full max-w-[1080px] flex-col px-4 py-4 md:px-5 md:py-5 lg:px-6">
+          <header className="flex shrink-0 items-end justify-between gap-4 border-b border-faint pb-3 md:pb-4">
+            <h1 id="settings-panel-title" className="text-[20px] font-medium tracking-tight text-text">
+              {t(activeTab.titleKey)}
+            </h1>
+          </header>
+          <div className="min-h-0 flex-1">
+            {loading ? (
+              <div className="flex min-h-[240px] items-center justify-center text-sm text-muted">
+                <Loader2 size={18} className="mr-2 animate-spin" />
+                {t("common.loading")}
+              </div>
+            ) : (
+              <>
+                {error && <p role="alert" className="mb-4 rounded-input bg-error/10 px-3 py-2 text-[11px] text-error">{error}</p>}
+                {tab === "general" && <GeneralTab />}
+                {tab === "llm" && <LLMTab config={config} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} saveModel={saveModel} saveCompaction={saveCompaction} onConfigReload={loadConfig} />}
+                {tab === "extensions" && <ExtensionsTab workspaceCwd={scope} />}
+                {tab === "mcp" && <MCPTab workspaceCwd={scope} />}
+                {tab === "compute" && <ComputeSettings workspaceCwd={scope} />}
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>

@@ -252,20 +252,28 @@ export class JobCoordinator {
       record.status = this.cancelled.has(record.job_id) ? "cancelled" : timedOut ? "timed_out" : result.code === 0 ? "succeeded" : "failed";
     } catch (error) { if (child) terminate(child); if (!this.cancelled.has(record.job_id)) { record.status = "failed"; record.stderr = String(error).slice(-100_000); } }
     finally {
-      this.stopHeartbeat(record.job_id); LIVE_JOB_OWNERS.delete(record.ownership?.token ?? "");
+      // Keep the in-process ownership proof until the terminal state is
+      // durably written. Otherwise another coordinator can observe the still
+      // running record in the small window after the child exits, conclude
+      // that its expired lease is orphaned, and fence a healthy completion.
+      this.stopHeartbeat(record.job_id);
       record.ended_at = new Date(this.now()).toISOString(); this.children.delete(record.job_id);
-      await this.hooks.beforeTerminalSave?.(record);
-      await withFileWriteLock(path, async () => {
-        const current = await readJson<JobRecord | null>(path, null);
-        const terminal = current && isTerminal(current.status);
-        const ownsCurrent = this.ownershipMatches(current?.ownership, record.ownership);
-        const durable = current?.status === "cancelled"
-          ? { ...record, status: "cancelled" as const, ended_at: current.ended_at ?? record.ended_at, ownership: current.ownership, stderr: mergeDiagnosticText(record.stderr, current.stderr) }
-          : terminal || !ownsCurrent ? current ?? record : record;
-        await writeJsonAtomic(path, durable);
-        Object.assign(record, durable);
-      });
-      this.cancelled.delete(record.job_id);
+      try {
+        await this.hooks.beforeTerminalSave?.(record);
+        await withFileWriteLock(path, async () => {
+          const current = await readJson<JobRecord | null>(path, null);
+          const terminal = current && isTerminal(current.status);
+          const ownsCurrent = this.ownershipMatches(current?.ownership, record.ownership);
+          const durable = current?.status === "cancelled"
+            ? { ...record, status: "cancelled" as const, ended_at: current.ended_at ?? record.ended_at, ownership: current.ownership, stderr: mergeDiagnosticText(record.stderr, current.stderr) }
+            : terminal || !ownsCurrent ? current ?? record : record;
+          await writeJsonAtomic(path, durable);
+          Object.assign(record, durable);
+        });
+      } finally {
+        LIVE_JOB_OWNERS.delete(record.ownership?.token ?? "");
+        this.cancelled.delete(record.job_id);
+      }
     }
   }
 }

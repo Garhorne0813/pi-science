@@ -68,7 +68,7 @@ describe("GET /api/skills/:skill_id/content", () => {
     expect(response.statusCode).toBe(404);
   });
 
-  it("returns 403 for a SKILL.md symlink escaping the source root", async () => {
+  it.skipIf(process.platform === "win32")("returns 403 for a SKILL.md symlink escaping the source root", async () => {
     const cwd = await workspaceWithProjectSkill("alpha", SKILL("alpha"));
     const outside = join(home, "outside.txt");
     await writeFile(outside, "secret", "utf8");

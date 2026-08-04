@@ -89,17 +89,35 @@ describe("job coordinator", () => {
     let now = 1_000;
     let releaseSpawn!: () => void;
     let enteredSpawn!: () => void;
+    let releaseTerminal!: () => void;
+    let enteredTerminal!: () => void;
     const spawnGate = new Promise<void>((resolve) => { releaseSpawn = resolve; });
     const gateEntered = new Promise<void>((resolve) => { enteredSpawn = resolve; });
-    const owner = jobCoordinator(undefined, { now: () => now, leaseMs: 200, heartbeatMs: 25, beforeSpawn: async () => { enteredSpawn(); await spawnGate; } });
+    const terminalGate = new Promise<void>((resolve) => { releaseTerminal = resolve; });
+    const terminalEntered = new Promise<void>((resolve) => { enteredTerminal = resolve; });
+    const owner = jobCoordinator(undefined, {
+      now: () => now,
+      leaseMs: 200,
+      heartbeatMs: 25,
+      beforeSpawn: async () => { enteredSpawn(); await spawnGate; },
+      beforeTerminalSave: async () => { enteredTerminal(); await terminalGate; },
+    });
     const observer = jobCoordinator(undefined, { now: () => now, leaseMs: 200, heartbeatMs: 25 });
-    const submitted = await owner.submit(cwd, { command: [process.execPath, "-e", "process.exit(0)"] });
-    await gateEntered;
-    now += 60_000;
-    expect((await observer.get(cwd, submitted.job_id))?.status).toBe("running");
-    expect(await observer.hasActive(cwd)).toBe(true);
-    releaseSpawn();
-    expect((await waitFor(() => observer.get(cwd, submitted.job_id), terminal))?.status).toBe("succeeded");
+    try {
+      const submitted = await owner.submit(cwd, { command: [process.execPath, "-e", "process.exit(0)"] });
+      await gateEntered;
+      now += 60_000;
+      expect((await observer.get(cwd, submitted.job_id))?.status).toBe("running");
+      expect(await observer.hasActive(cwd)).toBe(true);
+      releaseSpawn();
+      await terminalEntered;
+      expect((await observer.get(cwd, submitted.job_id))?.status).toBe("running");
+      releaseTerminal();
+      expect((await waitFor(() => observer.get(cwd, submitted.job_id), terminal))?.status).toBe("succeeded");
+    } finally {
+      releaseSpawn();
+      releaseTerminal();
+    }
   });
 
   it("heals only an expired lease whose owner is no longer credibly active", async () => {

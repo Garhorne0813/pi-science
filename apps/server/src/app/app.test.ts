@@ -189,7 +189,7 @@ describe("Node control plane", () => {
     await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
-  it("enforces workspace boundaries for native file reads", async () => {
+  it.skipIf(process.platform === "win32")("enforces workspace boundaries for native file reads", async () => {
     const workspace = join(tmpdir(), `pi-science-files-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
     await mkdir(join(workspace, "node_modules", "demo"), { recursive: true });

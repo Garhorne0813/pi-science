@@ -59,7 +59,7 @@ const EMPTY_FORM: ComputeForm = {
   password: "",
 };
 
-const fieldClass = "min-h-11 w-full rounded-input border border-border bg-surface-2 px-3 text-xs text-text outline-none transition-colors placeholder:text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent/25";
+const fieldClass = "min-h-10 w-full rounded-input border border-border bg-surface-2 px-3 text-xs text-text outline-none transition-colors placeholder:text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent/25";
 
 function ProbeDetails({ result }: { result: ProbeResult }) {
   const { t } = useTranslation();
@@ -202,83 +202,87 @@ export function ComputeSettings({ workspaceCwd }: ComputeSettingsProps) {
   if (loading) return <div className="py-4 text-sm text-muted">{t("common.loading")}</div>;
 
   return (
-    <section className="space-y-4">
-      <div>
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted">{t("settings.computePage.title")}</h2>
-        <p className="mt-1 text-[11px] leading-5 text-muted">
-          {t("settings.computePage.description")} {t("settings.computePage.savedTo")} <code className="rounded bg-surface-2 px-1 font-mono text-[11px]">.pi-science/compute.json</code>.
-        </p>
-      </div>
-
-      <div className="rounded-card border border-border bg-surface p-4">
-        <div className="mb-4 flex items-center gap-2">
+    <section className="space-y-0">
+      <div className="border-b border-faint pb-3">
+        <div className="flex min-h-14 items-center gap-2 border-b border-faint py-2">
           <Server size={16} className="text-accent" />
-          <h3 className="text-sm font-medium text-text">{t("settings.computePage.connection")}</h3>
+          <h3 className="text-[13px] font-semibold text-text">{t("settings.computePage.connection")}</h3>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="space-y-1.5 text-[11px] font-medium text-muted">
-            <span>{t("settings.computePage.label")}</span>
-            <input value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} placeholder={t("settings.computePage.labelPlaceholder")} className={fieldClass} />
+        <div className="divide-y divide-faint">
+          <label className="flex min-h-14 items-center justify-between gap-3 py-2">
+            <span className="text-[13px] font-medium text-text">{t("settings.computePage.label")}</span>
+            <span className="w-56 max-w-[62%] shrink-0">
+              <input value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} placeholder={t("settings.computePage.labelPlaceholder")} className={fieldClass} />
+            </span>
           </label>
-          <label className="space-y-1.5 text-[11px] font-medium text-muted">
-            <span>{t("settings.computePage.hostname")}</span>
-            <input value={form.host} onChange={(event) => setForm({ ...form, host: event.target.value })} placeholder="compute.example.org" className={cn(fieldClass, "font-mono")} />
+          <label className="flex min-h-14 items-center justify-between gap-3 py-2">
+            <span className="text-[13px] font-medium text-text">{t("settings.computePage.hostname")}</span>
+            <span className="w-56 max-w-[62%] shrink-0">
+              <input value={form.host} onChange={(event) => setForm({ ...form, host: event.target.value })} placeholder="compute.example.org" className={cn(fieldClass, "font-mono")} />
+            </span>
           </label>
-          <label className="space-y-1.5 text-[11px] font-medium text-muted">
-            <span>{t("settings.computePage.user")}</span>
-            <input value={form.user} onChange={(event) => setForm({ ...form, user: event.target.value })} placeholder={t("settings.computePage.userPlaceholder")} className={fieldClass} />
+          <label className="flex min-h-14 items-center justify-between gap-3 py-2">
+            <span className="text-[13px] font-medium text-text">{t("settings.computePage.user")}</span>
+            <span className="w-56 max-w-[62%] shrink-0">
+              <input value={form.user} onChange={(event) => setForm({ ...form, user: event.target.value })} placeholder={t("settings.computePage.userPlaceholder")} className={fieldClass} />
+            </span>
           </label>
-          <label className="space-y-1.5 text-[11px] font-medium text-muted">
-            <span>{t("settings.computePage.port")}</span>
-            <input type="number" min={1} max={65535} value={form.port} onChange={(event) => setForm({ ...form, port: Number(event.target.value) })} className={cn(fieldClass, "font-mono")} />
+          <label className="flex min-h-14 items-center justify-between gap-3 py-2">
+            <span className="text-[13px] font-medium text-text">{t("settings.computePage.port")}</span>
+            <span className="w-56 max-w-[62%] shrink-0">
+              <input type="number" min={1} max={65535} value={form.port} onChange={(event) => setForm({ ...form, port: Number(event.target.value) })} className={cn(fieldClass, "font-mono")} />
+            </span>
           </label>
-          <label className="space-y-1.5 text-[11px] font-medium text-muted">
-            <span>{t("settings.computePage.scheduler")}</span>
-            <select value={form.scheduler} onChange={(event) => setForm({ ...form, scheduler: event.target.value })} className={fieldClass}>
-              <option value="">{t("settings.computePage.directSsh")}</option>
-              <option value="slurm">Slurm</option>
-            </select>
+          <label className="flex min-h-14 items-center justify-between gap-3 py-2">
+            <span className="text-[13px] font-medium text-text">{t("settings.computePage.scheduler")}</span>
+            <span className="w-56 max-w-[62%] shrink-0">
+              <select value={form.scheduler} onChange={(event) => setForm({ ...form, scheduler: event.target.value })} className={fieldClass}>
+                <option value="">{t("settings.computePage.directSsh")}</option>
+                <option value="slurm">Slurm</option>
+              </select>
+            </span>
           </label>
-          <fieldset className="space-y-1.5">
-            <legend className="text-[11px] font-medium text-muted">{t("settings.computePage.authMethod")}</legend>
-            <div className="grid grid-cols-2 gap-2">
+          <div role="group" aria-label={t("settings.computePage.authMethod")} className="flex min-h-14 min-w-0 items-center justify-between gap-3 py-2">
+            <span className="shrink-0 text-[13px] font-medium text-text">{t("settings.computePage.authMethod")}</span>
+            <div className="flex w-56 max-w-[62%] shrink-0 gap-1.5">
               {(["key", "password"] as const).map((method) => (
-                <button key={method} type="button" onClick={() => setForm({ ...form, auth_method: method })} aria-pressed={form.auth_method === method} className={cn("flex min-h-11 items-center justify-center gap-2 rounded-input border px-3 text-xs transition-colors", form.auth_method === method ? "border-accent bg-accent/10 text-text" : "border-border bg-surface-2 text-muted hover:text-text")}>
-                  {method === "key" ? <KeyRound size={14} /> : <LockKeyhole size={14} />}
+                <button key={method} type="button" onClick={() => setForm({ ...form, auth_method: method })} aria-pressed={form.auth_method === method} className={cn("flex min-h-9 min-w-0 flex-1 items-center justify-center gap-1 rounded-input border px-2 text-[11px] transition-colors", form.auth_method === method ? "border-accent bg-accent/10 text-text" : "border-border bg-surface-2 text-muted hover:text-text")}>
+                  {method === "key" ? <KeyRound size={13} /> : <LockKeyhole size={13} />}
                   {t(`settings.computePage.${method === "key" ? "sshKey" : "password"}`)}
                 </button>
               ))}
             </div>
-          </fieldset>
-        </div>
-
-        <div className="mt-3">
+          </div>
           {form.auth_method === "key" ? (
-            <label className="space-y-1.5 text-[11px] font-medium text-muted">
-              <span>{t("settings.computePage.identityFile")}</span>
-              <input value={form.identity_file} onChange={(event) => setForm({ ...form, identity_file: event.target.value })} className={cn(fieldClass, "font-mono")} />
+            <label className="flex min-h-14 items-center justify-between gap-3 py-2">
+              <span className="text-[13px] font-medium text-text">{t("settings.computePage.identityFile")}</span>
+              <span className="w-56 max-w-[62%] shrink-0">
+                <input value={form.identity_file} onChange={(event) => setForm({ ...form, identity_file: event.target.value })} className={cn(fieldClass, "font-mono")} />
+              </span>
             </label>
           ) : (
-            <label className="space-y-1.5 text-[11px] font-medium text-muted">
-              <span>{t("settings.computePage.password")}</span>
-              <span className="relative block">
-                <input type={showPassword.draft ? "text" : "password"} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} className={cn(fieldClass, "pr-11")} autoComplete="new-password" />
-                <button type="button" onClick={() => setShowPassword((current) => ({ ...current, draft: !current.draft }))} className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-muted hover:text-text" aria-label={t("settings.computePage.togglePassword")}>
-                  {showPassword.draft ? <EyeOff size={15} /> : <Eye size={15} />}
-                </button>
+            <label className="flex min-h-14 items-center justify-between gap-3 py-2">
+              <span className="text-[13px] font-medium text-text">{t("settings.computePage.password")}</span>
+              <span className="w-56 max-w-[62%] shrink-0">
+                <span className="relative block">
+                  <input type={showPassword.draft ? "text" : "password"} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} className={cn(fieldClass, "pr-11")} autoComplete="new-password" />
+                  <button type="button" onClick={() => setShowPassword((current) => ({ ...current, draft: !current.draft }))} className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-muted hover:text-text" aria-label={t("settings.computePage.togglePassword")}>
+                    {showPassword.draft ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </span>
+                <span className="mt-1 block font-normal text-[10px] leading-4 text-muted/75">{t("settings.computePage.passwordNotSaved")}</span>
               </span>
-              <span className="block font-normal leading-4 text-muted/75">{t("settings.computePage.passwordNotSaved")}</span>
             </label>
           )}
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-4">
-          <button type="button" onClick={() => void handleDraftProbe()} disabled={!form.host.trim() || draftProbe === true || (form.auth_method === "password" && !form.password)} className="flex min-h-11 items-center gap-2 rounded-input border border-border bg-surface-2 px-4 text-xs font-medium text-text hover:border-accent disabled:cursor-not-allowed disabled:opacity-40">
+        <div className="mt-2 flex flex-wrap items-center justify-end gap-2 border-t border-faint pt-2">
+          <button type="button" onClick={() => void handleDraftProbe()} disabled={!form.host.trim() || draftProbe === true || (form.auth_method === "password" && !form.password)} className="flex min-h-10 items-center gap-2 rounded-input border border-border bg-surface-2 px-3 text-xs font-medium text-text hover:border-accent disabled:cursor-not-allowed disabled:opacity-40">
             {draftProbe === true ? <Loader2 size={14} className="animate-spin" /> : <Cpu size={14} />}
             {draftProbe === true ? t("settings.computePage.testing") : t("settings.computePage.testConnection")}
           </button>
-          <button type="button" onClick={() => void handleAdd()} disabled={!form.host.trim() || adding} className="min-h-11 rounded-input bg-accent px-4 text-xs font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-40">
+          <button type="button" onClick={() => void handleAdd()} disabled={!form.host.trim() || adding} className="min-h-10 rounded-input bg-accent px-3 text-xs font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-40">
             {adding ? t("settings.computePage.adding") : t("settings.computePage.add")}
           </button>
         </div>
@@ -287,12 +291,12 @@ export function ComputeSettings({ workspaceCwd }: ComputeSettingsProps) {
       </div>
 
       {machines.length === 0 ? (
-        <p className="rounded-card border border-dashed border-border px-4 py-6 text-center text-xs text-muted">{t("settings.computePage.empty")}</p>
+        <p className="border-b border-dashed border-border py-4 text-center text-xs text-muted">{t("settings.computePage.empty")}</p>
       ) : machines.map((machine) => {
         const result = probing[machine.label];
         const passwordAuth = machine.auth_method === "password";
         return (
-          <article key={machine.label} className="rounded-card border border-border bg-surface px-4 py-3">
+          <article key={machine.label} className="border-b border-faint py-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">

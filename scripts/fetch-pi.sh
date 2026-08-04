@@ -5,6 +5,10 @@ set -euo pipefail
 
 PI_ORBIT_VERSION="${PI_ORBIT_VERSION:-0.1.0}"
 PI_ORBIT_RELEASE_REPO="${PI_ORBIT_RELEASE_REPO:-Garhorne0813/pi-orbit}"
+PI_MCP_ADAPTER_VERSION="${PI_MCP_ADAPTER_VERSION:-2.18.0}"
+PI_SUBAGENTS_VERSION="${PI_SUBAGENTS_VERSION:-0.40.0}"
+PI_WEB_ACCESS_VERSION="${PI_WEB_ACCESS_VERSION:-0.18.0}"
+CONTEXT_MODE_VERSION="${CONTEXT_MODE_VERSION:-1.0.169}"
 RPIV_ASK_USER_QUESTION_VERSION="${RPIV_ASK_USER_QUESTION_VERSION:-2.3.1}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -13,18 +17,22 @@ CLI_MARKER="$RUNTIME_DIR/.cli-path"
 
 mkdir -p "$RUNTIME_DIR"
 
-install_rpiv_ask_user_question() {
+install_runtime_extensions() {
   command -v npm >/dev/null 2>&1 || {
-    echo "ERROR: npm is required to install @juicesharp/rpiv-ask-user-question." >&2
+    echo "ERROR: npm is required to install Pi runtime extensions." >&2
     exit 1
   }
-  echo "==> Installing @juicesharp/rpiv-ask-user-question@$RPIV_ASK_USER_QUESTION_VERSION..."
+  echo "==> Installing Pi runtime extensions..."
   npm install \
     --prefix "$RUNTIME_DIR" \
     --no-save \
     --no-package-lock \
-    --ignore-scripts \
     --omit=dev \
+    --cache "$RUNTIME_DIR/.npm-cache" \
+    "pi-mcp-adapter@$PI_MCP_ADAPTER_VERSION" \
+    "pi-subagents@$PI_SUBAGENTS_VERSION" \
+    "pi-web-access@$PI_WEB_ACCESS_VERSION" \
+    "context-mode@$CONTEXT_MODE_VERSION" \
     "@juicesharp/rpiv-ask-user-question@$RPIV_ASK_USER_QUESTION_VERSION"
 }
 
@@ -42,7 +50,7 @@ if [ -n "${PI_ORBIT_REPO:-}" ]; then
   }
   printf '%s\n' "$LOCAL_PI_REPO/packages/coding-agent/src/cli.ts" > "$CLI_MARKER"
   printf '%s\n' "$LOCAL_PI_REPO" > "$RUNTIME_DIR/.dev-repo-path"
-  install_rpiv_ask_user_question
+  install_runtime_extensions
   echo "==> Pi Orbit dev runtime ready: $LOCAL_PI_REPO"
   exit 0
 fi
@@ -100,6 +108,6 @@ fi
   echo "ERROR: Installed Pi Orbit does not support app-managed Web Mode: $pi_cli" >&2
   exit 1
 }
-install_rpiv_ask_user_question
+install_runtime_extensions
 printf '%s\n' "$pi_cli" > "$CLI_MARKER"
 echo "==> Pi Orbit $PI_ORBIT_VERSION ready: $pi_cli"

@@ -96,4 +96,18 @@ describe("renderBlockGroup", () => {
     render(<>{renderBlockGroup([agent("a2", "final")], codeRunner, wholeThread)}</>);
     expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
   });
+
+  it("shows one copy action for a response split across tool groups", () => {
+    render(<>{renderBlocks([
+      agent("a1", "好的，我来探索工作区的现有数据。先看一下整体结构。"),
+      tool("ls", "bash"),
+      agent("a2", "venv 内容淹没了输出，我排除它再看实际的工作文件。"),
+      tool("find", "bash"),
+      agent("a3", "工作区内容很精简。现在看一下脚本、数据和已有图。"),
+      tool("read", "bash"),
+      agent("a4", "已完成探索。"),
+    ], codeRunner)}</>);
+
+    expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(1);
+  });
 });
