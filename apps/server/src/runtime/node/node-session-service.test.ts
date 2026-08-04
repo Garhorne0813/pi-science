@@ -472,6 +472,9 @@ describe("Node session lifecycle", () => {
 
     await expect(service.command("session-deadline-no-probe", cwd, "prompt", { message: "test" })).resolves.toMatchObject({ success: true });
     await waitFor(() => publish.mock.calls.some((call) => (call[2] as { message?: string } | undefined)?.message === "The prompt was accepted but the Pi runtime did not start an agent turn."));
+    // The guarded error call is recorded before the paired terminal idle
+    // publish resolves under slower Windows process scheduling.
+    await waitFor(() => publish.mock.calls.some((call) => (call[2] as { type?: string } | undefined)?.type === "session.idle"));
 
     const log = await readFile(process.env.FAKE_PI_LOG!, "utf8");
     const lines = log.split("\n");
