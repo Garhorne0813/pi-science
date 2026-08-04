@@ -7,6 +7,7 @@ import { seedWorkspaceAssets } from "./pi-runtime-launch.js";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
 const sourceSkills = join(projectRoot, "skills");
+const dirLinkType = process.platform === "win32" ? "junction" : "dir";
 
 const cleanups: string[] = [];
 
@@ -52,7 +53,7 @@ describe("seedWorkspaceAssets", () => {
     writeFileSync(join(external, "keep.txt"), "do not delete", "utf8");
     const name = skillNames()[0]!;
     mkdirSync(join(cwd, ".pi", "skills"), { recursive: true });
-    symlinkSync(external, join(cwd, ".pi", "skills", name));
+    symlinkSync(external, join(cwd, ".pi", "skills", name), dirLinkType);
 
     const seeded = seedWorkspaceAssets(cwd);
 
@@ -70,7 +71,7 @@ describe("seedWorkspaceAssets", () => {
     const external = tempExternal();
     const { name, subdir } = firstSkillWithSubdir();
     mkdirSync(join(cwd, ".pi", "skills", name), { recursive: true });
-    symlinkSync(external, join(cwd, ".pi", "skills", name, subdir));
+    symlinkSync(external, join(cwd, ".pi", "skills", name, subdir), dirLinkType);
 
     seedWorkspaceAssets(cwd);
 
@@ -150,7 +151,7 @@ describe("seedWorkspaceAssets", () => {
     const external = tempExternal();
     writeFileSync(join(external, "keep.txt"), "do not delete", "utf8");
     mkdirSync(join(external, "skills"), { recursive: true });
-    symlinkSync(external, join(cwd, ".pi"));
+    symlinkSync(external, join(cwd, ".pi"), dirLinkType);
 
     const seeded = seedWorkspaceAssets(cwd);
 
@@ -167,7 +168,7 @@ describe("seedWorkspaceAssets", () => {
     const cwd = tempCwd();
     const external = tempExternal();
     writeFileSync(join(external, "keep.txt"), "do not delete", "utf8");
-    symlinkSync(external, join(cwd, ".pi-science"));
+    symlinkSync(external, join(cwd, ".pi-science"), dirLinkType);
 
     seedWorkspaceAssets(cwd);
 
@@ -177,7 +178,7 @@ describe("seedWorkspaceAssets", () => {
     expect(readFileSync(join(external, "keep.txt"), "utf8")).toBe("do not delete");
   });
 
-  it("replaces a dangling AGENTS.md symlink with the seeded file", () => {
+  it.skipIf(process.platform === "win32")("replaces a dangling AGENTS.md symlink with the seeded file", () => {
     const cwd = tempCwd();
     symlinkSync(join(cwd, "does-not-exist.md"), join(cwd, "AGENTS.md"));
 
@@ -191,7 +192,7 @@ describe("seedWorkspaceAssets", () => {
     );
   });
 
-  it("replaces an external-pointing AGENTS.md symlink and never writes through it", () => {
+  it.skipIf(process.platform === "win32")("replaces an external-pointing AGENTS.md symlink and never writes through it", () => {
     const cwd = tempCwd();
     const external = tempExternal();
     writeFileSync(join(external, "keep.txt"), "do not delete", "utf8");

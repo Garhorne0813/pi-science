@@ -119,8 +119,8 @@ describe("native control-plane business routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json().available_models).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "deepseek/deepseek-v4-pro", reasoning: true, thinking_levels: expect.arrayContaining(["off", "high", "max"]), context_window: 1_000_000 }),
-      expect.objectContaining({ id: "deepseek/deepseek-v4-flash", reasoning: true, thinking_levels: expect.arrayContaining(["off", "high", "max"]), context_window: 1_000_000 }),
+      expect.objectContaining({ id: "deepseek/deepseek-v4-pro", reasoning: true, thinking_levels: expect.arrayContaining(["off", "high"]), context_window: 1_000_000 }),
+      expect.objectContaining({ id: "deepseek/deepseek-v4-flash", reasoning: true, thinking_levels: expect.arrayContaining(["off", "high"]), context_window: 1_000_000 }),
     ]));
   });
 
