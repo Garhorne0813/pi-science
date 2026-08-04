@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { durableEventStore, type SseEventRecord } from "./event-store.js";
+import { durableEventStore, type EventPublishGuard, type SseEventRecord } from "./event-store.js";
 import type { PiEvent, PiProcess } from "../pi/pi-process.js";
 
 type Subscriber = {
@@ -12,6 +12,7 @@ type Subscriber = {
 
 type EventStore = {
   append(cwd: string, sessionId: string, event: SseEventRecord): Promise<void>;
+  appendConditional?: (cwd: string, sessionId: string, event: SseEventRecord, guard: EventPublishGuard) => Promise<boolean>;
   readAfter(cwd: string, sessionId: string, lastEventId?: string | null): Promise<SseEventRecord[]>;
   nextSequence?: (cwd: string, sessionId: string) => Promise<number>;
 };
@@ -277,11 +278,14 @@ export class ConversationEventHub {
     return unsubscribe;
   }
 
-  publish(cwd: string, sessionId: string, payload: Record<string, unknown>): Promise<void> {
+  publish(cwd: string, sessionId: string, payload: Record<string, unknown>, guard?: EventPublishGuard): Promise<void> {
     const key = streamKey(cwd, sessionId);
     const previous = this.publishing.get(key) ?? Promise.resolve();
+    const canPublish = () => guard?.() !== false;
     const next = previous.catch(() => undefined).then(async () => {
+      if (!canPublish()) return;
       await this.ensureSequence(cwd, sessionId, key);
+      if (!canPublish()) return;
       const sequence = (this.sequences.get(key) ?? 0) + 1;
       this.sequences.set(key, sequence);
       const record: SseEventRecord = {
@@ -290,10 +294,25 @@ export class ConversationEventHub {
         data: JSON.stringify(safeValue(payload)),
         created_at: new Date().toISOString(),
       };
-      try { await this.eventStore.append(cwd, sessionId, record); } catch { /* live delivery must survive a persistence outage */ }
+      let appended = true;
+      try {
+        appended = guard && this.eventStore.appendConditional
+          ? await this.eventStore.appendConditional(cwd, sessionId, record, guard)
+          : (await this.eventStore.append(cwd, sessionId, record), canPublish());
+      } catch {
+        // Live delivery must survive a persistence outage, but a conditional
+        // event must never be sent after its generation has been invalidated.
+        appended = canPublish();
+      }
+      if (!appended || !canPublish()) {
+        if (this.sequences.get(key) === sequence) this.sequences.set(key, sequence - 1);
+        return;
+      }
       for (const subscriber of this.subscribers.get(key) ?? []) {
+        if (!canPublish()) return;
         if (subscriber.cancelled) continue;
         if (subscriber.ready) {
+          if (!canPublish()) return;
           if (subscriber.deliver(record) === false) {
             subscriber.cancelled = true;
             this.subscribers.get(key)?.delete(subscriber);

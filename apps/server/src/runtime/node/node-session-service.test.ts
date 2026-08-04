@@ -2,7 +2,8 @@ import { mkdir, readFile, realpath, rm, stat, unlink, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { conversationEventHub } from "../events/conversation-event-hub.js";
+import { ConversationEventHub, conversationEventHub } from "../events/conversation-event-hub.js";
+import type { SseEventRecord } from "../events/event-store.js";
 import { NodeSessionService } from "./node-session-service.js";
 import { loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
 import { ProjectReviewService } from "../../project-review/service.js";
@@ -431,6 +432,75 @@ describe("Node session lifecycle", () => {
     }));
     publish.mockRestore();
     await service.command("session-idle-five-before-active", cwd, "abort");
+    await service.shutdownAll();
+  });
+
+  it("does not issue a reconciliation probe after the deadline has elapsed", async () => {
+    process.env.FAKE_PI_MODE = "never-starts";
+    process.env.PI_SCIENCE_RECONCILE_DELAY_MS = "100";
+    process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS = "50";
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-deadline-no-probe");
+    const publish = vi.spyOn(conversationEventHub, "publish");
+    await service.resume("session-deadline-no-probe", cwd);
+
+    await expect(service.command("session-deadline-no-probe", cwd, "prompt", { message: "test" })).resolves.toMatchObject({ success: true });
+    await waitFor(() => publish.mock.calls.some((call) => (call[2] as { message?: string } | undefined)?.message === "The prompt was accepted but the Pi runtime did not start an agent turn."));
+
+    const log = await readFile(process.env.FAKE_PI_LOG!, "utf8");
+    const lines = log.split("\n");
+    const promptLine = lines.findIndex((line) => line.includes('"type":"prompt"'));
+    const probesAfterPrompt = lines.slice(promptLine + 1).filter((line) => line.includes('"type":"get_state"'));
+    expect(probesAfterPrompt).toHaveLength(0);
+    expect(publish.mock.calls.filter((call) => (call[2] as { type?: string } | undefined)?.type === "session.idle")).toHaveLength(1);
+    const runtime = (service as unknown as { runtimes: Map<string, { operationToken?: string; operationPending?: string }> }).runtimes.get(`${resolve(cwd)}\0session-deadline-no-probe`);
+    expect(runtime?.operationToken).toBeUndefined();
+    expect(runtime?.operationPending).toBeUndefined();
+    publish.mockRestore();
+    await service.shutdownAll();
+  });
+
+  it("cancels a synthetic terminal when agent_start invalidates its append window", async () => {
+    process.env.FAKE_PI_MODE = "never-starts";
+    process.env.PI_SCIENCE_RECONCILE_DELAY_MS = "100";
+    process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS = "1";
+    const persisted: SseEventRecord[] = [];
+    let releaseAppend!: () => void;
+    let appendStarted!: () => void;
+    const appendReady = new Promise<void>((resolve) => { appendStarted = resolve; });
+    const appendRelease = new Promise<void>((resolve) => { releaseAppend = resolve; });
+    const store = {
+      append: async (_cwd: string, _sessionId: string, record: SseEventRecord) => { persisted.push(record); },
+      appendConditional: async (_cwd: string, _sessionId: string, record: SseEventRecord, guard: () => boolean) => {
+        appendStarted();
+        await appendRelease;
+        if (!guard()) return false;
+        persisted.push(record);
+        return true;
+      },
+      readAfter: async () => persisted.map((record) => ({ ...record })),
+    };
+    const eventHub = new ConversationEventHub(store);
+    const received: SseEventRecord[] = [];
+    const service = new NodeSessionService(eventHub, undefined, undefined, passthroughEnvironments);
+    const cwd = await workspaceWithSessions("session-conditional-terminal");
+    await service.resume("session-conditional-terminal", cwd);
+    await eventHub.subscribe(cwd, "session-conditional-terminal", undefined, (record) => received.push(record), false);
+
+    await expect(service.command("session-conditional-terminal", cwd, "prompt", { message: "test" })).resolves.toMatchObject({ success: true });
+    await appendReady;
+    const runtime = [...(service as unknown as { runtimes: Map<string, { process: { emit: (event: string, payload: unknown) => boolean } }> }).runtimes.values()][0]!;
+    runtime.process.emit("event", { type: "agent_start" });
+    releaseAppend();
+    await eventHub.flush();
+
+    const synthetic = (record: SseEventRecord) => {
+      const payload = JSON.parse(record.data) as { message?: string; type?: string };
+      return payload.message === "The prompt was accepted but the Pi runtime did not start an agent turn." || payload.type === "session.idle";
+    };
+    expect(persisted.filter(synthetic)).toEqual([]);
+    expect(received.filter(synthetic)).toEqual([]);
+    expect(received.map((record) => JSON.parse(record.data).type)).toContain("agent_start");
     await service.shutdownAll();
   });
 

@@ -584,7 +584,7 @@ export class NodeSessionService {
     runtime.operationDeadline = undefined;
   }
 
-  private clearPendingOperation(runtime: RuntimeRecord): void {
+  private resetPendingOperationState(runtime: RuntimeRecord): void {
     if (runtime.reconcileTimer) clearTimeout(runtime.reconcileTimer);
     runtime.reconcileTimer = undefined;
     runtime.operationPending = undefined;
@@ -592,6 +592,11 @@ export class NodeSessionService {
     runtime.reconcileAttempts = 0;
     runtime.reconcileFromTimeout = false;
     runtime.busy = false;
+  }
+
+  private clearPendingOperation(runtime: RuntimeRecord): void {
+    this.resetPendingOperationState(runtime);
+    runtime.operationToken = undefined;
   }
 
   private isCurrentPendingOperation(runtime: RuntimeRecord, token: string): boolean {
@@ -607,31 +612,38 @@ export class NodeSessionService {
       void this.withLock(runtimeKey(runtime.cwd, runtime.activeSessionId), async () => {
         const current = this.runtimes.get(runtimeKey(runtime.cwd, runtime.activeSessionId));
         if (current !== runtime || !this.isCurrentPendingOperation(runtime, operationToken)) return;
-        const state = await runtime.process.sendCommand("get_state");
+        // Never start a new probe after the deadline. The deadline check is
+        // deliberately at callback entry because the timer can be delayed by
+        // process scheduling or a preceding lock holder.
+        const state = Date.now() < (runtime.operationDeadline ?? 0)
+          ? await runtime.process.sendCommand("get_state")
+          : null;
         // A runtime event may have invalidated this reconciliation while the
         // state RPC was in flight. Never act on that stale result.
         if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
-        const data = state.data && typeof state.data === "object" ? state.data as Record<string, unknown> : {};
+        const data = state?.data && typeof state.data === "object" ? state.data as Record<string, unknown> : {};
         const active = Boolean(data.busy) || Boolean(data.isStreaming) || Boolean(data.isCompacting) || Number(data.pendingMessageCount ?? 0) > 0;
-        if (state.success && active && Date.now() < (runtime.operationDeadline ?? 0)) {
+        if (state?.success && active && Date.now() < (runtime.operationDeadline ?? 0)) {
           runtime.reconcileAttempts = 0;
           runtime.busy = true;
           this.scheduleOperationReconciliation(runtime, false);
           return;
         }
-        if (!state.success && Date.now() < (runtime.operationDeadline ?? 0)) {
+        if (state && !state.success && Date.now() < (runtime.operationDeadline ?? 0)) {
           runtime.reconcileAttempts = 0;
           this.scheduleOperationReconciliation(runtime, false);
           return;
         }
         const operation = runtime.operationPending;
-        if (state.success && !active) {
+        if (!state || (state.success && !active)) {
           // An accepted prompt/compact may remain idle while Pi Orbit resumes
           // a session or warms a model. Attempts are diagnostic only: keep
           // probing until the operation deadline. Transport-timeout acks are
-          // explicitly fail-fast and do not enter this retry window.
+          // explicitly fail-fast and do not enter this retry window. When a
+          // delayed timer reaches the deadline without a probe, enter this
+          // same terminal path directly.
           runtime.reconcileAttempts = (runtime.reconcileAttempts ?? 0) + 1;
-          if (!runtime.reconcileFromTimeout && Date.now() < (runtime.operationDeadline ?? 0)) {
+          if (!runtime.reconcileFromTimeout && state && Date.now() < (runtime.operationDeadline ?? 0)) {
             runtime.busy = true;
             this.scheduleOperationReconciliation(runtime, false);
             return;
@@ -639,14 +651,15 @@ export class NodeSessionService {
           // Check the token immediately before terminal reconciliation and
           // before each synthetic event. A late agent_start invalidates it.
           if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
+          const shouldPublish = () => this.isCurrentPendingOperation(runtime, operationToken);
           if (operation === "prompt") {
             await this.eventHub.publish(runtime.cwd, runtime.activeSessionId, {
               type: "error",
               sessionId: runtime.activeSessionId,
               message: "The prompt was accepted but the Pi runtime did not start an agent turn.",
-            });
+            }, shouldPublish);
             if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
-            await this.eventHub.publish(runtime.cwd, runtime.activeSessionId, { type: "session.idle", sessionId: runtime.activeSessionId });
+            await this.eventHub.publish(runtime.cwd, runtime.activeSessionId, { type: "session.idle", sessionId: runtime.activeSessionId }, shouldPublish);
             if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
           }
           if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
@@ -657,7 +670,10 @@ export class NodeSessionService {
         runtime.reconcileAttempts = 0;
         const sessionId = runtime.activeSessionId;
         const config = { ...runtime.config };
-        this.clearPendingOperation(runtime);
+        // Restart needs the operation state cleared so it can proceed, but
+        // retain the generation token until its failure event is published.
+        // A late runtime event can still invalidate that token in the window.
+        this.resetPendingOperationState(runtime);
         const restarted = await this.restartRuntimeUnlocked(runtime, config);
         if ("error" in restarted && sessionId && runtime.operationToken === operationToken) {
           await this.eventHub.publish(runtime.cwd, sessionId, {
@@ -665,8 +681,9 @@ export class NodeSessionService {
             sessionId,
             message: `Unable to safely reconcile timed-out ${operation} operation: ${restarted.error}`,
             terminal: true,
-          });
+          }, () => runtime.operationToken === operationToken);
         }
+        this.clearPendingOperation(runtime);
       });
     }, immediate ? 0 : Math.min(reconciliationDelayMs(), Math.max(0, (runtime.operationDeadline ?? Date.now()) - Date.now())));
   }
