@@ -417,6 +417,11 @@ describe("Node session lifecycle", () => {
     await expect(service.command("session-never-starts", cwd, "prompt", { message: "test" })).resolves.toMatchObject({ success: true });
     const acceptedAt = Date.now();
     await waitFor(() => publish.mock.calls.some((call) => (call[2] as { message?: string } | undefined)?.message === "The prompt was accepted but the Pi runtime did not start an agent turn."));
+    // The error publication is recorded by the spy before the durable/live
+    // publish promise yields to the matching terminal idle publication. Wait
+    // for both records so parallel CI load cannot observe that intentional
+    // append window between the two calls.
+    await waitFor(() => publish.mock.calls.some((call) => (call[2] as { type?: string } | undefined)?.type === "session.idle"));
     expect(Date.now() - acceptedAt).toBeGreaterThanOrEqual(200);
     const syntheticIdle = publish.mock.calls.filter((call) => (call[2] as { type?: string } | undefined)?.type === "session.idle");
     expect(syntheticIdle).toHaveLength(1);
