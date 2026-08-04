@@ -9,7 +9,7 @@ import { ProjectReviewService } from "../../project-review/service.js";
 import { parseReviewResult, type ReviewRunRequest, type ReviewRunResult, type ReviewSubagentRunner } from "../../project-review/types.js";
 
 const cleanup: string[] = [];
-const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE, piMode: process.env.PI_SCIENCE_PI_MODE, argsLog: process.env.FAKE_PI_ARGS_LOG };
+const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE, piMode: process.env.PI_SCIENCE_PI_MODE, argsLog: process.env.FAKE_PI_ARGS_LOG, stateDelay: process.env.FAKE_PI_STATE_DELAY, activeProbe: process.env.FAKE_PI_ACTIVE_PROBE, agentStartDelay: process.env.FAKE_PI_AGENT_START_DELAY };
 
 beforeEach(async () => {
   const root = join(tmpdir(), `pi-science-node-service-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -44,11 +44,12 @@ beforeEach(async () => {
     '  const request = JSON.parse(line);',
     '  if (log) fs.appendFileSync(log, JSON.stringify(request) + "\\n");',
     '  if (!request.id) return;',
-    '  if (request.type === "get_state" && process.env.FAKE_PI_MODE === "idle-active-idle") { stateRequests++; const probe = promptAccepted ? reconciliationProbes++ : -1; const active = promptAccepted && probe >= 0 && probe % 5 === 4; if (log) fs.appendFileSync(log, JSON.stringify({ type: "state_probe", phase: promptAccepted ? "reconciliation" : "preflight", probe, active }) + "\\n"); return respond(request, { data: { sessionId, busy: active, isStreaming: active, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }',
+    '  if (request.type === "get_state" && process.env.FAKE_PI_MODE === "idle-active-idle") { stateRequests++; const probe = promptAccepted ? reconciliationProbes++ : -1; const activeProbe = Number(process.env.FAKE_PI_ACTIVE_PROBE || 4); const active = promptAccepted && probe >= 0 && probe % (activeProbe + 1) === activeProbe; if (log) fs.appendFileSync(log, JSON.stringify({ type: "state_probe", phase: promptAccepted ? "reconciliation" : "preflight", probe, active }) + "\\n"); return respond(request, { data: { sessionId, busy: active, isStreaming: active, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }',
+    '  if (request.type === "get_state" && process.env.FAKE_PI_MODE === "late-agent-start" && promptAccepted) { stateRequests++; setTimeout(() => { if (!agentStartNotified) { agentStartNotified = true; busy = true; process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); } respond(request, { data: { sessionId, busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }, Number(process.env.FAKE_PI_AGENT_START_DELAY || 10)); return; }',
     '  if (request.type === "get_state") { stateRequests++; if (process.env.FAKE_PI_MODE === "restart-fail-once" && startNumber === 2) return; if (process.env.FAKE_PI_MODE === "new-session-state-fails" && sessionId.startsWith("generated-")) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (Number(process.env.FAKE_PI_FAIL_STATE_AFTER || 0) > 0 && stateRequests > Number(process.env.FAKE_PI_FAIL_STATE_AFTER)) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (process.env.FAKE_PI_MODE === "never-starts") return respond(request, { data: { sessionId, busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); if (process.env.FAKE_PI_MODE === "delayed-agent-start") { if (stateRequests > Number(process.env.FAKE_PI_STATE_DELAY || 3)) { if (!agentStartNotified) { agentStartNotified = true; process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); } return respond(request, { data: { sessionId, busy: true, isStreaming: true, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); } return respond(request, { data: { sessionId, busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); } const orbitBusyOnly = process.env.FAKE_PI_MODE === "orbit-busy-without-agent-start"; return respond(request, { data: { sessionId, busy, isStreaming: orbitBusyOnly ? false : busy, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }',
     '  if (request.type === "switch_session") { sessionId = JSON.parse(fs.readFileSync(request.sessionPath, "utf8").split("\\n")[0]).id; return respond(request); }',
     '  if (request.type === "new_session" || request.type === "clone" || request.type === "fork") { sessionId = `generated-${++counter}-${process.pid}`; return respond(request); }',
-    '  if (request.type === "prompt") { if (process.env.FAKE_PI_MODE === "prompt-timeout") return; if (process.env.FAKE_PI_MODE === "idle-active-idle") promptAccepted = true; busy = true; respond(request); if (process.env.FAKE_PI_MODE !== "orbit-busy-without-agent-start" && process.env.FAKE_PI_MODE !== "never-starts" && process.env.FAKE_PI_MODE !== "delayed-agent-start" && process.env.FAKE_PI_MODE !== "idle-active-idle") process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); return; }',
+    '  if (request.type === "prompt") { if (process.env.FAKE_PI_MODE === "prompt-timeout") return; if (process.env.FAKE_PI_MODE === "idle-active-idle" || process.env.FAKE_PI_MODE === "late-agent-start") promptAccepted = true; busy = true; respond(request); if (process.env.FAKE_PI_MODE !== "orbit-busy-without-agent-start" && process.env.FAKE_PI_MODE !== "never-starts" && process.env.FAKE_PI_MODE !== "delayed-agent-start" && process.env.FAKE_PI_MODE !== "idle-active-idle" && process.env.FAKE_PI_MODE !== "late-agent-start") process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); return; }',
     '  if (request.type === "compact") { if (process.env.FAKE_PI_MODE === "compact-timeout") return; return respond(request); }',
     '  if (request.type === "abort") { busy = false; respond(request); process.stdout.write(JSON.stringify({ type: "agent_settled", handledWithoutTurn: true }) + "\\n"); return; }',
     '  if (request.type === "get_commands") return process.env.FAKE_PI_MODE === "cancel-commands" ? respond(request, { data: { cancelled: true } }) : respond(request, { data: { commands: [{ name: "review", source: "skill" }] } });',
@@ -84,6 +85,12 @@ afterEach(async () => {
   process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS = original.deadline;
   process.env.PI_SCIENCE_IDLE_RUNTIME_MS = original.idle;
   process.env.FAKE_PI_MODE = original.mode;
+  if (original.stateDelay === undefined) delete process.env.FAKE_PI_STATE_DELAY;
+  else process.env.FAKE_PI_STATE_DELAY = original.stateDelay;
+  if (original.activeProbe === undefined) delete process.env.FAKE_PI_ACTIVE_PROBE;
+  else process.env.FAKE_PI_ACTIVE_PROBE = original.activeProbe;
+  if (original.agentStartDelay === undefined) delete process.env.FAKE_PI_AGENT_START_DELAY;
+  else process.env.FAKE_PI_AGENT_START_DELAY = original.agentStartDelay;
   if (original.piMode === undefined) delete process.env.PI_SCIENCE_PI_MODE;
   else process.env.PI_SCIENCE_PI_MODE = original.piMode;
   delete process.env.FAKE_PI_LOG;
@@ -376,26 +383,73 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
-  it("gives up after five consecutive idle probes and reports did-not-start exactly once", async () => {
+  it("waits through idle probes until the reconciliation deadline before reporting did-not-start", async () => {
     process.env.FAKE_PI_MODE = "never-starts";
+    process.env.PI_SCIENCE_RECONCILE_DELAY_MS = "20";
+    process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS = "260";
     const service = testService();
     const cwd = await workspaceWithSessions("session-never-starts");
     const publish = vi.spyOn(conversationEventHub, "publish");
     await service.resume("session-never-starts", cwd);
 
     await expect(service.command("session-never-starts", cwd, "prompt", { message: "test" })).resolves.toMatchObject({ success: true });
+    const acceptedAt = Date.now();
     await waitFor(() => publish.mock.calls.some((call) => (call[2] as { message?: string } | undefined)?.message === "The prompt was accepted but the Pi runtime did not start an agent turn."));
-    expect(publish).toHaveBeenCalledWith(cwd, "session-never-starts", expect.objectContaining({ type: "session.idle" }));
+    expect(Date.now() - acceptedAt).toBeGreaterThanOrEqual(200);
+    const syntheticIdle = publish.mock.calls.filter((call) => (call[2] as { type?: string } | undefined)?.type === "session.idle");
+    expect(syntheticIdle).toHaveLength(1);
     await new Promise((resolve) => setTimeout(resolve, 150));
     const didNotStartAfter = publish.mock.calls.filter((call) => (call[2] as { message?: string } | undefined)?.message === "The prompt was accepted but the Pi runtime did not start an agent turn.");
     expect(didNotStartAfter).toHaveLength(1);
 
-    // Exactly five idle probes after the prompt ack — no more, no less.
+    // The deadline, not a fixed attempt count, bounds accepted-idle probes.
     const log = await readFile(process.env.FAKE_PI_LOG!, "utf8");
     const promptLine = log.split("\n").findIndex((line) => line.includes('"type":"prompt"'));
     const idleProbes = log.split("\n").slice(promptLine + 1).filter((line) => line.includes('"type":"get_state"')).length;
-    expect(idleProbes).toBe(5);
+    expect(idleProbes).toBeGreaterThanOrEqual(5);
     publish.mockRestore();
+    await service.shutdownAll();
+  });
+
+  it("does not report did-not-start after five idle probes when the runtime then becomes active", async () => {
+    process.env.FAKE_PI_MODE = "idle-active-idle";
+    process.env.FAKE_PI_ACTIVE_PROBE = "5";
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-idle-five-before-active");
+    const publish = vi.spyOn(conversationEventHub, "publish");
+    await service.resume("session-idle-five-before-active", cwd);
+
+    await expect(service.command("session-idle-five-before-active", cwd, "prompt", { message: "test" })).resolves.toMatchObject({ success: true });
+    await waitFor(async () => (await readFile(process.env.FAKE_PI_LOG!, "utf8")).split("\n").some((line) => line.includes('"type":"state_probe"') && line.includes('"active":true')));
+    const probes = (await readFile(process.env.FAKE_PI_LOG!, "utf8")).split("\n")
+      .filter((line) => line.includes('"type":"state_probe"'))
+      .map((line) => JSON.parse(line) as { phase: string; probe: number; active: boolean })
+      .filter((probe) => probe.phase === "reconciliation");
+    expect(probes.findIndex((probe) => probe.active)).toBeGreaterThanOrEqual(5);
+    expect(publish).not.toHaveBeenCalledWith(cwd, "session-idle-five-before-active", expect.objectContaining({
+      message: "The prompt was accepted but the Pi runtime did not start an agent turn.",
+    }));
+    publish.mockRestore();
+    await service.command("session-idle-five-before-active", cwd, "abort");
+    await service.shutdownAll();
+  });
+
+  it("ignores a late agent_start while a reconciliation state request is in flight", async () => {
+    process.env.FAKE_PI_MODE = "late-agent-start";
+    process.env.FAKE_PI_AGENT_START_DELAY = "10";
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-late-agent-start");
+    const publish = vi.spyOn(conversationEventHub, "publish");
+    await service.resume("session-late-agent-start", cwd);
+
+    await expect(service.command("session-late-agent-start", cwd, "prompt", { message: "test" })).resolves.toMatchObject({ success: true });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(publish).not.toHaveBeenCalledWith(cwd, "session-late-agent-start", expect.objectContaining({
+      message: "The prompt was accepted but the Pi runtime did not start an agent turn.",
+    }));
+    expect(publish).not.toHaveBeenCalledWith(cwd, "session-late-agent-start", expect.objectContaining({ type: "session.idle" }));
+    publish.mockRestore();
+    await service.command("session-late-agent-start", cwd, "abort");
     await service.shutdownAll();
   });
 
