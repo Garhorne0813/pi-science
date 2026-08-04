@@ -36,22 +36,26 @@ const questionnaire: PendingQuestionnaire = {
 };
 
 describe("QuestionnairePrompt", () => {
-  it("supports tabbed questions, previews, notes, multi-select, and structured submit", () => {
+  it("uses an accordion, auto-advances single choice, keeps multi-select open, and submits the structured payload", () => {
     const onRespond = vi.fn();
     render(<QuestionnairePrompt questionnaire={questionnaire} interaction={interaction} onRespond={onRespond} />);
 
     expect(screen.getByText("Which execution mode should we use?")).toBeInTheDocument();
-    expect(screen.getByText("Prioritize turnaround time.")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /Fast.*Prioritize turnaround time/ }));
-    fireEvent.change(screen.getByLabelText("Notes for this question"), { target: { value: "Keep latency low." } });
-    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
-
     expect(screen.getByText("Which outputs are useful?")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuemax", "2");
+
+    fireEvent.click(screen.getByRole("button", { name: "Notes for this question" }));
+    fireEvent.change(screen.getByLabelText("Notes for this question"), { target: { value: "Keep latency low." } });
+    fireEvent.click(screen.getByRole("button", { name: /Fast.*Prioritize turnaround time/ }));
+
+    const outputsHeader = screen.getByRole("button", { name: /Outputs.*Which outputs are useful/ });
+    expect(outputsHeader).toHaveAttribute("aria-expanded", "true");
+    fireEvent.mouseEnter(screen.getByRole("button", { name: /Figures.*Publication-ready plots/ }));
     expect(screen.getByText("figure preview")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Figures.*Publication-ready plots/ }));
     fireEvent.click(screen.getByRole("button", { name: /Tables.*Machine-readable summaries/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+
+    fireEvent.click(screen.getByRole("button", { name: /Review/ }));
     fireEvent.click(screen.getByRole("button", { name: "Submit answers" }));
 
     expect(onRespond).toHaveBeenCalledTimes(1);
@@ -63,15 +67,46 @@ describe("QuestionnairePrompt", () => {
     ]));
   });
 
-  it("supports a custom answer and cancellation", () => {
+  it("auto-advances after a first custom answer or an empty multi-select answer", () => {
     const onRespond = vi.fn();
-    const singleQuestion = { ...questionnaire, toolCallId: "call-2", questions: [questionnaire.questions[0]!] };
+    const customQuestionnaire: PendingQuestionnaire = {
+      ...questionnaire,
+      toolCallId: "call-2",
+      questions: [
+        {
+          question: "Describe the experiment.",
+          header: "Experiment",
+          multiSelect: false,
+          options: [{ label: "Baseline", description: "Use the existing setup." }],
+        },
+        questionnaire.questions[1]!,
+        {
+          question: "Should the follow-up be automated?",
+          header: "Follow-up",
+          multiSelect: false,
+          options: [{ label: "Yes", description: "Run it automatically." }],
+        },
+      ],
+    };
+    render(<QuestionnairePrompt questionnaire={customQuestionnaire} interaction={interaction} onRespond={onRespond} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Type something/ }));
+    fireEvent.change(screen.getByPlaceholderText("Write a custom answer…"), { target: { value: "A bespoke experiment" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save answer" }));
+    expect(screen.getByRole("button", { name: /Outputs.*Which outputs are useful/ })).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue without selecting" }));
+    expect(screen.getByRole("button", { name: /Follow-up.*Should the follow-up be automated/ })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("supports a custom answer and cancellation from the persistent footer", () => {
+    const onRespond = vi.fn();
+    const singleQuestion = { ...questionnaire, toolCallId: "call-3", questions: [questionnaire.questions[0]!] };
     render(<QuestionnairePrompt questionnaire={singleQuestion} interaction={interaction} onRespond={onRespond} />);
 
     fireEvent.click(screen.getByRole("button", { name: /Type something/ }));
     fireEvent.change(screen.getByPlaceholderText("Write a custom answer…"), { target: { value: "A bespoke mode" } });
     fireEvent.click(screen.getByRole("button", { name: "Save answer" }));
-    fireEvent.click(screen.getByRole("button", { name: "Review" }));
     fireEvent.click(screen.getByRole("button", { name: "Submit answers" }));
 
     expect(JSON.parse(onRespond.mock.calls[0]![0].value).answers[0]).toMatchObject({ kind: "custom", answer: "A bespoke mode" });

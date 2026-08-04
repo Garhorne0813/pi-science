@@ -357,8 +357,6 @@ function findRuntimeExtension(packageName: string, cliPath: string, extraEntrypo
     // runtime checkout elsewhere cannot shadow the scenario under test.
     roots.push(...overrideRoots);
   } else {
-    const managedRuntimeRoot = join(PROJECT_ROOT, "runtime", "pi");
-    if (existsSync(managedRuntimeRoot)) roots.push(managedRuntimeRoot);
     let current = dirname(resolve(cliPath));
     for (let depth = 0; depth < 12; depth += 1) {
       if (!roots.includes(current)) roots.push(current);
@@ -366,6 +364,11 @@ function findRuntimeExtension(packageName: string, cliPath: string, extraEntrypo
       if (parent === current) break;
       current = parent;
     }
+    // Prefer extensions published alongside the selected CLI. The managed
+    // runtime is a fallback for the bundled release, but must not shadow a
+    // manifest-discovered extension from an explicitly selected installation.
+    const managedRuntimeRoot = join(PROJECT_ROOT, "runtime", "pi");
+    if (existsSync(managedRuntimeRoot) && !roots.includes(managedRuntimeRoot)) roots.push(managedRuntimeRoot);
   }
   for (const root of roots) {
     const packageDir = join(root, "node_modules", packageName);

@@ -32,9 +32,8 @@ export function groupBlocks(blocks: ThreadBlock[]): ThreadBlock[][] {
   return groups;
 }
 
-export function renderBlockGroup(blocks: ThreadBlock[], codeRunner: CodeRunner) {
+export function renderBlockGroup(blocks: ThreadBlock[], codeRunner: CodeRunner, actionTextByBlock = agentActionTextByBlock(blocks)) {
   const result: React.ReactNode[] = [];
-  const actionTextByBlock = agentActionTextByBlock(blocks);
   if (blocks.every((block): block is ToolCallBlock => block.kind === "tool")) {
     if (blocks.length > 1) result.push(<ToolGroup key={blocks[0].id} blocks={blocks} />);
     else if (blocks[0]) result.push(<ToolCard key={blocks[0].id} block={blocks[0]} />);
@@ -47,7 +46,8 @@ export function renderBlockGroup(blocks: ThreadBlock[], codeRunner: CodeRunner) 
 }
 
 export function renderBlocks(blocks: ThreadBlock[], codeRunner: CodeRunner) {
-  return groupBlocks(blocks).flatMap((group) => renderBlockGroup(group, codeRunner));
+  const actionTextByBlock = agentActionTextByBlock(blocks);
+  return groupBlocks(blocks).flatMap((group) => renderBlockGroup(group, codeRunner, actionTextByBlock));
 }
 
 /* ── Block Renderers ── */

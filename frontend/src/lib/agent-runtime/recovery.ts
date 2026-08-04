@@ -7,6 +7,7 @@ import { generations, turnState } from "./generations";
 import { backfillSessionName } from "./naming";
 import { loadSessionsInternal } from "./sessions";
 import { useRuntimeStore } from "./store";
+import { hasActivePendingInteraction, hasPendingInteractionData } from "./types";
 
 export async function resyncCompletedHistory(sessionId: string, cwd: string): Promise<void> {
   const generation = generations.connection;
@@ -57,10 +58,13 @@ export async function reconcileWorkingState(
       || current.activeSessionId !== sessionId
       || current.cwd !== cwd
     ) return;
+    const runtimeBusy = runtimeState.is_streaming
+      || runtimeState.is_compacting
+      || runtimeState.pending_message_count > 0;
+    const pendingInteraction = hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire);
+    const awaitingUserInput = hasActivePendingInteraction(current.pendingInteraction, current.pendingQuestionnaire);
     useRuntimeStore.setState({
-      working: runtimeState.is_streaming
-        || runtimeState.is_compacting
-        || runtimeState.pending_message_count > 0,
+      working: pendingInteraction ? !awaitingUserInput : runtimeBusy,
       model: runtimeState.model ?? current.model,
       thinking: runtimeState.thinking ?? current.thinking,
       contextTokens: runtimeState.context_tokens ?? current.contextTokens,
@@ -97,10 +101,14 @@ export async function reconcileAfterGap(
   // call must keep Send disabled until the backend reports idle.
   if (stateResult.status === "fulfilled") {
     const runtimeState = stateResult.value;
+    const runtimeBusy = runtimeState.is_streaming
+      || runtimeState.is_compacting
+      || runtimeState.pending_message_count > 0;
+    const latest = useRuntimeStore.getState();
+    const pendingInteraction = hasPendingInteractionData(latest.pendingInteraction, latest.pendingQuestionnaire);
+    const awaitingUserInput = hasActivePendingInteraction(latest.pendingInteraction, latest.pendingQuestionnaire);
     useRuntimeStore.setState({
-      working: runtimeState.is_streaming
-        || runtimeState.is_compacting
-        || runtimeState.pending_message_count > 0,
+      working: pendingInteraction ? !awaitingUserInput : runtimeBusy,
       model: runtimeState.model ?? current.model,
       thinking: runtimeState.thinking ?? current.thinking,
       contextTokens: runtimeState.context_tokens ?? current.contextTokens,
@@ -161,6 +169,23 @@ export async function reconcilePromptAfterLateStream(
       const runtimeWorking = runtimeState.is_streaming
         || runtimeState.is_compacting
         || runtimeState.pending_message_count > 0;
+      const pendingInteraction = hasPendingInteractionData(latest.pendingInteraction, latest.pendingQuestionnaire);
+      const awaitingUserInput = hasActivePendingInteraction(latest.pendingInteraction, latest.pendingQuestionnaire);
+      if (awaitingUserInput) {
+        // Pi keeps its stream marked busy while it is paused inside the
+        // interaction request. The prompt is the work the user needs to do,
+        // so clear the spinner state but keep both pending payloads intact.
+        ++generations.activity;
+        useRuntimeStore.setState({ working: false, status: "ready" });
+        return;
+      }
+      if (pendingInteraction) {
+        // The questionnaire payload and its matching extension UI request are
+        // delivered as separate events. Keep the turn busy until the pair is
+        // complete so an idle-looking intermediate state cannot clear the
+        // payload or re-enable the composer.
+        return;
+      }
       if (!runtimeWorking) {
         ++generations.activity;
         useRuntimeStore.setState({ working: false, status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
