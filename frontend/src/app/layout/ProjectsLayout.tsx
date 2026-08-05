@@ -5,7 +5,6 @@ import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { InspectorShell } from "../../components/inspector/InspectorShell";
 import { RightPane } from "../../components/inspector/RightPane";
-import { TodoWidget } from "../../components/todo/TodoWidget";
 import type { Inspector } from "../../types/thread";
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
 import { useWorkspaceCwd } from "../../lib/workspace";
@@ -21,6 +20,8 @@ import { workspacePathLeaf } from "../../lib/workspace";
 
 const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 420;
+
+const TodoWidget = lazy(() => import("../../components/todo/TodoWidget").then((m) => ({ default: m.TodoWidget })));
 
 export function ProjectsLayout() {
   const { t } = useTranslation();
@@ -202,7 +203,9 @@ export function ProjectsLayout() {
         sidebarCollapsed && "pt-12 md:pt-0 md:pl-12",
       )}>
         <Outlet />
-        <TodoWidget />
+        <Suspense fallback={null}>
+          <TodoWidget />
+        </Suspense>
       </main>
 
       {/* Inspector — only in workspace context */}
