@@ -432,16 +432,6 @@ function isUserVisibleSession(root: string, file: SessionFile): boolean {
   return !file.subagent && !isNestedSubagentSession(root, file.path);
 }
 
-function subagentParentPaths(root: string, files: SessionFile[]): Set<string> {
-  const parents = new Set<string>();
-  for (const file of files) {
-    if (!isNestedSubagentSession(root, file.path)) continue;
-    const firstSegment = relative(root, file.path).split(/[\\/]+/).filter(Boolean)[0];
-    if (firstSegment && !firstSegment.endsWith(".jsonl")) parents.add(join(root, `${firstSegment}.jsonl`));
-  }
-  return parents;
-}
-
 export class SessionRepository {
   async findPath(cwd: string, sessionId: string): Promise<string | null> {
     return (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId)?.path ?? null;
@@ -453,14 +443,16 @@ export class SessionRepository {
       readProject(cwd),
     ]);
     const root = sessionsRoot(cwd);
-    const nestedSubagentParents = subagentParentPaths(root, files);
     return files.filter((file) => {
       if (!isUserVisibleSession(root, file)) return false;
       const parentSession = typeof file.header.parentSession === "string" ? file.header.parentSession : "";
-      // A named top-level session is a user-created fork. Unnamed descendants
-      // of a parent with subagent run artifacts are Pi's internal fork context.
+      // A named top-level session is a user-created fork. An unnamed session
+      // with a parentSession is Pi's internal fork context. Do not depend on
+      // nested run artifacts for this classification: pi-subagents cleans up
+      // those directories after a run, while the fork-context transcript can
+      // remain and would otherwise resurface in the conversation list.
       if (file.sessionInfo) return true;
-      return !nestedSubagentParents.has(parentSession) && !nestedSubagentParents.has(resolve(parentSession));
+      return !parentSession;
     }).map(({ header, modified }) => ({
       id: String(header.id),
       cwd: typeof header.cwd === "string" ? header.cwd : resolve(cwd),
