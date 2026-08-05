@@ -81,4 +81,25 @@ describe("MentionComposer", () => {
     await waitFor(() => expect(input()).toHaveValue(" @scout "));
     expect(container.textContent).not.toContain("@reviewer");
   });
+
+  it("scrolls the active subagent into view while navigating", async () => {
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    render(<Harness />);
+    await typeAt("@");
+    await screen.findByRole("listbox", { name: "Subagents" });
+    fireEvent.keyDown(input(), { key: "ArrowDown" });
+
+    expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest" });
+    if (originalScrollIntoView) {
+      Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: originalScrollIntoView });
+    } else {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    }
+  });
 });

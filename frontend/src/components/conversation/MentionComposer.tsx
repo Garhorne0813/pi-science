@@ -74,6 +74,7 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
   const [dismissedStart, setDismissedStart] = useState<number | null>(null);
   const [caret, setCaret] = useState(value.length);
   const menuRef = useRef<HTMLDivElement>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const mirrorRef = useRef<HTMLDivElement>(null);
   const selectionDirectionRef = useRef<"forward" | "backward" | "none">("none");
 
@@ -97,6 +98,12 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
   }, [agents, dismissedStart, trigger]);
 
   useEffect(() => setActiveIndex(0), [trigger?.query, choices.length]);
+  useEffect(() => {
+    const activeOption = optionRefs.current[activeIndex];
+    if (activeOption && typeof activeOption.scrollIntoView === "function") {
+      activeOption.scrollIntoView({ block: "nearest" });
+    }
+  }, [activeIndex]);
   useEffect(() => {
     if (dismissedStart !== null && value[dismissedStart] !== "@") setDismissedStart(null);
   }, [dismissedStart, value]);
@@ -224,6 +231,7 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
           {choices.map((agent, index) => (
             <button
               key={`${agent.source ?? "agent"}-${agent.name}`}
+              ref={(element) => { optionRefs.current[index] = element; }}
               type="button"
               role="option"
               aria-selected={index === activeIndex}
