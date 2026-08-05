@@ -10,11 +10,11 @@
  *  / error). Nothing here spawns the Python runtime: the caller decides
  *  whether to capture an execution result. */
 
-import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveWorkspaceFile } from "../../security/workspace-security.js";
-import { withFileWriteLock } from "../../storage/persistence.js";
+import { withFileWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
 import type { SessionRepository } from "../node/session-repository.js";
 import { sessionRepository } from "../node/session-repository.js";
 
@@ -69,6 +69,9 @@ interface PiScienceMetadata {
 }
 
 interface NotebookCell {
+  /** Stable cell id (nbformat-valid, Jupyter >= 4.5) so re-runs and diffs
+   *  can reference a cell without depending on list position. */
+  id?: string;
   cell_type: "markdown" | "code";
   metadata: Record<string, unknown>;
   source: string[];
@@ -110,15 +113,28 @@ function outputsFromResult(result: ChatCellResult): unknown[] {
     });
   }
   if (result.error) {
-    const lines = result.error.split(/\r?\n/).filter((line) => line.length > 0);
+    const lines = result.error.split(/\r?\n/);
+    // ename is the exception type: the first line up to the first colon
+    // ("ValueError: bad value" -> "ValueError"), matching Jupyter output
+    // conventions. evalue/traceback keep the full original text.
+    const firstLine = lines.find((line) => line.length > 0) ?? "";
+    const colon = firstLine.indexOf(":");
+    const ename = (colon >= 0 ? firstLine.slice(0, colon) : firstLine).trim() || "Error";
     outputs.push({
       output_type: "error",
-      ename: lines[0] ?? "Error",
+      ename,
       evalue: result.error,
-      traceback: result.error.split(/\r?\n/),
+      traceback: lines,
     });
   }
   return outputs;
+}
+
+/** A result payload counts as "present" only when it carries an explicit
+ *  `ok` field. Callers may send `{}` or partial objects when no execution
+ *  result was captured; those must NOT erase previously persisted outputs. */
+function hasResultPayload(result: ChatCellResult | null | undefined): result is ChatCellResult {
+  return result !== null && result !== undefined && typeof result === "object" && "ok" in result;
 }
 
 function provenanceMarkdownCell(meta: PiScienceMetadata): NotebookCell {
@@ -132,6 +148,7 @@ function provenanceMarkdownCell(meta: PiScienceMetadata): NotebookCell {
   lines.push(`- **Saved**: ${meta.saved_at}`);
   if (meta.model_at_save) lines.push(`- **Model at save**: ${meta.model_at_save}`);
   return {
+    id: randomUUID(),
     cell_type: "markdown",
     metadata: { pi_science: meta },
     source: lines.map((line) => `${line}\n`),
@@ -140,6 +157,7 @@ function provenanceMarkdownCell(meta: PiScienceMetadata): NotebookCell {
 
 function codeCell(code: string, result: ChatCellResult | null, meta: PiScienceMetadata): NotebookCell {
   return {
+    id: randomUUID(),
     cell_type: "code",
     execution_count: null,
     metadata: { pi_science: meta },
@@ -203,10 +221,18 @@ export class ChatNotebookService {
     return withFileWriteLock(target, async () => {
       let notebook: NotebookDocument | null = null;
       let conflictError: string | null = null;
-      let exists = false;
+      let raw: string | null = null;
       try {
-        const raw = await readFile(target, "utf8");
-        exists = true;
+        raw = await readFile(target, "utf8");
+      } catch (error) {
+        // Only a missing file means "create fresh". A target that exists but
+        // cannot be read (EACCES, EISDIR, ...) must surface as a clean 409
+        // instead of being silently treated as absent or crashing later.
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT") conflictError = `existing notebook path is not readable: ${String(error)}`;
+      }
+      const exists = raw !== null;
+      if (raw !== null) {
         let parsed: unknown;
         try {
           parsed = JSON.parse(raw);
@@ -218,8 +244,6 @@ export class ChatNotebookService {
           conflictError = "existing file is not a valid Jupyter notebook";
         }
         notebook = candidate;
-      } catch {
-        // readFile failed (missing file): create a fresh notebook below.
       }
       if (conflictError) return fail("conflict", conflictError);
 
@@ -244,8 +268,10 @@ export class ChatNotebookService {
       if (existingIndex >= 0) {
         const previous = notebook.cells[existingIndex];
         if (previous) {
-          // No new result: keep the previous outputs instead of erasing them.
-          const outputs = request.result ? outputsFromResult(request.result) : (previous.outputs ?? []);
+          // A payload without an explicit `ok` field (null/undefined/{}) means
+          // "no result captured": keep the previous outputs instead of erasing
+          // them. Only an explicit ok field replaces the outputs.
+          const outputs = hasResultPayload(request.result) ? outputsFromResult(request.result) : (previous.outputs ?? []);
           notebook.cells[existingIndex] = {
             ...previous,
             outputs,
@@ -266,7 +292,9 @@ export class ChatNotebookService {
           }
           if (cell.cell_type === "code") break;
         }
-        await writeFile(target, `${JSON.stringify(notebook, null, 2)}\n`, "utf8");
+        // Atomic write: temp file + rename so a crash mid-write can never
+        // leave a truncated notebook at the target path.
+        await writeJsonAtomic(target, notebook);
         return {
           ok: true,
           path: relativePath.replaceAll("\\", "/"),
@@ -280,7 +308,7 @@ export class ChatNotebookService {
 
       const cellIndex = notebook.cells.length;
       notebook.cells.push(provenance, code);
-      await writeFile(target, `${JSON.stringify(notebook, null, 2)}\n`, "utf8");
+      await writeJsonAtomic(target, notebook);
       return {
         ok: true,
         path: relativePath.replaceAll("\\", "/"),

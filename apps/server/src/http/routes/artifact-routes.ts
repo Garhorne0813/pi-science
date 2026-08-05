@@ -7,7 +7,7 @@ import { appendJsonLine, appendJsonLineUnlocked, metadataRoot, readJsonLines, wi
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/workspace-security.js";
 
 interface Artifact { artifact_id: string; version: number; path: string; kind: string; mime: string; size: number; sha256: string; published_at: string; producer?: Record<string, unknown>; inputs?: unknown[]; environment?: Record<string, unknown>; verification?: Record<string, unknown> }
-interface Provenance { path: string; version: number; ts: number; tool: string; toolCallId?: string; sessionId: string; model?: string; contentHash?: string; content?: string; diff?: string; runId?: string }
+export interface Provenance { path: string; version: number; ts: number; tool: string; toolCallId?: string; sessionId: string; model?: string; contentHash?: string; content?: string; diff?: string; runId?: string }
 const MAX_PUBLISH_BYTES = 2 * 1024 * 1024 * 1024;
 
 async function hashFile(path: string): Promise<{ sha256: string; size: number }> {

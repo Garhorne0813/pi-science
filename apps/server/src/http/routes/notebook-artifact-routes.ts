@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { ChatNotebookService, type ChatCellResult } from "../../runtime/notebook/chat-notebook-service.js";
-import { recordProvenance } from "./artifact-routes.js";
+import { recordProvenance, type Provenance } from "./artifact-routes.js";
 
 function statusCode(code: string): number {
   switch (code) {
@@ -12,6 +12,24 @@ function statusCode(code: string): number {
     case "code_too_large":
     case "result_too_large": return 413;
     default: return 400;
+  }
+}
+
+async function recordProvenanceWithRetry(cwd: string, body: Record<string, unknown>): Promise<Provenance> {
+  // The notebook file is already committed at this point (save() runs under
+  // its file lock), so a provenance write failure must not roll the file
+  // back. The save is idempotent (same source_key updates in place), so the
+  // caller can safely retry; one retry covers transient contention on
+  // provenance.jsonl, and a second failure still returns a clean 500 that
+  // leaves the file intact for a later retry.
+  try {
+    return await recordProvenance(cwd, body);
+  } catch (error) {
+    try {
+      return await recordProvenance(cwd, body);
+    } catch {
+      throw error;
+    }
   }
 }
 
@@ -36,13 +54,25 @@ export function registerNotebookArtifactRoutes(app: FastifyInstance, service = n
       model_at_save: typeof body.model_at_save === "string" ? body.model_at_save : null,
     });
     if (!outcome.ok) return reply.code(statusCode(outcome.code)).send(outcome);
-    const provenance = await recordProvenance(cwd, {
-      path: outcome.path,
-      session_id: String(body.session_id ?? ""),
-      tool: "chat_save_notebook",
-      ...(typeof body.model_at_save === "string" ? { model: body.model_at_save } : {}),
-      content: `notebook:${outcome.path}:cells=${outcome.cell_count}:${outcome.updated ? "updated" : "appended"}`,
-    });
+    let provenance: Provenance;
+    try {
+      provenance = await recordProvenanceWithRetry(cwd, {
+        path: outcome.path,
+        session_id: String(body.session_id ?? ""),
+        tool: "chat_save_notebook",
+        ...(typeof body.model_at_save === "string" ? { model: body.model_at_save } : {}),
+        content: `notebook:${outcome.path}:cells=${outcome.cell_count}:${outcome.updated ? "updated" : "appended"}`,
+      });
+    } catch (error) {
+      // File is written; only the provenance ledger failed. Return a clean
+      // 500 with a retryable code — a retry of the same request updates the
+      // existing cell instead of duplicating it.
+      return reply.code(500).send({
+        ok: false,
+        code: "provenance_failed",
+        error: `notebook saved but provenance could not be recorded: ${String(error)}`,
+      });
+    }
     return {
       ok: true,
       path: outcome.path,

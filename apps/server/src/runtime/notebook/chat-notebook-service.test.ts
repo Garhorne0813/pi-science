@@ -40,7 +40,7 @@ interface SavedNotebook {
   nbformat: number;
   nbformat_minor: number;
   metadata: Record<string, unknown>;
-  cells: Array<{ cell_type: string; metadata: Record<string, unknown>; source: string[]; outputs?: unknown[] }>;
+  cells: Array<{ id?: string; cell_type: string; metadata: Record<string, unknown>; source: string[]; outputs?: unknown[] }>;
 }
 
 async function readNotebook(cwd: string): Promise<SavedNotebook> {
@@ -80,6 +80,8 @@ describe("ChatNotebookService", () => {
     expect(notebook.metadata.pi_science).toMatchObject({ source: "conversation", session_id: SESSION });
     expect(notebook.cells).toHaveLength(2);
     expect(notebook.cells[0]!.cell_type).toBe("markdown");
+    expect(notebook.cells[0]!.id).toBeTruthy();
+    expect(notebook.cells[1]!.id).toBeTruthy();
     expect(notebook.cells[0]!.source.join("")).toContain("Saved from conversation");
     expect(notebook.cells[0]!.source.join("")).toContain(SESSION);
     expect(notebook.cells[0]!.source.join("")).toContain(ASSISTANT);
@@ -143,6 +145,21 @@ describe("ChatNotebookService", () => {
     expect(notebook.cells[1]!.outputs).toEqual([{ output_type: "stream", name: "stdout", text: ["old stdout\n"] }]);
   });
 
+  it("keeps previous outputs when an update result payload lacks the explicit ok field", async () => {
+    const cwd = await makeWorkspace();
+    await writeSession(cwd);
+    const service = new ChatNotebookService();
+
+    await service.save(cwd, { session_id: SESSION, message_id: ASSISTANT, code: "x = 1\n", result: { ok: true, stdout: "old stdout\n", result: null, error: null } });
+    // `{}` / partial objects without `ok` mean "no result captured": the
+    // previous outputs must survive, not be erased by an empty translation.
+    const second = await service.save(cwd, { session_id: SESSION, message_id: ASSISTANT, code: "x = 1\n", result: {} as never });
+
+    expect(second).toMatchObject({ ok: true, updated: true });
+    const notebook = await readNotebook(cwd);
+    expect(notebook.cells[1]!.outputs).toEqual([{ output_type: "stream", name: "stdout", text: ["old stdout\n"] }]);
+  });
+
   it("translates stdout, result and error outputs into Jupyter outputs", async () => {
     const cwd = await makeWorkspace();
     await writeSession(cwd);
@@ -155,8 +172,31 @@ describe("ChatNotebookService", () => {
     expect(outputs).toEqual([
       { output_type: "stream", name: "stdout", text: ["print 1\n"] },
       { output_type: "execute_result", execution_count: null, data: { "text/plain": ["2\n"] }, metadata: {} },
-      { output_type: "error", ename: "TypeError: bad operand", evalue: "TypeError: bad operand", traceback: ["TypeError: bad operand"] },
+      { output_type: "error", ename: "TypeError", evalue: "TypeError: bad operand", traceback: ["TypeError: bad operand"] },
     ]);
+  });
+
+  it("derives the error ename from the first line before the colon and keeps the traceback verbatim", async () => {
+    const cwd = await makeWorkspace();
+    await writeSession(cwd);
+    const service = new ChatNotebookService();
+
+    await service.save(cwd, {
+      session_id: SESSION,
+      message_id: ASSISTANT,
+      code: "x = []\nx[0]\n",
+      result: { ok: false, stdout: "", result: null, error: "IndexError: list index out of range\n    at <cell line 2>\n    at main()" },
+    });
+
+    const notebook = await readNotebook(cwd);
+    const outputs = notebook.cells[1]!.outputs as Array<Record<string, unknown>>;
+    expect(outputs).toHaveLength(1);
+    expect(outputs[0]).toMatchObject({
+      output_type: "error",
+      ename: "IndexError",
+      evalue: "IndexError: list index out of range\n    at <cell line 2>\n    at main()",
+      traceback: ["IndexError: list index out of range", "    at <cell line 2>", "    at main()"],
+    });
   });
 
   it("preserves CJK code and results as UTF-8", async () => {
@@ -193,6 +233,29 @@ describe("ChatNotebookService", () => {
     expect(notebook.cells).toHaveLength(4);
     const sources = notebook.cells.filter((cell) => cell.cell_type === "code").map((cell) => cell.source.join("")).sort();
     expect(sources).toEqual(["a = 1\n", "b = 2\n"]);
+  });
+
+  it("does not duplicate or drop outputs when the same source key is saved concurrently", async () => {
+    const cwd = await makeWorkspace();
+    await writeSession(cwd);
+    const service = new ChatNotebookService();
+
+    await Promise.all([
+      service.save(cwd, { session_id: SESSION, message_id: ASSISTANT, code: "x = 1\n", result: { ok: true, stdout: "", result: "one", error: null } }),
+      service.save(cwd, { session_id: SESSION, message_id: ASSISTANT, code: "x = 1\n", result: { ok: true, stdout: "", result: "two", error: null } }),
+    ]);
+
+    const notebook = await readNotebook(cwd);
+    // One winner, one code cell, exactly one execute_result — never both
+    // appended nor both dropped.
+    expect(notebook.cells).toHaveLength(2);
+    const code = notebook.cells[1]!;
+    expect(code.outputs).toHaveLength(1);
+    const outputs = code.outputs as Array<Record<string, unknown>>;
+    expect(outputs[0]).toMatchObject({ output_type: "execute_result" });
+    const textParts = (outputs[0]!.data as Record<string, unknown>)["text/plain"] as string[] | undefined;
+    expect(textParts).toBeDefined();
+    expect(["one\n", "two\n"]).toContain(textParts!.join(""));
   });
 
   it("refuses to overwrite an existing file that is not a valid notebook", async () => {

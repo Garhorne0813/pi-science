@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerNotebookArtifactRoutes } from "./notebook-artifact-routes.js";
 import { ensureProject } from "../../project/project-registry.js";
-import { MAX_CODE_BYTES } from "../../runtime/notebook/chat-notebook-service.js";
+import { MAX_CODE_BYTES, MAX_RESULT_BYTES } from "../../runtime/notebook/chat-notebook-service.js";
 
 const tempDirs: string[] = [];
 
@@ -115,6 +115,30 @@ describe("POST /api/artifacts/notebooks/save", () => {
     const response = await app.inject({ method: "POST", url: `/api/artifacts/notebooks/save?cwd=${encodeURIComponent(cwd)}`, payload: { ...body(), code: "x".repeat(MAX_CODE_BYTES + 1) } });
     expect(response.statusCode).toBe(413);
     expect(response.json()).toMatchObject({ ok: false, code: "code_too_large" });
+  });
+
+  it("rejects an oversized execution result with 413", async () => {
+    const cwd = await makeWorkspace();
+    await writeSession(cwd);
+    const app = Fastify({ bodyLimit: 11 * 1024 * 1024 });
+    registerNotebookArtifactRoutes(app);
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/artifacts/notebooks/save?cwd=${encodeURIComponent(cwd)}`,
+      payload: { ...body(), result: { ok: true, stdout: "y".repeat(MAX_RESULT_BYTES + 1), result: null, error: null } },
+    });
+    expect(response.statusCode).toBe(413);
+    expect(response.json()).toMatchObject({ ok: false, code: "result_too_large" });
+  });
+
+  it("rejects a non-python language with 400", async () => {
+    const cwd = await makeWorkspace();
+    await writeSession(cwd);
+    const app = Fastify({ bodyLimit: 11 * 1024 * 1024 });
+    registerNotebookArtifactRoutes(app);
+    const response = await app.inject({ method: "POST", url: `/api/artifacts/notebooks/save?cwd=${encodeURIComponent(cwd)}`, payload: { ...body(), language: "r" } });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ ok: false, code: "invalid_request" });
   });
 
   it("rejects an existing non-notebook file with 409 without overwriting it", async () => {
