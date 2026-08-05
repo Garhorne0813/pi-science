@@ -19,6 +19,36 @@ const BUILTIN_SUBAGENTS = [
   ["scout", "Explores the workspace and gathers context."],
   ["worker", "Implements an approved task."],
 ] as const;
+const SUBAGENT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+
+type DiscoveredSubagent = { name: string; description: string; source: "builtin" | "project" };
+
+function unquoteFrontmatterValue(value: string): string {
+  const trimmed = value.trim();
+  if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function parseProjectSubagent(content: string): { name: string; description: string; packageName?: string } | null {
+  const block = content.match(/^---\s*\n([\s\S]*?)\n---(?:\s*\n|$)/)?.[1];
+  if (!block) return null;
+  const fields = new Map<string, string>();
+  for (const line of block.split(/\r?\n/)) {
+    const match = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/);
+    if (match) fields.set(match[1] ?? "", unquoteFrontmatterValue(match[2] ?? ""));
+  }
+  const name = fields.get("name")?.trim() ?? "";
+  const description = fields.get("description")?.trim() ?? "";
+  if (!name || !description || !SUBAGENT_NAME_PATTERN.test(name)) return null;
+  const rawPackage = fields.get("package")?.trim();
+  const packageName = rawPackage
+    ? rawPackage.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9.-]/g, "").replace(/-+/g, "-").replace(/\.+/g, ".").replace(/(?:^[-.]+|[-.]+$)/g, "")
+    : undefined;
+  if (rawPackage && (!packageName || !/^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)*$/.test(packageName))) return null;
+  return { name, description, ...(packageName ? { packageName } : {}) };
+}
 const PROVIDERS = [
   ["anthropic", "Anthropic", ["claude-opus-4-5", "claude-sonnet-4-20250514"]], ["openai", "OpenAI", ["gpt-5.1", "gpt-5.1-codex", "gpt-4o"]], ["google", "Gemini", ["gemini-2.5-pro", "gemini-2.5-flash"]], ["deepseek", "DeepSeek", ["deepseek-v4-pro", "deepseek-v4-flash"]], ["groq", "Groq", ["llama-3.3-70b-versatile"]], ["openrouter", "OpenRouter", ["openai/gpt-5.1", "anthropic/claude-sonnet-5"]], ["mistral", "Mistral", ["devstral-latest"]], ["xai", "xAI", ["grok-4.3"]], ["zai", "Z.AI", ["glm-4.7"]],
 ] as const;
@@ -306,20 +336,27 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
     catch (error) { return reply.code(403).send({ error: String(error) }); }
     const { readdir } = await import("node:fs/promises");
     const { join } = await import("node:path");
-    const agents = new Map<string, { name: string; description: string; source: "builtin" | "project" }>(
+    const agents = new Map<string, DiscoveredSubagent>(
       BUILTIN_SUBAGENTS.map(([name, description]) => [name, { name, description, source: "builtin" }]),
     );
     const directory = join(cwd, ".pi", "agents");
-    try {
-      for (const file of await readdir(directory)) {
-        if (!file.endsWith(".md")) continue;
-        const name = file.slice(0, -3);
-        const content = await readFile(join(directory, file), "utf8").catch(() => "");
-        const description = content.match(/^---[\s\S]*?^description:\s*["']?([^\n"']+)/m)?.[1]?.trim()
-          ?? content.match(/^#\s+(.+)$/m)?.[1]?.trim()
-          ?? "Project subagent";
-        agents.set(name, { name, description, source: "project" });
+    const visit = async (current: string): Promise<void> => {
+      for (const entry of await readdir(current, { withFileTypes: true })) {
+        const filePath = join(current, entry.name);
+        if (entry.isDirectory()) {
+          await visit(filePath);
+          continue;
+        }
+        if (!entry.isFile() || !entry.name.endsWith(".md") || entry.name.endsWith(".chain.md")) continue;
+        const parsed = parseProjectSubagent(await readFile(filePath, "utf8").catch(() => ""));
+        if (!parsed) continue;
+        const name = parsed.packageName ? `${parsed.packageName}.${parsed.name}` : parsed.name;
+        if (!SUBAGENT_NAME_PATTERN.test(name)) continue;
+        agents.set(name, { name, description: parsed.description, source: "project" });
       }
+    };
+    try {
+      await visit(directory);
     } catch { /* no project agents */ }
     return { agents: [...agents.values()].sort((a, b) => a.name.localeCompare(b.name)) };
   });

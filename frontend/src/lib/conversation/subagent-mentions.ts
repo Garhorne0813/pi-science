@@ -6,7 +6,7 @@ export interface SubagentMention {
 }
 
 const SUBAGENT_BLOCK = /<subagent_mentions>[\s\S]*?<\/subagent_mentions>\s*/g;
-const VALID_SUBAGENT = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+export const VALID_SUBAGENT = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
 export function injectSubagentMentions(message: string, mentions: SubagentMention[]): string {
   const names = [...new Set(mentions.map((mention) => mention.name).filter((name) => VALID_SUBAGENT.test(name)))];

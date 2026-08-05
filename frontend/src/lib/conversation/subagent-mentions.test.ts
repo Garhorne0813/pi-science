@@ -12,8 +12,10 @@ describe("subagent mentions", () => {
     expect(visibleUserMessage(message)).toBe("@reviewer @reviewer inspect this");
   });
 
-  it("ignores invalid names and leaves ordinary messages unchanged", () => {
-    expect(injectSubagentMentions("hello", [mention("bad name")])).toBe("hello");
+  it("supports runtime-qualified names and ignores unsafe names", () => {
+    const message = injectSubagentMentions("hello", [mention("Science.Auditor"), mention("bad name")]);
+    expect(message).toContain('- "Science.Auditor"');
+    expect(message).not.toContain("bad name");
     expect(stripSubagentMentionBlock("hello")).toBe("hello");
   });
 });
