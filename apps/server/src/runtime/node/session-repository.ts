@@ -21,6 +21,10 @@ export interface SessionMessageRecord {
   toolName?: string;
   isError?: boolean;
   timestamp?: string | null;
+  /** Tool-specific metadata persisted by Pi Orbit (e.g. rpiv-todo's task
+   *  snapshot). Forwarded to the frontend so read-only panels can rebuild
+   *  tool state without live events. Capped: oversized details are dropped. */
+  details?: unknown;
 }
 
 export interface SessionMessagePage {
@@ -90,13 +94,15 @@ function decodeMessageCursor(cursor: string): number {
   return value.o;
 }
 
+const MAX_TOOL_DETAILS_BYTES = 100_000;
+
 function parseMessageLine(line: string): SessionMessageRecord | null {
   if (!line.trim()) return null;
   try {
     const entry = JSON.parse(line) as Record<string, unknown>;
     if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") return null;
     const message = entry.message as Record<string, unknown>;
-    return {
+    const record: SessionMessageRecord = {
       id: typeof entry.id === "string" ? entry.id : "",
       role: typeof message.role === "string" ? message.role : "",
       content: Array.isArray(message.content) ? message.content as Array<Record<string, unknown>> : [],
@@ -105,6 +111,12 @@ function parseMessageLine(line: string): SessionMessageRecord | null {
       isError: typeof message.isError === "boolean" ? message.isError : false,
       timestamp: typeof entry.timestamp === "string" ? entry.timestamp : null,
     };
+    if (message.details !== undefined) {
+      try {
+        if (JSON.stringify(message.details).length <= MAX_TOOL_DETAILS_BYTES) record.details = message.details;
+      } catch { /* non-serializable details are dropped */ }
+    }
+    return record;
   } catch {
     return null;
   }

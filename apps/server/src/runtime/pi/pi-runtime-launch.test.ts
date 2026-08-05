@@ -96,6 +96,17 @@ describe("Pi runtime custom provider materialization", () => {
     expect(guidance).toContain("omit the comment when no meaningful follow-up remains");
   });
 
+  it("materializes multi-step todo guidance in the append system prompt", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-todo-guidance-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    buildPiProcessOptions(cwd);
+    const guidance = await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "APPEND_SYSTEM.md"), "utf8");
+    expect(guidance).toContain("call the todo tool (action: create)");
+    expect(guidance).toContain("exactly one task in_progress at a time");
+    expect(guidance).toContain("Simple single-step requests do not need a todo list");
+  });
+
   it("passes workspace package isolation into the agent runtime", async () => {
     const cwd = join(tmpdir(), `pi-runtime-environment-${Date.now()}`);
     cleanup.push(cwd);

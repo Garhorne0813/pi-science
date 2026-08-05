@@ -5,6 +5,7 @@ import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { InspectorShell } from "../../components/inspector/InspectorShell";
 import { RightPane } from "../../components/inspector/RightPane";
+import { TodoPanel } from "../../components/inspector/TodoPanel";
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
 import { useWorkspaceCwd } from "../../lib/workspace";
 import { usePendingProposalCount } from "../../lib/knowledge";
@@ -205,9 +206,14 @@ export function ProjectsLayout() {
       {/* Inspector — only in workspace context */}
       {isWorkspace && inspectorOpen && inspectorData && (
         <RightPane onClose={closeInspector}>
-          <ErrorBoundary>
-            <InspectorShell inspector={inspectorData} onClose={closeInspector} cwd={activeCwd || undefined} />
-          </ErrorBoundary>
+          <div className="flex h-full flex-col">
+            <TodoPanel />
+            <div className="min-h-0 flex-1">
+              <ErrorBoundary>
+                <InspectorShell inspector={inspectorData} onClose={closeInspector} cwd={activeCwd || undefined} />
+              </ErrorBoundary>
+            </div>
+          </div>
         </RightPane>
       )}
 

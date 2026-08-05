@@ -53,6 +53,10 @@ export interface ToolCallBlock {
   title?: string;
   input?: Record<string, unknown>;
   output?: string;
+  /** Tool-specific metadata from the persisted toolResult message (e.g.
+   *  rpiv-todo's task snapshot). Read-only panels rebuild tool state from
+   *  this without needing live events. */
+  details?: unknown;
   partialOutput?: string;
   diff?: string;
   startedAt?: string;

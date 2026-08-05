@@ -155,4 +155,22 @@ describe("conversation history conversion", () => {
       expect.objectContaining({ kind: "tool", callId: "call-read", tool: "read" }),
     ]);
   });
+
+  it("carries toolResult details through so panels can rebuild tool state", () => {
+    const blocks = convertHistoryToBlocks([
+      {
+        id: "result-todo",
+        role: "toolResult",
+        toolCallId: "call-todo",
+        toolName: "todo",
+        content: [{ type: "text", text: "Created #1: x (pending)" }],
+        details: { action: "create", params: {}, nextId: 2, tasks: [{ id: 1, subject: "x", status: "pending" }] },
+      },
+    ]);
+    expect(blocks[0]).toMatchObject({
+      kind: "tool",
+      tool: "todo",
+      details: { action: "create", params: {}, nextId: 2, tasks: [{ id: 1, subject: "x", status: "pending" }] },
+    });
+  });
 });

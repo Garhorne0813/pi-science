@@ -491,8 +491,12 @@ function materializeRuntimeSettings(agentDir: string, settings: Record<string, a
 // parses the emitted comment into follow-up suggestion chips.
 const FOLLOW_UP_GUIDANCE = "After completing a response, append an HTML comment on the final line: <!--suggest: q1 | q2 | q3--> with up to 3 short, concrete follow-up suggestions. Each suggestion must be a standalone message the user can copy and send directly, written from the user's perspective as a request, question, or imperative (for example, Chinese: 请比较… / 继续分析… / 帮我…; English: Compare… / Please analyze…). Do not use assistant/agent-offering language such as 我可以… / 要不要我… / I can… / Would you like me to…, and do not address the user as 你 or you when describing the agent's next step. Use the user's language, and omit the comment when no meaningful follow-up remains.\n";
 
+// Multi-step work guidance: nudge (never hard-block) complex tasks into the
+// todo tool so progress survives restarts and is visible in the app.
+const TODO_GUIDANCE = "Workflow planning: when a request requires multiple independent steps, several file edits, a research loop, notebook analysis, or repeated tool calls, first call the todo tool (action: create) to lay out the task list. Keep exactly one task in_progress at a time, update tasks as steps complete (or when the plan changes), and mark every task completed (or cancelled/deferred) before finishing. Simple single-step requests do not need a todo list.\n";
+
 function materializeFollowUpGuidance(agentDir: string): void {
-  writeFileSync(join(agentDir, "APPEND_SYSTEM.md"), FOLLOW_UP_GUIDANCE, "utf8");
+  writeFileSync(join(agentDir, "APPEND_SYSTEM.md"), `${FOLLOW_UP_GUIDANCE}${TODO_GUIDANCE}`, "utf8");
 }
 
 function positiveInteger(value: unknown): number | undefined {

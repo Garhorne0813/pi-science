@@ -20,9 +20,7 @@ function sessionHeader(id: string, cwd: string, timestamp = "2026-07-25T00:00:00
 
 function messageLine(id: string, role: string, text: string, timestamp = "2026-07-25T00:00:01.000Z") {
   return `${JSON.stringify({ type: "message", id, timestamp, message: { role, content: [{ type: "text", text }] } })}\n`;
-}
-
-afterEach(async () => {
+}afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
 });
 
@@ -234,6 +232,25 @@ describe("SessionRepository messages streaming", () => {
     expect(older.messages.map((message) => message.id)).toEqual(["m1", "m2"]);
     expect(older.has_more).toBe(false);
     expect(older.next_cursor).toBeNull();
+  });
+
+  it("forwards toolResult details and drops oversized ones", async () => {
+    const cwd = await makeWorkspace();
+    const repo = new SessionRepository();
+    const details = { action: "create", params: {}, nextId: 2, tasks: [{ id: 1, subject: "x", status: "pending" }] };
+    const oversized = { tasks: [{ id: 1, subject: "y".repeat(150_000) }] };
+    const lines = [
+      sessionHeader("tooled", cwd),
+      `${JSON.stringify({ type: "message", id: "m1", timestamp: "2026-07-25T00:00:01.000Z", message: { role: "toolResult", toolCallId: "c1", toolName: "todo", content: [{ type: "text", text: "Created" }], isError: false, details } })}\n`,
+      `${JSON.stringify({ type: "message", id: "m2", timestamp: "2026-07-25T00:00:02.000Z", message: { role: "toolResult", toolCallId: "c2", toolName: "todo", content: [{ type: "text", text: "Created" }], isError: false, details: oversized } })}\n`,
+    ];
+    await writeFile(join(cwd, ".pi-science", "sessions", "tooled.jsonl"), lines.join(""), "utf8");
+
+    const page = await repo.messagesPage(cwd, "tooled", { limit: 10 });
+    const byId = new Map(page.messages.map((message) => [message.id, message]));
+    expect(byId.get("m1")?.details).toEqual(details);
+    expect(byId.get("m1")?.toolName).toBe("todo");
+    expect(byId.get("m2")?.details).toBeUndefined();
   });
 
   it("indexes every user message and returns a cursor that includes the target", async () => {
