@@ -58,7 +58,7 @@ function renderHighlighted(value: string, mentions: SubagentMention[]) {
     if (mention.start < cursor || mention.end > value.length) continue;
     result.push(value.slice(cursor, mention.start));
     result.push(
-      <span key={mention.id} className="rounded bg-accent/15 font-medium text-accent ring-1 ring-inset ring-accent/20">
+      <span key={mention.id} className="rounded bg-accent/15 text-accent ring-1 ring-inset ring-accent/20">
         {value.slice(mention.start, mention.end)}
       </span>,
     );
