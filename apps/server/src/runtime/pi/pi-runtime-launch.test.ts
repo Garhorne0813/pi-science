@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildPiProcessOptions, loadDefaultPiConfig, resetWebRuntimeAllocation, runtimeExtensionStatus } from "./pi-runtime-launch.js";
 
 const cleanup: string[] = [];
-const original = { home: process.env.PI_SCIENCE_HOME, userHome: process.env.HOME, cli: process.env.PI_CLI_PATH, tsx: process.env.PI_TSX_PATH, tsconfig: process.env.PI_TSCONFIG_PATH, piMode: process.env.PI_SCIENCE_PI_MODE };
+const original = { home: process.env.PI_SCIENCE_HOME, userHome: process.env.HOME, userProfile: process.env.USERPROFILE, cli: process.env.PI_CLI_PATH, tsx: process.env.PI_TSX_PATH, tsconfig: process.env.PI_TSCONFIG_PATH, piMode: process.env.PI_SCIENCE_PI_MODE };
 
 beforeEach(async () => {
   const root = join(tmpdir(), `pi-science-runtime-launch-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -23,6 +23,8 @@ afterEach(async () => {
   process.env.PI_SCIENCE_HOME = original.home;
   if (original.userHome === undefined) delete process.env.HOME;
   else process.env.HOME = original.userHome;
+  if (original.userProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = original.userProfile;
   process.env.PI_CLI_PATH = original.cli;
   process.env.PI_TSX_PATH = original.tsx;
   process.env.PI_TSCONFIG_PATH = original.tsconfig;
@@ -174,6 +176,10 @@ describe("Pi runtime custom provider materialization", () => {
     await writeFile(extension, "export default function extension() {}\n", "utf8");
     await writeFile(join(packageDir, "package.json"), JSON.stringify({ pi: { extensions: ["index.ts"] } }), "utf8");
     process.env.HOME = installHome;
+    // os.homedir() reads USERPROFILE on Windows (HOME is not consulted), so the
+    // managed-npm-root discovery test must override both or it cannot find the
+    // injected package on windows runners.
+    process.env.USERPROFILE = installHome;
 
     const todo = runtimeExtensionStatus(process.env.PI_CLI_PATH!).find((item) => item.id === "rpiv-todo");
 
