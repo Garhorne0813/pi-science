@@ -206,6 +206,7 @@ export function ProjectsLayout() {
       </main>
 
       {/* Inspector — only in workspace context */}
+      {isWorkspace && <TodoAutoOpen />}
       {isWorkspace && inspectorOpen && (
         <WorkspaceInspectorPane inspectorData={inspectorData} cwd={activeCwd} onClose={closeInspector} />
       )}
@@ -219,6 +220,42 @@ export function ProjectsLayout() {
 }
 
 /* ── Workspace Right Pane (inspector + todo) ── */
+
+/**
+ * Opens the right pane once when the conversation first shows visible todo
+ * tasks (agent created a todo list), so the TodoPanel is not hidden behind a
+ * manual inspector open. Semantics:
+ * - fires once per todo streak: after the pane has been open (automatically
+ *   or by the user) it does not re-open until the todo list fully disappears;
+ * - a user close is respected for the rest of that streak;
+ * - sessions restored with an existing todo list open the pane on mount.
+ */
+export function TodoAutoOpen() {
+  const todoVisible = useRuntimeStore((state) => {
+    const snapshot = extractTodoSnapshot(state.thread.blocks);
+    return snapshot ? visibleTasks(snapshot).length > 0 : false;
+  });
+  const inspectorOpen = useUiStore((s) => s.inspectorOpen);
+  const setInspectorOpen = useUiStore((s) => s.setInspectorOpen);
+  const autoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (!todoVisible) {
+      // Todo streak ended: allow the next todo list to auto-open again.
+      autoOpenedRef.current = false;
+      return;
+    }
+    if (inspectorOpen) {
+      // The pane is already open (automatically or by the user); count it so
+      // a later manual close is not immediately overridden.
+      autoOpenedRef.current = true;
+      return;
+    }
+    if (autoOpenedRef.current) return;
+    autoOpenedRef.current = true;
+    setInspectorOpen(true);
+  }, [todoVisible, inspectorOpen, setInspectorOpen]);
+  return null;
+}
 
 /**
  * Right pane contents for a workspace. The inspector shell needs real

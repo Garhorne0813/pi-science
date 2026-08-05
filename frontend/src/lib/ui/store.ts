@@ -21,6 +21,9 @@ interface UiState {
   inspectorMaximized: boolean;
   inspectorData: Inspector | null;
   openInspector: (data: Inspector) => void;
+  /** Toggle just the pane visibility, leaving any inspector data untouched
+   *  (used by the todo auto-open behaviour). */
+  setInspectorOpen: (open: boolean) => void;
   closeInspector: () => void;
   setInspectorWidth: (w: number) => void;
   setInspectorMaximized: (m: boolean) => void;
@@ -94,6 +97,7 @@ export const useUiStore = create<UiState>((set) => ({
   inspectorMaximized: false,
   inspectorData: null,
   openInspector: (data) => set({ inspectorOpen: true, inspectorData: data }),
+  setInspectorOpen: (open) => set({ inspectorOpen: open }),
   closeInspector: () => set({ inspectorOpen: false, inspectorData: null }),
   setInspectorWidth: (w) => {
     saveToStorage("inspector.width", w);
