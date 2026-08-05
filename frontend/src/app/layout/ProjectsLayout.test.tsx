@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { SettingsNavItem, TodoAutoOpen, WorkspaceSessionList, WorkspaceInspectorPane } from "./ProjectsLayout";
+import { SettingsNavItem, WorkspaceSessionList, WorkspaceInspectorPane } from "./ProjectsLayout";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { FeedbackContext } from "../../components/feedback/feedback-context";
@@ -46,110 +46,33 @@ afterEach(() => {
 });
 
 describe("WorkspaceInspectorPane", () => {
-  function todoBlock(details: unknown): ThreadBlock {
-    return {
-      kind: "tool",
-      id: "tool-todo-1",
-      callId: "todo-call-1",
-      tool: "todo",
-      status: "done",
-      details,
-    };
-  }
-
   function setThread(blocks: ThreadBlock[]) {
     useRuntimeStore.setState({ thread: { blocks, index: {}, loaded: true } });
   }
 
-  it("renders the todo panel when the thread has todo tasks and no inspector data", () => {
-    setThread([todoBlock({ action: "create", tasks: [{ id: 1, subject: "Load data", status: "pending" }], nextId: 2 })]);
-    render(<WorkspaceInspectorPane inspectorData={null} cwd="proj" onClose={vi.fn()} />);
-    expect(screen.getByRole("region", { name: "Task list" })).toBeInTheDocument();
-    expect(screen.getByText("Load data")).toBeInTheDocument();
-  });
-
-  it("renders nothing when there are no todo tasks and no inspector data", () => {
+  it("renders nothing when there is no inspector data (todo widget owns todo UI now)", () => {
     setThread([]);
     const { container } = render(<WorkspaceInspectorPane inspectorData={null} cwd="proj" onClose={vi.fn()} />);
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders both the todo panel and the inspector shell when inspector data exists", () => {
-    setThread([todoBlock({ action: "create", tasks: [{ id: 1, subject: "Load data", status: "pending" }], nextId: 2 })]);
-    render(<WorkspaceInspectorPane inspectorData={{ variant: "notebook-panel" }} cwd="proj" onClose={vi.fn()} />);
-    expect(screen.getByRole("region", { name: "Task list" })).toBeInTheDocument();
-    expect(screen.getByText("Load data")).toBeInTheDocument();
-    expect(document.querySelector('[data-variant="notebook-panel"]')).not.toBeNull();
-  });
-});
-
-describe("TodoAutoOpen", () => {
-  function todoBlock(details: unknown): ThreadBlock {
-    return {
+  it("renders nothing with todo tasks but no inspector data — todo moved out of the pane", () => {
+    setThread([{
       kind: "tool",
       id: "tool-todo-1",
       callId: "todo-call-1",
       tool: "todo",
       status: "done",
-      details,
-    };
-  }
+      details: { action: "create", tasks: [{ id: 1, subject: "Load data", status: "pending" }], nextId: 2 },
+    }]);
+    const { container } = render(<WorkspaceInspectorPane inspectorData={null} cwd="proj" onClose={vi.fn()} />);
+    expect(container).toBeEmptyDOMElement();
+  });
 
-  function setThread(blocks: ThreadBlock[]) {
-    useRuntimeStore.setState({ thread: { blocks, index: {}, loaded: true } });
-  }
-
-  function renderAutoOpen() {
-    return render(<TodoAutoOpen />);
-  }
-
-  it("opens the pane when a todo list first appears", () => {
+  it("renders the inspector shell when inspector data exists", () => {
     setThread([]);
-    useUiStore.setState({ inspectorOpen: false, inspectorData: null });
-    renderAutoOpen();
-    expect(useUiStore.getState().inspectorOpen).toBe(false);
-    act(() => setThread([todoBlock({ action: "create", tasks: [{ id: 1, subject: "Load data", status: "pending" }], nextId: 2 })]));
-    expect(useUiStore.getState().inspectorOpen).toBe(true);
-  });
-
-  it("opens the pane on mount when todos already exist (restored session)", () => {
-    setThread([todoBlock({ action: "create", tasks: [{ id: 1, subject: "Load data", status: "pending" }], nextId: 2 })]);
-    useUiStore.setState({ inspectorOpen: false, inspectorData: null });
-    renderAutoOpen();
-    expect(useUiStore.getState().inspectorOpen).toBe(true);
-  });
-
-  it("does not reopen after the user closes the pane during the same todo streak", () => {
-    setThread([todoBlock({ action: "create", tasks: [{ id: 1, subject: "Load data", status: "pending" }], nextId: 2 })]);
-    useUiStore.setState({ inspectorOpen: false, inspectorData: null });
-    renderAutoOpen();
-    expect(useUiStore.getState().inspectorOpen).toBe(true);
-    act(() => useUiStore.getState().closeInspector());
-    expect(useUiStore.getState().inspectorOpen).toBe(false);
-    // Thread still has todos; the close must not be overridden.
-    act(() => setThread([todoBlock({ action: "create", tasks: [{ id: 1, subject: "Load data", status: "pending" }, { id: 2, subject: "Fit model", status: "pending" }], nextId: 3 })]));
-    expect(useUiStore.getState().inspectorOpen).toBe(false);
-  });
-
-  it("reopens for a new todo streak after all todos disappear", () => {
-    setThread([todoBlock({ action: "create", tasks: [{ id: 1, subject: "Load data", status: "pending" }], nextId: 2 })]);
-    useUiStore.setState({ inspectorOpen: false, inspectorData: null });
-    renderAutoOpen();
-    expect(useUiStore.getState().inspectorOpen).toBe(true);
-    act(() => useUiStore.getState().closeInspector());
-    act(() => setThread([]));
-    expect(useUiStore.getState().inspectorOpen).toBe(false);
-    act(() => setThread([todoBlock({ action: "create", tasks: [{ id: 1, subject: "Second list", status: "pending" }], nextId: 2 })]));
-    expect(useUiStore.getState().inspectorOpen).toBe(true);
-  });
-
-  it("stays closed when the thread never has todos", () => {
-    setThread([]);
-    useUiStore.setState({ inspectorOpen: false, inspectorData: null });
-    renderAutoOpen();
-    expect(useUiStore.getState().inspectorOpen).toBe(false);
-    act(() => setThread([{ kind: "agent", id: "a1", parts: [{ id: "p1", text: "hello" }] }]));
-    expect(useUiStore.getState().inspectorOpen).toBe(false);
+    render(<WorkspaceInspectorPane inspectorData={{ variant: "notebook-panel" }} cwd="proj" onClose={vi.fn()} />);
+    expect(document.querySelector('[data-variant="notebook-panel"]')).not.toBeNull();
   });
 });
 
