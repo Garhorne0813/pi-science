@@ -11,6 +11,7 @@ import { registerFileReadRoutes } from "../http/routes/file-routes.js";
 import { registerNodeSessionRoutes } from "../http/routes/node-session-routes.js";
 import { registerJobRoutes } from "../http/routes/job-routes.js";
 import { registerArtifactRoutes } from "../http/routes/artifact-routes.js";
+import { registerNotebookArtifactRoutes } from "../http/routes/notebook-artifact-routes.js";
 import { registerSettingsRoutes } from "../http/routes/settings-routes.js";
 import { registerRunEndpointRoutes } from "../http/routes/run-endpoint-routes.js";
 import { knownWorkspacePaths, registerCatalogRoutes } from "../http/routes/catalog-routes.js";
@@ -122,6 +123,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository, new AiTitleService(new PiTitleRuntimeFactory(piManager)));
   if (config.nodeJobs !== false) registerJobRoutes(app, jobs);
   registerEnvironmentRoutes(app, environments);
+  if (config.nodeArtifacts !== false) registerNotebookArtifactRoutes(app);
   if (config.nodeArtifacts !== false) registerArtifactRoutes(app);
   if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings);
   if (config.nodeRuns !== false) registerRunEndpointRoutes(app);
