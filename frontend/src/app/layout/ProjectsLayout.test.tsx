@@ -148,7 +148,7 @@ describe("TodoAutoOpen", () => {
     useUiStore.setState({ inspectorOpen: false, inspectorData: null });
     renderAutoOpen();
     expect(useUiStore.getState().inspectorOpen).toBe(false);
-    act(() => setThread([{ kind: "agent", id: "a1", parts: [{ id: "p1", text: "hello" }], timestamp: null }]));
+    act(() => setThread([{ kind: "agent", id: "a1", parts: [{ id: "p1", text: "hello" }] }]));
     expect(useUiStore.getState().inspectorOpen).toBe(false);
   });
 });
