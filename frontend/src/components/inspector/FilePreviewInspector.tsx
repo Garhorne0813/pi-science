@@ -107,8 +107,7 @@ export function FilePreviewInspector({
           if (cancelled) return;
           if (f && f.encoding === "utf8") setText(f.data);
           else if (f) setError(t("filePreview.binaryTextUnsupported"));
-          else if (kind !== "html" && kind !== "markdown")
-            setError(t("filePreview.fileUnavailable"));
+          else setError(t("filePreview.fileUnavailable"));
         }
         if (needsBytes) {
           const f = await readArtifact(data.path, data.root, cwd);

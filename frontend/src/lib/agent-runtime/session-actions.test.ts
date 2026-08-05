@@ -26,6 +26,28 @@ describe("runtime session actions", () => {
     expect(useRuntimeStore.getState().status).toBe("ready");
   });
 
+  it("shares concurrent initial reads for the same session", async () => {
+    let resolveMessages!: (response: Response) => void;
+    const messages = new Promise<Response>((resolve) => { resolveMessages = resolve; });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return messages;
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = useRuntimeStore.getState().connect("/workspace", "session-a");
+    const second = useRuntimeStore.getState().connect("/workspace", "session-a");
+    resolveMessages(jsonResponse({ messages: [] }));
+    await Promise.all([first, second]);
+
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/messages"))).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/state"))).toHaveLength(1);
+    expect(FakeEventSource.instances).toHaveLength(1);
+  });
+
   it("restores authoritative running, model, thinking and history state", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

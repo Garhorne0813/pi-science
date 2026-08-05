@@ -50,4 +50,13 @@ export function registerSessionReadRoutes(app: FastifyInstance, sessionRepositor
       return reply.code(403).send({ error: String(error) });
     }
   });
+
+  app.get<{ Params: { session_id: string } }>("/api/sessions/:session_id/messages/index", async (request, reply) => {
+    try {
+      const cwd = await validateWorkspaceCwd(queryCwd(request));
+      return await sessionRepository.userMessageIndex(cwd, request.params.session_id);
+    } catch (error) {
+      return reply.code(403).send({ error: String(error) });
+    }
+  });
 }

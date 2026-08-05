@@ -44,6 +44,18 @@ export interface SessionMessagePage {
   snapshot_version: string;
 }
 
+export interface SessionUserMessageIndexEntry {
+  id: string;
+  text: string;
+  timestamp?: string | null;
+  before: string;
+}
+
+export interface SessionUserMessageIndex {
+  messages: SessionUserMessageIndexEntry[];
+  snapshot_version: string;
+}
+
 export interface SessionState {
   id: string;
   cwd: string;

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useUiStore } from "../lib/ui";
-import { extractArtifactRefs, refToArtifactBlock, fileInspectorFromBlock } from "../lib/artifacts";
+import { extractArtifactRefs, fileInspectorFromBlock, publishedArtifactRefs, refToArtifactBlock } from "../lib/artifacts";
 import { pickAutoPreviewArtifact } from "../lib/artifacts/artifact-autopreview";
 import { parseSuggestions } from "../lib/conversation";
 import type { ThreadBlock } from "../types/thread";
@@ -28,7 +28,10 @@ export function useTurnEffects(working: boolean, blocks: ThreadBlock[]) {
     const agentText = lastAgent.parts.map((part) => part.text).join("");
     setSuggestions(parseSuggestions(agentText).suggestions);
     const ui = useUiStore.getState();
-    const pick = pickAutoPreviewArtifact(extractArtifactRefs(agentText), { inspectorOpen: ui.inspectorOpen });
+    // Auto-preview only artifacts confirmed by a publication event. A path in
+    // a plan is not evidence that the file was written to the workspace.
+    const refs = publishedArtifactRefs(extractArtifactRefs(agentText), blocks);
+    const pick = pickAutoPreviewArtifact(refs, { inspectorOpen: ui.inspectorOpen });
     if (pick) ui.openInspector(fileInspectorFromBlock(refToArtifactBlock(pick) as any) as any);
   }, [working, blocks]);
 

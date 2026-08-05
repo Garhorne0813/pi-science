@@ -27,10 +27,15 @@ type GetState = StoreApi<RuntimeState>["getState"];
  *  (or a StrictMode double effect) share one backend session instead of
  *  racing two. Owned by `createNewSession`, which also clears each entry. */
 const _createSessionPromises = new Map<string, Promise<string>>();
+function connectionKey(cwd: string, sessionId?: string): string { return `${cwd}\u0000${sessionId ?? ""}`; }
 
 export function createRuntimeActions(set: SetState, get: GetState) {
-  return {
-    connect: async (cwd: string, sessionId?: string) => {
+  /** React StrictMode can replay the route effect while the first session
+   * connection is still loading. Share that initial load for the same target;
+   * a later target still supersedes the previous generation as before. */
+  const connectPromises = new Map<string, Promise<void>>();
+
+  const connect = async (cwd: string, sessionId?: string) => {
       const generation = ++generations.connection;
       ++generations.promptMonitor;
       ++generations.activity;
@@ -184,9 +189,54 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       }
 
       if (generation === generations.connection) void loadSessionsInternal();
-    },
+    };
+
+  const connectDeduped = (cwd: string, sessionId?: string): Promise<void> => {
+    const key = connectionKey(cwd, sessionId);
+    const existing = connectPromises.get(key);
+    if (existing) return existing;
+    // A different target makes all previous in-flight loads stale. Their
+    // generation checks still prevent them from writing state when they finish.
+    connectPromises.clear();
+    const pending = connect(cwd, sessionId);
+    connectPromises.set(key, pending);
+    const clearIfCurrent = () => {
+      if (connectPromises.get(key) === pending) connectPromises.delete(key);
+    };
+    void pending.then(clearIfCurrent, clearIfCurrent);
+    return pending;
+  };
+
+  const loadHistoryPage = async (sessionId: string, cwd: string, before: string): Promise<number> => {
+    set({ historyLoading: true });
+    try {
+      const page = await getClient().getMessagesPage(sessionId, cwd, { before });
+      const current = get();
+      if (current.activeSessionId !== sessionId || current.cwd !== cwd) return 0;
+      set({
+        thread: prependHistoryMessages(current.thread, page.messages),
+        historyCursor: page.next_cursor,
+        historyHasMore: page.has_more,
+        historySnapshotVersion: page.snapshot_version,
+      });
+      return page.messages.length;
+    } catch (error) {
+      const current = get();
+      if (current.activeSessionId === sessionId && current.cwd === cwd) {
+        appendRuntimeError(error, sessionId, cwd);
+      }
+      return 0;
+    } finally {
+      const current = get();
+      if (current.activeSessionId === sessionId && current.cwd === cwd) set({ historyLoading: false });
+    }
+  };
+
+  return {
+    connect: connectDeduped,
 
     disconnect: () => {
+      connectPromises.clear();
       ++generations.connection;
       ++generations.promptMonitor;
       const { client } = get();
@@ -453,31 +503,13 @@ export function createRuntimeActions(set: SetState, get: GetState) {
     loadOlderMessages: async () => {
       const state = get();
       if (!state.activeSessionId || !state.historyHasMore || !state.historyCursor || state.historyLoading) return 0;
-      const sessionId = state.activeSessionId;
-      const cwd = state.cwd;
-      const cursor = state.historyCursor;
-      set({ historyLoading: true });
-      try {
-        const page = await getClient().getMessagesPage(sessionId, cwd, { before: cursor });
-        const current = get();
-        if (current.activeSessionId !== sessionId || current.cwd !== cwd) return 0;
-        set({
-          thread: prependHistoryMessages(current.thread, page.messages),
-          historyCursor: page.next_cursor,
-          historyHasMore: page.has_more,
-          historySnapshotVersion: page.snapshot_version,
-        });
-        return page.messages.length;
-      } catch (error) {
-        const current = get();
-        if (current.activeSessionId === sessionId && current.cwd === cwd) {
-          appendRuntimeError(error, sessionId, cwd);
-        }
-        return 0;
-      } finally {
-        const current = get();
-        if (current.activeSessionId === sessionId && current.cwd === cwd) set({ historyLoading: false });
-      }
+      return loadHistoryPage(state.activeSessionId, state.cwd, state.historyCursor);
+    },
+
+    loadMessagesForNavigation: async (before: string) => {
+      const state = get();
+      if (!state.activeSessionId || !before || state.historyLoading) return 0;
+      return loadHistoryPage(state.activeSessionId, state.cwd, before);
     },
 
     forkSession: async (sessionId: string) => {

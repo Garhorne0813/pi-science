@@ -30,6 +30,14 @@ export interface SessionMessagePage {
   snapshot_version: string;
 }
 
+export interface SessionUserMessageIndexEntry {
+  id: string;
+  text: string;
+  timestamp: string | null;
+  /** Cursor just after this message; passing it as `before` includes this message in a page. */
+  before: string;
+}
+
 interface SessionFile {
   path: string;
   header: Record<string, unknown>;
@@ -102,6 +110,13 @@ function parseMessageLine(line: string): SessionMessageRecord | null {
   }
 }
 
+function textFromMessage(message: SessionMessageRecord): string {
+  return message.content
+    .filter((content) => content.type === "text" && typeof content.text === "string")
+    .map((content) => content.text as string)
+    .join("\n");
+}
+
 /**
  * Read the newest messages without loading the complete JSONL file. The
  * cursor points to a byte offset at the beginning of the oldest returned line;
@@ -162,6 +177,46 @@ async function readMessagePage(
   } finally {
     await handle.close();
   }
+}
+
+/**
+ * Build a lightweight navigation index without returning assistant/tool
+ * payloads. The `before` cursor points immediately after each user-message
+ * line, so the normal paginated history endpoint can load the target on click.
+ */
+async function readUserMessageIndex(path: string): Promise<SessionUserMessageIndexEntry[]> {
+  const entries: SessionUserMessageIndexEntry[] = [];
+  const stream = createReadStream(path);
+  let pending = Buffer.alloc(0);
+  let lineOffset = 0;
+
+  const consume = (line: Buffer, endOffset: number) => {
+    const message = parseMessageLine(line.toString("utf8"));
+    if (!message || message.role !== "user" || !message.id) return;
+    const text = textFromMessage(message);
+    if (!text) return;
+    entries.push({
+      id: message.id,
+      text,
+      timestamp: message.timestamp ?? null,
+      before: encodeMessageCursor(endOffset),
+    });
+  };
+
+  for await (const chunk of stream) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    pending = pending.length === 0 ? buffer : Buffer.concat([pending, buffer]);
+    let newline = pending.indexOf(0x0a);
+    while (newline >= 0) {
+      const endOffset = lineOffset + newline + 1;
+      consume(pending.subarray(0, newline), endOffset);
+      pending = pending.subarray(newline + 1);
+      lineOffset = endOffset;
+      newline = pending.indexOf(0x0a);
+    }
+  }
+  if (pending.length > 0) consume(pending, lineOffset + pending.length);
+  return entries;
 }
 
 // A candidate is every `.jsonl` file discovered while scanning, whether or not
@@ -502,6 +557,20 @@ export class SessionRepository {
       has_more: page.hasMore,
       snapshot_version: snapshotVersion(metadata.size, metadata.mtimeMs),
     };
+  }
+
+  async userMessageIndex(cwd: string, sessionId: string): Promise<{ messages: SessionUserMessageIndexEntry[]; snapshot_version: string }> {
+    const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
+    if (!file) return { messages: [], snapshot_version: "0:0" };
+    try {
+      const metadata = await stat(file.path);
+      return {
+        messages: await readUserMessageIndex(file.path),
+        snapshot_version: snapshotVersion(metadata.size, metadata.mtimeMs),
+      };
+    } catch {
+      return { messages: [], snapshot_version: "0:0" };
+    }
   }
 
   async messages(cwd: string, sessionId: string): Promise<SessionMessageRecord[]> {

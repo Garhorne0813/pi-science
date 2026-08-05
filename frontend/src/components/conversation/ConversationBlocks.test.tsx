@@ -4,6 +4,7 @@ import { groupBlocks, renderBlockGroup, renderBlocks } from "./ConversationBlock
 import i18n from "../../i18n";
 import type { CodeRunner } from "../markdown-viewer/MarkdownViewer";
 import type { ThreadBlock } from "../../types/thread";
+import { useRuntimeStore } from "../../lib/agent-runtime";
 
 const codeRunner: CodeRunner = { cwd: "proj", sessionId: "s1" };
 
@@ -32,6 +33,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useRuntimeStore.setState({ thread: { blocks: [], index: {}, loaded: true } });
   Reflect.deleteProperty(navigator, "clipboard");
 });
 
@@ -82,6 +84,15 @@ describe("renderBlocks", () => {
     // Only the user message has a copy button; the tool-call narration does not.
     const copyButtons = screen.getAllByRole("button", { name: "Copy" });
     expect(copyButtons).toHaveLength(1);
+  });
+
+  it("does not make an unconfirmed planned path clickable", () => {
+    useRuntimeStore.setState({ thread: { blocks: [], index: {}, loaded: true } });
+    render(<>{renderBlocks([
+      agent("a1", "计划输出 `drafts/structure_prediction_research_brief.md`。"),
+    ], codeRunner)}</>);
+
+    expect(screen.queryByRole("button", { name: /drafts\/structure_prediction_research_brief\.md/ })).not.toBeInTheDocument();
   });
 });
 

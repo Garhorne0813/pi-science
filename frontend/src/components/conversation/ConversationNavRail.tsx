@@ -7,6 +7,8 @@ export interface ConversationNavItem {
   label: string;
   /** Full message text for the tooltip; `label` stays truncated for display. */
   full?: string;
+  /** Cursor for a user message that is indexed but not loaded in the thread yet. */
+  before?: string;
 }
 
 /** ChatGPT-style rail on the right of the conversation: one entry per user

@@ -204,6 +204,17 @@ describe("native Node conversation routes", () => {
     expect(second.statusCode).toBe(200);
     expect(second.json()).toMatchObject({ messages: [{ id: "m1" }], has_more: false, next_cursor: null });
 
+    const index = await server.inject({ method: "GET", url: `/api/sessions/session-page/messages/index?cwd=${encodeURIComponent(cwd)}` });
+    expect(index.statusCode).toBe(200);
+    expect(index.json()).toMatchObject({
+      messages: [
+        { id: "m1", text: "m1", before: expect.any(String) },
+        { id: "m2", text: "m2", before: expect.any(String) },
+        { id: "m3", text: "m3", before: expect.any(String) },
+      ],
+      snapshot_version: expect.any(String),
+    });
+
     expect((await server.inject({ method: "GET", url: `/api/sessions/session-page/messages?cwd=${encodeURIComponent(cwd)}&limit=0` })).statusCode).toBe(400);
     expect((await server.inject({ method: "GET", url: `/api/sessions/session-page/messages?cwd=${encodeURIComponent(cwd)}&before=not-a-cursor` })).statusCode).toBe(400);
     await server.close();

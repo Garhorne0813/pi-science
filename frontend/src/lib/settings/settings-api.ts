@@ -61,6 +61,12 @@ export const subagentsQuery = (cwd: string, errorFallback: string) => ({
   queryFn: () => apiRequest<{ agents?: ProjectSubagent[] }>(`/api/settings/subagents?cwd=${encodeURIComponent(cwd)}`, { errorFallback }),
   staleTime: 0,
 });
+export const subagentsDiscoveryKey = (cwd: string) => settingsKey("subagents-discovery", cwd);
+export const subagentsDiscoveryQuery = (cwd: string) => ({
+  queryKey: subagentsDiscoveryKey(cwd),
+  queryFn: () => apiRequest<{ agents?: Array<{ name: string; description?: string; source?: string }> }>(`/api/settings/subagents/discovery?cwd=${encodeURIComponent(cwd)}`),
+  staleTime: 3_000,
+});
 
 export const webAccessKey = settingsKey("web-access");
 export const webAccessQuery = (errorFallback: string) => ({
@@ -156,11 +162,13 @@ export const settingsApi = {
   async saveSubagent(cwd: string, name: string, body: ProjectSubagent, fallback: string): Promise<void> {
     await apiRequest(`/api/settings/subagents/${encodeURIComponent(name)}?cwd=${encodeURIComponent(cwd)}`, { ...json("PUT", body), errorFallback: fallback });
     void queryClient.invalidateQueries({ queryKey: subagentsKey(cwd) });
+    void queryClient.invalidateQueries({ queryKey: subagentsDiscoveryKey(cwd) });
   },
 
   async deleteSubagent(cwd: string, name: string, fallback: string): Promise<void> {
     await apiRequest(`/api/settings/subagents/${encodeURIComponent(name)}?cwd=${encodeURIComponent(cwd)}`, { method: "DELETE", errorFallback: fallback });
     void queryClient.invalidateQueries({ queryKey: subagentsKey(cwd) });
+    void queryClient.invalidateQueries({ queryKey: subagentsDiscoveryKey(cwd) });
   },
 
   /* ── MCP catalog ── */

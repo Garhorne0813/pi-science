@@ -5,6 +5,7 @@ import type { FastifyInstance } from "fastify";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { ProjectReviewBusyError, type ProjectReviewService } from "../../project-review/service.js";
 import { ensureKnowledgeItem, mutateProjectState, readProjectState as state, timestamp as now, type ProjectState } from "../../project-review/project-state.js";
+import { subscribeProjectKnowledgeEvents } from "../../project-review/events.js";
 import type { ResearchLoopCoordinator } from "../../research-loop/coordinator.js";
 import { subscribeResearchEvents } from "../../research-loop/events.js";
 import { compileResearchIntent } from "../../research-loop/intent.js";
@@ -55,6 +56,19 @@ export function registerProjectRoutes(app: FastifyInstance, research: ResearchLo
   app.get("/api/project-knowledge/items", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); const include = String((request.query as { include_inactive?: string }).include_inactive ?? "true") !== "false"; return { items: include ? current.items : current.items.filter((item) => item.status === "active") }; });
   app.get("/api/project-knowledge/proposals", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); const status = (request.query as { status?: string }).status; const proposals = status ? current.proposals.filter((item) => item.status === status) : current.proposals; return { proposals, pending_count: current.proposals.filter((item) => item.status === "pending").length }; });
   app.get("/api/project-knowledge/proposals/count", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; return { pending_count: (await state(cwd)).proposals.filter((item) => item.status === "pending").length }; });
+  app.get("/api/project-knowledge/events", async (request, reply) => {
+    const cwd = await ws(request, reply); if (!cwd) return;
+    reply.hijack();
+    reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "x-accel-buffering": "no" });
+    const push = (text: string) => { if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.write(text); };
+    push(": connected\n\n");
+    const unsubscribe = subscribeProjectKnowledgeEvents(cwd, (event) => push(`data: ${JSON.stringify(event)}\n\n`));
+    const heartbeat = setInterval(() => push(": ping\n\n"), 15_000);
+    let closed = false;
+    const cleanup = () => { if (closed) return; closed = true; clearInterval(heartbeat); unsubscribe(); };
+    request.raw.once("close", cleanup);
+    reply.raw.once("close", cleanup);
+  });
   app.patch<{ Params: { proposal_id: string } }>("/api/project-knowledge/proposals/:proposal_id", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; try { return await mutateProjectState(cwd, (current) => { const item = current.proposals.find((row) => row.id === request.params.proposal_id); if (!item) throw new ProjectMemoryMutationError(404, "Proposal not found"); if (item.status !== "pending") throw new ProjectMemoryMutationError(409, "Only pending proposals can be edited"); Object.assign(item, request.body as Record<string, unknown>, { updated_at: now() }); return { proposal: item }; }); } catch (error) { return mutationFailure(reply, error); } });
   app.get<{ Params: { proposal_id: string } }>("/api/project-knowledge/proposals/:proposal_id/preview", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const item = (await state(cwd)).proposals.find((row) => row.id === request.params.proposal_id); if (!item) return reply.code(404).send({ error: "Proposal not found" }); return { ok: true, proposal_type: item.proposal_type, before: "", after: `${item.title}\n${item.summary}`, conflicts_with: item.conflicts_with, supersedes: item.supersedes }; });
   app.post<{ Params: { proposal_id: string } }>("/api/project-knowledge/proposals/:proposal_id/accept", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const body = (request.body ?? {}) as { title?: string; summary?: string }; try { return await mutateProjectState(cwd, (current) => { const proposal = current.proposals.find((row) => row.id === request.params.proposal_id); if (!proposal) throw new ProjectMemoryMutationError(404, "Proposal not found"); if (proposal.status !== "pending") throw new ProjectMemoryMutationError(409, "Proposal is not pending"); proposal.status = "accepted"; proposal.updated_at = now(); proposal.decision_reason = null; decideMemory(proposal, "approved", null); appendDecision(current, proposal.id, "accepted", null); if (body.title) proposal.title = body.title; if (body.summary) proposal.summary = body.summary; const knowledgeItem = ensureKnowledgeItem(current, proposal); return knowledgeItem ? { ok: true, proposal_id: proposal.id, knowledge_item: knowledgeItem } : { ok: true, proposal_id: proposal.id, file_operation: { id: `history-${randomUUID().slice(0, 12)}`, operations: proposal.operations } }; }); } catch (error) { return mutationFailure(reply, error); } });

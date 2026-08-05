@@ -236,6 +236,27 @@ describe("SessionRepository messages streaming", () => {
     expect(older.next_cursor).toBeNull();
   });
 
+  it("indexes every user message and returns a cursor that includes the target", async () => {
+    const cwd = await makeWorkspace();
+    const repo = new SessionRepository();
+    const lines = [
+      sessionHeader("indexed", cwd),
+      messageLine("m1", "user", "one"),
+      messageLine("m2", "assistant", "two"),
+      messageLine("m3", "user", "three"),
+      messageLine("m4", "assistant", "four"),
+    ];
+    await writeFile(join(cwd, ".pi-science", "sessions", "indexed.jsonl"), lines.join(""), "utf8");
+
+    const index = await repo.userMessageIndex(cwd, "indexed");
+    expect(index.messages.map((message) => message.id)).toEqual(["m1", "m3"]);
+    expect(index.messages.map((message) => message.text)).toEqual(["one", "three"]);
+
+    const target = index.messages[1]!;
+    const page = await repo.messagesPage(cwd, "indexed", { before: target.before, limit: 2 });
+    expect(page.messages.map((message) => message.id)).toEqual(["m2", "m3"]);
+  });
+
   it("rejects malformed history cursors and oversized pages", async () => {
     const cwd = await makeWorkspace();
     const repo = new SessionRepository();

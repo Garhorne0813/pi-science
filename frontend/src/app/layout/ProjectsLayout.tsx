@@ -480,6 +480,6 @@ export function SettingsNavItem({ cwd, collapsed = false }: { cwd: string | null
 
 function KnowledgeNavItem({ cwd, active }: { cwd: string; active: boolean }) {
   const { t } = useTranslation();
-  const { data } = usePendingProposalCount(cwd, 8000);
+  const { data } = usePendingProposalCount(cwd);
   return <SidebarNavItem to={`/workspace/${encodeURIComponent(cwd)}/knowledge`} label={t("nav.knowledge")} icon={<Inbox size={16} />} active={active} badge={Number(data?.pending_count) || 0} />;
 }

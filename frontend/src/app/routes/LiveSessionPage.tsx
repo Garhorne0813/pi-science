@@ -1,9 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, ReactNode, Ref } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, Loader2, Square, Plus, Sparkles, X, File, FolderOpen } from "lucide-react";
 import type { VirtuosoHandle, VirtuosoProps } from "react-virtuoso";
-import { getSessionName } from "../../lib/client/pi-science-client";
+import { getClient, getSessionName } from "../../lib/client/pi-science-client";
+import { queryClient } from "../../lib/client/query-client";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import type { PendingInteraction } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
@@ -93,6 +95,7 @@ export function LiveSessionPage() {
   const historyHasMore = useRuntimeStore((s) => s.historyHasMore);
   const historyLoading = useRuntimeStore((s) => s.historyLoading);
   const loadOlderMessages = useRuntimeStore((s) => s.loadOlderMessages);
+  const loadMessagesForNavigation = useRuntimeStore((s) => s.loadMessagesForNavigation);
   const connect = useRuntimeStore((s) => s.connect);
   const disconnect = useRuntimeStore((s) => s.disconnect);
   const abort = useRuntimeStore((s) => s.abort);
@@ -136,6 +139,13 @@ export function LiveSessionPage() {
   const [reviewingProject, setReviewingProject] = useState(false);
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
   const removeWorkspaceReference = useUiStore((state) => state.removeWorkspaceReference);
+
+  const messageIndexQuery = useQuery({
+    queryKey: ["session-message-index", workspaceCwd, sessionId ?? null],
+    queryFn: () => getClient().getUserMessageIndex(sessionId!, workspaceCwd),
+    enabled: Boolean(sessionId),
+    staleTime: 30_000,
+  }, queryClient);
 
   useEffect(() => {
     connect(workspaceCwd, sessionId || undefined);
@@ -213,12 +223,24 @@ export function LiveSessionPage() {
 
   const { suggestions, setSuggestions } = useTurnEffects(working, thread.blocks);
 
-  const userNavItems = useMemo<ConversationNavItem[]>(() => thread.blocks
-    .filter((block) => block.kind === "user")
-    .map((block) => {
-      const visible = visibleUserMessage(block.text);
-      return { id: block.id, label: (visible || t("conversation.attachment")).slice(0, 120), full: block.text };
-    }), [thread.blocks, t]);
+  const userNavItems = useMemo<ConversationNavItem[]>(() => {
+    const loadedUsers = thread.blocks.filter((block): block is Extract<ThreadBlock, { kind: "user" }> => block.kind === "user");
+    const loadedById = new Map(loadedUsers.map((block) => [block.id, block]));
+    const seen = new Set<string>();
+    const toItem = (id: string, text: string, before?: string): ConversationNavItem => {
+      const visible = visibleUserMessage(text);
+      return { id, label: (visible || t("conversation.attachment")).slice(0, 120), full: text, before };
+    };
+    const indexed = (messageIndexQuery.data?.messages ?? []).map((entry) => {
+      const loaded = loadedById.get(entry.id);
+      seen.add(entry.id);
+      return toItem(entry.id, loaded?.text ?? entry.text, loaded ? undefined : entry.before);
+    });
+    const live = loadedUsers
+      .filter((block) => !seen.has(block.id))
+      .map((block) => toItem(block.id, block.text));
+    return [...indexed, ...live];
+  }, [messageIndexQuery.data?.messages, t, thread.blocks]);
 
   const smoothScroll = () => !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   // Runs fn after `delay` only while the page still shows the same session;
@@ -235,12 +257,7 @@ export function LiveSessionPage() {
     for (const handle of scrollTimersRef.current) window.clearTimeout(handle);
     scrollTimersRef.current = [];
   };
-  const handleNavSelect = (id: string) => {
-    // Stop the follow-output effect from yanking the viewport back to the bottom.
-    followOutputRef.current = false;
-    // A new navigation supersedes any pending correction timers from a
-    // previous one (rapid consecutive clicks, session switch).
-    cancelPendingScrollTimers();
+  const scrollToLoadedTarget = (id: string) => {
     const scrollToExact = () => {
       const target = document.getElementById(`user-msg-${id}`);
       if (!target) return false;
@@ -266,7 +283,7 @@ export function LiveSessionPage() {
       }
       scrollerNow.scrollTop = beforeTop;
     }
-    const groupIndex = blockGroups.findIndex((group) => group.some((block) => block.id === id));
+    const groupIndex = groupBlocks(useRuntimeStore.getState().thread.blocks).findIndex((group) => group.some((block) => block.id === id));
     if (groupIndex >= 0) {
       // Virtuoso's scrollToIndex takes the 0-based data index (its data-index
       // attribute), NOT firstItemIndex + dataIndex — the latter overflows for
@@ -283,6 +300,21 @@ export function LiveSessionPage() {
     } else {
       scrollToExact();
     }
+  };
+  const handleNavSelect = (id: string) => {
+    // Stop the follow-output effect from yanking the viewport back to the bottom.
+    followOutputRef.current = false;
+    // A new navigation supersedes any pending correction timers from a
+    // previous one (rapid consecutive clicks, session switch).
+    cancelPendingScrollTimers();
+    const target = userNavItems.find((item) => item.id === id);
+    if (target?.before) {
+      void loadMessagesForNavigation(target.before).then((loadedMessages) => {
+        if (loadedMessages > 0) scheduleSessionScoped(() => scrollToLoadedTarget(id), 0);
+      });
+      return;
+    }
+    scrollToLoadedTarget(id);
   };
   const scrollToBottom = () => {
     followOutputRef.current = true;
