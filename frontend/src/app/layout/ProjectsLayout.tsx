@@ -3,13 +3,12 @@ import { lazy, Suspense, useState, useEffect, useRef } from "react";
 import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical } from "lucide-react";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
-import { InspectorShell } from "../../components/inspector/InspectorShell";
+import { InspectorTabs } from "../../components/inspector/InspectorTabs";
 import { RightPane } from "../../components/inspector/RightPane";
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
 import { useWorkspaceCwd } from "../../lib/workspace";
 import { usePendingProposalCount } from "../../lib/knowledge";
 import { cn } from "../../lib/ui";
-import { ErrorBoundary } from "../../components/ErrorBoundary";
 
 // The settings bundle (dialog + five tabs) only loads on first open.
 const SettingsDialog = lazy(() => import("../../components/settings/SettingsDialog").then((m) => ({ default: m.SettingsDialog })));
@@ -26,7 +25,8 @@ export function ProjectsLayout() {
   const sidebarWidth = useUiStore((s) => s.sidebarWidth);
   const setSidebarCollapsed = useUiStore((s) => s.setSidebarCollapsed);
   const inspectorOpen = useUiStore((s) => s.inspectorOpen);
-  const inspectorData = useUiStore((s) => s.inspectorData);
+  const inspectorTabs = useUiStore((s) => s.inspectorTabs);
+  const activeInspectorTabId = useUiStore((s) => s.activeInspectorTabId);
   const closeInspector = useUiStore((s) => s.closeInspector);
   const setSidebarWidth = useUiStore((s) => s.setSidebarWidth);
   const [sidebarDragWidth, setSidebarDragWidth] = useState<number | null>(null);
@@ -203,11 +203,9 @@ export function ProjectsLayout() {
       </main>
 
       {/* Inspector — only in workspace context */}
-      {isWorkspace && inspectorOpen && inspectorData && (
+      {isWorkspace && inspectorOpen && activeInspectorTabId && inspectorTabs.length > 0 && (
         <RightPane onClose={closeInspector}>
-          <ErrorBoundary>
-            <InspectorShell inspector={inspectorData} onClose={closeInspector} cwd={activeCwd || undefined} />
-          </ErrorBoundary>
+          <InspectorTabs tabs={inspectorTabs} activeTabId={activeInspectorTabId} cwd={activeCwd || undefined} />
         </RightPane>
       )}
 
