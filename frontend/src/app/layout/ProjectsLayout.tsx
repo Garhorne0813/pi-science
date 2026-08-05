@@ -6,6 +6,8 @@ import { useRuntimeStore } from "../../lib/agent-runtime";
 import { InspectorShell } from "../../components/inspector/InspectorShell";
 import { RightPane } from "../../components/inspector/RightPane";
 import { TodoPanel } from "../../components/inspector/TodoPanel";
+import { extractTodoSnapshot, visibleTasks } from "../../lib/conversation/todos";
+import type { Inspector } from "../../types/thread";
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
 import { useWorkspaceCwd } from "../../lib/workspace";
 import { usePendingProposalCount } from "../../lib/knowledge";
@@ -204,17 +206,8 @@ export function ProjectsLayout() {
       </main>
 
       {/* Inspector — only in workspace context */}
-      {isWorkspace && inspectorOpen && inspectorData && (
-        <RightPane onClose={closeInspector}>
-          <div className="flex h-full flex-col">
-            <TodoPanel />
-            <div className="min-h-0 flex-1">
-              <ErrorBoundary>
-                <InspectorShell inspector={inspectorData} onClose={closeInspector} cwd={activeCwd || undefined} />
-              </ErrorBoundary>
-            </div>
-          </div>
-        </RightPane>
+      {isWorkspace && inspectorOpen && (
+        <WorkspaceInspectorPane inspectorData={inspectorData} cwd={activeCwd} onClose={closeInspector} />
       )}
 
       {/* Settings dialog — floats above every page, one instance only */}
@@ -222,6 +215,37 @@ export function ProjectsLayout() {
         <SettingsDialog />
       </Suspense>
     </div>
+  );
+}
+
+/* ── Workspace Right Pane (inspector + todo) ── */
+
+/**
+ * Right pane contents for a workspace. The inspector shell needs real
+ * inspector data; the todo panel only needs a todo tool snapshot in the
+ * thread. Render the pane whenever the user opened the inspector OR a todo
+ * list exists, and show whichever sections have content — otherwise the todo
+ * panel would be invisible until the user opens some file/artifact.
+ */
+export function WorkspaceInspectorPane({ inspectorData, cwd, onClose }: { inspectorData: Inspector | null; cwd: string | null; onClose: () => void }) {
+  const todoVisible = useRuntimeStore((state) => {
+    const snapshot = extractTodoSnapshot(state.thread.blocks);
+    return snapshot ? visibleTasks(snapshot).length > 0 : false;
+  });
+  if (!inspectorData && !todoVisible) return null;
+  return (
+    <RightPane onClose={onClose}>
+      <div className="flex h-full flex-col">
+        <TodoPanel />
+        {inspectorData && (
+          <div className="min-h-0 flex-1">
+            <ErrorBoundary>
+              <InspectorShell inspector={inspectorData} onClose={onClose} cwd={cwd || undefined} />
+            </ErrorBoundary>
+          </div>
+        )}
+      </div>
+    </RightPane>
   );
 }
 

@@ -1,12 +1,13 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { SettingsNavItem, WorkspaceSessionList } from "./ProjectsLayout";
+import { SettingsNavItem, WorkspaceSessionList, WorkspaceInspectorPane } from "./ProjectsLayout";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { FeedbackContext } from "../../components/feedback/feedback-context";
 import i18n from "../../i18n";
 import type { SessionInfo } from "../../lib/client/types";
+import type { ThreadBlock } from "../../types/thread";
 
 function LocationProbe() {
   const location = useLocation();
@@ -42,6 +43,44 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("WorkspaceInspectorPane", () => {
+  function todoBlock(details: unknown): ThreadBlock {
+    return {
+      kind: "tool",
+      id: "tool-todo-1",
+      callId: "todo-call-1",
+      tool: "todo",
+      status: "done",
+      details,
+    };
+  }
+
+  function setThread(blocks: ThreadBlock[]) {
+    useRuntimeStore.setState({ thread: { blocks, index: {}, loaded: true } });
+  }
+
+  it("renders the todo panel when the thread has todo tasks and no inspector data", () => {
+    setThread([todoBlock({ action: "create", tasks: [{ id: 1, subject: "Load data", status: "pending" }], nextId: 2 })]);
+    render(<WorkspaceInspectorPane inspectorData={null} cwd="proj" onClose={vi.fn()} />);
+    expect(screen.getByRole("region", { name: "Task list" })).toBeInTheDocument();
+    expect(screen.getByText("Load data")).toBeInTheDocument();
+  });
+
+  it("renders nothing when there are no todo tasks and no inspector data", () => {
+    setThread([]);
+    const { container } = render(<WorkspaceInspectorPane inspectorData={null} cwd="proj" onClose={vi.fn()} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("renders both the todo panel and the inspector shell when inspector data exists", () => {
+    setThread([todoBlock({ action: "create", tasks: [{ id: 1, subject: "Load data", status: "pending" }], nextId: 2 })]);
+    render(<WorkspaceInspectorPane inspectorData={{ variant: "notebook-panel" }} cwd="proj" onClose={vi.fn()} />);
+    expect(screen.getByRole("region", { name: "Task list" })).toBeInTheDocument();
+    expect(screen.getByText("Load data")).toBeInTheDocument();
+    expect(document.querySelector('[data-variant="notebook-panel"]')).not.toBeNull();
+  });
 });
 
 describe("SettingsNavItem", () => {
