@@ -106,7 +106,7 @@ export function ConversationNavRail({
             type="button"
             data-nav-id={item.id}
             aria-current={activeId === item.id ? "true" : undefined}
-            onClick={() => onSelect(item.id)}
+            onClick={() => { setActiveId(item.id); onSelect(item.id); }}
             title={item.full ?? item.label}
             className={cn(
               "relative flex min-h-8 w-full shrink-0 items-center gap-2 px-2.5 text-left text-xs transition-colors",

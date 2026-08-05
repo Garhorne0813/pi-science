@@ -1,4 +1,5 @@
 import { mkdirSync, readdirSync, readFileSync, existsSync, lstatSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import * as nodeFs from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -226,6 +227,33 @@ describe("seedWorkspaceAssets", () => {
       warn.mockRestore();
     }
     expect(existsSync(join(cwd, ".pi", "skills", name, "stale-helper.py"))).toBe(false);
+  });
+
+  it("tolerates a packaged checkout without a skills directory", async () => {
+    const cwd = tempCwd();
+    vi.doMock("node:fs", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:fs")>();
+      return {
+        ...actual,
+        existsSync: (target: nodeFs.PathLike) => (String(target) === sourceSkills ? false : actual.existsSync(target)),
+      };
+    });
+    // pi-runtime-launch.js is statically imported at the top of this file, so
+    // its module instance (and its node:fs bindings) are already cached;
+    // reset the registry so the dynamic import re-executes against the mock.
+    vi.resetModules();
+    try {
+      const { seedWorkspaceAssets: seedMissingSkills } = await import("./pi-runtime-launch.js");
+      // Assert the observation point that distinguishes guarded vs unguarded
+      // code: with the source skills/ mocked away, the guarded implementation
+      // mirrors nothing ([]), while a guard-less readdirSync would still read
+      // the real directory and return a non-empty list.
+      expect(seedMissingSkills(cwd)).toEqual([]);
+      // The managed tree root is still created; only the mirror loop is skipped.
+      expect(existsSync(join(cwd, ".pi", "skills"))).toBe(true);
+    } finally {
+      vi.doUnmock("node:fs");
+    }
   });
 });
 

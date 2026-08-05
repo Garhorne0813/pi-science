@@ -3,6 +3,7 @@
 
 import type { ThreadBlock } from "../../types/thread";
 import { deriveSessionName, getSessionName, setSessionName } from "../client/pi-science-client";
+import { clearAiTitleAttempted, hasAiTitle, markAiTitle } from "../client/session-names";
 import { visibleUserMessage } from "../files";
 import type { Thread } from "./event-fold";
 import { useRuntimeStore } from "./store";
@@ -32,5 +33,20 @@ export function applyPromptSessionName(cwd: string, sessionId: string, message: 
   setSessionName(cwd, sessionId, sessionName);
   useRuntimeStore.setState((state) => ({
     sessions: state.sessions.map((session) => session.id === sessionId ? { ...session, name: sessionName } : session),
+  }));
+}
+
+/** Apply an AI-generated title over the display name and mark it as AI so
+ *  later settle events do not regenerate it. Re-checks the marker first: a
+ *  concurrent generation that already applied (or a manual rename that
+ *  cleared and re-set the name) must not be overwritten in the in-flight
+ *  window. */
+export function applyAiSessionName(cwd: string, sessionId: string, title: string): void {
+  if (hasAiTitle(cwd, sessionId)) return;
+  setSessionName(cwd, sessionId, title);
+  markAiTitle(cwd, sessionId);
+  clearAiTitleAttempted(cwd, sessionId);
+  useRuntimeStore.setState((state) => ({
+    sessions: state.sessions.map((session) => session.id === sessionId ? { ...session, name: title } : session),
   }));
 }

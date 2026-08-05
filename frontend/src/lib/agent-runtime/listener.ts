@@ -2,11 +2,13 @@
  *  lifecycle, interaction prompts and thread folding. */
 
 import type { PiScienceClient } from "../client/pi-science-client";
+import { aiTitleAttemptedAt, hasAiTitle, markAiTitleAttempted } from "../client/pi-science-client";
 import { workspaceFiles } from "../workspace";
 import { appendRuntimeError, isMissingSessionError } from "./errors";
 import { foldEvent, resetTurnBuffer } from "./event-fold";
 import { generations, turnState } from "./generations";
 import { reconcileAfterGap, reconcileWorkingState, recoverMissingSession, resyncCompletedHistory } from "./recovery";
+import { applyAiSessionName } from "./naming";
 import { applySessionReplacements } from "./session-replacement";
 import { loadSessionsInternal, optimisticSessionIds } from "./sessions";
 import { useRuntimeStore } from "./store";
@@ -30,6 +32,35 @@ let optimisticRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
 function clearOptimisticRetry(): void {
   if (optimisticRetryTimer) { clearTimeout(optimisticRetryTimer); optimisticRetryTimer = null; }
+}
+
+/** AI title generation is best-effort: one in-flight request per session,
+ *  skipped once a title is already marked as AI-generated, silent on failure.
+ *  Failed attempts are recorded with a TTL so a broken provider or runtime
+ *  does not spawn a fresh Pi process on every idle event. */
+const aiTitleInFlight = new Set<string>();
+const AI_TITLE_RETRY_MS = 60 * 60 * 1000;
+
+function maybeGenerateAiTitle(sessionId: string, cwd?: string): void {
+  const client = _listenerClient;
+  if (!client || !cwd || hasAiTitle(cwd, sessionId)) return;
+  const attemptedAt = aiTitleAttemptedAt(cwd, sessionId);
+  if (attemptedAt && Date.now() - attemptedAt < AI_TITLE_RETRY_MS) return;
+  const key = `${cwd}\u0000${sessionId}`;
+  if (aiTitleInFlight.has(key)) return;
+  aiTitleInFlight.add(key);
+  void client
+    .generateSessionTitle(sessionId, cwd)
+    .then((title) => {
+      if (title) applyAiSessionName(cwd, sessionId, title);
+      else markAiTitleAttempted(cwd, sessionId);
+    })
+    .catch(() => {
+      markAiTitleAttempted(cwd, sessionId);
+    })
+    .finally(() => {
+      aiTitleInFlight.delete(key);
+    });
 }
 
 function questionnaireQuestions(value: unknown): PendingQuestionnaire["questions"] {
@@ -249,6 +280,7 @@ export function registerEventListener(client: PiScienceClient) {
       });
       if (successful && state.activeSessionId && event.handledWithoutTurn !== true) {
         void resyncCompletedHistory(state.activeSessionId, state.cwd);
+        maybeGenerateAiTitle(state.activeSessionId, state.cwd);
       }
       void loadSessionsInternal();
     } else if (event.type === "error") {

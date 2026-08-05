@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, stat, truncate, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { configRoot } from "../../storage/persistence.js";
@@ -9,6 +9,8 @@ export interface SseEventRecord {
   data: string;
   created_at: string;
 }
+
+export type EventPublishGuard = () => boolean;
 
 const MAX_EVENT_FILE_BYTES = 20 * 1024 * 1024;
 const RETAIN_EVENT_LINES = 5_000;
@@ -127,7 +129,7 @@ function compareEventRecords(left: SseEventRecord, right: SseEventRecord): numbe
 }
 
 export class DurableEventStore {
-  private readonly writes = new Map<string, Promise<void>>();
+  private readonly writes = new Map<string, Promise<unknown>>();
 
   constructor(private readonly options: {
     maxEventFileBytes?: number;
@@ -136,8 +138,22 @@ export class DurableEventStore {
 
   append(cwd: string, sessionId: string, event: SseEventRecord): Promise<void> {
     const key = `${resolve(cwd)}\0${sessionId}`;
+    return this.enqueueWrite(key, () => this.appendOrdered(cwd, sessionId, event)).then(() => undefined);
+  }
+
+  /**
+   * Appends an event only while the caller's generation is current. The
+   * append is rolled back when the guard changes while the filesystem write
+   * is in flight, so a cancelled conditional publication is not replayed.
+   */
+  appendConditional(cwd: string, sessionId: string, event: SseEventRecord, guard: EventPublishGuard): Promise<boolean> {
+    const key = `${resolve(cwd)}\0${sessionId}`;
+    return this.enqueueWrite(key, () => this.appendConditionalOrdered(cwd, sessionId, event, guard));
+  }
+
+  private enqueueWrite<T>(key: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.writes.get(key) ?? Promise.resolve();
-    const next = previous.catch(() => undefined).then(() => this.appendOrdered(cwd, sessionId, event));
+    const next = previous.catch(() => undefined).then(operation);
     this.writes.set(key, next);
     void next.then(() => {
       if (this.writes.get(key) === next) this.writes.delete(key);
@@ -189,9 +205,47 @@ export class DurableEventStore {
     await this.compactIfNeeded(target).catch(() => undefined);
   }
 
+  private async appendConditionalOrdered(cwd: string, sessionId: string, event: SseEventRecord, guard: EventPublishGuard): Promise<boolean> {
+    if (!guard()) return false;
+    const primary = eventPath(cwd, sessionId);
+    let target = primary;
+    let appended: boolean;
+    try {
+      appended = await this.appendRecordConditional(primary, event, guard);
+    } catch {
+      if (!guard()) return false;
+      target = fallbackEventPath(cwd, sessionId);
+      appended = await this.appendRecordConditional(target, event, guard);
+    }
+    if (!appended) return false;
+    // A conditional append deliberately skips compaction. Compaction would add
+    // another asynchronous commit window after the guard was checked; the
+    // next ordinary append will compact the file if it is still oversized.
+    removeCachedEvents(target);
+    return true;
+  }
+
   private async appendRecord(path: string, event: SseEventRecord): Promise<void> {
     await mkdir(dirname(path), { recursive: true });
     await appendFile(path, `${JSON.stringify(event)}\n`, "utf8");
+  }
+
+  private async appendRecordConditional(path: string, event: SseEventRecord, guard: EventPublishGuard): Promise<boolean> {
+    if (!guard()) return false;
+    await mkdir(dirname(path), { recursive: true });
+    let existed = true;
+    let originalSize = 0;
+    try { originalSize = (await stat(path)).size; }
+    catch { existed = false; }
+    if (!guard()) return false;
+    await appendFile(path, `${JSON.stringify(event)}\n`, "utf8");
+    if (guard()) return true;
+    try {
+      await truncate(path, originalSize);
+      if (!existed && originalSize === 0) await unlink(path);
+    } catch { /* best effort rollback; the guard still prevents live delivery */ }
+    removeCachedEvents(path);
+    return false;
   }
 
   private async compactIfNeeded(path: string): Promise<void> {

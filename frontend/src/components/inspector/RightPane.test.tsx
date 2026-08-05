@@ -1,10 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { RightPane } from "./RightPane";
 import { useUiStore } from "@/lib/ui";
+import i18n from "@/i18n";
 
 describe("RightPane resizing", () => {
   let captured = false;
+
+  beforeAll(async () => {
+    await i18n.changeLanguage("en");
+  });
 
   beforeEach(() => {
     captured = false;
@@ -41,7 +46,8 @@ describe("RightPane resizing", () => {
       </RightPane>,
     );
 
-    const divider = screen.getByRole("separator", { name: "调整预览栏宽度" });
+    const divider = screen.getByRole("separator", { name: "Resize preview panel" });
+    expect(divider).toHaveAttribute("tabindex", "0");
     fireEvent.pointerDown(divider, { button: 0, pointerId: 1, clientX: 604 });
     fireEvent.pointerMove(divider, { pointerId: 1, clientX: 700 });
 
@@ -57,7 +63,7 @@ describe("RightPane resizing", () => {
       </RightPane>,
     );
 
-    const divider = screen.getByRole("separator", { name: "调整预览栏宽度" });
+    const divider = screen.getByRole("separator", { name: "Resize preview panel" });
     fireEvent.keyDown(divider, { key: "ArrowLeft" });
 
     expect(useUiStore.getState().inspectorWidth).toBe(436);

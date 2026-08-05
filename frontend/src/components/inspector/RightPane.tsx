@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { INSPECTOR_MAX, INSPECTOR_MIN, useUiStore } from "@/lib/ui";
 import { cn } from "@/lib/ui";
 
@@ -22,6 +23,7 @@ export function RightPane({
   children: React.ReactNode;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   // Field-level selectors so unrelated UI-store writes do not re-render the pane.
   const inspectorWidth = useUiStore((s) => s.inspectorWidth);
   const inspectorMaximized = useUiStore((s) => s.inspectorMaximized);
@@ -101,10 +103,11 @@ export function RightPane({
       <div
         role="separator"
         aria-orientation="vertical"
-        aria-label="调整预览栏宽度"
+        aria-label={t("shell.resizePane")}
         aria-valuemin={INSPECTOR_MIN}
         aria-valuemax={INSPECTOR_MAX}
         aria-valuenow={dragWidth ?? inspectorWidth}
+        tabIndex={0}
         onPointerDown={onDividerPointerDown}
         onPointerMove={onDividerPointerMove}
         onPointerUp={onDividerPointerUp}

@@ -76,6 +76,61 @@ describe("central conversation event hub", () => {
     expect(hub.hasSubscribers(cwd, "session-live")).toBe(false);
   });
 
+  it("does not append or deliver a guarded publication that is invalid before publishing", async () => {
+    const cwd = await workspace();
+    let allowed = false;
+    const appended: SseEventRecord[] = [];
+    const store = {
+      append: async (_cwd: string, _sessionId: string, record: SseEventRecord) => { appended.push(record); },
+      readAfter: async () => [],
+    };
+    const hub = new ConversationEventHub(store);
+    const received: SseEventRecord[] = [];
+    await hub.subscribe(cwd, "session-guarded", undefined, (record) => received.push(record), false);
+
+    await hub.publish(cwd, "session-guarded", { type: "session.idle", sessionId: "session-guarded" }, () => allowed);
+
+    expect(appended).toHaveLength(0);
+    expect(received).toHaveLength(0);
+  });
+
+  it("does not append or deliver a guarded publication invalidated during the append window", async () => {
+    const cwd = await workspace();
+    let allowed = true;
+    let releaseAppend!: () => void;
+    let appendStarted!: () => void;
+    const appendReady = new Promise<void>((resolve) => { appendStarted = resolve; });
+    const appendRelease = new Promise<void>((resolve) => { releaseAppend = resolve; });
+    const appended: SseEventRecord[] = [];
+    const store = {
+      append: async () => { throw new Error("conditional append was not used"); },
+      appendConditional: async (_cwd: string, _sessionId: string, record: SseEventRecord, guard: () => boolean) => {
+        appendStarted();
+        await appendRelease;
+        if (!guard()) return false;
+        appended.push(record);
+        return true;
+      },
+      readAfter: async () => [],
+    };
+    const hub = new ConversationEventHub(store);
+    const received: SseEventRecord[] = [];
+    await hub.subscribe(cwd, "session-window", undefined, (record) => received.push(record), false);
+
+    const publishing = hub.publish(cwd, "session-window", { type: "session.idle", sessionId: "session-window" }, () => allowed);
+    await appendReady;
+    allowed = false;
+    releaseAppend();
+    await publishing;
+
+    expect(appended).toHaveLength(0);
+    expect(received).toHaveLength(0);
+
+    await hub.publish(cwd, "session-window", { type: "agent_start", sessionId: "session-window" });
+    expect(received.map((record) => JSON.parse(record.data).type)).toEqual(["agent_start"]);
+    expect(received[0]?.id).toBe("1");
+  });
+
   it("re-delivers pending interactions to a fresh subscriber without a cursor", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub({

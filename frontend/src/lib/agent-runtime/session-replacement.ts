@@ -2,6 +2,7 @@
  *  change) without losing the conversation's name, list entry or route. */
 
 import {
+  clearAiTitle,
   clearCachedMessages,
   clearSessionName,
   getClient,
@@ -45,6 +46,7 @@ export function applySessionReplacements(replacements: SessionReplacement[]): st
     clearCachedMessages(state.cwd, replacement.oldId);
     getClient().clearCursor(state.cwd, replacement.oldId);
     clearSessionName(state.cwd, replacement.oldId);
+    clearAiTitle(state.cwd, replacement.oldId);
   }
 
   const sessionsById = new Map<string, SessionInfo>();

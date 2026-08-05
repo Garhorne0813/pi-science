@@ -237,6 +237,11 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       set({ client, working: true });
 
       applyPromptSessionName(cwd, activeSessionId, message);
+      // Baseline for the late-stream monitor: any assistant message persisted
+      // after this instant belongs to the turn being sent. Captured before the
+      // HTTP acknowledgement so a fast reply can never be attributed to a
+      // previous turn (nor a slow monitor to the wrong prompt).
+      const promptTimestamp = Date.now();
       try {
         await client.sendPrompt(activeSessionId, message, cwd);
         if (!streamWasOpen) {
@@ -246,6 +251,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
             activeSessionId,
             cwd,
             monitorGeneration,
+            promptTimestamp,
           );
         }
         return activeSessionId;
@@ -596,10 +602,18 @@ export function createRuntimeActions(set: SetState, get: GetState) {
     },
 
     deleteSession: async (sessionId: string) => {
-      const { cwd } = get();
+      const { cwd, activeSessionId } = get();
       await getClient().deleteSession(sessionId, cwd);
-      optimisticSessionIds.delete(sessionId);
-      set((state) => ({ sessions: state.sessions.filter((session) => session.id !== sessionId) }));
+      if (activeSessionId === sessionId) {
+        // Deleting the active conversation must clear its cursor/history/thread
+        // state, not just drop the list row — reuse the full recovery reset.
+        // Pass the client so the reset also disconnects any live SSE stream for
+        // the deleted session (missing client leaves a phantom error state).
+        recoverMissingSession(sessionId, cwd, getClient());
+      } else {
+        optimisticSessionIds.delete(sessionId);
+        set((state) => ({ sessions: state.sessions.filter((session) => session.id !== sessionId) }));
+      }
       await loadSessionsInternal();
     },
 
