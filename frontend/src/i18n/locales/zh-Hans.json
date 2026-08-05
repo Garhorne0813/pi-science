@@ -26,6 +26,8 @@
   "filePreview.tableView.chart": "图表",
   "filePreview.tabs.preview": "预览",
   "filePreview.tabs.code": "代码",
+  "filePreview.openFiles": "已打开的文件预览",
+  "filePreview.closeTab": "关闭 {{filename}}",
   "shell.closeInspector": "关闭面板",
   "shell.maximizePanel": "最大化面板",
   "shell.restorePanel": "恢复面板",

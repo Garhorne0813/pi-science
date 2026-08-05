@@ -3,14 +3,12 @@ import { lazy, Suspense, useState, useEffect, useRef } from "react";
 import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical } from "lucide-react";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
-import { InspectorShell } from "../../components/inspector/InspectorShell";
+import { InspectorTabs } from "../../components/inspector/InspectorTabs";
 import { RightPane } from "../../components/inspector/RightPane";
-import type { Inspector } from "../../types/thread";
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
 import { useWorkspaceCwd } from "../../lib/workspace";
 import { usePendingProposalCount } from "../../lib/knowledge";
 import { cn } from "../../lib/ui";
-import { ErrorBoundary } from "../../components/ErrorBoundary";
 
 // The settings bundle (dialog + five tabs) only loads on first open.
 const SettingsDialog = lazy(() => import("../../components/settings/SettingsDialog").then((m) => ({ default: m.SettingsDialog })));
@@ -29,7 +27,8 @@ export function ProjectsLayout() {
   const sidebarWidth = useUiStore((s) => s.sidebarWidth);
   const setSidebarCollapsed = useUiStore((s) => s.setSidebarCollapsed);
   const inspectorOpen = useUiStore((s) => s.inspectorOpen);
-  const inspectorData = useUiStore((s) => s.inspectorData);
+  const inspectorTabs = useUiStore((s) => s.inspectorTabs);
+  const activeInspectorTabId = useUiStore((s) => s.activeInspectorTabId);
   const closeInspector = useUiStore((s) => s.closeInspector);
   const setSidebarWidth = useUiStore((s) => s.setSidebarWidth);
   const [sidebarDragWidth, setSidebarDragWidth] = useState<number | null>(null);
@@ -209,8 +208,10 @@ export function ProjectsLayout() {
       </main>
 
       {/* Inspector — only in workspace context */}
-      {isWorkspace && inspectorOpen && inspectorData && (
-        <WorkspaceInspectorPane inspectorData={inspectorData} cwd={activeCwd} onClose={closeInspector} />
+      {isWorkspace && inspectorOpen && activeInspectorTabId && inspectorTabs.length > 0 && (
+        <RightPane onClose={closeInspector}>
+          <InspectorTabs tabs={inspectorTabs} activeTabId={activeInspectorTabId} cwd={activeCwd || undefined} />
+        </RightPane>
       )}
 
       {/* Settings dialog — floats above every page, one instance only */}
@@ -218,23 +219,6 @@ export function ProjectsLayout() {
         <SettingsDialog />
       </Suspense>
     </div>
-  );
-}
-
-/* ── Workspace Right Pane (inspector only; todo lives in its own widgets) ── */
-
-export function WorkspaceInspectorPane({ inspectorData, cwd, onClose }: { inspectorData: Inspector | null; cwd: string | null; onClose: () => void }) {
-  if (!inspectorData) return null;
-  return (
-    <RightPane onClose={onClose}>
-      <div className="flex h-full flex-col">
-        <div className="min-h-0 flex-1">
-          <ErrorBoundary>
-            <InspectorShell inspector={inspectorData} onClose={onClose} cwd={cwd || undefined} />
-          </ErrorBoundary>
-        </div>
-      </div>
-    </RightPane>
   );
 }
 
