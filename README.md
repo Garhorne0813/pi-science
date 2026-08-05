@@ -40,7 +40,7 @@ Each project keeps its own conversations, files, runs, provenance, and reviewed 
 - Python 3.11 or newer
 - pnpm
 - An LLM provider API key, or a trusted OpenAI/Anthropic-compatible local endpoint
-- Windows: PowerShell 5.1 or newer; Git Bash is only required when downloading a new Pi runtime
+- Windows: PowerShell 5.1 or newer
 
 ### One-command setup
 
@@ -68,7 +68,7 @@ powershell -File scripts/install.ps1
 powershell -File scripts/start.ps1
 ```
 
-The Bash launcher is designed for macOS/Linux and is intended to run under WSL; CI validates its lifecycle on Linux. The PowerShell installer reuses an existing Pi runtime when possible; a fresh runtime download still requires Git Bash. Both launchers deliberately run `tsx watch` and the Vite development server, so they are not production deployment servers. Starting an installed checkout invokes package-local executables directly, so npm and pnpm wrappers are not runtime requirements; pnpm is still required for installation, builds, and dependency updates.
+The Bash launcher is designed for macOS/Linux and is intended to run under WSL; CI validates its lifecycle on Linux. The PowerShell installer downloads and verifies the native Windows Pi runtime ZIP, so Git Bash is not required for a fresh Windows installation. Both launchers deliberately run `tsx watch` and the Vite development server, so they are not production deployment servers. Starting an installed checkout invokes package-local executables directly, so npm and pnpm wrappers are not runtime requirements; pnpm is still required for installation, builds, and dependency updates.
 
 ### The `pi-science` command
 
