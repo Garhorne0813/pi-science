@@ -5,8 +5,7 @@ import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { InspectorShell } from "../../components/inspector/InspectorShell";
 import { RightPane } from "../../components/inspector/RightPane";
-import { TodoPanel } from "../../components/inspector/TodoPanel";
-import { extractTodoSnapshot, visibleTasks } from "../../lib/conversation/todos";
+import { TodoWidget } from "../../components/todo/TodoWidget";
 import type { Inspector } from "../../types/thread";
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
 import { useWorkspaceCwd } from "../../lib/workspace";
@@ -199,15 +198,15 @@ export function ProjectsLayout() {
 
       {/* Main */}
       <main id="main-content" tabIndex={-1} className={cn(
-        "flex min-w-0 flex-1 flex-col overflow-hidden",
+        "relative flex min-w-0 flex-1 flex-col overflow-hidden",
         sidebarCollapsed && "pt-12 md:pt-0 md:pl-12",
       )}>
         <Outlet />
+        <TodoWidget />
       </main>
 
       {/* Inspector — only in workspace context */}
-      {isWorkspace && <TodoAutoOpen />}
-      {isWorkspace && inspectorOpen && (
+      {isWorkspace && inspectorOpen && inspectorData && (
         <WorkspaceInspectorPane inspectorData={inspectorData} cwd={activeCwd} onClose={closeInspector} />
       )}
 
@@ -219,68 +218,18 @@ export function ProjectsLayout() {
   );
 }
 
-/* ── Workspace Right Pane (inspector + todo) ── */
+/* ── Workspace Right Pane (inspector only; todo lives in its own widgets) ── */
 
-/**
- * Opens the right pane once when the conversation first shows visible todo
- * tasks (agent created a todo list), so the TodoPanel is not hidden behind a
- * manual inspector open. Semantics:
- * - fires once per todo streak: after the pane has been open (automatically
- *   or by the user) it does not re-open until the todo list fully disappears;
- * - a user close is respected for the rest of that streak;
- * - sessions restored with an existing todo list open the pane on mount.
- */
-export function TodoAutoOpen() {
-  const todoVisible = useRuntimeStore((state) => {
-    const snapshot = extractTodoSnapshot(state.thread.blocks);
-    return snapshot ? visibleTasks(snapshot).length > 0 : false;
-  });
-  const inspectorOpen = useUiStore((s) => s.inspectorOpen);
-  const setInspectorOpen = useUiStore((s) => s.setInspectorOpen);
-  const autoOpenedRef = useRef(false);
-  useEffect(() => {
-    if (!todoVisible) {
-      // Todo streak ended: allow the next todo list to auto-open again.
-      autoOpenedRef.current = false;
-      return;
-    }
-    if (inspectorOpen) {
-      // The pane is already open (automatically or by the user); count it so
-      // a later manual close is not immediately overridden.
-      autoOpenedRef.current = true;
-      return;
-    }
-    if (autoOpenedRef.current) return;
-    autoOpenedRef.current = true;
-    setInspectorOpen(true);
-  }, [todoVisible, inspectorOpen, setInspectorOpen]);
-  return null;
-}
-
-/**
- * Right pane contents for a workspace. The inspector shell needs real
- * inspector data; the todo panel only needs a todo tool snapshot in the
- * thread. Render the pane whenever the user opened the inspector OR a todo
- * list exists, and show whichever sections have content — otherwise the todo
- * panel would be invisible until the user opens some file/artifact.
- */
 export function WorkspaceInspectorPane({ inspectorData, cwd, onClose }: { inspectorData: Inspector | null; cwd: string | null; onClose: () => void }) {
-  const todoVisible = useRuntimeStore((state) => {
-    const snapshot = extractTodoSnapshot(state.thread.blocks);
-    return snapshot ? visibleTasks(snapshot).length > 0 : false;
-  });
-  if (!inspectorData && !todoVisible) return null;
+  if (!inspectorData) return null;
   return (
     <RightPane onClose={onClose}>
       <div className="flex h-full flex-col">
-        <TodoPanel />
-        {inspectorData && (
-          <div className="min-h-0 flex-1">
-            <ErrorBoundary>
-              <InspectorShell inspector={inspectorData} onClose={onClose} cwd={cwd || undefined} />
-            </ErrorBoundary>
-          </div>
-        )}
+        <div className="min-h-0 flex-1">
+          <ErrorBoundary>
+            <InspectorShell inspector={inspectorData} onClose={onClose} cwd={cwd || undefined} />
+          </ErrorBoundary>
+        </div>
       </div>
     </RightPane>
   );

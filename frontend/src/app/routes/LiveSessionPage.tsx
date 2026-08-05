@@ -21,6 +21,7 @@ import { MentionComposer } from "../../components/conversation/MentionComposer";
 import { QuestionnairePrompt } from "../../components/conversation/QuestionnairePrompt";
 import { groupBlocks, renderBlockGroup } from "../../components/conversation/ConversationBlocks";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
+import { TodoStickyBar } from "../../components/todo/TodoStickyBar";
 import { visibleUserMessage } from "../../lib/files";
 import { useTranslation } from "react-i18next";
 import { ResearchLoopDraftCard, ResearchLoopStatusCard, ResearchModePicker } from "../../components/conversation/ResearchLoopControls";
@@ -459,6 +460,7 @@ export function LiveSessionPage() {
           grow equally, so the composer card lands on the vertical centre while
           the welcome copy hangs off its bottom edge. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
+        <TodoStickyBar />
         {/* Thread */}
         <div className={cn("flex-1 overflow-hidden [overflow-anchor:none]", showWelcome && "flex flex-col justify-end")}>
           {/* 824 = 760 composer column + the px-8 gutters, so thread content lines up with the composer's edges.

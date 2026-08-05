@@ -43,6 +43,10 @@ interface UiState {
    *  once by the session-list effect; never persisted, never crosses workspaces. */
   suppressAutoSessionNav: boolean;
   setSuppressAutoSessionNav: (v: boolean) => void;
+  /** Which todo widget renders: sticky progress bar at the top of the
+   *  conversation, or a floating action button in the corner. */
+  todoUiMode: "sticky" | "fab";
+  setTodoUiMode: (mode: "sticky" | "fab") => void;
 }
 
 function loadFromStorage<T>(key: string, fallback: T): T {
@@ -117,6 +121,12 @@ export const useUiStore = create<UiState>((set) => ({
   clearWorkspaceReferences: (cwd) => set((state) => ({
     workspaceReferences: state.workspaceReferences.filter((item) => item.cwd !== cwd),
   })),
+
+  todoUiMode: loadFromStorage<"sticky" | "fab">("todo.uiMode", "fab"),
+  setTodoUiMode: (mode) => {
+    saveToStorage("todo.uiMode", mode);
+    set({ todoUiMode: mode });
+  },
 
   settingsOpen: false,
   settingsScope: null,

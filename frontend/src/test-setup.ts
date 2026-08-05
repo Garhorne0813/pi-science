@@ -20,3 +20,18 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
     }),
   });
 }
+
+// Radix primitives (e.g. Popover) measure their content with ResizeObserver;
+// jsdom does not implement it.
+if (typeof window !== "undefined" && typeof window.ResizeObserver !== "function") {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  Object.defineProperty(window, "ResizeObserver", {
+    configurable: true,
+    writable: true,
+    value: ResizeObserverStub,
+  });
+}

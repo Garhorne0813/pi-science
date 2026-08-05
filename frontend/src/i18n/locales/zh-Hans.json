@@ -803,5 +803,14 @@
   "mesh.loadFailed": "三维模型加载失败",
   "mesh.viewerLabel": "三维模型查看器",
   "mesh.resetView": "重置视图",
-  "mesh.rendering": "正在渲染…"
+  "mesh.rendering": "正在渲染…",
+  "todo.summary": "已完成 {{completed}}/{{total}}",
+  "todo.currentTask": "当前：{{task}}",
+  "todo.allCompleted": "全部完成",
+  "todo.blocked": "受依赖阻塞",
+  "todo.open": "展开任务列表",
+  "todo.close": "收起任务列表",
+  "todo.mode.sticky": "顶部模式",
+  "todo.mode.fab": "悬浮模式",
+  "todo.switchMode": "切换为{{mode}}"
 }

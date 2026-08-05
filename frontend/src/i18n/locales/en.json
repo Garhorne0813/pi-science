@@ -803,5 +803,14 @@
   "mesh.loadFailed": "Failed to load 3D model",
   "mesh.viewerLabel": "3D model viewer",
   "mesh.resetView": "Reset view",
-  "mesh.rendering": "Rendering…"
+  "mesh.rendering": "Rendering…",
+  "todo.summary": "{{completed}}/{{total}} done",
+  "todo.currentTask": "Now: {{task}}",
+  "todo.allCompleted": "All done",
+  "todo.blocked": "Blocked",
+  "todo.open": "Open task list",
+  "todo.close": "Close task list",
+  "todo.mode.sticky": "Sticky mode",
+  "todo.mode.fab": "Floating mode",
+  "todo.switchMode": "Switch to {{mode}}"
 }

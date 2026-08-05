@@ -88,3 +88,70 @@ describe("visibleTasks", () => {
     expect(visibleTasks(snapshot).map((task) => task.id)).toEqual([1, 3]);
   });
 });
+
+import { todoViewModel } from "./todos";
+
+describe("todoViewModel", () => {
+  it("returns null when the thread has no visible todo tasks", () => {
+    expect(todoViewModel([{ kind: "user", id: "u1", text: "hi" }])).toBeNull();
+    expect(todoViewModel([todoBlock({ tasks: [{ id: 1, subject: "x", status: "deleted" }], nextId: 2 })])).toBeNull();
+  });
+
+  it("computes totals, percent and allCompleted", () => {
+    const vm = todoViewModel([
+      todoBlock({
+        nextId: 4,
+        tasks: [
+          { id: 1, subject: "Load", status: "completed" },
+          { id: 2, subject: "Fit", status: "completed" },
+          { id: 3, subject: "Report", status: "pending" },
+          { id: 4, subject: "Gone", status: "deleted" },
+        ],
+      }),
+    ]);
+    expect(vm).not.toBeNull();
+    expect(vm!.total).toBe(3);
+    expect(vm!.completed).toBe(2);
+    expect(vm!.percent).toBe(67);
+    expect(vm!.allCompleted).toBe(false);
+  });
+
+  it("prefers in_progress over pending for the active task and uses subject", () => {
+    const vm = todoViewModel([todoBlock({
+      nextId: 3,
+      tasks: [
+        { id: 1, subject: "Load", status: "completed" },
+        { id: 2, subject: "Fit", status: "pending" },
+      ],
+    })]);
+    expect(vm!.activeTask).toMatchObject({ id: 2, subject: "Fit" });
+  });
+
+  it("counts only tasks blocked by unfinished dependencies", () => {
+    const vm = todoViewModel([todoBlock({
+      nextId: 5,
+      tasks: [
+        { id: 1, subject: "A", status: "completed" },
+        { id: 2, subject: "B", status: "pending", blockedBy: [1] },
+        { id: 3, subject: "C", status: "pending", blockedBy: [1, 2] },
+        { id: 4, subject: "D", status: "in_progress", blockedBy: [99] },
+      ],
+    })]);
+    // B depends on completed A -> not blocked. C depends on B (pending) -> blocked.
+    // D depends on a missing id -> not counted.
+    expect(vm!.blockedCount).toBe(1);
+  });
+
+  it("reports allCompleted when every visible task is completed", () => {
+    const vm = todoViewModel([todoBlock({
+      nextId: 3,
+      tasks: [
+        { id: 1, subject: "A", status: "completed" },
+        { id: 2, subject: "B", status: "completed" },
+      ],
+    })]);
+    expect(vm!.allCompleted).toBe(true);
+    expect(vm!.percent).toBe(100);
+    expect(vm!.activeTask).toBeNull();
+  });
+});
