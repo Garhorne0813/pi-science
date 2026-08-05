@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import type { SessionRepository } from "../../runtime/node/session-repository.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
+import type { AiTitleService } from "../../runtime/title/ai-title-service.js";
 
 function cwd(request: { query: unknown }): string {
   const value = (request.query as { cwd?: unknown }).cwd;
@@ -40,7 +41,12 @@ function sendFailure(reply: FastifyReply, result: Record<string, unknown>) {
   return reply.code(status(result.code)).send({ ok: false, ...result });
 }
 
-export function registerNodeSessionRoutes(app: FastifyInstance, nodeSessionService: NodeSessionService, sessionRepository: SessionRepository): void {
+export function registerNodeSessionRoutes(
+  app: FastifyInstance,
+  nodeSessionService: NodeSessionService,
+  sessionRepository: SessionRepository,
+  aiTitleService?: AiTitleService,
+): void {
   app.post("/api/sessions", async (request, reply) => {
     const parsed = createSessionRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid session request", code: "invalid_request" });
@@ -54,6 +60,21 @@ export function registerNodeSessionRoutes(app: FastifyInstance, nodeSessionServi
     if (typeof body?.message !== "string" || !body.message) return reply.code(400).send({ ok: false, code: "invalid_request", error: "message is required" });
     const result = await nodeSessionService.command(request.params.session_id, cwd(request), "prompt", { message: body.message });
     return result.success ? { ok: true, id: request.params.session_id } : sendFailure(reply, result);
+  });
+
+  app.post<{ Params: { session_id: string } }>("/api/sessions/:session_id/title", async (request, reply) => {
+    if (!aiTitleService) return reply.code(404).send({ ok: false, code: "not_found", error: "ai titles are not available" });
+    const sessionId = request.params.session_id;
+    let workspace: string;
+    try {
+      workspace = await validateWorkspaceCwd(cwd(request));
+    } catch (error) {
+      return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) });
+    }
+    const exists = await sessionRepository.findPath(workspace, sessionId);
+    if (!exists) return reply.code(404).send({ ok: false, code: "not_found", error: "session not found" });
+    const title = await aiTitleService.generateTitle(workspace, sessionId);
+    return { ok: true, title };
   });
 
   app.post<{ Params: { session_id: string } }>("/api/sessions/:session_id/resume", async (request, reply) => {

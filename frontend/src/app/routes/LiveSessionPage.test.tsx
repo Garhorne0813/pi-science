@@ -15,8 +15,21 @@
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { ComponentType, ReactNode, Ref } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import type { VirtuosoHandle } from "react-virtuoso";
+
+const { virtuosoProps } = vi.hoisted(() => ({ virtuosoProps: [] as Array<Record<string, unknown>> }));
+vi.mock("react-virtuoso", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-virtuoso")>();
+  const React = await import("react");
+  const Virtuoso = React.forwardRef((props: Record<string, unknown>, ref) => {
+    virtuosoProps.push(props);
+    return React.createElement(actual.Virtuoso, { ...props, ref: ref as Ref<VirtuosoHandle> });
+  });
+  return { ...actual, Virtuoso };
+});
 
 vi.mock("../../components/conversation/ModelControlMenu", () => ({
   // The real menu is a Radix dropdown; the behaviors under test are the page's
@@ -45,6 +58,7 @@ import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
 import { queryClient } from "../../lib/client/query-client";
 import { resetDynamicCommands } from "../../lib/conversation";
+import type { PendingInteraction, PendingQuestionnaire } from "../../lib/agent-runtime";
 import i18n from "../../i18n";
 import type { ThreadBlock } from "../../types/thread";
 
@@ -156,6 +170,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   overrides = [];
+  virtuosoProps.length = 0;
   fetchMock.mockClear();
   vi.stubGlobal("fetch", fetchMock);
   IOStub.instances = [];
@@ -198,6 +213,7 @@ beforeEach(() => {
     compactionEnabled: true,
     compactionThresholdPercent: null,
     pendingInteraction: null,
+    pendingQuestionnaire: null,
     fileRevision: 0,
     draft: "",
     connect: vi.fn(async () => undefined),
@@ -450,8 +466,113 @@ describe("turn-completion effects", () => {
     act(() => { useRuntimeStore.setState({ working: false }); });
     await waitFor(() => expect(openInspector).toHaveBeenCalledTimes(1));
   });
+
+  it("fills the composer draft with a clicked suggestion instead of sending it", async () => {
+    const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
+    useRuntimeStore.setState({ sendPrompt });
+    await renderReady();
+
+    act(() => { useRuntimeStore.setState({ working: true }); });
+    act(() => {
+      useRuntimeStore.setState({
+        working: false,
+        thread: {
+          blocks: [agentBlock("a1", "Saved outputs/plot.png\n<!--suggest: plot residuals-->")],
+          index: { a1: 0 },
+          loaded: true,
+        },
+      });
+    });
+
+    const suggestion = await screen.findByRole("button", { name: "plot residuals" });
+    fireEvent.click(suggestion);
+
+    // Draft filled, nothing dispatched.
+    await waitFor(() => expect(useRuntimeStore.getState().draft).toBe("plot residuals"));
+    expect(sendPrompt).not.toHaveBeenCalled();
+    // Composer textarea gains focus after picking a suggestion.
+    expect(document.activeElement).toBe(textarea());
+    // Chips disappear after picking one.
+    expect(screen.queryByLabelText("Suggested follow-ups")).toBeNull();
+  });
 });
 
+
+describe("stable Virtuoso footer", () => {
+  it("uses the wired Footer, keeps its identity stable, and renders updated context", async () => {
+    type FooterContext = {
+      renderInteractionPrompt: () => ReactNode;
+      working: boolean;
+      pendingInteraction: PendingInteraction | null;
+    };
+    type VirtuosoProps = {
+      context?: FooterContext;
+      components?: { Footer?: ComponentType<{ context: FooterContext }> };
+    };
+    const latestProps = () => virtuosoProps.at(-1) as VirtuosoProps | undefined;
+
+    useRuntimeStore.setState({
+      thread: { blocks: [userBlock("u1", "Earlier question")], index: { u1: 0 }, loaded: true },
+    });
+    await renderReady();
+    await waitFor(() => expect(latestProps()?.components?.Footer).toBeDefined());
+
+    const initial = latestProps();
+    if (!initial?.components?.Footer || !initial.context) throw new Error("Virtuoso Footer was not wired");
+    const Footer = initial.components.Footer;
+    const footerView = render(<Footer context={initial.context} />);
+
+    act(() => { useRuntimeStore.setState({ working: true }); });
+    await waitFor(() => expect(latestProps()?.context?.working).toBe(true));
+    const workingProps = latestProps();
+    expect(workingProps?.components?.Footer).toBe(Footer);
+    if (!workingProps?.context) throw new Error("updated Virtuoso context was not captured");
+    footerView.rerender(<Footer context={workingProps.context} />);
+    expect(footerView.container).toHaveTextContent("Working…");
+
+    const interaction: PendingInteraction = {
+      requestId: "questionnaire-request",
+      method: "input",
+      title: "Questionnaire",
+      questionnaire: true,
+      toolCallId: "questionnaire-tool",
+    };
+    const questionnaire: PendingQuestionnaire = {
+      toolCallId: "questionnaire-tool",
+      questions: [{
+        question: "Which mode should we use?",
+        header: "Mode",
+        multiSelect: false,
+        options: [
+          { label: "Fast", description: "Run quickly." },
+          { label: "Careful", description: "Run with extra checks." },
+        ],
+      }],
+    };
+    act(() => { useRuntimeStore.setState({ pendingInteraction: interaction, pendingQuestionnaire: questionnaire }); });
+    await waitFor(() => expect(latestProps()?.context?.pendingInteraction).toBe(interaction));
+    const questionnaireProps = latestProps();
+    expect(questionnaireProps?.components?.Footer).toBe(Footer);
+    expect(questionnaireProps?.context?.renderInteractionPrompt).not.toBe(initial.context.renderInteractionPrompt);
+    if (!questionnaireProps?.context) throw new Error("questionnaire Virtuoso context was not captured");
+    footerView.rerender(<Footer context={questionnaireProps.context} />);
+    expect(footerView.container).toHaveTextContent("Which mode should we use?");
+
+    const option = within(footerView.container).getByRole("button", { name: /Fast/ });
+    fireEvent.click(option);
+    expect(option).toHaveAttribute("aria-pressed", "true");
+
+    act(() => { useRuntimeStore.setState({ working: false }); });
+    await waitFor(() => expect(latestProps()?.context?.working).toBe(false));
+    const settledProps = latestProps();
+    expect(settledProps?.components?.Footer).toBe(Footer);
+    if (!settledProps?.context) throw new Error("settled Virtuoso context was not captured");
+    footerView.rerender(<Footer context={settledProps.context} />);
+    const selectedOption = within(footerView.container).getAllByRole("button", { name: /Fast/ }).find((button) => button.hasAttribute("aria-pressed"));
+    expect(selectedOption).toHaveAttribute("aria-pressed", "true");
+    expect(within(footerView.container).getByRole("region", { name: "Answer a few questions" })).toBeInTheDocument();
+  });
+});
 
 describe("model change optimistic rollback", () => {
   it("rolls back both model and thinking when the settings save fails", async () => {
@@ -777,5 +898,212 @@ describe("header settings entry", () => {
     useUiStore.setState({ settingsOpen: false });
     await renderReady();
     expect(screen.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
+  });
+});
+
+describe("scroll and nav behavior (docs/markdown.md §3.16 a/b/d)", () => {
+  it("snaps to the bottom when a new turn starts (working false→true)", async () => {
+    useRuntimeStore.setState({
+      thread: { blocks: [userBlock("u1", "First question"), agentBlock("a1", "first reply")], index: { u1: 0, a1: 1 }, loaded: true },
+    });
+    await renderReady();
+    const scroller = document.querySelector(".virtuoso-scroller") ?? document.querySelector(".overflow-y-auto");
+    expect(scroller).not.toBeNull();
+    Object.defineProperty(scroller!, "scrollHeight", { value: 4000, configurable: true });
+    (scroller as HTMLElement).scrollTop = 0;
+    act(() => { useRuntimeStore.setState({ working: true }); });
+    expect((scroller as HTMLElement).scrollTop).toBe(4000);
+  });
+
+  it("does not snap when the user is reading history (followOutputRef false)", async () => {
+    useRuntimeStore.setState({
+      thread: { blocks: [userBlock("u1", "First question"), agentBlock("a1", "first reply")], index: { u1: 0, a1: 1 }, loaded: true },
+    });
+    await renderReady();
+    const scroller = (document.querySelector(".virtuoso-scroller") ?? document.querySelector(".overflow-y-auto")) as HTMLElement;
+    Object.defineProperty(scroller, "scrollHeight", { value: 4000, configurable: true });
+    Object.defineProperty(scroller, "clientHeight", { value: 100, configurable: true });
+    scroller.scrollTop = 3000;
+    fireEvent.scroll(scroller); // nearBottom=false → followOutputRef=false
+    act(() => { useRuntimeStore.setState({ working: true }); });
+    expect(scroller.scrollTop).toBe(3000);
+  });
+
+  it("renders suggestion chips above the research-mode picker", async () => {
+    await renderReady();
+    act(() => { useRuntimeStore.setState({ working: true }); });
+    act(() => {
+      useRuntimeStore.setState({
+        working: false,
+        thread: {
+          blocks: [agentBlock("a1", "Saved outputs/plot.png\n<!--suggest: plot residuals-->")],
+          index: { a1: 0 },
+          loaded: true,
+        },
+      });
+    });
+    const chips = await screen.findByLabelText("Suggested follow-ups");
+    // The chips container must be the first child of the picker column, i.e.
+    // rendered ABOVE the research-mode picker (docs §3.16 d).
+    expect(chips.parentElement?.firstElementChild).toBe(chips);
+  });
+
+  it("nav click scrolls the target into view via the fast path", async () => {
+    useRuntimeStore.setState({
+      thread: {
+        blocks: [userBlock("u1", "First question"), agentBlock("a1", "first reply")],
+        index: { u1: 0, a1: 1 },
+        loaded: true,
+      },
+    });
+    await renderReady();
+    const scrollIntoViewSpy = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
+    try {
+      fireEvent.click(await screen.findByRole("button", { name: "First question" }));
+      expect(scrollIntoViewSpy).toHaveBeenCalled();
+      const targetCall = scrollIntoViewSpy.mock.calls.find(
+        (_args, index) => (scrollIntoViewSpy.mock.instances[index] as HTMLElement | null)?.id === "user-msg-u1",
+      );
+      expect(targetCall).toBeDefined();
+      expect(targetCall![0]).toMatchObject({ behavior: "auto", block: "start" });
+    } finally {
+      scrollIntoViewSpy.mockRestore();
+    }
+  });
+
+  it("falls back to group scroll when the fast path lands off-target", async () => {
+    useRuntimeStore.setState({
+      thread: {
+        blocks: [userBlock("u1", "First question"), agentBlock("a1", "first reply")],
+        index: { u1: 0, a1: 1 },
+        loaded: true,
+      },
+    });
+    await renderReady();
+    const target = document.getElementById("user-msg-u1");
+    expect(target).not.toBeNull();
+    // Make the fast-path offset check reject: target sits far below the viewport.
+    const fakeRect = {
+      top: 1200, bottom: 1300, left: 0, right: 0, x: 0, y: 1200, width: 100, height: 100,
+      toJSON: () => ({}),
+    } as DOMRect;
+    const originalRect = target!.getBoundingClientRect.bind(target!);
+    target!.getBoundingClientRect = () => fakeRect;
+    const scrollIntoViewSpy = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
+    try {
+      fireEvent.click(await screen.findByRole("button", { name: "First question" }));
+      // Fast path rejected → Virtuoso scrollToIndex path schedules re-scrolls.
+      await waitFor(() => {
+        const targetCalls = scrollIntoViewSpy.mock.calls.filter(
+          (_args, index) => (scrollIntoViewSpy.mock.instances[index] as HTMLElement | null)?.id === "user-msg-u1",
+        );
+        expect(targetCalls.length).toBeGreaterThanOrEqual(2);
+      }, { timeout: 2000 });
+    } finally {
+      scrollIntoViewSpy.mockRestore();
+      target!.getBoundingClientRect = originalRect;
+    }
+  });
+
+  it("cancels pending nav-correction timers on unmount", async () => {
+    useRuntimeStore.setState({
+      thread: {
+        blocks: [userBlock("u1", "First question"), agentBlock("a1", "first reply")],
+        index: { u1: 0, a1: 1 },
+        loaded: true,
+      },
+    });
+    const view = await renderReady();
+    const target = document.getElementById("user-msg-u1");
+    expect(target).not.toBeNull();
+    // Force the fast-path offset check to reject so the group-scroll branch
+    // schedules its 120/350ms correction timers before we unmount.
+    const fakeRect = {
+      top: 1200, bottom: 1300, left: 0, right: 0, x: 0, y: 1200, width: 100, height: 100,
+      toJSON: () => ({}),
+    } as DOMRect;
+    const originalRect = target!.getBoundingClientRect.bind(target!);
+    target!.getBoundingClientRect = () => fakeRect;
+    const scrollIntoViewSpy = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
+    try {
+      fireEvent.click(await screen.findByRole("button", { name: "First question" }));
+      view.unmount();
+      const callsAtUnmount = scrollIntoViewSpy.mock.calls.length;
+      // Longer than both correction delays: stale callbacks must have been
+      // cancelled by the unmount cleanup, not fired afterwards.
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect(scrollIntoViewSpy.mock.calls.length).toBe(callsAtUnmount);
+    } finally {
+      scrollIntoViewSpy.mockRestore();
+      target!.getBoundingClientRect = originalRect;
+    }
+  });
+});
+
+describe("defensive thread shape and copy actions (docs/pr30markdown.md 3.4/3.5/3.6)", () => {
+  function toolBlock(id: string, tool: string): ThreadBlock {
+    return { kind: "tool", id, callId: `${id}-call`, tool, status: "done", output: "tool output" };
+  }
+
+  beforeEach(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn(async () => undefined) },
+    });
+  });
+
+  it("renders the welcome composer without crashing when thread blocks are malformed", async () => {
+    useRuntimeStore.setState({
+      thread: { blocks: "garbage" as unknown as ThreadBlock[], index: {}, loaded: true },
+    });
+    await renderReady();
+    expect(screen.getByLabelText("Send message")).toBeInTheDocument();
+  });
+
+  it("shows the copy action only on the final assistant answer, copying the merged turn text", async () => {
+    useRuntimeStore.setState({
+      thread: {
+        blocks: [
+          userBlock("u1", "do the thing"),
+          agentBlock("a1", "Let me check that for you."),
+          toolBlock("t1", "read"),
+          agentBlock("a2", "Here is the final answer."),
+        ],
+        index: { u1: 0, a1: 1, t1: 2, a2: 3 },
+        loaded: true,
+      },
+    });
+    await renderReady();
+
+    // One copy button on the user message, one on the final assistant block —
+    // the assistant narration before the tool call must not show one.
+    const copyButtons = screen.getAllByRole("button", { name: "Copy" });
+    expect(copyButtons).toHaveLength(2);
+    const userMessage = document.getElementById("user-msg-u1")!;
+    const agentCopy = copyButtons.find((button) => !userMessage.contains(button));
+    expect(agentCopy).toBeDefined();
+
+    fireEvent.click(agentCopy!);
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      "Let me check that for you.\n\nHere is the final answer.",
+    );
+  });
+
+  it("hides the copy action when the turn ends on a tool call with no final assistant answer", async () => {
+    useRuntimeStore.setState({
+      thread: {
+        blocks: [
+          userBlock("u1", "do the thing"),
+          agentBlock("a1", "Working on it."),
+          toolBlock("t1", "read"),
+        ],
+        index: { u1: 0, a1: 1, t1: 2 },
+        loaded: true,
+      },
+    });
+    await renderReady();
+
+    const copyButtons = screen.getAllByRole("button", { name: "Copy" });
+    expect(copyButtons).toHaveLength(1);
   });
 });

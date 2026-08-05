@@ -159,6 +159,28 @@ export OPENAI_API_KEY=sk-...
 # or ANTHROPIC_API_KEY, DEEPSEEK_API_KEY, and other supported vendors
 ```
 
+## AI Session Titles
+
+When a conversation settles, Pi-Science may generate a concise AI title for it
+(**enabled by default**). The feature runs a short prompt through the same
+configured provider as your sessions — a fresh isolated Pi runtime sends the
+most recent few messages (≤ 6 messages, each trimmed to ≤ 200 characters) and
+asks for a title of at most 8 words. This means **the latest conversation
+excerpt is sent to your configured LLM provider** on each settled turn; the
+result is stored locally in your browser.
+
+To disable it, set the environment variable before starting the services and
+restart:
+
+```bash
+export PI_SCIENCE_AI_TITLES=0
+```
+
+Title generation never blocks the conversation and failures are silent (the
+sidebar keeps the derived name). It is also disabled automatically when the Pi
+runtime runs in RPC mode (`PI_SCIENCE_PI_MODE=rpc`), which has no way to run
+an isolated title runtime without persisting a ghost session.
+
 ## Development
 
 ```bash

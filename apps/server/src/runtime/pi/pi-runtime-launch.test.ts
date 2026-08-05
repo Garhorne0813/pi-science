@@ -84,7 +84,14 @@ describe("Pi runtime custom provider materialization", () => {
     buildPiProcessOptions(cwd);
     const guidance = await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "APPEND_SYSTEM.md"), "utf8");
     expect(guidance).toContain("<!--suggest: q1 | q2 | q3-->");
-    expect(guidance).toContain("follow-up questions in the user's language");
+    expect(guidance).toContain("up to 3 short, concrete follow-up suggestions");
+    expect(guidance).toContain("standalone message the user can copy and send directly");
+    expect(guidance).toContain("written from the user's perspective as a request, question, or imperative");
+    expect(guidance).toContain("Do not use assistant/agent-offering language");
+    expect(guidance).toContain("我可以… / 要不要我… / I can… / Would you like me to…");
+    expect(guidance).toContain("do not address the user as 你 or you when describing the agent's next step");
+    expect(guidance).toContain("Use the user's language");
+    expect(guidance).toContain("omit the comment when no meaningful follow-up remains");
   });
 
   it("passes workspace package isolation into the agent runtime", async () => {

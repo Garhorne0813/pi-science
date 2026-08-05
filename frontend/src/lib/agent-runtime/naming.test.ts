@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { getSessionName, setSessionName } from "../client/pi-science-client";
+import { getSessionName, hasAiTitle, markAiTitle, setSessionName } from "../client/pi-science-client";
 import { useRuntimeStore } from "./index";
+import { applyAiSessionName } from "./naming";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
 
@@ -126,5 +127,19 @@ describe("session naming", () => {
     await useRuntimeStore.getState().sendPrompt("x".repeat(100));
 
     expect(getSessionName("/workspace", "session-long")).toBe(`${"x".repeat(48)}…`);
+  });
+
+  it("does not overwrite a name when the session is already AI-titled (in-flight guard)", () => {
+    setSessionName("/workspace", "session-a", "Existing AI 标题");
+    markAiTitle("/workspace", "session-a");
+    applyAiSessionName("/workspace", "session-a", "Late result");
+    expect(getSessionName("/workspace", "session-a")).toBe("Existing AI 标题");
+    expect(hasAiTitle("/workspace", "session-a")).toBe(true);
+  });
+
+  it("applies and marks a fresh AI title", () => {
+    applyAiSessionName("/workspace", "session-b", "Fresh title");
+    expect(getSessionName("/workspace", "session-b")).toBe("Fresh title");
+    expect(hasAiTitle("/workspace", "session-b")).toBe(true);
   });
 });

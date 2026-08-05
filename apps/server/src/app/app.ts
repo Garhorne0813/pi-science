@@ -19,6 +19,7 @@ import { registerLiteratureRoutes } from "../http/routes/literature-routes.js";
 import { createServerModules, type ServerModules } from "./server-modules.js";
 import { registerEnvironmentRoutes } from "../http/routes/environment-routes.js";
 import { validateWorkspaceCwd } from "../security/workspace-security.js";
+import { AiTitleService, PiTitleRuntimeFactory } from "../runtime/title/ai-title-service.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
   const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, jobs, research, projectReview, scientificRuntime, environments } = modules;
@@ -118,7 +119,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeSessions || config.nodePiManager) registerSessionReadRoutes(app, sessionRepository, nodeSessionService);
   if (config.nodeSse || config.nodePiManager) registerSseRoutes(app, nodeSessionService, events);
   if (config.nodeFiles) registerFileReadRoutes(app);
-  if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository);
+  if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository, new AiTitleService(new PiTitleRuntimeFactory(piManager)));
   if (config.nodeJobs !== false) registerJobRoutes(app, jobs);
   registerEnvironmentRoutes(app, environments);
   if (config.nodeArtifacts !== false) registerArtifactRoutes(app);

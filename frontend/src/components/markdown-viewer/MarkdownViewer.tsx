@@ -141,6 +141,97 @@ function MathBlock({ children, variant }: { children?: React.ReactNode; variant:
 }
 
 const FILE_HREF = /^(?!(?:https?:\/\/|mailto:|#|data:|file:))/i;
+
+/** Tolerate a trailing stray `}` that some models append after the closing
+ *  `\right\}` of a display formula (e.g. `...\right\} }$$`). KaTeX treats the
+ *  stray brace as a parse error and (with throwOnError: false) silently drops
+ *  the whole formula, leaving raw TeX on screen. Strip exactly one trailing
+ *  `}` when it is preceded by a space and the formula otherwise ends with a
+ *  balanced construct (`\right}`, `]`, `)`, or `}`). */
+export function stripStrayClosingBrace(tex: string): string {
+  // Match a space/tab-separated closing brace, optionally followed by
+  // newlines (multi-line display formulas: `$$\n...\right\} }\n$$`). The
+  // balanced-construct check keeps legitimate trailing braces (`\right\}`)
+  // intact. Non-matching input is returned byte-identical, so structural
+  // newlines of a display formula are never consumed.
+  const match = /^(.*?)[ \t]+\}\s*$/s.exec(tex);
+  if (!match) return tex;
+  const before = match[1] ?? "";
+  if (/\\right\}$|\]$|\)$|\}$/.test(before)) return before;
+  return tex;
+}
+
+/** Fenced code block (``` or ~~~) and inline code span matchers. Fences match
+ *  only at line start so indented paragraphs are untouched. Inline spans use
+ *  CommonMark-style equal-length backtick runs (`` `...` `` and `` ``...`` ``
+ *  both close correctly; a lone unclosed backtick is left alone). */
+const FENCE_PATTERN = /^(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1[ \t]*$/gm;
+const INLINE_CODE_PATTERN = /(`+)[^`\n]*?\1/g;
+
+/** Unlikely salt inside the private-use-area placeholder so literal user text
+ *  that happens to contain \uE000…\uE001 can never be mistaken for a guard
+ *  token. Regenerated once per module load; tests share a single instance. */
+const PLACEHOLDER_SALT = Math.random().toString(36).slice(2, 8);
+const placeholder = (index: number): string => `\uE000${PLACEHOLDER_SALT}${index}\uE001`;
+const PLACEHOLDER_RE = new RegExp(`\uE000${PLACEHOLDER_SALT}(\\d+)\uE001`, "g");
+
+/** Replace fenced code blocks and inline code spans with private-use-area
+ *  placeholders so the math normalizer never rewrites example TeX inside
+ *  code. Returns the guarded text plus the captured spans in order. */
+function protectCodeSpans(md: string): { text: string; spans: string[] } {
+  const spans: string[] = [];
+  const protect = (match: string) => {
+    spans.push(match);
+    return placeholder(spans.length - 1);
+  };
+  const withFences = md.replace(FENCE_PATTERN, protect);
+  return { text: withFences.replace(INLINE_CODE_PATTERN, protect), spans };
+}
+
+function restoreCodeSpans(text: string, spans: string[]): string {
+  return text.replace(PLACEHOLDER_RE, (_m, index: string) => {
+    const n = Number(index);
+    return Number.isInteger(n) && n >= 0 && n < spans.length ? spans[n] : _m;
+  });
+}
+
+/** Normalize math input before remark-math / rehype-katex sees the text.
+ *  Two fixes for model output, applied only outside code:
+ *  1. drop a stray closing `}` that models sometimes leave at the end of a
+ *     display formula (`...\right\} }$$`), which makes KaTeX fail and the
+ *     whole formula degrade to raw TeX (single- and multi-line forms);
+ *  2. single-line `$$...$$` blocks are parsed by remark-math as INLINE math
+ *     (never display), so expand them to the multi-line block form
+ *     (`$$\n...\n$$`) that remark-math reliably classifies as display.
+ *  Fix 2 applies ONLY to formulas that stand alone on their own line
+ *  (opening `$$` at line start, closing `$$` followed only by line end).
+ *  Formulas inside a sentence, blockquote (`> $$…$$`) or list (`- $$…$$`)
+ *  are left untouched — expanding them would corrupt the surrounding text
+ *  (remark-math already renders those cases without data loss).
+ *  Fenced code blocks and inline code spans are placeholder-protected first,
+ *  so example TeX inside code is never rewritten. */
+export function normalizeMathInput(md: string): string {
+  const { text, spans } = protectCodeSpans(md);
+  const fixed = text.replace(/\$\$([\s\S]*?)\$\$/g, (whole, inner: string, offset: number) => {
+    // Standalone-line check: nothing before the opening `$$` on its line and
+    // nothing but whitespace after the closing `$$` until the line end.
+    const lineStart = text.lastIndexOf("\n", offset - 1);
+    const prefix = text.slice(lineStart + 1, offset);
+    const after = text.slice(offset + whole.length);
+    if (prefix !== "" || !/^[ \t]*(?:\n|$)/.test(after)) return whole;
+    const braced = stripStrayClosingBrace(String(inner));
+    const trimmed = braced.replace(/^[ \t]+/, "").replace(/[ \t]+$/, "");
+    // Multi-line content is already display-form; keep it untouched (the
+    // stray-brace strip may have consumed the structural trailing newline,
+    // so restore it to keep the closing $$ on its own line).
+    if (trimmed.includes("\n")) {
+      return `$$${braced.endsWith("\n") ? braced : `${braced}\n`}$$`;
+    }
+    return `$$\n${trimmed}\n$$`;
+  });
+  return restoreCodeSpans(fixed, spans);
+}
+
 export function MarkdownViewer({
   children,
   className,
@@ -242,7 +333,7 @@ export function MarkdownViewer({
           td: ({ children }) => <td className={s.td}>{children}</td>,
         }}
       >
-        {children}
+        {normalizeMathInput(children)}
       </ReactMarkdown>
     </div>
   );

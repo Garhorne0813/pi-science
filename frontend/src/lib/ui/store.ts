@@ -34,6 +34,12 @@ interface UiState {
   settingsScope: string | null;
   openSettings: (scope: string | null) => void;
   closeSettings: () => void;
+  /** True right after the active session was deleted (or a new session was
+   *  requested): the workspace landing was just navigated to on purpose, so
+   *  the session list must not auto-open the most recent session. Consumed
+   *  once by the session-list effect; never persisted, never crosses workspaces. */
+  suppressAutoSessionNav: boolean;
+  setSuppressAutoSessionNav: (v: boolean) => void;
 }
 
 function loadFromStorage<T>(key: string, fallback: T): T {
@@ -112,6 +118,9 @@ export const useUiStore = create<UiState>((set) => ({
   settingsScope: null,
   openSettings: (scope) => set({ settingsOpen: true, settingsScope: scope }),
   closeSettings: () => set({ settingsOpen: false }),
+
+  suppressAutoSessionNav: false,
+  setSuppressAutoSessionNav: (v) => set({ suppressAutoSessionNav: v }),
 }));
 
 // Re-export for RightPane compatibility

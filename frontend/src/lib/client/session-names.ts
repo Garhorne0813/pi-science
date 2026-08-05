@@ -105,7 +105,105 @@ export function moveSessionName(cwd: string, previousSessionId: string, nextSess
   delete names[previousKey];
   delete names[previousSessionId];
   saveNames(names);
+  // Keep the AI-title mark in sync with the moved name so the replacement
+  // session stops regenerating exactly like the original one did.
+  const marks = loadAiMarks();
+  if (marks[previousKey] === true) {
+    marks[nextKey] = true;
+    delete marks[previousKey];
+    saveAiMarks(marks);
+  }
   return typeof names[nextKey] === "string" ? names[nextKey] : "";
+}
+
+const AI_NAME_KEY = "pi-science.session-names-ai";
+
+function loadAiMarks(): Record<string, true> {
+  try {
+    const raw = localStorage.getItem(AI_NAME_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, true>;
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+function saveAiMarks(marks: Record<string, true>) {
+  try {
+    localStorage.setItem(AI_NAME_KEY, JSON.stringify(marks));
+  } catch {
+    // Marking is optional metadata; storage failures must never throw.
+  }
+}
+
+/** True when the session's current name was produced by the AI title feature. */
+export function hasAiTitle(cwd: string, sessionId: string): boolean {
+  return loadAiMarks()[sessionKey(cwd, sessionId)] === true;
+}
+
+/** Record that the session's name came from the AI title feature. */
+export function markAiTitle(cwd: string, sessionId: string): void {
+  const marks = loadAiMarks();
+  marks[sessionKey(cwd, sessionId)] = true;
+  saveAiMarks(marks);
+}
+
+/** Clear the AI mark (e.g. after the user renames manually, so a later AI
+ *  title no longer overrides the manual choice). */
+export function clearAiTitle(cwd: string, sessionId: string): void {
+  const marks = loadAiMarks();
+  delete marks[sessionKey(cwd, sessionId)];
+  saveAiMarks(marks);
+}
+
+const AI_ATTEMPT_KEY = "pi-science.session-names-ai-attempted";
+
+function loadAiAttempts(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(AI_ATTEMPT_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return Object.fromEntries(
+        Object.entries(parsed).filter(([, value]) => typeof value === "number" && Number.isFinite(value)),
+      ) as Record<string, number>;
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+function saveAiAttempts(attempts: Record<string, number>) {
+  try {
+    localStorage.setItem(AI_ATTEMPT_KEY, JSON.stringify(attempts));
+  } catch {
+    // Attempt tracking is optional metadata; storage failures must never throw.
+  }
+}
+
+/** Timestamp (ms) of the last AI-title attempt for a session, or 0 when none.
+ *  Callers compare against a TTL; expired entries are simply retried. */
+export function aiTitleAttemptedAt(cwd: string, sessionId: string): number {
+  const value = loadAiAttempts()[sessionKey(cwd, sessionId)];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+/** Record a (failed) AI-title attempt so the next settle does not immediately
+ *  spawn another Pi runtime; expires via TTL check at the call site. */
+export function markAiTitleAttempted(cwd: string, sessionId: string, at: number = Date.now()): void {
+  const attempts = loadAiAttempts();
+  attempts[sessionKey(cwd, sessionId)] = at;
+  saveAiAttempts(attempts);
+}
+
+/** Clear the attempt marker (e.g. after a successful title). */
+export function clearAiTitleAttempted(cwd: string, sessionId: string): void {
+  const attempts = loadAiAttempts();
+  delete attempts[sessionKey(cwd, sessionId)];
+  saveAiAttempts(attempts);
 }
 
 /** Derive a display name from message text: first non-empty line, trimmed,

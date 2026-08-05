@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveSessionName, getSessionName, moveSessionName, setSessionName } from "./pi-science-client";
+import {
+  aiTitleAttemptedAt,
+  clearAiTitle,
+  deriveSessionName,
+  getSessionName,
+  hasAiTitle,
+  markAiTitle,
+  markAiTitleAttempted,
+  moveSessionName,
+  setSessionName,
+} from "./pi-science-client";
 import { installClientTestEnvironment } from "./test-helpers";
 
 
@@ -56,6 +66,37 @@ describe("session name migration and storage resilience", () => {
     }));
     expect(moveSessionName("/workspace", "old", "new")).toBe("Old");
     expect(typeof getSessionName("/workspace", "new")).toBe("string");
+  });
+
+  it("moves the AI-title mark together with the display name", () => {
+    setSessionName("/workspace", "old", "AI 标题");
+    markAiTitle("/workspace", "old");
+    expect(hasAiTitle("/workspace", "old")).toBe(true);
+    expect(moveSessionName("/workspace", "old", "new")).toBe("AI 标题");
+    expect(hasAiTitle("/workspace", "new")).toBe(true);
+    expect(hasAiTitle("/workspace", "old")).toBe(false);
+  });
+
+  it("leaves the AI-title mark untouched when no name is moved", () => {
+    markAiTitle("/workspace", "keep");
+    moveSessionName("/workspace", "other", "keep");
+    expect(hasAiTitle("/workspace", "keep")).toBe(true);
+  });
+
+  it("tracks failed AI-title attempts with timestamps", () => {
+    expect(aiTitleAttemptedAt("/workspace", "session-x")).toBe(0);
+    markAiTitleAttempted("/workspace", "session-x", 1234);
+    expect(aiTitleAttemptedAt("/workspace", "session-x")).toBe(1234);
+    markAiTitleAttempted("/workspace", "session-x");
+    expect(aiTitleAttemptedAt("/workspace", "session-x")).toBeGreaterThan(0);
+  });
+
+  it("clears the AI-title mark and attempt separately", () => {
+    markAiTitle("/workspace", "session-x");
+    markAiTitleAttempted("/workspace", "session-x");
+    clearAiTitle("/workspace", "session-x");
+    expect(hasAiTitle("/workspace", "session-x")).toBe(false);
+    expect(aiTitleAttemptedAt("/workspace", "session-x")).toBeGreaterThan(0);
   });
 
   it("does not throw when the session-name store holds a non-object value", () => {

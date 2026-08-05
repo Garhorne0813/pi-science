@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { getClient } from "../client/pi-science-client";
+import { generations } from "./generations";
 import { useRuntimeStore } from "./index";
+import { reconcilePromptAfterLateStream } from "./recovery";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
 
@@ -226,8 +229,8 @@ describe("runtime conversation recovery", () => {
       const url = String(input);
       if (url.includes("/messages")) {
         return jsonResponse({ messages: stateReads > 1 ? [
-          { id: "user-fast", role: "user", content: [{ type: "text", text: "fast" }] },
-          { id: "agent-fast", role: "assistant", content: [{ type: "text", text: "done" }] },
+          { id: "user-fast", role: "user", content: [{ type: "text", text: "fast" }], timestamp: new Date(Date.now() - 60_000).toISOString() },
+          { id: "agent-fast", role: "assistant", content: [{ type: "text", text: "done" }], timestamp: new Date(Date.now() + 60_000).toISOString() },
         ] : [] });
       }
       if (url.includes("/state")) {
@@ -292,5 +295,136 @@ describe("runtime conversation recovery", () => {
     expect(blocks.filter((b) => b.kind === "user").map((b) => b.id)).toEqual(["user-durable"]);
     expect(blocks.filter((b) => b.kind === "agent").map((b) => b.id)).toEqual(["agent-durable"]);
     expect(blocks.some((b) => (b as { parts?: Array<{ id: string }> }).parts?.some((p) => p.id === "live-part"))).toBe(false);
+  });
+
+  it("keeps monitoring when the runtime is idle but this turn has no reply yet", async () => {
+    let reads = 0;
+    const oldMessages = () => [
+      { id: "user-old", role: "user", content: [{ type: "text", text: "previous" }], timestamp: new Date(Date.now() - 7_200_000).toISOString() },
+      { id: "agent-old", role: "assistant", content: [{ type: "text", text: "old reply" }], timestamp: new Date(Date.now() - 7_200_000 + 1_000).toISOString() },
+    ];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) {
+        reads += 1;
+        // History already contains an OLD assistant message; the late reply
+        // only appears once reads >= 3 (after the monitor's first idle check).
+        return jsonResponse({ messages: reads >= 3 ? [...oldMessages(), {
+          id: "agent-new", role: "assistant", content: [{ type: "text", text: "late reply" }], timestamp: new Date(Date.now() + 60_000).toISOString(),
+        }] : oldMessages() });
+      }
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.includes("/prompt")) return jsonResponse({ ok: true, id: "session-a" });
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    await useRuntimeStore.getState().sendPrompt("late stream");
+
+    // Old-history assistant + idle runtime must NOT settle the monitor: the
+    // reply belongs to a previous turn, so Send stays disabled.
+    await new Promise((resolve) => setTimeout(resolve, 1_300));
+    expect(useRuntimeStore.getState().working).toBe(true);
+
+    // Once the reply for THIS turn lands in the persisted history, the
+    // monitor settles and resyncs the conversation.
+    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false), { timeout: 5_000 });
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
+      expect.objectContaining({ kind: "agent", id: "agent-new" }),
+    );
+  });
+
+  it("settles when a reply written after the prompt is already visible", async () => {
+    let reads = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) {
+        reads += 1;
+        return jsonResponse({ messages: reads > 1 ? [
+          { id: "user-1", role: "user", content: [{ type: "text", text: "hi" }], timestamp: new Date(Date.now() - 60_000).toISOString() },
+          { id: "agent-1", role: "assistant", content: [{ type: "text", text: "done" }], timestamp: new Date(Date.now() + 60_000).toISOString() },
+        ] : [] });
+      }
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.includes("/prompt")) return jsonResponse({ ok: true, id: "session-a" });
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    await useRuntimeStore.getState().sendPrompt("hi");
+
+    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false), { timeout: 4_000 });
+    expect(useRuntimeStore.getState().status).toBe("ready");
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
+      expect.objectContaining({ kind: "agent", id: "agent-1" }),
+    );
+  });
+
+  it("keeps monitoring with a baseline when the latest assistant message has no timestamp (idle cap settles)", async () => {
+    let stateReads = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) {
+        // The latest assistant message carries no parseable timestamp: it
+        // cannot be attributed to this turn, so the baseline path must NOT
+        // settle — monitoring continues until the idle cap.
+        return jsonResponse({ messages: [
+          { id: "user-1", role: "user", content: [{ type: "text", text: "hi" }], timestamp: new Date(Date.now() - 60_000).toISOString() },
+          { id: "agent-nots", role: "assistant", content: [{ type: "text", text: "no timestamp" }] },
+        ] });
+      }
+      if (url.includes("/state")) {
+        stateReads += 1;
+        return jsonResponse(state("session-a"));
+      }
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: "session-a",
+      working: true,
+      status: "connecting",
+      thread: { blocks: [], index: {}, loaded: false },
+    });
+    const monitorGeneration = generations.promptMonitor;
+    // Baseline IS provided, but the assistant message has no timestamp →
+    // reply unconfirmed → the monitor must keep polling (no early settle).
+    void reconcilePromptAfterLateStream(getClient(), "session-a", "/workspace", monitorGeneration, Date.now(), 3);
+
+    // Well past several REST rounds the monitor is still polling.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(useRuntimeStore.getState().working).toBe(true);
+    expect(stateReads).toBeGreaterThan(0);
+
+    // The idle cap (3 idle rounds) eventually settles the monitor.
+    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false), { timeout: 10_000 });
+    expect(useRuntimeStore.getState().status).toBe("ready");
+  });
+
+  it("settles via the idle cap when no reply can be confirmed (no baseline, no timestamps)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) {
+        // Assistant message without a parseable timestamp: cannot be
+        // attributed to this turn — conservative path keeps monitoring.
+        return jsonResponse({ messages: [{ id: "old-a", role: "assistant", content: [{ type: "text", text: "old" }] }] });
+      }
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: "session-a",
+      working: true,
+      status: "connecting",
+      thread: { blocks: [], index: {}, loaded: false },
+    });
+    const monitorGeneration = generations.promptMonitor;
+    void reconcilePromptAfterLateStream(getClient(), "session-a", "/workspace", monitorGeneration, undefined, 2);
+
+    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false), { timeout: 5_000 });
+    expect(useRuntimeStore.getState().status).toBe("ready");
   });
 });

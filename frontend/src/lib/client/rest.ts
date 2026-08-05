@@ -181,3 +181,17 @@ export async function respondToInteraction(
     throw new Error(responseError(data, `Interaction response failed: ${res.statusText}`));
   }
 }
+
+/** Ask the control plane to generate an AI title for a session (Pi runtime). */
+export async function generateSessionTitle(baseUrl: string, sessionId: string, cwd: string): Promise<string | null> {
+  const res = await request(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/title?cwd=${encodeURIComponent(cwd)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    return null;
+  }
+  return typeof data.title === "string" && data.title ? data.title : null;
+}

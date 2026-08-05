@@ -170,6 +170,9 @@ export function seedWorkspaceAssets(cwd: string): string[] {
   replaceForeignEntry(targetSkills);
   mkdirSync(targetSkills, { recursive: true });
   const result: string[] = [];
+  // The packaged checkout may ship without a skills/ directory (source-only
+  // archives). Missing project skills must not break session creation.
+  if (!existsSync(sourceSkills)) return result;
   for (const name of readdirSync(sourceSkills, { withFileTypes: true })) {
     if (!name.isDirectory()) continue;
     const skillMarkdown = join(sourceSkills, name.name, "SKILL.md");
@@ -482,7 +485,7 @@ function materializeRuntimeSettings(agentDir: string, settings: Record<string, a
 
 // Pi appends <agentDir>/APPEND_SYSTEM.md to its system prompt; the frontend
 // parses the emitted comment into follow-up suggestion chips.
-const FOLLOW_UP_GUIDANCE = "After completing a response, append an HTML comment on the final line: <!--suggest: q1 | q2 | q3--> with up to 3 short, concrete follow-up questions in the user's language. Omit when nothing meaningful remains.\n";
+const FOLLOW_UP_GUIDANCE = "After completing a response, append an HTML comment on the final line: <!--suggest: q1 | q2 | q3--> with up to 3 short, concrete follow-up suggestions. Each suggestion must be a standalone message the user can copy and send directly, written from the user's perspective as a request, question, or imperative (for example, Chinese: 请比较… / 继续分析… / 帮我…; English: Compare… / Please analyze…). Do not use assistant/agent-offering language such as 我可以… / 要不要我… / I can… / Would you like me to…, and do not address the user as 你 or you when describing the agent's next step. Use the user's language, and omit the comment when no meaningful follow-up remains.\n";
 
 function materializeFollowUpGuidance(agentDir: string): void {
   writeFileSync(join(agentDir, "APPEND_SYSTEM.md"), FOLLOW_UP_GUIDANCE, "utf8");

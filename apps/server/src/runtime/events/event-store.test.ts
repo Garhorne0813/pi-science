@@ -118,6 +118,19 @@ describe("durable conversation event replay", () => {
     await expect(readFile(target.fallback, "utf8")).rejects.toThrow();
   });
 
+  it("rolls back a conditional append invalidated during the filesystem write", async () => {
+    const cwd = await workspace();
+    const store = new DurableEventStore();
+    let checks = 0;
+    const appended = await store.appendConditional(cwd, "session-conditional", record("1", "2026-07-23T00:00:01.000Z", "cancelled"), () => ++checks < 3);
+
+    expect(appended).toBe(false);
+    expect(await store.readAfter(cwd, "session-conditional")).toEqual([]);
+
+    await store.append(cwd, "session-conditional", record("1", "2026-07-23T00:00:02.000Z", "next"));
+    expect((await store.readAfter(cwd, "session-conditional")).map((item) => item.data)).toEqual([JSON.stringify({ text: "next" })]);
+  });
+
   it("serves repeated cursor reads consistently and sees events appended after a cached read", async () => {
     const cwd = await workspace();
     const store = new DurableEventStore();

@@ -72,6 +72,7 @@ export function QuestionnairePrompt({
   const canSubmit = answeredCount === questions.length && !submitting;
   const noneLabel = t("questionnaire.none");
   const customLabel = t("questionnaire.custom");
+  const componentId = interaction.requestId.replace(/[^a-zA-Z0-9_-]/g, "-");
 
   const updateAnswer = (index: number, answer: QuestionnaireAnswer | null) => {
     setAnswers((previous) => replaceAt(previous, index, answer));
@@ -85,13 +86,11 @@ export function QuestionnairePrompt({
   };
 
   const openNextUnanswered = (fromIndex: number) => {
-    const isAnswered = (index: number) => index === fromIndex || Boolean(answers[index]);
-    const candidates = [
-      ...questions.slice(fromIndex + 1).map((_, index) => fromIndex + 1 + index),
-      ...questions.slice(0, fromIndex).map((_, index) => index),
-    ];
-    const nextIndex = candidates.find((index) => !isAnswered(index));
-    if (nextIndex !== undefined) openQuestion(nextIndex);
+    // Always return to the first incomplete question, even when the user
+    // answered a later accordion row out of order.
+    const nextIndex = questions.findIndex((_, index) => index !== fromIndex && !answers[index]);
+    if (nextIndex >= 0) openQuestion(nextIndex);
+    else setSummaryOpen(true);
   };
 
   const chooseOption = (questionIndex: number, optionIndex: number) => {
@@ -132,14 +131,20 @@ export function QuestionnairePrompt({
     if (!previousAnswer) openNextUnanswered(questionIndex);
   };
 
-  const openCustomAnswer = (questionIndex: number) => {
+  const toggleCustomAnswer = (questionIndex: number) => {
+    const isOpen = Boolean(customOpen[questionIndex]);
     const existingAnswer = answers[questionIndex];
-    setCustomOpen((previous) => replaceAt(previous, questionIndex, true));
-    if (existingAnswer?.kind === "custom") {
+    setCustomOpen((previous) => replaceAt(previous, questionIndex, !isOpen));
+    if (!isOpen && existingAnswer?.kind === "custom") {
       setCustomDrafts((previous) => replaceAt(previous, questionIndex, existingAnswer.answer ?? ""));
     }
     setHoveredOption(null);
     setPreviewIndex(null);
+  };
+
+  const cancelCustomAnswer = (questionIndex: number) => {
+    setCustomDrafts((previous) => replaceAt(previous, questionIndex, ""));
+    setCustomOpen((previous) => replaceAt(previous, questionIndex, false));
   };
 
   const saveCustomAnswer = (questionIndex: number) => {
@@ -251,9 +256,10 @@ export function QuestionnairePrompt({
           return (
             <div key={`${question.question}-${questionIndex}`} className={cn("overflow-hidden rounded-input border transition-colors", isOpen ? "border-accent/35 bg-surface" : "border-border bg-surface-2/20")}>
               <button
+                id={`questionnaire-header-${componentId}-${questionIndex}`}
                 type="button"
                 aria-expanded={isOpen}
-                aria-controls={`questionnaire-question-${questionIndex}`}
+                aria-controls={`questionnaire-panel-${componentId}-${questionIndex}`}
                 onClick={() => openQuestion(questionIndex)}
                 className="flex w-full items-start gap-2.5 px-2.5 py-1.5 text-left transition-colors hover:bg-accent/5 sm:px-3"
               >
@@ -271,7 +277,12 @@ export function QuestionnairePrompt({
               </button>
 
               {isOpen && (
-                <div id={`questionnaire-question-${questionIndex}`} className="px-2.5 pb-2.5 sm:px-3">
+                <div
+                  id={`questionnaire-panel-${componentId}-${questionIndex}`}
+                  role="region"
+                  aria-labelledby={`questionnaire-header-${componentId}-${questionIndex}`}
+                  className="px-2.5 pb-2.5 sm:px-3"
+                >
                   <div className="grid gap-1.5">
                     {question.options.map((option, optionIndex) => {
                       const selected = question.multiSelect
@@ -328,8 +339,9 @@ export function QuestionnairePrompt({
 
                     <button
                       type="button"
+                      aria-expanded={customOpen[questionIndex]}
                       aria-pressed={answer?.kind === "custom" || customOpen[questionIndex]}
-                      onClick={() => openCustomAnswer(questionIndex)}
+                      onClick={() => toggleCustomAnswer(questionIndex)}
                       className={cn(
                         "flex w-full items-center gap-2.5 rounded-input border border-dashed px-2.5 py-1.5 text-left text-sm transition-colors",
                         answer?.kind === "custom" || customOpen[questionIndex] ? "border-accent bg-accent/10 text-text" : "border-border text-muted hover:border-accent/55 hover:text-text",
@@ -348,8 +360,9 @@ export function QuestionnairePrompt({
 
                   {customOpen[questionIndex] && (
                     <div className="mt-2 rounded-input border border-accent/30 bg-accent/5 p-2.5">
-                      <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-text"><PenLine size={12} className="text-accent" />{t("questionnaire.customLabel")}</div>
+                      <label htmlFor={`questionnaire-custom-${componentId}-${questionIndex}`} className="mb-1 flex items-center gap-1.5 text-xs font-medium text-text"><PenLine size={12} className="text-accent" />{t("questionnaire.customLabel")}</label>
                       <textarea
+                        id={`questionnaire-custom-${componentId}-${questionIndex}`}
                         autoFocus
                         value={customDrafts[questionIndex] ?? ""}
                         onChange={(event) => setCustomDrafts((previous) => replaceAt(previous, questionIndex, event.target.value))}
@@ -358,7 +371,7 @@ export function QuestionnairePrompt({
                         className="w-full resize-y rounded-input border border-border bg-surface px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent"
                       />
                       <div className="mt-1.5 flex justify-end gap-1.5">
-                        <button type="button" onClick={() => setCustomOpen((previous) => replaceAt(previous, questionIndex, false))} className="rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2">{t("common.cancel")}</button>
+                        <button type="button" onClick={() => cancelCustomAnswer(questionIndex)} className="rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2">{t("common.cancel")}</button>
                         <button type="button" onClick={() => saveCustomAnswer(questionIndex)} className="rounded-input bg-accent px-2.5 py-1 text-xs text-accent-fg">{t("questionnaire.saveAnswer")}</button>
                       </div>
                     </div>
@@ -377,9 +390,9 @@ export function QuestionnairePrompt({
                     </button>
                     {notesOpen[questionIndex] && (
                       <div className="mt-1.5">
-                        <label className="sr-only" htmlFor={`questionnaire-notes-${questionIndex}`}>{t("questionnaire.notes")}</label>
+                        <label className="sr-only" htmlFor={`questionnaire-notes-${componentId}-${questionIndex}`}>{t("questionnaire.notes")}</label>
                         <textarea
-                          id={`questionnaire-notes-${questionIndex}`}
+                          id={`questionnaire-notes-${componentId}-${questionIndex}`}
                           value={notes[questionIndex] ?? ""}
                           onChange={(event) => setNotes((previous) => replaceAt(previous, questionIndex, event.target.value))}
                           rows={2}
@@ -400,6 +413,7 @@ export function QuestionnairePrompt({
         <div className="px-4 pt-1.5 sm:px-5">
           <button
             type="button"
+            aria-label={summaryOpen ? t("questionnaire.hideReview") : t("questionnaire.review")}
             aria-expanded={summaryOpen}
             onClick={() => setSummaryOpen((open) => !open)}
             className="flex w-full items-center gap-1.5 rounded-input px-1 py-1 text-left text-xs text-muted transition-colors hover:bg-surface-2 hover:text-text"
@@ -425,6 +439,7 @@ export function QuestionnairePrompt({
                   <span className="w-5 shrink-0 text-[11px] font-mono text-muted">{questionIndex + 1}</span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-xs font-medium text-text">{question.header || t("questionnaire.question", { number: questionIndex + 1 })}</span>
+                    <span className="block truncate text-xs text-text">{question.question}</span>
                     <span className="block truncate text-xs text-muted">{answer ? answerLabel(answer, noneLabel, customLabel) : t("questionnaire.unanswered")}</span>
                   </span>
                   {answer ? <Check size={13} className="mt-0.5 shrink-0 text-ok" /> : <span className="mt-0.5 shrink-0 text-[11px] text-warn">—</span>}

@@ -27,6 +27,19 @@ type RuntimeRecord = {
   busy: boolean;
   operationPending?: PendingOperation;
   operationDeadline?: number;
+  /** Generation token for the accepted prompt/compact reconciliation. */
+  operationToken?: string;
+  /** Consecutive idle re-checks while a prompt/compact was accepted but the
+   *  agent has not started its turn yet. Pi Orbit may need time to resume a
+   *  session or warm a model after the HTTP ack; this is startup reconciliation,
+   *  not a timeout for the full agent response. Only applies to the
+   *  accepted-then-idle window (prompt returned OK); a transport timeout path
+   *  skips this and fails fast. */
+  reconcileAttempts?: number;
+  /** True when the pending operation was acknowledged via a transport timeout
+   *  rather than an OK response. Those are already-dead operations: an idle
+   *  probe must fail fast, not retry into a phantom turn. */
+  reconcileFromTimeout?: boolean;
   restartPending: boolean;
   reconcileTimer?: NodeJS.Timeout;
   idleTimer?: NodeJS.Timeout;
@@ -44,9 +57,11 @@ function reconciliationDelayMs(): number {
   return value > 0 ? value : 2_000;
 }
 
+/** Bounds only accepted-idle startup reconciliation while Pi Orbit resumes a
+ *  session or warms a model; it is not an agent-response timeout. */
 function reconciliationDeadlineMs(): number {
   const value = Number(process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS ?? 0);
-  return value > 0 ? value : 45_000;
+  return value > 0 ? value : 120_000;
 }
 
 function idleRuntimeMs(): number {
@@ -108,13 +123,7 @@ export class NodeSessionService {
     await mkdir(resolve(cwd, ".pi-science", "sessions"), { recursive: true });
     return this.withLock(`create:${cwd}`, async () => {
       let runtime: RuntimeRecord | undefined;
-      const defaults = effectiveConfig();
-      const config = {
-        ...defaults,
-        ...body.config,
-        skills: body.config?.skills?.length ? body.config.skills : defaults.skills,
-        extensions: body.config?.extensions?.length ? body.config.extensions : defaults.extensions,
-      };
+      const config = effectiveConfig(body.config);
       const started = await this.startRuntime(cwd, config);
       if ("error" in started) return started;
       runtime = started;
@@ -156,7 +165,10 @@ export class NodeSessionService {
       if (type === "prompt" || type === "compact") this.beginPendingOperation(runtime, type);
       const result = await runtime.process.sendCommand(type, params);
       if (!result.success) {
-        if ((type === "prompt" || type === "compact") && result.code === "timeout") this.scheduleOperationReconciliation(runtime, true);
+        if ((type === "prompt" || type === "compact") && result.code === "timeout") {
+          runtime.reconcileFromTimeout = true;
+          this.scheduleOperationReconciliation(runtime, true);
+        }
         else if (type === "prompt" || type === "compact") this.clearPendingOperation(runtime);
         return result;
       }
@@ -399,13 +411,21 @@ export class NodeSessionService {
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
     return this.withLock(`${cwd}\0${sessionId}`, async () => {
       const runtime = this.runtimes.get(runtimeKey(cwd, sessionId));
-      const path = await this.repository.findPath(cwd, sessionId);
       if (runtime?.activeSessionId === sessionId) {
         if (runtime.busy) return { success: false, code: "busy", error: "cannot delete a conversation while it is running" };
+        // Stop the runtime first: its JSONL is flushed by the dying process, so
+        // the on-disk file may only exist (or be rewritten) after cleanup.
         await this.cleanupRuntime(runtime);
       }
+      // After cleanup the disk is authoritative. Invalidate the scan cache so
+      // the lookup below cannot be served from (or overwritten by) a stale
+      // in-flight scan that predates the flush.
+      invalidateSessionFileCache(cwd);
+      const path = await this.repository.findPathOnDisk(cwd, sessionId);
       if (!path) {
-        return runtime?.activeSessionId === sessionId ? { success: true } : { success: false, code: "not_found", error: "session not found" };
+        // The file is already gone (ghost 404) or was never durable — nothing
+        // left to delete, so the delete itself succeeded.
+        return { success: true };
       }
       try { await unlink(path); }
       catch (error) { return { success: false, code: "delete_failed", error: String(error) }; }
@@ -514,10 +534,10 @@ export class NodeSessionService {
     this.eventHub.bind(cwd, process, {
       activeSessionId: () => runtime.activeSessionId || null,
       onBusy: (busy) => {
-        if (runtime.reconcileTimer) clearTimeout(runtime.reconcileTimer);
-        runtime.reconcileTimer = undefined;
-        runtime.operationPending = undefined;
-        runtime.operationDeadline = undefined;
+        // agent_start/agent_settled are authoritative runtime events. They
+        // invalidate any in-flight reconciliation so a late get_state result
+        // cannot publish a synthetic terminal event for the next turn.
+        this.invalidatePendingOperation(runtime);
         runtime.busy = busy;
         if (!busy && runtime.restartPending) {
           queueMicrotask(() => { void this.reloadRuntimeAfterTurn(runtime); });
@@ -554,64 +574,125 @@ export class NodeSessionService {
   private beginPendingOperation(runtime: RuntimeRecord, operation: PendingOperation): void {
     if (runtime.reconcileTimer) clearTimeout(runtime.reconcileTimer);
     runtime.reconcileTimer = undefined;
+    runtime.operationToken = randomUUID();
     runtime.operationPending = operation;
     runtime.operationDeadline = Date.now() + reconciliationDeadlineMs();
+    runtime.reconcileAttempts = 0;
+    runtime.reconcileFromTimeout = false;
     runtime.busy = true;
   }
 
-  private clearPendingOperation(runtime: RuntimeRecord): void {
+  private invalidatePendingOperation(runtime: RuntimeRecord): void {
+    if (runtime.reconcileTimer) clearTimeout(runtime.reconcileTimer);
+    runtime.reconcileTimer = undefined;
+    runtime.operationToken = undefined;
+    runtime.operationPending = undefined;
+    runtime.operationDeadline = undefined;
+  }
+
+  private resetPendingOperationState(runtime: RuntimeRecord): void {
     if (runtime.reconcileTimer) clearTimeout(runtime.reconcileTimer);
     runtime.reconcileTimer = undefined;
     runtime.operationPending = undefined;
     runtime.operationDeadline = undefined;
+    runtime.reconcileAttempts = 0;
+    runtime.reconcileFromTimeout = false;
     runtime.busy = false;
   }
 
+  private clearPendingOperation(runtime: RuntimeRecord): void {
+    this.resetPendingOperationState(runtime);
+    runtime.operationToken = undefined;
+  }
+
+  private isCurrentPendingOperation(runtime: RuntimeRecord, token: string): boolean {
+    return runtime.operationToken === token && runtime.operationPending !== undefined;
+  }
+
   private scheduleOperationReconciliation(runtime: RuntimeRecord, immediate: boolean): void {
+    const operationToken = runtime.operationToken;
+    if (!operationToken || !runtime.operationPending) return;
     if (runtime.reconcileTimer) clearTimeout(runtime.reconcileTimer);
     runtime.reconcileTimer = setTimeout(() => {
+      runtime.reconcileTimer = undefined;
       void this.withLock(runtimeKey(runtime.cwd, runtime.activeSessionId), async () => {
         const current = this.runtimes.get(runtimeKey(runtime.cwd, runtime.activeSessionId));
-        if (current !== runtime || !runtime.operationPending) return;
-        const state = await runtime.process.sendCommand("get_state");
-        const data = state.data && typeof state.data === "object" ? state.data as Record<string, unknown> : {};
+        if (current !== runtime || !this.isCurrentPendingOperation(runtime, operationToken)) return;
+        // Never start a new probe after the deadline. The deadline check is
+        // deliberately at callback entry because the timer can be delayed by
+        // process scheduling or a preceding lock holder.
+        const state = Date.now() < (runtime.operationDeadline ?? 0)
+          ? await runtime.process.sendCommand("get_state")
+          : null;
+        // A runtime event may have invalidated this reconciliation while the
+        // state RPC was in flight. Never act on that stale result.
+        if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
+        const data = state?.data && typeof state.data === "object" ? state.data as Record<string, unknown> : {};
         const active = Boolean(data.busy) || Boolean(data.isStreaming) || Boolean(data.isCompacting) || Number(data.pendingMessageCount ?? 0) > 0;
-        if (state.success && active && Date.now() < (runtime.operationDeadline ?? 0)) {
+        if (state?.success && active && Date.now() < (runtime.operationDeadline ?? 0)) {
+          runtime.reconcileAttempts = 0;
           runtime.busy = true;
           this.scheduleOperationReconciliation(runtime, false);
           return;
         }
-        if (!state.success && Date.now() < (runtime.operationDeadline ?? 0)) {
+        if (state && !state.success && Date.now() < (runtime.operationDeadline ?? 0)) {
+          runtime.reconcileAttempts = 0;
           this.scheduleOperationReconciliation(runtime, false);
           return;
         }
         const operation = runtime.operationPending;
-        if (state.success && !active) {
-          this.clearPendingOperation(runtime);
+        if (!state || (state.success && !active)) {
+          // An accepted prompt/compact may remain idle while Pi Orbit resumes
+          // a session or warms a model. This startup window is not a timeout for
+          // the full agent response. Attempts are diagnostic only: keep probing
+          // until the operation deadline. Transport-timeout acks are
+          // explicitly fail-fast and do not enter this retry window. When a
+          // delayed timer reaches the deadline without a probe, enter this
+          // same terminal path directly.
+          runtime.reconcileAttempts = (runtime.reconcileAttempts ?? 0) + 1;
+          if (!runtime.reconcileFromTimeout && state && Date.now() < (runtime.operationDeadline ?? 0)) {
+            runtime.busy = true;
+            this.scheduleOperationReconciliation(runtime, false);
+            return;
+          }
+          // Check the token immediately before terminal reconciliation and
+          // before each synthetic event. A late agent_start invalidates it.
+          if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
+          const shouldPublish = () => this.isCurrentPendingOperation(runtime, operationToken);
           if (operation === "prompt") {
             await this.eventHub.publish(runtime.cwd, runtime.activeSessionId, {
               type: "error",
               sessionId: runtime.activeSessionId,
               message: "The prompt was accepted but the Pi runtime did not start an agent turn.",
-            });
-            await this.eventHub.publish(runtime.cwd, runtime.activeSessionId, { type: "session.idle", sessionId: runtime.activeSessionId });
+            }, shouldPublish);
+            if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
+            await this.eventHub.publish(runtime.cwd, runtime.activeSessionId, { type: "session.idle", sessionId: runtime.activeSessionId }, shouldPublish);
+            if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
           }
+          if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
+          this.clearPendingOperation(runtime);
           return;
         }
+        if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
+        runtime.reconcileAttempts = 0;
         const sessionId = runtime.activeSessionId;
         const config = { ...runtime.config };
-        this.clearPendingOperation(runtime);
+        // Restart needs the operation state cleared so it can proceed, but
+        // retain the generation token until its failure event is published.
+        // A late runtime event can still invalidate that token in the window.
+        this.resetPendingOperationState(runtime);
         const restarted = await this.restartRuntimeUnlocked(runtime, config);
-        if ("error" in restarted && sessionId) {
+        if ("error" in restarted && sessionId && runtime.operationToken === operationToken) {
           await this.eventHub.publish(runtime.cwd, sessionId, {
             type: "error",
             sessionId,
             message: `Unable to safely reconcile timed-out ${operation} operation: ${restarted.error}`,
             terminal: true,
-          });
+          }, () => runtime.operationToken === operationToken);
         }
+        this.clearPendingOperation(runtime);
       });
-    }, immediate ? 0 : reconciliationDelayMs());
+    }, immediate ? 0 : Math.min(reconciliationDelayMs(), Math.max(0, (runtime.operationDeadline ?? Date.now()) - Date.now())));
   }
 
   /** One auto review per settled turn: a second settle for a session whose
