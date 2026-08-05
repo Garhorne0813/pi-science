@@ -1,4 +1,5 @@
 import { pathLeaf } from "../workspace";
+import { stripSubagentMentionBlock } from "../conversation/subagent-mentions";
 
 export interface WorkspaceReference {
   cwd: string;
@@ -18,7 +19,7 @@ export function injectWorkspaceReferences(message: string, references: Workspace
 }
 
 export function visibleUserMessage(message: string): string {
-  return message.replace(REFERENCE_BLOCK, "").trim();
+  return stripSubagentMentionBlock(message.replace(REFERENCE_BLOCK, ""));
 }
 
 export function referencesFromMessage(message: string): Array<Pick<WorkspaceReference, "path" | "name" | "isDir">> {

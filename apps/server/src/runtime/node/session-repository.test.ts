@@ -122,6 +122,45 @@ describe("SessionRepository cache", () => {
     expect(second).toHaveLength(2);
   });
 
+  it("hides pi-subagents child sessions while keeping user forks visible", async () => {
+    const cwd = await makeWorkspace();
+    const sessions = join(cwd, ".pi-science", "sessions");
+    const repo = new SessionRepository();
+    await writeFile(join(sessions, "parent.jsonl"), sessionHeader("parent", cwd), "utf8");
+
+    // A forked user session remains a top-level conversation even when Pi
+    // records its parent session in the header.
+    await writeFile(
+      join(sessions, "user-fork.jsonl"),
+      `${JSON.stringify({ type: "session", id: "user-fork", cwd, timestamp: "2026-07-25T00:01:00.000Z", parentSession: join(sessions, "parent.jsonl") })}\n${JSON.stringify({ type: "session_info", id: "info", name: "My fork" })}\n`,
+      "utf8",
+    );
+
+    // pi-subagents creates both a fork-context session and nested run
+    // transcripts. Neither should appear in the user-facing list. The
+    // fork-context check must remain correct even if nested run artifacts are
+    // cleaned up before this repository is read.
+    await writeFile(
+      join(sessions, "subagent-fork.jsonl"),
+      `${JSON.stringify({ type: "session", id: "subagent-fork", cwd, timestamp: "2026-07-25T00:02:00.000Z", parentSession: join(sessions, "parent.jsonl") })}\n`,
+      "utf8",
+    );
+    await mkdir(join(sessions, "parent", "run-abc", "run-0"), { recursive: true });
+    await writeFile(
+      join(sessions, "parent", "run-abc", "run-0", "session.jsonl"),
+      sessionHeader("subagent-nested", cwd),
+      "utf8",
+    );
+
+    await rm(join(sessions, "parent"), { recursive: true });
+
+    await expect(repo.list(cwd)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "user-fork" }),
+      expect.objectContaining({ id: "parent" }),
+    ]));
+    await expect(repo.list(cwd)).resolves.toHaveLength(2);
+  });
+
   it("re-discovers a session file that was completed in place after being corrupt", async () => {
     const cwd = await makeWorkspace();
     const repo = new SessionRepository();

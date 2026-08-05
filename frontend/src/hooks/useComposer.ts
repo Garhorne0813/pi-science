@@ -7,6 +7,7 @@ import { apiRequest } from "../lib/client/api";
 import { injectWorkspaceReferences } from "../lib/files";
 import { useFeedback } from "../components/feedback/feedback-context";
 import type { ResearchLoopDraft, ResearchStarter } from "../components/conversation/ResearchLoopControls";
+import { injectSubagentMentions, type SubagentMention } from "../lib/conversation";
 
 /**
  * Composer state and send pipeline: attachments, drag-and-drop, IME guards,
@@ -39,6 +40,7 @@ export function useComposer(params: {
   const input = useRuntimeStore((s) => s.draft);
   const setInput = useRuntimeStore((s) => s.setDraft);
   const [files, setFiles] = useState<File[]>([]);
+  const [mentions, setMentions] = useState<SubagentMention[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -60,6 +62,7 @@ export function useComposer(params: {
     composerContextRef.current = composerContext;
     if (previousContext !== null && previousContext !== composerContext) {
       setInput("");
+      setMentions([]);
       setFiles([]);
       clearWorkspaceReferences(cwd);
     }
@@ -104,17 +107,18 @@ export function useComposer(params: {
   };
 
   const handleSend = async () => {
+    const originalDraft = input;
     const text = input.trim();
     if (!selectedModel || (!text && files.length === 0 && workspaceReferences.length === 0) || working || reviewingProject) return;
     let workflowMessage: string | null = null;
     if (research.mode && !research.draft && text) {
       const prepared = await research.intent(text);
       if (!prepared) return;
-      if (prepared.kind === "draft") { setInput(""); return; }
+      if (prepared.kind === "draft") { setInput(""); setMentions([]); return; }
       workflowMessage = prepared.message;
     }
 
-    if (text.startsWith("/") && files.length === 0 && workspaceReferences.length === 0 && await runSlashCommand(text)) {
+    if (text.startsWith("/") && mentions.length === 0 && files.length === 0 && workspaceReferences.length === 0 && await runSlashCommand(text)) {
       setInput("");
       return;
     }
@@ -127,11 +131,14 @@ export function useComposer(params: {
         : `I've uploaded these files: ${names}`;
     }
 
+    message = injectSubagentMentions(message, mentions);
     message = injectWorkspaceReferences(message, workspaceReferences);
 
     const sentFiles = files;
     const sentReferences = workspaceReferences;
+    const sentMentions = mentions;
     setInput("");
+    setMentions([]);
     setFiles([]);
     clearWorkspaceReferences(cwd);
     onSend?.();
@@ -149,7 +156,8 @@ export function useComposer(params: {
       .catch(() => {
         // Keep the failed message visible with its inline error, but restore the
         // original draft/attachments so retrying does not require retyping.
-        if (!useRuntimeStore.getState().draft) setInput(text);
+        if (!useRuntimeStore.getState().draft) setInput(originalDraft);
+        setMentions((current) => current.length > 0 ? current : sentMentions);
         setFiles((current) => current.length > 0 ? current : sentFiles);
         sentReferences.forEach((reference) => useUiStore.getState().addWorkspaceReference(reference));
       });
@@ -182,7 +190,7 @@ export function useComposer(params: {
   };
 
   return {
-    input, setInput, files, setFiles, dragOver, setDragOver,
+    input, setInput, mentions, setMentions, files, setFiles, dragOver, setDragOver,
     fileInputRef, inputRef, composingRef, workspaceReferences,
     handleSend, handleKeyDown, handleDrop, handleFilePick,
   };

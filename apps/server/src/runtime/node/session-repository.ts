@@ -1,5 +1,5 @@
 import { open, readdir, stat } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { readProject } from "../../project/project-registry.js";
@@ -33,12 +33,22 @@ export interface SessionMessagePage {
 interface SessionFile {
   path: string;
   header: Record<string, unknown>;
+  subagent: boolean;
+  sessionInfo: boolean;
   modified: Date;
 }
 
 interface CachedFile {
   path: string;
   header: Record<string, unknown>;
+  subagent: boolean;
+  sessionInfo: boolean;
+}
+
+interface ParsedSessionHeader {
+  header: Record<string, unknown>;
+  subagent: boolean;
+  sessionInfo: boolean;
 }
 
 function sessionsRoot(cwd: string): string {
@@ -164,6 +174,8 @@ interface CachedCandidate {
   mtimeMs: number;
   size: number;
   header: Record<string, unknown> | null; // null = not (yet) a valid session
+  subagent: boolean;
+  sessionInfo: boolean;
 }
 
 interface DirCache {
@@ -185,7 +197,7 @@ const scanInFlight = new Map<string, Promise<CacheEntry | null>>();
 
 const sessionFileCache = new Map<string, CacheEntry>();
 
-async function tryParseHeader(path: string): Promise<Record<string, unknown> | null> {
+async function tryParseHeader(path: string): Promise<ParsedSessionHeader | null> {
   try {
     const handle = await open(path, "r");
     const buffer = Buffer.alloc(64 * 1024);
@@ -195,11 +207,27 @@ async function tryParseHeader(path: string): Promise<Record<string, unknown> | n
     } finally {
       await handle.close();
     }
-    const firstLine = buffer.subarray(0, bytesRead).toString("utf8").split("\n", 1)[0]?.trim();
+    const lines = buffer.subarray(0, bytesRead).toString("utf8").split("\n");
+    const firstLine = lines[0]?.trim();
     if (!firstLine) return null;
     const header = JSON.parse(firstLine) as Record<string, unknown>;
     if (header.type !== "session" || typeof header.id !== "string") return null;
-    return header;
+    // pi-subagents names its forked child sessions with a session_info entry.
+    // Keep this marker in the cache so the user-facing session list can hide
+    // these implementation sessions without hiding ordinary user forks.
+    let sessionInfo = false;
+    let subagent = false;
+    for (const line of lines.slice(1)) {
+      try {
+        const entry = JSON.parse(line) as Record<string, unknown>;
+        if (entry.type !== "session_info") continue;
+        sessionInfo = true;
+        if (typeof entry.name === "string" && entry.name.startsWith("subagent-")) subagent = true;
+      } catch {
+        // Ignore non-JSON lines while looking for session metadata.
+      }
+    }
+    return { header, subagent, sessionInfo };
   } catch {
     // A partially-written or corrupt session is not a valid candidate yet.
     return null;
@@ -240,8 +268,8 @@ async function scanSessionFiles(root: string): Promise<Record<string, DirCache>>
       } catch {
         continue;
       }
-      const header = await tryParseHeader(path);
-      candidates.push({ path, mtimeMs: meta.mtimeMs, size: meta.size, header });
+      const parsed = await tryParseHeader(path);
+      candidates.push({ path, mtimeMs: meta.mtimeMs, size: meta.size, header: parsed?.header ?? null, subagent: parsed?.subagent ?? false, sessionInfo: parsed?.sessionInfo ?? false });
     }
     dirs[directory] = { mtimeMs: dirStat.mtimeMs, candidates };
   }
@@ -259,7 +287,7 @@ function filesFromDirs(dirs: Record<string, DirCache>): CachedFile[] {
         && candidate.header.type === "session"
         && typeof candidate.header.id === "string"
       ) {
-        files.push({ path: candidate.path, header: candidate.header });
+        files.push({ path: candidate.path, header: candidate.header, subagent: candidate.subagent, sessionInfo: candidate.sessionInfo });
       }
     }
   }
@@ -297,8 +325,8 @@ async function revalidateCache(root: string, cached: CacheEntry): Promise<Cached
         continue;
       }
       if (meta.mtimeMs !== candidate.mtimeMs || meta.size !== candidate.size) {
-        const header = await tryParseHeader(candidate.path);
-        candidates.push({ path: candidate.path, mtimeMs: meta.mtimeMs, size: meta.size, header });
+        const parsed = await tryParseHeader(candidate.path);
+        candidates.push({ path: candidate.path, mtimeMs: meta.mtimeMs, size: meta.size, header: parsed?.header ?? null, subagent: parsed?.subagent ?? false, sessionInfo: parsed?.sessionInfo ?? false });
         dirty = true;
       } else {
         candidates.push(candidate);
@@ -377,7 +405,7 @@ async function sessionFilesWithMtime(root: string): Promise<SessionFile[]> {
     cached.map(async (file) => {
       try {
         const metadata = await stat(file.path);
-        return { path: file.path, header: file.header, modified: metadata.mtime };
+        return { path: file.path, header: file.header, subagent: file.subagent, sessionInfo: file.sessionInfo, modified: metadata.mtime };
       } catch {
         return null;
       }
@@ -386,6 +414,22 @@ async function sessionFilesWithMtime(root: string): Promise<SessionFile[]> {
   return refreshed
     .filter((item): item is SessionFile => item !== null)
     .sort((left, right) => right.modified.getTime() - left.modified.getTime());
+}
+
+function isNestedSubagentSession(root: string, path: string): boolean {
+  const segments = relative(root, path).split(/[\\/]+/).filter(Boolean);
+  // pi-subagents stores child transcripts below a directory named after the
+  // parent session file, e.g. <parent>/<run-id>/run-0/session.jsonl.
+  // The explicit run directory checks also cover parallel/async layouts.
+  return segments.slice(0, -1).some((segment) => (
+    segment.endsWith(".jsonl")
+    || /^run-\d+$/.test(segment)
+    || /^(?:parallel|dynamic|async)-/.test(segment)
+  ));
+}
+
+function isUserVisibleSession(root: string, file: SessionFile): boolean {
+  return !file.subagent && !isNestedSubagentSession(root, file.path);
 }
 
 export class SessionRepository {
@@ -410,7 +454,18 @@ export class SessionRepository {
       sessionFilesWithMtime(sessionsRoot(cwd)),
       readProject(cwd),
     ]);
-    return files.map(({ header, modified }) => ({
+    const root = sessionsRoot(cwd);
+    return files.filter((file) => {
+      if (!isUserVisibleSession(root, file)) return false;
+      const parentSession = typeof file.header.parentSession === "string" ? file.header.parentSession : "";
+      // A named top-level session is a user-created fork. An unnamed session
+      // with a parentSession is Pi's internal fork context. Do not depend on
+      // nested run artifacts for this classification: pi-subagents cleans up
+      // those directories after a run, while the fork-context transcript can
+      // remain and would otherwise resurface in the conversation list.
+      if (file.sessionInfo) return true;
+      return !parentSession;
+    }).map(({ header, modified }) => ({
       id: String(header.id),
       cwd: typeof header.cwd === "string" ? header.cwd : resolve(cwd),
       project_id: project?.id ?? (typeof header.project_id === "string" ? header.project_id : null),

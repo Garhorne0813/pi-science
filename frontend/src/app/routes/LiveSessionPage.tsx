@@ -15,6 +15,7 @@ import { SlashCommandMenu } from "../../components/SlashCommandMenu";
 import { ConversationWelcome } from "../../components/conversation/ConversationWelcome";
 import { ModelControlMenu } from "../../components/conversation/ModelControlMenu";
 import { InteractionPrompt } from "../../components/conversation/InteractionPrompt";
+import { MentionComposer } from "../../components/conversation/MentionComposer";
 import { QuestionnairePrompt } from "../../components/conversation/QuestionnairePrompt";
 import { groupBlocks, renderBlockGroup } from "../../components/conversation/ConversationBlocks";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
@@ -562,16 +563,16 @@ export function LiveSessionPage() {
               input={input}
               onSelect={setInput}
             />
-            <textarea
-              ref={composer.inputRef}
+            <MentionComposer
+              cwd={workspaceCwd}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              mentions={composer.mentions}
+              onChange={(value, mentions) => { setInput(value); composer.setMentions(mentions); }}
               onKeyDown={composer.handleKeyDown}
               onCompositionStart={() => { composer.composingRef.current = true; }}
               onCompositionEnd={() => { setTimeout(() => { composer.composingRef.current = false; }, 0); }}
               placeholder={composer.dragOver ? "Drop files here…" : research.prompt}
-              rows={2}
-              className="max-h-[160px] w-full resize-none bg-transparent px-3 py-2 text-sm leading-6 text-text outline-none placeholder:text-muted"
+              inputRef={composer.inputRef}
             />
             <div className="flex items-center justify-between gap-2 px-3 pb-2">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
