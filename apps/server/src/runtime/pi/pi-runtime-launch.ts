@@ -1,6 +1,7 @@
 import { createHash, randomInt, randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import type { PiConfig } from "@pi-science/contracts";
 import type { PiProcessOptions } from "./pi-process.js";
@@ -342,6 +343,7 @@ const EXTENSIONS = [
   { id: "pi-web-access", name: "Web Access", description: "Adds web search, URL fetching, and media extraction." },
   { id: "context-mode", name: "Context Mode", description: "Optional sandboxed context index.", entrypoints: ["build/adapters/pi/extension.js"] },
   { id: "rpiv-ask-user-question", packageName: "@juicesharp/rpiv-ask-user-question", name: "Ask User Question", description: "Adds structured multi-question prompts with previews, multi-select, custom answers, and notes." },
+  { id: "rpiv-todo", packageName: "@juicesharp/rpiv-todo", name: "Todo", description: "Adds task tracking with a live overlay." },
 ] as const;
 
 export function runtimeExtensionStatus(cliPath = process.env.PI_CLI_PATH ?? "", overrideRoots?: string[]): Array<{ id: string; name: string; description: string; installed: boolean; path: string | null }> {
@@ -372,6 +374,8 @@ function findRuntimeExtension(packageName: string, cliPath: string, extraEntrypo
     // manifest-discovered extension from an explicitly selected installation.
     const managedRuntimeRoot = join(PROJECT_ROOT, "runtime", "pi");
     if (existsSync(managedRuntimeRoot) && !roots.includes(managedRuntimeRoot)) roots.push(managedRuntimeRoot);
+    const managedPiInstallRoot = join(homedir(), ".pi", "agent", "npm");
+    if (!roots.includes(managedPiInstallRoot)) roots.push(managedPiInstallRoot);
   }
   for (const root of roots) {
     const packageDir = join(root, "node_modules", packageName);

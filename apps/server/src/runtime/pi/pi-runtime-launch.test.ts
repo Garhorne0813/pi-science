@@ -3,10 +3,10 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildPiProcessOptions, loadDefaultPiConfig, resetWebRuntimeAllocation } from "./pi-runtime-launch.js";
+import { buildPiProcessOptions, loadDefaultPiConfig, resetWebRuntimeAllocation, runtimeExtensionStatus } from "./pi-runtime-launch.js";
 
 const cleanup: string[] = [];
-const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, tsx: process.env.PI_TSX_PATH, tsconfig: process.env.PI_TSCONFIG_PATH, piMode: process.env.PI_SCIENCE_PI_MODE };
+const original = { home: process.env.PI_SCIENCE_HOME, userHome: process.env.HOME, cli: process.env.PI_CLI_PATH, tsx: process.env.PI_TSX_PATH, tsconfig: process.env.PI_TSCONFIG_PATH, piMode: process.env.PI_SCIENCE_PI_MODE };
 
 beforeEach(async () => {
   const root = join(tmpdir(), `pi-science-runtime-launch-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -21,6 +21,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   process.env.PI_SCIENCE_HOME = original.home;
+  if (original.userHome === undefined) delete process.env.HOME;
+  else process.env.HOME = original.userHome;
   process.env.PI_CLI_PATH = original.cli;
   process.env.PI_TSX_PATH = original.tsx;
   process.env.PI_TSCONFIG_PATH = original.tsconfig;
@@ -131,6 +133,40 @@ describe("Pi runtime custom provider materialization", () => {
 
     expect(extensions.filter((path) => path === extension)).toHaveLength(1);
     expect(extensions).not.toContain("pi-subagents/index.ts");
+  });
+
+  it("discovers the registered rpiv-todo extension from an injected package root", async () => {
+    const runtimeRoot = join(tmpdir(), `pi-runtime-todo-manifest-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const cli = join(runtimeRoot, "packages", "coding-agent", "dist", "cli.js");
+    const packageDir = join(runtimeRoot, "node_modules", "@juicesharp", "rpiv-todo");
+    const extension = join(packageDir, "index.ts");
+    cleanup.push(runtimeRoot);
+    await mkdir(join(runtimeRoot, "packages", "coding-agent", "dist"), { recursive: true });
+    await mkdir(packageDir, { recursive: true });
+    await writeFile(cli, "", "utf8");
+    await writeFile(extension, "export default function extension() {}\n", "utf8");
+    await writeFile(join(packageDir, "package.json"), JSON.stringify({ pi: { extensions: ["./index.ts"] } }), "utf8");
+
+    const todo = runtimeExtensionStatus(cli, [runtimeRoot]).find((item) => item.id === "rpiv-todo");
+    const config = loadDefaultPiConfig([runtimeRoot]);
+
+    expect(todo).toMatchObject({ id: "rpiv-todo", name: "Todo", installed: true, path: extension });
+    expect(config.extensions).toContain(extension);
+  });
+
+  it("auto-discovers rpiv-todo from Pi's managed npm root", async () => {
+    const installHome = join(tmpdir(), `pi-runtime-todo-home-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const packageDir = join(installHome, ".pi", "agent", "npm", "node_modules", "@juicesharp", "rpiv-todo");
+    const extension = join(packageDir, "index.ts");
+    cleanup.push(installHome);
+    await mkdir(packageDir, { recursive: true });
+    await writeFile(extension, "export default function extension() {}\n", "utf8");
+    await writeFile(join(packageDir, "package.json"), JSON.stringify({ pi: { extensions: ["index.ts"] } }), "utf8");
+    process.env.HOME = installHome;
+
+    const todo = runtimeExtensionStatus(process.env.PI_CLI_PATH!).find((item) => item.id === "rpiv-todo");
+
+    expect(todo).toMatchObject({ installed: true, path: extension });
   });
 
   it("uses the Pi-Science questionnaire bridge instead of registering the upstream duplicate tool", async () => {
