@@ -195,11 +195,14 @@ $installValues = Read-InstallEnv -Path $InstallStateFile
 $PiCliPath = Read-RuntimeCli -InstallValues $installValues
 if (-not $PiCliPath) {
     Write-Host "==> Installing Pi agent runtime..."
-    $bashPath = Get-ProcessCommand "bash"
-    if (-not $bashPath) {
-        throw "A Git Bash installation is required for a new Pi runtime. Install Git for Windows or set PI_CLI_PATH to an existing runtime."
+    $fetchScript = Join-Path $ScriptDir "fetch-pi.ps1"
+    if (-not (Test-Path -LiteralPath $fetchScript -PathType Leaf)) {
+        throw "Windows Pi runtime installer is missing: $fetchScript"
     }
-    Invoke-Checked -FilePath $bashPath -Arguments @((Join-Path $ScriptDir "fetch-pi.sh")) -WorkingDirectory $ProjectDir
+    & $fetchScript
+    if ($LASTEXITCODE -ne 0) {
+        throw "Pi runtime installer exited with code $LASTEXITCODE."
+    }
     $PiCliPath = Read-RuntimeCli -InstallValues @{}
     if (-not $PiCliPath) {
         throw "Pi installer did not produce a usable CLI under $RuntimeDir."
