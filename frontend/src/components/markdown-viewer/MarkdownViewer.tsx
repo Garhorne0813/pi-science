@@ -70,7 +70,17 @@ const STYLES: Record<Variant, Record<string, string>> = {
 };
 
 /** Workspace context that lets chat python fences execute on the kernel bridge. */
-export type CodeRunner = { cwd: string; sessionId: string };
+export type CodeRunner = {
+  cwd: string;
+  sessionId: string;
+  /** Model id active when the conversation turn was produced (provenance). */
+  modelAtSave?: string;
+  /** Agent message id the block belongs to — required for notebook saving. */
+  messageId?: string;
+  messageTimestamp?: string;
+  /** False while the assistant turn is still streaming (partial output). */
+  messageComplete?: boolean;
+};
 
 /** Flatten a rendered code element's children back into the fence's source text. */
 function reactText(node: React.ReactNode): string {
@@ -299,13 +309,23 @@ export function MarkdownViewer({
           },
           // Block code: the plain wrapper — its inner <code> is restyled via [&_code].
           // In chat with a codeRunner, python fences become executable blocks.
-          pre: ({ children }) => {
+          pre: ({ children, node }) => {
             const codeEl = Array.isArray(children) ? children[0] : children;
             if (codeRunner && variant === "chat" && isValidElement(codeEl)) {
               const codeProps = codeEl.props as { className?: string; children?: React.ReactNode };
               if (runnableLanguage(fenceLanguage(codeProps.className))) {
                 return (
-                  <RunnableCodeBlock code={reactText(codeProps.children)} cwd={codeRunner.cwd} sessionId={codeRunner.sessionId} preClassName={s.pre}>
+                  <RunnableCodeBlock
+                    code={reactText(codeProps.children)}
+                    cwd={codeRunner.cwd}
+                    sessionId={codeRunner.sessionId}
+                    preClassName={s.pre}
+                    modelAtSave={codeRunner.modelAtSave}
+                    messageId={codeRunner.messageId}
+                    messageTimestamp={codeRunner.messageTimestamp}
+                    messageComplete={codeRunner.messageComplete}
+                    sourceLine={node?.position?.start?.line}
+                  >
                     {children}
                   </RunnableCodeBlock>
                 );

@@ -45,6 +45,7 @@ export function InspectorShell({
           cwd={inspector.cwd || cwd}
           onClose={onClose}
           controls={controls}
+          revision={inspector.revision}
         />
       )}
       {!["file", "artifact", "pdf", "notebook", "notebook-file", "notebook-panel"].includes(inspector.variant) && (

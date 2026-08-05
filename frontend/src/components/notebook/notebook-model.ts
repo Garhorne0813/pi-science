@@ -6,6 +6,9 @@ export interface NotebookOutput {
   ename?: string;
   evalue?: string;
   traceback?: string[];
+  /** Notebook format v4 keeps per-output metadata (e.g. "scrolled"); keep it
+   *  so a re-serialize round-trip does not drop third-party fields. */
+  metadata?: Record<string, unknown>;
 }
 
 export interface NotebookCell {
@@ -13,13 +16,18 @@ export interface NotebookCell {
   source?: string | string[];
   execution_count?: number | null;
   outputs?: NotebookOutput[];
+  id?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface NotebookDocument {
   cells: NotebookCell[];
+  nbformat?: number;
+  nbformat_minor?: number;
   metadata?: {
     kernelspec?: { language?: string; name?: string; display_name?: string };
     language_info?: { name?: string };
+    [key: string]: unknown;
   };
 }
 

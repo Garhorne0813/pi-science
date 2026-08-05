@@ -191,9 +191,10 @@ export function fileInspectorForPath(
   filename = path.split(/[\\/]/).pop() || path,
   root?: FileRoot,
   cwd?: string,
+  revision?: number,
 ): FilePreviewInspector | NotebookFileInspector {
   if (extOf(filename) === "ipynb") {
-    return { variant: "notebook-file", path, root, cwd };
+    return { variant: "notebook-file", path, root, cwd, revision };
   }
   return {
     variant: "file",

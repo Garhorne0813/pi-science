@@ -29,12 +29,16 @@ export function NotebookEditor({
   cwd,
   onClose,
   controls,
+  revision,
 }: {
   path: string;
   root?: FileRoot;
   cwd: string;
   onClose: () => void;
   controls?: React.ReactNode;
+  /** Reload the notebook when the file revision changes (e.g. a chat cell was
+   *  just saved into this file while it is already open). */
+  revision?: number;
 }) {
   const { t } = useTranslation();
   const [cells, setCells] = useState<EditableCell[]>([]);
@@ -78,7 +82,7 @@ export function NotebookEditor({
     return () => {
       cancelled = true;
     };
-  }, [cwd, path, root, t]);
+  }, [cwd, path, root, t, revision]);
 
   useEffect(() => () => {
     void notebookRuntime.release(notebookId, cwd).catch(() => undefined);

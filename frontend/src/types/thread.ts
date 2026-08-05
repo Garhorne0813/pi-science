@@ -216,6 +216,8 @@ export interface NotebookFileInspector {
   path: string;
   root?: FileRoot;
   cwd?: string;
+  /** Known file revision at open time; the editor reloads when it changes. */
+  revision?: number;
 }
 
 export interface PdfInspector {

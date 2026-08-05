@@ -65,7 +65,7 @@ export function renderBlocks(blocks: ThreadBlock[], codeRunner: CodeRunner) {
 function BlockRenderer({ block, actionText, codeRunner }: { block: ThreadBlock; actionText?: string; codeRunner: CodeRunner }) {
   switch (block.kind) {
     case "user": return <UserMessage id={block.id} text={block.text} timestamp={block.timestamp} />;
-    case "agent": return <AgentMessage parts={block.parts} partial={block.partial} timestamp={block.timestamp} actionText={actionText} codeRunner={codeRunner} />;
+    case "agent": return <AgentMessage parts={block.parts} partial={block.partial} timestamp={block.timestamp} actionText={actionText} codeRunner={codeRunner} messageId={block.id} messageComplete={!block.partial} />;
     case "tool": return <ToolCard block={block} />;
     case "status-line": return <StatusLine block={block} />;
     default: return null;
@@ -128,7 +128,7 @@ function UserMessage({ id, text, timestamp }: { id: string; text: string; timest
   );
 }
 
-function AgentMessage({ parts, partial, timestamp, actionText, codeRunner }: { parts: { id: string; text: string }[]; partial?: boolean; timestamp?: string; actionText?: string; codeRunner?: CodeRunner }) {
+function AgentMessage({ parts, partial, timestamp, actionText, codeRunner, messageId, messageComplete }: { parts: { id: string; text: string }[]; partial?: boolean; timestamp?: string; actionText?: string; codeRunner?: CodeRunner; messageId?: string; messageComplete?: boolean }) {
   const { t } = useTranslation();
   const rawText = parts.map((p) => p.text).join("");
   const openInspector = useUiStore((s) => s.openInspector);
@@ -143,6 +143,12 @@ function AgentMessage({ parts, partial, timestamp, actionText, codeRunner }: { p
   const refs = publishedArtifactRefs(extractArtifactRefs(text), threadBlocks);
   const citations = extractCitations(text);
 
+  // Notebook saving needs the owning message context; per-message fields live
+  // on the agent block, so they are assembled here rather than at the route.
+  const runner: CodeRunner | undefined = codeRunner && messageId
+    ? { ...codeRunner, messageId, messageTimestamp: timestamp, messageComplete: messageComplete ?? !partial }
+    : codeRunner;
+
   const handleFileClick = (filePath: string) => {
     const block = refToArtifactBlock(filePath);
     const inspector = fileInspectorFromBlock(block as any);
@@ -151,7 +157,7 @@ function AgentMessage({ parts, partial, timestamp, actionText, codeRunner }: { p
 
   return (
     <div className="group/message">
-      <MarkdownViewer variant="chat" codeRunner={codeRunner}>{text}</MarkdownViewer>
+      <MarkdownViewer variant="chat" codeRunner={runner}>{text}</MarkdownViewer>
       {refs.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mt-2">
           {refs.map((ref) => (

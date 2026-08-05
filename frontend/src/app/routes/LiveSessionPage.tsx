@@ -512,7 +512,7 @@ export function LiveSessionPage() {
                   }}
                   itemContent={(_index, group) => (
                     <div className="mx-auto w-full max-w-[824px] px-8 pb-4">
-                      {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock)}
+                      {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch", modelAtSave: model.selectedModel ?? undefined }, actionTextByBlock)}
                     </div>
                   )}
                 />
