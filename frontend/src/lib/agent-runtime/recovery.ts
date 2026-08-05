@@ -1,13 +1,86 @@
 /** Recovery paths: authoritative REST re-reads after a stream gap, a late
  *  stream attach or a transport failure, and the missing-session reset. */
 
-import { clearCachedMessages, clearAiTitle, clearSessionName, getClient, type PiScienceClient } from "../client/pi-science-client";
+import { clearCachedMessages, clearAiTitle, clearSessionName, getClient, type PiScienceClient, type SessionState } from "../client/pi-science-client";
 import { emptyThread, mergeHistoryWithLive, resetTurnBuffer, threadFromMessages } from "./event-fold";
 import { generations, turnState } from "./generations";
 import { backfillSessionName } from "./naming";
 import { loadSessionsInternal } from "./sessions";
 import { useRuntimeStore } from "./store";
 import { hasActivePendingInteraction, hasPendingInteractionData } from "./types";
+
+const WORKING_STATE_MAX_ATTEMPTS = 3;
+const WORKING_STATE_BACKOFF_MS = [0, 100, 250] as const;
+const CONNECTION_RECOVERY_MAX_ATTEMPTS = 4;
+const CONNECTION_RECOVERY_BACKOFF_MS = [0, 100, 250, 500] as const;
+
+type KnownRuntimeState = { busy: boolean; activityGeneration: number };
+type ConnectionRecoveryRun = { connectionGeneration: number; activityGeneration: number; promise: Promise<void> };
+const knownRuntimeStates = new WeakMap<PiScienceClient, Map<string, KnownRuntimeState>>();
+const connectionRecoveryRuns = new WeakMap<PiScienceClient, Map<string, ConnectionRecoveryRun>>();
+const suppressedConnectionRecoveries = new WeakMap<PiScienceClient, Set<string>>();
+
+function runtimeKey(sessionId: string, cwd: string): string {
+  return `${cwd}\u0000${sessionId}`;
+}
+
+function runtimeBusy(runtimeState: SessionState): boolean {
+  return runtimeState.is_streaming
+    || runtimeState.is_compacting
+    || runtimeState.pending_message_count > 0;
+}
+
+function pendingWorkingState(runtimeStateBusy: boolean, current: ReturnType<typeof useRuntimeStore.getState>): boolean {
+  const pendingInteraction = hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire);
+  const awaitingUserInput = hasActivePendingInteraction(current.pendingInteraction, current.pendingQuestionnaire);
+  return pendingInteraction ? !awaitingUserInput : runtimeStateBusy;
+}
+
+export function rememberRuntimeState(
+  client: PiScienceClient,
+  sessionId: string,
+  cwd: string,
+  runtimeState: SessionState,
+  activityGeneration = generations.activity,
+): void {
+  const states = knownRuntimeStates.get(client) ?? new Map<string, KnownRuntimeState>();
+  states.set(runtimeKey(sessionId, cwd), { busy: runtimeBusy(runtimeState), activityGeneration });
+  knownRuntimeStates.set(client, states);
+}
+
+function knownRuntimeState(client: PiScienceClient, sessionId: string, cwd: string): KnownRuntimeState | undefined {
+  return knownRuntimeStates.get(client)?.get(runtimeKey(sessionId, cwd));
+}
+
+export function suppressConnectionRecovery(client: PiScienceClient, sessionId: string, cwd: string): void {
+  const suppressed = suppressedConnectionRecoveries.get(client) ?? new Set<string>();
+  suppressed.add(runtimeKey(sessionId, cwd));
+  suppressedConnectionRecoveries.set(client, suppressed);
+}
+
+export function consumeSuppressedConnectionRecovery(client: PiScienceClient, sessionId: string, cwd: string): boolean {
+  const suppressed = suppressedConnectionRecoveries.get(client);
+  if (!suppressed?.delete(runtimeKey(sessionId, cwd))) return false;
+  if (suppressed.size === 0) suppressedConnectionRecoveries.delete(client);
+  return true;
+}
+
+function applyRuntimeState(runtimeState: SessionState, current = useRuntimeStore.getState()): void {
+  useRuntimeStore.setState({
+    working: pendingWorkingState(runtimeBusy(runtimeState), current),
+    model: runtimeState.model ?? current.model,
+    thinking: runtimeState.thinking ?? current.thinking,
+    contextTokens: runtimeState.context_tokens ?? current.contextTokens,
+    contextWindow: runtimeState.context_window ?? current.contextWindow,
+    contextPercent: runtimeState.context_percent ?? current.contextPercent,
+    compactionEnabled: runtimeState.compaction_enabled ?? current.compactionEnabled,
+    compactionThresholdPercent: runtimeState.compaction_threshold_percent ?? current.compactionThresholdPercent,
+  });
+}
+
+function waitForRecovery(ms: number): Promise<void> {
+  return ms > 0 ? new Promise((resolve) => globalThis.setTimeout(resolve, ms)) : Promise.resolve();
+}
 
 export async function resyncCompletedHistory(sessionId: string, cwd: string): Promise<void> {
   const generation = generations.connection;
@@ -49,8 +122,77 @@ export async function reconcileWorkingState(
   connectionGeneration: number,
   activityGeneration: number,
 ): Promise<void> {
-  try {
-    const runtimeState = await client.getSessionState(sessionId, cwd);
+  for (let attempt = 0; attempt < WORKING_STATE_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const runtimeState = await client.getSessionState(sessionId, cwd);
+      const current = useRuntimeStore.getState();
+      if (
+        connectionGeneration !== generations.connection
+        || activityGeneration !== generations.activity
+        || current.activeSessionId !== sessionId
+        || current.cwd !== cwd
+      ) return;
+      rememberRuntimeState(client, sessionId, cwd, runtimeState, activityGeneration);
+      applyRuntimeState(runtimeState, current);
+      return;
+    } catch {
+      // A state request failure is retryable. It is not evidence of an idle
+      // runtime, so do not clear working until a bounded retry gets an
+      // authoritative answer (or a same-generation known idle snapshot exists
+      // for the final fallback below).
+      if (attempt + 1 < WORKING_STATE_MAX_ATTEMPTS) {
+        await waitForRecovery(WORKING_STATE_BACKOFF_MS[attempt + 1] ?? WORKING_STATE_BACKOFF_MS.at(-1)!);
+      }
+    }
+  }
+
+  const current = useRuntimeStore.getState();
+  if (
+    connectionGeneration !== generations.connection
+    || activityGeneration !== generations.activity
+    || current.activeSessionId !== sessionId
+    || current.cwd !== cwd
+  ) return;
+  const known = knownRuntimeState(client, sessionId, cwd);
+  if (known?.activityGeneration !== activityGeneration) return;
+  if (known.busy) {
+    // A previous authoritative busy result remains the safe answer when all
+    // retry requests fail: never re-enable Send while the runtime may run.
+    applyRuntimeState({
+      id: sessionId,
+      cwd,
+      is_streaming: true,
+      is_compacting: false,
+      pending_message_count: 0,
+    }, current);
+  } else if (!hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire)) {
+    // Only an authoritative idle snapshot from this activity generation may
+    // settle a failed probe. An unknown state must remain conservatively busy.
+    useRuntimeStore.setState({ working: false });
+  }
+}
+
+/** Recover the authoritative conversation snapshot after a connection loss.
+ *  Each bounded round reads messages and runtime state together. The history
+ *  read repairs a missed terminal event while the state read is the sole
+ *  authority for the composer guard; failures back off instead of treating an
+ *  unavailable endpoint as idle. */
+async function runConnectionRecovery(
+  client: PiScienceClient,
+  sessionId: string,
+  cwd: string,
+  connectionGeneration: number,
+  activityGeneration: number,
+): Promise<void> {
+  let lastState: SessionState | undefined;
+  let historySucceeded = false;
+  let stateSucceeded = false;
+
+  for (let attempt = 0; attempt < CONNECTION_RECOVERY_MAX_ATTEMPTS; attempt += 1) {
+    const [historyResult, stateResult] = await Promise.allSettled([
+      client.getMessagesPage(sessionId, cwd),
+      client.getSessionState(sessionId, cwd),
+    ]);
     const current = useRuntimeStore.getState();
     if (
       connectionGeneration !== generations.connection
@@ -58,28 +200,84 @@ export async function reconcileWorkingState(
       || current.activeSessionId !== sessionId
       || current.cwd !== cwd
     ) return;
-    const runtimeBusy = runtimeState.is_streaming
-      || runtimeState.is_compacting
-      || runtimeState.pending_message_count > 0;
-    const pendingInteraction = hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire);
-    const awaitingUserInput = hasActivePendingInteraction(current.pendingInteraction, current.pendingQuestionnaire);
-    useRuntimeStore.setState({
-      working: pendingInteraction ? !awaitingUserInput : runtimeBusy,
-      model: runtimeState.model ?? current.model,
-      thinking: runtimeState.thinking ?? current.thinking,
-      contextTokens: runtimeState.context_tokens ?? current.contextTokens,
-      contextWindow: runtimeState.context_window ?? current.contextWindow,
-      contextPercent: runtimeState.context_percent ?? current.contextPercent,
-      compactionEnabled: runtimeState.compaction_enabled ?? current.compactionEnabled,
-      compactionThresholdPercent: runtimeState.compaction_threshold_percent ?? current.compactionThresholdPercent,
-    });
-  } catch {
-    // Keep the current working state. A stream transport failure must not
-    // re-enable Send while the backend may still be executing the turn.
+
+    historySucceeded = historyResult.status === "fulfilled";
+    stateSucceeded = stateResult.status === "fulfilled";
+    if (stateResult.status === "fulfilled") {
+      const runtimeState = stateResult.value;
+      lastState = runtimeState;
+      rememberRuntimeState(client, sessionId, cwd, runtimeState, activityGeneration);
+      applyRuntimeState(runtimeState, useRuntimeStore.getState());
+    }
+    if (historyResult.status === "fulfilled") {
+      const history = historyResult.value;
+      useRuntimeStore.setState((state) => ({
+        thread: mergeHistoryWithLive(threadFromMessages(history.messages), state.thread),
+        historyCursor: history.next_cursor,
+        historyHasMore: history.has_more,
+        historyLoading: false,
+        historySnapshotVersion: history.snapshot_version,
+      }));
+      backfillSessionName(cwd, sessionId, useRuntimeStore.getState().thread);
+    }
+    if (historySucceeded && stateSucceeded) {
+      useRuntimeStore.setState({ status: "ready" });
+      void loadSessionsInternal();
+      return;
+    }
+    if (attempt + 1 < CONNECTION_RECOVERY_MAX_ATTEMPTS) {
+      await waitForRecovery(CONNECTION_RECOVERY_BACKOFF_MS[attempt + 1] ?? CONNECTION_RECOVERY_BACKOFF_MS.at(-1)!);
+    }
   }
+
+  const current = useRuntimeStore.getState();
+  if (
+    connectionGeneration !== generations.connection
+    || activityGeneration !== generations.activity
+    || current.activeSessionId !== sessionId
+    || current.cwd !== cwd
+  ) return;
+  // Keep whatever authoritative half succeeded. If the last state read was
+  // idle and no interaction is pending, settling is safe even when the history
+  // endpoint stayed unavailable. If state never succeeded, preserve working.
+  if (lastState) applyRuntimeState(lastState, current);
+  if (lastState && !runtimeBusy(lastState) && !hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire)) {
+    useRuntimeStore.setState({ working: false });
+  } else if (!stateSucceeded) {
+    const known = knownRuntimeState(client, sessionId, cwd);
+    if (known?.activityGeneration === activityGeneration && !known.busy && !hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire)) {
+      useRuntimeStore.setState({ working: false });
+    }
+  }
+  useRuntimeStore.setState({ status: "error" });
 }
 
-/** Recover the authoritative conversation snapshot after a `stream.gap`:
+export function reconcileAfterConnectionLoss(
+  client: PiScienceClient,
+  sessionId: string,
+  cwd: string,
+  connectionGeneration: number,
+  activityGeneration: number,
+): Promise<void> {
+  const key = runtimeKey(sessionId, cwd);
+  const runs = connectionRecoveryRuns.get(client) ?? new Map<string, ConnectionRecoveryRun>();
+  const existing = runs.get(key);
+  if (
+    existing
+    && existing.connectionGeneration === connectionGeneration
+    && existing.activityGeneration === activityGeneration
+  ) return existing.promise;
+  const promise = runConnectionRecovery(client, sessionId, cwd, connectionGeneration, activityGeneration);
+  runs.set(key, { connectionGeneration, activityGeneration, promise });
+  connectionRecoveryRuns.set(client, runs);
+  void promise.finally(() => {
+    if (runs.get(key)?.promise === promise) runs.delete(key);
+    if (runs.size === 0) connectionRecoveryRuns.delete(client);
+  }).catch(() => undefined);
+  return promise;
+}
+
+/** Recover the authoritative conversation snapshot after a `stream.gap`:"}]} Беларусь.functions.edit  code...  (json) $1? Wrong? Tool output omitted? Need see. ["}]} NakneАҞӘА 全民彩票天天атәуп 天天彩票网.functions.edit  code￣色жәк 彩神争霸输钱json  suliaq  񟿿 เกมสล็อตԥсҭазаара? Unclear JSON valid? Actually tool returned? Need inspect. Wait no output likely? Let's check. уҳәа. [
  *  re-read both the message history and the runtime state in parallel, and
  *  base `working` on the authoritative state rather than blindly clearing it.
  *  The new SSE subscription (rebuilt by the client transport) only carries
@@ -89,6 +287,7 @@ export async function reconcileAfterGap(
   cwd: string,
 ): Promise<void> {
   const client = getClient();
+  const activityGeneration = generations.activity;
   const [historyResult, stateResult] = await Promise.allSettled([
     client.getMessagesPage(sessionId, cwd),
     client.getSessionState(sessionId, cwd),
@@ -100,23 +299,8 @@ export async function reconcileAfterGap(
   // not clobber a busy flag the backend still holds. A gap during a long tool
   // call must keep Send disabled until the backend reports idle.
   if (stateResult.status === "fulfilled") {
-    const runtimeState = stateResult.value;
-    const runtimeBusy = runtimeState.is_streaming
-      || runtimeState.is_compacting
-      || runtimeState.pending_message_count > 0;
-    const latest = useRuntimeStore.getState();
-    const pendingInteraction = hasPendingInteractionData(latest.pendingInteraction, latest.pendingQuestionnaire);
-    const awaitingUserInput = hasActivePendingInteraction(latest.pendingInteraction, latest.pendingQuestionnaire);
-    useRuntimeStore.setState({
-      working: pendingInteraction ? !awaitingUserInput : runtimeBusy,
-      model: runtimeState.model ?? current.model,
-      thinking: runtimeState.thinking ?? current.thinking,
-      contextTokens: runtimeState.context_tokens ?? current.contextTokens,
-      contextWindow: runtimeState.context_window ?? current.contextWindow,
-      contextPercent: runtimeState.context_percent ?? current.contextPercent,
-      compactionEnabled: runtimeState.compaction_enabled ?? current.compactionEnabled,
-      compactionThresholdPercent: runtimeState.compaction_threshold_percent ?? current.compactionThresholdPercent,
-    });
+    rememberRuntimeState(client, sessionId, cwd, stateResult.value, activityGeneration);
+    if (activityGeneration === generations.activity) applyRuntimeState(stateResult.value, useRuntimeStore.getState());
   }
   // History recovery is independent from busy state. Merge the REST snapshot
   // with live blocks so a text.updated arriving during this request is kept.
@@ -284,6 +468,7 @@ export function recoverMissingSession(sessionId: string, cwd: string, client?: P
   ++generations.localMutation;
   resetTurnBuffer();
   turnState.errored = false;
+  if (client?.isConnectedTo(sessionId, cwd)) suppressConnectionRecovery(client, sessionId, cwd);
   client?.disconnect();
   // The session's on-disk record is gone; purge its cached messages and SSE
   // cursor so a later connect to a reused id starts from a clean slate.

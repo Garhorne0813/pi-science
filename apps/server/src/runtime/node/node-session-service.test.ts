@@ -267,6 +267,32 @@ describe("Node session lifecycle", () => {
     }
   });
 
+  it("does not keep a resumed session busy after an acknowledged prompt and runtime restart", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-restart-resume");
+    await service.resume("session-restart-resume", cwd);
+    await expect(service.command("session-restart-resume", cwd, "prompt", { message: "acknowledged" })).resolves.toMatchObject({ success: true });
+    await service.shutdownAll();
+
+    const resumed = testService();
+    await expect(resumed.resume("session-restart-resume", cwd)).resolves.toEqual({ success: true });
+    await expect(resumed.state("session-restart-resume", cwd)).resolves.toMatchObject({
+      id: "session-restart-resume",
+      is_streaming: false,
+      is_compacting: false,
+      pending_message_count: 0,
+    });
+    // Let any reconciliation timer from the old runtime's acknowledged prompt
+    // reach its callback; it must not resurrect a stale busy state in the new
+    // runtime after resume.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await expect(resumed.state("session-restart-resume", cwd)).resolves.toMatchObject({
+      is_streaming: false,
+      pending_message_count: 0,
+    });
+    await resumed.shutdownAll();
+  });
+
   it("keeps other sessions independent while a turn is active and deletes exactly one session", async () => {
     const service = testService();
     const cwd = await workspaceWithSessions("session-a", "session-b");

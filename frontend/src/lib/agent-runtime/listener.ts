@@ -7,7 +7,7 @@ import { workspaceFiles } from "../workspace";
 import { appendRuntimeError, isMissingSessionError } from "./errors";
 import { foldEvent, resetTurnBuffer } from "./event-fold";
 import { generations, turnState } from "./generations";
-import { reconcileAfterGap, reconcileWorkingState, recoverMissingSession, resyncCompletedHistory } from "./recovery";
+import { consumeSuppressedConnectionRecovery, reconcileAfterConnectionLoss, reconcileAfterGap, reconcileWorkingState, recoverMissingSession, resyncCompletedHistory } from "./recovery";
 import { applyAiSessionName } from "./naming";
 import { applySessionReplacements } from "./session-replacement";
 import { loadSessionsInternal, optimisticSessionIds } from "./sessions";
@@ -135,6 +135,15 @@ export function registerEventListener(client: PiScienceClient) {
 
     if (event.type === "connection.connecting" || event.type === "connection.reconnecting") {
       useRuntimeStore.setState({ status: "connecting" });
+      if (event.type === "connection.reconnecting" && state.activeSessionId) {
+        void reconcileAfterConnectionLoss(
+          client,
+          state.activeSessionId,
+          state.cwd,
+          generations.connection,
+          generations.activity,
+        );
+      }
       return;
     }
     if (event.type === "connection.open") {
@@ -161,6 +170,15 @@ export function registerEventListener(client: PiScienceClient) {
     }
     if (event.type === "connection.closed") {
       if (state.status !== "offline") useRuntimeStore.setState({ status: "offline" });
+      if (state.activeSessionId && !consumeSuppressedConnectionRecovery(client, state.activeSessionId, state.cwd)) {
+        void reconcileAfterConnectionLoss(
+          client,
+          state.activeSessionId,
+          state.cwd,
+          generations.connection,
+          generations.activity,
+        );
+      }
       return;
     }
 
