@@ -156,7 +156,7 @@ export function InspectorTabs({
         {expandedTabId && (
           <div
             aria-hidden="true"
-            className="fixed inset-0 z-40 bg-black/50"
+            className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
             onClick={() => setExpandedTabId(null)}
           />
         )}

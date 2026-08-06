@@ -463,7 +463,7 @@ function Body({
     // A document reads as a page: white paper, black text, whatever the app
     // theme — the same document-neutral canvas the Office previews use.
     return text !== null ? (
-      <div className="min-h-full px-6 py-8">
+      <div className="min-h-full px-2 py-2">
         <div className="mx-auto max-w-[760px] rounded-sm bg-white px-12 py-11 shadow-[0_1px_4px_rgba(0,0,0,.25)] max-sm:px-6 max-sm:py-7">
           <MarkdownViewer variant="document">{text}</MarkdownViewer>
         </div>

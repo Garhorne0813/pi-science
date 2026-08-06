@@ -79,6 +79,7 @@ describe("InspectorTabs", () => {
 
     const dialog = screen.getByRole("dialog", { name: "two.txt" });
     expect(dialog).toHaveStyle({ width: "92vw", height: "92vh", left: "4vw", top: "4vh" });
+    expect(dialog.previousElementSibling).toHaveClass("backdrop-blur-sm");
     expect(screen.getByRole("button", { name: "Restore panel" })).toHaveAttribute("aria-pressed", "true");
 
     fireEvent.keyDown(window, { key: "Escape" });
