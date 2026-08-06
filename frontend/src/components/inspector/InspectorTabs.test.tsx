@@ -70,4 +70,19 @@ describe("InspectorTabs", () => {
 
     expect(within(screen.getByRole("tabpanel")).getByLabelText("Edit one.txt")).toHaveValue("unsaved draft");
   });
+
+  it("opens the active preview in a 92% viewport dialog and restores it", () => {
+    useUiStore.getState().openInspector(file("two.txt"));
+    render(<Harness />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Maximize panel" }));
+
+    const dialog = screen.getByRole("dialog", { name: "two.txt" });
+    expect(dialog).toHaveStyle({ width: "92vw", height: "92vh", left: "4vw", top: "4vh" });
+    expect(screen.getByRole("button", { name: "Restore panel" })).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "two.txt" })).toBeNull();
+    expect(screen.getByRole("tabpanel")).toBeInTheDocument();
+  });
 });

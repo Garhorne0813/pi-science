@@ -1,4 +1,5 @@
-import { X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Maximize2, Minimize2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Inspector } from "../../types/thread";
 import { useUiStore, type InspectorTab } from "@/lib/ui";
@@ -29,6 +30,23 @@ export function InspectorTabs({
   const { t } = useTranslation();
   const activateTab = useUiStore((state) => state.activateInspectorTab);
   const closeTab = useUiStore((state) => state.closeInspectorTab);
+  const [expandedTabId, setExpandedTabId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!expandedTabId) return;
+    if (expandedTabId !== activeTabId || !tabs.some((tab) => tab.id === expandedTabId)) {
+      setExpandedTabId(null);
+    }
+  }, [activeTabId, expandedTabId, tabs]);
+
+  useEffect(() => {
+    if (!expandedTabId) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setExpandedTabId(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [expandedTabId]);
 
   const focusSibling = (currentId: string, direction: -1 | 1) => {
     const index = tabs.findIndex((tab) => tab.id === currentId);
@@ -102,15 +120,30 @@ export function InspectorTabs({
       </div>
 
       <div className="min-h-0 flex-1">
+        {expandedTabId && (
+          <div
+            aria-hidden="true"
+            className="fixed inset-0 z-40 bg-black/50"
+            onClick={() => setExpandedTabId(null)}
+          />
+        )}
         {tabs.map((tab, index) => {
           const active = tab.id === activeTabId;
+          const expanded = tab.id === expandedTabId;
+          const title = tabTitle(tab.data);
           return (
             <div
               key={tab.id}
               id={`inspector-panel-${index}`}
-              role="tabpanel"
+              role={expanded ? "dialog" : "tabpanel"}
+              aria-modal={expanded || undefined}
+              aria-label={expanded ? title : undefined}
               hidden={!active}
-              className="h-full"
+              style={expanded ? { width: "92vw", height: "92vh", left: "4vw", top: "4vh" } : undefined}
+              className={cn(
+                "h-full",
+                expanded && "fixed z-50 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl",
+              )}
             >
               <ErrorBoundary>
                 <InspectorShell
@@ -118,6 +151,18 @@ export function InspectorTabs({
                   onClose={() => closeTab(tab.id)}
                   cwd={cwd}
                   compactHeader
+                  controls={tab.data.variant === "file" ? (
+                    <button
+                      type="button"
+                      className="text-text hover:opacity-60"
+                      aria-label={t(expanded ? "shell.restorePanel" : "shell.maximizePanel")}
+                      title={t(expanded ? "shell.restorePanel" : "shell.maximizePanel")}
+                      aria-pressed={expanded}
+                      onClick={() => setExpandedTabId(expanded ? null : tab.id)}
+                    >
+                      {expanded ? <Minimize2 size={14} strokeWidth={1.5} /> : <Maximize2 size={14} strokeWidth={1.5} />}
+                    </button>
+                  ) : undefined}
                 />
               </ErrorBoundary>
             </div>
