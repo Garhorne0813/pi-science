@@ -10,6 +10,7 @@ import { useRuntimeStore } from "../../lib/agent-runtime";
 export function InspectorShell({
   inspector,
   onClose,
+  leadingControls,
   controls,
   cwd: cwdOverride,
   compactHeader = false,
@@ -17,6 +18,7 @@ export function InspectorShell({
 }: {
   inspector: Inspector;
   onClose: () => void;
+  leadingControls?: React.ReactNode;
   controls?: React.ReactNode;
   cwd?: string;
   compactHeader?: boolean;
@@ -31,6 +33,7 @@ export function InspectorShell({
         <FilePreviewInspector
           data={inspector}
           onClose={onClose}
+          leadingControls={leadingControls}
           controls={controls}
           cwd={inspector.cwd || cwd}
           showTitle={!compactHeader}

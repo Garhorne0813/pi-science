@@ -46,6 +46,7 @@ import { previewPolicy } from "@/lib/artifacts/preview-policy";
 export function FilePreviewInspector({
   data,
   onClose,
+  leadingControls,
   controls,
   cwd,
   showTitle = true,
@@ -56,6 +57,8 @@ export function FilePreviewInspector({
 }: {
   data: FilePreviewInspectorT;
   onClose: () => void;
+  /** Header controls rendered before edit/save actions. */
+  leadingControls?: React.ReactNode;
   /** Pane-level header buttons (e.g. maximize), rendered before Close. */
   controls?: React.ReactNode;
   cwd: string;
@@ -231,6 +234,7 @@ export function FilePreviewInspector({
           </div>
         )}
         <div className="flex-1" />
+        {leadingControls}
         {saveNotice && <span className="mr-1 text-xs text-ok">{saveNotice}</span>}
         {editing ? (
           <>

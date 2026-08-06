@@ -187,50 +187,48 @@ export function InspectorTabs({
                   cwd={cwd}
                   compactHeader
                   contentZoom={expanded ? zoom : 1}
-                  controls={tab.data.variant === "file" ? (
-                    <>
+                  leadingControls={tab.data.variant === "file" && expanded ? (
+                    <div className="flex items-center rounded-input bg-surface-2 p-0.5">
                       <button
                         type="button"
-                        className="text-text hover:opacity-60"
-                        aria-label={t(expanded ? "shell.restorePanel" : "shell.maximizePanel")}
-                        title={t(expanded ? "shell.restorePanel" : "shell.maximizePanel")}
-                        aria-pressed={expanded}
-                        onClick={() => setExpandedTabId(expanded ? null : tab.id)}
+                        className="rounded p-1 text-muted hover:bg-surface hover:text-text disabled:opacity-35"
+                        aria-label={t("filePreview.zoomOut")}
+                        disabled={zoom <= MIN_ZOOM}
+                        onClick={() => setTabZoom(tab.id, (current) => current - ZOOM_STEP)}
                       >
-                        {expanded ? <Minimize2 size={14} strokeWidth={1.5} /> : <Maximize2 size={14} strokeWidth={1.5} />}
+                        <Minus size={13} />
                       </button>
-                      {expanded && (
-                        <div className="flex items-center rounded-input bg-surface-2 p-0.5">
-                          <button
-                            type="button"
-                            className="rounded p-1 text-muted hover:bg-surface hover:text-text disabled:opacity-35"
-                            aria-label={t("filePreview.zoomOut")}
-                            disabled={zoom <= MIN_ZOOM}
-                            onClick={() => setTabZoom(tab.id, (current) => current - ZOOM_STEP)}
-                          >
-                            <Minus size={13} />
-                          </button>
-                          <button
-                            type="button"
-                            className="min-w-12 rounded px-1 py-0.5 text-[11px] tabular-nums text-muted hover:bg-surface hover:text-text"
-                            aria-label={t("filePreview.resetZoom")}
-                            title={t("filePreview.resetZoom")}
-                            onClick={() => setTabZoom(tab.id, () => 1)}
-                          >
-                            {Math.round(zoom * 100)}%
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded p-1 text-muted hover:bg-surface hover:text-text disabled:opacity-35"
-                            aria-label={t("filePreview.zoomIn")}
-                            disabled={zoom >= MAX_ZOOM}
-                            onClick={() => setTabZoom(tab.id, (current) => current + ZOOM_STEP)}
-                          >
-                            <Plus size={13} />
-                          </button>
-                        </div>
-                      )}
-                    </>
+                      <button
+                        type="button"
+                        className="min-w-12 rounded px-1 py-0.5 text-[11px] tabular-nums text-muted hover:bg-surface hover:text-text"
+                        aria-label={t("filePreview.resetZoom")}
+                        title={t("filePreview.resetZoom")}
+                        onClick={() => setTabZoom(tab.id, () => 1)}
+                      >
+                        {Math.round(zoom * 100)}%
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded p-1 text-muted hover:bg-surface hover:text-text disabled:opacity-35"
+                        aria-label={t("filePreview.zoomIn")}
+                        disabled={zoom >= MAX_ZOOM}
+                        onClick={() => setTabZoom(tab.id, (current) => current + ZOOM_STEP)}
+                      >
+                        <Plus size={13} />
+                      </button>
+                    </div>
+                  ) : undefined}
+                  controls={tab.data.variant === "file" ? (
+                    <button
+                      type="button"
+                      className="text-text hover:opacity-60"
+                      aria-label={t(expanded ? "shell.restorePanel" : "shell.maximizePanel")}
+                      title={t(expanded ? "shell.restorePanel" : "shell.maximizePanel")}
+                      aria-pressed={expanded}
+                      onClick={() => setExpandedTabId(expanded ? null : tab.id)}
+                    >
+                      {expanded ? <Minimize2 size={14} strokeWidth={1.5} /> : <Maximize2 size={14} strokeWidth={1.5} />}
+                    </button>
                   ) : undefined}
                 />
               </ErrorBoundary>

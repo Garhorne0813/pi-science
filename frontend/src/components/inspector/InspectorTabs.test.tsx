@@ -94,6 +94,13 @@ describe("InspectorTabs", () => {
     render(<Harness />);
     fireEvent.click(screen.getByRole("button", { name: "Maximize panel" }));
 
+    const header = within(screen.getByRole("dialog", { name: "two.txt" })).getByRole("banner");
+    const zoomGroup = screen.getByRole("button", { name: "Reset zoom to 100%" }).parentElement;
+    const editButton = within(header).getByRole("button", { name: "Edit file" });
+    expect(Array.from(header.children).indexOf(zoomGroup as Element)).toBeLessThan(
+      Array.from(header.children).indexOf(editButton),
+    );
+
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
     expect(screen.getByRole("button", { name: "Reset zoom to 100%" })).toHaveTextContent("110%");
 
