@@ -483,7 +483,7 @@ export function SettingsNavItem({ cwd, collapsed = false }: { cwd: string | null
     );
   }
   return (
-    <button onClick={handleClick} className={cn("flex h-8 min-h-0 w-full items-center gap-1.5 rounded-input px-1.5 text-left text-[13px]", settingsOpen ? "bg-surface-2 font-medium text-text" : "text-text/90 hover:bg-surface-2 hover:text-text")}>
+    <button onClick={handleClick} className={cn("flex h-7 min-h-0 w-full items-center gap-1.5 rounded-input px-1.5 text-left text-[13px]", settingsOpen ? "bg-surface-2 font-medium text-text" : "text-text/90 hover:bg-surface-2 hover:text-text")}>
       <span className="shrink-0 text-muted"><Settings size={16} /></span>
       <span className="min-w-0 flex-1 truncate">{t("nav.settings")}</span>
     </button>
