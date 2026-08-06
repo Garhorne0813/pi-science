@@ -21,6 +21,7 @@ const contentTypes: Record<string, string> = {
   ".png": "image/png",
   ".svg": "image/svg+xml",
   ".txt": "text/plain",
+  ".webp": "image/webp",
 };
 
 function queryValue(request: { query: unknown }, key: string, fallback = ""): string {

@@ -194,6 +194,7 @@ describe("Node control plane", () => {
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
     await mkdir(join(workspace, "node_modules", "demo"), { recursive: true });
     await writeFile(join(workspace, "notes.txt"), "hello", "utf8");
+    await writeFile(join(workspace, "pic.webp"), "RIFF\\x00\\x00\\x00\\x00WEBPVP8 ", "utf8");
     const outside = `${workspace}-outside.txt`;
     await writeFile(outside, "secret", "utf8");
     await symlink(outside, join(workspace, "escape.txt"));
@@ -206,6 +207,9 @@ describe("Node control plane", () => {
     const served = await app.inject({ method: "GET", url: `/api/files/serve/notes.txt?cwd=${encodeURIComponent(workspace)}` });
     expect(served.statusCode).toBe(200);
     expect(served.body).toBe("hello");
+    const servedWebp = await app.inject({ method: "GET", url: `/api/files/serve/pic.webp?cwd=${encodeURIComponent(workspace)}` });
+    expect(servedWebp.statusCode).toBe(200);
+    expect(servedWebp.headers["content-type"]).toBe("image/webp");
     const read = await app.inject({ method: "GET", url: `/api/files/notes.txt?cwd=${encodeURIComponent(workspace)}` });
     expect(read.statusCode).toBe(200);
     expect(read.json()).toMatchObject({ path: "notes.txt", encoding: "utf8", data: "hello", size: 5 });

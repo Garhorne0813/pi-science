@@ -789,6 +789,7 @@
   "molecule.atomCount_other": "{{count}} atoms",
   "molecule.rendering": "Rendering…",
   "filePreview.fileUnavailable": "File not found or inaccessible",
+  "filePreview.imageFailed": "Image failed to load",
   "filePreview.binaryTextUnsupported": "Binary file — cannot preview as text",
   "filePreview.file": "File",
   "filePreview.versionHistory": "Version history",

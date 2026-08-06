@@ -789,6 +789,7 @@
   "molecule.atomCount_other": "{{count}} 个原子",
   "molecule.rendering": "正在渲染…",
   "filePreview.fileUnavailable": "文件不存在或无法访问",
+  "filePreview.imageFailed": "图片加载失败",
   "filePreview.binaryTextUnsupported": "二进制文件无法作为文本预览",
   "filePreview.file": "文件",
   "filePreview.versionHistory": "版本历史",

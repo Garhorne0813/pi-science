@@ -336,6 +336,8 @@ export function FilePreviewInspector({
               filename={data.filename}
               path={data.path}
               language={data.language}
+              cwd={cwd}
+              root={data.root}
             />
           </Suspense>
         )}
@@ -354,6 +356,8 @@ function Body({
   filename,
   path,
   language,
+  cwd,
+  root,
 }: {
   kind: PreviewKind;
   url: string | null;
@@ -363,6 +367,9 @@ function Body({
   filename: string;
   path: string;
   language?: string;
+  /** Workspace root for resolving relative markdown references. */
+  cwd?: string;
+  root?: FileRoot;
 }) {
   const { t } = useTranslation();
   if (kind === "docx" || kind === "xlsx" || kind === "pptx") {
@@ -471,7 +478,7 @@ function Body({
     return text !== null ? (
       <div className="min-h-full px-2 py-2">
         <div className="mx-auto max-w-[760px] rounded-sm bg-white px-12 py-11 shadow-[0_1px_4px_rgba(0,0,0,.25)] max-sm:px-6 max-sm:py-7">
-          <MarkdownViewer variant="document">{text}</MarkdownViewer>
+          <MarkdownViewer variant="document" resourceContext={{ cwd: cwd ?? "", root, documentPath: path }}>{text}</MarkdownViewer>
         </div>
       </div>
     ) : (

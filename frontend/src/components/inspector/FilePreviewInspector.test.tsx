@@ -33,7 +33,7 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {})
   return jsonResponse({ error: `unhandled ${method} ${url}` }, 404);
 });
 
-function renderInspector(path: string, filename: string, kind: "text" | "pdf" = "text") {
+function renderInspector(path: string, filename: string, kind: "text" | "pdf" = "text", content?: string) {
   const data: FilePreviewInspectorT = {
     kind: "file",
     path,
@@ -41,6 +41,7 @@ function renderInspector(path: string, filename: string, kind: "text" | "pdf" = 
     root: "workspace",
     artifact: undefined,
     language: kind === "text" ? "plaintext" : undefined,
+    ...(content !== undefined ? { content } : {}),
   } as unknown as FilePreviewInspectorT;
   return render(
     <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
@@ -107,6 +108,15 @@ describe("FilePreviewInspector edit capability", () => {
     renderInspector(missingPath, "missing.md", "text");
 
     await waitFor(() => expect(screen.getByText("File not found or inaccessible")).toBeInTheDocument());
+  });
+
+  it("resolves markdown image references relative to the document directory", async () => {
+    renderInspector("reports/readme.md", "readme.md", "text", "![plot](./images/a.png)\n\n![wide](../shared/b.png)");
+
+    const plot = await screen.findByRole("img", { name: "plot" });
+    expect(plot.getAttribute("src")).toContain("/api/files/serve/reports/images/a.png?cwd=proj");
+    const wide = screen.getByRole("img", { name: "wide" });
+    expect(wide.getAttribute("src")).toContain("/api/files/serve/shared/b.png?cwd=proj");
   });
 
   it("cancel discards the draft", async () => {

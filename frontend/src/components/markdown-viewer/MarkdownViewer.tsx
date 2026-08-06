@@ -10,6 +10,7 @@ import { cn } from "@/lib/ui";
 import { fenceLanguage, runnableLanguage } from "@/lib/conversation";
 import { RunnableCodeBlock } from "../conversation/RunnableCodeBlock";
 import { fileInspectorForPath } from "@/lib/artifacts";
+import { resolveMarkdownResource, type MarkdownResourceContext } from "@/lib/files/markdown-resources";
 import { useUiStore } from "@/lib/ui";
 
 /** Two contexts render markdown: chat bubbles (theme colors, compact) and the
@@ -142,6 +143,28 @@ function MathBlock({ children, variant }: { children?: React.ReactNode; variant:
 
 const FILE_HREF = /^(?!(?:https?:\/\/|mailto:|#|data:|file:))/i;
 
+/** Workspace/external image with a graceful failure placeholder. */
+function ResourceImage({ src, alt }: { src: string; alt?: string }) {
+  const { t } = useTranslation();
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <span role="img" aria-label={alt ?? ""} className="my-3 inline-block rounded-input border border-border bg-surface-2 px-3 py-2 text-xs text-muted">
+        {t("filePreview.imageFailed")}
+      </span>
+    );
+  }
+  return (
+    <img
+      src={src}
+      alt={alt ?? ""}
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className="my-3 max-h-[480px] max-w-full rounded border border-border"
+    />
+  );
+}
+
 /** Tolerate a trailing stray `}` that some models append after the closing
  *  `\right\}` of a display formula (e.g. `...\right\} }$$`). KaTeX treats the
  *  stray brace as a parse error and (with throwOnError: false) silently drops
@@ -237,25 +260,31 @@ export function MarkdownViewer({
   className,
   variant = "chat",
   codeRunner,
+  resourceContext,
 }: {
   children: string;
   className?: string;
   variant?: Variant;
   /** When set (chat variant only), python fences get a Run affordance. */
   codeRunner?: CodeRunner;
+  /** Document/workspace context for resolving relative image and file links.
+   *  Chat mode derives it from codeRunner.cwd when omitted. */
+  resourceContext?: MarkdownResourceContext;
 }) {
   const s = STYLES[variant];
   const cwd = codeRunner?.cwd;
   const openInspector = useUiStore((s) => s.openInspector);
+  const { t } = useTranslation();
+  // Chat bubbles resolve workspace-relative references against the workspace
+  // root; document previews carry their own file context.
+  const context: MarkdownResourceContext | undefined = resourceContext ?? (cwd ? { cwd, documentPath: undefined } : undefined);
   const handleFileLink = useCallback((href: string) => {
-    if (!cwd) return;
-    let path = href;
-    // Strip ./ prefix and resolve absolute paths under the workspace root.
-    const normalizedCwd = cwd.replace(/[\/]+$/, "");
-    if (path.startsWith("./")) path = path.slice(2);
-    else if (path.startsWith(normalizedCwd + "/") || path.startsWith(normalizedCwd + "\\")) path = path.slice(normalizedCwd.length + 1);
-    openInspector(fileInspectorForPath(path, path.split(/[\\/]/).at(-1) || path, undefined, cwd));
-  }, [cwd, openInspector]);
+    if (!context) return;
+    const resolved = resolveMarkdownResource(href, context);
+    if (resolved.kind !== "workspace") return;
+    const filename = resolved.path.split(/[\\/]/).at(-1) || resolved.path;
+    openInspector(fileInspectorForPath(resolved.path, filename, context.root, cwd));
+  }, [context, cwd, openInspector]);
   return (
     <div className={cn(s.root, className)}>
       <ReactMarkdown
@@ -263,9 +292,29 @@ export function MarkdownViewer({
         rehypePlugins={[[rehypeKatex, { throwOnError: false }]]}
         components={{
           p: ({ children }) => <p className={s.p}>{children}</p>,
+          img: ({ src, alt }) => {
+            const href = src ?? "";
+            if (!href.trim()) {
+              return (
+                <span role="img" aria-label={alt ?? ""} className="my-3 inline-block rounded-input border border-border bg-surface-2 px-3 py-2 text-xs text-muted">
+                  {t("filePreview.imageFailed")}
+                </span>
+              );
+            }
+            if (!context) return <ResourceImage src={href} alt={alt} />;
+            const resolved = resolveMarkdownResource(href, context);
+            if (resolved.kind === "invalid") {
+              return (
+                <span role="img" aria-label={alt ?? ""} className="my-3 inline-block rounded-input border border-border bg-surface-2 px-3 py-2 text-xs text-muted">
+                  {t("filePreview.imageFailed")}
+                </span>
+              );
+            }
+            return <ResourceImage src={resolved.url} alt={alt} />;
+          },
           a: ({ children, href: rawHref }) => {
             const href = rawHref ?? "";
-            if (cwd && FILE_HREF.test(href)) {
+            if (context && FILE_HREF.test(href)) {
               return (
                 <span
                   onClick={(e) => { e.preventDefault(); handleFileLink(href); }}
