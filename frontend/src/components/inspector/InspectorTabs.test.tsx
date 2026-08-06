@@ -44,8 +44,10 @@ describe("InspectorTabs", () => {
     render(<Harness />);
 
     expect(screen.getByRole("tab", { name: "two.txt" })).toHaveAttribute("aria-selected", "true");
-    expect(within(screen.getByRole("tabpanel")).queryByRole("button", { name: "Close" })).toBeNull();
-    expect(within(screen.getByRole("tabpanel")).queryByRole("button", { name: "Open" })).toBeNull();
+    const activePanel = screen.getByRole("tabpanel");
+    expect(within(activePanel).getByRole("banner")).toHaveClass("h-10");
+    expect(within(activePanel).queryByRole("button", { name: "Close" })).toBeNull();
+    expect(within(activePanel).queryByRole("button", { name: "Open" })).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: "one.txt" }));
     expect(screen.getByRole("tab", { name: "one.txt" })).toHaveAttribute("aria-selected", "true");
 

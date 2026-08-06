@@ -52,6 +52,7 @@ export function FilePreviewInspector({
   showClose = true,
   showOpenExternally = true,
   contentZoom = 1,
+  compactHeader = false,
 }: {
   data: FilePreviewInspectorT;
   onClose: () => void;
@@ -66,6 +67,7 @@ export function FilePreviewInspector({
   showOpenExternally?: boolean;
   /** Scale applied to preview content while keeping the toolbar unchanged. */
   contentZoom?: number;
+  compactHeader?: boolean;
 }) {
   const { t } = useTranslation();
   const kind = previewKindForName(data.filename);
@@ -211,7 +213,7 @@ export function FilePreviewInspector({
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
+      <header className={cn("flex shrink-0 items-center gap-2 border-b border-border px-4", compactHeader ? "h-10" : "h-12")}>
         {showTitle && <span className="truncate text-sm font-medium text-text">{data.filename}</span>}
         <span className="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">
           {data.artifact || t("filePreview.file")}

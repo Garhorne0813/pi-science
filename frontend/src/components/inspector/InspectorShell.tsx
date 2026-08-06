@@ -37,6 +37,7 @@ export function InspectorShell({
           showClose={!compactHeader}
           showOpenExternally={!compactHeader}
           contentZoom={contentZoom}
+          compactHeader={compactHeader}
         />
       )}
       {inspector.variant === "notebook-panel" && (
