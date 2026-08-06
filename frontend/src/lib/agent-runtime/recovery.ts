@@ -3,6 +3,7 @@
 
 import { clearCachedMessages, clearAiTitle, clearSessionName, getClient, type PiScienceClient, type SessionState } from "../client/pi-science-client";
 import { emptyThread, mergeHistoryWithLive, resetTurnBuffer, threadFromMessages } from "./event-fold";
+import { attachPersistedTurnArtifacts } from "./turn-artifacts";
 import { markWorkspaceFilesChanged } from "./file-revision";
 import { generations, turnState } from "./generations";
 import { backfillSessionName } from "./naming";
@@ -105,7 +106,7 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
       return;
     }
     useRuntimeStore.setState({
-      thread: threadFromMessages(history.messages),
+      thread: await attachPersistedTurnArtifacts(threadFromMessages(history.messages), sessionId, cwd),
       historyCursor: history.next_cursor,
       historyHasMore: history.has_more,
       historyLoading: false,
@@ -213,13 +214,14 @@ async function runConnectionRecovery(
     }
     if (historyResult.status === "fulfilled") {
       const history = historyResult.value;
-      useRuntimeStore.setState((state) => ({
-        thread: mergeHistoryWithLive(threadFromMessages(history.messages), state.thread),
+      const restored = mergeHistoryWithLive(await attachPersistedTurnArtifacts(threadFromMessages(history.messages), sessionId, cwd), useRuntimeStore.getState().thread);
+      useRuntimeStore.setState({
+        thread: restored,
         historyCursor: history.next_cursor,
         historyHasMore: history.has_more,
         historyLoading: false,
         historySnapshotVersion: history.snapshot_version,
-      }));
+      });
       backfillSessionName(cwd, sessionId, useRuntimeStore.getState().thread);
     }
     if (historySucceeded && stateSucceeded) {
@@ -312,13 +314,14 @@ export async function reconcileAfterGap(
   // History recovery is independent from busy state. Merge the REST snapshot
   // with live blocks so a text.updated arriving during this request is kept.
   if (historyResult.status === "fulfilled") {
-    useRuntimeStore.setState((state) => ({
-      thread: mergeHistoryWithLive(threadFromMessages(historyResult.value.messages), state.thread),
+    const merged = mergeHistoryWithLive(await attachPersistedTurnArtifacts(threadFromMessages(historyResult.value.messages), sessionId, cwd), useRuntimeStore.getState().thread);
+    useRuntimeStore.setState({
+      thread: merged,
       historyCursor: historyResult.value.next_cursor,
       historyHasMore: historyResult.value.has_more,
       historyLoading: false,
       historySnapshotVersion: historyResult.value.snapshot_version,
-    }));
+    });
     backfillSessionName(cwd, sessionId, useRuntimeStore.getState().thread);
   }
   useRuntimeStore.setState({

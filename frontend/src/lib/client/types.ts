@@ -58,6 +58,23 @@ export interface SessionUserMessageIndex {
   snapshot_version: string;
 }
 
+export interface TurnArtifactItem {
+  path: string;
+  kind: string;
+  mime: string;
+  size: number;
+  artifactId?: string;
+  version?: number;
+}
+
+export interface TurnArtifactTurn {
+  turn_id: string;
+  session_id: string;
+  assistant_message_id: string | null;
+  ended_at: string;
+  artifacts: TurnArtifactItem[];
+}
+
 export interface SessionState {
   id: string;
   cwd: string;

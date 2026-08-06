@@ -3,7 +3,7 @@
 
 import { request, responseError } from "./http";
 import { cacheMessages } from "./message-cache";
-import type { HistoryMessage, InteractionResponse, SessionInfo, SessionMessagePage, SessionState, SessionUserMessageIndex } from "./types";
+import type { HistoryMessage, InteractionResponse, SessionInfo, SessionMessagePage, SessionState, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
 
 export async function createSession(baseUrl: string, cwd: string, model?: string): Promise<{ id: string; cwd?: string; project_id?: string }> {
   const config = model ? { model } : {};
@@ -75,6 +75,18 @@ export async function getUserMessageIndex(baseUrl: string, sessionId: string, cw
     messages: Array.isArray(data.messages) ? data.messages : [],
     snapshot_version: typeof data.snapshot_version === "string" ? data.snapshot_version : "",
   };
+}
+
+export async function getTurnArtifacts(baseUrl: string, sessionId: string, cwd?: string): Promise<{ turns: TurnArtifactTurn[] }> {
+  const params = new URLSearchParams();
+  if (cwd) params.set("cwd", cwd);
+  const query = params.toString();
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/artifacts${query ? `?${query}` : ""}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    throw new Error(responseError(data, `Load turn artifacts failed: ${res.statusText}`));
+  }
+  return { turns: Array.isArray(data.turns) ? data.turns : [] };
 }
 
 export async function resumeSession(baseUrl: string, sessionId: string, cwd: string): Promise<void> {

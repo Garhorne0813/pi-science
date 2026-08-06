@@ -14,7 +14,8 @@ export type ThreadBlock =
   | FigureBlock
   | ArtifactBlock
   | RunningJobsBlock
-  | StatusLineBlock;
+  | StatusLineBlock
+  | TurnArtifactSummaryBlock;
 
 export interface UserMessageBlock {
   kind: "user";
@@ -110,6 +111,26 @@ export type ArtifactKind =
   | "script"
   | "table"
   | "other";
+
+export interface TurnArtifactItem {
+  path: string;
+  kind: string;
+  mime: string;
+  size: number;
+  artifactId?: string;
+  version?: number;
+}
+
+/** Per-turn generated-file summary shown after the final assistant message.
+ *  Built from the `turn.artifacts` SSE event and restored from the persisted
+ *  turn-artifacts.jsonl on history load. */
+export interface TurnArtifactSummaryBlock {
+  kind: "artifact-summary";
+  id: string;
+  turnId: string;
+  assistantMessageId?: string | null;
+  artifacts: TurnArtifactItem[];
+}
 
 export interface RunningJobsBlock {
   kind: "running-jobs";

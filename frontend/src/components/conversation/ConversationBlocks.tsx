@@ -7,6 +7,7 @@ import { useRuntimeStore } from "../../lib/agent-runtime";
 import type { ThreadBlock, ToolCallBlock } from "../../types/thread";
 import { MarkdownViewer, type CodeRunner } from "../markdown-viewer/MarkdownViewer";
 import { extractArtifactRefs, fileInspectorFromBlock, publishedArtifactRefs, refToArtifactBlock } from "../../lib/artifacts";
+import { TurnArtifactStrip } from "./TurnArtifactStrip";
 import { referencesFromMessage, visibleUserMessage } from "../../lib/files";
 import { agentActionTextByBlock } from "../../lib/conversation";
 import { extractCitations } from "../../lib/citations";
@@ -68,6 +69,7 @@ function BlockRenderer({ block, actionText, codeRunner }: { block: ThreadBlock; 
     case "agent": return <AgentMessage parts={block.parts} partial={block.partial} timestamp={block.timestamp} actionText={actionText} codeRunner={codeRunner} />;
     case "tool": return <ToolCard block={block} />;
     case "status-line": return <StatusLine block={block} />;
+    case "artifact-summary": return <TurnArtifactStrip artifacts={block.artifacts} cwd={codeRunner?.cwd} />;
     default: return null;
   }
 }

@@ -822,5 +822,8 @@
   "todo.close": "收起任务列表",
   "todo.mode.sticky": "顶部模式",
   "todo.mode.fab": "悬浮模式",
-  "todo.switchMode": "切换为{{mode}}"
+  "todo.switchMode": "切换为{{mode}}",
+  "conversation.generatedFiles": "本轮生成的文件",
+  "conversation.more": "更多",
+  "conversation.collapse": "收起"
 }

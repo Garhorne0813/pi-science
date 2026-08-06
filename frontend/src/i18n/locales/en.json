@@ -822,5 +822,8 @@
   "todo.close": "Close task list",
   "todo.mode.sticky": "Sticky mode",
   "todo.mode.fab": "Floating mode",
-  "todo.switchMode": "Switch to {{mode}}"
+  "todo.switchMode": "Switch to {{mode}}",
+  "conversation.generatedFiles": "Generated files",
+  "conversation.more": "more",
+  "conversation.collapse": "collapse"
 }

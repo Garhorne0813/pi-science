@@ -122,3 +122,15 @@ describe("renderBlockGroup", () => {
     expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(1);
   });
 });
+
+describe("artifact-summary blocks", () => {
+  it("renders the turn artifact strip after the final agent message", () => {
+    render(<>{renderBlocks([
+      agent("a1", "final answer"),
+      { kind: "artifact-summary", id: "turn-artifacts-t1", turnId: "t1", assistantMessageId: "a1", artifacts: [{ path: "work/plot.png", kind: "image", mime: "image/png", size: 10 }] },
+    ], codeRunner)}</>);
+
+    expect(screen.getByLabelText("Generated files")).toBeInTheDocument();
+    expect(screen.getByAltText("plot.png")).toBeInTheDocument();
+  });
+});

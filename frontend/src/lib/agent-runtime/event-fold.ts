@@ -7,7 +7,8 @@
  *  clears it through `resetTurnBuffer()`. */
 
 import type { ThreadBlock } from "../../types/thread";
-import type { HistoryMessage, PiScienceEvent } from "../client/pi-science-client";
+import type { TurnArtifactItem } from "../../types/thread";
+import type { HistoryMessage, PiScienceEvent, TurnArtifactTurn } from "../client/pi-science-client";
 
 export interface Thread {
   blocks: ThreadBlock[];
@@ -137,19 +138,40 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
     }
 
     case "artifact.published": {
-      const artifactId = String(event.artifactId || "");
-      const path = String(event.path || "");
-      const verification = event.verification as { status?: string } | undefined;
+      // Folded into the per-turn artifact summary (`turn.artifacts`); a
+      // standalone status line would duplicate the strip. Publication state
+      // is still tracked via `publishedArtifactPaths` for prose references.
+      break;
+    }
+
+    case "turn.artifacts": {
+      const turnId = String(event.turnId || "");
+      const items = Array.isArray(event.artifacts) ? event.artifacts as TurnArtifactItem[] : [];
+      if (!turnId || items.length === 0) break;
+      const blockId = `turn-artifacts-${turnId}`;
       const block: ThreadBlock = {
-        kind: "status-line",
-        id: `artifact-${artifactId || path}-${String(event.version || "")}`,
-        text: `Published artifact: ${path}${artifactId ? ` (${artifactId})` : ""}`,
-        level: verification?.status === "failed" ? "warn" : "done",
-        artifactId,
-        path,
+        kind: "artifact-summary",
+        id: blockId,
+        turnId,
+        assistantMessageId: event.assistantMessageId ? String(event.assistantMessageId) : null,
+        artifacts: items,
       };
-      index[block.id] = blocks.length;
-      blocks.push(block);
+      const existing = index[blockId];
+      if (existing !== undefined) {
+        blocks[existing] = block;
+        break;
+      }
+      let insertAt = -1;
+      const assistantMessageId = block.assistantMessageId;
+      if (assistantMessageId && index[assistantMessageId] !== undefined) {
+        insertAt = index[assistantMessageId] + 1;
+      }
+      if (insertAt < 0) insertAt = blocks.length;
+      blocks.splice(insertAt, 0, block);
+      for (const key of Object.keys(index)) {
+        if (index[key] >= insertAt) index[key] += 1;
+      }
+      index[blockId] = insertAt;
       break;
     }
 
@@ -331,4 +353,41 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
     }
   }
   return blocks;
+}
+
+/** Attach persisted per-turn artifact summaries to a history-built thread.
+ *  Idempotent: turns already folded (from live SSE) are skipped by block id.
+ *  Inserts each summary right after its assistant message when the message is
+ *  present in the thread; otherwise appends at the end. */
+export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): Thread {
+  if (!turns || turns.length === 0) return thread;
+  let blocks = thread.blocks;
+  let index = thread.index;
+  let changed = false;
+  for (const turn of turns) {
+    const items = Array.isArray(turn.artifacts) ? turn.artifacts as TurnArtifactItem[] : [];
+    if (!turn.turn_id || items.length === 0) continue;
+    const blockId = `turn-artifacts-${turn.turn_id}`;
+    if (index[blockId] !== undefined) continue;
+    const assistantMessageId = turn.assistant_message_id ?? null;
+    let insertAt = -1;
+    if (assistantMessageId && index[assistantMessageId] !== undefined) insertAt = index[assistantMessageId] + 1;
+    if (insertAt < 0) insertAt = blocks.length;
+    const block: ThreadBlock = {
+      kind: "artifact-summary",
+      id: blockId,
+      turnId: turn.turn_id,
+      assistantMessageId,
+      artifacts: items,
+    };
+    blocks.splice(insertAt, 0, block);
+    index = { ...index };
+    for (const key of Object.keys(index)) {
+      if (index[key] >= insertAt) index[key] += 1;
+    }
+    index[blockId] = insertAt;
+    changed = true;
+  }
+  if (!changed) return thread;
+  return { blocks, index, loaded: thread.loaded };
 }

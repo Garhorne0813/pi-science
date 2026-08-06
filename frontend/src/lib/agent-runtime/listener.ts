@@ -285,6 +285,11 @@ export function registerEventListener(client: PiScienceClient) {
       const failed = status === "error";
       const finished = status === "end" || failed;
       useRuntimeStore.setState({ working: !finished, status: failed ? "error" : "ready" });
+    } else if (event.type === "turn.artifacts") {
+      ++generations.activity;
+      // The turn produced files: refresh the workspace tree so the new
+      // entries (and their thumbnails) appear immediately.
+      markWorkspaceFilesChanged();
     } else if (event.type === "agent_settled" || event.type === "session.idle") {
       ++generations.activity;
       const successful = !turnState.errored;
