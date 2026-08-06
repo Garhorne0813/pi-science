@@ -49,6 +49,7 @@ export function FilePreviewInspector({
   controls,
   cwd,
   showTitle = true,
+  showClose = true,
 }: {
   data: FilePreviewInspectorT;
   onClose: () => void;
@@ -57,6 +58,8 @@ export function FilePreviewInspector({
   cwd: string;
   /** The outer multi-file tab strip already shows the filename. */
   showTitle?: boolean;
+  /** Multi-file tabs provide their own close control. */
+  showClose?: boolean;
 }) {
   const { t } = useTranslation();
   const kind = previewKindForName(data.filename);
@@ -273,9 +276,11 @@ export function FilePreviewInspector({
           </button>
         )}
         {controls}
-        <button className="text-text hover:opacity-60" aria-label={t("common.close")} onClick={onClose}>
-          <X size={14} strokeWidth={1.5} />
-        </button>
+        {showClose && (
+          <button className="text-text hover:opacity-60" aria-label={t("common.close")} onClick={onClose}>
+            <X size={14} strokeWidth={1.5} />
+          </button>
+        )}
       </header>
 
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto bg-surface-2">

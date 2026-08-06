@@ -26,7 +26,14 @@ export function InspectorShell({
   return (
     <div className="h-full border-l border-border bg-surface" data-variant={inspector.variant}>
       {inspector.variant === "file" && (
-        <FilePreviewInspector data={inspector} onClose={onClose} controls={controls} cwd={inspector.cwd || cwd} showTitle={!compactHeader} />
+        <FilePreviewInspector
+          data={inspector}
+          onClose={onClose}
+          controls={controls}
+          cwd={inspector.cwd || cwd}
+          showTitle={!compactHeader}
+          showClose={!compactHeader}
+        />
       )}
       {inspector.variant === "notebook-panel" && (
         <NotebookPanel onClose={onClose} cwd={cwd} />

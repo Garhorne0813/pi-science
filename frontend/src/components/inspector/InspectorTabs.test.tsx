@@ -44,6 +44,7 @@ describe("InspectorTabs", () => {
     render(<Harness />);
 
     expect(screen.getByRole("tab", { name: "two.txt" })).toHaveAttribute("aria-selected", "true");
+    expect(within(screen.getByRole("tabpanel")).queryByRole("button", { name: "Close" })).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: "one.txt" }));
     expect(screen.getByRole("tab", { name: "one.txt" })).toHaveAttribute("aria-selected", "true");
 
