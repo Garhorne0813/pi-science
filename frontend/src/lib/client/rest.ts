@@ -3,7 +3,7 @@
 
 import { request, responseError } from "./http";
 import { cacheMessages } from "./message-cache";
-import type { HistoryMessage, InteractionResponse, SessionInfo, SessionMessagePage, SessionState } from "./types";
+import type { HistoryMessage, InteractionResponse, SessionInfo, SessionMessagePage, SessionState, SessionUserMessageIndex } from "./types";
 
 export async function createSession(baseUrl: string, cwd: string, model?: string): Promise<{ id: string; cwd?: string; project_id?: string }> {
   const config = model ? { model } : {};
@@ -60,6 +60,21 @@ export async function getMessagesPage(
 
 export async function getMessages(baseUrl: string, sessionId: string, cwd?: string): Promise<HistoryMessage[]> {
   return (await getMessagesPage(baseUrl, sessionId, cwd)).messages;
+}
+
+export async function getUserMessageIndex(baseUrl: string, sessionId: string, cwd?: string): Promise<SessionUserMessageIndex> {
+  const params = new URLSearchParams();
+  if (cwd) params.set("cwd", cwd);
+  const query = params.toString();
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/messages/index${query ? `?${query}` : ""}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    throw new Error(responseError(data, `Load message index failed: ${res.statusText}`));
+  }
+  return {
+    messages: Array.isArray(data.messages) ? data.messages : [],
+    snapshot_version: typeof data.snapshot_version === "string" ? data.snapshot_version : "",
+  };
 }
 
 export async function resumeSession(baseUrl: string, sessionId: string, cwd: string): Promise<void> {

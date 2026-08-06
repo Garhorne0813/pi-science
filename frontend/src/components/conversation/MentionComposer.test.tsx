@@ -2,9 +2,10 @@ import { useRef, useState } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentMention } from "../../lib/conversation";
+import { queryClient } from "../../lib/client/query-client";
 import { MentionComposer } from "./MentionComposer";
 
-const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+const fetchMock = vi.fn(async (_input: RequestInfo | URL) => new Response(JSON.stringify({
   agents: [
     { name: "reviewer", description: "Review work", source: "builtin" },
     { name: "scout", description: "Gather context", source: "builtin" },
@@ -43,10 +44,24 @@ async function typeAt(value: string, position = value.length) {
 
 describe("MentionComposer", () => {
   beforeEach(() => {
+    queryClient.clear();
     vi.stubGlobal("fetch", fetchMock);
     fetchMock.mockClear();
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    queryClient.clear();
+    vi.unstubAllGlobals();
+  });
+
+  it("shares discovery loading across composers in the same workspace", async () => {
+    const first = render(<Harness />);
+    const second = render(<Harness />);
+
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith("/api/settings/subagents/discovery")).length).toBe(1));
+
+    first.unmount();
+    second.unmount();
+  });
 
   it("dismisses the menu with Escape or an outside click and keeps @ as text", async () => {
     render(<Harness />);

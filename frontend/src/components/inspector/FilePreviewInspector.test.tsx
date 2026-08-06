@@ -15,6 +15,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 let writeCalls: Array<{ path: string; content: string }> = [];
 let writeError: Error | null = null;
+let missingPath: string | null = null;
 
 const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
   const url = String(input);
@@ -27,6 +28,7 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {})
     writeCalls.push({ path: body.path, content: body.content });
     return jsonResponse({ ok: true, path: body.path, size: body.content.length });
   }
+  if (missingPath && url.includes(`/api/files/${missingPath}`)) return jsonResponse({ error: "File not found" }, 404);
   if (url.includes("/api/files/")) return jsonResponse({ path: "x.txt", encoding: "utf8", data: "line1\nline2\n", size: 12 });
   return jsonResponse({ error: `unhandled ${method} ${url}` }, 404);
 });
@@ -50,6 +52,7 @@ function renderInspector(path: string, filename: string, kind: "text" | "pdf" = 
 beforeEach(async () => {
   writeCalls = [];
   writeError = null;
+  missingPath = null;
   fetchMock.mockClear();
   vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
@@ -97,6 +100,13 @@ describe("FilePreviewInspector edit capability", () => {
   it("does not offer editing for binary formats like pdf", async () => {
     renderInspector("doc.pdf", "doc.pdf", "pdf");
     await waitFor(() => expect(screen.queryByLabelText("Edit file")).toBeNull());
+  });
+
+  it("shows a missing-file error for a markdown artifact reference", async () => {
+    missingPath = "drafts/missing.md";
+    renderInspector(missingPath, "missing.md", "text");
+
+    await waitFor(() => expect(screen.getByText("File not found or inaccessible")).toBeInTheDocument());
   });
 
   it("cancel discards the draft", async () => {

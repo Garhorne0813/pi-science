@@ -97,6 +97,7 @@ export interface RuntimeState {
   loadSessions: (cwd?: string) => Promise<SessionInfo[]>;
   loadSession: (sessionId: string) => Promise<void>;
   loadOlderMessages: () => Promise<number>;
+  loadMessagesForNavigation: (before: string) => Promise<number>;
   forkSession: (sessionId: string) => Promise<string>;
   createNewSession: () => Promise<string>;
   deleteSession: (sessionId: string) => Promise<void>;

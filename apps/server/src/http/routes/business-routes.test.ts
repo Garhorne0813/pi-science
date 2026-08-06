@@ -436,6 +436,13 @@ describe("native control-plane business routes", () => {
     const preview = await app.inject({ method: "GET", url: `/api/files/nested/renamed.txt/preview?cwd=${encodeURIComponent(cwd)}` });
     expect(preview.statusCode).toBe(200);
     expect(preview.json()).toMatchObject({ path: "nested/renamed.txt", name: "renamed.txt", extension: ".txt" });
+
+    // The browser used to encode the whole nested path as one wildcard
+    // segment (`nested%2Frenamed.txt`). Keep this contract working while the
+    // frontend uses segment-wise encoding for new requests.
+    const encodedRead = await app.inject({ method: "GET", url: `/api/files/${encodeURIComponent("nested/renamed.txt")}?cwd=${encodeURIComponent(cwd)}` });
+    expect(encodedRead.statusCode).toBe(200);
+    expect(encodedRead.json()).toMatchObject({ path: "nested/renamed.txt", data: "hello" });
   });
 
   it("normalizes backslash-form file requests and provenance to API paths", async () => {

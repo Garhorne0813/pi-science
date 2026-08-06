@@ -1,6 +1,8 @@
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "../client/api";
 import { queryClient } from "../client/query-client";
+import { subscribeProjectKnowledgeEvents } from "./project-knowledge-events";
 
 export type KnowledgeType =
   | "finding"
@@ -160,9 +162,19 @@ export function useReviewPolicy(cwd: string) {
   return useQuery(read<ProjectPolicy>(projectKnowledgeKey("policy", cwd), `/api/project-knowledge/policy?${query(cwd)}`), queryClient);
 }
 
-/** Pending-proposal badge: polled, not pushed — the server has no signal for it. */
-export function usePendingProposalCount(cwd: string, refetchIntervalMs: number) {
-  return useQuery({ ...proposalCountQuery(cwd), refetchInterval: refetchIntervalMs });
+/** Pending-proposal badge: event-driven, with REST refresh on initial connect/reconnect. */
+export function usePendingProposalCount(cwd: string) {
+  const query = useQuery(proposalCountQuery(cwd));
+
+  useEffect(() => subscribeProjectKnowledgeEvents(cwd, (event) => {
+    if (typeof event?.pending_count === "number") {
+      queryClient.setQueryData(projectKnowledgeKey("proposals-count", cwd), { pending_count: event.pending_count });
+    } else {
+      void queryClient.invalidateQueries({ queryKey: projectKnowledgeKey("proposals-count", cwd) });
+    }
+  }), [cwd]);
+
+  return query;
 }
 
 export const projectKnowledgeApi = {

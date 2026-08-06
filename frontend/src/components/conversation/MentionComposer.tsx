@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from "react";
-import { apiRequest } from "../../lib/client/api";
 import type { SubagentMention } from "../../lib/conversation";
+import { queryClient } from "../../lib/client/query-client";
+import { subagentsDiscoveryQuery } from "../../lib/settings";
 import { cn } from "../../lib/ui";
 
 interface AvailableSubagent {
@@ -80,7 +81,7 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
 
   useEffect(() => {
     let cancelled = false;
-    void apiRequest<{ agents?: AvailableSubagent[] }>(`/api/settings/subagents/discovery?cwd=${encodeURIComponent(cwd)}`)
+    void queryClient.fetchQuery(subagentsDiscoveryQuery(cwd))
       .then((data) => { if (!cancelled) setAgents(data.agents ?? []); })
       .catch(() => { if (!cancelled) setAgents([]); });
     return () => { cancelled = true; };

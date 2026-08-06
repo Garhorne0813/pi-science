@@ -6,7 +6,7 @@ import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import type { ThreadBlock, ToolCallBlock } from "../../types/thread";
 import { MarkdownViewer, type CodeRunner } from "../markdown-viewer/MarkdownViewer";
-import { extractArtifactRefs, refToArtifactBlock, fileInspectorFromBlock } from "../../lib/artifacts";
+import { extractArtifactRefs, fileInspectorFromBlock, publishedArtifactRefs, refToArtifactBlock } from "../../lib/artifacts";
 import { referencesFromMessage, visibleUserMessage } from "../../lib/files";
 import { agentActionTextByBlock } from "../../lib/conversation";
 import { extractCitations } from "../../lib/citations";
@@ -132,12 +132,15 @@ function AgentMessage({ parts, partial, timestamp, actionText, codeRunner }: { p
   const { t } = useTranslation();
   const rawText = parts.map((p) => p.text).join("");
   const openInspector = useUiStore((s) => s.openInspector);
+  const threadBlocks = useRuntimeStore((s) => s.thread.blocks);
   if (!rawText && partial) return null;
   if (!rawText) return null;
 
   const text = parseSuggestions(rawText).clean;
-  // Detect file references and make them clickable
-  const refs = extractArtifactRefs(text);
+  // Only publication events prove that a path is a real workspace artifact.
+  // Assistant plans often mention future files such as drafts/foo.md; linking
+  // those paths makes a normal click issue a misleading file-read 404.
+  const refs = publishedArtifactRefs(extractArtifactRefs(text), threadBlocks);
   const citations = extractCitations(text);
 
   const handleFileClick = (filePath: string) => {

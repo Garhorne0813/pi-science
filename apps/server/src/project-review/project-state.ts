@@ -12,6 +12,7 @@ import {
   type MemoryDecision,
   writeMemoryLedgerUnlocked,
 } from "../memory/ledger.js";
+import { emitProjectKnowledgeEvent } from "./events.js";
 
 export type Source = MemorySource;
 export type Policy = { auto_review: boolean; reminder_threshold: number; max_directory_depth: number; minimum_files_for_new_category: number; locked_paths: string[]; naming_pattern: string; accepted_counts: Record<string, number>; rejected_counts: Record<string, number>; external_services_allowed: boolean; allowed_egress_domains: string[]; blocked_data_classes: string[]; updated_at: string };
@@ -103,10 +104,14 @@ export async function writeProjectState(cwd: string, state: ProjectState): Promi
 
 /** Serialize a read/modify/write operation so memory decisions cannot overwrite each other. */
 export async function mutateProjectState<T>(cwd: string, operation: (state: ProjectState) => Promise<T> | T): Promise<T> {
-  return withFileWriteLock(projectMemoryLedgerPath(cwd), async () => {
+  let pendingCount = 0;
+  const result = await withFileWriteLock(projectMemoryLedgerPath(cwd), async () => {
     const current = await readProjectStateUnlocked(cwd);
     const result = await operation(current);
     await persistProjectStateUnlocked(cwd, current);
+    pendingCount = current.proposals.filter((item) => item.status === "pending").length;
     return result;
   });
+  emitProjectKnowledgeEvent(cwd, { type: "project-knowledge.changed", pending_count: pendingCount });
+  return result;
 }

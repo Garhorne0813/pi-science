@@ -10,6 +10,7 @@ import type {
   FileRoot,
   FilePreviewInspector,
   NotebookFileInspector,
+  ThreadBlock,
 } from "../../types/thread";
 
 // Re-export so existing imports from artifacts.ts keep working
@@ -70,6 +71,34 @@ export function extractArtifactRefs(markdown: string): string[] {
     out.push(raw);
   }
   return out;
+}
+
+/** Normalize the path spelling used by runtime artifact events and chat text. */
+export function normalizeArtifactPath(path: string): string {
+  return path.replaceAll("\\", "/").replace(/^\.\//, "");
+}
+
+/**
+ * Paths emitted by an artifact publication event are authoritative. A path
+ * mentioned in prose can be a plan, an example, or a future output and must
+ * not become a file link until the runtime has actually published it.
+ */
+export function publishedArtifactPaths(blocks: readonly ThreadBlock[]): Set<string> {
+  return new Set(
+    blocks.flatMap((block) => (
+      block.kind === "status-line" && block.level === "done" && block.path
+        ? [normalizeArtifactPath(block.path)]
+        : []
+    )),
+  );
+}
+
+export function publishedArtifactRefs(
+  refs: readonly string[],
+  blocks: readonly ThreadBlock[],
+): string[] {
+  const published = publishedArtifactPaths(blocks);
+  return refs.filter((ref) => published.has(normalizeArtifactPath(ref)));
 }
 
 export function extOf(filename: string): string {

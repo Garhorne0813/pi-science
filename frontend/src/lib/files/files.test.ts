@@ -23,4 +23,19 @@ describe("workspace file context", () => {
     expect(previewUrl("report.pdf", undefined, "/correct/workspace"))
       .toContain("cwd=%2Fcorrect%2Fworkspace");
   });
+
+  it("keeps workspace path separators visible to wildcard file routes", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      path: "drafts/report.md",
+      encoding: "utf8",
+      data: "# report",
+      size: 9,
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await readArtifact("drafts/report.md", undefined, "/workspace");
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/api/files/drafts/report.md?");
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("drafts%2Freport.md");
+  });
 });

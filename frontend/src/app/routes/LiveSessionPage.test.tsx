@@ -88,6 +88,9 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
       { name: "scout", description: "Gather context", source: "builtin" },
     ] }));
   }
+  if (url.startsWith("/api/sessions/s1/messages/index")) {
+    return Promise.resolve(jsonResponse({ messages: [], snapshot_version: "" }));
+  }
   if (url.includes("/commands?")) return Promise.resolve(jsonResponse({ commands: [] }));
   if (url.startsWith("/api/project-memory/research-loops")) return Promise.resolve(jsonResponse({ loops: [] }));
   if (method === "PUT" && url.startsWith("/api/settings/model")) {
@@ -112,6 +115,16 @@ function agentBlock(id: string, text: string): ThreadBlock {
 
 function userBlock(id: string, text: string): ThreadBlock {
   return { kind: "user", id, text, timestamp: new Date().toISOString() };
+}
+
+function publishedArtifactBlock(path: string): ThreadBlock {
+  return {
+    kind: "status-line",
+    id: `artifact-${path}`,
+    text: `Published artifact: ${path}`,
+    level: "done",
+    path,
+  };
 }
 
 /** IntersectionObserver stub that captures its callback so tests can drive
@@ -454,8 +467,11 @@ describe("turn-completion effects", () => {
       useRuntimeStore.setState({
         working: false,
         thread: {
-          blocks: [agentBlock("a1", "Saved outputs/plot.png\n<!--suggest: plot residuals-->")],
-          index: { a1: 0 },
+          blocks: [
+            agentBlock("a1", "Saved outputs/plot.png\n<!--suggest: plot residuals-->"),
+            publishedArtifactBlock("outputs/plot.png"),
+          ],
+          index: { a1: 0, "artifact-outputs/plot.png": 1 },
           loaded: true,
         },
       });
@@ -725,6 +741,44 @@ describe("conversation nav rail and scroll-to-latest", () => {
     expect(nav).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "First question about models" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Second question about data" })).toBeInTheDocument();
+  });
+
+  it("shows indexed older user messages and loads their page when selected", async () => {
+    threadWith([
+      userBlock("u-latest", "Latest question"),
+      agentBlock("a-latest", "latest reply"),
+    ]);
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/messages/index")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u-old", text: "Old question", before: "cursor-old" },
+            { id: "u-latest", text: "Latest question", before: "cursor-latest" },
+          ],
+          snapshot_version: "1:1",
+        }));
+      }
+      if (url.includes("/api/sessions/s1/messages?") && url.includes("before=cursor-old")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u-old", role: "user", content: [{ type: "text", text: "Old question" }] },
+            { id: "a-old", role: "assistant", content: [{ type: "text", text: "old reply" }] },
+          ],
+          next_cursor: null,
+          has_more: false,
+          snapshot_version: "2:2",
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    expect(await screen.findByRole("button", { name: "Old question" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Old question" }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/sessions/s1/messages?cwd=proj&before=cursor-old"))).toBe(true));
+    await waitFor(() => expect(document.getElementById("user-msg-u-old")).toBeInTheDocument());
   });
 
   it("jumps to the selected user message on click", async () => {

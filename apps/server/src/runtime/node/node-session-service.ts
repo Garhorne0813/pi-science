@@ -613,6 +613,15 @@ export class NodeSessionService {
     const operationToken = runtime.operationToken;
     if (!operationToken || !runtime.operationPending) return;
     if (runtime.reconcileTimer) clearTimeout(runtime.reconcileTimer);
+    const deadline = runtime.operationDeadline ?? Date.now();
+    const delay = immediate ? 0 : reconciliationDelayMs();
+    const remaining = Math.max(0, deadline - Date.now());
+    // Do not schedule a probe whose configured delay cannot fit entirely
+    // before the deadline. Scheduling it at the deadline creates a race where
+    // a timer that fires just early can still issue one late reconciliation
+    // request under CI or a busy event loop.
+    const probeAllowed = immediate || delay < remaining;
+    const timerDelay = immediate ? 0 : probeAllowed ? delay : remaining + 1;
     runtime.reconcileTimer = setTimeout(() => {
       runtime.reconcileTimer = undefined;
       void this.withLock(runtimeKey(runtime.cwd, runtime.activeSessionId), async () => {
@@ -621,7 +630,7 @@ export class NodeSessionService {
         // Never start a new probe after the deadline. The deadline check is
         // deliberately at callback entry because the timer can be delayed by
         // process scheduling or a preceding lock holder.
-        const state = Date.now() < (runtime.operationDeadline ?? 0)
+        const state = probeAllowed && Date.now() < (runtime.operationDeadline ?? 0)
           ? await runtime.process.sendCommand("get_state")
           : null;
         // A runtime event may have invalidated this reconciliation while the
@@ -692,7 +701,7 @@ export class NodeSessionService {
         }
         this.clearPendingOperation(runtime);
       });
-    }, immediate ? 0 : Math.min(reconciliationDelayMs(), Math.max(0, (runtime.operationDeadline ?? Date.now()) - Date.now())));
+    }, timerDelay);
   }
 
   /** One auto review per settled turn: a second settle for a session whose

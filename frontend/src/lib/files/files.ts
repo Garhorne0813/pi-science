@@ -8,6 +8,12 @@ export type { FileRoot };
 
 const API = "/api";
 
+/** Encode a workspace path without hiding separators inside %2F. This keeps
+ * wildcard routes and browser/proxy path handling consistent across files. */
+function encodeWorkspacePath(path: string): string {
+  return path.replaceAll("\\", "/").split("/").map(encodeURIComponent).join("/");
+}
+
 export interface ArtifactFile {
   path: string;
   mime: string;
@@ -25,7 +31,7 @@ export async function readArtifact(
   try {
     const params = new URLSearchParams({ cwd });
     if (root) params.set("root", root);
-    return await apiRequest<ArtifactFile>(`${API}/files/${encodeURIComponent(path)}?${params}`);
+    return await apiRequest<ArtifactFile>(`${API}/files/${encodeWorkspacePath(path)}?${params}`);
   } catch {
     return null;
   }
@@ -128,7 +134,7 @@ export async function probeLargeFile(
   try {
     const params = new URLSearchParams({ cwd });
     if (root) params.set("root", root);
-    return await apiRequest<LargeFilePointer>(`${API}/files/probe/${encodeURIComponent(path)}?${params}`);
+    return await apiRequest<LargeFilePointer>(`${API}/files/probe/${encodeWorkspacePath(path)}?${params}`);
   } catch {
     return null;
   }

@@ -10,7 +10,7 @@ import { clearCachedMessages, readCachedMessages } from "./message-cache";
 import * as rest from "./rest";
 import { clearAiTitle, clearAiTitleAttempted, clearSessionName } from "./session-names";
 import { SseTransport } from "./sse-transport";
-import type { HistoryMessage, InteractionResponse, PiScienceEvent, SessionInfo, SessionMessagePage, SessionState } from "./types";
+import type { HistoryMessage, InteractionResponse, PiScienceEvent, SessionInfo, SessionMessagePage, SessionState, SessionUserMessageIndex } from "./types";
 
 export type {
   AvailableModel,
@@ -20,6 +20,7 @@ export type {
   SessionInfo,
   SessionMessagePage,
   SessionState,
+  SessionUserMessageIndex,
 } from "./types";
 export { clampThinkingLevel, conversationModelOptions } from "./models";
 export { aiTitleAttemptedAt, clearAiTitle, clearAiTitleAttempted, clearSessionName, deriveSessionName, getSessionName, hasAiTitle, markAiTitle, markAiTitleAttempted, moveSessionName, setSessionName } from "./session-names";
@@ -72,6 +73,10 @@ export class PiScienceClient {
     options: { before?: string | null; limit?: number } = {},
   ): Promise<SessionMessagePage> {
     return rest.getMessagesPage(this.baseUrl, sessionId, cwd, options);
+  }
+
+  async getUserMessageIndex(sessionId: string, cwd?: string): Promise<SessionUserMessageIndex> {
+    return rest.getUserMessageIndex(this.baseUrl, sessionId, cwd);
   }
 
   /** Return the most recently cached message snapshot for a session, or null.

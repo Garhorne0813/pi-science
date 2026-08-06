@@ -75,4 +75,21 @@ describe("PiScienceClient REST calls", () => {
     expect(page).toMatchObject({ next_cursor: "eyJ2IjoxLCJvIjoxMjN9", has_more: true, snapshot_version: "456:789" });
     expect(page.messages[0]?.id).toBe("m2");
   });
+
+  it("requests the lightweight user-message index", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      messages: [{ id: "u1", text: "first question", before: "cursor-u1" }],
+      snapshot_version: "456:789",
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PiScienceClient();
+
+    const index = await client.getUserMessageIndex("session-a", "/workspace");
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/sessions/session-a/messages/index?cwd=%2Fworkspace");
+    expect(index.messages).toEqual([{ id: "u1", text: "first question", before: "cursor-u1" }]);
+  });
 });
