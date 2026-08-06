@@ -50,6 +50,7 @@ export function FilePreviewInspector({
   cwd,
   showTitle = true,
   showClose = true,
+  showOpenExternally = true,
 }: {
   data: FilePreviewInspectorT;
   onClose: () => void;
@@ -60,6 +61,8 @@ export function FilePreviewInspector({
   showTitle?: boolean;
   /** Multi-file tabs provide their own close control. */
   showClose?: boolean;
+  /** Multi-file tabs keep the content header focused on preview actions. */
+  showOpenExternally?: boolean;
 }) {
   const { t } = useTranslation();
   const kind = previewKindForName(data.filename);
@@ -265,7 +268,7 @@ export function FilePreviewInspector({
         >
           <History size={14} strokeWidth={1.5} />
         </button>
-        {kind !== "html" && (
+        {showOpenExternally && kind !== "html" && (
           <button
             className="text-text hover:opacity-60"
             aria-label={t("common.open")}

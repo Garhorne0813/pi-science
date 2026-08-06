@@ -33,6 +33,7 @@ export function InspectorShell({
           cwd={inspector.cwd || cwd}
           showTitle={!compactHeader}
           showClose={!compactHeader}
+          showOpenExternally={!compactHeader}
         />
       )}
       {inspector.variant === "notebook-panel" && (
