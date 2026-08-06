@@ -20,11 +20,15 @@ interface UiState {
   inspectorWidth: number;
   inspectorMaximized: boolean;
   inspectorData: Inspector | null;
+  inspectorTabs: InspectorTab[];
+  activeInspectorTabId: string | null;
   openInspector: (data: Inspector) => void;
   /** Toggle just the pane visibility, leaving any inspector data untouched
    *  (used by the todo auto-open behaviour). */
   setInspectorOpen: (open: boolean) => void;
   closeInspector: () => void;
+  activateInspectorTab: (id: string) => void;
+  closeInspectorTab: (id: string) => void;
   setInspectorWidth: (w: number) => void;
   setInspectorMaximized: (m: boolean) => void;
   workspaceReferences: WorkspaceReference[];
@@ -47,6 +51,28 @@ interface UiState {
    *  conversation, or a floating action button in the corner. */
   todoUiMode: "sticky" | "fab";
   setTodoUiMode: (mode: "sticky" | "fab") => void;
+}
+
+export interface InspectorTab {
+  id: string;
+  data: Inspector;
+}
+
+/** A stable identity lets repeated opens focus the existing tab. */
+export function inspectorTabId(data: Inspector): string {
+  switch (data.variant) {
+    case "file":
+    case "notebook-file":
+      return JSON.stringify([data.variant, data.cwd ?? "", data.root ?? "", data.path]);
+    case "pdf":
+      return JSON.stringify([data.variant, data.path ?? data.filename ?? ""]);
+    case "artifact":
+      return JSON.stringify([data.variant, data.filename]);
+    case "notebook":
+      return JSON.stringify([data.variant, data.notebookId]);
+    case "notebook-panel":
+      return data.variant;
+  }
 }
 
 function loadFromStorage<T>(key: string, fallback: T): T {
@@ -100,9 +126,58 @@ export const useUiStore = create<UiState>((set) => ({
   inspectorWidth: loadFromStorage("inspector.width", 420),
   inspectorMaximized: false,
   inspectorData: null,
-  openInspector: (data) => set({ inspectorOpen: true, inspectorData: data }),
+  inspectorTabs: [],
+  activeInspectorTabId: null,
+  openInspector: (data) => set((state) => {
+    const id = inspectorTabId(data);
+    // Some callers/tests can explicitly hide the pane through setState. Treat
+    // the next open as a fresh pane even if a stale tab array remains.
+    const currentTabs = state.inspectorOpen ? state.inspectorTabs : [];
+    const existing = currentTabs.findIndex((tab) => tab.id === id);
+    const inspectorTabs = existing === -1
+      ? [...currentTabs, { id, data }]
+      : currentTabs.map((tab, index) => index === existing ? { ...tab, data } : tab);
+    return {
+      inspectorOpen: true,
+      inspectorData: data,
+      inspectorTabs,
+      activeInspectorTabId: id,
+    };
+  }),
+  /** Toggle the pane visibility without touching inspector data; the todo
+   *  widget auto-opens the pane when a task list appears. */
   setInspectorOpen: (open) => set({ inspectorOpen: open }),
-  closeInspector: () => set({ inspectorOpen: false, inspectorData: null }),
+  closeInspector: () => set({
+    inspectorOpen: false,
+    inspectorData: null,
+    inspectorTabs: [],
+    activeInspectorTabId: null,
+  }),
+  activateInspectorTab: (id) => set((state) => {
+    const tab = state.inspectorTabs.find((item) => item.id === id);
+    if (!tab) return state;
+    return { inspectorOpen: true, inspectorData: tab.data, activeInspectorTabId: id };
+  }),
+  closeInspectorTab: (id) => set((state) => {
+    const closingIndex = state.inspectorTabs.findIndex((tab) => tab.id === id);
+    if (closingIndex === -1) return state;
+    const inspectorTabs = state.inspectorTabs.filter((tab) => tab.id !== id);
+    if (inspectorTabs.length === 0) {
+      return {
+        inspectorOpen: false,
+        inspectorData: null,
+        inspectorTabs,
+        activeInspectorTabId: null,
+      };
+    }
+    if (state.activeInspectorTabId !== id) return { inspectorTabs };
+    const nextTab = inspectorTabs[Math.min(closingIndex, inspectorTabs.length - 1)];
+    return {
+      inspectorTabs,
+      activeInspectorTabId: nextTab.id,
+      inspectorData: nextTab.data,
+    };
+  }),
   setInspectorWidth: (w) => {
     saveToStorage("inspector.width", w);
     set({ inspectorWidth: w });

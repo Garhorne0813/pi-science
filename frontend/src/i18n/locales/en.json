@@ -26,6 +26,8 @@
   "filePreview.tableView.chart": "Chart",
   "filePreview.tabs.preview": "Preview",
   "filePreview.tabs.code": "Code",
+  "filePreview.openFiles": "Open file previews",
+  "filePreview.closeTab": "Close {{filename}}",
   "shell.closeInspector": "Close panel",
   "shell.maximizePanel": "Maximize panel",
   "shell.restorePanel": "Restore panel",

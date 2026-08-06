@@ -12,11 +12,13 @@ export function InspectorShell({
   onClose,
   controls,
   cwd: cwdOverride,
+  compactHeader = false,
 }: {
   inspector: Inspector;
   onClose: () => void;
   controls?: React.ReactNode;
   cwd?: string;
+  compactHeader?: boolean;
 }) {
   const runtimeCwd = useRuntimeStore((state) => state.cwd);
   const cwd = cwdOverride || runtimeCwd;
@@ -24,7 +26,7 @@ export function InspectorShell({
   return (
     <div className="h-full border-l border-border bg-surface" data-variant={inspector.variant}>
       {inspector.variant === "file" && (
-        <FilePreviewInspector data={inspector} onClose={onClose} controls={controls} cwd={inspector.cwd || cwd} />
+        <FilePreviewInspector data={inspector} onClose={onClose} controls={controls} cwd={inspector.cwd || cwd} showTitle={!compactHeader} />
       )}
       {inspector.variant === "notebook-panel" && (
         <NotebookPanel onClose={onClose} cwd={cwd} />
