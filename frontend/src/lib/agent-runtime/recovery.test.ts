@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { getClient } from "../client/pi-science-client";
 import { generations } from "./generations";
 import { useRuntimeStore } from "./index";
-import { reconcilePromptAfterLateStream } from "./recovery";
+import { reconcileAfterConnectionLoss, reconcilePromptAfterLateStream } from "./recovery";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
 
@@ -85,6 +85,176 @@ describe("runtime conversation recovery", () => {
     expect(current.activeSessionId).toBeNull();
     expect(current.thread.blocks).toHaveLength(0);
     expect(current.status).toBe("ready");
+  });
+
+  it("settles stale working after a closed stream from the authoritative idle state", async () => {
+    let stateReads = 0;
+    let messageReads = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) {
+        messageReads += 1;
+        return jsonResponse({ messages: [] });
+      }
+      if (url.includes("/state")) {
+        stateReads += 1;
+        return jsonResponse(state("session-a", { is_streaming: stateReads === 1 }));
+      }
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    expect(useRuntimeStore.getState().working).toBe(true);
+    // This is the transport's closed notification, not the store disconnect
+    // action, so the listener must perform bounded authoritative recovery.
+    useRuntimeStore.getState().client?.disconnect();
+
+    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false));
+    expect(messageReads).toBeGreaterThanOrEqual(2);
+    expect(stateReads).toBeGreaterThanOrEqual(2);
+  });
+
+  it("retries a failed reconnect state read before settling idle", async () => {
+    let stateReads = 0;
+    let recoveryStateFailures = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) {
+        stateReads += 1;
+        if (stateReads === 2) {
+          recoveryStateFailures += 1;
+          return jsonResponse({ error: "temporary state failure" }, 503);
+        }
+        return jsonResponse(state("session-a", { is_streaming: stateReads === 1 }));
+      }
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    expect(useRuntimeStore.getState().working).toBe(true);
+    const source = FakeEventSource.instances[0];
+    source.readyState = FakeEventSource.CONNECTING;
+    source.onerror?.({} as Event);
+
+    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false));
+    expect(recoveryStateFailures).toBe(1);
+    expect(stateReads).toBeGreaterThanOrEqual(3);
+  });
+
+  it("does not clear working when every recovery state read fails", async () => {
+    let stateReads = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) {
+        stateReads += 1;
+        if (stateReads > 1) return jsonResponse({ error: "state unavailable" }, 503);
+        return jsonResponse(state("session-a", { is_streaming: true }));
+      }
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    const source = FakeEventSource.instances[0];
+    source.readyState = FakeEventSource.CONNECTING;
+    source.onerror?.({} as Event);
+
+    await vi.waitFor(() => expect(useRuntimeStore.getState().status).toBe("error"), { timeout: 5_000 });
+    expect(stateReads).toBeGreaterThanOrEqual(5);
+    expect(useRuntimeStore.getState().working).toBe(true);
+  });
+
+  it("uses state idle to settle a turn when agent_settled was missed", async () => {
+    let stateReads = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [
+        { id: "user-1", role: "user", content: [{ type: "text", text: "previous" }] },
+        { id: "assistant-1", role: "assistant", content: [{ type: "text", text: "finished" }] },
+      ] });
+      if (url.includes("/state")) {
+        stateReads += 1;
+        return jsonResponse(state("session-a", { is_streaming: stateReads === 1 }));
+      }
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    expect(useRuntimeStore.getState().working).toBe(true);
+    // No agent_settled is emitted. Reconnect recovery must use the persisted
+    // messages plus the authoritative idle state instead.
+    const source = FakeEventSource.instances[0];
+    source.readyState = FakeEventSource.CONNECTING;
+    source.onerror?.({} as Event);
+
+    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false));
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
+      expect.objectContaining({ kind: "agent", id: "assistant-1" }),
+    );
+  });
+
+  it("keeps working and rejects a prompt when reconnect state is explicitly busy", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-a", { is_streaming: true }));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    const source = FakeEventSource.instances[0];
+    source.readyState = FakeEventSource.CONNECTING;
+    source.onerror?.({} as Event);
+    await vi.waitFor(() => expect(useRuntimeStore.getState().status).toBe("ready"));
+
+    expect(useRuntimeStore.getState().working).toBe(true);
+    await expect(useRuntimeStore.getState().sendPrompt("must not overlap")).rejects.toThrow(
+      "The current conversation is still running",
+    );
+  });
+
+  it("drops a stale connection recovery after switching sessions", async () => {
+    let recovery = false;
+    let releaseMessages!: (response: Response) => void;
+    let releaseState!: (response: Response) => void;
+    const delayedMessages = new Promise<Response>((resolve) => { releaseMessages = resolve; });
+    const delayedState = new Promise<Response>((resolve) => { releaseState = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("session-a/messages")) return recovery ? delayedMessages : jsonResponse({ messages: [] });
+      if (url.includes("session-a/state")) return recovery ? delayedState : jsonResponse(state("session-a"));
+      if (url.includes("session-b/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("session-b/state")) return jsonResponse(state("session-b", { is_streaming: true }));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    recovery = true;
+    const client = getClient();
+    const staleConnectionGeneration = generations.connection;
+    const staleActivityGeneration = generations.activity;
+    const reconnecting = reconcileAfterConnectionLoss(
+      client,
+      "session-a",
+      "/workspace",
+      staleConnectionGeneration,
+      staleActivityGeneration,
+    );
+
+    await useRuntimeStore.getState().connect("/workspace", "session-b");
+    releaseMessages(jsonResponse({ messages: [] }));
+    releaseState(jsonResponse(state("session-a")));
+    await reconnecting;
+
+    expect(useRuntimeStore.getState().activeSessionId).toBe("session-b");
+    expect(useRuntimeStore.getState().working).toBe(true);
   });
 
   it("rebuilds conversation history when the durable SSE cursor has expired", async () => {

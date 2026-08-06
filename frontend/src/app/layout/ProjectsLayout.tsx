@@ -20,6 +20,8 @@ import { workspacePathLeaf } from "../../lib/workspace";
 const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 420;
 
+const TodoWidget = lazy(() => import("../../components/todo/TodoWidget").then((m) => ({ default: m.TodoWidget })));
+
 export function ProjectsLayout() {
   const { t } = useTranslation();
   const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed);
@@ -207,11 +209,14 @@ export function ProjectsLayout() {
 
       {/* Main */}
       <main id="main-content" tabIndex={-1} className={cn(
-        "flex min-w-0 flex-1 flex-col overflow-hidden",
+        "relative flex min-w-0 flex-1 flex-col overflow-hidden",
         sidebarCollapsed && "pt-12 md:pt-0 md:pl-12",
         inspectorMaximized && "hidden",
       )}>
         <Outlet />
+        <Suspense fallback={null}>
+          <TodoWidget />
+        </Suspense>
       </main>
 
       {isConversationRoute && <PreviewPaneControls />}

@@ -39,6 +39,29 @@ describe("runtime event subscription", () => {
     expect(source.readyState).toBe(FakeEventSource.CLOSED);
   });
 
+  it("retries a failed transport state probe before settling an idle turn", async () => {
+    let stateReads = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) {
+        stateReads += 1;
+        if (stateReads === 2) return jsonResponse({ error: "state unavailable" }, 503);
+        return jsonResponse(state("session-a", { is_streaming: stateReads === 1 }));
+      }
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    const source = FakeEventSource.instances[0];
+    source.readyState = FakeEventSource.CLOSED;
+    source.onerror?.({} as Event);
+
+    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false));
+    expect(stateReads).toBeGreaterThanOrEqual(3);
+  });
+
   it("bounded optimistic retry recovers a session that never materializes on disk", async () => {
     const { optimisticSessionIds } = await import("./sessions");
     optimisticSessionIds.add("optimistic-ghost");

@@ -35,6 +35,8 @@ export interface HistoryMessage {
   toolName?: string;
   isError?: boolean;
   timestamp?: string;
+  /** Tool-specific metadata persisted by Pi Orbit (toolResult details). */
+  details?: unknown;
 }
 
 export interface SessionMessagePage {

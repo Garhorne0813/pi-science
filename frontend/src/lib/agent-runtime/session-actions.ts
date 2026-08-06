@@ -16,7 +16,7 @@ import { emptyThread, mergeHistoryWithLive, prependHistoryMessages, resetTurnBuf
 import { generations, turnState } from "./generations";
 import { registerEventListener } from "./listener";
 import { applyPromptSessionName, backfillSessionName } from "./naming";
-import { recoverMissingSession, reconcilePromptAfterLateStream } from "./recovery";
+import { recoverMissingSession, reconcileAfterConnectionLoss, reconcilePromptAfterLateStream, rememberRuntimeState, suppressConnectionRecovery } from "./recovery";
 import { loadSessionsInternal, optimisticSessionIds } from "./sessions";
 import { hasActivePendingInteraction, hasPendingInteractionData, type RuntimeState } from "./types";
 
@@ -131,6 +131,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         }
         if (runtimeStateResult.status === "fulfilled") {
           const runtimeState = runtimeStateResult.value;
+          rememberRuntimeState(client, targetSessionId, cwd, runtimeState, connectActivityGeneration);
           if (!liveActivityArrived) {
             const runtimeBusy = runtimeState.is_streaming
               || runtimeState.is_compacting
@@ -149,8 +150,11 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           nextState.compactionThresholdPercent = runtimeState.compaction_threshold_percent ?? null;
         } else {
           if (!liveActivityArrived) {
+            // A failed state read is not proof that a restored session is idle.
+            // Keep the composer guarded until bounded authoritative recovery
+            // confirms an idle runtime.
             nextState.status = "error";
-            nextState.working = false;
+            nextState.working = true;
           }
         }
         // A newly-created session may already have opened its SSE connection
@@ -176,7 +180,18 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           recoverMissingSession(targetSessionId, cwd, client);
           return;
         }
-        if (failure) appendRuntimeError(failure, targetSessionId, cwd);
+        if (failure) {
+          appendRuntimeError(failure, targetSessionId, cwd);
+          if (!liveActivityArrived) {
+            void reconcileAfterConnectionLoss(
+              client,
+              targetSessionId,
+              cwd,
+              generation,
+              generations.activity,
+            );
+          }
+        }
       } catch (err) {
         if (generation !== generations.connection) return;
         console.error("Failed to connect session:", err);
@@ -185,7 +200,9 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           return;
         }
         appendRuntimeError(err, sessionId ?? null, cwd);
-        set({ status: "error", working: false });
+        // A failed connection is not proof that the backend is idle. Keep the
+        // composer guarded until a subsequent authoritative state read.
+        set({ status: "error", working: true });
       }
 
       if (generation === generations.connection) void loadSessionsInternal();
@@ -239,7 +256,10 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       connectPromises.clear();
       ++generations.connection;
       ++generations.promptMonitor;
-      const { client } = get();
+      const { client, activeSessionId, cwd } = get();
+      if (client && activeSessionId && client.isConnectedTo(activeSessionId, cwd)) {
+        suppressConnectionRecovery(client, activeSessionId, cwd);
+      }
       client?.disconnect();
       // Unmounting the conversation view does not stop the backend turn. Keep
       // the stop/busy state so workspace-level controls cannot race the active

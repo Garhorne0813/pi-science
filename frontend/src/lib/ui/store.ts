@@ -23,6 +23,9 @@ interface UiState {
   inspectorTabs: InspectorTab[];
   activeInspectorTabId: string | null;
   openInspector: (data: Inspector) => void;
+  /** Toggle just the pane visibility, leaving any inspector data untouched
+   *  (used by the todo auto-open behaviour). */
+  setInspectorOpen: (open: boolean) => void;
   closeInspector: () => void;
   setInspectorVisible: (visible: boolean) => void;
   activateInspectorTab: (id: string) => void;
@@ -45,6 +48,10 @@ interface UiState {
    *  once by the session-list effect; never persisted, never crosses workspaces. */
   suppressAutoSessionNav: boolean;
   setSuppressAutoSessionNav: (v: boolean) => void;
+  /** Which todo widget renders: sticky progress bar at the top of the
+   *  conversation, or a floating action button in the corner. */
+  todoUiMode: "sticky" | "fab";
+  setTodoUiMode: (mode: "sticky" | "fab") => void;
 }
 
 export interface InspectorTab {
@@ -136,6 +143,7 @@ export const useUiStore = create<UiState>((set) => ({
       activeInspectorTabId: id,
     };
   }),
+  setInspectorOpen: (open) => set({ inspectorOpen: open }),
   closeInspector: () => set({
     inspectorOpen: false,
     inspectorMaximized: false,
@@ -196,6 +204,12 @@ export const useUiStore = create<UiState>((set) => ({
   clearWorkspaceReferences: (cwd) => set((state) => ({
     workspaceReferences: state.workspaceReferences.filter((item) => item.cwd !== cwd),
   })),
+
+  todoUiMode: loadFromStorage<"sticky" | "fab">("todo.uiMode", "fab"),
+  setTodoUiMode: (mode) => {
+    saveToStorage("todo.uiMode", mode);
+    set({ todoUiMode: mode });
+  },
 
   settingsOpen: false,
   settingsScope: null,

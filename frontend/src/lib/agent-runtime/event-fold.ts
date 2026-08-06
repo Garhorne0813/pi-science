@@ -326,6 +326,7 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
         tool: msg.toolName || toolNames.get(callId) || "unknown",
         status: msg.isError ? "error" as const : "done" as const,
         output: text || undefined,
+        details: msg.details,
       });
     }
   }

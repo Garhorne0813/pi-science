@@ -1,0 +1,30 @@
+import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
+import type { TodoTask } from "@/lib/conversation/todos";
+import { TodoTaskRow } from "./TodoTaskRow";
+
+/** Shared read-only task list. Scrolls inside whatever max-height its shell
+ *  gives it; the shell owns the scroll region. */
+export function TodoTaskList({ tasks }: { tasks: TodoTask[] }) {
+  const { t } = useTranslation();
+  const byId = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
+  const blockedIds = useMemo(() => {
+    const set = new Set<number>();
+    for (const task of tasks) {
+      const depends = (task.blockedBy ?? []).some((id) => {
+        const dependency = byId.get(id);
+        return dependency !== undefined && dependency.status !== "completed";
+      });
+      if (depends) set.add(task.id);
+    }
+    return set;
+  }, [tasks, byId]);
+
+  return (
+    <ul className="space-y-1.5 overflow-y-auto">
+      {tasks.map((task) => (
+        <TodoTaskRow key={task.id} task={task} blocked={blockedIds.has(task.id)} t={t} />
+      ))}
+    </ul>
+  );
+}
