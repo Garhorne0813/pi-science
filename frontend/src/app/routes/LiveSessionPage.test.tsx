@@ -255,6 +255,12 @@ describe("composer send-failure restore", () => {
     expect(screen.getByRole("banner")).toHaveClass("h-9");
   });
 
+  it("uses compact spacing for the composer toolbar", async () => {
+    await renderReady();
+    const toolbar = screen.getByLabelText("Send message").parentElement?.parentElement;
+    expect(toolbar).toHaveClass("pb-1");
+  });
+
   it("loads the configured model and sends from a workspace without an active session", async () => {
     const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sessions: [], activeSessionId: null, model: "", sendPrompt });

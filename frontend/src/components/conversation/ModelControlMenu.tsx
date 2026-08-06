@@ -77,7 +77,7 @@ export function ModelControlMenu({
         <button
           type="button"
           aria-label={labels.trigger}
-          className="group flex min-h-9 min-w-0 max-w-[420px] items-center gap-2 rounded-input px-2.5 py-1 text-left text-xs text-text outline-none transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-50"
+          className="group flex h-7 min-h-0 min-w-0 max-w-[420px] items-center gap-2 rounded-input px-2.5 text-left text-xs text-text outline-none transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <span className="flex min-w-0 flex-1 items-center gap-1.5">
             <span className="truncate">{modelLabel}</span>

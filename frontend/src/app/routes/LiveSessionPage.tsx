@@ -606,7 +606,7 @@ export function LiveSessionPage() {
               placeholder={composer.dragOver ? "Drop files here…" : research.prompt}
               inputRef={composer.inputRef}
             />
-            <div className="flex items-center justify-between gap-2 px-3 pb-2">
+            <div className="flex items-center justify-between gap-2 px-3 pb-1">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <button
                   onClick={() => composer.fileInputRef.current?.click()}

@@ -32,6 +32,7 @@ describe("ModelControlMenu", () => {
     );
 
     const ring = screen.getByRole("img", { name: "Context: 25.0K / 100K · 25%" });
+    expect(screen.getByRole("button", { name: "Select model and thinking level and view context" })).toHaveClass("h-7", "min-h-0");
     const progress = ring.querySelectorAll("circle")[1];
     expect(progress).toHaveAttribute("stroke-dasharray", "25 100");
     expect(progress).toHaveAttribute("stroke", "var(--accent)");
