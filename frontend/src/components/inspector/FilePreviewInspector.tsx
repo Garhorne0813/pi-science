@@ -51,6 +51,7 @@ export function FilePreviewInspector({
   showTitle = true,
   showClose = true,
   showOpenExternally = true,
+  contentZoom = 1,
 }: {
   data: FilePreviewInspectorT;
   onClose: () => void;
@@ -63,6 +64,8 @@ export function FilePreviewInspector({
   showClose?: boolean;
   /** Multi-file tabs keep the content header focused on preview actions. */
   showOpenExternally?: boolean;
+  /** Scale applied to preview content while keeping the toolbar unchanged. */
+  contentZoom?: number;
 }) {
   const { t } = useTranslation();
   const kind = previewKindForName(data.filename);
@@ -287,6 +290,7 @@ export function FilePreviewInspector({
       </header>
 
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto bg-surface-2">
+        <div className="h-full min-h-full" style={{ zoom: contentZoom }}>
         {showHistory && <ProvenancePanel path={data.path} language={data.language} cwd={cwd} />}
         {!showHistory && editing && draft !== null && (
           <div className="flex h-full flex-col">
@@ -329,6 +333,7 @@ export function FilePreviewInspector({
             />
           </Suspense>
         )}
+        </div>
       </div>
     </div>
   );

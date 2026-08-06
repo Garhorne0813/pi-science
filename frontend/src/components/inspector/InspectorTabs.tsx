@@ -1,11 +1,19 @@
-import { useEffect, useState } from "react";
-import { Maximize2, Minimize2, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Maximize2, Minimize2, Minus, Plus, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Inspector } from "../../types/thread";
 import { useUiStore, type InspectorTab } from "@/lib/ui";
 import { cn } from "@/lib/ui";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { InspectorShell } from "./InspectorShell";
+
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 4;
+const ZOOM_STEP = 0.1;
+
+function clampZoom(value: number): number {
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(value * 100) / 100));
+}
 
 function tabTitle(data: Inspector): string {
   switch (data.variant) {
@@ -31,6 +39,15 @@ export function InspectorTabs({
   const activateTab = useUiStore((state) => state.activateInspectorTab);
   const closeTab = useUiStore((state) => state.closeInspectorTab);
   const [expandedTabId, setExpandedTabId] = useState<string | null>(null);
+  const [zoomByTab, setZoomByTab] = useState<Record<string, number>>({});
+  const expandedPanelRef = useRef<HTMLDivElement | null>(null);
+
+  const setTabZoom = (tabId: string, update: (current: number) => number) => {
+    setZoomByTab((current) => ({
+      ...current,
+      [tabId]: clampZoom(update(current[tabId] ?? 1)),
+    }));
+  };
 
   useEffect(() => {
     if (!expandedTabId) return;
@@ -46,6 +63,22 @@ export function InspectorTabs({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  }, [expandedTabId]);
+
+  useEffect(() => {
+    if (!expandedTabId || !expandedPanelRef.current) return;
+    const panel = expandedPanelRef.current;
+    const onWheel = (event: WheelEvent) => {
+      // Chromium emits ctrl+wheel for a trackpad pinch. metaKey also supports
+      // the familiar Command+wheel gesture on macOS.
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const factor = Math.exp(-event.deltaY * 0.002);
+      setTabZoom(expandedTabId, (current) => current * factor);
+    };
+    panel.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    return () => panel.removeEventListener("wheel", onWheel, { capture: true });
   }, [expandedTabId]);
 
   const focusSibling = (currentId: string, direction: -1 | 1) => {
@@ -131,8 +164,10 @@ export function InspectorTabs({
           const active = tab.id === activeTabId;
           const expanded = tab.id === expandedTabId;
           const title = tabTitle(tab.data);
+          const zoom = zoomByTab[tab.id] ?? 1;
           return (
             <div
+              ref={expanded ? expandedPanelRef : undefined}
               key={tab.id}
               id={`inspector-panel-${index}`}
               role={expanded ? "dialog" : "tabpanel"}
@@ -151,17 +186,51 @@ export function InspectorTabs({
                   onClose={() => closeTab(tab.id)}
                   cwd={cwd}
                   compactHeader
+                  contentZoom={expanded ? zoom : 1}
                   controls={tab.data.variant === "file" ? (
-                    <button
-                      type="button"
-                      className="text-text hover:opacity-60"
-                      aria-label={t(expanded ? "shell.restorePanel" : "shell.maximizePanel")}
-                      title={t(expanded ? "shell.restorePanel" : "shell.maximizePanel")}
-                      aria-pressed={expanded}
-                      onClick={() => setExpandedTabId(expanded ? null : tab.id)}
-                    >
-                      {expanded ? <Minimize2 size={14} strokeWidth={1.5} /> : <Maximize2 size={14} strokeWidth={1.5} />}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className="text-text hover:opacity-60"
+                        aria-label={t(expanded ? "shell.restorePanel" : "shell.maximizePanel")}
+                        title={t(expanded ? "shell.restorePanel" : "shell.maximizePanel")}
+                        aria-pressed={expanded}
+                        onClick={() => setExpandedTabId(expanded ? null : tab.id)}
+                      >
+                        {expanded ? <Minimize2 size={14} strokeWidth={1.5} /> : <Maximize2 size={14} strokeWidth={1.5} />}
+                      </button>
+                      {expanded && (
+                        <div className="flex items-center rounded-input bg-surface-2 p-0.5">
+                          <button
+                            type="button"
+                            className="rounded p-1 text-muted hover:bg-surface hover:text-text disabled:opacity-35"
+                            aria-label={t("filePreview.zoomOut")}
+                            disabled={zoom <= MIN_ZOOM}
+                            onClick={() => setTabZoom(tab.id, (current) => current - ZOOM_STEP)}
+                          >
+                            <Minus size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            className="min-w-12 rounded px-1 py-0.5 text-[11px] tabular-nums text-muted hover:bg-surface hover:text-text"
+                            aria-label={t("filePreview.resetZoom")}
+                            title={t("filePreview.resetZoom")}
+                            onClick={() => setTabZoom(tab.id, () => 1)}
+                          >
+                            {Math.round(zoom * 100)}%
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded p-1 text-muted hover:bg-surface hover:text-text disabled:opacity-35"
+                            aria-label={t("filePreview.zoomIn")}
+                            disabled={zoom >= MAX_ZOOM}
+                            onClick={() => setTabZoom(tab.id, (current) => current + ZOOM_STEP)}
+                          >
+                            <Plus size={13} />
+                          </button>
+                        </div>
+                      )}
+                    </>
                   ) : undefined}
                 />
               </ErrorBoundary>

@@ -13,12 +13,14 @@ export function InspectorShell({
   controls,
   cwd: cwdOverride,
   compactHeader = false,
+  contentZoom = 1,
 }: {
   inspector: Inspector;
   onClose: () => void;
   controls?: React.ReactNode;
   cwd?: string;
   compactHeader?: boolean;
+  contentZoom?: number;
 }) {
   const runtimeCwd = useRuntimeStore((state) => state.cwd);
   const cwd = cwdOverride || runtimeCwd;
@@ -34,6 +36,7 @@ export function InspectorShell({
           showTitle={!compactHeader}
           showClose={!compactHeader}
           showOpenExternally={!compactHeader}
+          contentZoom={contentZoom}
         />
       )}
       {inspector.variant === "notebook-panel" && (

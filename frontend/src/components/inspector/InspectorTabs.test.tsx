@@ -85,4 +85,19 @@ describe("InspectorTabs", () => {
     expect(screen.queryByRole("dialog", { name: "two.txt" })).toBeNull();
     expect(screen.getByRole("tabpanel")).toBeInTheDocument();
   });
+
+  it("zooms expanded preview content with controls and Ctrl+wheel", () => {
+    useUiStore.getState().openInspector(file("two.txt"));
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "Maximize panel" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(screen.getByRole("button", { name: "Reset zoom to 100%" })).toHaveTextContent("110%");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset zoom to 100%" }));
+    expect(screen.getByRole("button", { name: "Reset zoom to 100%" })).toHaveTextContent("100%");
+
+    fireEvent.wheel(screen.getByRole("dialog", { name: "two.txt" }), { ctrlKey: true, deltaY: -100 });
+    expect(screen.getByRole("button", { name: "Reset zoom to 100%" })).toHaveTextContent("122%");
+  });
 });
