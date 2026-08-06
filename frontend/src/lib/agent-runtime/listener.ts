@@ -287,9 +287,9 @@ export function registerEventListener(client: PiScienceClient) {
       useRuntimeStore.setState({ working: !finished, status: failed ? "error" : "ready" });
     } else if (event.type === "turn.artifacts") {
       ++generations.activity;
-      // The turn produced files: refresh the workspace tree so the new
-      // entries (and their thumbnails) appear immediately.
-      markWorkspaceFilesChanged();
+      // No extra tree refresh here: the server publishes this event from the
+      // agent_settled observer, and that settled event already bumped the
+      // file revision above. Marking again would double-refresh every turn.
     } else if (event.type === "agent_settled" || event.type === "session.idle") {
       ++generations.activity;
       const successful = !turnState.errored;

@@ -28,8 +28,11 @@ export type MarkdownResource =
   | { kind: "workspace"; path: string; url: string }
   | { kind: "invalid" };
 
-/** External URL schemes that the browser can load on its own. */
-const EXTERNAL_SCHEME = /^(?:https?:|mailto:|data:|blob:|file:)/i;
+/** External URL schemes that the browser can load on its own. `file:` is NOT
+ *  included: this is a web-only app that can never load local files, so a
+ *  file:// reference is invalid rather than external. */
+const EXTERNAL_SCHEME = /^(?:https?:|mailto:|data:|blob:)/i;
+const FILE_SCHEME = /^file:/i;
 
 /** Split off the query/fragment before encoding — they must survive verbatim. */
 function splitQueryFragment(href: string): { clean: string; suffix: string } {
@@ -61,6 +64,25 @@ function joinWithin(baseDir: string, relative: string): string | null {
   return absolute ? `/${joined}` : joined;
 }
 
+/** Pure POSIX-style normalization for absolute forms: collapses `.` and
+ *  resolves `..` against the root (never climbs above `/`). Relative inputs
+ *  are resolved like posix.normalize (leading `..` segments survive). */
+function posixNormalize(value: string): string {
+  const absolute = value.startsWith("/");
+  const parts: string[] = [];
+  for (const segment of value.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      if (parts.length > 0 && parts[parts.length - 1] !== "..") parts.pop();
+      else if (!absolute) parts.push("..");
+      continue;
+    }
+    parts.push(segment);
+  }
+  const joined = parts.join("/");
+  return absolute ? `/${joined}` : joined;
+}
+
 /** Windows drive prefix (`C:`, `c:` — case-insensitive). */
 const WINDOWS_DRIVE = /^[a-zA-Z]:/;
 
@@ -86,6 +108,7 @@ function stripCwdPrefix(candidate: string, cwd: string): string | null {
 export function resolveMarkdownResource(href: string, context: MarkdownResourceContext): MarkdownResource {
   const raw = href.trim();
   if (!raw || raw.startsWith("#")) return { kind: "invalid" };
+  if (FILE_SCHEME.test(raw)) return { kind: "invalid" };
   if (EXTERNAL_SCHEME.test(raw)) return { kind: "external", url: raw };
 
   const cwd = normalizeSlashes(context.cwd).replace(/\/+$/, "");
@@ -105,9 +128,16 @@ export function resolveMarkdownResource(href: string, context: MarkdownResourceC
     workspacePath = stripCwdPrefix(resolved, cwdDriveStripped) ?? resolved.replace(/^\/+/, "");
   } else if (candidate.startsWith("/")) {
     // Absolute form: either a real workspace path under cwd, or the
-    // workspace-root shorthand (`/figures/a.png`).
-    resolved = candidate;
-    workspacePath = stripCwdPrefix(resolved, cwd) ?? resolved.replace(/^\/+/, "");
+    // workspace-root shorthand (`/figures/a.png`). Normalize `.`/`..` first
+    // so `/figures/../../etc/passwd` cannot smuggle `..` segments into the
+    // workspace-relative result; a `..` path that normalizes OUTSIDE the cwd
+    // prefix (root shorthand) is rejected as invalid.
+    const normalized = normalizeSlashes(posixNormalize(candidate));
+    const hasDotDot = candidate.split("/").some((segment) => segment === "..");
+    resolved = normalized;
+    const prefixPath = stripCwdPrefix(resolved, cwd);
+    workspacePath = prefixPath ?? resolved.replace(/^\/+/, "");
+    if (hasDotDot && prefixPath === null) return { kind: "invalid" };
   } else {
     // Relative form: resolve against the document directory when known
     // (documentPath is a workspace-relative path, so anchor it to cwd),

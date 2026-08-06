@@ -69,7 +69,7 @@ describe("workspace artifact snapshot", () => {
     expect(diff.modified).toEqual([]);
   });
 
-  it("bounded: stops collecting after the entry cap", async () => {
+  it("bounded: stops collecting after the entry cap (env override)", async () => {
     const cwd = await workspace();
     await mkdir(join(cwd, "work", "many"), { recursive: true });
     for (let index = 0; index < 30; index += 1) {
@@ -77,13 +77,14 @@ describe("workspace artifact snapshot", () => {
     }
     const original = process.env.PI_SCIENCE_SNAPSHOT_CAP;
     process.env.PI_SCIENCE_SNAPSHOT_CAP = "10";
-    // Re-import with a patched cap is not possible; assert the default cap is
-    // respected by generating more entries than the limit.
-    delete process.env.PI_SCIENCE_SNAPSHOT_CAP;
-    const snapshot = await snapshotWorkspace(cwd);
-    expect((snapshot ?? []).length).toBeGreaterThan(0);
-    expect((snapshot ?? []).length).toBeLessThanOrEqual(30 + 2);
-    if (original === undefined) delete process.env.PI_SCIENCE_SNAPSHOT_CAP;
-    else process.env.PI_SCIENCE_SNAPSHOT_CAP = original;
+    try {
+      // snapshotEntryCap() reads the env per call, so a small cap genuinely
+      // bounds the walk below the 30 files created above.
+      const snapshot = await snapshotWorkspace(cwd);
+      expect((snapshot ?? []).length).toBeLessThanOrEqual(10);
+    } finally {
+      if (original === undefined) delete process.env.PI_SCIENCE_SNAPSHOT_CAP;
+      else process.env.PI_SCIENCE_SNAPSHOT_CAP = original;
+    }
   });
 });

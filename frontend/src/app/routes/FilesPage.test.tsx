@@ -114,4 +114,28 @@ describe("FilesPage", () => {
     fireEvent.click(screen.getByText("Refresh"));
     await vi.waitFor(() => expect(files.directory).toHaveBeenCalled());
   });
+
+  it("drops a stale poll result that raced a directory switch", async () => {
+    const dirEntry: FileListEntry = { name: "work", path: "work", isDir: true, size: 0, modified: 1 };
+    files.directory.mockImplementation(async (_cwd: string, subdir: string) => ({
+      entries: subdir ? entries(["inner.txt"]) : [dirEntry],
+      breadcrumbs: subdir ? [{ name: "work", path: "work" }] : [],
+    }));
+    let resolveSlow!: (value: { entries: FileListEntry[]; breadcrumbs: never[] }) => void;
+    files.refreshDirectory.mockImplementationOnce(() => new Promise((resolve) => { resolveSlow = resolve; }));
+
+    render(<FilesPage />);
+    await screen.findByText("work");
+    // First poll fires after 2s and stays pending (slow refresh for the root).
+    await new Promise((resolve) => setTimeout(resolve, 2_100));
+    expect(resolveSlow).toBeDefined();
+    // Navigate into work/ while the root poll is still in flight.
+    fireEvent.click(screen.getByText("work"));
+    await screen.findByText("inner.txt");
+    // The stale root result resolves late: it must NOT overwrite inner.txt.
+    resolveSlow({ entries: entries(["a.txt", "b.txt", "new.txt"]), breadcrumbs: [] });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.getByText("inner.txt")).toBeInTheDocument();
+    expect(screen.queryByText("a.txt")).toBeNull();
+  });
 });

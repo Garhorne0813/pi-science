@@ -21,6 +21,13 @@ export const MAX_SNAPSHOT_ENTRIES = 2_000;
 export const MAX_SNAPSHOT_DEPTH = 3;
 export const MAX_SNAPSHOT_FILE_BYTES = 100 * 1024 * 1024;
 
+/** Entry cap, overridable via PI_SCIENCE_SNAPSHOT_CAP (positive integer).
+ *  Read per call so tests can shrink it without module re-import. */
+export function snapshotEntryCap(): number {
+  const value = Number(process.env.PI_SCIENCE_SNAPSHOT_CAP ?? 0);
+  return Number.isInteger(value) && value > 0 ? value : MAX_SNAPSHOT_ENTRIES;
+}
+
 const IGNORED_DIRS = new Set([
   ".git", ".hg", ".svn", "node_modules", ".venv", "venv", ".pi-science", ".pi",
   ".cache", "dist", "build", "out", "target", ".next", ".turbo",
@@ -85,7 +92,7 @@ export function previewMime(path: string): string {
 }
 
 async function walk(root: string, dir: string, depth: number, entries: WorkspaceSnapshotEntry[]): Promise<void> {
-  if (depth > MAX_SNAPSHOT_DEPTH || entries.length >= MAX_SNAPSHOT_ENTRIES) return;
+  if (depth > MAX_SNAPSHOT_DEPTH || entries.length >= snapshotEntryCap()) return;
   let names: string[];
   try {
     names = await readdir(dir);
@@ -93,7 +100,7 @@ async function walk(root: string, dir: string, depth: number, entries: Workspace
     return;
   }
   for (const name of names) {
-    if (entries.length >= MAX_SNAPSHOT_ENTRIES) return;
+    if (entries.length >= snapshotEntryCap()) return;
     if (isIgnoredDir(name)) continue;
     const absolute = join(dir, name);
     let info;
@@ -127,7 +134,7 @@ export async function snapshotWorkspace(cwd: string): Promise<WorkspaceSnapshotE
   }
   const entries: WorkspaceSnapshotEntry[] = [];
   for (const name of names) {
-    if (entries.length >= MAX_SNAPSHOT_ENTRIES) break;
+    if (entries.length >= snapshotEntryCap()) break;
     if (isIgnoredDir(name)) continue;
     const absolute = join(root, name);
     let info;

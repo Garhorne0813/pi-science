@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FolderOpen, File, ChevronRight, Trash2, ArrowUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useUiStore } from "../../lib/ui";
@@ -19,6 +19,9 @@ export function FilesPage() {
   const [subdir, setSubdir] = useState("");
   const [loading, setLoading] = useState(true);
   const [contextMenu, setContextMenu] = useState<{ entry: FileListEntry; point: ContextPoint } | null>(null);
+  // Guards the polling fallback: a refresh for a previous subdir must never
+  // overwrite entries for the current one (mirrors FileBrowser's token guard).
+  const pollTokenRef = useRef(0);
   const openInspector = useUiStore((s) => s.openInspector);
   const addWorkspaceReference = useUiStore((s) => s.addWorkspaceReference);
   const fileRevision = useRuntimeStore((s) => s.fileRevision);
@@ -46,14 +49,18 @@ export function FilesPage() {
   useEffect(() => {
     const id = window.setInterval(() => {
       if (document.visibilityState !== "visible") return;
+      const token = ++pollTokenRef.current;
       void workspaceFiles.refreshDirectory(workspaceCwd, subdir)
         .then((result) => {
+          // Drop results that raced a directory switch (or unmount): the
+          // current token only matches the newest poll cycle.
+          if (token !== pollTokenRef.current) return;
           setEntries(result.entries);
           setBreadcrumbs(result.breadcrumbs);
         })
         .catch(() => undefined);
     }, 2_000);
-    return () => window.clearInterval(id);
+    return () => { pollTokenRef.current += 1; window.clearInterval(id); };
   }, [workspaceCwd, subdir]);
 
   const refreshFiles = () => {

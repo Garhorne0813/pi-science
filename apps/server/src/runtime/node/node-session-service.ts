@@ -722,7 +722,13 @@ export class NodeSessionService {
    *  agent_start against the state at agent_settled, attach persisted
    *  artifact ids when available, persist a turn-artifacts record and publish
    *  `turn.artifacts` for the frontend strip. Failures degrade to nothing
-   *  (the conversation itself is the source of truth for the turn). */
+   *  (the conversation itself is the source of truth for the turn).
+   *
+   *  Known limitation: the baseline/after snapshots are workspace-wide, so
+   *  with parallel sessions in the same workspace a file created by another
+   *  session's turn can be attributed to this turn. Consumers display the
+   *  strip per session (session_id is persisted and published), so the
+   *  mis-attribution is cosmetic only. */
   private async finishTurnArtifacts(runtime: RuntimeRecord, event: Record<string, unknown>, sessionId: string): Promise<void> {
     const turnId = runtime.turnId;
     if (!turnId) return;

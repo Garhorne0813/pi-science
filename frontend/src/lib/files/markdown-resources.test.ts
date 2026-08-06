@@ -11,6 +11,11 @@ describe("resolveMarkdownResource", () => {
     }
   });
 
+  it("rejects file:// references as invalid (web app cannot load local files)", () => {
+    expect(resolveMarkdownResource("file:///Users/me/plot.png", ctx)).toEqual({ kind: "invalid" });
+    expect(resolveMarkdownResource("file:///C:/Users/me/plot.png", ctx)).toEqual({ kind: "invalid" });
+  });
+
   it("rejects empty, anchor-only and fragment paths", () => {
     expect(resolveMarkdownResource("", ctx)).toEqual({ kind: "invalid" });
     expect(resolveMarkdownResource("#section", ctx)).toEqual({ kind: "invalid" });
@@ -46,6 +51,15 @@ describe("resolveMarkdownResource", () => {
 
   it("interprets workspace-root shorthand (/figures/a.png) inside the workspace", () => {
     expect(resolveMarkdownResource("/figures/a.png", ctx)).toMatchObject({ kind: "workspace", path: "figures/a.png" });
+  });
+
+  it("normalizes .. in absolute paths and rejects paths that climb above the workspace root", () => {
+    expect(resolveMarkdownResource("/figures/../../etc/passwd", ctx)).toEqual({ kind: "invalid" });
+    expect(resolveMarkdownResource("/../../secret.txt", ctx)).toEqual({ kind: "invalid" });
+  });
+
+  it("normalizes .. inside the cwd prefix without breaking the resolution", () => {
+    expect(resolveMarkdownResource(`${CWD}/figures/../a.png`, ctx)).toMatchObject({ kind: "workspace", path: "a.png" });
   });
 
   it("handles Windows drive paths and backslashes (case-insensitive drive)", () => {
