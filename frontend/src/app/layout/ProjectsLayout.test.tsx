@@ -1,13 +1,12 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { SettingsNavItem, WorkspaceSessionList, WorkspaceInspectorPane } from "./ProjectsLayout";
+import { SettingsNavItem, WorkspaceSessionList } from "./ProjectsLayout";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { FeedbackContext } from "../../components/feedback/feedback-context";
 import i18n from "../../i18n";
 import type { SessionInfo } from "../../lib/client/types";
-import type { ThreadBlock } from "../../types/thread";
 
 function LocationProbe() {
   const location = useLocation();
@@ -43,37 +42,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
-});
-
-describe("WorkspaceInspectorPane", () => {
-  function setThread(blocks: ThreadBlock[]) {
-    useRuntimeStore.setState({ thread: { blocks, index: {}, loaded: true } });
-  }
-
-  it("renders nothing when there is no inspector data (todo widget owns todo UI now)", () => {
-    setThread([]);
-    const { container } = render(<WorkspaceInspectorPane inspectorData={null} cwd="proj" onClose={vi.fn()} />);
-    expect(container).toBeEmptyDOMElement();
-  });
-
-  it("renders nothing with todo tasks but no inspector data — todo moved out of the pane", () => {
-    setThread([{
-      kind: "tool",
-      id: "tool-todo-1",
-      callId: "todo-call-1",
-      tool: "todo",
-      status: "done",
-      details: { action: "create", tasks: [{ id: 1, subject: "Load data", status: "pending" }], nextId: 2 },
-    }]);
-    const { container } = render(<WorkspaceInspectorPane inspectorData={null} cwd="proj" onClose={vi.fn()} />);
-    expect(container).toBeEmptyDOMElement();
-  });
-
-  it("renders the inspector shell when inspector data exists", () => {
-    setThread([]);
-    render(<WorkspaceInspectorPane inspectorData={{ variant: "notebook-panel" }} cwd="proj" onClose={vi.fn()} />);
-    expect(document.querySelector('[data-variant="notebook-panel"]')).not.toBeNull();
-  });
 });
 
 describe("SettingsNavItem", () => {
