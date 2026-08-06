@@ -46,17 +46,31 @@ import { previewPolicy } from "@/lib/artifacts/preview-policy";
 export function FilePreviewInspector({
   data,
   onClose,
+  leadingControls,
   controls,
   cwd,
   showTitle = true,
+  showClose = true,
+  showOpenExternally = true,
+  contentZoom = 1,
+  compactHeader = false,
 }: {
   data: FilePreviewInspectorT;
   onClose: () => void;
+  /** Header controls rendered before edit/save actions. */
+  leadingControls?: React.ReactNode;
   /** Pane-level header buttons (e.g. maximize), rendered before Close. */
   controls?: React.ReactNode;
   cwd: string;
   /** The outer multi-file tab strip already shows the filename. */
   showTitle?: boolean;
+  /** Multi-file tabs provide their own close control. */
+  showClose?: boolean;
+  /** Multi-file tabs keep the content header focused on preview actions. */
+  showOpenExternally?: boolean;
+  /** Scale applied to preview content while keeping the toolbar unchanged. */
+  contentZoom?: number;
+  compactHeader?: boolean;
 }) {
   const { t } = useTranslation();
   const kind = previewKindForName(data.filename);
@@ -202,7 +216,7 @@ export function FilePreviewInspector({
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
+      <header className={cn("flex shrink-0 items-center gap-2 border-b border-border px-4", compactHeader ? "h-10" : "h-12")}>
         {showTitle && <span className="truncate text-sm font-medium text-text">{data.filename}</span>}
         <span className="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">
           {data.artifact || t("filePreview.file")}
@@ -220,6 +234,7 @@ export function FilePreviewInspector({
           </div>
         )}
         <div className="flex-1" />
+        {leadingControls}
         {saveNotice && <span className="mr-1 text-xs text-ok">{saveNotice}</span>}
         {editing ? (
           <>
@@ -262,7 +277,7 @@ export function FilePreviewInspector({
         >
           <History size={14} strokeWidth={1.5} />
         </button>
-        {kind !== "html" && (
+        {showOpenExternally && kind !== "html" && (
           <button
             className="text-text hover:opacity-60"
             aria-label={t("common.open")}
@@ -273,12 +288,15 @@ export function FilePreviewInspector({
           </button>
         )}
         {controls}
-        <button className="text-text hover:opacity-60" aria-label={t("common.close")} onClick={onClose}>
-          <X size={14} strokeWidth={1.5} />
-        </button>
+        {showClose && (
+          <button className="text-text hover:opacity-60" aria-label={t("common.close")} onClick={onClose}>
+            <X size={14} strokeWidth={1.5} />
+          </button>
+        )}
       </header>
 
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto bg-surface-2">
+        <div className="h-full min-h-full" style={{ zoom: contentZoom }}>
         {showHistory && <ProvenancePanel path={data.path} language={data.language} cwd={cwd} />}
         {!showHistory && editing && draft !== null && (
           <div className="flex h-full flex-col">
@@ -321,6 +339,7 @@ export function FilePreviewInspector({
             />
           </Suspense>
         )}
+        </div>
       </div>
     </div>
   );
@@ -450,7 +469,7 @@ function Body({
     // A document reads as a page: white paper, black text, whatever the app
     // theme — the same document-neutral canvas the Office previews use.
     return text !== null ? (
-      <div className="min-h-full px-6 py-8">
+      <div className="min-h-full px-2 py-2">
         <div className="mx-auto max-w-[760px] rounded-sm bg-white px-12 py-11 shadow-[0_1px_4px_rgba(0,0,0,.25)] max-sm:px-6 max-sm:py-7">
           <MarkdownViewer variant="document">{text}</MarkdownViewer>
         </div>

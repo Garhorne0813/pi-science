@@ -10,15 +10,19 @@ import { useRuntimeStore } from "../../lib/agent-runtime";
 export function InspectorShell({
   inspector,
   onClose,
+  leadingControls,
   controls,
   cwd: cwdOverride,
   compactHeader = false,
+  contentZoom = 1,
 }: {
   inspector: Inspector;
   onClose: () => void;
+  leadingControls?: React.ReactNode;
   controls?: React.ReactNode;
   cwd?: string;
   compactHeader?: boolean;
+  contentZoom?: number;
 }) {
   const runtimeCwd = useRuntimeStore((state) => state.cwd);
   const cwd = cwdOverride || runtimeCwd;
@@ -26,7 +30,18 @@ export function InspectorShell({
   return (
     <div className="h-full border-l border-border bg-surface" data-variant={inspector.variant}>
       {inspector.variant === "file" && (
-        <FilePreviewInspector data={inspector} onClose={onClose} controls={controls} cwd={inspector.cwd || cwd} showTitle={!compactHeader} />
+        <FilePreviewInspector
+          data={inspector}
+          onClose={onClose}
+          leadingControls={leadingControls}
+          controls={controls}
+          cwd={inspector.cwd || cwd}
+          showTitle={!compactHeader}
+          showClose={!compactHeader}
+          showOpenExternally={!compactHeader}
+          contentZoom={contentZoom}
+          compactHeader={compactHeader}
+        />
       )}
       {inspector.variant === "notebook-panel" && (
         <NotebookPanel onClose={onClose} cwd={cwd} />
