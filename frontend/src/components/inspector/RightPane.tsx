@@ -14,7 +14,7 @@ const MAX_FRACTION = 0.7;
  * Resizable right pane hosting an inspector or the session Files browser.
  * The left-edge divider drags within [INSPECTOR_MIN, INSPECTOR_MAX] (persisted);
  * dragging it far right snaps the pane closed. Maximized, the pane covers the
- * whole window — sidebar and conversation stay mounted underneath.
+ * all layout space to the right of the sidebar while the conversation hides.
  */
 export function RightPane({
   children,
@@ -88,8 +88,7 @@ export function RightPane({
   };
 
   if (inspectorMaximized) {
-    // The pane header stays the top row; no extra strip above it.
-    return <div className="fixed inset-0 z-40 bg-surface">{children}</div>;
+    return <div className="relative h-full min-w-0 flex-1 bg-surface">{children}</div>;
   }
 
   return (

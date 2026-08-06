@@ -446,7 +446,7 @@ export function LiveSessionPage() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <header className="flex items-center justify-between h-12 px-6 border-b border-faint shrink-0">
+      <header className="flex h-9 shrink-0 items-center justify-between border-b border-faint px-6 pr-24">
         <div className="flex items-center gap-2.5 min-w-0">
           <span className={cn("h-2 w-2 rounded-full shrink-0",
             status === "ready" ? "bg-ok" : status === "connecting" ? "bg-warn animate-pulse" : status === "error" ? "bg-error" : "bg-muted"
