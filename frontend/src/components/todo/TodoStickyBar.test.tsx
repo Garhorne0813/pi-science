@@ -43,6 +43,22 @@ describe("TodoStickyBar", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("floats over the thread as an absolute overlay without taking layout space", () => {
+    setThread([todoBlock({ action: "create", nextId: 2, tasks: [{ id: 1, subject: "Load", status: "pending" }] })]);
+    const { container } = render(<TodoStickyBar />);
+    const overlay = container.firstElementChild;
+    expect(overlay).not.toBeNull();
+    expect(overlay!.className).toContain("absolute");
+    expect(overlay!.className).toContain("z-30");
+    expect(overlay!.className).toContain("-translate-x-1/2");
+    // Auto-open expands the list as a popover panel below the bar, not in flow.
+    const panel = document.getElementById("todo-sticky-list");
+    expect(panel).not.toBeNull();
+    expect(panel!.className).toContain("absolute");
+    expect(panel!.className).toContain("top-full");
+    expect(panel!.className).toContain("overflow-y-auto");
+  });
+
   it("renders nothing without todo tasks", () => {
     const { container } = render(<TodoStickyBar />);
     expect(container).toBeEmptyDOMElement();

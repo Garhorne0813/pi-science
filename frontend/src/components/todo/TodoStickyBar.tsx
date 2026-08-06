@@ -28,9 +28,10 @@ export function TodoModeSwitch({ className }: { className?: string }) {
 }
 
 /**
- * Mode A: a compact sticky progress bar above the conversation thread. Shows
- * percent + completed/total + the active task's active form; clicking the bar
- * expands the task list inline (independent scroll region).
+ * Mode A: a compact progress bar floating above the conversation thread
+ * (absolute overlay, takes no document-flow space). Shows percent +
+ * completed/total + the active task's active form; clicking the bar opens the
+ * task list in a popover panel below it (independent scroll region).
  */
 export function TodoStickyBar() {
   const { t } = useTranslation();
@@ -50,18 +51,18 @@ export function TodoStickyBar() {
   const activeLabel = vm.activeTask ? (vm.activeTask.activeForm || vm.activeTask.subject) : null;
 
   return (
-    <div className="mx-auto w-full max-w-[760px] shrink-0 px-8 pt-3">
-      <div
-        className="rounded-card border border-border bg-surface shadow-card"
-        onKeyDown={onKeyDown}
-      >
+    <div
+      className="pointer-events-auto absolute left-1/2 top-3 z-30 w-[min(760px,calc(100vw-24px))] -translate-x-1/2"
+      onKeyDown={onKeyDown}
+    >
+      <div className="rounded-card border border-border bg-surface shadow-card">
         <div className="flex items-center gap-1.5 pr-2 pl-1">
           <button
             type="button"
             onClick={() => (open ? close() : setOpen(true))}
             aria-expanded={open}
             aria-controls="todo-sticky-list"
-            className="flex min-w-0 flex-1 items-center gap-2 rounded-input px-2 py-2 text-left transition-colors hover:bg-surface-2"
+            className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-input px-2 py-2 text-left transition-colors hover:bg-surface-2 md:min-h-9"
           >
             <ListTodo size={14} className="shrink-0 text-accent" aria-hidden />
             <span
@@ -85,15 +86,15 @@ export function TodoStickyBar() {
           </button>
           <TodoModeSwitch />
         </div>
-        {open && (
-          <div
-            id="todo-sticky-list"
-            className="max-h-[min(48vh,420px)] overflow-hidden border-t border-faint px-3 py-2"
-          >
-            <TodoTaskList tasks={vm.tasks} />
-          </div>
-        )}
       </div>
+      {open && (
+        <div
+          id="todo-sticky-list"
+          className="absolute left-0 right-0 top-full mt-1 max-h-[min(48vh,420px)] overflow-y-auto rounded-card border border-border bg-surface px-3 py-2 shadow-card"
+        >
+          <TodoTaskList tasks={vm.tasks} />
+        </div>
+      )}
     </div>
   );
 }
