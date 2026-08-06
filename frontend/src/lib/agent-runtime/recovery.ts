@@ -3,6 +3,7 @@
 
 import { clearCachedMessages, clearAiTitle, clearSessionName, getClient, type PiScienceClient, type SessionState } from "../client/pi-science-client";
 import { emptyThread, mergeHistoryWithLive, resetTurnBuffer, threadFromMessages } from "./event-fold";
+import { markWorkspaceFilesChanged } from "./file-revision";
 import { generations, turnState } from "./generations";
 import { backfillSessionName } from "./naming";
 import { loadSessionsInternal } from "./sessions";
@@ -169,6 +170,7 @@ export async function reconcileWorkingState(
     // Only an authoritative idle snapshot from this activity generation may
     // settle a failed probe. An unknown state must remain conservatively busy.
     useRuntimeStore.setState({ working: false });
+    markWorkspaceFilesChanged();
   }
 }
 
@@ -222,6 +224,9 @@ async function runConnectionRecovery(
     }
     if (historySucceeded && stateSucceeded) {
       useRuntimeStore.setState({ status: "ready" });
+      // The connection was restored after a loss: files may have changed
+      // while the stream was down and no terminal event reached the tree.
+      markWorkspaceFilesChanged();
       void loadSessionsInternal();
       return;
     }
@@ -243,10 +248,12 @@ async function runConnectionRecovery(
   if (lastState) applyRuntimeState(lastState, current);
   if (lastState && !runtimeBusy(lastState) && !hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire)) {
     useRuntimeStore.setState({ working: false });
+    markWorkspaceFilesChanged();
   } else if (!stateSucceeded) {
     const known = knownRuntimeState(client, sessionId, cwd);
     if (known?.activityGeneration === activityGeneration && !known.busy && !hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire)) {
       useRuntimeStore.setState({ working: false });
+      markWorkspaceFilesChanged();
     }
   }
   useRuntimeStore.setState({ status: "error" });

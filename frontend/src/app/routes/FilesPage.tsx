@@ -40,6 +40,22 @@ export function FilesPage() {
     return () => controller.abort();
   }, [fileRevision, loadFiles, subdir]);
 
+  // Polling fallback while this tab is visible: keeps the listing fresh when
+  // files are created by kernels or external tools without a terminal event.
+  // Quiet — only the first load shows the loading state, refreshes never flash.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void workspaceFiles.refreshDirectory(workspaceCwd, subdir)
+        .then((result) => {
+          setEntries(result.entries);
+          setBreadcrumbs(result.breadcrumbs);
+        })
+        .catch(() => undefined);
+    }, 2_000);
+    return () => window.clearInterval(id);
+  }, [workspaceCwd, subdir]);
+
   const refreshFiles = () => {
     workspaceFiles.invalidate();
     void loadFiles(subdir);
