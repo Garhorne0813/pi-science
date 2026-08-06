@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { attachTurnArtifacts, emptyThread, foldEvent } from "./event-fold";
+import { attachTurnArtifacts, foldEvent } from "./event-fold";
 import type { Thread } from "./event-fold";
 import type { PiScienceEvent } from "../client/pi-science-client";
 
 function threadWith(blocks: Array<{ kind: string; id: string; [key: string]: unknown }>): Thread {
   const index: Record<string, number> = {};
   blocks.forEach((block, position) => { index[block.id] = position; });
-  return { blocks: blocks as Thread["blocks"], index, loaded: true };
+  return { blocks: blocks as unknown as Thread["blocks"], index, loaded: true };
 }
 
 describe("foldEvent turn.artifacts", () => {
