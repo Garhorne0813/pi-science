@@ -48,12 +48,15 @@ export function FilePreviewInspector({
   onClose,
   controls,
   cwd,
+  showTitle = true,
 }: {
   data: FilePreviewInspectorT;
   onClose: () => void;
   /** Pane-level header buttons (e.g. maximize), rendered before Close. */
   controls?: React.ReactNode;
   cwd: string;
+  /** The outer multi-file tab strip already shows the filename. */
+  showTitle?: boolean;
 }) {
   const { t } = useTranslation();
   const kind = previewKindForName(data.filename);
@@ -201,7 +204,7 @@ export function FilePreviewInspector({
   return (
     <div className="flex h-full flex-col">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
-        <span className="truncate text-sm font-medium text-text">{data.filename}</span>
+        {showTitle && <span className="truncate text-sm font-medium text-text">{data.filename}</span>}
         <span className="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">
           {data.artifact || t("filePreview.file")}
         </span>
