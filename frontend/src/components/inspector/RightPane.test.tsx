@@ -69,4 +69,16 @@ describe("RightPane resizing", () => {
     expect(useUiStore.getState().inspectorWidth).toBe(436);
     expect(divider).toHaveAttribute("aria-valuenow", "436");
   });
+
+  it("fills the layout beside the sidebar when expanded", () => {
+    useUiStore.setState({ inspectorMaximized: true });
+    const { container } = render(
+      <RightPane onClose={vi.fn()}>
+        <div>Preview</div>
+      </RightPane>,
+    );
+
+    expect(container.firstElementChild).toHaveClass("flex-1");
+    expect(container.firstElementChild).not.toHaveClass("fixed", "inset-0");
+  });
 });

@@ -27,6 +27,7 @@ interface UiState {
    *  (used by the todo auto-open behaviour). */
   setInspectorOpen: (open: boolean) => void;
   closeInspector: () => void;
+  setInspectorVisible: (visible: boolean) => void;
   activateInspectorTab: (id: string) => void;
   closeInspectorTab: (id: string) => void;
   setInspectorWidth: (w: number) => void;
@@ -130,9 +131,7 @@ export const useUiStore = create<UiState>((set) => ({
   activeInspectorTabId: null,
   openInspector: (data) => set((state) => {
     const id = inspectorTabId(data);
-    // Some callers/tests can explicitly hide the pane through setState. Treat
-    // the next open as a fresh pane even if a stale tab array remains.
-    const currentTabs = state.inspectorOpen ? state.inspectorTabs : [];
+    const currentTabs = state.inspectorTabs;
     const existing = currentTabs.findIndex((tab) => tab.id === id);
     const inspectorTabs = existing === -1
       ? [...currentTabs, { id, data }]
@@ -147,9 +146,19 @@ export const useUiStore = create<UiState>((set) => ({
   setInspectorOpen: (open) => set({ inspectorOpen: open }),
   closeInspector: () => set({
     inspectorOpen: false,
+    inspectorMaximized: false,
     inspectorData: null,
     inspectorTabs: [],
     activeInspectorTabId: null,
+  }),
+  setInspectorVisible: (visible) => set((state) => {
+    if (!visible) return { inspectorOpen: false, inspectorMaximized: false };
+    if (state.inspectorTabs.length === 0 || !state.activeInspectorTabId) return state;
+    const active = state.inspectorTabs.find((tab) => tab.id === state.activeInspectorTabId);
+    return {
+      inspectorOpen: true,
+      inspectorData: active?.data ?? state.inspectorData,
+    };
   }),
   activateInspectorTab: (id) => set((state) => {
     const tab = state.inspectorTabs.find((item) => item.id === id);
@@ -163,6 +172,7 @@ export const useUiStore = create<UiState>((set) => ({
     if (inspectorTabs.length === 0) {
       return {
         inspectorOpen: false,
+        inspectorMaximized: false,
         inspectorData: null,
         inspectorTabs,
         activeInspectorTabId: null,

@@ -1,8 +1,7 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { Check, ChevronDown, ChevronRight, Gauge } from "lucide-react";
+import { Check, ChevronDown, ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { cn } from "../../lib/ui";
 import type { AvailableModel } from "../../lib/client/pi-science-client";
 
 const EN_THINKING_LABELS: Record<string, string> = {
@@ -68,6 +67,9 @@ export function ModelControlMenu({
   // Warn shortly before Pi's auto-compaction kicks in (within 10% of the threshold).
   const nearCompaction = Boolean(compactionEnabled) && compactionThresholdPercent != null && contextPercent != null
     && contextPercent >= compactionThresholdPercent - 10;
+  const ringPercent = Math.min(100, Math.max(0, contextPercent ?? 0));
+  const roundedContextPercent = Math.round(contextPercent ?? 0);
+  const contextRingLabel = `${labels.context}: ${contextSummary} · ${roundedContextPercent}%${nearCompaction ? ` · ${labels.threshold}: ${compactionThresholdPercent}%` : ""}`;
 
   return (
     <DropdownMenu.Root>
@@ -75,18 +77,31 @@ export function ModelControlMenu({
         <button
           type="button"
           aria-label={labels.trigger}
-          className="group flex min-h-9 min-w-0 max-w-[420px] items-center gap-2 rounded-input px-2.5 py-1 text-left text-xs text-text outline-none transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-50"
+          className="group flex h-7 min-h-0 min-w-0 max-w-[420px] items-center gap-2 rounded-input px-2.5 text-left text-xs text-text outline-none transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <span className="flex min-w-0 flex-1 items-center gap-1.5">
             <span className="truncate">{modelLabel}</span>
             <span className="shrink-0 text-muted">{thinkingLabel}</span>
             {contextPercent != null && (
               <span
-                title={nearCompaction ? `${labels.threshold}: ${compactionThresholdPercent}%` : undefined}
-                className={cn("ml-1 flex shrink-0 items-center gap-1 border-l border-faint pl-2 font-mono text-[10px]", nearCompaction ? "text-warn" : "text-muted")}
+                role="img"
+                aria-label={contextRingLabel}
+                title={contextRingLabel}
+                className="ml-1 shrink-0"
               >
-                <Gauge size={10} />
-                {formatTokens(contextTokens)}/{formatTokens(effectiveWindow)} · {Math.round(contextPercent)}%{nearCompaction ? ` → ${compactionThresholdPercent}%` : ""}
+                <svg aria-hidden="true" viewBox="0 0 16 16" className="h-3.5 w-3.5 -rotate-90" fill="none">
+                  <circle cx="8" cy="8" r="5.5" stroke="var(--border)" strokeWidth="2" />
+                  <circle
+                    cx="8"
+                    cy="8"
+                    r="5.5"
+                    pathLength="100"
+                    stroke={nearCompaction ? "var(--warn)" : "var(--accent)"}
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeDasharray={`${ringPercent} 100`}
+                  />
+                </svg>
               </span>
             )}
           </span>

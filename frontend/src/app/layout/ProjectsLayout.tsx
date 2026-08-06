@@ -5,6 +5,7 @@ import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { InspectorTabs } from "../../components/inspector/InspectorTabs";
 import { RightPane } from "../../components/inspector/RightPane";
+import { PreviewPaneControls } from "../../components/inspector/PreviewPaneControls";
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
 import { useWorkspaceCwd } from "../../lib/workspace";
 import { usePendingProposalCount } from "../../lib/knowledge";
@@ -29,7 +30,9 @@ export function ProjectsLayout() {
   const inspectorOpen = useUiStore((s) => s.inspectorOpen);
   const inspectorTabs = useUiStore((s) => s.inspectorTabs);
   const activeInspectorTabId = useUiStore((s) => s.activeInspectorTabId);
+  const inspectorMaximized = useUiStore((s) => s.inspectorMaximized);
   const closeInspector = useUiStore((s) => s.closeInspector);
+  const setInspectorMaximized = useUiStore((s) => s.setInspectorMaximized);
   const setSidebarWidth = useUiStore((s) => s.setSidebarWidth);
   const [sidebarDragWidth, setSidebarDragWidth] = useState<number | null>(null);
   const [sidebarDragging, setSidebarDragging] = useState(false);
@@ -37,6 +40,10 @@ export function ProjectsLayout() {
   const location = useLocation();
   const activeCwd = useWorkspaceCwd();
   const isWorkspace = !!activeCwd;
+  const workspaceRoot = activeCwd ? `/workspace/${encodeURIComponent(activeCwd)}` : "";
+  const isConversationRoute = isWorkspace && (
+    location.pathname === workspaceRoot || location.pathname.startsWith(`${workspaceRoot}/session/`)
+  );
   const clampSidebarWidth = (width: number) => Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
   const beginSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -69,6 +76,10 @@ export function ProjectsLayout() {
   useEffect(() => {
     closeInspector();
   }, [activeCwd, closeInspector]);
+
+  useEffect(() => {
+    if (!isConversationRoute && inspectorMaximized) setInspectorMaximized(false);
+  }, [inspectorMaximized, isConversationRoute, setInspectorMaximized]);
 
   // A desktop sidebar left open becomes an overlay when the viewport crosses
   // the mobile breakpoint. Close it during that transition so it cannot cover
@@ -200,12 +211,15 @@ export function ProjectsLayout() {
       <main id="main-content" tabIndex={-1} className={cn(
         "relative flex min-w-0 flex-1 flex-col overflow-hidden",
         sidebarCollapsed && "pt-12 md:pt-0 md:pl-12",
+        inspectorMaximized && "hidden",
       )}>
         <Outlet />
         <Suspense fallback={null}>
           <TodoWidget />
         </Suspense>
       </main>
+
+      {isConversationRoute && <PreviewPaneControls />}
 
       {/* Inspector — only in workspace context */}
       {isWorkspace && inspectorOpen && activeInspectorTabId && inspectorTabs.length > 0 && (
@@ -474,7 +488,7 @@ export function SettingsNavItem({ cwd, collapsed = false }: { cwd: string | null
     );
   }
   return (
-    <button onClick={handleClick} className={cn("flex h-8 min-h-0 w-full items-center gap-1.5 rounded-input px-1.5 text-left text-[13px]", settingsOpen ? "bg-surface-2 font-medium text-text" : "text-text/90 hover:bg-surface-2 hover:text-text")}>
+    <button onClick={handleClick} className={cn("flex h-7 min-h-0 w-full items-center gap-1.5 rounded-input px-1.5 text-left text-[13px]", settingsOpen ? "bg-surface-2 font-medium text-text" : "text-text/90 hover:bg-surface-2 hover:text-text")}>
       <span className="shrink-0 text-muted"><Settings size={16} /></span>
       <span className="min-w-0 flex-1 truncate">{t("nav.settings")}</span>
     </button>

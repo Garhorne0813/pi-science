@@ -96,4 +96,20 @@ describe("inspector tabs", () => {
       inspectorTabId(baseFile),
     ])).toHaveLength(3);
   });
+
+  it("hides and restores the inspector without discarding open tabs", () => {
+    const preview = file("report.md");
+    useUiStore.getState().openInspector(preview);
+    useUiStore.getState().setInspectorMaximized(true);
+
+    useUiStore.getState().setInspectorVisible(false);
+    expect(useUiStore.getState()).toMatchObject({
+      inspectorOpen: false,
+      inspectorMaximized: false,
+      inspectorTabs: [{ data: preview }],
+    });
+
+    useUiStore.getState().setInspectorVisible(true);
+    expect(useUiStore.getState()).toMatchObject({ inspectorOpen: true, inspectorData: preview });
+  });
 });

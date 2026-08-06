@@ -44,6 +44,10 @@ describe("InspectorTabs", () => {
     render(<Harness />);
 
     expect(screen.getByRole("tab", { name: "two.txt" })).toHaveAttribute("aria-selected", "true");
+    const activePanel = screen.getByRole("tabpanel");
+    expect(within(activePanel).getByRole("banner")).toHaveClass("h-10");
+    expect(within(activePanel).queryByRole("button", { name: "Close" })).toBeNull();
+    expect(within(activePanel).queryByRole("button", { name: "Open" })).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: "one.txt" }));
     expect(screen.getByRole("tab", { name: "one.txt" })).toHaveAttribute("aria-selected", "true");
 
@@ -67,5 +71,43 @@ describe("InspectorTabs", () => {
     fireEvent.click(screen.getByRole("tab", { name: "one.txt" }));
 
     expect(within(screen.getByRole("tabpanel")).getByLabelText("Edit one.txt")).toHaveValue("unsaved draft");
+  });
+
+  it("opens the active preview in a 92% viewport dialog and restores it", () => {
+    useUiStore.getState().openInspector(file("two.txt"));
+    render(<Harness />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Maximize panel" }));
+
+    const dialog = screen.getByRole("dialog", { name: "two.txt" });
+    expect(dialog).toHaveStyle({ width: "92vw", height: "92vh", left: "4vw", top: "4vh" });
+    expect(dialog.previousElementSibling).toHaveClass("backdrop-blur-sm");
+    expect(screen.getByRole("button", { name: "Restore panel" })).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "two.txt" })).toBeNull();
+    expect(screen.getByRole("tabpanel")).toBeInTheDocument();
+  });
+
+  it("zooms expanded preview content with controls and Ctrl+wheel", () => {
+    useUiStore.getState().openInspector(file("two.txt"));
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "Maximize panel" }));
+
+    const header = within(screen.getByRole("dialog", { name: "two.txt" })).getByRole("banner");
+    const zoomGroup = screen.getByRole("button", { name: "Reset zoom to 100%" }).parentElement;
+    const editButton = within(header).getByRole("button", { name: "Edit file" });
+    expect(Array.from(header.children).indexOf(zoomGroup as Element)).toBeLessThan(
+      Array.from(header.children).indexOf(editButton),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(screen.getByRole("button", { name: "Reset zoom to 100%" })).toHaveTextContent("110%");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset zoom to 100%" }));
+    expect(screen.getByRole("button", { name: "Reset zoom to 100%" })).toHaveTextContent("100%");
+
+    fireEvent.wheel(screen.getByRole("dialog", { name: "two.txt" }), { ctrlKey: true, deltaY: -100 });
+    expect(screen.getByRole("button", { name: "Reset zoom to 100%" })).toHaveTextContent("122%");
   });
 });
