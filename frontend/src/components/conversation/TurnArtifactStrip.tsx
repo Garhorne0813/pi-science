@@ -62,7 +62,7 @@ function OpenAffordance() {
   return (
     <span
       aria-hidden
-      className="pointer-events-none absolute right-1 top-1 z-10 flex h-7 w-7 items-center justify-center rounded-[6px] bg-black/90 text-white opacity-0 shadow-[0_2px_8px_rgba(0,0,0,0.25)] transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+      className="pointer-events-none absolute right-1 top-1 z-10 flex h-7 w-7 items-center justify-center rounded-[6px] bg-white/90 text-black/70 opacity-0 shadow-[0_2px_8px_rgba(0,0,0,0.18)] transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 dark:bg-black/90 dark:text-white/80 dark:shadow-[0_2px_8px_rgba(0,0,0,0.35)]"
     >
       <ArrowUpRight size={14} />
     </span>

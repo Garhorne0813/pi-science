@@ -223,8 +223,13 @@ describe("TurnArtifactStrip", () => {
       expect(card.className).not.toContain("backdrop-blur");
       expect(card.className).not.toContain("bg-white/45");
     });
-    // Each card carries the hover/focus open affordance.
+    // Each card carries the hover/focus open affordance, theme-adaptive.
     expect(container.querySelectorAll("[class*='group-hover:opacity-100']").length).toBe(2);
+    const affordance = container.querySelector("[class*='bg-white/90']");
+    expect(affordance).not.toBeNull();
+    expect(affordance?.className).toContain("dark:bg-black/90");
+    expect(affordance?.className).toContain("text-black/70");
+    expect(affordance?.className).toContain("dark:text-white/80");
   });
 
   it("shows the GENERATED · N label above the card row", () => {
