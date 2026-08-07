@@ -577,8 +577,18 @@ export class NodeSessionService {
           runtime.turnAssistantPartId = undefined;
           runtime.turnOrdinal = (runtime.turnOrdinal ?? 0) + 1;
         }
-        if (event.type === "text.updated" && typeof event.partId === "string" && event.partId) {
-          runtime.turnAssistantPartId = event.partId;
+        // Pi's raw event type is "message_update" with an inner
+        // assistantMessageEvent (text_delta/text/text_end); the hub normalizes
+        // these to text.updated with partId = message.id. Listen on the raw
+        // shape so the anchor is the last assistant message of the turn.
+        if (event.type === "message_update") {
+          const assistant = event.assistantMessageEvent as Record<string, unknown> | undefined;
+          const message = event.message as Record<string, unknown> | undefined;
+          const kind = String(assistant?.type ?? "");
+          if (["text_delta", "text", "text_end"].includes(kind)) {
+            const messageId = typeof message?.id === "string" && message.id ? message.id : "";
+            if (messageId) runtime.turnAssistantPartId = messageId;
+          }
         }
         if (event.type === "agent_settled") {
           await this.finishTurnArtifacts(runtime, event, sessionId);

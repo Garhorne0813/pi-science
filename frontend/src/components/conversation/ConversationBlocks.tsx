@@ -6,7 +6,7 @@ import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import type { ThreadBlock, ToolCallBlock } from "../../types/thread";
 import { MarkdownViewer, type CodeRunner } from "../markdown-viewer/MarkdownViewer";
-import { extractArtifactRefs, fileInspectorFromBlock, publishedArtifactRefs, refToArtifactBlock } from "../../lib/artifacts";
+import { fileInspectorFromBlock, refToArtifactBlock } from "../../lib/artifacts";
 import { TurnArtifactStrip } from "./TurnArtifactStrip";
 import { referencesFromMessage, visibleUserMessage } from "../../lib/files";
 import { agentActionTextByBlock } from "../../lib/conversation";
@@ -133,40 +133,15 @@ function UserMessage({ id, text, timestamp }: { id: string; text: string; timest
 function AgentMessage({ parts, partial, timestamp, actionText, codeRunner }: { parts: { id: string; text: string }[]; partial?: boolean; timestamp?: string; actionText?: string; codeRunner?: CodeRunner }) {
   const { t } = useTranslation();
   const rawText = parts.map((p) => p.text).join("");
-  const openInspector = useUiStore((s) => s.openInspector);
-  const threadBlocks = useRuntimeStore((s) => s.thread.blocks);
   if (!rawText && partial) return null;
   if (!rawText) return null;
 
   const text = parseSuggestions(rawText).clean;
-  // Only publication events prove that a path is a real workspace artifact.
-  // Assistant plans often mention future files such as drafts/foo.md; linking
-  // those paths makes a normal click issue a misleading file-read 404.
-  const refs = publishedArtifactRefs(extractArtifactRefs(text), threadBlocks);
   const citations = extractCitations(text);
-
-  const handleFileClick = (filePath: string) => {
-    const block = refToArtifactBlock(filePath);
-    const inspector = fileInspectorFromBlock(block as any);
-    openInspector(inspector as any);
-  };
 
   return (
     <div className="group/message">
       <MarkdownViewer variant="chat" codeRunner={codeRunner}>{text}</MarkdownViewer>
-      {refs.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mt-2">
-          {refs.map((ref) => (
-            <button
-              key={ref}
-              onClick={() => handleFileClick(ref)}
-              className="rounded-input border border-border bg-surface px-2 py-1 font-mono text-[11px] text-link hover:bg-surface-2"
-            >
-              📄 {ref}
-            </button>
-          ))}
-        </div>
-      )}
       {citations.length > 0 && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           <span className="text-[10px] text-muted">{t("conversation.sources")} ({citations.length})</span>
