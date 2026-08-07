@@ -658,7 +658,7 @@ describe("Node session lifecycle", () => {
       return publish.mock.calls.some(([, , payload]) => (payload as { type?: string }).type === "turn.artifacts");
     });
     const turnEvent = publish.mock.calls.find(([, , payload]) => (payload as { type?: string }).type === "turn.artifacts")?.[2] as Record<string, unknown>;
-    expect(turnEvent).toMatchObject({ type: "turn.artifacts", assistantMessageId: "msg-turn-1" });
+    expect(turnEvent).toMatchObject({ type: "turn.artifacts", assistantMessageId: "msg-turn-1", turnOrdinal: 1 });
     expect(turnEvent.artifacts).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "work/plot.png", kind: "image" }),
     ]));
@@ -680,7 +680,7 @@ describe("Node session lifecycle", () => {
       return publish.mock.calls.some(([, , payload]) => (payload as { type?: string }).type === "turn.artifacts");
     });
     const turnEvent = publish.mock.calls.find(([, , payload]) => (payload as { type?: string }).type === "turn.artifacts")?.[2] as Record<string, unknown>;
-    expect(turnEvent).toMatchObject({ type: "turn.artifacts", assistantMessageId: "part-turn-1" });
+    expect(turnEvent).toMatchObject({ type: "turn.artifacts", assistantMessageId: "part-turn-1", turnOrdinal: 1 });
     expect(turnEvent.artifacts).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "work/plot.png", kind: "image" }),
     ]));

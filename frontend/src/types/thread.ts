@@ -129,6 +129,8 @@ export interface TurnArtifactSummaryBlock {
   id: string;
   turnId: string;
   assistantMessageId?: string | null;
+  /** 1-based turn ordinal when known (live events and new persisted records). */
+  turnOrdinal?: number | null;
   artifacts: TurnArtifactItem[];
 }
 

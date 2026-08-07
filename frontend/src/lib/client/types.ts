@@ -71,6 +71,10 @@ export interface TurnArtifactTurn {
   turn_id: string;
   session_id: string;
   assistant_message_id: string | null;
+  /** 1-based turn ordinal (agent_start count); null for records persisted
+   *  before this field existed. Used to anchor the strip to the n-th agent
+   *  block on history restore when no assistant message id is available. */
+  turn_ordinal: number | null;
   ended_at: string;
   artifacts: TurnArtifactItem[];
 }

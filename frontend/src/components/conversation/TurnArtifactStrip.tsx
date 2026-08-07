@@ -69,7 +69,7 @@ function useSnippet(path: string, cwd?: string) {
 }
 
 function MiniTable({ data }: { data: CsvSnippet }) {
-  const rowCount = Math.max(data.rows.length, 1);
+  const rows = data.truncated ? data.rows.slice(0, Math.max(1, data.rows.length - 1)) : data.rows;
   return (
     <table className="table-fixed w-full border-collapse text-[9px] leading-tight text-muted">
       <thead>
@@ -80,7 +80,7 @@ function MiniTable({ data }: { data: CsvSnippet }) {
         </tr>
       </thead>
       <tbody>
-        {data.rows.slice(0, Math.max(1, rowCount - 1)).map((row, rowIndex) => (
+        {rows.map((row, rowIndex) => (
           <tr key={rowIndex}>
             {row.map((cell, cellIndex) => (
               <td key={cellIndex} className="max-w-[34px] truncate border-b border-faint px-0.5 py-0.5">{cell}</td>
@@ -88,7 +88,7 @@ function MiniTable({ data }: { data: CsvSnippet }) {
           </tr>
         ))}
         {data.truncated && (
-          <tr><td colSpan={5} className="px-0.5 pt-0.5 text-[8px] text-muted/70">…</td></tr>
+          <tr><td colSpan={5} className="px-0.5 pt-0.5 text-[8px] text-muted opacity-70">…</td></tr>
         )}
       </tbody>
     </table>
@@ -113,7 +113,7 @@ function IconCard({ item, cwd, Icon }: { item: TurnArtifactItem; cwd?: string; I
       <Icon size={16} className="text-accent" aria-hidden />
       <span className="block w-full truncate text-center text-[10px] text-muted group-hover:text-text" title={item.path}>{filename}</span>
       {item.size > 0 && (
-        <span className="text-[9px] text-muted/70">{item.size >= 1024 * 1024 ? `${(item.size / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(item.size / 1024))} KB`}</span>
+        <span className="text-[9px] text-muted opacity-70">{item.size >= 1024 * 1024 ? `${(item.size / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(item.size / 1024))} KB`}</span>
       )}
     </button>
   );
@@ -150,7 +150,7 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
         >
           {excerpt.markdown}
         </MarkdownViewer>
-        {excerpt.truncated && <span className="text-[8px] text-muted/70">…</span>}
+        {excerpt.truncated && <span className="text-[8px] text-muted opacity-70">…</span>}
       </div>
     );
   } else {
@@ -174,6 +174,9 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
         {body}
         {ready && (
           <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-5 bg-gradient-to-t from-white/45 to-transparent dark:from-black/25" />
+        )}
+        {ready && snippetKindFor(item) === "code" && (
+          <div aria-hidden className="pointer-events-none absolute inset-y-0 right-0 w-4 bg-gradient-to-l from-white/45 to-transparent dark:from-black/25" />
         )}
       </div>
       <span className={`block truncate px-1.5 py-1 text-[10px] text-muted group-hover:text-text ${GLASS_FILENAME_BAR}`}>{filename}</span>
@@ -239,7 +242,7 @@ export function TurnArtifactStrip({ artifacts, cwd }: { artifacts: TurnArtifactI
           <button
             type="button"
             onClick={() => setExpanded(true)}
-            className="flex w-full shrink-0 flex-col items-center justify-center gap-1 rounded-card border border-dashed border-white/20 bg-white/35 px-2 py-2 text-[10px] text-muted shadow-[0_8px_32px_rgba(0,0,0,0.08)] backdrop-blur-xl transition-colors hover:border-accent/60 hover:bg-white/55 hover:text-text dark:border-white/10 dark:bg-black/20 dark:hover:bg-black/30"
+            className="flex w-full shrink-0 flex-col items-center justify-center gap-1 rounded-card border border-dashed border-white/20 bg-white/35 px-2 py-2 text-[10px] text-muted shadow-[0_8px_32px_rgba(0,0,0,0.08)] backdrop-blur-xl transition-colors hover:border-accent hover:bg-white/55 hover:text-text dark:border-white/10 dark:bg-black/20 dark:hover:bg-black/30"
           >
             <span className="text-xs font-medium">+{extra}</span>
             <span className="flex items-center gap-0.5"><ChevronDown size={12} aria-hidden />{t("conversation.more")}</span>
@@ -249,7 +252,7 @@ export function TurnArtifactStrip({ artifacts, cwd }: { artifacts: TurnArtifactI
           <button
             type="button"
             onClick={() => setExpanded(false)}
-            className="flex w-full shrink-0 flex-col items-center justify-center gap-1 rounded-card border border-dashed border-white/20 bg-white/35 px-2 py-2 text-[10px] text-muted shadow-[0_8px_32px_rgba(0,0,0,0.08)] backdrop-blur-xl transition-colors hover:border-accent/60 hover:bg-white/55 hover:text-text dark:border-white/10 dark:bg-black/20 dark:hover:bg-black/30"
+            className="flex w-full shrink-0 flex-col items-center justify-center gap-1 rounded-card border border-dashed border-white/20 bg-white/35 px-2 py-2 text-[10px] text-muted shadow-[0_8px_32px_rgba(0,0,0,0.08)] backdrop-blur-xl transition-colors hover:border-accent hover:bg-white/55 hover:text-text dark:border-white/10 dark:bg-black/20 dark:hover:bg-black/30"
           >
             <span className="flex items-center gap-0.5"><ChevronUp size={12} aria-hidden />{t("conversation.collapse")}</span>
           </button>

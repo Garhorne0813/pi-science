@@ -149,11 +149,13 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
       const items = Array.isArray(event.artifacts) ? event.artifacts as TurnArtifactItem[] : [];
       if (!turnId || items.length === 0) break;
       const blockId = `turn-artifacts-${turnId}`;
+      const turnOrdinal = Number(event.turnOrdinal);
       const block: ThreadBlock = {
         kind: "artifact-summary",
         id: blockId,
         turnId,
         assistantMessageId: event.assistantMessageId ? String(event.assistantMessageId) : null,
+        ...(Number.isInteger(turnOrdinal) && turnOrdinal > 0 ? { turnOrdinal } : {}),
         artifacts: items,
       };
       const existing = index[blockId];
@@ -165,6 +167,12 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
       const assistantMessageId = block.assistantMessageId;
       if (assistantMessageId && index[assistantMessageId] !== undefined) {
         insertAt = index[assistantMessageId] + 1;
+      }
+      if (insertAt < 0 && Number.isInteger(turnOrdinal) && turnOrdinal > 0) {
+        // Anchor to the n-th agent block when the turn ordinal is known. This
+        // is reliable even when earlier turns produced no record (a pure
+        // record-ordinal fallback would misplace strips in that case).
+        insertAt = afterAgentBlock(blocks, turnOrdinal);
       }
       if (insertAt < 0) {
         // Pi's agent_settled does not carry a message id, so summaries are
@@ -378,10 +386,13 @@ function afterAgentBlock(blocks: ThreadBlock[], ordinal: number): number {
 }
 
 /** Attach persisted per-turn artifact summaries to a history-built thread.
- *  Idempotent: turns already folded (from live SSE) are skipped by block id.
- *  Inserts each summary right after its assistant message when the message is
- *  present in the thread; otherwise anchors by turn order (the n-th strip goes
- *  after the n-th agent block), falling back to the end of the thread. */
+ *  Idempotent per turn id: when the strip is already present it is updated in
+ *  place when its position is correct, otherwise it is repositioned to the
+ *  right place (SSE replay may have inserted it at a fallback position before
+ *  the full history arrived).
+ *
+ *  Anchoring order: exact assistant message id → turn_ordinal (n-th agent
+ *  block) → record order fallback → end of thread. */
 export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): Thread {
   if (!turns || turns.length === 0) return thread;
   let blocks = thread.blocks;
@@ -392,10 +403,15 @@ export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): 
     const items = Array.isArray(turn.artifacts) ? turn.artifacts as TurnArtifactItem[] : [];
     if (!turn.turn_id || items.length === 0) continue;
     const blockId = `turn-artifacts-${turn.turn_id}`;
-    if (index[blockId] !== undefined) continue;
     const assistantMessageId = turn.assistant_message_id ?? null;
+    const ordinal = Number(turn.turn_ordinal);
     let insertAt = -1;
     if (assistantMessageId && index[assistantMessageId] !== undefined) insertAt = index[assistantMessageId] + 1;
+    if (insertAt < 0 && Number.isInteger(ordinal) && ordinal > 0) {
+      // Anchor to the n-th agent block (reliable when earlier turns produced
+      // no record — a pure record-ordinal fallback would misplace strips).
+      insertAt = afterAgentBlock(blocks, ordinal);
+    }
     if (insertAt < 0) {
       // Anchor by turn order: the next ordinal strip goes right after the
       // matching agent block, falling back to the end for tool-only turns.
@@ -407,8 +423,28 @@ export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): 
       id: blockId,
       turnId: turn.turn_id,
       assistantMessageId,
+      ...(Number.isInteger(ordinal) && ordinal > 0 ? { turnOrdinal: ordinal } : {}),
       artifacts: items,
     };
+    const existingIdx = index[blockId];
+    if (existingIdx !== undefined) {
+      if (existingIdx === insertAt) {
+        // Already at the right place: refresh the block content in place.
+        blocks[existingIdx] = block;
+        changed = true;
+        continue;
+      }
+      // Reposition: remove from the old slot, then re-insert at the target.
+      blocks.splice(existingIdx, 1);
+      const nextIndex: Record<string, number> = {};
+      for (const key of Object.keys(index)) {
+        if (key === blockId) continue;
+        if (index[key] > existingIdx) nextIndex[key] = index[key] - 1;
+        else nextIndex[key] = index[key];
+      }
+      index = nextIndex;
+      if (insertAt > existingIdx) insertAt -= 1;
+    }
     blocks.splice(insertAt, 0, block);
     insertedBefore += 1;
     index = { ...index };

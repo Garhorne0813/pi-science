@@ -58,6 +58,11 @@ type RuntimeRecord = {
    *  keys live agent blocks by partId) to avoid every turn's artifacts being
    *  appended at the end of the thread. */
   turnAssistantPartId?: string;
+  /** 1-based ordinal of the current turn (incremented on each agent_start).
+   *  Persisted with turn-artifacts records so the frontend can anchor a strip
+   *  to the n-th agent block even when earlier turns produced no files (pure
+   *  record-ordinal fallback misplaces strips when a turn has no record). */
+  turnOrdinal?: number;
 };
 
 function runtimeKey(cwd: string, sessionId: string): string {
@@ -570,6 +575,7 @@ export class NodeSessionService {
           runtime.turnId = randomUUID();
           runtime.turnBaseline = snapshotWorkspace(cwd);
           runtime.turnAssistantPartId = undefined;
+          runtime.turnOrdinal = (runtime.turnOrdinal ?? 0) + 1;
         }
         if (event.type === "text.updated" && typeof event.partId === "string" && event.partId) {
           runtime.turnAssistantPartId = event.partId;
@@ -758,10 +764,12 @@ export class NodeSessionService {
       : typeof event.assistantMessageId === "string"
         ? event.assistantMessageId
         : runtime.turnAssistantPartId ?? null;
+    const turnOrdinal = runtime.turnOrdinal ?? null;
     const record = {
       turn_id: turnId,
       session_id: sessionId,
       assistant_message_id: assistantMessageId,
+      turn_ordinal: turnOrdinal,
       ended_at: new Date().toISOString(),
       artifacts: items,
     };
@@ -770,6 +778,7 @@ export class NodeSessionService {
       type: "turn.artifacts",
       sessionId,
       turnId,
+      turnOrdinal,
       assistantMessageId,
       artifacts: items,
     }).catch(() => undefined);

@@ -84,7 +84,7 @@ describe("TurnArtifactStrip", () => {
   });
 
   it("renders a mini table for csv snippets", async () => {
-    mockReadArtifact.mockResolvedValue({ ...snippetFile(), data: "gene,value\nA,1.0\nB,2.0\nC,3.0\nD,4.0" });
+    mockReadArtifact.mockResolvedValue({ ...snippetFile(), data: "gene,value\nA,1.0\nB,2.0\nC,3.0\nD,4.0\nE,5.0\nF,6.0" });
     render(
       <TurnArtifactStrip
         cwd="/workspace"
@@ -93,6 +93,10 @@ describe("TurnArtifactStrip", () => {
     );
     expect(await screen.findByRole("cell", { name: "1.0" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "gene" })).toBeInTheDocument();
+    // Truncated window: the ellipsis replaces the last parsed row (3.0), so
+    // the last visible data row is 2.0.
+    expect(screen.getByRole("cell", { name: "2.0" })).toBeInTheDocument();
+    expect(screen.queryByRole("cell", { name: "3.0" })).not.toBeInTheDocument();
     expect(mockReadArtifact).toHaveBeenCalledWith("results/summary.csv", "workspace", "/workspace", 8192);
     mockReadArtifact.mockReset();
   });
@@ -179,5 +183,70 @@ describe("TurnArtifactStrip", () => {
       expect(card.className).toContain("dark:bg-black/25");
       expect(card.className).toContain("w-full");
     });
+  });
+
+  it("shows a code fade mask on snippet cards and no token-opacity classes", async () => {
+    mockReadArtifact.mockResolvedValue({ ...snippetFile(), data: "import os\nprint('x' * 400)\n" });
+    const { container } = render(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{ path: "work/script.py", kind: "code", mime: "text/x-python", size: 512 }]}
+      />,
+    );
+    await screen.findByLabelText("script.py (work/script.py)");
+    const fades = container.querySelectorAll("[class*='bg-gradient-to-l']");
+    expect(fades.length).toBe(1);
+    // No token-opacity utilities (they are no-ops with CSS-variable colors);
+    // native-color opacities like white/60 and black/25 are valid glass styles.
+    const buttons = container.querySelectorAll("button");
+    buttons.forEach((button) => {
+      expect(button.className).not.toMatch(/(?:muted|surface|accent|border|text|ok|warn|error)\/\d{2}\b/);
+    });
+    mockReadArtifact.mockReset();
+  });
+
+  it("shows an ellipsis row only when the csv snippet is truncated and keeps the last visible row", async () => {
+    mockReadArtifact.mockResolvedValue({ ...snippetFile(), data: "a,b\n1,2\n3,4\n5,6\n7,8" });
+    const { container } = render(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{ path: "results/t.csv", kind: "table", mime: "text/csv", size: 512 }]}
+      />,
+    );
+    await screen.findByRole("cell", { name: "1" });
+    // Truncated: ellipsis row shown, and the dropped last row (7,8) is not.
+    expect(container.querySelector("tbody")!.textContent).toContain("…");
+    expect(container.querySelector("tbody")!.textContent).not.toContain("7");
+    mockReadArtifact.mockReset();
+  });
+
+  it("shows every row including the last one when the csv snippet is not truncated", async () => {
+    mockReadArtifact.mockResolvedValue({ ...snippetFile(), data: "a,b\n1,2\n3,4" });
+    const { container } = render(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{ path: "results/t.csv", kind: "table", mime: "text/csv", size: 512 }]}
+      />,
+    );
+    await screen.findByRole("cell", { name: "1" });
+    // Untruncated: every data row renders, including the last one (3,4).
+    expect(screen.getByRole("cell", { name: "4" })).toBeInTheDocument();
+    expect(container.querySelector("tbody")!.textContent).not.toContain("…");
+    mockReadArtifact.mockReset();
+  });
+
+  it("drops the last row in favor of an ellipsis row when the csv snippet is truncated", async () => {
+    mockReadArtifact.mockResolvedValue({ ...snippetFile(), data: "a,b\n1,2\n3,4\n5,6\n7,8\n9,0\n10,11\n12,13\n14,15\n16,17\n18,19\n20,21\n" });
+    const { container } = render(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{ path: "results/t.csv", kind: "table", mime: "text/csv", size: 512 }]}
+      />,
+    );
+    await screen.findByRole("cell", { name: "1" });
+    expect(container.querySelector("tbody")!.textContent).toContain("…");
+    // The truncated last row (20,21) is replaced by the ellipsis, not rendered.
+    expect(container.querySelector("tbody")!.textContent).not.toContain("21");
+    mockReadArtifact.mockReset();
   });
 });
