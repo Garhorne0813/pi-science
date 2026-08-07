@@ -55,14 +55,14 @@ function LightboxBody({ item, cwd, partial, onPartial }: {
       <img
         src={previewUrl(item.path, "workspace", cwd ?? "")}
         alt={item.path.split("/").pop() ?? item.path}
-        className="mx-auto max-h-[70vh] w-auto max-w-full object-contain"
+        className="mx-auto max-h-[85vh] w-auto max-w-full object-contain"
       />
     );
   }
 
   if (state.status === "loading") {
     return (
-      <div className="flex h-[50vh] items-center justify-center text-sm text-muted" role="status">
+      <div className="flex h-[70vh] items-center justify-center text-sm text-muted" role="status">
         <Loader2 size={18} className="mr-2 animate-spin text-accent" aria-hidden />
         {t("common.loading")}
       </div>
@@ -70,7 +70,7 @@ function LightboxBody({ item, cwd, partial, onPartial }: {
   }
   if (state.status === "error") {
     return (
-      <div className="flex h-[40vh] items-center justify-center text-sm text-error">
+      <div className="flex h-[60vh] items-center justify-center text-sm text-error">
         {t("conversation.lightboxLoadError")}
       </div>
     );
@@ -83,7 +83,7 @@ function LightboxBody({ item, cwd, partial, onPartial }: {
         </div>
       )}
       <Suspense fallback={(
-        <div className="flex h-[50vh] items-center justify-center text-sm text-muted" role="status">
+        <div className="flex h-[70vh] items-center justify-center text-sm text-muted" role="status">
           <Loader2 size={18} className="mr-2 animate-spin text-accent" aria-hidden />
           {t("common.loading")}
         </div>
@@ -114,7 +114,7 @@ export function ArtifactLightbox({ item, cwd, open, onOpenChange }: {
         <Dialog.Content
           className={cn(
             "fixed left-1/2 top-1/2 z-[96] flex max-h-[85vh] w-[calc(100vw-24px)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-card border border-border bg-surface shadow-pop outline-none",
-            "max-w-[min(90vw,900px)]",
+            "max-w-[min(94vw,1200px)]",
           )}
         >
           <div className="flex items-center gap-2 border-b border-faint px-4 py-2.5">
