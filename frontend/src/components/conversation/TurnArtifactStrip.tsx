@@ -12,6 +12,13 @@ const MAX_VISIBLE = 6;
 const SNIPPET_BYTES = 8192;
 const SNIPPET_HEIGHT = "h-[88px]";
 
+/** Apple-style glass card shell: translucent surface + blur + soft shadow.
+ *  Theme colors are CSS variables (opacity modifiers are no-ops), so the
+ *  translucency uses native white/black with dark: overrides. */
+const GLASS =
+  "rounded-card border border-white/20 bg-white/45 shadow-[0_8px_32px_rgba(0,0,0,0.08)] backdrop-blur-xl transition-colors hover:bg-white/60 dark:border-white/10 dark:bg-black/25 dark:hover:bg-black/35";
+const GLASS_FILENAME_BAR = "border-t border-white/15 dark:border-white/10";
+
 function fileIcon(kind: string) {
   switch (kind) {
     case "image": return FileImage;
@@ -64,7 +71,7 @@ function useSnippet(path: string, cwd?: string) {
 function MiniTable({ data }: { data: CsvSnippet }) {
   const rowCount = Math.max(data.rows.length, 1);
   return (
-    <table className="w-full border-collapse text-[9px] leading-tight text-muted">
+    <table className="table-fixed w-full border-collapse text-[9px] leading-tight text-muted">
       <thead>
         <tr>
           {data.columns.slice(0, 5).map((column, index) => (
@@ -100,7 +107,7 @@ function IconCard({ item, cwd, Icon }: { item: TurnArtifactItem; cwd?: string; I
     <button
       type="button"
       onClick={open}
-      className="group flex w-[104px] shrink-0 flex-col items-center gap-1 rounded-card border border-border bg-surface px-2 py-2 text-left transition-colors hover:border-accent/60"
+      className={`group flex w-full shrink-0 flex-col items-center gap-1 px-2 py-2 text-left ${GLASS}`}
       aria-label={`${filename} (${item.path})`}
     >
       <Icon size={16} className="text-accent" aria-hidden />
@@ -121,6 +128,8 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
     if (!cwd) return;
     openInspector(fileInspectorForPath(item.path, filename, "workspace", cwd));
   };
+
+  const ready = snippet.status === "ready";
 
   let body: ReactNode;
   if (snippet.status === "loading") {
@@ -158,11 +167,16 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
     <button
       type="button"
       onClick={open}
-      className="group flex w-[180px] shrink-0 flex-col overflow-hidden rounded-card border border-border bg-surface text-left transition-colors hover:border-accent/60"
+      className={`group flex w-full shrink-0 flex-col overflow-hidden text-left ${GLASS}`}
       aria-label={`${filename} (${item.path})`}
     >
-      <div className={`${SNIPPET_HEIGHT} overflow-hidden p-1.5`}>{body}</div>
-      <span className="block truncate border-t border-faint px-1.5 py-1 text-[10px] text-muted group-hover:text-text">{filename}</span>
+      <div className={`relative ${SNIPPET_HEIGHT} overflow-hidden p-1.5`}>
+        {body}
+        {ready && (
+          <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-5 bg-gradient-to-t from-white/45 to-transparent dark:from-black/25" />
+        )}
+      </div>
+      <span className={`block truncate px-1.5 py-1 text-[10px] text-muted group-hover:text-text ${GLASS_FILENAME_BAR}`}>{filename}</span>
     </button>
   );
 }
@@ -184,7 +198,7 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
       <button
         type="button"
         onClick={open}
-        className="group relative block w-[104px] shrink-0 overflow-hidden rounded-card border border-border bg-surface text-left transition-colors hover:border-accent/60"
+        className={`group relative block w-full shrink-0 overflow-hidden text-left ${GLASS}`}
         aria-label={`${filename} (${item.path})`}
       >
         <img
@@ -194,7 +208,7 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
           onError={() => setImageFailed(true)}
           className="h-[68px] w-full object-cover transition-opacity group-hover:opacity-80"
         />
-        <span className="block truncate border-t border-faint px-1.5 py-1 text-[10px] text-muted group-hover:text-text">{filename}</span>
+        <span className={`block truncate px-1.5 py-1 text-[10px] text-muted group-hover:text-text ${GLASS_FILENAME_BAR}`}>{filename}</span>
       </button>
     );
   }
@@ -219,13 +233,13 @@ export function TurnArtifactStrip({ artifacts, cwd }: { artifacts: TurnArtifactI
 
   return (
     <section aria-label={t("conversation.generatedFiles")} className="mt-1">
-      <div className="flex flex-wrap gap-2">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2">
         {visible.map((item) => <ArtifactMiniCard key={item.path} item={item} cwd={cwd} />)}
         {extra > 0 && (
           <button
             type="button"
             onClick={() => setExpanded(true)}
-            className="flex w-[104px] shrink-0 flex-col items-center justify-center gap-1 rounded-card border border-dashed border-border bg-surface/50 px-2 py-2 text-[10px] text-muted transition-colors hover:border-accent/60 hover:text-text"
+            className="flex w-full shrink-0 flex-col items-center justify-center gap-1 rounded-card border border-dashed border-white/20 bg-white/35 px-2 py-2 text-[10px] text-muted shadow-[0_8px_32px_rgba(0,0,0,0.08)] backdrop-blur-xl transition-colors hover:border-accent/60 hover:bg-white/55 hover:text-text dark:border-white/10 dark:bg-black/20 dark:hover:bg-black/30"
           >
             <span className="text-xs font-medium">+{extra}</span>
             <span className="flex items-center gap-0.5"><ChevronDown size={12} aria-hidden />{t("conversation.more")}</span>
@@ -235,7 +249,7 @@ export function TurnArtifactStrip({ artifacts, cwd }: { artifacts: TurnArtifactI
           <button
             type="button"
             onClick={() => setExpanded(false)}
-            className="flex w-[104px] shrink-0 flex-col items-center justify-center gap-1 rounded-card border border-dashed border-border bg-surface/50 px-2 py-2 text-[10px] text-muted transition-colors hover:border-accent/60 hover:text-text"
+            className="flex w-full shrink-0 flex-col items-center justify-center gap-1 rounded-card border border-dashed border-white/20 bg-white/35 px-2 py-2 text-[10px] text-muted shadow-[0_8px_32px_rgba(0,0,0,0.08)] backdrop-blur-xl transition-colors hover:border-accent/60 hover:bg-white/55 hover:text-text dark:border-white/10 dark:bg-black/20 dark:hover:bg-black/30"
           >
             <span className="flex items-center gap-0.5"><ChevronUp size={12} aria-hidden />{t("conversation.collapse")}</span>
           </button>

@@ -155,4 +155,29 @@ describe("TurnArtifactStrip", () => {
     expect(screen.getByText("table.xlsx")).toBeInTheDocument();
     expect(mockReadArtifact).not.toHaveBeenCalled();
   });
+
+  it("lays cards out in a fill-then-wrap grid with glass styling", () => {
+    const { container } = render(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[
+          { path: "work/a.png", kind: "image", mime: "image/png", size: 10 },
+          { path: "work/b.txt", kind: "text", mime: "text/plain", size: 10 },
+        ]}
+      />,
+    );
+    const grid = container.querySelector("section > div");
+    expect(grid).not.toBeNull();
+    expect(grid!.className).toContain("grid");
+    expect(grid!.className).toContain("grid-cols-[repeat(auto-fill,minmax(140px,1fr))]");
+    // Every card (image thumbnail and icon card) uses the glass shell.
+    const cards = container.querySelectorAll("section > div > button");
+    expect(cards.length).toBe(2);
+    cards.forEach((card) => {
+      expect(card.className).toContain("backdrop-blur-xl");
+      expect(card.className).toContain("bg-white/45");
+      expect(card.className).toContain("dark:bg-black/25");
+      expect(card.className).toContain("w-full");
+    });
+  });
 });
