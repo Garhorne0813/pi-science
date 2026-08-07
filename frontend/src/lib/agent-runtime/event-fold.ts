@@ -400,18 +400,38 @@ function afterAgentBlock(blocks: ThreadBlock[], ordinal: number): number {
   return blocks.length;
 }
 
+/** Position right after the LAST agent block of the `turnIndex`-th turn
+ *  (1-based). Turns are delimited by user-message boundaries: turn N is the
+ *  span between the N-th user block and the (N+1)-th user block (or thread
+ *  end). A turn with no agent block (tool-only) anchors at its own span end.
+ *  Falls back to the `turnIndex`-th agent block when user boundaries are
+ *  insufficient (paged history missing early user messages), so the strip
+ *  never lands between messages of a multi-assistant-message turn. */
+function afterTurnEnd(blocks: ThreadBlock[], turnIndex: number): number {
+  const userIndexes: number[] = [];
+  blocks.forEach((block, position) => { if (block.kind === "user") userIndexes.push(position); });
+  if (userIndexes.length < turnIndex) return afterAgentBlock(blocks, turnIndex);
+  const spanStart = userIndexes[turnIndex - 1] + 1;
+  const spanEnd = turnIndex < userIndexes.length ? userIndexes[turnIndex] : blocks.length;
+  let lastAgent = -1;
+  for (let i = spanStart; i < spanEnd; i += 1) {
+    if (blocks[i].kind === "agent") lastAgent = i;
+  }
+  return lastAgent >= 0 ? lastAgent + 1 : spanEnd;
+}
+
 /** Attach persisted per-turn artifact summaries to a history-built thread.
  *  Idempotent per turn id: when the strip is already present it is updated in
  *  place when its position is correct, otherwise it is repositioned to the
  *  right place (SSE replay may have inserted it at a fallback position before
  *  the full history arrived).
  *
- *  Anchoring order: exact assistant message id → turn_ordinal (n-th agent
- *  block) → record order fallback → end of thread.
- *  Limitation: the n-th agent block may be an intermediate message of a
- *  turn that spans several assistant messages (Pi emits anonymous part ids
- *  without a message id); live folds are exact via _turnLastAgentIndex, but
- *  history restore without ids keeps this ordinal approximation. */
+ *  Anchoring order: exact assistant message id → turn_ordinal (end of the
+ *  n-th turn, delimited by user messages) → record order fallback → end of
+ *  thread. Turns spanning several assistant messages anchor after the LAST
+ *  one (Pi emits anonymous part ids without a message id); when user
+ *  boundaries are unavailable (paged history) it falls back to the n-th
+ *  agent block approximation. */
 export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): Thread {
   if (!turns || turns.length === 0) return thread;
   let blocks = thread.blocks;
@@ -427,9 +447,10 @@ export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): 
     let insertAt = -1;
     if (assistantMessageId && index[assistantMessageId] !== undefined) insertAt = index[assistantMessageId] + 1;
     if (insertAt < 0 && Number.isInteger(ordinal) && ordinal > 0) {
-      // Anchor to the n-th agent block (reliable when earlier turns produced
-      // no record — a pure record-ordinal fallback would misplace strips).
-      insertAt = afterAgentBlock(blocks, ordinal);
+      // Anchor to the END of the ordinal-th turn (user-message delimited) so
+      // multi-assistant-message turns get their strip after the last message;
+      // falls back to the n-th agent block when user boundaries are missing.
+      insertAt = afterTurnEnd(blocks, ordinal);
     }
     if (insertAt < 0) {
       // Anchor by turn order: the next ordinal strip goes right after the

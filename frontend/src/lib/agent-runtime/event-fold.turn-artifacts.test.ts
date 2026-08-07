@@ -201,6 +201,56 @@ describe("attachTurnArtifacts (history restore)", () => {
     expect(next.blocks[7]).toMatchObject({ turnId: "turn-3" });
   });
 
+  it("anchors by turn_ordinal to the END of a multi-message turn", () => {
+    // Turn 1 spans two assistant messages (anonymous part ids, no message id)
+    // — the strip must land after the LAST one, not between them.
+    const thread = threadWith([
+      { kind: "user", id: "u1", text: "a" },
+      { kind: "agent", id: "msg-1a", parts: [{ id: "msg-1a", text: "r1a" }] },
+      { kind: "agent", id: "msg-1b", parts: [{ id: "msg-1b", text: "r1b" }] },
+      { kind: "user", id: "u2", text: "b" },
+      { kind: "agent", id: "msg-2", parts: [{ id: "msg-2", text: "r2" }] },
+    ]);
+    const next = attachTurnArtifacts(thread, [
+      { turn_id: "turn-1", session_id: "s", assistant_message_id: null, turn_ordinal: 1, ended_at: "t", artifacts: [{ path: "x.png", kind: "image", mime: "image/png", size: 1 }] },
+      { turn_id: "turn-2", session_id: "s", assistant_message_id: null, turn_ordinal: 2, ended_at: "t", artifacts: [{ path: "y.csv", kind: "table", mime: "text/csv", size: 2 }] },
+    ]);
+    expect(next.blocks.map((block) => block.kind)).toEqual(["user", "agent", "agent", "artifact-summary", "user", "agent", "artifact-summary"]);
+    expect(next.blocks[3]).toMatchObject({ turnId: "turn-1" });
+    expect(next.blocks[6]).toMatchObject({ turnId: "turn-2" });
+    expect(next.index["turn-artifacts-turn-1"]).toBe(3);
+    expect(next.index["turn-artifacts-turn-2"]).toBe(6);
+  });
+
+  it("anchors a tool-only turn at its own span end", () => {
+    // Turn 1 produces no assistant text (tool-only) — the strip belongs at the
+    // end of turn 1's span (before the next user message), not at the thread end.
+    const thread = threadWith([
+      { kind: "user", id: "u1", text: "a" },
+      { kind: "tool", id: "tool-1", callId: "c1", tool: "bash", status: "done" },
+      { kind: "user", id: "u2", text: "b" },
+      { kind: "agent", id: "msg-2", parts: [{ id: "msg-2", text: "r2" }] },
+    ]);
+    const next = attachTurnArtifacts(thread, [
+      { turn_id: "turn-1", session_id: "s", assistant_message_id: null, turn_ordinal: 1, ended_at: "t", artifacts: [{ path: "x.png", kind: "image", mime: "image/png", size: 1 }] },
+    ]);
+    expect(next.blocks.map((block) => block.kind)).toEqual(["user", "tool", "artifact-summary", "user", "agent"]);
+    expect(next.index["turn-artifacts-turn-1"]).toBe(2);
+  });
+
+  it("falls back to the n-th agent block when user boundaries are missing", () => {
+    // Paged history without early user messages: afterTurnEnd cannot delimit
+    // turns, so it falls back to the ordinal-th agent block approximation.
+    const thread = threadWith([
+      { kind: "agent", id: "msg-1", parts: [{ id: "msg-1", text: "r1" }] },
+      { kind: "agent", id: "msg-2", parts: [{ id: "msg-2", text: "r2" }] },
+    ]);
+    const next = attachTurnArtifacts(thread, [
+      { turn_id: "turn-2", session_id: "s", assistant_message_id: null, turn_ordinal: 2, ended_at: "t", artifacts: [{ path: "x.png", kind: "image", mime: "image/png", size: 1 }] },
+    ]);
+    expect(next.index["turn-artifacts-turn-2"]).toBe(2);
+  });
+
   it("repositions a strip already inserted at a fallback position by SSE replay", () => {
     // SSE replay folded turn-2 at the record-ordinal fallback position
     // (after the first agent block) because the full history had not arrived.
