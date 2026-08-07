@@ -21,6 +21,10 @@ vi.mock("../../lib/files", async (importOriginal) => {
   };
 });
 
+vi.mock("./MoleculeThumb", () => ({
+  MoleculeThumb: () => <div data-testid="molecule-thumb" />,
+}));
+
 function snippetFile(encoding: "utf8" | "base64" = "utf8") {
   return { path: "x", mime: "text/plain", encoding, data: "x", size: 1 };
 }
@@ -263,5 +267,28 @@ describe("TurnArtifactStrip", () => {
     const card = container.querySelector("button");
     expect(card!.textContent).toContain(".csv");
     expect(card!.textContent).toContain("very-long-name");
+  });
+
+  it("renders structure artifacts through MoleculeThumb", () => {
+    render(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{ path: "work/protein.pdb", kind: "structure", mime: "chemical/x-pdb", size: 4096 }]}
+      />,
+    );
+    expect(screen.getByTestId("molecule-thumb")).toBeTruthy();
+    expect(screen.getByLabelText("protein.pdb (work/protein.pdb)")).toBeTruthy();
+    // Structure cards must not trigger the 8KB snippet reader.
+    expect(mockReadArtifact).not.toHaveBeenCalled();
+  });
+
+  it("keeps icon card for other kinds (structure path not taken)", () => {
+    render(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{ path: "work/notes.txt", kind: "text", mime: "text/plain", size: 32 }]}
+      />,
+    );
+    expect(screen.queryByTestId("molecule-thumb")).toBeNull();
   });
 });

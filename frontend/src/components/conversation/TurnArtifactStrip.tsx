@@ -7,6 +7,7 @@ import { useUiStore } from "../../lib/ui";
 import type { TurnArtifactItem } from "../../types/thread";
 import { codeSnippet, markdownSnippet, parseCsvSnippet, parseTsvSnippet, type CsvSnippet } from "../../lib/conversation/turn-artifact-snippet";
 import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
+import { MoleculeThumb } from "./MoleculeThumb";
 
 const MAX_VISIBLE = 6;
 const SNIPPET_BYTES = 8192;
@@ -32,11 +33,12 @@ function fileIcon(kind: string) {
 }
 
 /** Which snippet renderer applies to this artifact, or null for icon-only. */
-function snippetKindFor(item: TurnArtifactItem): "table" | "markdown" | "code" | null {
+function snippetKindFor(item: TurnArtifactItem): "table" | "markdown" | "code" | "structure" | null {
   const ext = item.path.split(".").pop()?.toLowerCase() ?? "";
   if (item.kind === "table") return ext === "csv" || ext === "tsv" ? "table" : null;
   if (item.kind === "code" || item.kind === "notebook") return "code";
   if (item.kind === "text") return ext === "md" ? "markdown" : "code";
+  if (item.kind === "structure") return "structure";
   return null;
 }
 
@@ -68,10 +70,10 @@ function OpenAffordance() {
 }
 
 /** Capped first-bytes read of a workspace file for the snippet card. */
-function useSnippet(path: string, cwd?: string) {
+function useSnippet(path: string, cwd?: string, enabled = true) {
   const [state, setState] = useState<{ status: "loading" } | { status: "error" } | { status: "ready"; text: string }>({ status: "loading" });
   useEffect(() => {
-    if (!cwd) {
+    if (!enabled || !cwd) {
       setState({ status: "error" });
       return;
     }
@@ -92,7 +94,7 @@ function useSnippet(path: string, cwd?: string) {
     return () => {
       cancelled = true;
     };
-  }, [path, cwd]);
+  }, [path, cwd, enabled]);
   return state;
 }
 
@@ -164,13 +166,34 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
   const openInspector = useUiStore((state) => state.openInspector);
   const { t } = useTranslation();
   const filename = item.path.split("/").pop() ?? item.path;
-  const snippet = useSnippet(item.path, cwd);
+  const [structureFailed, setStructureFailed] = useState(false);
+  const snippet = useSnippet(item.path, cwd, snippetKindFor(item) !== "structure");
   const open = () => {
     if (!cwd) return;
     openInspector(fileInspectorForPath(item.path, filename, "workspace", cwd));
   };
 
   const ready = snippet.status === "ready";
+
+  if (snippetKindFor(item) === "structure") {
+    if (structureFailed || !cwd) return <IconCard item={item} cwd={cwd} Icon={fileIcon(item.kind)} />;
+    return (
+      <button
+        type="button"
+        onClick={open}
+        className={CARD}
+        aria-label={`${filename} (${item.path})`}
+      >
+        <OpenAffordance />
+        <div className={`relative ${PREVIEW_HEIGHT} overflow-hidden bg-surface-2`}>
+          <MoleculeThumb path={item.path} cwd={cwd} filename={filename} onError={() => setStructureFailed(true)} />
+        </div>
+        <span className={FILENAME_BAR}>
+          <FilenameLabel filename={filename} />
+        </span>
+      </button>
+    );
+  }
 
   let body: ReactNode;
   if (snippet.status === "loading") {
