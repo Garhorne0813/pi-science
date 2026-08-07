@@ -53,6 +53,11 @@ type RuntimeRecord = {
    *  diffed at agent_settled to surface files the turn produced. */
   turnId?: string;
   turnBaseline?: Promise<WorkspaceSnapshotEntry[] | null>;
+  /** Last text.updated partId seen this turn. Pi's agent_settled carries no
+   *  message id, so the strip is anchored to the assistant part (the frontend
+   *  keys live agent blocks by partId) to avoid every turn's artifacts being
+   *  appended at the end of the thread. */
+  turnAssistantPartId?: string;
 };
 
 function runtimeKey(cwd: string, sessionId: string): string {
@@ -564,6 +569,10 @@ export class NodeSessionService {
         if (event.type === "agent_start") {
           runtime.turnId = randomUUID();
           runtime.turnBaseline = snapshotWorkspace(cwd);
+          runtime.turnAssistantPartId = undefined;
+        }
+        if (event.type === "text.updated" && typeof event.partId === "string" && event.partId) {
+          runtime.turnAssistantPartId = event.partId;
         }
         if (event.type === "agent_settled") {
           await this.finishTurnArtifacts(runtime, event, sessionId);
@@ -748,7 +757,7 @@ export class NodeSessionService {
       ? event.messageId
       : typeof event.assistantMessageId === "string"
         ? event.assistantMessageId
-        : null;
+        : runtime.turnAssistantPartId ?? null;
     const record = {
       turn_id: turnId,
       session_id: sessionId,

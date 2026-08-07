@@ -51,7 +51,7 @@ beforeEach(async () => {
     '  if (request.type === "get_state") { stateRequests++; if (process.env.FAKE_PI_MODE === "restart-fail-once" && startNumber === 2) return; if (process.env.FAKE_PI_MODE === "new-session-state-fails" && sessionId.startsWith("generated-")) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (Number(process.env.FAKE_PI_FAIL_STATE_AFTER || 0) > 0 && stateRequests > Number(process.env.FAKE_PI_FAIL_STATE_AFTER)) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (process.env.FAKE_PI_MODE === "never-starts") return respond(request, { data: { sessionId, busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); if (process.env.FAKE_PI_MODE === "delayed-agent-start") { if (stateRequests > Number(process.env.FAKE_PI_STATE_DELAY || 3)) { if (!agentStartNotified) { agentStartNotified = true; process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); } return respond(request, { data: { sessionId, busy: true, isStreaming: true, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); } return respond(request, { data: { sessionId, busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); } const orbitBusyOnly = process.env.FAKE_PI_MODE === "orbit-busy-without-agent-start"; return respond(request, { data: { sessionId, busy, isStreaming: orbitBusyOnly ? false : busy, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }',
     '  if (request.type === "switch_session") { sessionId = JSON.parse(fs.readFileSync(request.sessionPath, "utf8").split("\\n")[0]).id; return respond(request); }',
     '  if (request.type === "new_session" || request.type === "clone" || request.type === "fork") { sessionId = `generated-${++counter}-${process.pid}`; return respond(request); }',
-    '  if (request.type === "prompt") { if (process.env.FAKE_PI_MODE === "prompt-timeout") return; if (process.env.FAKE_PI_MODE === "idle-active-idle" || process.env.FAKE_PI_MODE === "late-agent-start") promptAccepted = true; busy = true; respond(request); if (process.env.FAKE_PI_MODE === "turn-artifacts") { process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); setTimeout(() => { if (process.env.FAKE_PI_WRITE_FILE) { fs.mkdirSync(path.dirname(process.env.FAKE_PI_WRITE_FILE), { recursive: true }); fs.writeFileSync(process.env.FAKE_PI_WRITE_FILE, "turn artifact data\\n"); } busy = false; process.stdout.write(JSON.stringify({ type: "agent_settled", messageId: "msg-turn-1" }) + "\\n"); }, 50); return; } if (process.env.FAKE_PI_MODE !== "orbit-busy-without-agent-start" && process.env.FAKE_PI_MODE !== "never-starts" && process.env.FAKE_PI_MODE !== "delayed-agent-start" && process.env.FAKE_PI_MODE !== "idle-active-idle" && process.env.FAKE_PI_MODE !== "late-agent-start") process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); return; }',
+    '  if (request.type === "prompt") { if (process.env.FAKE_PI_MODE === "prompt-timeout") return; if (process.env.FAKE_PI_MODE === "idle-active-idle" || process.env.FAKE_PI_MODE === "late-agent-start") promptAccepted = true; busy = true; respond(request); if (process.env.FAKE_PI_MODE === "turn-artifacts") { process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); setTimeout(() => { if (process.env.FAKE_PI_WRITE_FILE) { fs.mkdirSync(path.dirname(process.env.FAKE_PI_WRITE_FILE), { recursive: true }); fs.writeFileSync(process.env.FAKE_PI_WRITE_FILE, "turn artifact data\\n"); } busy = false; process.stdout.write(JSON.stringify({ type: "agent_settled", messageId: "msg-turn-1" }) + "\\n"); }, 50); return; } if (process.env.FAKE_PI_MODE === "turn-artifacts-partid") { process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); setTimeout(() => { if (process.env.FAKE_PI_WRITE_FILE) { fs.mkdirSync(path.dirname(process.env.FAKE_PI_WRITE_FILE), { recursive: true }); fs.writeFileSync(process.env.FAKE_PI_WRITE_FILE, "turn artifact data\\n"); } process.stdout.write(JSON.stringify({ type: "text.updated", partId: "part-turn-1", text: "hello", replace: false }) + "\\n"); busy = false; process.stdout.write(JSON.stringify({ type: "agent_settled" }) + "\\n"); }, 50); return; } if (process.env.FAKE_PI_MODE !== "orbit-busy-without-agent-start" && process.env.FAKE_PI_MODE !== "never-starts" && process.env.FAKE_PI_MODE !== "delayed-agent-start" && process.env.FAKE_PI_MODE !== "idle-active-idle" && process.env.FAKE_PI_MODE !== "late-agent-start") process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); return; }',
     '  if (request.type === "compact") { if (process.env.FAKE_PI_MODE === "compact-timeout") return; return respond(request); }',
     '  if (request.type === "abort") { busy = false; respond(request); process.stdout.write(JSON.stringify({ type: "agent_settled", handledWithoutTurn: true }) + "\\n"); return; }',
     '  if (request.type === "get_commands") return process.env.FAKE_PI_MODE === "cancel-commands" ? respond(request, { data: { cancelled: true } }) : respond(request, { data: { commands: [{ name: "review", source: "skill" }] } });',
@@ -659,6 +659,28 @@ describe("Node session lifecycle", () => {
     });
     const turnEvent = publish.mock.calls.find(([, , payload]) => (payload as { type?: string }).type === "turn.artifacts")?.[2] as Record<string, unknown>;
     expect(turnEvent).toMatchObject({ type: "turn.artifacts", assistantMessageId: "msg-turn-1" });
+    expect(turnEvent.artifacts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "work/plot.png", kind: "image" }),
+    ]));
+    await service.shutdownAll();
+  });
+
+  it("publishes turn.artifacts anchored to the assistant part id when agent_settled carries no message id", async () => {
+    process.env.FAKE_PI_MODE = "turn-artifacts-partid";
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-turn-artifacts-partid");
+    process.env.FAKE_PI_WRITE_FILE = join(cwd, "work", "plot.png");
+    await service.resume("session-turn-artifacts-partid", cwd);
+    const publish = vi.spyOn(conversationEventHub, "publish");
+    // spyOn reuses a live mock when an earlier test left one behind; clear so
+    // this test only sees its own publishes.
+    publish.mockClear();
+    await expect(service.command("session-turn-artifacts-partid", cwd, "prompt", { message: "go" })).resolves.toMatchObject({ success: true });
+    await waitFor(() => {
+      return publish.mock.calls.some(([, , payload]) => (payload as { type?: string }).type === "turn.artifacts");
+    });
+    const turnEvent = publish.mock.calls.find(([, , payload]) => (payload as { type?: string }).type === "turn.artifacts")?.[2] as Record<string, unknown>;
+    expect(turnEvent).toMatchObject({ type: "turn.artifacts", assistantMessageId: "part-turn-1" });
     expect(turnEvent.artifacts).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "work/plot.png", kind: "image" }),
     ]));

@@ -166,6 +166,13 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
       if (assistantMessageId && index[assistantMessageId] !== undefined) {
         insertAt = index[assistantMessageId] + 1;
       }
+      if (insertAt < 0) {
+        // Pi's agent_settled does not carry a message id, so summaries are
+        // anchored by turn order: the n-th strip goes right after the n-th
+        // agent block (live agent blocks are keyed by text.updated partId).
+        const insertedBefore = blocks.filter((b) => b.kind === "artifact-summary").length;
+        insertAt = afterAgentBlock(blocks, insertedBefore + 1);
+      }
       if (insertAt < 0) insertAt = blocks.length;
       blocks.splice(insertAt, 0, block);
       for (const key of Object.keys(index)) {
@@ -355,15 +362,32 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
   return blocks;
 }
 
+/** Position right after the `ordinal`-th agent block (1-based), or the end of
+ *  the thread when there are fewer agent blocks (e.g. tool-only turns). Used to
+ *  anchor turn-artifact strips by turn order when no assistant message id is
+ *  available. */
+function afterAgentBlock(blocks: ThreadBlock[], ordinal: number): number {
+  let count = 0;
+  for (let i = 0; i < blocks.length; i += 1) {
+    if (blocks[i].kind === "agent") {
+      count += 1;
+      if (count === ordinal) return i + 1;
+    }
+  }
+  return blocks.length;
+}
+
 /** Attach persisted per-turn artifact summaries to a history-built thread.
  *  Idempotent: turns already folded (from live SSE) are skipped by block id.
  *  Inserts each summary right after its assistant message when the message is
- *  present in the thread; otherwise appends at the end. */
+ *  present in the thread; otherwise anchors by turn order (the n-th strip goes
+ *  after the n-th agent block), falling back to the end of the thread. */
 export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): Thread {
   if (!turns || turns.length === 0) return thread;
   let blocks = thread.blocks;
   let index = thread.index;
   let changed = false;
+  let insertedBefore = blocks.filter((b) => b.kind === "artifact-summary").length;
   for (const turn of turns) {
     const items = Array.isArray(turn.artifacts) ? turn.artifacts as TurnArtifactItem[] : [];
     if (!turn.turn_id || items.length === 0) continue;
@@ -372,6 +396,11 @@ export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): 
     const assistantMessageId = turn.assistant_message_id ?? null;
     let insertAt = -1;
     if (assistantMessageId && index[assistantMessageId] !== undefined) insertAt = index[assistantMessageId] + 1;
+    if (insertAt < 0) {
+      // Anchor by turn order: the next ordinal strip goes right after the
+      // matching agent block, falling back to the end for tool-only turns.
+      insertAt = afterAgentBlock(blocks, insertedBefore + 1);
+    }
     if (insertAt < 0) insertAt = blocks.length;
     const block: ThreadBlock = {
       kind: "artifact-summary",
@@ -381,6 +410,7 @@ export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): 
       artifacts: items,
     };
     blocks.splice(insertAt, 0, block);
+    insertedBefore += 1;
     index = { ...index };
     for (const key of Object.keys(index)) {
       if (index[key] >= insertAt) index[key] += 1;

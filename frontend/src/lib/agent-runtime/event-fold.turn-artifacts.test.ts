@@ -36,6 +36,23 @@ describe("foldEvent turn.artifacts", () => {
     expect(state.blocks.at(-1)).toMatchObject({ kind: "artifact-summary", turnId: "turn-9" });
   });
 
+  it("anchors each strip after its own turn's agent block when the assistant message id is absent", () => {
+    let state = threadWith([
+      { kind: "user", id: "user-1", text: "a" },
+      { kind: "agent", id: "part-1", parts: [{ id: "part-1", text: "r1" }] },
+      { kind: "user", id: "user-2", text: "b" },
+      { kind: "agent", id: "part-2", parts: [{ id: "part-2", text: "r2" }] },
+    ]);
+    const base = { type: "turn.artifacts", sessionId: "s" } as PiScienceEvent;
+    state = foldEvent(state, { ...base, turnId: "turn-1", artifacts: [{ path: "x.png", kind: "image", mime: "image/png", size: 1 }] });
+    state = foldEvent(state, { ...base, turnId: "turn-2", artifacts: [{ path: "y.csv", kind: "table", mime: "text/csv", size: 2 }] });
+    expect(state.blocks.map((block) => block.kind)).toEqual(["user", "agent", "artifact-summary", "user", "agent", "artifact-summary"]);
+    expect(state.blocks[2]).toMatchObject({ turnId: "turn-1" });
+    expect(state.blocks[5]).toMatchObject({ turnId: "turn-2" });
+    expect(state.index["turn-artifacts-turn-1"]).toBe(2);
+    expect(state.index["turn-artifacts-turn-2"]).toBe(5);
+  });
+
   it("deduplicates by turn id, replacing in place", () => {
     let state = threadWith([{ kind: "user", id: "user-1", text: "hi" }]);
     const base = { type: "turn.artifacts", sessionId: "s", turnId: "turn-1" } as PiScienceEvent;
@@ -77,6 +94,38 @@ describe("attachTurnArtifacts (history restore)", () => {
     const once = attachTurnArtifacts(thread, turns);
     const twice = attachTurnArtifacts(once, turns);
     expect(twice.blocks.filter((block) => block.kind === "artifact-summary")).toHaveLength(1);
+  });
+
+  it("attaches by turn order when persisted ids are absent", () => {
+    const thread = threadWith([
+      { kind: "user", id: "u1", text: "a" },
+      { kind: "agent", id: "msg-1", parts: [{ id: "msg-1", text: "r1" }] },
+      { kind: "user", id: "u2", text: "b" },
+      { kind: "agent", id: "msg-2", parts: [{ id: "msg-2", text: "r2" }] },
+    ]);
+    const next = attachTurnArtifacts(thread, [
+      { turn_id: "turn-1", session_id: "s", assistant_message_id: null, ended_at: "t", artifacts: [{ path: "x.png", kind: "image", mime: "image/png", size: 1 }] },
+      { turn_id: "turn-2", session_id: "s", assistant_message_id: null, ended_at: "t", artifacts: [{ path: "y.csv", kind: "table", mime: "text/csv", size: 2 }] },
+    ]);
+    expect(next.blocks.map((block) => block.kind)).toEqual(["user", "agent", "artifact-summary", "user", "agent", "artifact-summary"]);
+    expect(next.blocks[2]).toMatchObject({ turnId: "turn-1" });
+    expect(next.blocks[5]).toMatchObject({ turnId: "turn-2" });
+  });
+
+  it("mixes exact id matches and turn-order fallback", () => {
+    const thread = threadWith([
+      { kind: "user", id: "u1", text: "a" },
+      { kind: "agent", id: "msg-1", parts: [{ id: "msg-1", text: "r1" }] },
+      { kind: "user", id: "u2", text: "b" },
+      { kind: "agent", id: "msg-2", parts: [{ id: "msg-2", text: "r2" }] },
+    ]);
+    const next = attachTurnArtifacts(thread, [
+      { turn_id: "turn-1", session_id: "s", assistant_message_id: "msg-1", ended_at: "t", artifacts: [{ path: "x.png", kind: "image", mime: "image/png", size: 1 }] },
+      { turn_id: "turn-2", session_id: "s", assistant_message_id: null, ended_at: "t", artifacts: [{ path: "y.csv", kind: "table", mime: "text/csv", size: 2 }] },
+    ]);
+    expect(next.blocks.map((block) => block.kind)).toEqual(["user", "agent", "artifact-summary", "user", "agent", "artifact-summary"]);
+    expect(next.blocks[2]).toMatchObject({ turnId: "turn-1" });
+    expect(next.blocks[5]).toMatchObject({ turnId: "turn-2" });
   });
 
   it("appends turns whose assistant message is not in the loaded page", () => {
