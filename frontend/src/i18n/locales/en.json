@@ -826,5 +826,8 @@
   "conversation.generatedFiles": "Generated files",
   "conversation.more": "more",
   "conversation.collapse": "collapse",
-  "conversation.codeSnippet": "Code snippet"
+  "conversation.codeSnippet": "Code snippet",
+  "conversation.generatedFilesLabel": "GENERATED · {{count}}",
+  "conversation.rowsCols": "{{rows}} rows · {{columns}} columns",
+  "conversation.moreColumns": "+{{count}} more"
 }

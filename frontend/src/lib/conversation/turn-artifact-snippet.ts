@@ -3,10 +3,15 @@
  *  renderable slice (mini table, code lines, markdown excerpt). */
 
 export interface CsvSnippet {
+  /** Header fields (capped at MAX_COLS for rendering). */
   columns: string[];
+  /** Total column count including columns beyond the render cap. */
+  columnCount: number;
   rows: string[][];
   /** True when more rows exist beyond the parsed window. */
   truncated: boolean;
+  /** Data rows parsed from the fragment (header excluded). */
+  rowCount: number;
 }
 
 const MAX_ROWS = 4;
@@ -42,9 +47,11 @@ export function splitDelimitedLine(line: string, separator: string): string[] {
 function parseDelimited(text: string, separator: string): CsvSnippet {
   const lines = text.split(/\r?\n/).filter((line) => line.trim() !== "");
   const slice = lines.slice(0, MAX_ROWS);
-  const rows = slice.map((line) => splitDelimitedLine(line, separator).slice(0, MAX_COLS));
-  const columns = rows[0] ?? [];
-  return { columns, rows: rows.slice(1), truncated: lines.length > MAX_ROWS };
+  const fullRows = slice.map((line) => splitDelimitedLine(line, separator));
+  const columns = (fullRows[0] ?? []).slice(0, MAX_COLS);
+  const columnCount = (fullRows[0] ?? []).length;
+  const rows = fullRows.slice(1).map((row) => row.slice(0, MAX_COLS));
+  return { columns, columnCount, rows, rowCount: Math.max(0, fullRows.length - 1), truncated: lines.length > MAX_ROWS };
 }
 
 export function parseCsvSnippet(text: string): CsvSnippet {

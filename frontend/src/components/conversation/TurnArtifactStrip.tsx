@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { File, FileText, FileSpreadsheet, FileImage, FileCode2, NotebookPen, ChevronDown, ChevronUp } from "lucide-react";
+import { File, FileText, FileSpreadsheet, FileImage, FileCode2, NotebookPen, ChevronDown, ChevronUp, ArrowUpRight } from "lucide-react";
 import { previewUrl, readArtifact } from "../../lib/files";
 import { fileInspectorForPath } from "../../lib/artifacts";
 import { useUiStore } from "../../lib/ui";
@@ -10,14 +10,15 @@ import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
 
 const MAX_VISIBLE = 6;
 const SNIPPET_BYTES = 8192;
-const SNIPPET_HEIGHT = "h-[88px]";
+const PREVIEW_HEIGHT = "h-[55px]";
 
-/** Apple-style glass card shell: translucent surface + blur + soft shadow.
- *  Theme colors are CSS variables (opacity modifiers are no-ops), so the
- *  translucency uses native white/black with dark: overrides. */
-const GLASS =
-  "rounded-card border border-white/20 bg-white/45 shadow-[0_8px_32px_rgba(0,0,0,0.08)] backdrop-blur-xl transition-colors hover:bg-white/60 dark:border-white/10 dark:bg-black/25 dark:hover:bg-black/35";
-const GLASS_FILENAME_BAR = "border-t border-white/15 dark:border-white/10";
+/** Claude Science card shell: solid surface, 12px radius, inset ring only
+ *  (no blur, no outer shadow, no hover lift). Ring uses native black/white
+ *  opacities because theme tokens are CSS variables (opacity modifiers are
+ *  no-ops); the focus ring is the Claude Science blue with the inset ring kept. */
+const CARD =
+  "group relative flex w-[128px] shrink-0 flex-col overflow-hidden rounded-[12px] bg-surface text-left ring-1 ring-inset ring-black/10 focus-visible:ring-2 focus-visible:ring-[#2a78d6] dark:ring-white/10";
+const FILENAME_BAR = "flex h-[25px] min-w-0 items-center gap-0.5 px-2";
 
 function fileIcon(kind: string) {
   switch (kind) {
@@ -37,6 +38,33 @@ function snippetKindFor(item: TurnArtifactItem): "table" | "markdown" | "code" |
   if (item.kind === "code" || item.kind === "notebook") return "code";
   if (item.kind === "text") return ext === "md" ? "markdown" : "code";
   return null;
+}
+
+/** Filename split at the last dot so the extension survives truncation. */
+function FilenameLabel({ filename }: { filename: string }) {
+  const dot = filename.lastIndexOf(".");
+  const base = dot > 0 ? filename.slice(0, dot) : filename;
+  const ext = dot > 0 ? filename.slice(dot) : "";
+  return (
+    <>
+      <span className="min-w-0 truncate text-[10.5px] font-medium text-text">{base}</span>
+      {ext && <span className="shrink-0 text-[10.5px] font-medium text-muted">{ext}</span>}
+    </>
+  );
+}
+
+/** Hover/focus affordance: a small open button floats over the top-right
+ *  corner (mirrors Claude Science; the whole card is clickable, so this is
+ *  decorative). */
+function OpenAffordance() {
+  return (
+    <span
+      aria-hidden
+      className="pointer-events-none absolute right-1 top-1 z-10 flex h-7 w-7 items-center justify-center rounded-[6px] bg-black/90 text-white opacity-0 shadow-[0_2px_8px_rgba(0,0,0,0.25)] transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+    >
+      <ArrowUpRight size={14} />
+    </span>
+  );
 }
 
 /** Capped first-bytes read of a workspace file for the snippet card. */
@@ -68,34 +96,45 @@ function useSnippet(path: string, cwd?: string) {
   return state;
 }
 
-function MiniTable({ data }: { data: CsvSnippet }) {
-  const rows = data.truncated ? data.rows.slice(0, Math.max(1, data.rows.length - 1)) : data.rows;
+/** First non-empty value's rough type: numeric → "123", otherwise "abc". */
+function columnTypeHint(row: string[], index: number): "abc" | "123" {
+  const value = row[index];
+  if (value !== undefined && value.trim() !== "" && /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(value.trim())) return "123";
+  return "abc";
+}
+
+/** Claude Science style CSV summary badge: rows · columns, field type hints
+ *  and the first few column names, then "+N more" for the rest. */
+function TableSummary({ data }: { data: CsvSnippet }) {
+  const { t } = useTranslation();
+  const rowsLabel = data.truncated ? `${data.rowCount}+` : String(data.rowCount);
+  const firstDataRow = data.rows[0] ?? [];
+  const visibleColumns = data.columns.slice(0, 3);
+  const remaining = Math.max(0, data.columnCount - visibleColumns.length);
   return (
-    <table className="table-fixed w-full border-collapse text-[9px] leading-tight text-muted">
-      <thead>
-        <tr>
-          {data.columns.slice(0, 5).map((column, index) => (
-            <th key={index} className="max-w-[34px] truncate border-b border-border px-0.5 py-0.5 text-left font-medium text-text">{column}</th>
+    <div className="flex h-full flex-col justify-center gap-1 overflow-hidden">
+      <div className="truncate text-[9px] leading-tight text-muted">
+        {t("conversation.rowsCols", { rows: rowsLabel, columns: data.columnCount })}
+      </div>
+      {visibleColumns.length > 0 && (
+        <div className="flex flex-wrap gap-0.5 overflow-hidden">
+          {visibleColumns.map((column, index) => (
+            <span key={index} className="flex max-w-[52px] items-center gap-0.5 rounded-[4px] bg-surface px-1 py-0.5 text-[9px] leading-tight text-muted">
+              <span className="shrink-0 font-mono text-[8px] text-accent">{columnTypeHint(firstDataRow, index)}</span>
+              <span className="truncate">{column}</span>
+            </span>
           ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row, rowIndex) => (
-          <tr key={rowIndex}>
-            {row.map((cell, cellIndex) => (
-              <td key={cellIndex} className="max-w-[34px] truncate border-b border-faint px-0.5 py-0.5">{cell}</td>
-            ))}
-          </tr>
-        ))}
-        {data.truncated && (
-          <tr><td colSpan={5} className="px-0.5 pt-0.5 text-[8px] text-muted opacity-70">…</td></tr>
-        )}
-      </tbody>
-    </table>
+          {remaining > 0 && (
+            <span className="text-[9px] leading-tight text-muted">{t("conversation.moreColumns", { count: remaining })}</span>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
-/** Icon-only card (unchanged look): unknown/binary/document types. */
+/** Icon-only card: centered icon over a darker preview area, filename bar
+ *  below (same 128×80 shell as content cards). */
 function IconCard({ item, cwd, Icon }: { item: TurnArtifactItem; cwd?: string; Icon: ReturnType<typeof fileIcon> }) {
   const openInspector = useUiStore((state) => state.openInspector);
   const filename = item.path.split("/").pop() ?? item.path;
@@ -107,14 +146,16 @@ function IconCard({ item, cwd, Icon }: { item: TurnArtifactItem; cwd?: string; I
     <button
       type="button"
       onClick={open}
-      className={`group flex w-full shrink-0 flex-col items-center gap-1 px-2 py-2 text-left ${GLASS}`}
+      className={CARD}
       aria-label={`${filename} (${item.path})`}
     >
-      <Icon size={16} className="text-accent" aria-hidden />
-      <span className="block w-full truncate text-center text-[10px] text-muted group-hover:text-text" title={item.path}>{filename}</span>
-      {item.size > 0 && (
-        <span className="text-[9px] text-muted opacity-70">{item.size >= 1024 * 1024 ? `${(item.size / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(item.size / 1024))} KB`}</span>
-      )}
+      <OpenAffordance />
+      <div className={`flex ${PREVIEW_HEIGHT} items-center justify-center bg-surface-2`}>
+        <Icon size={18} className="text-accent" aria-hidden />
+      </div>
+      <span className={FILENAME_BAR}>
+        <FilenameLabel filename={filename} />
+      </span>
     </button>
   );
 }
@@ -133,12 +174,12 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
 
   let body: ReactNode;
   if (snippet.status === "loading") {
-    body = <div className="h-full w-full animate-pulse rounded-input bg-surface-2" aria-hidden />;
+    body = <div className="h-full w-full animate-pulse rounded-[6px] bg-surface-2" aria-hidden />;
   } else if (snippet.status === "error") {
     return <IconCard item={item} cwd={cwd} Icon={fileIcon(item.kind)} />;
   } else if (snippetKindFor(item) === "table") {
     const data = item.path.toLowerCase().endsWith(".tsv") ? parseTsvSnippet(snippet.text) : parseCsvSnippet(snippet.text);
-    body = <MiniTable data={data} />;
+    body = <TableSummary data={data} />;
   } else if (snippetKindFor(item) === "markdown") {
     const excerpt = markdownSnippet(snippet.text);
     body = (
@@ -150,11 +191,11 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
         >
           {excerpt.markdown}
         </MarkdownViewer>
-        {excerpt.truncated && <span className="text-[8px] text-muted opacity-70">…</span>}
+        {excerpt.truncated && <span className="text-[8px] text-muted">…</span>}
       </div>
     );
   } else {
-    const excerpt = codeSnippet(snippet.text);
+    const excerpt = codeSnippet(snippet.text, 4);
     body = (
       <pre className="h-full overflow-hidden font-mono text-[9px] leading-[1.45] text-muted" aria-label={t("conversation.codeSnippet")}>
         {excerpt.code}
@@ -167,19 +208,22 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
     <button
       type="button"
       onClick={open}
-      className={`group flex w-full shrink-0 flex-col overflow-hidden text-left ${GLASS}`}
+      className={CARD}
       aria-label={`${filename} (${item.path})`}
     >
-      <div className={`relative ${SNIPPET_HEIGHT} overflow-hidden p-1.5`}>
+      <OpenAffordance />
+      <div className={`relative ${PREVIEW_HEIGHT} overflow-hidden bg-surface-2 p-1.5`}>
         {body}
         {ready && (
-          <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-5 bg-gradient-to-t from-white/45 to-transparent dark:from-black/25" />
+          <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-4 bg-gradient-to-t from-surface-2 to-transparent" />
         )}
         {ready && snippetKindFor(item) === "code" && (
-          <div aria-hidden className="pointer-events-none absolute inset-y-0 right-0 w-4 bg-gradient-to-l from-white/45 to-transparent dark:from-black/25" />
+          <div aria-hidden className="pointer-events-none absolute inset-y-0 right-0 w-3 bg-gradient-to-l from-surface-2 to-transparent" />
         )}
       </div>
-      <span className={`block truncate px-1.5 py-1 text-[10px] text-muted group-hover:text-text ${GLASS_FILENAME_BAR}`}>{filename}</span>
+      <span className={FILENAME_BAR}>
+        <FilenameLabel filename={filename} />
+      </span>
     </button>
   );
 }
@@ -201,17 +245,22 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
       <button
         type="button"
         onClick={open}
-        className={`group relative block w-full shrink-0 overflow-hidden text-left ${GLASS}`}
+        className={CARD}
         aria-label={`${filename} (${item.path})`}
       >
-        <img
-          src={previewUrl(item.path, "workspace", cwd ?? "")}
-          alt={filename}
-          loading="lazy"
-          onError={() => setImageFailed(true)}
-          className="h-[68px] w-full object-cover transition-opacity group-hover:opacity-80"
-        />
-        <span className={`block truncate px-1.5 py-1 text-[10px] text-muted group-hover:text-text ${GLASS_FILENAME_BAR}`}>{filename}</span>
+        <OpenAffordance />
+        <div className={`relative ${PREVIEW_HEIGHT} overflow-hidden bg-surface-2 p-1.5`}>
+          <img
+            src={previewUrl(item.path, "workspace", cwd ?? "")}
+            alt={filename}
+            loading="lazy"
+            onError={() => setImageFailed(true)}
+            className="h-full w-full object-contain"
+          />
+        </div>
+        <span className={FILENAME_BAR}>
+          <FilenameLabel filename={filename} />
+        </span>
       </button>
     );
   }
@@ -235,14 +284,17 @@ export function TurnArtifactStrip({ artifacts, cwd }: { artifacts: TurnArtifactI
   if (!artifacts.length) return null;
 
   return (
-    <section aria-label={t("conversation.generatedFiles")} className="mt-1">
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2">
+    <section aria-label={t("conversation.generatedFiles")} className="mt-3.5">
+      <div className="mb-1.5 text-[10.5px] font-medium tracking-[0.02em] text-muted">
+        {t("conversation.generatedFilesLabel", { count: artifacts.length })}
+      </div>
+      <div className="flex flex-wrap gap-2">
         {visible.map((item) => <ArtifactMiniCard key={item.path} item={item} cwd={cwd} />)}
         {extra > 0 && (
           <button
             type="button"
             onClick={() => setExpanded(true)}
-            className="flex w-full shrink-0 flex-col items-center justify-center gap-1 rounded-card border border-dashed border-white/20 bg-white/35 px-2 py-2 text-[10px] text-muted shadow-[0_8px_32px_rgba(0,0,0,0.08)] backdrop-blur-xl transition-colors hover:border-accent hover:bg-white/55 hover:text-text dark:border-white/10 dark:bg-black/20 dark:hover:bg-black/30"
+            className="flex w-[128px] shrink-0 flex-col items-center justify-center gap-1 rounded-[12px] border border-dashed border-border bg-surface px-2 py-2 text-[10px] text-muted transition-colors hover:border-accent hover:text-text"
           >
             <span className="text-xs font-medium">+{extra}</span>
             <span className="flex items-center gap-0.5"><ChevronDown size={12} aria-hidden />{t("conversation.more")}</span>
@@ -252,7 +304,7 @@ export function TurnArtifactStrip({ artifacts, cwd }: { artifacts: TurnArtifactI
           <button
             type="button"
             onClick={() => setExpanded(false)}
-            className="flex w-full shrink-0 flex-col items-center justify-center gap-1 rounded-card border border-dashed border-white/20 bg-white/35 px-2 py-2 text-[10px] text-muted shadow-[0_8px_32px_rgba(0,0,0,0.08)] backdrop-blur-xl transition-colors hover:border-accent hover:bg-white/55 hover:text-text dark:border-white/10 dark:bg-black/20 dark:hover:bg-black/30"
+            className="flex w-[128px] shrink-0 flex-col items-center justify-center gap-1 rounded-[12px] border border-dashed border-border bg-surface px-2 py-2 text-[10px] text-muted transition-colors hover:border-accent hover:text-text"
           >
             <span className="flex items-center gap-0.5"><ChevronUp size={12} aria-hidden />{t("conversation.collapse")}</span>
           </button>

@@ -826,5 +826,8 @@
   "conversation.generatedFiles": "本轮生成的文件",
   "conversation.more": "更多",
   "conversation.collapse": "收起",
-  "conversation.codeSnippet": "代码片段"
+  "conversation.codeSnippet": "代码片段",
+  "conversation.generatedFilesLabel": "本轮生成 · {{count}}",
+  "conversation.rowsCols": "{{rows}} 行 · {{columns}} 列",
+  "conversation.moreColumns": "另有 {{count}} 列"
 }

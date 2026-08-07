@@ -43,10 +43,13 @@ describe("TurnArtifactStrip", () => {
       />,
     );
     expect(screen.getByLabelText("Generated files")).toBeInTheDocument();
+    expect(screen.getByText("GENERATED · 2")).toBeInTheDocument();
     const image = screen.getByAltText("plot.png");
     expect(image).toHaveAttribute("src", expect.stringContaining("/api/files/serve/work/plot.png"));
     expect(image).toHaveAttribute("loading", "lazy");
-    expect(screen.getByText("summary.csv")).toBeInTheDocument();
+    // Claude Science style: contain (never crop) inside the darker preview area.
+    expect(image.className).toContain("object-contain");
+    expect(screen.getByLabelText("summary.csv (results/summary.csv)")).toBeInTheDocument();
   });
 
   it("collapses to 6 cards with a +N expander and expands on click", async () => {
@@ -58,7 +61,7 @@ describe("TurnArtifactStrip", () => {
     expect(screen.getByText("+3")).toBeInTheDocument();
     await user.click(screen.getByText("+3"));
     await waitFor(() => expect(screen.queryByText("+3")).not.toBeInTheDocument());
-    expect(screen.getByText("f8.txt")).toBeInTheDocument();
+    expect(screen.getByLabelText("f8.txt (work/f8.txt)")).toBeInTheDocument();
   });
 
   it("opens the inspector when a card is clicked", async () => {
@@ -83,21 +86,52 @@ describe("TurnArtifactStrip", () => {
     expect(screen.getByLabelText("broken.png (broken.png)")).toBeInTheDocument();
   });
 
-  it("renders a mini table for csv snippets", async () => {
-    mockReadArtifact.mockResolvedValue({ ...snippetFile(), data: "gene,value\nA,1.0\nB,2.0\nC,3.0\nD,4.0\nE,5.0\nF,6.0" });
+  it("renders a CSV summary badge with rows, columns, type hints and +N more", async () => {
+    mockReadArtifact.mockResolvedValue({ ...snippetFile(), data: "gene,value,fc,padj,log2\nA,1.0,2.5,0.01,3.1\nB,2.0,-1.2,0.04,-2.0\nC,3.0,0.8,0.9,0.4\nD,4.0,1.1,0.02,1.9\nE,5.0,3.3,0.001,4.2\nF,6.0,0.2,0.7,0.1" });
     render(
       <TurnArtifactStrip
         cwd="/workspace"
         artifacts={[{ path: "results/summary.csv", kind: "table", mime: "text/csv", size: 512 }]}
       />,
     );
-    expect(await screen.findByRole("cell", { name: "1.0" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "gene" })).toBeInTheDocument();
-    // Truncated window: the ellipsis replaces the last parsed row (3.0), so
-    // the last visible data row is 2.0.
-    expect(screen.getByRole("cell", { name: "2.0" })).toBeInTheDocument();
-    expect(screen.queryByRole("cell", { name: "3.0" })).not.toBeInTheDocument();
+    expect(await screen.findByText("3+ rows · 5 columns")).toBeInTheDocument();
+    // First three column names are rendered as chips, the rest collapse to +N more.
+    expect(screen.getByText("gene")).toBeInTheDocument();
+    expect(screen.getByText("value")).toBeInTheDocument();
+    expect(screen.getByText("fc")).toBeInTheDocument();
+    expect(screen.getByText("+2 more")).toBeInTheDocument();
+    // Numeric columns show the 123 hint, text columns the abc hint.
+    expect(screen.getAllByText("123").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("abc").length).toBeGreaterThan(0);
     expect(mockReadArtifact).toHaveBeenCalledWith("results/summary.csv", "workspace", "/workspace", 8192);
+    mockReadArtifact.mockReset();
+  });
+
+  it("shows exact row count when the CSV snippet is not truncated", async () => {
+    mockReadArtifact.mockResolvedValue({ ...snippetFile(), data: "a,b\n1,2\n3,4" });
+    render(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{ path: "results/t.csv", kind: "table", mime: "text/csv", size: 512 }]}
+      />,
+    );
+    expect(await screen.findByText("2 rows · 2 columns")).toBeInTheDocument();
+    expect(screen.queryByText(/\+ more/)).not.toBeInTheDocument();
+    mockReadArtifact.mockReset();
+  });
+
+  it("shows every column name when the CSV has few columns", async () => {
+    mockReadArtifact.mockResolvedValue({ ...snippetFile(), data: "a,b\n1,2\n3,4\n5,6\n7,8\n9,0" });
+    render(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{ path: "results/t.csv", kind: "table", mime: "text/csv", size: 512 }]}
+      />,
+    );
+    await screen.findByText("3+ rows · 2 columns");
+    expect(screen.getByText("a")).toBeInTheDocument();
+    expect(screen.getByText("b")).toBeInTheDocument();
+    expect(screen.queryByText(/\+\d+ more/)).not.toBeInTheDocument();
     mockReadArtifact.mockReset();
   });
 
@@ -134,7 +168,7 @@ describe("TurnArtifactStrip", () => {
       />,
     );
     await waitFor(() => {
-      expect(screen.queryByText("summary.csv")).toBeInTheDocument();
+      expect(screen.getByLabelText("summary.csv (results/summary.csv)")).toBeInTheDocument();
     });
     mockReadArtifact.mockReset();
 
@@ -145,7 +179,7 @@ describe("TurnArtifactStrip", () => {
         artifacts={[{ path: "x.pdf", kind: "document", mime: "application/pdf", size: 10 }]}
       />,
     );
-    expect(await screen.findByText("x.pdf")).toBeInTheDocument();
+    expect(await screen.findByLabelText("x.pdf (x.pdf)")).toBeInTheDocument();
     mockReadArtifact.mockReset();
   });
 
@@ -156,11 +190,11 @@ describe("TurnArtifactStrip", () => {
         artifacts={[{ path: "data/table.xlsx", kind: "table", mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: 1024 }]}
       />,
     );
-    expect(screen.getByText("table.xlsx")).toBeInTheDocument();
+    expect(screen.getByLabelText("table.xlsx (data/table.xlsx)")).toBeInTheDocument();
     expect(mockReadArtifact).not.toHaveBeenCalled();
   });
 
-  it("lays cards out in a fill-then-wrap grid with glass styling", () => {
+  it("lays cards out in a fill-then-wrap flex row with Claude Science shell styling", () => {
     const { container } = render(
       <TurnArtifactStrip
         cwd="/workspace"
@@ -170,19 +204,33 @@ describe("TurnArtifactStrip", () => {
         ]}
       />,
     );
-    const grid = container.querySelector("section > div");
-    expect(grid).not.toBeNull();
-    expect(grid!.className).toContain("grid");
-    expect(grid!.className).toContain("grid-cols-[repeat(auto-fill,minmax(140px,1fr))]");
-    // Every card (image thumbnail and icon card) uses the glass shell.
-    const cards = container.querySelectorAll("section > div > button");
+    const row = container.querySelector("section > div:last-child");
+    expect(row).not.toBeNull();
+    expect(row!.className).toContain("flex");
+    expect(row!.className).toContain("flex-wrap");
+    expect(row!.className).toContain("gap-2");
+    // Every card uses the solid shell: fixed 128px, inset ring, no glass blur.
+    const cards = container.querySelectorAll("section > div:last-child > button");
     expect(cards.length).toBe(2);
     cards.forEach((card) => {
-      expect(card.className).toContain("backdrop-blur-xl");
-      expect(card.className).toContain("bg-white/45");
-      expect(card.className).toContain("dark:bg-black/25");
-      expect(card.className).toContain("w-full");
+      expect(card.className).toContain("w-[128px]");
+      expect(card.className).toContain("ring-1");
+      expect(card.className).toContain("ring-inset");
+      expect(card.className).not.toContain("backdrop-blur");
+      expect(card.className).not.toContain("bg-white/45");
     });
+    // Each card carries the hover/focus open affordance.
+    expect(container.querySelectorAll("[class*='group-hover:opacity-100']").length).toBe(2);
+  });
+
+  it("shows the GENERATED · N label above the card row", () => {
+    render(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{ path: "work/a.txt", kind: "text", mime: "text/plain", size: 10 }]}
+      />,
+    );
+    expect(screen.getByText("GENERATED · 1")).toBeInTheDocument();
   });
 
   it("shows a code fade mask on snippet cards and no token-opacity classes", async () => {
@@ -197,7 +245,7 @@ describe("TurnArtifactStrip", () => {
     const fades = container.querySelectorAll("[class*='bg-gradient-to-l']");
     expect(fades.length).toBe(1);
     // No token-opacity utilities (they are no-ops with CSS-variable colors);
-    // native-color opacities like white/60 and black/25 are valid glass styles.
+    // native-color opacities like ring-black/10 are valid.
     const buttons = container.querySelectorAll("button");
     buttons.forEach((button) => {
       expect(button.className).not.toMatch(/(?:muted|surface|accent|border|text|ok|warn|error)\/\d{2}\b/);
@@ -205,48 +253,15 @@ describe("TurnArtifactStrip", () => {
     mockReadArtifact.mockReset();
   });
 
-  it("shows an ellipsis row only when the csv snippet is truncated and keeps the last visible row", async () => {
-    mockReadArtifact.mockResolvedValue({ ...snippetFile(), data: "a,b\n1,2\n3,4\n5,6\n7,8" });
+  it("splits filename and extension so the extension survives truncation", () => {
     const { container } = render(
       <TurnArtifactStrip
         cwd="/workspace"
-        artifacts={[{ path: "results/t.csv", kind: "table", mime: "text/csv", size: 512 }]}
+        artifacts={[{ path: "results/very-long-name.csv", kind: "table", mime: "text/csv", size: 10 }]}
       />,
     );
-    await screen.findByRole("cell", { name: "1" });
-    // Truncated: ellipsis row shown, and the dropped last row (7,8) is not.
-    expect(container.querySelector("tbody")!.textContent).toContain("…");
-    expect(container.querySelector("tbody")!.textContent).not.toContain("7");
-    mockReadArtifact.mockReset();
-  });
-
-  it("shows every row including the last one when the csv snippet is not truncated", async () => {
-    mockReadArtifact.mockResolvedValue({ ...snippetFile(), data: "a,b\n1,2\n3,4" });
-    const { container } = render(
-      <TurnArtifactStrip
-        cwd="/workspace"
-        artifacts={[{ path: "results/t.csv", kind: "table", mime: "text/csv", size: 512 }]}
-      />,
-    );
-    await screen.findByRole("cell", { name: "1" });
-    // Untruncated: every data row renders, including the last one (3,4).
-    expect(screen.getByRole("cell", { name: "4" })).toBeInTheDocument();
-    expect(container.querySelector("tbody")!.textContent).not.toContain("…");
-    mockReadArtifact.mockReset();
-  });
-
-  it("drops the last row in favor of an ellipsis row when the csv snippet is truncated", async () => {
-    mockReadArtifact.mockResolvedValue({ ...snippetFile(), data: "a,b\n1,2\n3,4\n5,6\n7,8\n9,0\n10,11\n12,13\n14,15\n16,17\n18,19\n20,21\n" });
-    const { container } = render(
-      <TurnArtifactStrip
-        cwd="/workspace"
-        artifacts={[{ path: "results/t.csv", kind: "table", mime: "text/csv", size: 512 }]}
-      />,
-    );
-    await screen.findByRole("cell", { name: "1" });
-    expect(container.querySelector("tbody")!.textContent).toContain("…");
-    // The truncated last row (20,21) is replaced by the ellipsis, not rendered.
-    expect(container.querySelector("tbody")!.textContent).not.toContain("21");
-    mockReadArtifact.mockReset();
+    const card = container.querySelector("button");
+    expect(card!.textContent).toContain(".csv");
+    expect(card!.textContent).toContain("very-long-name");
   });
 });

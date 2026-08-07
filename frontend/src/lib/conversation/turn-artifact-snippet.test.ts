@@ -19,12 +19,15 @@ describe("parseCsvSnippet", () => {
     expect(out.rows).toHaveLength(3);
     expect(out.rows[0]).toEqual(["A", "1.0", "0.01"]);
     expect(out.truncated).toBe(true);
+    expect(out.columnCount).toBe(3);
+    expect(out.rowCount).toBe(3);
   });
 
-  it("caps columns at 5", () => {
+  it("caps columns at 5 for rendering but reports the real column count", () => {
     const out = parseCsvSnippet("a,b,c,d,e,f,g\n1,2,3,4,5,6,7");
     expect(out.columns).toHaveLength(5);
     expect(out.rows[0]).toEqual(["1", "2", "3", "4", "5"]);
+    expect(out.columnCount).toBe(7);
   });
 
   it("handles quoted fields containing commas", () => {
@@ -35,6 +38,7 @@ describe("parseCsvSnippet", () => {
   it("is not truncated when rows fit", () => {
     const out = parseCsvSnippet("a,b\n1,2");
     expect(out.truncated).toBe(false);
+    expect(out.rowCount).toBe(1);
   });
 });
 
