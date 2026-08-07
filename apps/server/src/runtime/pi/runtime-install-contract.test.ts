@@ -17,6 +17,7 @@ describe("Pi runtime installation contract", () => {
     expect(fetchScript).toContain('pi-web-access@$PI_WEB_ACCESS_VERSION');
     expect(fetchScript).toContain('context-mode@$CONTEXT_MODE_VERSION');
     expect(fetchScript).toContain('@juicesharp/rpiv-ask-user-question@$RPIV_ASK_USER_QUESTION_VERSION');
+    expect(fetchScript).toContain('@juicesharp/rpiv-todo@$RPIV_TODO_VERSION');
     expect(fetchScript).toContain('--no-save');
     expect(installScript).toContain('PI_CLI="$(cat "$PI_CLI_MARKER")"');
   });

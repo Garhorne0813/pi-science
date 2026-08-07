@@ -56,6 +56,7 @@ function Install-RuntimeExtensions {
     $piWebAccessVersion = Get-Setting "PI_WEB_ACCESS_VERSION" "0.18.0"
     $contextModeVersion = Get-Setting "CONTEXT_MODE_VERSION" "1.0.169"
     $askUserQuestionVersion = Get-Setting "RPIV_ASK_USER_QUESTION_VERSION" "2.3.1"
+    $todoVersion = Get-Setting "RPIV_TODO_VERSION" "2.4.0"
     $arguments = @(
         "install",
         "--prefix", $RuntimeDir,
@@ -67,7 +68,8 @@ function Install-RuntimeExtensions {
         "pi-subagents@$piSubagentsVersion",
         "pi-web-access@$piWebAccessVersion",
         "context-mode@$contextModeVersion",
-        "@juicesharp/rpiv-ask-user-question@$askUserQuestionVersion"
+        "@juicesharp/rpiv-ask-user-question@$askUserQuestionVersion",
+        "@juicesharp/rpiv-todo@$todoVersion"
     )
     Write-Host "==> Installing Pi runtime extensions..."
     & $npmPath @arguments

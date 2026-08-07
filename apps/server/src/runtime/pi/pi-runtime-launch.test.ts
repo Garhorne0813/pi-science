@@ -181,7 +181,7 @@ describe("Pi runtime custom provider materialization", () => {
     // injected package on windows runners.
     process.env.USERPROFILE = installHome;
 
-    const todo = runtimeExtensionStatus(process.env.PI_CLI_PATH!).find((item) => item.id === "rpiv-todo");
+    const todo = runtimeExtensionStatus(process.env.PI_CLI_PATH!, [join(installHome, ".pi", "agent", "npm")]).find((item) => item.id === "rpiv-todo");
 
     expect(todo).toMatchObject({ installed: true, path: extension });
   });
