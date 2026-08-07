@@ -8,6 +8,7 @@ import type { TurnArtifactItem } from "../../types/thread";
 import { codeSnippet, markdownSnippet, parseCsvSnippet, parseTsvSnippet, type CsvSnippet } from "../../lib/conversation/turn-artifact-snippet";
 import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
 import { MoleculeThumb } from "./MoleculeThumb";
+import { ArtifactLightbox } from "./ArtifactLightbox";
 
 const MAX_VISIBLE = 6;
 const SNIPPET_BYTES = 8192;
@@ -162,7 +163,7 @@ function IconCard({ item, cwd, Icon }: { item: TurnArtifactItem; cwd?: string; I
   );
 }
 
-function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
+function SnippetCard({ item, cwd, onLightbox }: { item: TurnArtifactItem; cwd?: string; onLightbox: (item: TurnArtifactItem) => void }) {
   const openInspector = useUiStore((state) => state.openInspector);
   const { t } = useTranslation();
   const filename = item.path.split("/").pop() ?? item.path;
@@ -170,6 +171,12 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
   const snippet = useSnippet(item.path, cwd, snippetKindFor(item) !== "structure");
   const open = () => {
     if (!cwd) return;
+    // Structures open in the centered lightbox (interactive 3D), everything
+    // else keeps opening in the right-side inspector.
+    if (snippetKindFor(item) === "structure") {
+      onLightbox(item);
+      return;
+    }
     openInspector(fileInspectorForPath(item.path, filename, "workspace", cwd));
   };
 
@@ -251,7 +258,7 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
   );
 }
 
-function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
+function ArtifactMiniCard({ item, cwd, onLightbox }: { item: TurnArtifactItem; cwd?: string; onLightbox: (item: TurnArtifactItem) => void }) {
   const openInspector = useUiStore((state) => state.openInspector);
   const filename = item.path.split("/").pop() ?? item.path;
   const Icon = fileIcon(item.kind);
@@ -260,6 +267,11 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
 
   const open = () => {
     if (!cwd) return;
+    // Images open in the centered lightbox; other kinds keep the inspector.
+    if (item.kind === "image") {
+      onLightbox(item);
+      return;
+    }
     openInspector(fileInspectorForPath(item.path, filename, "workspace", cwd));
   };
 
@@ -289,7 +301,7 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
   }
 
   if (snippetKindFor(item)) {
-    return <SnippetCard item={item} cwd={cwd} />;
+    return <SnippetCard item={item} cwd={cwd} onLightbox={onLightbox} />;
   }
 
   return <IconCard item={item} cwd={cwd} Icon={Icon} />;
@@ -301,6 +313,7 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
 export function TurnArtifactStrip({ artifacts, cwd }: { artifacts: TurnArtifactItem[]; cwd?: string }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const [lightboxItem, setLightboxItem] = useState<TurnArtifactItem | null>(null);
   const visible = useMemo(() => (expanded ? artifacts : artifacts.slice(0, MAX_VISIBLE)), [artifacts, expanded]);
   const extra = artifacts.length - visible.length;
 
@@ -312,7 +325,7 @@ export function TurnArtifactStrip({ artifacts, cwd }: { artifacts: TurnArtifactI
         {t("conversation.generatedFilesLabel", { count: artifacts.length })}
       </div>
       <div className="flex flex-wrap gap-2">
-        {visible.map((item) => <ArtifactMiniCard key={item.path} item={item} cwd={cwd} />)}
+        {visible.map((item) => <ArtifactMiniCard key={item.path} item={item} cwd={cwd} onLightbox={setLightboxItem} />)}
         {extra > 0 && (
           <button
             type="button"
@@ -333,6 +346,12 @@ export function TurnArtifactStrip({ artifacts, cwd }: { artifacts: TurnArtifactI
           </button>
         )}
       </div>
+      <ArtifactLightbox
+        item={lightboxItem}
+        cwd={cwd}
+        open={lightboxItem !== null}
+        onOpenChange={(open) => { if (!open) setLightboxItem(null); }}
+      />
     </section>
   );
 }

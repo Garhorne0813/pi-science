@@ -25,12 +25,18 @@ vi.mock("./MoleculeThumb", () => ({
   MoleculeThumb: () => <div data-testid="molecule-thumb" />,
 }));
 
+// ArtifactLightbox lazily imports MoleculeView (WebGL/3dmol): stub it.
+vi.mock("../inspector/MoleculeView", () => ({
+  MoleculeView: () => <div data-testid="lightbox-molecule" />,
+}));
+
 function snippetFile(encoding: "utf8" | "base64" = "utf8") {
   return { path: "x", mime: "text/plain", encoding, data: "x", size: 1 };
 }
 
 beforeEach(() => {
   mockReadArtifact.mockReset();
+  openInspector.mockClear();
   // Default: snippet reads fail → cards degrade to icon-only.
   mockReadArtifact.mockResolvedValue(null);
 });
@@ -68,7 +74,26 @@ describe("TurnArtifactStrip", () => {
     expect(screen.getByLabelText("f8.txt (work/f8.txt)")).toBeInTheDocument();
   });
 
-  it("opens the inspector when a card is clicked", async () => {
+  it("opens the inspector for non-image/structure cards", async () => {
+    const user = userEvent.setup();
+    // Resolve the snippet so the card is stable before clicking (a loading→
+    // ready re-render can replace the button mid-click under userEvent).
+    mockReadArtifact.mockResolvedValue({
+      path: "results/summary.csv", mime: "text/csv", encoding: "utf8", data: "a,b\n1,2\n3,4", size: 12,
+    });
+    render(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{ path: "results/summary.csv", kind: "table", mime: "text/csv", size: 10 }]}
+      />,
+    );
+    await waitFor(() => expect(screen.queryByText(/rows/)).toBeInTheDocument());
+    await user.click(screen.getByLabelText("summary.csv (results/summary.csv)"));
+    expect(openInspector).toHaveBeenCalledWith(expect.objectContaining({ variant: "file", path: "results/summary.csv", cwd: "/workspace" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("opens the centered lightbox for image cards instead of the inspector", async () => {
     const user = userEvent.setup();
     render(
       <TurnArtifactStrip
@@ -77,7 +102,28 @@ describe("TurnArtifactStrip", () => {
       />,
     );
     await user.click(screen.getByLabelText("a.png (figures/a.png)"));
-    expect(openInspector).toHaveBeenCalledWith(expect.objectContaining({ variant: "file", path: "figures/a.png", cwd: "/workspace" }));
+    expect(openInspector).not.toHaveBeenCalled();
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "a.png" })).toBeInTheDocument();
+  });
+
+  it("opens the centered lightbox for structure cards", async () => {
+    const user = userEvent.setup();
+    mockReadArtifact.mockResolvedValue({
+      path: "work/1ake.pdb", mime: "text/plain", encoding: "utf8", data: "ATOM      1  N", size: 10,
+    });
+    render(
+      <TurnArtifactStrip
+        cwd="/workspace"
+        artifacts={[{ path: "work/1ake.pdb", kind: "structure", mime: "chemical/x-pdb", size: 10 }]}
+      />,
+    );
+    await user.click(screen.getByLabelText("1ake.pdb (work/1ake.pdb)"));
+    expect(openInspector).not.toHaveBeenCalled();
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("lightbox-molecule")).toBeInTheDocument());
   });
 
   it("keeps an accessible card when the image source is unavailable", () => {

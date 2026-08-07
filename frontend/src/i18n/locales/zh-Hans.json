@@ -829,5 +829,8 @@
   "conversation.codeSnippet": "代码片段",
   "conversation.generatedFilesLabel": "本轮生成 · {{count}}",
   "conversation.rowsCols": "{{rows}} 行 · {{columns}} 列",
-  "conversation.moreColumns": "另有 {{count}} 列"
+  "conversation.moreColumns": "另有 {{count}} 列",
+  "conversation.lightboxLoadError": "无法加载文件",
+  "conversation.lightboxStructurePartial": "大结构文件——仅展示前 4 MB",
+  "conversation.lightboxImageLabel": "{{name}} 大图预览"
 }
