@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { attachTurnArtifacts, foldEvent } from "./event-fold";
+import { beforeEach, describe, expect, it } from "vitest";
+import { attachTurnArtifacts, foldEvent, resetTurnBuffer } from "./event-fold";
 import type { Thread } from "./event-fold";
 import type { PiScienceEvent } from "../client/pi-science-client";
+
+beforeEach(() => { resetTurnBuffer(); });
 
 function threadWith(blocks: Array<{ kind: string; id: string; [key: string]: unknown }>): Thread {
   const index: Record<string, number> = {};
@@ -87,6 +89,55 @@ describe("foldEvent turn.artifacts", () => {
     const state = threadWith([{ kind: "user", id: "user-1", text: "hi" }]);
     const next = foldEvent(state, { type: "turn.artifacts", sessionId: "s", turnId: "turn-1", artifacts: [] } as PiScienceEvent);
     expect(next.blocks.filter((block) => block.kind === "artifact-summary")).toHaveLength(0);
+  });
+
+  it("anchors at the turn end when a turn spans several assistant messages without ids", () => {
+    let state = threadWith([{ kind: "user", id: "user-1", text: "analyze" }]);
+    // Part ids mirror Pi's anonymous-N series: one narration message, then the
+    // final answer — the strip must land after the LAST one, not in between.
+    state = foldEvent(state, { type: "text.updated", sessionId: "s", partId: "anonymous-2", text: "narration" });
+    state = foldEvent(state, { type: "text.updated", sessionId: "s", partId: "anonymous-3", text: "final answer" });
+    state = foldEvent(state, { type: "turn.artifacts", sessionId: "s", turnId: "turn-1", artifacts: [{ path: "x.png", kind: "image", mime: "image/png", size: 1 }] });
+    expect(state.blocks.map((block) => block.kind)).toEqual(["user", "agent", "agent", "artifact-summary"]);
+    expect(state.index["turn-artifacts-turn-1"]).toBe(3);
+  });
+
+  it("anchors each strip at its own turn's end across two multi-message turns", () => {
+    let state = threadWith([{ kind: "user", id: "user-1", text: "go" }]);
+    const base = { type: "turn.artifacts", sessionId: "s" } as PiScienceEvent;
+    // Turn 1: two assistant messages.
+    state = foldEvent(state, { type: "text.updated", sessionId: "s", partId: "anonymous-2", text: "r1a" });
+    state = foldEvent(state, { type: "text.updated", sessionId: "s", partId: "anonymous-3", text: "r1b" });
+    state = foldEvent(state, { ...base, turnId: "turn-1", artifacts: [{ path: "x.png", kind: "image", mime: "image/png", size: 1 }] });
+    // Turn 2 (agent_start clears the turn state) with two assistant messages.
+    resetTurnBuffer();
+    state = foldEvent(state, { type: "text.updated", sessionId: "s", partId: "anonymous-4", text: "r2a" });
+    state = foldEvent(state, { type: "text.updated", sessionId: "s", partId: "anonymous-5", text: "r2b" });
+    state = foldEvent(state, { ...base, turnId: "turn-2", artifacts: [{ path: "y.csv", kind: "table", mime: "text/csv", size: 2 }] });
+    expect(state.blocks.map((block) => block.kind)).toEqual(["user", "agent", "agent", "artifact-summary", "agent", "agent", "artifact-summary"]);
+    expect(state.blocks[3]).toMatchObject({ turnId: "turn-1" });
+    expect(state.blocks[6]).toMatchObject({ turnId: "turn-2" });
+  });
+
+  it("prefers an exact assistant message id over the live turn-end anchor", () => {
+    let state = threadWith([
+      { kind: "user", id: "user-1", text: "x" },
+      { kind: "agent", id: "exact", parts: [{ id: "exact", text: "matched" }] },
+    ]);
+    // A later live text block moves the turn-end anchor away from "exact".
+    state = foldEvent(state, { type: "text.updated", sessionId: "s", partId: "live-part", text: "live text" });
+    state = foldEvent(state, { type: "turn.artifacts", sessionId: "s", turnId: "turn-1", assistantMessageId: "exact", artifacts: [{ path: "a.png", kind: "image", mime: "image/png", size: 1 }] });
+    expect(state.index["turn-artifacts-turn-1"]).toBe(2);
+    expect(state.blocks[1]).toMatchObject({ id: "exact" });
+  });
+
+  it("appends to the thread end for a tool-only turn without agent blocks", () => {
+    let state = threadWith([
+      { kind: "user", id: "user-1", text: "x" },
+      { kind: "tool", id: "tool-1", callId: "c1", tool: "bash", status: "done" },
+    ]);
+    state = foldEvent(state, { type: "turn.artifacts", sessionId: "s", turnId: "turn-1", artifacts: [{ path: "a.csv", kind: "table", mime: "text/csv", size: 2 }] });
+    expect(state.blocks.at(-1)).toMatchObject({ kind: "artifact-summary", turnId: "turn-1" });
   });
 });
 

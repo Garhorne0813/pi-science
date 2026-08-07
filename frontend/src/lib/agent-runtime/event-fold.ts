@@ -23,12 +23,18 @@ export function emptyThread(): Thread {
 
 let _textBuffer = ""; // Accumulates text deltas
 let _currentTurnId = ""; // Unique ID per agent turn, resets on agent_start
+/** Index (in the folded block list) of the last agent block inserted or
+ *  updated in the current turn. `turn.artifacts` arrives after the turn's
+ *  final assistant message, so this is the exact "turn end" position even
+ *  when the turn spans several assistant messages (anonymous part ids). */
+let _turnLastAgentIndex = -1;
 
 /** Drop the accumulated text of the current turn. Called by every path that
  *  begins a new turn or invalidates the one in flight. */
 export function resetTurnBuffer(): void {
   _textBuffer = "";
   _currentTurnId = "";
+  _turnLastAgentIndex = -1;
 }
 
 export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
@@ -73,6 +79,7 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
           // Update turn ID so subsequent events find this post-tool block
           _currentTurnId = turnId + "-post";
           index[turnId + "-post"] = blocks.length;
+          _turnLastAgentIndex = blocks.length;
           blocks.push({
             kind: "agent",
             id: turnId + "-post",
@@ -88,6 +95,7 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
             partial: true,
             timestamp: blocks[existingIdx].kind === "agent" ? blocks[existingIdx].timestamp : undefined,
           } as ThreadBlock;
+          _turnLastAgentIndex = existingIdx;
         }
       } else {
         // New block for this turn
@@ -99,6 +107,7 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
           timestamp: new Date().toISOString(),
         };
         index[blockId] = blocks.length;
+        _turnLastAgentIndex = blocks.length;
         blocks.push(block);
       }
       break;
@@ -167,6 +176,12 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
       const assistantMessageId = block.assistantMessageId;
       if (assistantMessageId && index[assistantMessageId] !== undefined) {
         insertAt = index[assistantMessageId] + 1;
+      }
+      if (insertAt < 0 && _turnLastAgentIndex >= 0) {
+        // Live fold: anchor at the END of the current turn (after its last
+        // assistant message), not after an intermediate message of a turn
+        // that spans several assistant messages.
+        insertAt = _turnLastAgentIndex + 1;
       }
       if (insertAt < 0 && Number.isInteger(turnOrdinal) && turnOrdinal > 0) {
         // Anchor to the n-th agent block when the turn ordinal is known. This
@@ -392,7 +407,11 @@ function afterAgentBlock(blocks: ThreadBlock[], ordinal: number): number {
  *  the full history arrived).
  *
  *  Anchoring order: exact assistant message id → turn_ordinal (n-th agent
- *  block) → record order fallback → end of thread. */
+ *  block) → record order fallback → end of thread.
+ *  Limitation: the n-th agent block may be an intermediate message of a
+ *  turn that spans several assistant messages (Pi emits anonymous part ids
+ *  without a message id); live folds are exact via _turnLastAgentIndex, but
+ *  history restore without ids keeps this ordinal approximation. */
 export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): Thread {
   if (!turns || turns.length === 0) return thread;
   let blocks = thread.blocks;
