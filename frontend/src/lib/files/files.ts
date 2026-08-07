@@ -20,17 +20,22 @@ export interface ArtifactFile {
   encoding: "utf8" | "base64";
   data: string;
   size: number;
+  /** Present when maxBytes was requested and the file is larger than the cap. */
+  truncated?: boolean;
 }
 
-/** Read a workspace file. Uses REST API. */
+/** Read a workspace file. Uses REST API. `maxBytes` caps the response to the
+ *  first N bytes (used by per-turn artifact cards to preview file content). */
 export async function readArtifact(
   path: string,
   root: FileRoot | undefined,
   cwd: string,
+  maxBytes?: number,
 ): Promise<ArtifactFile | null> {
   try {
     const params = new URLSearchParams({ cwd });
     if (root) params.set("root", root);
+    if (maxBytes !== undefined) params.set("maxBytes", String(maxBytes));
     return await apiRequest<ArtifactFile>(`${API}/files/${encodeWorkspacePath(path)}?${params}`);
   } catch {
     return null;

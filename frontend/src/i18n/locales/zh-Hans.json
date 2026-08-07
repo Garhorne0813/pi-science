@@ -825,5 +825,6 @@
   "todo.switchMode": "切换为{{mode}}",
   "conversation.generatedFiles": "本轮生成的文件",
   "conversation.more": "更多",
-  "conversation.collapse": "收起"
+  "conversation.collapse": "收起",
+  "conversation.codeSnippet": "代码片段"
 }

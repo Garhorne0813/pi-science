@@ -825,5 +825,6 @@
   "todo.switchMode": "Switch to {{mode}}",
   "conversation.generatedFiles": "Generated files",
   "conversation.more": "more",
-  "conversation.collapse": "collapse"
+  "conversation.collapse": "collapse",
+  "conversation.codeSnippet": "Code snippet"
 }

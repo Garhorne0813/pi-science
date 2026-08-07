@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { isUtf8 } from "node:buffer";
 import { basename, dirname, extname, join, relative, sep } from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -232,7 +232,19 @@ async function readWorkspaceFile(
     const metadata = await stat(target);
     if (!metadata.isFile()) return reply.code(400).send({ error: `Not a file: ${path}` });
     if (metadata.size > 50 * 1024 * 1024) return reply.code(400).send({ error: `File too large to read (${metadata.size} bytes). Use /api/files/probe for structure.` });
-    const data = await readFile(target);
+    // Optional snippet read: cap the response to the first N bytes (used by
+    // per-turn artifact cards to preview file content without transferring
+    // the whole file). Reads only the requested window from disk.
+    let maxBytes: number | null = null;
+    const maxBytesRaw = queryValue(request, "maxBytes", "");
+    if (maxBytesRaw !== "") {
+      if (!/^\d+$/.test(maxBytesRaw)) return reply.code(400).send({ error: "maxBytes must be a positive integer" });
+      const parsed = Number(maxBytesRaw);
+      if (!Number.isSafeInteger(parsed) || parsed <= 0) return reply.code(400).send({ error: "maxBytes must be a positive integer" });
+      maxBytes = parsed;
+    }
+    const truncated = maxBytes !== null && metadata.size > maxBytes;
+    const data = maxBytes !== null ? await readFileChunk(target, maxBytes) : await readFile(target);
     const forceBase64 = queryValue(request, "format", "text") === "base64";
     const encoding = !forceBase64 && isUtf8(data) ? "utf8" : "base64";
     return {
@@ -240,9 +252,22 @@ async function readWorkspaceFile(
       encoding,
       data: encoding === "utf8" ? data.toString("utf8") : data.toString("base64"),
       size: data.byteLength,
+      ...(truncated ? { truncated: true } : {}),
     };
   } catch (error) {
     return reply.code(404).send({ error: String(error) });
+  }
+}
+
+/** Read only the first `maxBytes` bytes of a file without loading the rest. */
+async function readFileChunk(path: string, maxBytes: number): Promise<Buffer> {
+  const handle = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(maxBytes);
+    const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
   }
 }
 
