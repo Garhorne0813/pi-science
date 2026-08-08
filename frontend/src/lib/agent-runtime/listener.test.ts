@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { useRuntimeStore } from "./index";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
+import * as fileRevision from "./file-revision";
 
 
 installRuntimeTestEnvironment();
@@ -403,5 +404,28 @@ describe("runtime event subscription", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(localStorage.getItem("pi-science.session-names-ai")).toBeNull();
     expect(JSON.parse(localStorage.getItem("pi-science.session-names") ?? "{}")).toEqual({});
+  });
+
+  it("refreshes the workspace file tree exactly once per settled turn", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-a", { is_streaming: false }));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const mark = vi.spyOn(fileRevision, "markWorkspaceFilesChanged");
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    mark.mockClear();
+    const source = FakeEventSource.instances[0];
+    source.open();
+    source.emit("agent_start", { type: "agent_start", sessionId: "session-a" });
+    // The backend normalizes agent_settled into session.idle; that single
+    // event must bump the tree revision exactly once.
+    source.emit("session.idle", { type: "session.idle", sessionId: "session-a" });
+    // The server publishes turn.artifacts from the settled observer; the
+    // listener must NOT bump the tree revision a second time.
+    source.emit("turn.artifacts", { type: "turn.artifacts", sessionId: "session-a", turnId: "t1", artifacts: [] });
+    await vi.waitFor(() => expect(mark).toHaveBeenCalledTimes(1));
   });
 });

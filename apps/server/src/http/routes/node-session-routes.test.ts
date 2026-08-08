@@ -297,4 +297,80 @@ describe("native Node conversation routes", () => {
     expect(response.json()).toEqual({ commands: [] });
     await server.close();
   });
+
+  it("persists session titles and surfaces them in the session list", async () => {
+    const cwd = await workspaceWithSessions("session-a", "session-b");
+    const server = app();
+    const query = `cwd=${encodeURIComponent(cwd)}`;
+
+    // No titles initially: the list has no names.
+    const before = await server.inject({ method: "GET", url: `/api/sessions?${query}` });
+    const beforeList = before.json() as Array<{ id: string; name: string | null }>;
+    expect(beforeList.find((s) => s.id === "session-a")?.name ?? null).toBeNull();
+
+    // Set a title for session-a.
+    const put = await server.inject({
+      method: "PUT",
+      url: `/api/sessions/session-a/title?${query}`,
+      payload: { title: "蛋白质工程分析" },
+    });
+    expect(put.statusCode).toBe(200);
+    expect(put.json()).toMatchObject({ ok: true, title: "蛋白质工程分析" });
+
+    // The list now carries the persisted name.
+    const after = await server.inject({ method: "GET", url: `/api/sessions?${query}` });
+    const afterList = after.json() as Array<{ id: string; name: string | null }>;
+    expect(afterList.find((s) => s.id === "session-a")?.name).toBe("蛋白质工程分析");
+    expect(afterList.find((s) => s.id === "session-b")?.name ?? null).toBeNull();
+
+    // Upsert overwrites.
+    await server.inject({
+      method: "PUT",
+      url: `/api/sessions/session-a/title?${query}`,
+      payload: { title: "新标题" },
+    });
+    const updated = await server.inject({ method: "GET", url: `/api/sessions?${query}` });
+    expect((updated.json() as Array<{ id: string; name: string | null }>).find((s) => s.id === "session-a")?.name).toBe("新标题");
+    await server.close();
+  });
+
+  it("validates title payloads and workspace ownership", async () => {
+    const cwd = await workspaceWithSessions("session-a");
+    const server = app();
+    const query = `cwd=${encodeURIComponent(cwd)}`;
+
+    const empty = await server.inject({ method: "PUT", url: `/api/sessions/session-a/title?${query}`, payload: { title: "   " } });
+    expect(empty.statusCode).toBe(400);
+    expect(empty.json()).toMatchObject({ code: "invalid_request" });
+
+    const tooLong = await server.inject({ method: "PUT", url: `/api/sessions/session-a/title?${query}`, payload: { title: "x".repeat(101) } });
+    expect(tooLong.statusCode).toBe(400);
+
+    const missing = await server.inject({ method: "PUT", url: `/api/sessions/ghost-no-such/title?${query}`, payload: { title: "ok" } });
+    expect(missing.statusCode).toBe(404);
+
+    const badWorkspace = await server.inject({ method: "PUT", url: `/api/sessions/session-a/title?cwd=${encodeURIComponent("/no/such/workspace")}`, payload: { title: "ok" } });
+    expect(badWorkspace.statusCode).toBe(403);
+    await server.close();
+  });
+
+  it("clears the persisted title when the session is deleted", async () => {
+    const cwd = await workspaceWithSessions("session-a");
+    const server = app();
+    const query = `cwd=${encodeURIComponent(cwd)}`;
+    await server.inject({ method: "PUT", url: `/api/sessions/session-a/title?${query}`, payload: { title: "gone soon" } });
+
+    const deleted = await server.inject({ method: "DELETE", url: `/api/sessions/session-a?${query}` });
+    expect(deleted.statusCode).toBe(200);
+
+    const list = await server.inject({ method: "GET", url: `/api/sessions?${query}` });
+    const sessions = list.json() as Array<{ id: string; name: string | null }>;
+    expect(sessions.some((s) => s.id === "session-a" && s.name === "gone soon")).toBe(false);
+
+    // The title file no longer references the deleted session.
+    const { readFile } = await import("node:fs/promises");
+    const raw = await readFile(join(cwd, ".pi-science", "session-titles.jsonl"), "utf8").catch(() => "");
+    expect(raw.includes("gone soon")).toBe(false);
+    await server.close();
+  });
 });

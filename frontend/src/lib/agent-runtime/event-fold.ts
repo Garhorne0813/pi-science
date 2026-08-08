@@ -7,7 +7,8 @@
  *  clears it through `resetTurnBuffer()`. */
 
 import type { ThreadBlock } from "../../types/thread";
-import type { HistoryMessage, PiScienceEvent } from "../client/pi-science-client";
+import type { TurnArtifactItem } from "../../types/thread";
+import type { HistoryMessage, PiScienceEvent, TurnArtifactTurn } from "../client/pi-science-client";
 
 export interface Thread {
   blocks: ThreadBlock[];
@@ -22,12 +23,18 @@ export function emptyThread(): Thread {
 
 let _textBuffer = ""; // Accumulates text deltas
 let _currentTurnId = ""; // Unique ID per agent turn, resets on agent_start
+/** Index (in the folded block list) of the last agent block inserted or
+ *  updated in the current turn. `turn.artifacts` arrives after the turn's
+ *  final assistant message, so this is the exact "turn end" position even
+ *  when the turn spans several assistant messages (anonymous part ids). */
+let _turnLastAgentIndex = -1;
 
 /** Drop the accumulated text of the current turn. Called by every path that
  *  begins a new turn or invalidates the one in flight. */
 export function resetTurnBuffer(): void {
   _textBuffer = "";
   _currentTurnId = "";
+  _turnLastAgentIndex = -1;
 }
 
 export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
@@ -72,6 +79,7 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
           // Update turn ID so subsequent events find this post-tool block
           _currentTurnId = turnId + "-post";
           index[turnId + "-post"] = blocks.length;
+          _turnLastAgentIndex = blocks.length;
           blocks.push({
             kind: "agent",
             id: turnId + "-post",
@@ -87,6 +95,7 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
             partial: true,
             timestamp: blocks[existingIdx].kind === "agent" ? blocks[existingIdx].timestamp : undefined,
           } as ThreadBlock;
+          _turnLastAgentIndex = existingIdx;
         }
       } else {
         // New block for this turn
@@ -98,6 +107,7 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
           timestamp: new Date().toISOString(),
         };
         index[blockId] = blocks.length;
+        _turnLastAgentIndex = blocks.length;
         blocks.push(block);
       }
       break;
@@ -137,19 +147,61 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
     }
 
     case "artifact.published": {
-      const artifactId = String(event.artifactId || "");
-      const path = String(event.path || "");
-      const verification = event.verification as { status?: string } | undefined;
+      // Folded into the per-turn artifact summary (`turn.artifacts`); a
+      // standalone status line would duplicate the strip. Publication state
+      // is still tracked via `publishedArtifactPaths` for prose references.
+      break;
+    }
+
+    case "turn.artifacts": {
+      const turnId = String(event.turnId || "");
+      const items = Array.isArray(event.artifacts) ? event.artifacts as TurnArtifactItem[] : [];
+      if (!turnId || items.length === 0) break;
+      const blockId = `turn-artifacts-${turnId}`;
+      const turnOrdinal = Number(event.turnOrdinal);
       const block: ThreadBlock = {
-        kind: "status-line",
-        id: `artifact-${artifactId || path}-${String(event.version || "")}`,
-        text: `Published artifact: ${path}${artifactId ? ` (${artifactId})` : ""}`,
-        level: verification?.status === "failed" ? "warn" : "done",
-        artifactId,
-        path,
+        kind: "artifact-summary",
+        id: blockId,
+        turnId,
+        assistantMessageId: event.assistantMessageId ? String(event.assistantMessageId) : null,
+        ...(Number.isInteger(turnOrdinal) && turnOrdinal > 0 ? { turnOrdinal } : {}),
+        artifacts: items,
       };
-      index[block.id] = blocks.length;
-      blocks.push(block);
+      const existing = index[blockId];
+      if (existing !== undefined) {
+        blocks[existing] = block;
+        break;
+      }
+      let insertAt = -1;
+      const assistantMessageId = block.assistantMessageId;
+      if (assistantMessageId && index[assistantMessageId] !== undefined) {
+        insertAt = index[assistantMessageId] + 1;
+      }
+      if (insertAt < 0 && _turnLastAgentIndex >= 0) {
+        // Live fold: anchor at the END of the current turn (after its last
+        // assistant message), not after an intermediate message of a turn
+        // that spans several assistant messages.
+        insertAt = _turnLastAgentIndex + 1;
+      }
+      if (insertAt < 0 && Number.isInteger(turnOrdinal) && turnOrdinal > 0) {
+        // Anchor to the n-th agent block when the turn ordinal is known. This
+        // is reliable even when earlier turns produced no record (a pure
+        // record-ordinal fallback would misplace strips in that case).
+        insertAt = afterAgentBlock(blocks, turnOrdinal);
+      }
+      if (insertAt < 0) {
+        // Pi's agent_settled does not carry a message id, so summaries are
+        // anchored by turn order: the n-th strip goes right after the n-th
+        // agent block (live agent blocks are keyed by text.updated partId).
+        const insertedBefore = blocks.filter((b) => b.kind === "artifact-summary").length;
+        insertAt = afterAgentBlock(blocks, insertedBefore + 1);
+      }
+      if (insertAt < 0) insertAt = blocks.length;
+      blocks.splice(insertAt, 0, block);
+      for (const key of Object.keys(index)) {
+        if (index[key] >= insertAt) index[key] += 1;
+      }
+      index[blockId] = insertAt;
       break;
     }
 
@@ -331,4 +383,117 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
     }
   }
   return blocks;
+}
+
+/** Position right after the `ordinal`-th agent block (1-based), or the end of
+ *  the thread when there are fewer agent blocks (e.g. tool-only turns). Used to
+ *  anchor turn-artifact strips by turn order when no assistant message id is
+ *  available. */
+function afterAgentBlock(blocks: ThreadBlock[], ordinal: number): number {
+  let count = 0;
+  for (let i = 0; i < blocks.length; i += 1) {
+    if (blocks[i].kind === "agent") {
+      count += 1;
+      if (count === ordinal) return i + 1;
+    }
+  }
+  return blocks.length;
+}
+
+/** Position right after the LAST agent block of the `turnIndex`-th turn
+ *  (1-based). Turns are delimited by user-message boundaries: turn N is the
+ *  span between the N-th user block and the (N+1)-th user block (or thread
+ *  end). A turn with no agent block (tool-only) anchors at its own span end.
+ *  Falls back to the `turnIndex`-th agent block when user boundaries are
+ *  insufficient (paged history missing early user messages), so the strip
+ *  never lands between messages of a multi-assistant-message turn. */
+function afterTurnEnd(blocks: ThreadBlock[], turnIndex: number): number {
+  const userIndexes: number[] = [];
+  blocks.forEach((block, position) => { if (block.kind === "user") userIndexes.push(position); });
+  if (userIndexes.length < turnIndex) return afterAgentBlock(blocks, turnIndex);
+  const spanStart = userIndexes[turnIndex - 1] + 1;
+  const spanEnd = turnIndex < userIndexes.length ? userIndexes[turnIndex] : blocks.length;
+  let lastAgent = -1;
+  for (let i = spanStart; i < spanEnd; i += 1) {
+    if (blocks[i].kind === "agent") lastAgent = i;
+  }
+  return lastAgent >= 0 ? lastAgent + 1 : spanEnd;
+}
+
+/** Attach persisted per-turn artifact summaries to a history-built thread.
+ *  Idempotent per turn id: when the strip is already present it is updated in
+ *  place when its position is correct, otherwise it is repositioned to the
+ *  right place (SSE replay may have inserted it at a fallback position before
+ *  the full history arrived).
+ *
+ *  Anchoring order: exact assistant message id → turn_ordinal (end of the
+ *  n-th turn, delimited by user messages) → record order fallback → end of
+ *  thread. Turns spanning several assistant messages anchor after the LAST
+ *  one (Pi emits anonymous part ids without a message id); when user
+ *  boundaries are unavailable (paged history) it falls back to the n-th
+ *  agent block approximation. */
+export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): Thread {
+  if (!turns || turns.length === 0) return thread;
+  let blocks = thread.blocks;
+  let index = thread.index;
+  let changed = false;
+  let insertedBefore = blocks.filter((b) => b.kind === "artifact-summary").length;
+  for (const turn of turns) {
+    const items = Array.isArray(turn.artifacts) ? turn.artifacts as TurnArtifactItem[] : [];
+    if (!turn.turn_id || items.length === 0) continue;
+    const blockId = `turn-artifacts-${turn.turn_id}`;
+    const assistantMessageId = turn.assistant_message_id ?? null;
+    const ordinal = Number(turn.turn_ordinal);
+    let insertAt = -1;
+    if (assistantMessageId && index[assistantMessageId] !== undefined) insertAt = index[assistantMessageId] + 1;
+    if (insertAt < 0 && Number.isInteger(ordinal) && ordinal > 0) {
+      // Anchor to the END of the ordinal-th turn (user-message delimited) so
+      // multi-assistant-message turns get their strip after the last message;
+      // falls back to the n-th agent block when user boundaries are missing.
+      insertAt = afterTurnEnd(blocks, ordinal);
+    }
+    if (insertAt < 0) {
+      // Anchor by turn order: the next ordinal strip goes right after the
+      // matching agent block, falling back to the end for tool-only turns.
+      insertAt = afterAgentBlock(blocks, insertedBefore + 1);
+    }
+    if (insertAt < 0) insertAt = blocks.length;
+    const block: ThreadBlock = {
+      kind: "artifact-summary",
+      id: blockId,
+      turnId: turn.turn_id,
+      assistantMessageId,
+      ...(Number.isInteger(ordinal) && ordinal > 0 ? { turnOrdinal: ordinal } : {}),
+      artifacts: items,
+    };
+    const existingIdx = index[blockId];
+    if (existingIdx !== undefined) {
+      if (existingIdx === insertAt) {
+        // Already at the right place: refresh the block content in place.
+        blocks[existingIdx] = block;
+        changed = true;
+        continue;
+      }
+      // Reposition: remove from the old slot, then re-insert at the target.
+      blocks.splice(existingIdx, 1);
+      const nextIndex: Record<string, number> = {};
+      for (const key of Object.keys(index)) {
+        if (key === blockId) continue;
+        if (index[key] > existingIdx) nextIndex[key] = index[key] - 1;
+        else nextIndex[key] = index[key];
+      }
+      index = nextIndex;
+      if (insertAt > existingIdx) insertAt -= 1;
+    }
+    blocks.splice(insertAt, 0, block);
+    insertedBefore += 1;
+    index = { ...index };
+    for (const key of Object.keys(index)) {
+      if (index[key] >= insertAt) index[key] += 1;
+    }
+    index[blockId] = insertAt;
+    changed = true;
+  }
+  if (!changed) return thread;
+  return { blocks, index, loaded: thread.loaded };
 }

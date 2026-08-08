@@ -35,6 +35,15 @@ export const workspaceFiles = {
     return result;
   },
 
+  async refreshDirectory(cwd: string, subdir = "", signal?: AbortSignal): Promise<{ entries: FileListEntry[]; breadcrumbs: Breadcrumb[] }> {
+    // Invalidate only this directory's cache entry, then re-read it. The default
+    // 3s staleTime would otherwise serve a stale listing to callers that read
+    // directly (no useQuery observer), so the invalidation must happen before
+    // the fetch.
+    void queryClient.invalidateQueries({ queryKey: workspaceFilesKey(cwd, subdir) });
+    return this.directory(cwd, subdir, signal);
+  },
+
   async sidebar(cwd: string, signal?: AbortSignal): Promise<FileListEntry[]> {
     const { entries } = await this.directory(cwd, "", signal);
     return entries.filter((entry) => !entry.name.startsWith(".")).slice(0, 30);

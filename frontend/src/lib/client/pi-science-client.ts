@@ -10,7 +10,7 @@ import { clearCachedMessages, readCachedMessages } from "./message-cache";
 import * as rest from "./rest";
 import { clearAiTitle, clearAiTitleAttempted, clearSessionName } from "./session-names";
 import { SseTransport } from "./sse-transport";
-import type { HistoryMessage, InteractionResponse, PiScienceEvent, SessionInfo, SessionMessagePage, SessionState, SessionUserMessageIndex } from "./types";
+import type { HistoryMessage, InteractionResponse, PiScienceEvent, SessionInfo, SessionMessagePage, SessionState, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
 
 export type {
   AvailableModel,
@@ -21,6 +21,7 @@ export type {
   SessionMessagePage,
   SessionState,
   SessionUserMessageIndex,
+  TurnArtifactTurn,
 } from "./types";
 export { clampThinkingLevel, conversationModelOptions } from "./models";
 export { aiTitleAttemptedAt, clearAiTitle, clearAiTitleAttempted, clearSessionName, deriveSessionName, getSessionName, hasAiTitle, markAiTitle, markAiTitleAttempted, moveSessionName, setSessionName } from "./session-names";
@@ -79,6 +80,10 @@ export class PiScienceClient {
     return rest.getUserMessageIndex(this.baseUrl, sessionId, cwd);
   }
 
+  async getTurnArtifacts(sessionId: string, cwd?: string): Promise<{ turns: TurnArtifactTurn[] }> {
+    return rest.getTurnArtifacts(this.baseUrl, sessionId, cwd);
+  }
+
   /** Return the most recently cached message snapshot for a session, or null.
    *  Used to render the conversation instantly on switch before the network
    *  response arrives. */
@@ -114,6 +119,12 @@ export class PiScienceClient {
 
   async abort(sessionId: string, cwd?: string): Promise<void> {
     return rest.abort(this.baseUrl, sessionId, cwd);
+  }
+
+  /** Persist a session display title on the server (best-effort; the
+   *  localStorage registry remains the immediate/fallback source). */
+  async setSessionTitle(sessionId: string, title: string, cwd?: string): Promise<void> {
+    await rest.setSessionTitle(this.baseUrl, sessionId, title, cwd);
   }
 
   async deleteSession(sessionId: string, cwd?: string): Promise<void> {

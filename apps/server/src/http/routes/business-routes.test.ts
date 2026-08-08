@@ -445,6 +445,33 @@ describe("native control-plane business routes", () => {
     expect(encodedRead.json()).toMatchObject({ path: "nested/renamed.txt", data: "hello" });
   });
 
+  it("reads a capped byte window with maxBytes and validates the parameter", async () => {
+    const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
+    await writeFile(join(cwd, "snippet.txt"), "abcdefghijklmnopqrstuvwxyz0123456789", "utf8");
+
+    const capped = await app.inject({ method: "GET", url: `/api/files/snippet.txt?cwd=${encodeURIComponent(cwd)}&maxBytes=10` });
+    expect(capped.statusCode).toBe(200);
+    expect(capped.json()).toMatchObject({ path: "snippet.txt", data: "abcdefghij", size: 10, truncated: true });
+
+    const full = await app.inject({ method: "GET", url: `/api/files/snippet.txt?cwd=${encodeURIComponent(cwd)}` });
+    expect(full.statusCode).toBe(200);
+    expect(full.json()).toMatchObject({ data: "abcdefghijklmnopqrstuvwxyz0123456789", size: 36 });
+    expect(full.json()).not.toHaveProperty("truncated");
+
+    // Cap larger than the file: reads everything, no truncated flag.
+    const oversized = await app.inject({ method: "GET", url: `/api/files/snippet.txt?cwd=${encodeURIComponent(cwd)}&maxBytes=500` });
+    expect(oversized.statusCode).toBe(200);
+    expect(oversized.json()).toMatchObject({ data: "abcdefghijklmnopqrstuvwxyz0123456789", size: 36 });
+    expect(oversized.json()).not.toHaveProperty("truncated");
+
+    const invalid = await app.inject({ method: "GET", url: `/api/files/snippet.txt?cwd=${encodeURIComponent(cwd)}&maxBytes=abc` });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json()).toMatchObject({ error: "maxBytes must be a positive integer" });
+
+    const zero = await app.inject({ method: "GET", url: `/api/files/snippet.txt?cwd=${encodeURIComponent(cwd)}&maxBytes=0` });
+    expect(zero.statusCode).toBe(400);
+  });
+
   it("normalizes backslash-form file requests and provenance to API paths", async () => {
     const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
     const uploaded = await app.inject({ method: "POST", url: `/api/files/upload?cwd=${encodeURIComponent(cwd)}`, payload: { path: "incoming\\nested.txt", content: "hello" } });

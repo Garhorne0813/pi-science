@@ -3,8 +3,8 @@
 
 import type { PiScienceClient } from "../client/pi-science-client";
 import { aiTitleAttemptedAt, hasAiTitle, markAiTitleAttempted } from "../client/pi-science-client";
-import { workspaceFiles } from "../workspace";
 import { appendRuntimeError, isMissingSessionError } from "./errors";
+import { markWorkspaceFilesChanged } from "./file-revision";
 import { foldEvent, resetTurnBuffer } from "./event-fold";
 import { generations, turnState } from "./generations";
 import { consumeSuppressedConnectionRecovery, reconcileAfterConnectionLoss, reconcileAfterGap, reconcileWorkingState, recoverMissingSession, resyncCompletedHistory } from "./recovery";
@@ -285,17 +285,21 @@ export function registerEventListener(client: PiScienceClient) {
       const failed = status === "error";
       const finished = status === "end" || failed;
       useRuntimeStore.setState({ working: !finished, status: failed ? "error" : "ready" });
+    } else if (event.type === "turn.artifacts") {
+      ++generations.activity;
+      // No extra tree refresh here: the server publishes this event from the
+      // agent_settled observer, and that settled event already bumped the
+      // file revision above. Marking again would double-refresh every turn.
     } else if (event.type === "agent_settled" || event.type === "session.idle") {
       ++generations.activity;
       const successful = !turnState.errored;
-      workspaceFiles.invalidate();
       useRuntimeStore.setState({
         working: false,
         status: successful ? "ready" : "error",
         pendingInteraction: null,
         pendingQuestionnaire: null,
-        fileRevision: (state.fileRevision ?? 0) + 1,
       });
+      markWorkspaceFilesChanged();
       if (successful && state.activeSessionId && event.handledWithoutTurn !== true) {
         void resyncCompletedHistory(state.activeSessionId, state.cwd);
         maybeGenerateAiTitle(state.activeSessionId, state.cwd);

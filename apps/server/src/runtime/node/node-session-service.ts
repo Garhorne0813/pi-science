@@ -13,6 +13,9 @@ import type { ProjectReviewService } from "../../project-review/service.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { SessionRepository, invalidateSessionFileCache, sessionRepository } from "./session-repository.js";
 import { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
+import { diffWorkspaceSnapshots, previewKind, previewMime, snapshotWorkspace, type WorkspaceSnapshotEntry } from "../artifacts/workspace-artifact-snapshot.js";
+import { turnArtifactRepository } from "../artifacts/turn-artifact-repository.js";
+import { readJsonLines, workspaceFile } from "../../storage/persistence.js";
 import { ensureProject } from "../../project/project-registry.js";
 
 type RuntimeFailure = { error: string; code: string; diagnostics?: unknown };
@@ -46,6 +49,20 @@ type RuntimeRecord = {
   closing: boolean;
   lastState?: Record<string, unknown>;
   lastStateAt?: number;
+  /** Turn-level artifact tracking: baseline snapshot taken at agent_start,
+   *  diffed at agent_settled to surface files the turn produced. */
+  turnId?: string;
+  turnBaseline?: Promise<WorkspaceSnapshotEntry[] | null>;
+  /** Last text.updated partId seen this turn. Pi's agent_settled carries no
+   *  message id, so the strip is anchored to the assistant part (the frontend
+   *  keys live agent blocks by partId) to avoid every turn's artifacts being
+   *  appended at the end of the thread. */
+  turnAssistantPartId?: string;
+  /** 1-based ordinal of the current turn (incremented on each agent_start).
+   *  Persisted with turn-artifacts records so the frontend can anchor a strip
+   *  to the n-th agent block even when earlier turns produced no files (pure
+   *  record-ordinal fallback misplaces strips when a turn has no record). */
+  turnOrdinal?: number;
 };
 
 function runtimeKey(cwd: string, sessionId: string): string {
@@ -554,7 +571,29 @@ export class NodeSessionService {
       },
       observe: async (event, sessionId) => {
         await observeNodePiEvent(cwd, runtime.config.model ?? null, event, sessionId, (payload) => this.eventHub.publish(cwd, sessionId, payload));
-        if (event.type === "agent_settled") this.scheduleAutoReview(cwd, sessionId);
+        if (event.type === "agent_start") {
+          runtime.turnId = randomUUID();
+          runtime.turnBaseline = snapshotWorkspace(cwd);
+          runtime.turnAssistantPartId = undefined;
+          runtime.turnOrdinal = (runtime.turnOrdinal ?? 0) + 1;
+        }
+        // Pi's raw event type is "message_update" with an inner
+        // assistantMessageEvent (text_delta/text/text_end); the hub normalizes
+        // these to text.updated with partId = message.id. Listen on the raw
+        // shape so the anchor is the last assistant message of the turn.
+        if (event.type === "message_update") {
+          const assistant = event.assistantMessageEvent as Record<string, unknown> | undefined;
+          const message = event.message as Record<string, unknown> | undefined;
+          const kind = String(assistant?.type ?? "");
+          if (["text_delta", "text", "text_end"].includes(kind)) {
+            const messageId = typeof message?.id === "string" && message.id ? message.id : "";
+            if (messageId) runtime.turnAssistantPartId = messageId;
+          }
+        }
+        if (event.type === "agent_settled") {
+          await this.finishTurnArtifacts(runtime, event, sessionId);
+          this.scheduleAutoReview(cwd, sessionId);
+        }
       },
     });
     return runtime;
@@ -702,6 +741,85 @@ export class NodeSessionService {
         this.clearPendingOperation(runtime);
       });
     }, timerDelay);
+  }
+
+  /** Turn-level artifact summary: diff the workspace snapshot taken at
+   *  agent_start against the state at agent_settled, attach persisted
+   *  artifact ids when available, persist a turn-artifacts record and publish
+   *  `turn.artifacts` for the frontend strip. Failures degrade to nothing
+   *  (the conversation itself is the source of truth for the turn).
+   *
+   *  Known limitation: the baseline/after snapshots are workspace-wide, so
+   *  with parallel sessions in the same workspace a file created by another
+   *  session's turn can be attributed to this turn. Consumers display the
+   *  strip per session (session_id is persisted and published), so the
+   *  mis-attribution is cosmetic only. */
+  private async finishTurnArtifacts(runtime: RuntimeRecord, event: Record<string, unknown>, sessionId: string): Promise<void> {
+    const turnId = runtime.turnId;
+    if (!turnId) return;
+    runtime.turnId = undefined;
+    const baseline = runtime.turnBaseline;
+    runtime.turnBaseline = undefined;
+    if (!baseline) return;
+    const before = await baseline;
+    const after = await snapshotWorkspace(runtime.cwd);
+    if (!after) return;
+    const { created, modified } = diffWorkspaceSnapshots(before, after);
+    const changed = [...created, ...modified];
+    if (changed.length === 0) return;
+    const items = await this.toTurnArtifactItems(runtime.cwd, changed);
+    if (items.length === 0) return;
+    const assistantMessageId = typeof event.messageId === "string"
+      ? event.messageId
+      : typeof event.assistantMessageId === "string"
+        ? event.assistantMessageId
+        : runtime.turnAssistantPartId ?? null;
+    const turnOrdinal = runtime.turnOrdinal ?? null;
+    const record = {
+      turn_id: turnId,
+      session_id: sessionId,
+      assistant_message_id: assistantMessageId,
+      turn_ordinal: turnOrdinal,
+      ended_at: new Date().toISOString(),
+      artifacts: items,
+    };
+    await turnArtifactRepository.append(runtime.cwd, record).catch(() => undefined);
+    await this.eventHub.publish(runtime.cwd, sessionId, {
+      type: "turn.artifacts",
+      sessionId,
+      turnId,
+      turnOrdinal,
+      assistantMessageId,
+      artifacts: items,
+    }).catch(() => undefined);
+  }
+
+  private async toTurnArtifactItems(cwd: string, entries: WorkspaceSnapshotEntry[]): Promise<Array<{ path: string; kind: string; mime: string; size: number; artifactId?: string; version?: number }>> {
+    let manifests: Array<{ artifact_id?: string; version?: unknown; path?: unknown }> = [];
+    try {
+      manifests = await readJsonLines<{ artifact_id?: string; version?: unknown; path?: unknown }>(workspaceFile(cwd, "artifacts.jsonl"));
+    } catch {
+      manifests = [];
+    }
+    const byPath = new Map<string, { artifactId: string; version: number }>();
+    for (const manifest of manifests) {
+      const path = typeof manifest.path === "string" ? manifest.path : "";
+      if (!path || typeof manifest.artifact_id !== "string") continue;
+      byPath.set(path, { artifactId: manifest.artifact_id, version: Number(manifest.version ?? 0) });
+    }
+    return entries
+      .map((entry) => {
+        const manifest = byPath.get(entry.path);
+        return {
+          path: entry.path,
+          kind: previewKind(entry.path),
+          mime: previewMime(entry.path),
+          size: entry.size,
+          ...(manifest ? { artifactId: manifest.artifactId, version: manifest.version } : {}),
+        };
+      })
+      .sort((a, b) => b.size - a.size)
+      .slice(0, 12);
   }
 
   /** One auto review per settled turn: a second settle for a session whose

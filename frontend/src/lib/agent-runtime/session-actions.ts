@@ -13,6 +13,7 @@ import {
 } from "../client/pi-science-client";
 import { appendRuntimeError, isMissingSessionError } from "./errors";
 import { emptyThread, mergeHistoryWithLive, prependHistoryMessages, resetTurnBuffer, threadFromMessages } from "./event-fold";
+import { attachPersistedTurnArtifacts } from "./turn-artifacts";
 import { generations, turnState } from "./generations";
 import { registerEventListener } from "./listener";
 import { applyPromptSessionName, backfillSessionName } from "./naming";
@@ -99,7 +100,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         const cachedMessages = client.getCachedMessages(targetSessionId, cwd);
         if (cachedMessages && cachedMessages.length > 0) {
           if (localMutationGeneration === generations.localMutation && generation === generations.connection) {
-            set({ thread: threadFromMessages(cachedMessages) });
+            set({ thread: await attachPersistedTurnArtifacts(threadFromMessages(cachedMessages), targetSessionId, cwd) });
           }
         }
 
@@ -121,9 +122,13 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         // `is_streaming: false` (or a transient state-read error).
         const liveActivityArrived = generations.activity !== connectActivityGeneration;
         if (messagesResult.status === "fulfilled") {
-          nextState.thread = mergeHistoryWithLive(
-            threadFromMessages(messagesResult.value.messages),
-            get().thread,
+          nextState.thread = await attachPersistedTurnArtifacts(
+            mergeHistoryWithLive(
+              threadFromMessages(messagesResult.value.messages),
+              get().thread,
+            ),
+            targetSessionId,
+            cwd,
           );
           nextState.historyCursor = messagesResult.value.next_cursor;
           nextState.historyHasMore = messagesResult.value.has_more;
@@ -564,7 +569,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       set({
         client,
         activeSessionId: result.id,
-        thread: threadFromMessages(history.messages),
+        thread: await attachPersistedTurnArtifacts(threadFromMessages(history.messages), result.id, cwd),
         historyCursor: history.next_cursor,
         historyHasMore: history.has_more,
         historyLoading: false,

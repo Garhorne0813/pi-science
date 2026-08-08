@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { getClient } from "../client/pi-science-client";
+import { workspaceFiles } from "../workspace";
 import { generations } from "./generations";
 import { useRuntimeStore } from "./index";
 import { reconcileAfterConnectionLoss, reconcilePromptAfterLateStream } from "./recovery";
@@ -596,5 +597,33 @@ describe("runtime conversation recovery", () => {
 
     await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false), { timeout: 5_000 });
     expect(useRuntimeStore.getState().status).toBe("ready");
+  });
+
+  it("marks workspace files changed once when recovery confirms an idle runtime", async () => {
+    const invalidateSpy = vi.spyOn(workspaceFiles, "invalidate");
+    let stateReads = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) {
+        stateReads += 1;
+        // First read is busy (the turn may still be running), later ones idle.
+        return jsonResponse(state("session-a", { is_streaming: stateReads === 1 }));
+      }
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    expect(useRuntimeStore.getState().working).toBe(true);
+    useRuntimeStore.getState().client?.disconnect();
+
+    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false));
+    expect(useRuntimeStore.getState().fileRevision).toBe(1);
+    expect(invalidateSpy).toHaveBeenCalled();
+    // A second pass over the same idle confirmation must not bump again.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(useRuntimeStore.getState().fileRevision).toBe(1);
+    invalidateSpy.mockRestore();
   });
 });

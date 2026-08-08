@@ -88,7 +88,9 @@ export function publishedArtifactPaths(blocks: readonly ThreadBlock[]): Set<stri
     blocks.flatMap((block) => (
       block.kind === "status-line" && block.level === "done" && block.path
         ? [normalizeArtifactPath(block.path)]
-        : []
+        : block.kind === "artifact-summary"
+          ? block.artifacts.map((item) => normalizeArtifactPath(item.path))
+          : []
     )),
   );
 }

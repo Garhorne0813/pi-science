@@ -94,6 +94,25 @@ describe("renderBlocks", () => {
 
     expect(screen.queryByRole("button", { name: /drafts\/structure_prediction_research_brief\.md/ })).not.toBeInTheDocument();
   });
+
+  it("does not render file-reference chips even for published artifact paths (cards replace them)", () => {
+    useRuntimeStore.setState({ thread: { blocks: [], index: {}, loaded: true } });
+    render(<>{renderBlocks([
+      agent("a1", "生成完成：`work/plot.png` 和 `work/results.csv`。"),
+      { kind: "status-line", id: "st1", text: "artifact ready", level: "done", path: "work/plot.png" },
+      { kind: "artifact-summary", id: "turn-artifacts-t1", turnId: "t1", assistantMessageId: "a1", artifacts: [{ path: "work/plot.png", kind: "image", mime: "image/png", size: 10 }, { path: "work/results.csv", kind: "table", mime: "text/csv", size: 10 }] },
+    ], codeRunner)}</>);
+
+    // The paths are published (status-line done + artifact-summary), but the
+    // per-message chip row is gone — the turn artifact cards are the single source.
+    // Exact name match: the old chips exposed the bare path as their accessible
+    // name, while the artifact cards use an aria-label like "plot.png (work/plot.png)",
+    // so an exact "work/plot.png" lookup only ever matches the removed chips.
+    expect(screen.queryByRole("button", { name: "work/plot.png" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "work/results.csv" })).not.toBeInTheDocument();
+    // The strip itself still renders (its cards use img/alt or aria-label, not button text).
+    expect(screen.getByLabelText("Generated files")).toBeInTheDocument();
+  });
 });
 
 describe("renderBlockGroup", () => {
@@ -120,5 +139,17 @@ describe("renderBlockGroup", () => {
     ], codeRunner)}</>);
 
     expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(1);
+  });
+});
+
+describe("artifact-summary blocks", () => {
+  it("renders the turn artifact strip after the final agent message", () => {
+    render(<>{renderBlocks([
+      agent("a1", "final answer"),
+      { kind: "artifact-summary", id: "turn-artifacts-t1", turnId: "t1", assistantMessageId: "a1", artifacts: [{ path: "work/plot.png", kind: "image", mime: "image/png", size: 10 }] },
+    ], codeRunner)}</>);
+
+    expect(screen.getByLabelText("Generated files")).toBeInTheDocument();
+    expect(screen.getByAltText("plot.png")).toBeInTheDocument();
   });
 });

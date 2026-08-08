@@ -789,6 +789,7 @@
   "molecule.atomCount_other": "{{count}} atoms",
   "molecule.rendering": "Rendering…",
   "filePreview.fileUnavailable": "File not found or inaccessible",
+  "filePreview.imageFailed": "Image failed to load",
   "filePreview.binaryTextUnsupported": "Binary file — cannot preview as text",
   "filePreview.file": "File",
   "filePreview.versionHistory": "Version history",
@@ -821,5 +822,12 @@
   "todo.close": "Close task list",
   "todo.mode.sticky": "Sticky mode",
   "todo.mode.fab": "Floating mode",
-  "todo.switchMode": "Switch to {{mode}}"
+  "todo.switchMode": "Switch to {{mode}}",
+  "conversation.generatedFiles": "Generated files",
+  "conversation.more": "more",
+  "conversation.collapse": "collapse",
+  "conversation.codeSnippet": "Code snippet",
+  "conversation.generatedFilesLabel": "GENERATED · {{count}}",
+  "conversation.rowsCols": "{{rows}} rows · {{columns}} columns",
+  "conversation.moreColumns": "+{{count}} more"
 }

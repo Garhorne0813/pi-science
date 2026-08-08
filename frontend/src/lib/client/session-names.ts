@@ -69,6 +69,12 @@ export function setSessionName(cwd: string, sessionId: string, name: string): vo
   const names = loadNames();
   names[sessionKey(cwd, sessionId)] = name.slice(0, 50);  // Cap length
   saveNames(names);
+  // Best-effort server persistence (fire-and-forget): the localStorage
+  // registry stays the immediate source and the fallback when the control
+  // plane is unreachable, so naming never blocks the prompt path.
+  void import("./pi-science-client").then(({ getClient }) => {
+    void getClient().setSessionTitle(sessionId, name.slice(0, 100), cwd).catch(() => undefined);
+  });
 }
 
 /** Remove the display name for a session (e.g. after deletion or when a

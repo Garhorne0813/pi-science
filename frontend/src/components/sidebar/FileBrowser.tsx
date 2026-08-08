@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderOpen, File, ChevronRight, ChevronDown, RefreshCw, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useUiStore } from "../../lib/ui";
@@ -19,46 +19,103 @@ export function FileBrowser({ cwd }: { cwd: string }) {
   const [contextMenu, setContextMenu] = useState<{ entry: FileListEntry; point: ContextPoint } | null>(null);
   const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
   const [folderStates, setFolderStates] = useState<Map<string, DirState>>(new Map());
+  const openFoldersRef = useRef<Set<string>>(new Set());
+  // Guards async results: any newer load/toggle invalidates older in-flight
+  // requests (workspace switch, rapid toggles, revision bumps).
+  const requestTokenRef = useRef(0);
+  // The `work/` folder auto-opens only once per workspace, so a later revision
+  // refresh does not fight a user who deliberately closed it.
+  const initializedRef = useRef(false);
   const openInspector = useUiStore((s) => s.openInspector);
   const addWorkspaceReference = useUiStore((s) => s.addWorkspaceReference);
   const fileRevision = useRuntimeStore((s) => s.fileRevision);
 
-  const loadFiles = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true);
+  const loadFiles = useCallback(async (signal?: AbortSignal, quiet = false) => {
+    const token = ++requestTokenRef.current;
+    if (!quiet) setLoading(true);
     try {
       const rootEntries = await workspaceFiles.sidebar(cwd, signal);
+      if (token !== requestTokenRef.current || signal?.aborted) return;
       setEntries(rootEntries);
-      const work = rootEntries.find((e) => e.isDir && e.name === "work");
-      if (work) {
-        setOpenFolders((prev) => { const next = new Set(prev); next.add(work.path); return next; });
-        setFolderStates((prev) => { const next = new Map(prev); next.set(work.path, { entries: [], loading: true, error: null }); return next; });
+
+      // Re-read every folder that is currently expanded (not just work/), so
+      // files created by a finished turn show up everywhere the user is looking.
+      const dirs = [...openFoldersRef.current];
+      const results = await Promise.all(dirs.map(async (dir) => {
         try {
-          const result = await workspaceFiles.directory(cwd, work.path);
-          setFolderStates((prev) => {
-            const next = new Map(prev);
-            if (!next.get(work.path)?.loading) return next;
-            next.set(work.path, { entries: result.entries, loading: false, error: null });
-            return next;
-          });
+          return { dir, result: await workspaceFiles.directory(cwd, dir, signal) };
         } catch (error) {
-          setFolderStates((prev) => {
-            const next = new Map(prev);
-            if (!next.get(work.path)?.loading) return next;
-            next.set(work.path, { entries: [], loading: false, error: error instanceof Error ? error.message : String(error) });
-            return next;
-          });
+          return { dir, error: error instanceof Error ? error.message : String(error) };
+        }
+      }));
+      if (token !== requestTokenRef.current || signal?.aborted) return;
+      setFolderStates((prev) => {
+        const next = new Map(prev);
+        for (const item of results) {
+          if ("result" in item && item.result) next.set(item.dir, { entries: item.result.entries, loading: false, error: null });
+          else next.set(item.dir, { entries: prev.get(item.dir)?.entries ?? [], loading: false, error: "error" in item ? item.error : "unknown error" });
+        }
+        return next;
+      });
+
+      // First load per workspace: surface the `work/` folder automatically.
+      if (!initializedRef.current) {
+        initializedRef.current = true;
+        const work = rootEntries.find((e) => e.isDir && e.name === "work");
+        if (work && !openFoldersRef.current.has(work.path)) {
+          setOpenFolders((prev) => { const next = new Set(prev); next.add(work.path); return next; });
+          openFoldersRef.current.add(work.path);
+          setFolderStates((prev) => { const next = new Map(prev); next.set(work.path, { entries: [], loading: true, error: null }); return next; });
+          try {
+            const result = await workspaceFiles.directory(cwd, work.path, signal);
+            if (token !== requestTokenRef.current || signal?.aborted) return;
+            setFolderStates((prev) => {
+              const next = new Map(prev);
+              if (!next.get(work.path)?.loading) return next;
+              next.set(work.path, { entries: result.entries, loading: false, error: null });
+              return next;
+            });
+          } catch (error) {
+            if (token !== requestTokenRef.current || signal?.aborted) return;
+            setFolderStates((prev) => {
+              const next = new Map(prev);
+              if (!next.get(work.path)?.loading) return next;
+              next.set(work.path, { entries: [], loading: false, error: error instanceof Error ? error.message : String(error) });
+              return next;
+            });
+          }
         }
       }
     } catch (error) {
       if (!signal?.aborted) toast(error instanceof Error ? error.message : t("files.loadError"), "error");
-    } finally { if (!signal?.aborted) setLoading(false); }
+    } finally { if (token === requestTokenRef.current && !quiet) setLoading(false); }
   }, [cwd, t, toast]);
+
+  // Reset per-workspace state when the cwd changes.
+  useEffect(() => {
+    initializedRef.current = false;
+    requestTokenRef.current += 1;
+    openFoldersRef.current = new Set();
+    setOpenFolders(new Set());
+    setFolderStates(new Map());
+  }, [cwd]);
 
   useEffect(() => {
     const controller = new AbortController();
     void loadFiles(controller.signal);
     return () => controller.abort();
   }, [fileRevision, loadFiles]);
+
+  // Polling fallback while the browser tab is visible: catches files created
+  // by kernels or external tools that never emitted a terminal event. Quiet so
+  // repeated refreshes never flash the loading indicator.
+  useEffect(() => {
+    if (!expanded) return;
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") void loadFiles(undefined, true);
+    }, 2_000);
+    return () => window.clearInterval(id);
+  }, [expanded, loadFiles]);
 
   const handleClick = (entry: FileListEntry) => {
     if (entry.isDir) {
@@ -69,36 +126,42 @@ export function FileBrowser({ cwd }: { cwd: string }) {
   };
 
   const toggleFolder = useCallback(async (dirPath: string) => {
+    const isClosing = openFoldersRef.current.has(dirPath);
     setOpenFolders((prev) => {
       const next = new Set(prev);
-      if (next.has(dirPath)) { next.delete(dirPath); return next; }
-      next.add(dirPath);
+      if (isClosing) next.delete(dirPath); else next.add(dirPath);
+      openFoldersRef.current = next;
       return next;
     });
-    const alreadyLoaded = folderStates.has(dirPath);
-    if (!alreadyLoaded) {
-      setFolderStates((prev) => { const next = new Map(prev); next.set(dirPath, { entries: [], loading: true, error: null }); return next; });
-      try {
-        const result = await workspaceFiles.directory(cwd, dirPath);
-        setFolderStates((prev) => {
-          const next = new Map(prev);
-          const current = next.get(dirPath);
-          // If the folder was closed and reopened while the request was in flight, keep loading.
-          if (!current || !current.loading) return next;
-          next.set(dirPath, { entries: result.entries, loading: false, error: null });
-          return next;
-        });
-      } catch (error) {
-        setFolderStates((prev) => {
-          const next = new Map(prev);
-          const current = next.get(dirPath);
-          if (!current || !current.loading) return next;
-          next.set(dirPath, { entries: [], loading: false, error: error instanceof Error ? error.message : String(error) });
-          return next;
-        });
-      }
+    if (isClosing) {
+      // Dropping the cached state means reopening always re-reads from the
+      // server instead of reusing a possibly stale listing.
+      setFolderStates((prev) => { const next = new Map(prev); next.delete(dirPath); return next; });
+      return;
     }
-  }, [cwd, folderStates]);
+    const token = ++requestTokenRef.current;
+    setFolderStates((prev) => { const next = new Map(prev); next.set(dirPath, { entries: prev.get(dirPath)?.entries ?? [], loading: true, error: null }); return next; });
+    try {
+      const result = await workspaceFiles.directory(cwd, dirPath);
+      if (token !== requestTokenRef.current) return;
+      setFolderStates((prev) => {
+        const next = new Map(prev);
+        const current = next.get(dirPath);
+        if (!current || !current.loading) return next;
+        next.set(dirPath, { entries: result.entries, loading: false, error: null });
+        return next;
+      });
+    } catch (error) {
+      if (token !== requestTokenRef.current) return;
+      setFolderStates((prev) => {
+        const next = new Map(prev);
+        const current = next.get(dirPath);
+        if (!current || !current.loading) return next;
+        next.set(dirPath, { entries: [], loading: false, error: error instanceof Error ? error.message : String(error) });
+        return next;
+      });
+    }
+  }, [cwd]);
 
   const folderEntries = useMemo(() => {
     const seen = new Set<string>();
