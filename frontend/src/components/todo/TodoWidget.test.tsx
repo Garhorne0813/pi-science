@@ -52,6 +52,12 @@ describe("TodoWidget", () => {
     expect(second.container).toBeEmptyDOMElement();
   });
 
+  it("hides when every task is completed", () => {
+    setThread([todoBlock({ action: "create", nextId: 2, tasks: [{ id: 1, subject: "Load", status: "completed" }] })]);
+    const { container } = render(<TodoWidget />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("renders the FAB with progress and auto-expands the card once on mount", () => {
     setThread([todoBlock({
       action: "create",

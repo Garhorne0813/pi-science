@@ -40,13 +40,14 @@ export function TodoStickyBar() {
   const cwd = useRuntimeStore((s) => s.cwd);
   const sessionId = useRuntimeStore((s) => s.activeSessionId);
   const vm = useMemo(() => todoViewModel(blocks), [blocks]);
-  const { open, setOpen, close } = useTodoAutoOpenOnce(Boolean(vm), `${cwd}:${sessionId ?? ""}`);
+  const hasOpenTasks = Boolean(vm && !vm.allCompleted);
+  const { open, setOpen, close } = useTodoAutoOpenOnce(hasOpenTasks, `${cwd}:${sessionId ?? ""}`);
 
   const onKeyDown = useCallback((event: React.KeyboardEvent) => {
     if (event.key === "Escape") close();
   }, [close]);
 
-  if (mode !== "sticky" || !vm) return null;
+  if (mode !== "sticky" || !vm || vm.allCompleted) return null;
 
   const activeLabel = vm.activeTask ? (vm.activeTask.activeForm || vm.activeTask.subject) : null;
 

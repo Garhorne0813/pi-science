@@ -128,10 +128,23 @@ describe("TodoStickyBar", () => {
     expect(useUiStore.getState().todoUiMode).toBe("fab");
   });
 
-  it("shows All done when every task is completed", () => {
+  it("hides when every task is completed", () => {
     setThread([todoBlock({ action: "create", nextId: 2, tasks: [{ id: 1, subject: "Load", status: "completed" }] })]);
+    const { container } = render(<TodoStickyBar />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("auto-opens again when a new task appears after completion", () => {
+    setThread([todoBlock({ action: "create", nextId: 2, tasks: [{ id: 1, subject: "First", status: "completed" }] })]);
     render(<TodoStickyBar />);
-    expect(screen.getByText("All done")).toBeInTheDocument();
-    expect(screen.getByText("100% · 1/1")).toBeInTheDocument();
+    expect(screen.queryByText("First")).not.toBeInTheDocument();
+
+    act(() => setThread([todoBlock({ action: "create", nextId: 3, tasks: [
+      { id: 1, subject: "First", status: "completed" },
+      { id: 2, subject: "Second", status: "pending" },
+    ] })]));
+
+    expect(screen.getAllByText("Second").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { expanded: true })).toBeInTheDocument();
   });
 });

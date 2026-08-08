@@ -38,7 +38,8 @@ export function TodoWidget() {
   const cwd = useRuntimeStore((s) => s.cwd);
   const sessionId = useRuntimeStore((s) => s.activeSessionId);
   const vm = useMemo(() => todoViewModel(blocks), [blocks]);
-  const { open, setOpen, close } = useTodoAutoOpenOnce(Boolean(vm), `${cwd}:${sessionId ?? ""}`);
+  const hasOpenTasks = Boolean(vm && !vm.allCompleted);
+  const { open, setOpen, close } = useTodoAutoOpenOnce(hasOpenTasks, `${cwd}:${sessionId ?? ""}`);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const positionRef = useRef<TodoPosition | null>(null);
   const dragRef = useRef<{
@@ -92,7 +93,7 @@ export function TodoWidget() {
     return () => observer.disconnect();
   }, [constrainPosition]);
 
-  if (mode !== "fab" || !vm) return null;
+  if (mode !== "fab" || !vm || vm.allCompleted) return null;
 
   const activeLabel = vm.activeTask ? (vm.activeTask.activeForm || vm.activeTask.subject) : null;
   const summary = `${vm.percent}% · ${vm.completed}/${vm.total}`;
