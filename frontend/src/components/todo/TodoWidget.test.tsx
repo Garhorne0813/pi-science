@@ -29,10 +29,14 @@ beforeAll(async () => {
 beforeEach(() => {
   useRuntimeStore.setState({ thread: emptyThread(), cwd: "proj", activeSessionId: "s1" });
   useUiStore.setState({ todoUiMode: "fab" });
+  localStorage.removeItem("pi-science.todo-widget-position");
 });
 
 afterEach(() => {
   cleanup();
+  Reflect.deleteProperty(HTMLElement.prototype, "setPointerCapture");
+  Reflect.deleteProperty(HTMLElement.prototype, "hasPointerCapture");
+  Reflect.deleteProperty(HTMLElement.prototype, "releasePointerCapture");
 });
 
 describe("TodoWidget", () => {
@@ -94,5 +98,37 @@ describe("TodoWidget", () => {
     render(<TodoWidget />);
     fireEvent.click(screen.getByRole("button", { name: /Sticky mode/ }));
     expect(useUiStore.getState().todoUiMode).toBe("sticky");
+  });
+
+  it("drags within the conversation area, persists the position, and suppresses the drag click", async () => {
+    let captured = false;
+    Object.defineProperties(HTMLElement.prototype, {
+      setPointerCapture: { configurable: true, value: () => { captured = true; } },
+      hasPointerCapture: { configurable: true, value: () => captured },
+      releasePointerCapture: { configurable: true, value: () => { captured = false; } },
+    });
+    setThread([todoBlock({ action: "create", nextId: 2, tasks: [{ id: 1, subject: "Load", status: "pending" }] })]);
+    render(<TodoWidget />);
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    const trigger = screen.getByRole("progressbar", { name: "Task list" }).closest("button")!;
+    Object.defineProperty(trigger.parentElement, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ left: 0, top: 0, width: 500, height: 400, right: 500, bottom: 400, x: 0, y: 0, toJSON: () => ({}) }),
+    });
+    Object.defineProperty(trigger, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ left: 380, top: 340, width: 100, height: 40, right: 480, bottom: 380, x: 380, y: 340, toJSON: () => ({}) }),
+    });
+
+    fireEvent.pointerDown(trigger, { button: 0, pointerId: 1, clientX: 400, clientY: 350 });
+    fireEvent.pointerMove(trigger, { pointerId: 1, clientX: 300, clientY: 250 });
+    fireEvent.pointerUp(trigger, { pointerId: 1, clientX: 300, clientY: 250 });
+    fireEvent.click(trigger);
+
+    expect(trigger).toHaveStyle({ left: "280px", top: "240px" });
+    expect(JSON.parse(localStorage.getItem("pi-science.todo-widget-position")!)).toEqual({ left: 280, top: 240 });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });
