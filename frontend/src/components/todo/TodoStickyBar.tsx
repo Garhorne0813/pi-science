@@ -90,9 +90,9 @@ export function TodoStickyBar() {
       {open && (
         <div
           id="todo-sticky-list"
-          className="absolute left-0 right-0 top-full mt-1 max-h-[min(48vh,420px)] overflow-y-auto rounded-card border border-border bg-surface px-3 py-2 shadow-card"
+          className="absolute left-0 right-0 top-full mt-1 max-h-[min(42vh,360px)] overflow-y-auto rounded-card border border-border bg-surface p-1.5 shadow-card"
         >
-          <TodoTaskList tasks={vm.tasks} />
+          <TodoTaskList tasks={vm.tasks} compact />
         </div>
       )}
     </div>
