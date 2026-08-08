@@ -223,7 +223,10 @@ export class PiProcess extends EventEmitter {
         case "get_last_assistant_text": return this.asData(await this.webRequest("GET", `${sessionPath}/last-assistant-text`));
         case "switch_session": {
           const result = await this.webRequest("POST", `${runtimePath}/resume`, { sessionPath: params.sessionPath });
-          if (result.success) await this.refreshRuntimeIdentity();
+          if (result.success) {
+            await this.refreshRuntimeIdentity();
+            await this.replaceEventStream();
+          }
           return result;
         }
         case "prompt":
@@ -235,12 +238,18 @@ export class PiProcess extends EventEmitter {
           return this.webRequest("POST", `${runtimePath}/${type === "follow_up" ? "follow-up" : type}`, params);
         case "fork": {
           const result = await this.webRequest("POST", `${runtimePath}/fork`, params.entryId ? { entryId: params.entryId } : {});
-          if (result.success) await this.refreshRuntimeIdentity();
+          if (result.success) {
+            await this.refreshRuntimeIdentity();
+            await this.replaceEventStream();
+          }
           return result;
         }
         case "clone": {
           const result = await this.webRequest("POST", `${sessionPath}/clone`);
-          if (result.success) await this.refreshRuntimeIdentity();
+          if (result.success) {
+            await this.refreshRuntimeIdentity();
+            await this.replaceEventStream();
+          }
           return result;
         }
         case "set_model": return this.webRequest("POST", `${runtimePath}/model`, { provider: params.provider, modelId: params.modelId });
@@ -267,18 +276,24 @@ export class PiProcess extends EventEmitter {
   }
 
   private async startEventStream(): Promise<void> {
-    this.eventAbort = new AbortController();
-    const response = await this.webHost!.request("GET", `${this.runtimePath()}/events?after=0`, undefined, 0, this.eventAbort.signal);
+    const controller = new AbortController();
+    this.eventAbort = controller;
+    const response = await this.webHost!.request("GET", `${this.runtimePath()}/events?after=0`, undefined, 0, controller.signal);
     if (!response.ok || !response.body) throw new Error(await this.webHost!.responseError(response));
-    void this.consumeEventStream(response).catch((error: unknown) => {
-      if (!this.closed && !this.eventAbort?.signal.aborted) this.emit("stderr", `Pi Orbit event stream failed: ${String(error)}\n`);
+    void this.consumeEventStream(response, controller).catch((error: unknown) => {
+      if (!this.closed && !controller.signal.aborted) this.emit("stderr", `Pi Orbit event stream failed: ${String(error)}\n`);
     });
   }
 
-  private async consumeEventStream(initialResponse: Response): Promise<void> {
+  private async replaceEventStream(): Promise<void> {
+    this.eventAbort?.abort();
+    await this.startEventStream();
+  }
+
+  private async consumeEventStream(initialResponse: Response, controller: AbortController): Promise<void> {
     let response = initialResponse;
     let lastSequence = 0;
-    while (!this.closed && !this.eventAbort?.signal.aborted) {
+    while (!this.closed && !controller.signal.aborted) {
       if (!response.body) throw new Error("Pi Orbit event stream has no response body");
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -310,9 +325,10 @@ export class PiProcess extends EventEmitter {
           }
         }
       }
-      if (this.closed || this.eventAbort?.signal.aborted) return;
+      if (this.closed || controller.signal.aborted) return;
       await new Promise((resolve) => setTimeout(resolve, 50));
-      response = await this.webHost!.request("GET", `${this.runtimePath()}/events?after=${lastSequence}`, undefined, 0, this.eventAbort?.signal);
+      if (this.closed || controller.signal.aborted) return;
+      response = await this.webHost!.request("GET", `${this.runtimePath()}/events?after=${lastSequence}`, undefined, 0, controller.signal);
       if (!response.ok) throw new Error(await this.webHost!.responseError(response));
     }
   }

@@ -32,7 +32,14 @@ async function fakeRuntime(): Promise<{ cwd: string; command: string; args: stri
   return { cwd, command: process.execPath, args: [script] };
 }
 
-async function fakeWebRuntime(createFailure = false, initialTrustDecision: boolean | null = null, busyGets = 0, deleteBusyTurns = 0, busyMs = 0): Promise<{
+async function fakeWebRuntime(
+  createFailure = false,
+  initialTrustDecision: boolean | null = null,
+  busyGets = 0,
+  deleteBusyTurns = 0,
+  busyMs = 0,
+  detachEventsOnResume = false,
+): Promise<{
   cwd: string;
   command: string;
   args: string[];
@@ -62,6 +69,7 @@ async function fakeWebRuntime(createFailure = false, initialTrustDecision: boole
     `let busyGets = ${busyGets};`,
     `let deleteBusyTurns = ${deleteBusyTurns};`,
     `const busyUntil = ${busyMs} > 0 ? Date.now() + ${busyMs} : 0;`,
+    `const detachEventsOnResume = ${detachEventsOnResume};`,
     'let deleteCount = 0;',
     'import { writeFileSync } from "node:fs";',
     'function json(response, status, value) { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); }',
@@ -82,6 +90,7 @@ async function fakeWebRuntime(createFailure = false, initialTrustDecision: boole
     '    if (suffix === "/events") { response.writeHead(200, { "content-type": "text/event-stream" }); response.write(`event: connected\\ndata: ${JSON.stringify({ runtimeId })}\\n\\n`); const set = clients.get(runtimeId) ?? new Set(); set.add(response); clients.set(runtimeId, set); request.on("close", () => set.delete(response)); return; }',
     '    if (suffix === "/state") return json(response, 200, { piSessionId: runtime.piSessionId, isStreaming: false, pendingMessageCount: 0 });',
     '    if (suffix === "/commands") return json(response, 200, { commands: [{ name: "review", source: "skill" }] });',
+    '    if (suffix === "/resume" && request.method === "POST") { const value = await body(request); runtime.piSessionId = "restored-session"; runtime.sessionPath = value.sessionPath; if (detachEventsOnResume) clients.set(runtimeId, new Set()); return json(response, 200, { success: true, runtimeId, piSessionId: runtime.piSessionId }); }',
     '    if (suffix === "/prompt" && request.method === "POST") { await body(request); json(response, 202, { success: true }); event(runtimeId, { type: "agent_start", sessionId: runtime.piSessionId }); return; }',
     '    if (suffix === "/fork" && request.method === "POST") { await body(request); runtime.piSessionId = `fork-${++counter}`; runtime.sessionPath = `${runtime.sessionDir}/${runtime.piSessionId}.jsonl`; return json(response, 200, { success: true, runtimeId, piSessionId: runtime.piSessionId }); }',
     '    if (!suffix && request.method === "DELETE") { deleteCount += 1; writeFileSync("delete-count.json", String(deleteCount)); if (deleteBusyTurns > 0) { deleteBusyTurns -= 1; return json(response, 409, { error: "Runtime is busy", code: "runtime_busy" }); } runtimes.delete(runtimeId); return json(response, 200, { success: true }); }',
@@ -172,6 +181,27 @@ describe("Node Pi Orbit adapter", () => {
     await expect(manager.sendCommand("web-workspace-2", "get_state")).resolves.toMatchObject({ success: true });
     await manager.shutdownAll();
     expect(manager.hostProcessCount).toBe(0);
+    await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it("reattaches the Orbit event stream after resuming a persisted session", async () => {
+    const manager = new PiManager();
+    managers.push(manager);
+    const runtime = await fakeWebRuntime(false, null, 0, 0, 0, true);
+    const process = await manager.start("restored-workspace", runtime);
+    const events: Array<{ type: string; sessionId?: string }> = [];
+    process.on("event", (event: { type: string; sessionId?: string }) => events.push(event));
+
+    await expect(manager.sendCommand("restored-workspace", "switch_session", {
+      sessionPath: join(runtime.cwd, "sessions", "restored-session.jsonl"),
+    })).resolves.toMatchObject({ success: true });
+    await expect(manager.sendCommand("restored-workspace", "prompt", { message: "hello again" }))
+      .resolves.toMatchObject({ success: true });
+
+    for (let attempt = 0; attempt < 50 && !events.some((event) => event.type === "agent_start"); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(events).toContainEqual({ type: "agent_start", sessionId: "restored-session" });
     await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
