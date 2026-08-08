@@ -52,7 +52,7 @@ export function TodoStickyBar() {
 
   return (
     <div
-      className="pointer-events-auto absolute left-1/2 top-3 z-30 w-[min(760px,calc(100vw-24px))] -translate-x-1/2"
+      className="pointer-events-auto absolute inset-x-3 top-3 z-30 mx-auto max-w-[760px]"
       onKeyDown={onKeyDown}
     >
       <div className="rounded-card border border-border bg-surface shadow-card">

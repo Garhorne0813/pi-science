@@ -50,7 +50,9 @@ describe("TodoStickyBar", () => {
     expect(overlay).not.toBeNull();
     expect(overlay!.className).toContain("absolute");
     expect(overlay!.className).toContain("z-30");
-    expect(overlay!.className).toContain("-translate-x-1/2");
+    expect(overlay!.className).toContain("inset-x-3");
+    expect(overlay!.className).toContain("max-w-[760px]");
+    expect(overlay!.className).not.toContain("100vw");
     // Auto-open expands the list as a popover panel below the bar, not in flow.
     const panel = document.getElementById("todo-sticky-list");
     expect(panel).not.toBeNull();
