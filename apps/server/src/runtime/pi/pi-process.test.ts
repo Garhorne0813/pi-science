@@ -202,6 +202,7 @@ describe("Node Pi Orbit adapter", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     expect(events).toContainEqual({ type: "agent_start", sessionId: "restored-session" });
+    await manager.shutdownAll();
     await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
