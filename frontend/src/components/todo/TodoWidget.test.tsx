@@ -62,6 +62,10 @@ describe("TodoWidget", () => {
     // Auto-expanded: the task list is in the popover content.
     expect(screen.getByText("Load")).toBeInTheDocument();
     expect(screen.getByText("Fit")).toBeInTheDocument();
+    const popover = screen.getByRole("dialog");
+    expect(popover).toHaveClass("w-[min(320px,calc(100vw-24px))]");
+    expect(popover.querySelector("ul")).toHaveClass("space-y-0.5");
+    expect(popover.querySelector("li")).toHaveClass("py-1.5");
   });
 
   it("closes the card on Escape and does not reopen during the same streak", async () => {

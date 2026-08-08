@@ -57,39 +57,34 @@ export function TodoWidget() {
         <Popover.Content
           sideOffset={8}
           align="end"
-          className="z-[95] w-[min(360px,calc(100vw-24px))] rounded-card border border-border bg-surface shadow-card outline-none"
+          className="z-[95] w-[min(320px,calc(100vw-24px))] rounded-card border border-border bg-surface shadow-card outline-none"
         >
-          <div className="flex items-center gap-2 border-b border-faint px-3 py-2.5">
-            <h2 className="shrink-0 text-xs font-medium text-text">{t("todo.title")}</h2>
+          <div className="flex items-center gap-1.5 border-b border-faint px-2 py-1.5">
+            <h2 className="shrink-0 text-[11px] font-medium text-text">{t("todo.title")}</h2>
             <span
               role="progressbar"
               aria-valuenow={vm.percent}
               aria-valuemin={0}
               aria-valuemax={100}
-              className="shrink-0 text-[11px] text-muted"
+              className="shrink-0 text-[10px] text-muted"
             >
               {summary}
             </span>
-            {vm.allCompleted ? (
-              <span className="shrink-0 text-[11px] text-ok">{t("todo.allCompleted")}</span>
-            ) : activeLabel ? (
-              <span className="min-w-0 flex-1 truncate text-[11px] text-muted" title={activeLabel}>{activeLabel}</span>
-            ) : null}
             <div className="ml-auto flex shrink-0 items-center gap-1">
               <TodoModeSwitch />
               <Popover.Close asChild>
                 <button
                   type="button"
                   aria-label={t("todo.close")}
-                  className="rounded-input p-1 text-muted transition-colors hover:bg-surface-2 hover:text-text"
+                  className="rounded-input p-0.5 text-muted transition-colors hover:bg-surface-2 hover:text-text"
                 >
-                  <X size={13} aria-hidden />
+                  <X size={12} aria-hidden />
                 </button>
               </Popover.Close>
             </div>
           </div>
-          <div className="max-h-[min(70vh,520px)] overflow-y-auto p-3">
-            <TodoTaskList tasks={vm.tasks} />
+          <div className="max-h-[min(56vh,420px)] overflow-y-auto p-1.5">
+            <TodoTaskList tasks={vm.tasks} compact />
           </div>
           <Popover.Arrow className="fill-surface" />
         </Popover.Content>
