@@ -687,6 +687,41 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
+  it("continues turn ordinals across runtime rebuilds from persisted records", async () => {
+    process.env.FAKE_PI_MODE = "turn-artifacts-partid";
+    const cwd = await workspaceWithSessions("session-turn-ordinal-rebuild");
+    process.env.FAKE_PI_WRITE_FILE = join(cwd, "work", "plot.png");
+
+    // First runtime handles the first turn, then the whole service (and its
+    // runtime) is torn down — the second runtime is a fresh process.
+    const first = testService();
+    await first.resume("session-turn-ordinal-rebuild", cwd);
+    const firstPublish = vi.spyOn(conversationEventHub, "publish");
+    // Clear the spy before prompting: earlier tests may have left calls behind,
+    // which would let waitFor succeed on stale events and tear down the runtime
+    // before this turn actually completes.
+    firstPublish.mockClear();
+    await expect(first.command("session-turn-ordinal-rebuild", cwd, "prompt", { message: "go" })).resolves.toMatchObject({ success: true });
+    await waitFor(() => {
+      return firstPublish.mock.calls.some(([, , payload]) => (payload as { type?: string }).type === "turn.artifacts");
+    });
+    const firstEvent = firstPublish.mock.calls.find(([, , payload]) => (payload as { type?: string }).type === "turn.artifacts")?.[2] as Record<string, unknown>;
+    expect(firstEvent).toMatchObject({ type: "turn.artifacts", turnOrdinal: 1 });
+    await first.shutdownAll();
+
+    const second = testService();
+    await second.resume("session-turn-ordinal-rebuild", cwd);
+    const secondPublish = vi.spyOn(conversationEventHub, "publish");
+    secondPublish.mockClear();
+    await expect(second.command("session-turn-ordinal-rebuild", cwd, "prompt", { message: "go" })).resolves.toMatchObject({ success: true });
+    await waitFor(() => {
+      return secondPublish.mock.calls.some(([, , payload]) => (payload as { type?: string }).type === "turn.artifacts");
+    });
+    const secondEvent = secondPublish.mock.calls.find(([, , payload]) => (payload as { type?: string }).type === "turn.artifacts")?.[2] as Record<string, unknown>;
+    expect(secondEvent).toMatchObject({ type: "turn.artifacts", turnOrdinal: 2 });
+    await second.shutdownAll();
+  });
+
   it("cleans a failed restart handshake, restores the old session, and publishes blank replacements", async () => {
     const service = testService();
     const cwd = await workspaceWithSessions("session-a");
