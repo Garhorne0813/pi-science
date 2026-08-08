@@ -56,6 +56,21 @@ describe("InspectorTabs", () => {
     expect(useUiStore.getState().activeInspectorTabId).toBe(inspectorTabId(second));
   });
 
+  it("reserves fixed control space and keeps tab content at a stable height", () => {
+    const first = file("one.txt");
+    const second = file("two.txt");
+    useUiStore.getState().openInspector(first);
+    useUiStore.getState().openInspector(second);
+    const tabs = useUiStore.getState().inspectorTabs;
+    render(<InspectorTabs tabs={tabs} activeTabId={inspectorTabId(second)} cwd="project" reserveControls />);
+
+    const tablist = screen.getByRole("tablist", { name: "Open file previews" });
+    expect(tablist.parentElement).toHaveClass("h-10", "mr-14");
+    expect(tablist).toHaveClass("h-9", "overflow-x-auto", "overflow-y-hidden", "[scrollbar-width:none]");
+    expect(tablist.firstElementChild).toHaveClass("h-9", "w-max", "min-w-full");
+    expect(screen.getByRole("tab", { name: "two.txt" }).parentElement).toHaveClass("h-full");
+  });
+
   it("keeps an unsaved draft while switching between tabs", async () => {
     const first = file("one.txt");
     const second = file("two.txt");
