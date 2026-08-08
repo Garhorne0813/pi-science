@@ -68,7 +68,9 @@ describe("InspectorTabs", () => {
     expect(tablist.parentElement).toHaveClass("h-10", "mr-14");
     expect(tablist).toHaveClass("h-9", "overflow-x-auto", "overflow-y-hidden", "[scrollbar-width:none]");
     expect(tablist.firstElementChild).toHaveClass("h-9", "w-max", "min-w-full");
-    expect(screen.getByRole("tab", { name: "two.txt" }).parentElement).toHaveClass("h-full");
+    const activeTabContainer = screen.getByRole("tab", { name: "two.txt" }).parentElement;
+    expect(activeTabContainer).toHaveClass("h-full");
+    expect(activeTabContainer).not.toHaveClass("focus-within:ring-2", "focus-within:ring-accent");
   });
 
   it("uses a regular vertical mouse wheel to scroll overflowing tabs horizontally", () => {

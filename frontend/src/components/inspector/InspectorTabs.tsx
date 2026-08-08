@@ -154,7 +154,6 @@ export function InspectorTabs({
                 className={cn(
                   "group relative flex h-full min-w-[7rem] max-w-48 shrink-0 cursor-default items-center gap-1.5 border-r border-border px-2 text-xs outline-none",
                   active ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2/60 hover:text-text",
-                  "focus-within:ring-2 focus-within:ring-inset focus-within:ring-accent",
                 )}
               >
                 {active && <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />}
