@@ -32,8 +32,13 @@ beforeEach(async () => {
 afterEach(async () => {
   if (originalHome === undefined) delete process.env.PI_SCIENCE_HOME;
   else process.env.PI_SCIENCE_HOME = originalHome;
-  await Promise.all(cleanups.splice(0).map((path) => rm(path, { recursive: true, force: true })));
-});
+  await Promise.all(cleanups.splice(0).map((path) => rm(path, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 100,
+  })));
+}, 30_000);
 
 async function workspaceWithMcp(servers: Record<string, unknown>): Promise<string> {
   const cwd = join(home, `ws-${cleanups.length}`);
