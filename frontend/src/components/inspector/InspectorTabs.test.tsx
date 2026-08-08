@@ -71,6 +71,20 @@ describe("InspectorTabs", () => {
     expect(screen.getByRole("tab", { name: "two.txt" }).parentElement).toHaveClass("h-full");
   });
 
+  it("uses a regular vertical mouse wheel to scroll overflowing tabs horizontally", () => {
+    const tabs = [file("one.txt"), file("two.txt")].map((data) => ({ id: inspectorTabId(data), data }));
+    render(<InspectorTabs tabs={tabs} activeTabId={tabs[0].id} cwd="project" />);
+
+    const tablist = screen.getByRole("tablist", { name: "Open file previews" });
+    Object.defineProperties(tablist, {
+      clientWidth: { configurable: true, value: 200 },
+      scrollWidth: { configurable: true, value: 400 },
+    });
+    fireEvent.wheel(tablist, { deltaY: 60 });
+
+    expect(tablist.scrollLeft).toBe(60);
+  });
+
   it("keeps an unsaved draft while switching between tabs", async () => {
     const first = file("one.txt");
     const second = file("two.txt");

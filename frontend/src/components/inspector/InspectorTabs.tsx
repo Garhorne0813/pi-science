@@ -97,13 +97,24 @@ export function InspectorTabs({
       const left = maxScroll > 0 ? (scrollLeft / maxScroll) * (100 - width) : 0;
       setTabScrollIndicator({ visible, left, width });
     };
+    const handleWheel = (event: WheelEvent) => {
+      if (scroller.scrollWidth <= scroller.clientWidth) return;
+      // Preserve native horizontal trackpad gestures. A regular vertical
+      // mouse wheel over the tab strip moves the tabs horizontally instead.
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      const previousScrollLeft = scroller.scrollLeft;
+      scroller.scrollLeft += event.deltaY;
+      if (scroller.scrollLeft !== previousScrollLeft) event.preventDefault();
+    };
     updateIndicator();
     scroller.addEventListener("scroll", updateIndicator, { passive: true });
+    scroller.addEventListener("wheel", handleWheel, { passive: false });
     const observer = new ResizeObserver(updateIndicator);
     observer.observe(scroller);
     if (scroller.firstElementChild) observer.observe(scroller.firstElementChild);
     return () => {
       scroller.removeEventListener("scroll", updateIndicator);
+      scroller.removeEventListener("wheel", handleWheel);
       observer.disconnect();
     };
   }, [tabs.length]);
