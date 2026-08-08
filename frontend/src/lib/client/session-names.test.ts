@@ -105,3 +105,38 @@ describe("session name migration and storage resilience", () => {
     expect(getSessionName("/workspace", "session-x")).toBe("My chat");
   });
 });
+
+describe("setSessionName server persistence", () => {
+  it("writes the title to the server (PUT) without blocking the sync path", async () => {
+    const calls: Array<{ url: string; method?: string; body?: string }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), method: init?.method, body: String(init?.body ?? "") });
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      setSessionName("/workspace", "persist-me", "持久标题");
+      // The localStorage write is immediate (sync contract).
+      expect(getSessionName("/workspace", "persist-me")).toBe("持久标题");
+      // Fire-and-forget: give the dynamic import + PUT a tick.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const put = calls.find((c) => c.url.includes("/api/sessions/persist-me/title") && c.method === "PUT");
+      expect(put).toBeTruthy();
+      expect(JSON.parse(put!.body ?? "").title).toBe("持久标题");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("keeps the local name when the server write fails", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => { throw new Error("network down"); }) as typeof fetch;
+    try {
+      setSessionName("/workspace", "fail-me", "离线标题");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(getSessionName("/workspace", "fail-me")).toBe("离线标题");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

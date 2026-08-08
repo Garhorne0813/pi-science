@@ -121,6 +121,12 @@ export class PiScienceClient {
     return rest.abort(this.baseUrl, sessionId, cwd);
   }
 
+  /** Persist a session display title on the server (best-effort; the
+   *  localStorage registry remains the immediate/fallback source). */
+  async setSessionTitle(sessionId: string, title: string, cwd?: string): Promise<void> {
+    await rest.setSessionTitle(this.baseUrl, sessionId, title, cwd);
+  }
+
   async deleteSession(sessionId: string, cwd?: string): Promise<void> {
     await rest.deleteSession(this.baseUrl, sessionId, cwd);
     if (cwd) {

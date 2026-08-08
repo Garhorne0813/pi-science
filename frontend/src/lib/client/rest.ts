@@ -187,6 +187,19 @@ export async function deleteSession(baseUrl: string, sessionId: string, cwd?: st
   }
 }
 
+export async function setSessionTitle(baseUrl: string, sessionId: string, title: string, cwd?: string): Promise<void> {
+  const params = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/title${params}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    throw new Error(responseError(data, `Set session title failed: ${res.statusText}`));
+  }
+}
+
 export async function respondToInteraction(
   baseUrl: string,
   sessionId: string,

@@ -1,5 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { SessionRepository } from "../../runtime/node/session-repository.js";
+import type { SessionTitleRepository } from "../../runtime/node/session-titles.js";
+import { sessionTitleRepository } from "../../runtime/node/session-titles.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import { ensureProject } from "../../project/project-registry.js";
@@ -9,7 +11,7 @@ function queryCwd(request: { query: unknown }): string {
   return typeof query.cwd === "string" && query.cwd.length > 0 ? query.cwd : ".";
 }
 
-export function registerSessionReadRoutes(app: FastifyInstance, sessionRepository: SessionRepository, nodeSessionService: NodeSessionService): void {
+export function registerSessionReadRoutes(app: FastifyInstance, sessionRepository: SessionRepository, nodeSessionService: NodeSessionService, titles: SessionTitleRepository = sessionTitleRepository): void {
   app.get("/api/sessions", async (request, reply) => {
     try {
       const cwd = await validateWorkspaceCwd(queryCwd(request));
@@ -20,6 +22,11 @@ export function registerSessionReadRoutes(app: FastifyInstance, sessionRepositor
         if (!sessions.some((session) => session.id === runtime.id)) {
           sessions.unshift({ id: runtime.id, cwd, project_id: project.id, name: null, created_at: null, updated_at: new Date().toISOString() });
         }
+      }
+      const titleById = await titles.getTitles(cwd);
+      for (const session of sessions) {
+        const title = titleById.get(session.id);
+        if (title) (session as { name: string | null }).name = title;
       }
       return sessions;
     } catch (error) {

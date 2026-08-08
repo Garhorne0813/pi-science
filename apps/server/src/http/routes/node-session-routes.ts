@@ -2,6 +2,8 @@ import { createSessionRequestSchema } from "@pi-science/contracts";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import type { SessionRepository } from "../../runtime/node/session-repository.js";
+import type { SessionTitleRepository } from "../../runtime/node/session-titles.js";
+import { sessionTitleRepository } from "../../runtime/node/session-titles.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { AiTitleService } from "../../runtime/title/ai-title-service.js";
 
@@ -46,6 +48,7 @@ export function registerNodeSessionRoutes(
   nodeSessionService: NodeSessionService,
   sessionRepository: SessionRepository,
   aiTitleService?: AiTitleService,
+  titles: SessionTitleRepository = sessionTitleRepository,
 ): void {
   app.post("/api/sessions", async (request, reply) => {
     const parsed = createSessionRequestSchema.safeParse(request.body);
@@ -74,6 +77,24 @@ export function registerNodeSessionRoutes(
     const exists = await sessionRepository.findPath(workspace, sessionId);
     if (!exists) return reply.code(404).send({ ok: false, code: "not_found", error: "session not found" });
     const title = await aiTitleService.generateTitle(workspace, sessionId);
+    return { ok: true, title };
+  });
+
+  app.put<{ Params: { session_id: string } }>("/api/sessions/:session_id/title", async (request, reply) => {
+    const sessionId = request.params.session_id;
+    const body = (request.body ?? {}) as { title?: unknown };
+    const title = typeof body.title === "string" ? body.title.trim() : "";
+    if (!title) return reply.code(400).send({ ok: false, code: "invalid_request", error: "title must be a non-empty string" });
+    if (title.length > 100) return reply.code(400).send({ ok: false, code: "invalid_request", error: "title must be at most 100 characters" });
+    let workspace: string;
+    try {
+      workspace = await validateWorkspaceCwd(cwd(request));
+    } catch (error) {
+      return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) });
+    }
+    const exists = await sessionRepository.findPath(workspace, sessionId);
+    if (!exists) return reply.code(404).send({ ok: false, code: "not_found", error: "session not found" });
+    await titles.setTitle(workspace, sessionId, title);
     return { ok: true, title };
   });
 
@@ -159,7 +180,15 @@ export function registerNodeSessionRoutes(
   });
 
   app.delete<{ Params: { session_id: string } }>("/api/sessions/:session_id", async (request, reply) => {
+    const sessionId = request.params.session_id;
+    let workspace: string;
+    try {
+      workspace = await validateWorkspaceCwd(cwd(request));
+    } catch (error) {
+      return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) });
+    }
     const result = await nodeSessionService.delete(request.params.session_id, cwd(request));
+    if (result.success) await titles.deleteTitle(workspace, sessionId);
     return result.success ? { ok: true } : sendFailure(reply, result as Record<string, unknown>);
   });
 }
