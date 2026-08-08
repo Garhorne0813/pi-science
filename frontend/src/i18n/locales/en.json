@@ -829,8 +829,5 @@
   "conversation.codeSnippet": "Code snippet",
   "conversation.generatedFilesLabel": "GENERATED · {{count}}",
   "conversation.rowsCols": "{{rows}} rows · {{columns}} columns",
-  "conversation.moreColumns": "+{{count}} more",
-  "conversation.lightboxLoadError": "Unable to load file",
-  "conversation.lightboxStructurePartial": "Large structure file — showing the first 4 MB",
-  "conversation.lightboxImageLabel": "Large preview of {{name}}"
+  "conversation.moreColumns": "+{{count}} more"
 }
