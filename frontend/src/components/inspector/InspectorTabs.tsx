@@ -30,10 +30,13 @@ export function InspectorTabs({
   tabs,
   activeTabId,
   cwd,
+  reserveControls = false,
 }: {
   tabs: InspectorTab[];
   activeTabId: string;
   cwd?: string;
+  /** Keep the fixed preview layout controls from covering the scroll viewport. */
+  reserveControls?: boolean;
 }) {
   const { t } = useTranslation();
   const activateTab = useUiStore((state) => state.activateInspectorTab);
@@ -41,6 +44,8 @@ export function InspectorTabs({
   const [expandedTabId, setExpandedTabId] = useState<string | null>(null);
   const [zoomByTab, setZoomByTab] = useState<Record<string, number>>({});
   const expandedPanelRef = useRef<HTMLDivElement | null>(null);
+  const tabScrollRef = useRef<HTMLDivElement | null>(null);
+  const [tabScrollIndicator, setTabScrollIndicator] = useState({ visible: false, left: 0, width: 100 });
 
   const setTabZoom = (tabId: string, update: (current: number) => number) => {
     setZoomByTab((current) => ({
@@ -81,6 +86,39 @@ export function InspectorTabs({
     return () => panel.removeEventListener("wheel", onWheel, { capture: true });
   }, [expandedTabId]);
 
+  useEffect(() => {
+    const scroller = tabScrollRef.current;
+    if (!scroller) return;
+    const updateIndicator = () => {
+      const { clientWidth, scrollLeft, scrollWidth } = scroller;
+      const visible = scrollWidth > clientWidth + 1;
+      const width = visible ? Math.max(12, (clientWidth / scrollWidth) * 100) : 100;
+      const maxScroll = Math.max(0, scrollWidth - clientWidth);
+      const left = maxScroll > 0 ? (scrollLeft / maxScroll) * (100 - width) : 0;
+      setTabScrollIndicator({ visible, left, width });
+    };
+    const handleWheel = (event: WheelEvent) => {
+      if (scroller.scrollWidth <= scroller.clientWidth) return;
+      // Preserve native horizontal trackpad gestures. A regular vertical
+      // mouse wheel over the tab strip moves the tabs horizontally instead.
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      const previousScrollLeft = scroller.scrollLeft;
+      scroller.scrollLeft += event.deltaY;
+      if (scroller.scrollLeft !== previousScrollLeft) event.preventDefault();
+    };
+    updateIndicator();
+    scroller.addEventListener("scroll", updateIndicator, { passive: true });
+    scroller.addEventListener("wheel", handleWheel, { passive: false });
+    const observer = new ResizeObserver(updateIndicator);
+    observer.observe(scroller);
+    if (scroller.firstElementChild) observer.observe(scroller.firstElementChild);
+    return () => {
+      scroller.removeEventListener("scroll", updateIndicator);
+      scroller.removeEventListener("wheel", handleWheel);
+      observer.disconnect();
+    };
+  }, [tabs.length]);
+
   const focusSibling = (currentId: string, direction: -1 | 1) => {
     const index = tabs.findIndex((tab) => tab.id === currentId);
     if (index === -1) return;
@@ -94,62 +132,79 @@ export function InspectorTabs({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div
-        role="tablist"
-        aria-label={t("filePreview.openFiles")}
-        className="flex h-9 shrink-0 overflow-x-auto border-b border-border bg-surface px-1"
+        className={cn(
+          "relative h-10 shrink-0 bg-surface",
+          reserveControls && "mr-14",
+        )}
       >
-        {tabs.map((tab, index) => {
-          const active = tab.id === activeTabId;
-          const title = tabTitle(tab.data);
-          return (
-            <div
-              key={tab.id}
-              title={title}
-              className={cn(
-                "group relative flex min-w-[7rem] max-w-48 shrink-0 cursor-default items-center gap-1.5 border-r border-border px-2 text-xs outline-none",
-                active ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2/60 hover:text-text",
-                "focus-within:ring-2 focus-within:ring-inset focus-within:ring-accent",
-              )}
-            >
-              {active && <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />}
-              <button
-                type="button"
-                role="tab"
-                tabIndex={active ? 0 : -1}
-                data-tab-index={index}
-                aria-selected={active}
-                aria-controls={`inspector-panel-${index}`}
-                className="min-w-0 flex-1 truncate text-left outline-none"
-                onClick={() => activateTab(tab.id)}
-                onAuxClick={(event) => {
-                  if (event.button === 1) closeTab(tab.id);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-                    event.preventDefault();
-                    focusSibling(tab.id, event.key === "ArrowLeft" ? -1 : 1);
-                  }
-                }}
-              >
-                {title}
-              </button>
-              <button
-                type="button"
-                aria-label={t("filePreview.closeTab", { filename: title })}
+        <div
+          ref={tabScrollRef}
+          role="tablist"
+          aria-label={t("filePreview.openFiles")}
+          className="h-9 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        >
+          <div className="flex h-9 w-max min-w-full border-b border-border px-1">
+            {tabs.map((tab, index) => {
+            const active = tab.id === activeTabId;
+            const title = tabTitle(tab.data);
+            return (
+              <div
+                key={tab.id}
+                title={title}
                 className={cn(
-                  "rounded p-0.5 hover:bg-border hover:text-text",
-                  active ? "text-muted" : "text-transparent group-hover:text-muted group-focus-within:text-muted",
+                  "group relative flex h-full min-w-[7rem] max-w-48 shrink-0 cursor-default items-center gap-1.5 border-r border-border px-2 text-xs outline-none",
+                  active ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2/60 hover:text-text",
                 )}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  closeTab(tab.id);
-                }}
               >
-                <X size={12} />
-              </button>
-            </div>
-          );
-        })}
+                {active && <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />}
+                <button
+                  type="button"
+                  role="tab"
+                  tabIndex={active ? 0 : -1}
+                  data-tab-index={index}
+                  aria-selected={active}
+                  aria-controls={`inspector-panel-${index}`}
+                  className="min-w-0 flex-1 truncate text-left outline-none"
+                  onClick={() => activateTab(tab.id)}
+                  onAuxClick={(event) => {
+                    if (event.button === 1) closeTab(tab.id);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                      event.preventDefault();
+                      focusSibling(tab.id, event.key === "ArrowLeft" ? -1 : 1);
+                    }
+                  }}
+                >
+                  {title}
+                </button>
+                <button
+                  type="button"
+                  aria-label={t("filePreview.closeTab", { filename: title })}
+                  className={cn(
+                    "rounded p-0.5 hover:bg-border hover:text-text",
+                    active ? "text-muted" : "text-transparent group-hover:text-muted group-focus-within:text-muted",
+                  )}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    closeTab(tab.id);
+                  }}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            );
+            })}
+          </div>
+        </div>
+        {tabScrollIndicator.visible && (
+          <div aria-hidden="true" className="absolute inset-x-1 bottom-0 h-1 overflow-hidden rounded-full bg-border/45">
+            <div
+              className="h-full rounded-full bg-muted/55"
+              style={{ marginLeft: `${tabScrollIndicator.left}%`, width: `${tabScrollIndicator.width}%` }}
+            />
+          </div>
+        )}
       </div>
 
       <div className="min-h-0 flex-1">

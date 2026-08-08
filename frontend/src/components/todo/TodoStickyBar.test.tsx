@@ -50,13 +50,18 @@ describe("TodoStickyBar", () => {
     expect(overlay).not.toBeNull();
     expect(overlay!.className).toContain("absolute");
     expect(overlay!.className).toContain("z-30");
-    expect(overlay!.className).toContain("-translate-x-1/2");
+    expect(overlay!.className).toContain("inset-x-3");
+    expect(overlay!.className).toContain("max-w-[760px]");
+    expect(overlay!.className).not.toContain("100vw");
     // Auto-open expands the list as a popover panel below the bar, not in flow.
     const panel = document.getElementById("todo-sticky-list");
     expect(panel).not.toBeNull();
     expect(panel!.className).toContain("absolute");
     expect(panel!.className).toContain("top-full");
     expect(panel!.className).toContain("overflow-y-auto");
+    expect(panel!.className).toContain("p-1.5");
+    expect(panel!.querySelector("ul")!.className).toContain("space-y-0.5");
+    expect(panel!.querySelector("li")!.className).toContain("py-1.5");
   });
 
   it("renders nothing without todo tasks", () => {
@@ -123,10 +128,23 @@ describe("TodoStickyBar", () => {
     expect(useUiStore.getState().todoUiMode).toBe("fab");
   });
 
-  it("shows All done when every task is completed", () => {
+  it("hides when every task is completed", () => {
     setThread([todoBlock({ action: "create", nextId: 2, tasks: [{ id: 1, subject: "Load", status: "completed" }] })]);
+    const { container } = render(<TodoStickyBar />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("auto-opens again when a new task appears after completion", () => {
+    setThread([todoBlock({ action: "create", nextId: 2, tasks: [{ id: 1, subject: "First", status: "completed" }] })]);
     render(<TodoStickyBar />);
-    expect(screen.getByText("All done")).toBeInTheDocument();
-    expect(screen.getByText("100% · 1/1")).toBeInTheDocument();
+    expect(screen.queryByText("First")).not.toBeInTheDocument();
+
+    act(() => setThread([todoBlock({ action: "create", nextId: 3, tasks: [
+      { id: 1, subject: "First", status: "completed" },
+      { id: 2, subject: "Second", status: "pending" },
+    ] })]));
+
+    expect(screen.getAllByText("Second").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { expanded: true })).toBeInTheDocument();
   });
 });

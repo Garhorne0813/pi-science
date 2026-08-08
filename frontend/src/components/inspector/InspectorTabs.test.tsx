@@ -56,6 +56,37 @@ describe("InspectorTabs", () => {
     expect(useUiStore.getState().activeInspectorTabId).toBe(inspectorTabId(second));
   });
 
+  it("reserves fixed control space and keeps tab content at a stable height", () => {
+    const first = file("one.txt");
+    const second = file("two.txt");
+    useUiStore.getState().openInspector(first);
+    useUiStore.getState().openInspector(second);
+    const tabs = useUiStore.getState().inspectorTabs;
+    render(<InspectorTabs tabs={tabs} activeTabId={inspectorTabId(second)} cwd="project" reserveControls />);
+
+    const tablist = screen.getByRole("tablist", { name: "Open file previews" });
+    expect(tablist.parentElement).toHaveClass("h-10", "mr-14");
+    expect(tablist).toHaveClass("h-9", "overflow-x-auto", "overflow-y-hidden", "[scrollbar-width:none]");
+    expect(tablist.firstElementChild).toHaveClass("h-9", "w-max", "min-w-full");
+    const activeTabContainer = screen.getByRole("tab", { name: "two.txt" }).parentElement;
+    expect(activeTabContainer).toHaveClass("h-full");
+    expect(activeTabContainer).not.toHaveClass("focus-within:ring-2", "focus-within:ring-accent");
+  });
+
+  it("uses a regular vertical mouse wheel to scroll overflowing tabs horizontally", () => {
+    const tabs = [file("one.txt"), file("two.txt")].map((data) => ({ id: inspectorTabId(data), data }));
+    render(<InspectorTabs tabs={tabs} activeTabId={tabs[0].id} cwd="project" />);
+
+    const tablist = screen.getByRole("tablist", { name: "Open file previews" });
+    Object.defineProperties(tablist, {
+      clientWidth: { configurable: true, value: 200 },
+      scrollWidth: { configurable: true, value: 400 },
+    });
+    fireEvent.wheel(tablist, { deltaY: 60 });
+
+    expect(tablist.scrollLeft).toBe(60);
+  });
+
   it("keeps an unsaved draft while switching between tabs", async () => {
     const first = file("one.txt");
     const second = file("two.txt");

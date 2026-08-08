@@ -40,19 +40,20 @@ export function TodoStickyBar() {
   const cwd = useRuntimeStore((s) => s.cwd);
   const sessionId = useRuntimeStore((s) => s.activeSessionId);
   const vm = useMemo(() => todoViewModel(blocks), [blocks]);
-  const { open, setOpen, close } = useTodoAutoOpenOnce(Boolean(vm), `${cwd}:${sessionId ?? ""}`);
+  const hasOpenTasks = Boolean(vm && !vm.allCompleted);
+  const { open, setOpen, close } = useTodoAutoOpenOnce(hasOpenTasks, `${cwd}:${sessionId ?? ""}`);
 
   const onKeyDown = useCallback((event: React.KeyboardEvent) => {
     if (event.key === "Escape") close();
   }, [close]);
 
-  if (mode !== "sticky" || !vm) return null;
+  if (mode !== "sticky" || !vm || vm.allCompleted) return null;
 
   const activeLabel = vm.activeTask ? (vm.activeTask.activeForm || vm.activeTask.subject) : null;
 
   return (
     <div
-      className="pointer-events-auto absolute left-1/2 top-3 z-30 w-[min(760px,calc(100vw-24px))] -translate-x-1/2"
+      className="pointer-events-auto absolute inset-x-3 top-3 z-30 mx-auto max-w-[760px]"
       onKeyDown={onKeyDown}
     >
       <div className="rounded-card border border-border bg-surface shadow-card">
@@ -90,9 +91,9 @@ export function TodoStickyBar() {
       {open && (
         <div
           id="todo-sticky-list"
-          className="absolute left-0 right-0 top-full mt-1 max-h-[min(48vh,420px)] overflow-y-auto rounded-card border border-border bg-surface px-3 py-2 shadow-card"
+          className="absolute left-0 right-0 top-full mt-1 max-h-[min(42vh,360px)] overflow-y-auto rounded-card border border-border bg-surface p-1.5 shadow-card"
         >
-          <TodoTaskList tasks={vm.tasks} />
+          <TodoTaskList tasks={vm.tasks} compact />
         </div>
       )}
     </div>

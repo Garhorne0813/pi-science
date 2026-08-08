@@ -29,15 +29,20 @@ export function RightPane({
   const inspectorMaximized = useUiStore((s) => s.inspectorMaximized);
   const setInspectorWidth = useUiStore((s) => s.setInspectorWidth);
   const setInspectorMaximized = useUiStore((s) => s.setInspectorMaximized);
-  // While dragging, the live width lives here; the store (and localStorage)
-  // are only written on pointer-up.
-  const [dragWidth, setDragWidth] = useState<number | null>(null);
+  // Live width changes are applied directly once per animation frame. This
+  // avoids reconciling the (potentially expensive) preview tree on every
+  // pointermove; the persisted store is only written on pointer-up.
+  const [dragging, setDragging] = useState(false);
+  const paneRef = useRef<HTMLDivElement | null>(null);
   const dragWidthRef = useRef<number | null>(null);
-  const dragging = dragWidth !== null;
+  const dragFrameRef = useRef<number | null>(null);
 
   // Maximized never outlives the pane — closing it returns the next pane
   // (possibly for a different artifact or session) to the normal split.
   useEffect(() => () => setInspectorMaximized(false), [setInspectorMaximized]);
+  useEffect(() => () => {
+    if (dragFrameRef.current !== null) cancelAnimationFrame(dragFrameRef.current);
+  }, []);
 
   const clamp = (w: number) =>
     Math.max(
@@ -50,7 +55,7 @@ export function RightPane({
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     dragWidthRef.current = inspectorWidth;
-    setDragWidth(inspectorWidth);
+    setDragging(true);
   };
 
   const onDividerPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -60,14 +65,27 @@ export function RightPane({
     const w = window.innerWidth - e.clientX;
     if (w < COLLAPSE_BELOW) {
       // Snap closed — the pane unmounts, which also ends the drag.
+      if (dragFrameRef.current !== null) cancelAnimationFrame(dragFrameRef.current);
+      dragFrameRef.current = null;
       dragWidthRef.current = null;
-      setDragWidth(null);
+      setDragging(false);
       onClose();
       return;
     }
     const nextWidth = clamp(w);
     dragWidthRef.current = nextWidth;
-    setDragWidth(nextWidth);
+    e.currentTarget.setAttribute("aria-valuenow", String(nextWidth));
+    if (dragFrameRef.current === null) {
+      // The sentinel also keeps synchronous requestAnimationFrame shims used
+      // in tests from leaving a stale frame id behind.
+      dragFrameRef.current = -1;
+      const frame = requestAnimationFrame(() => {
+        dragFrameRef.current = null;
+        const liveWidth = dragWidthRef.current;
+        if (liveWidth !== null && paneRef.current) paneRef.current.style.width = `${liveWidth}px`;
+      });
+      if (dragFrameRef.current !== null) dragFrameRef.current = frame;
+    }
   };
 
   const onDividerPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -75,9 +93,14 @@ export function RightPane({
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
     const nextWidth = dragWidthRef.current;
-    if (nextWidth !== null) setInspectorWidth(nextWidth);
+    if (dragFrameRef.current !== null) cancelAnimationFrame(dragFrameRef.current);
+    dragFrameRef.current = null;
+    if (nextWidth !== null) {
+      if (paneRef.current) paneRef.current.style.width = `${nextWidth}px`;
+      setInspectorWidth(nextWidth);
+    }
     dragWidthRef.current = null;
-    setDragWidth(null);
+    setDragging(false);
   };
 
   const onDividerKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -93,10 +116,14 @@ export function RightPane({
 
   return (
     <div
-      className="relative hidden h-full shrink-0 lg:block"
-      style={{ width: dragWidth ?? inspectorWidth }}
+      ref={paneRef}
+      className={cn(
+        "relative hidden h-full shrink-0 lg:block",
+        dragging && "will-change-[width] select-none",
+      )}
+      style={{ width: inspectorWidth }}
     >
-      <div className="h-full">{children}</div>
+      <div className={cn("h-full", dragging && "pointer-events-none")}>{children}</div>
       {/* Drag divider: resize within [INSPECTOR_MIN, INSPECTOR_MAX]; dragging
           far right snaps the pane closed. */}
       <div
@@ -105,7 +132,7 @@ export function RightPane({
         aria-label={t("shell.resizePane")}
         aria-valuemin={INSPECTOR_MIN}
         aria-valuemax={INSPECTOR_MAX}
-        aria-valuenow={dragWidth ?? inspectorWidth}
+        aria-valuenow={inspectorWidth}
         tabIndex={0}
         onPointerDown={onDividerPointerDown}
         onPointerMove={onDividerPointerMove}

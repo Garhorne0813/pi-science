@@ -224,7 +224,12 @@ export function ProjectsLayout() {
       {/* Inspector — only in workspace context */}
       {isWorkspace && inspectorOpen && activeInspectorTabId && inspectorTabs.length > 0 && (
         <RightPane onClose={closeInspector}>
-          <InspectorTabs tabs={inspectorTabs} activeTabId={activeInspectorTabId} cwd={activeCwd || undefined} />
+          <InspectorTabs
+            tabs={inspectorTabs}
+            activeTabId={activeInspectorTabId}
+            cwd={activeCwd || undefined}
+            reserveControls={isConversationRoute}
+          />
         </RightPane>
       )}
 

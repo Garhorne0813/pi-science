@@ -1,11 +1,12 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import type { TodoTask } from "@/lib/conversation/todos";
+import { cn } from "@/lib/ui";
 import { TodoTaskRow } from "./TodoTaskRow";
 
 /** Shared read-only task list. Scrolls inside whatever max-height its shell
  *  gives it; the shell owns the scroll region. */
-export function TodoTaskList({ tasks }: { tasks: TodoTask[] }) {
+export function TodoTaskList({ tasks, compact = false }: { tasks: TodoTask[]; compact?: boolean }) {
   const { t } = useTranslation();
   const byId = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
   const blockedIds = useMemo(() => {
@@ -21,9 +22,9 @@ export function TodoTaskList({ tasks }: { tasks: TodoTask[] }) {
   }, [tasks, byId]);
 
   return (
-    <ul className="space-y-1.5 overflow-y-auto">
+    <ul className={cn("overflow-y-auto", compact ? "space-y-0.5" : "space-y-1.5")}>
       {tasks.map((task) => (
-        <TodoTaskRow key={task.id} task={task} blocked={blockedIds.has(task.id)} t={t} />
+        <TodoTaskRow key={task.id} task={task} blocked={blockedIds.has(task.id)} compact={compact} t={t} />
       ))}
     </ul>
   );

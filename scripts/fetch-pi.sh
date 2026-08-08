@@ -10,6 +10,7 @@ PI_SUBAGENTS_VERSION="${PI_SUBAGENTS_VERSION:-0.40.0}"
 PI_WEB_ACCESS_VERSION="${PI_WEB_ACCESS_VERSION:-0.18.0}"
 CONTEXT_MODE_VERSION="${CONTEXT_MODE_VERSION:-1.0.169}"
 RPIV_ASK_USER_QUESTION_VERSION="${RPIV_ASK_USER_QUESTION_VERSION:-2.3.1}"
+RPIV_TODO_VERSION="${RPIV_TODO_VERSION:-2.4.0}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 RUNTIME_DIR="$PROJECT_DIR/runtime/pi"
@@ -33,7 +34,8 @@ install_runtime_extensions() {
     "pi-subagents@$PI_SUBAGENTS_VERSION" \
     "pi-web-access@$PI_WEB_ACCESS_VERSION" \
     "context-mode@$CONTEXT_MODE_VERSION" \
-    "@juicesharp/rpiv-ask-user-question@$RPIV_ASK_USER_QUESTION_VERSION"
+    "@juicesharp/rpiv-ask-user-question@$RPIV_ASK_USER_QUESTION_VERSION" \
+    "@juicesharp/rpiv-todo@$RPIV_TODO_VERSION"
 }
 
 # Local source is an explicit development override. This avoids silently using
