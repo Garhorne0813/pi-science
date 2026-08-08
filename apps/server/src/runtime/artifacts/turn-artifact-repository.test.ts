@@ -47,4 +47,47 @@ describe("turn artifact repository", () => {
     const missing = await repository.forSession(cwd, "session-nope");
     expect(missing).toEqual([]);
   });
+
+  it("nextTurnOrdinal returns 1 with no records and keeps counting per session", async () => {
+    const repository = new TurnArtifactRepository();
+    const cwd = await workspace();
+
+    expect(await repository.nextTurnOrdinal(cwd, "session-a")).toBe(1);
+
+    await repository.append(cwd, {
+      turn_id: "turn-1", session_id: "session-a", assistant_message_id: "msg-1",
+      ended_at: "2026-01-01T00:00:00.000Z", turn_ordinal: 1,
+      artifacts: [],
+    });
+    await repository.append(cwd, {
+      turn_id: "turn-2", session_id: "session-a", assistant_message_id: "msg-2",
+      ended_at: "2026-01-01T00:00:01.000Z", turn_ordinal: 2,
+      artifacts: [],
+    });
+    expect(await repository.nextTurnOrdinal(cwd, "session-a")).toBe(3);
+
+    // Other sessions are unaffected; ordinals on other records are ignored.
+    await repository.append(cwd, {
+      turn_id: "turn-3", session_id: "session-b", assistant_message_id: "msg-3",
+      ended_at: "2026-01-01T00:00:02.000Z", turn_ordinal: 7,
+      artifacts: [],
+    });
+    expect(await repository.nextTurnOrdinal(cwd, "session-a")).toBe(3);
+  });
+
+  it("nextTurnOrdinal ignores missing or invalid ordinals", async () => {
+    const repository = new TurnArtifactRepository();
+    const cwd = await workspace();
+    await repository.append(cwd, {
+      turn_id: "turn-1", session_id: "session-a", assistant_message_id: "msg-1",
+      ended_at: "2026-01-01T00:00:00.000Z",
+      artifacts: [],
+    });
+    await repository.append(cwd, {
+      turn_id: "turn-2", session_id: "session-a", assistant_message_id: "msg-2",
+      ended_at: "2026-01-01T00:00:01.000Z", turn_ordinal: "not-a-number" as unknown as number,
+      artifacts: [],
+    });
+    expect(await repository.nextTurnOrdinal(cwd, "session-a")).toBe(1);
+  });
 });

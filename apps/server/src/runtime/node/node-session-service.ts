@@ -575,7 +575,12 @@ export class NodeSessionService {
           runtime.turnId = randomUUID();
           runtime.turnBaseline = snapshotWorkspace(cwd);
           runtime.turnAssistantPartId = undefined;
-          runtime.turnOrdinal = (runtime.turnOrdinal ?? 0) + 1;
+          // Derive the ordinal from persisted records so it keeps counting
+          // across runtime rebuilds (idle cleanup, restarts); the in-memory
+          // field alone would reset to 1 and misanchor strips for later turns.
+          runtime.turnOrdinal = await turnArtifactRepository
+            .nextTurnOrdinal(runtime.cwd, sessionId)
+            .catch(() => (runtime.turnOrdinal ?? 0) + 1);
         }
         // Pi's raw event type is "message_update" with an inner
         // assistantMessageEvent (text_delta/text/text_end); the hub normalizes
