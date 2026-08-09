@@ -132,19 +132,19 @@ export function InspectorTabs({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div
-        className={cn(
-          "relative h-primary shrink-0 bg-surface",
-          reserveControls && "mr-14",
-        )}
-      >
+      <div className="relative h-primary shrink-0 bg-surface">
         <div
           ref={tabScrollRef}
           role="tablist"
           aria-label={t("filePreview.openFiles")}
           className="h-control overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
-          <div className="flex h-control w-max min-w-full border-b border-border px-1">
+          <div
+            className={cn(
+              "flex h-control w-max min-w-full border-b border-border px-1",
+              reserveControls && "pr-14",
+            )}
+          >
             {tabs.map((tab, index) => {
             const active = tab.id === activeTabId;
             const title = tabTitle(tab.data);
