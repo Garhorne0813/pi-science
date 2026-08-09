@@ -6,6 +6,7 @@ import { useUiStore } from "@/lib/ui";
 import i18n from "@/i18n";
 import type { ThreadBlock } from "@/types/thread";
 import { TodoStickyBar } from "./TodoStickyBar";
+import { TodoWidget } from "./TodoWidget";
 
 function todoBlock(details: unknown): ThreadBlock {
   return {
@@ -28,7 +29,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   useRuntimeStore.setState({ thread: { ...emptyThread(), loaded: true }, cwd: "proj", activeSessionId: "s1" });
-  useUiStore.setState({ todoUiMode: "sticky" });
+  useUiStore.setState({ todoUiMode: "sticky", todoUiOpen: false });
 });
 
 afterEach(() => {
@@ -128,6 +129,21 @@ describe("TodoStickyBar", () => {
     render(<TodoStickyBar />);
     fireEvent.click(screen.getByRole("button", { name: /Minimize/ }));
     expect(useUiStore.getState().todoUiMode).toBe("fab");
+  });
+
+  it("keeps a collapsed list collapsed when minimizing to fab mode", () => {
+    setThread([todoBlock({ action: "create", nextId: 2, tasks: [{ id: 1, subject: "Load", status: "pending" }] })]);
+    render(<>
+      <TodoStickyBar />
+      <TodoWidget />
+    </>);
+
+    expect(screen.getByRole("button", { expanded: false })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Minimize/ }));
+
+    const fab = screen.getByRole("progressbar", { name: "Task list" }).closest("button")!;
+    expect(fab).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("hides when every task is completed", () => {

@@ -28,7 +28,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   useRuntimeStore.setState({ thread: { ...emptyThread(), loaded: true }, cwd: "proj", activeSessionId: "s1" });
-  useUiStore.setState({ todoUiMode: "fab" });
+  useUiStore.setState({ todoUiMode: "fab", todoUiOpen: false });
   localStorage.removeItem("pi-science.todo-widget-position");
 });
 

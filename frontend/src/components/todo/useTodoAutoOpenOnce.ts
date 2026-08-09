@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import { useUiStore } from "@/lib/ui";
 
 /**
  * Auto-expands a todo widget once per "todo streak" when new tasks appear in
@@ -13,7 +14,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * - a loaded empty thread arms auto-open for the next newly-created list.
  */
 export function useTodoAutoOpenOnce(todoVisible: boolean, streakKey: string, threadLoaded: boolean): { open: boolean; setOpen: (open: boolean) => void; close: () => void } {
-  const [open, setOpen] = useState(false);
+  const open = useUiStore((s) => s.todoUiOpen);
+  const setOpen = useUiStore((s) => s.setTodoUiOpen);
   const streakRef = useRef<{ key: string; opened: boolean; armed: boolean } | null>(null);
 
   useEffect(() => {
