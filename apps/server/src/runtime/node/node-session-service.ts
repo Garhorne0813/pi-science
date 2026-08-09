@@ -69,6 +69,13 @@ type RuntimeRecord = {
    *  to the n-th agent block even when earlier turns produced no files (pure
    *  record-ordinal fallback misplaces strips when a turn has no record). */
   turnOrdinal?: number;
+  /** JSONL cursor captured at prompt-accept time (fallback evidence when the
+   *  Pi event stream dies and agent_start never arrives): snapshot_version,
+   *  last message role/id. The reconciliation probe compares a fresh tail read
+   *  against this to prove the turn actually completed from the message file
+   *  alone, so it can recover the artifact summary instead of misreporting
+   *  did-not-start. */
+  acceptSnapshot?: Promise<{ version: string; role: string | null; id: string | null } | null>;
 };
 
 function runtimeKey(cwd: string, sessionId: string): string {
@@ -203,6 +210,7 @@ export class NodeSessionService {
         return result;
       }
       if (type === "prompt" || type === "compact") {
+        if (type === "prompt") this.recordAcceptTurnBaseline(runtime);
         this.scheduleOperationReconciliation(runtime, false);
         return result;
       }
@@ -633,6 +641,40 @@ export class NodeSessionService {
     });
   }
 
+  /** Standby per-turn tracking captured at prompt-accept time. The Pi event
+   *  stream is the authoritative turn signal, but when it dies (silently, no
+   *  exception) agent_start/agent_settled never arrive and the turn bookkeeping
+   *  never starts. Recording a baseline snapshot + JSONL cursor here gives the
+   *  reconciliation probe enough evidence to recover the artifact summary.
+   *  A real agent_start overwrites these fields with fresh turn values. */
+  private recordAcceptTurnBaseline(runtime: RuntimeRecord): void {
+    if (runtime.operationPending !== "prompt" || !runtime.activeSessionId) return;
+    runtime.turnId ??= randomUUID();
+    runtime.turnBaseline ??= snapshotWorkspace(runtime.cwd);
+    runtime.acceptSnapshot = this.repository
+      .messagesPage(runtime.cwd, runtime.activeSessionId, { limit: 1 })
+      .then((page) => {
+        const last = page.messages[page.messages.length - 1];
+        return { version: page.snapshot_version, role: last?.role ?? null, id: last?.id ?? null };
+      })
+      .catch(() => null);
+  }
+
+  /** Compare the message file against the accept-time cursor: any version
+   *  change whose newest message is an assistant reply proves the accepted
+   *  prompt actually produced a turn, even with a dead event stream. */
+  private async turnCompletedEvidence(runtime: RuntimeRecord): Promise<"none" | "completed" | "unknown"> {
+    const accept = runtime.acceptSnapshot;
+    if (!accept) return "unknown";
+    const before = await accept;
+    if (!before) return "unknown";
+    const page = await this.repository.messagesPage(runtime.cwd, runtime.activeSessionId, { limit: 1 }).catch(() => null);
+    if (!page) return "unknown";
+    if (page.snapshot_version === before.version) return "none";
+    const last = page.messages[page.messages.length - 1];
+    return last?.role === "assistant" ? "completed" : "none";
+  }
+
   private beginPendingOperation(runtime: RuntimeRecord, operation: PendingOperation): void {
     if (runtime.reconcileTimer) clearTimeout(runtime.reconcileTimer);
     runtime.reconcileTimer = undefined;
@@ -786,6 +828,25 @@ export class NodeSessionService {
         }
         const operation = runtime.operationPending;
         if (!state || (state.success && !active)) {
+          // Message-side evidence: when the Pi event stream dies, agent_start/
+          // agent_settled never arrive and the get_state probe stays idle even
+          // though the turn actually ran (messages were appended to the session
+          // JSONL by Pi Orbit). Compare a fresh tail read against the cursor
+          // captured at accept time: a new assistant message proves completion
+          // and lets us recover the artifact summary + end the operation
+          // normally instead of misreporting did-not-start.
+          if (operation === "prompt" && (await this.turnCompletedEvidence(runtime)) === "completed") {
+            if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
+            await this.finishTurnArtifacts(runtime, {}, runtime.activeSessionId).catch(() => undefined);
+            if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
+            await this.eventHub.publish(runtime.cwd, runtime.activeSessionId, {
+              type: "session.idle",
+              sessionId: runtime.activeSessionId,
+            }, () => this.isCurrentPendingOperation(runtime, operationToken));
+            if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
+            this.clearPendingOperation(runtime);
+            return;
+          }
           // An accepted prompt/compact may remain idle while Pi Orbit resumes
           // a session or warms a model. This startup window is not a timeout for
           // the full agent response. Attempts are diagnostic only: keep probing
@@ -879,7 +940,13 @@ export class NodeSessionService {
       ended_at: new Date().toISOString(),
       artifacts: items,
     };
-    await turnArtifactRepository.append(runtime.cwd, record).catch(() => undefined);
+    // Defensive idempotency: a reconciliation-recovered turn and a late
+    // (replayed) agent_settled could both carry the same turn id; never append
+    // a duplicate record for one turn.
+    const existing = await turnArtifactRepository.forSession(runtime.cwd, sessionId).catch(() => []);
+    if (!existing.some((r) => r.turn_id === turnId)) {
+      await turnArtifactRepository.append(runtime.cwd, record).catch(() => undefined);
+    }
     await this.eventHub.publish(runtime.cwd, sessionId, {
       type: "turn.artifacts",
       sessionId,
