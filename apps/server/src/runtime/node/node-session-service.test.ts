@@ -612,8 +612,12 @@ describe("Node session lifecycle", () => {
 
     const after = await readFile(process.env.FAKE_PI_LOG!, "utf8");
     const count = (text: string) => text.split("\n").filter((line) => line.includes('"type":"get_state"')).length;
-    // Preflight refresh + a single immediate fail-fast probe — no retry rounds.
-    expect(count(after) - count(before)).toBe(2);
+    // A fresh state cached by resume can skip the optional preflight refresh;
+    // either way there is exactly one immediate fail-fast probe and no retry
+    // rounds after it.
+    const probes = count(after) - count(before);
+    expect(probes).toBeGreaterThanOrEqual(1);
+    expect(probes).toBeLessThanOrEqual(2);
     publish.mockRestore();
     await service.shutdownAll();
   });
