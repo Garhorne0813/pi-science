@@ -27,7 +27,7 @@ export function PreviewPaneControls() {
         icon={inspectorOpen ? PanelRightClose : PanelRightOpen}
         label={t(inspectorOpen ? "shell.hideInspector" : "shell.showInspector")}
         size="compact"
-        className="text-text"
+        className={inspectorOpen ? "bg-surface text-text" : "text-text"}
         aria-pressed={inspectorOpen}
         disabled={!hasTabs}
         onClick={() => setInspectorVisible(!inspectorOpen)}

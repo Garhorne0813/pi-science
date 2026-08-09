@@ -28,6 +28,7 @@ describe("PreviewPaneControls", () => {
     const hide = screen.getByRole("button", { name: "Hide preview panel" });
     const controls = hide.parentElement!;
     expect(controls).toHaveClass("fixed", "right-card", "h-control", "gap-2");
+    expect(hide).toHaveClass("bg-surface", "text-text");
     expect(hide.querySelector("svg")).toHaveAttribute("width", "14");
     expect(controls.lastElementChild).toBe(hide);
 
