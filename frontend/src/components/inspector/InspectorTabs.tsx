@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { Inspector } from "../../types/thread";
 import { useUiStore, type InspectorTab } from "@/lib/ui";
 import { cn } from "@/lib/ui";
+import { IconButton } from "../ui/Icon";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { InspectorShell } from "./InspectorShell";
 
@@ -133,7 +134,7 @@ export function InspectorTabs({
     <div className="flex h-full min-h-0 flex-col">
       <div
         className={cn(
-          "relative h-10 shrink-0 bg-surface",
+          "relative h-primary shrink-0 bg-surface",
           reserveControls && "mr-14",
         )}
       >
@@ -141,9 +142,9 @@ export function InspectorTabs({
           ref={tabScrollRef}
           role="tablist"
           aria-label={t("filePreview.openFiles")}
-          className="h-9 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          className="h-control overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
-          <div className="flex h-9 w-max min-w-full border-b border-border px-1">
+          <div className="flex h-control w-max min-w-full border-b border-border px-1">
             {tabs.map((tab, index) => {
             const active = tab.id === activeTabId;
             const title = tabTitle(tab.data);
@@ -152,7 +153,7 @@ export function InspectorTabs({
                 key={tab.id}
                 title={title}
                 className={cn(
-                  "group relative flex h-full min-w-[7rem] max-w-48 shrink-0 cursor-default items-center gap-1.5 border-r border-border px-2 text-xs outline-none",
+                  "group relative flex h-full min-w-28 max-w-48 shrink-0 cursor-default items-center gap-1.5 border-r border-border px-2 text-ui-caption outline-none",
                   active ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2/60 hover:text-text",
                 )}
               >
@@ -178,20 +179,19 @@ export function InspectorTabs({
                 >
                   {title}
                 </button>
-                <button
-                  type="button"
-                  aria-label={t("filePreview.closeTab", { filename: title })}
+                <IconButton
+                  icon={X}
+                  label={t("filePreview.closeTab", { filename: title })}
+                  size="compact"
                   className={cn(
-                    "rounded p-0.5 hover:bg-border hover:text-text",
+                    "hover:bg-border hover:text-text",
                     active ? "text-muted" : "text-transparent group-hover:text-muted group-focus-within:text-muted",
                   )}
                   onClick={(event) => {
                     event.stopPropagation();
                     closeTab(tab.id);
                   }}
-                >
-                  <X size={12} />
-                </button>
+                />
               </div>
             );
             })}
@@ -244,46 +244,42 @@ export function InspectorTabs({
                   contentZoom={expanded ? zoom : 1}
                   leadingControls={tab.data.variant === "file" && expanded ? (
                     <div className="flex items-center rounded-input bg-surface-2 p-0.5">
-                      <button
-                        type="button"
-                        className="rounded p-1 text-muted hover:bg-surface hover:text-text disabled:opacity-35"
-                        aria-label={t("filePreview.zoomOut")}
+                      <IconButton
+                        icon={Minus}
+                        label={t("filePreview.zoomOut")}
+                        size="compact"
+                        className="hover:bg-surface"
                         disabled={zoom <= MIN_ZOOM}
                         onClick={() => setTabZoom(tab.id, (current) => current - ZOOM_STEP)}
-                      >
-                        <Minus size={13} />
-                      </button>
+                      />
                       <button
                         type="button"
-                        className="min-w-12 rounded px-1 py-0.5 text-[11px] tabular-nums text-muted hover:bg-surface hover:text-text"
+                        className="min-w-12 rounded px-1 py-0.5 text-ui-caption tabular-nums text-muted hover:bg-surface hover:text-text"
                         aria-label={t("filePreview.resetZoom")}
                         title={t("filePreview.resetZoom")}
                         onClick={() => setTabZoom(tab.id, () => 1)}
                       >
                         {Math.round(zoom * 100)}%
                       </button>
-                      <button
-                        type="button"
-                        className="rounded p-1 text-muted hover:bg-surface hover:text-text disabled:opacity-35"
-                        aria-label={t("filePreview.zoomIn")}
+                      <IconButton
+                        icon={Plus}
+                        label={t("filePreview.zoomIn")}
+                        size="compact"
+                        className="hover:bg-surface"
                         disabled={zoom >= MAX_ZOOM}
                         onClick={() => setTabZoom(tab.id, (current) => current + ZOOM_STEP)}
-                      >
-                        <Plus size={13} />
-                      </button>
+                      />
                     </div>
                   ) : undefined}
                   controls={tab.data.variant === "file" ? (
-                    <button
-                      type="button"
-                      className="text-text hover:opacity-60"
-                      aria-label={t(expanded ? "shell.restorePanel" : "shell.maximizePanel")}
-                      title={t(expanded ? "shell.restorePanel" : "shell.maximizePanel")}
+                    <IconButton
+                      icon={expanded ? Minimize2 : Maximize2}
+                      label={t(expanded ? "shell.restorePanel" : "shell.maximizePanel")}
+                      size="compact"
+                      className="text-text"
                       aria-pressed={expanded}
                       onClick={() => setExpandedTabId(expanded ? null : tab.id)}
-                    >
-                      {expanded ? <Minimize2 size={14} strokeWidth={1.5} /> : <Maximize2 size={14} strokeWidth={1.5} />}
-                    </button>
+                    />
                   ) : undefined}
                 />
               </ErrorBoundary>

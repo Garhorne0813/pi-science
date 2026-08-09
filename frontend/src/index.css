@@ -10,17 +10,81 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Semantic density utilities live in the imported stylesheet, rather than
+   relying only on Tailwind's startup-time config. This keeps them available
+   during Vite HMR when the density scale changes without a server restart. */
+@layer utilities {
+  .h-icon { height: var(--density-icon); }
+  .h-tool { height: var(--density-tool); }
+  .h-nav { height: var(--density-nav); }
+  .h-control { height: var(--density-control); }
+  .h-primary { height: var(--density-primary); }
+  .h-header { height: var(--density-header); }
+  .w-icon { width: var(--density-icon); }
+  .w-tool { width: var(--density-tool); }
+  .w-nav { width: var(--density-nav); }
+  .w-control { width: var(--density-control); }
+  .w-primary { width: var(--density-primary); }
+  .w-header { width: var(--density-header); }
+  .min-h-icon { min-height: var(--density-icon); }
+  .min-h-tool { min-height: var(--density-tool); }
+  .min-h-nav { min-height: var(--density-nav); }
+  .min-h-control { min-height: var(--density-control); }
+  .min-h-primary { min-height: var(--density-primary); }
+  .min-h-header { min-height: var(--density-header); }
+
+  .text-ui-micro { font-size: 0.625rem; line-height: 0.875rem; }
+  .text-ui-meta { font-size: 0.6875rem; line-height: 1rem; }
+  .text-ui-caption { font-size: 0.75rem; line-height: 1rem; }
+  .text-ui-label { font-size: 0.8125rem; line-height: 1.125rem; }
+  .text-ui-body { font-size: 0.875rem; line-height: 1.25rem; }
+  .text-ui-title { font-size: 1.25rem; line-height: 1.75rem; }
+
+  .p-compact { padding: var(--space-compact); }
+  .p-panel { padding: var(--space-panel); }
+  .p-card { padding: var(--space-card); }
+  .px-panel { padding-left: var(--space-panel); padding-right: var(--space-panel); }
+  .px-card { padding-left: var(--space-card); padding-right: var(--space-card); }
+  .px-section { padding-left: var(--space-section); padding-right: var(--space-section); }
+  .px-page { padding-left: var(--space-page); padding-right: var(--space-page); }
+  .py-compact { padding-top: var(--space-compact); padding-bottom: var(--space-compact); }
+  .py-panel { padding-top: var(--space-panel); padding-bottom: var(--space-panel); }
+  .py-card { padding-top: var(--space-card); padding-bottom: var(--space-card); }
+  .py-section { padding-top: var(--space-section); padding-bottom: var(--space-section); }
+  .py-page { padding-top: var(--space-page); padding-bottom: var(--space-page); }
+  .gap-compact { gap: var(--space-compact); }
+  .gap-panel { gap: var(--space-panel); }
+  .gap-card { gap: var(--space-card); }
+  .mb-panel { margin-bottom: var(--space-panel); }
+  .mb-card { margin-bottom: var(--space-card); }
+  .mb-page { margin-bottom: var(--space-page); }
+  .my-panel { margin-top: var(--space-panel); margin-bottom: var(--space-panel); }
+  .right-card { right: var(--space-card); }
+  .space-y-card > :not([hidden]) ~ :not([hidden]) { margin-top: var(--space-card); }
+  .space-y-page > :not([hidden]) ~ :not([hidden]) { margin-top: var(--space-page); }
+  .shadow-card { box-shadow: var(--shadow-card); }
+  .shadow-pop { box-shadow: var(--shadow-pop); }
+}
+
 :root,
 [data-theme="light"] {
-  --bg: #faf9f5;
-  --surface: #ffffff;
-  --surface-2: #f0eee6;
-  --border: #e5e2d7;
-  --border-faint: #f0ede4;
-  --text: #262521;
-  --muted: #726e64;
-  --accent: #c96442;
+  --bg: #f7f6f2;
+  --surface: #fdfcf9;
+  --surface-2: #efede7;
+  --surface-raised: #ffffff;
+  --surface-inset: #f3f1eb;
+  --surface-hover: #ebe8df;
+  --surface-selected: #e8e2d8;
+  --sidebar: #fbfaf7;
+  --border: #dedbd2;
+  --border-faint: #ebe8e0;
+  --border-strong: #c9c4b8;
+  --text: #24231f;
+  --muted: #716d63;
+  --accent: #c45f3d;
   --accent-fg: #ffffff;
+  --accent-soft: #f8ebe5;
+  --accent-border: #e7b9a8;
   --link: #2a6fdb;
   --warn: #c98a2b;
   --ok: #4b8b5b;
@@ -35,18 +99,42 @@
   --series-8: #eb6834;
   --chart-grid: #e5e2d7;
   --chart-axis: #c9c5b8;
+  --shadow-card: 0 1px 2px rgb(52 46 38 / 5%), 0 6px 20px rgb(52 46 38 / 5%);
+  --shadow-card-hover: 0 2px 4px rgb(52 46 38 / 7%), 0 12px 28px rgb(52 46 38 / 9%);
+  --shadow-pop: 0 14px 42px rgb(42 37 31 / 16%), 0 2px 8px rgb(42 37 31 / 8%);
+  /* Shared density scale. Components should use the semantic Tailwind aliases
+     instead of introducing adjacent one-off heights and spacing values. */
+  --density-icon: 1.5rem;
+  --density-tool: 1.75rem;
+  --density-nav: 2rem;
+  --density-control: 2.25rem;
+  --density-primary: 2.5rem;
+  --density-header: 2.75rem;
+  --space-compact: 0.375rem;
+  --space-panel: 0.75rem;
+  --space-card: 1rem;
+  --space-section: 1.25rem;
+  --space-page: 1.5rem;
 }
 
 [data-theme="dark"] {
-  --bg: #262624;
-  --surface: #30302e;
-  --surface-2: #3a3a37;
-  --border: #45443f;
-  --border-faint: #343330;
+  --bg: #20211f;
+  --surface: #282925;
+  --surface-2: #32332e;
+  --surface-raised: #2d2e2a;
+  --surface-inset: #242521;
+  --surface-hover: #383932;
+  --surface-selected: #423a31;
+  --sidebar: #272824;
+  --border: #41423b;
+  --border-faint: #33342f;
+  --border-strong: #595a51;
   --text: #f0eee6;
   --muted: #a6a092;
   --accent: #d97757;
   --accent-fg: #211f1c;
+  --accent-soft: #3c2d27;
+  --accent-border: #704735;
   --link: #7aa5f0;
   --warn: #d7a24a;
   --ok: #6bb07d;
@@ -61,6 +149,70 @@
   --series-8: #d95926;
   --chart-grid: #45443f;
   --chart-axis: #5c5a53;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 22%), 0 8px 24px rgb(0 0 0 / 13%);
+  --shadow-card-hover: 0 2px 5px rgb(0 0 0 / 28%), 0 14px 32px rgb(0 0 0 / 20%);
+  --shadow-pop: 0 18px 48px rgb(0 0 0 / 38%), 0 3px 10px rgb(0 0 0 / 24%);
+}
+
+/* Surface hierarchy. Cards use a raised surface, embedded groups use an inset
+   surface, and popovers receive the strongest edge and elevation. */
+@layer components {
+  .ui-card,
+  .ui-card-flat,
+  .ui-card-inset,
+  .ui-card-accent,
+  .ui-popover,
+  .ui-dialog,
+  .ui-user-message {
+    border: 1px solid var(--border);
+  }
+
+  .ui-card { background: var(--surface-raised); }
+
+  .ui-card-flat { background: var(--surface); }
+
+  .ui-card-inset {
+    background: var(--surface-inset);
+    border-color: var(--border-faint);
+  }
+
+  .ui-card-interactive {
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-card);
+    transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+  }
+
+  .ui-card-interactive:hover {
+    background: color-mix(in srgb, var(--surface-raised) 88%, var(--accent-soft));
+    border-color: var(--accent-border);
+    box-shadow: var(--shadow-card-hover);
+  }
+
+  .ui-card-accent {
+    background: linear-gradient(135deg, var(--accent-soft), var(--surface-raised) 72%);
+    border-color: var(--accent-border);
+  }
+
+  .ui-popover {
+    background: var(--surface-raised);
+    border-color: var(--border-strong);
+    box-shadow: var(--shadow-pop);
+  }
+
+  .ui-dialog {
+    background: var(--surface-raised);
+    border-color: var(--border-strong);
+    box-shadow: var(--shadow-pop);
+  }
+
+  .app-sidebar { background: var(--sidebar); }
+
+  .ui-user-message {
+    background: var(--surface-selected);
+    border-color: color-mix(in srgb, var(--border-strong) 72%, var(--accent-border));
+  }
+
 }
 
 html, body, #root { height: 100%; }
@@ -104,7 +256,7 @@ button:disabled {
 /* Settings controls share one compact visual language regardless of the
    utility classes used by their individual forms. */
 .settings-page select {
-  min-height: 2.5rem !important;
+  min-height: var(--density-control) !important;
   appearance: none;
   border: 1px solid var(--border);
   border-radius: 0.5rem;
@@ -116,7 +268,7 @@ button:disabled {
   box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 4%, transparent);
   color: var(--text);
   font-family: Inter, system-ui, sans-serif !important;
-  font-size: 0.75rem !important;
+  font-size: 0.8125rem !important;
   font-weight: 500;
   line-height: 1rem;
   padding: 0.5rem 2.25rem 0.5rem 0.75rem;

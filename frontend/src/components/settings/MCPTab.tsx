@@ -45,20 +45,20 @@ export function MCPTab({ workspaceCwd }: { workspaceCwd: string | null }) {
 
   if (loading)
     return (
-      <div className="text-sm text-muted py-4">
+      <div className="py-card text-ui-body text-muted">
         <Loader2 size={16} className="animate-spin inline mr-2" />
         {t("common.loading")}
       </div>
     );
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-card">
       <Section>
-        {error && <p className="mb-3 rounded-input bg-error/10 px-3 py-2 text-[11px] text-error">{error}</p>}
+        {error && <p className="mb-panel rounded-input bg-error/10 px-panel py-2 text-ui-caption text-error">{error}</p>}
         {!workspaceCwd ? (
-          <p className="rounded-input border border-dashed border-border px-3 py-3 text-xs text-muted">{t("settings.mcpPage.workspaceRequired")}</p>
+          <p className="rounded-input border border-dashed border-border p-panel text-ui-caption text-muted">{t("settings.mcpPage.workspaceRequired")}</p>
         ) : servers.length === 0 ? (
-          <p className="text-xs text-muted">{t("settings.mcpPage.empty")}</p>
+          <p className="text-ui-caption text-muted">{t("settings.mcpPage.empty")}</p>
         ) : (
           <div>
             {servers.map((server) => (

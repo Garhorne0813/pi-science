@@ -22,14 +22,14 @@ export function ExtensionsTab({ workspaceCwd }: { workspaceCwd: string | null })
   const extensions = extensionsRead.isPending ? null : extensionsRead.data?.extensions || [];
 
   return (
-    <div className="space-y-6 pt-3 md:pt-4">
+    <div className="space-y-page pt-panel md:pt-4">
       <Section title={t("settings.extensionsPage.title")}>
         {error && (
-          <p role="alert" className="mb-3 text-xs text-error">
+          <p role="alert" className="mb-panel text-ui-caption text-error">
             {error}
           </p>
         )}
-        {extensions === null && !error && <p className="text-xs text-muted">{t("settings.extensionsPage.checking")}</p>}
+        {extensions === null && !error && <p className="text-ui-caption text-muted">{t("settings.extensionsPage.checking")}</p>}
         {extensions?.map((extension) => (
           <ExtCard key={extension.id} name={extension.name} pkg={extension.id} desc={EXTENSION_DESCRIPTION_KEYS[extension.id] ? t(EXTENSION_DESCRIPTION_KEYS[extension.id]) : extension.description} checked={extension.installed} />
         ))}

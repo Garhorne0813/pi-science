@@ -5,14 +5,14 @@ import type { McpServer } from "../../lib/settings";
 export function McpRow({ server, onToggle }: { server: McpServer; onToggle: (id: string, on: boolean) => void }) {
   const { t } = useTranslation();
   return (
-    <div className="flex min-h-14 items-start justify-between gap-2 border-b border-faint py-2">
+    <div className="flex min-h-14 items-start justify-between gap-panel border-b border-faint py-2">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="text-[13px] font-medium text-text">{server.name}</span>
+            <span className="text-ui-label font-medium text-text">{server.name}</span>
             <span className="rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] text-muted">{server.transport}</span>
           </div>
-          <p className="mt-0.5 text-[11px] text-muted">{server.description || server.id}</p>
+          <p className="mt-0.5 text-ui-caption text-muted">{server.description || server.id}</p>
           <div className="mt-1 flex items-center gap-2">
             <span className={cn("text-[10px]", server.health === "ready" ? "text-ok" : server.health === "error" ? "text-error" : "text-muted")}>
               {t("settings.mcpPage.health")}: {server.health}

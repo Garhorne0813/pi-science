@@ -24,7 +24,7 @@ export function ResearchTab({ cwd, onError }: { cwd: string; onError: (message: 
 
   return (
     <div className="space-y-4">
-      <section className="flex flex-col gap-4 rounded-card border border-border bg-surface p-5 sm:flex-row sm:items-center sm:justify-between">
+      <section className="ui-card-flat flex flex-col gap-4 rounded-card p-5 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="font-serif text-lg text-text">{t("knowledge.researchTitle")}</h2>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">{t("knowledge.researchConversationDescription")}</p>
@@ -44,7 +44,7 @@ export function ResearchTab({ cwd, onError }: { cwd: string; onError: (message: 
       ) : (
         <div className="space-y-3">
           {loops.map((loop) => (
-            <button key={loop.loop_id} type="button" onClick={openResearch} className="block w-full rounded-card border border-border bg-surface p-5 text-left shadow-card transition-colors hover:border-accent/40">
+            <button key={loop.loop_id} type="button" onClick={openResearch} className="ui-card-flat block w-full rounded-card p-5 text-left transition-colors hover:border-accent/40">
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="font-semibold text-text">{loop.title}</h3>
                 <span className="rounded-full bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-muted">{t(`research.status.${loop.status}`, { defaultValue: loop.status })}</span>

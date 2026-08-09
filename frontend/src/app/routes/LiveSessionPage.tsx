@@ -513,7 +513,7 @@ export function LiveSessionPage() {
                     Footer: ConversationFooter,
                   }}
                   itemContent={(_index, group) => (
-                    <div className="mx-auto w-full max-w-[824px] px-8 pb-4">
+                    <div className="mx-auto w-full max-w-[824px] px-8 pb-3">
                       {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock)}
                     </div>
                   )}
@@ -552,7 +552,7 @@ export function LiveSessionPage() {
                   type="button"
                   aria-label={t("conversation.scrollToLatest")}
                   onClick={scrollToBottom}
-                  className="absolute -top-10 left-1/2 z-10 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-card transition-colors hover:bg-surface-2 hover:text-text"
+                  className="ui-popover absolute -top-10 left-1/2 z-10 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full text-muted transition-colors hover:bg-surface-2 hover:text-text"
                 >
                   <ArrowDown size={15} />
                 </button>
@@ -561,8 +561,8 @@ export function LiveSessionPage() {
           )}
           <div
             className={cn(
-              "relative mx-auto max-w-[760px] rounded-card border bg-surface shadow-card transition-colors",
-              composer.dragOver ? "border-accent bg-accent/5" : "border-border",
+              "ui-card relative mx-auto max-w-[760px] rounded-card transition-colors",
+              composer.dragOver && "border-accent bg-accent/5",
             )}
             onDragOver={(e) => { e.preventDefault(); composer.setDragOver(true); }}
             onDragLeave={() => composer.setDragOver(false)}

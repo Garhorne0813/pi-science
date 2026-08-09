@@ -8,6 +8,7 @@ import { todoViewModel } from "@/lib/conversation/todos";
 import { TodoTaskList } from "./TodoTaskList";
 import { TodoModeSwitch } from "./TodoStickyBar";
 import { useTodoAutoOpenOnce } from "./useTodoAutoOpenOnce";
+import { Icon, IconButton } from "../ui/Icon";
 
 const TODO_POSITION_KEY = "pi-science.todo-widget-position";
 const DRAG_THRESHOLD = 4;
@@ -152,11 +153,11 @@ export function TodoWidget() {
             event.stopPropagation();
           }}
           className={cn(
-            "absolute z-[90] flex min-h-10 max-w-[min(360px,calc(100vw-24px))] touch-none cursor-grab items-center gap-2 rounded-full border border-border bg-surface px-3 shadow-card transition-colors hover:bg-surface-2 active:cursor-grabbing",
+            "ui-card absolute z-[90] flex min-h-primary max-w-[min(360px,calc(100vw-24px))] touch-none cursor-grab items-center gap-2 rounded-full px-panel transition-colors hover:bg-surface-2 active:cursor-grabbing",
             position ? "right-auto bottom-auto" : "right-5 bottom-5",
           )}
         >
-          <ListTodo size={15} className="shrink-0 text-accent" aria-hidden />
+          <Icon icon={ListTodo} size="md" className="shrink-0 text-accent" />
           <span
             role="progressbar"
             aria-valuenow={vm.percent}
@@ -168,9 +169,9 @@ export function TodoWidget() {
             {summary}
           </span>
           {vm.allCompleted ? (
-            <span className="shrink-0 text-[11px] text-ok">{t("todo.allCompleted")}</span>
+            <span className="shrink-0 text-ui-meta text-ok">{t("todo.allCompleted")}</span>
           ) : activeLabel ? (
-            <span className="min-w-0 truncate text-[11px] text-muted" title={activeLabel}>{activeLabel}</span>
+            <span className="min-w-0 truncate text-ui-meta text-muted" title={activeLabel}>{activeLabel}</span>
           ) : null}
         </button>
       </Popover.Trigger>
@@ -178,33 +179,27 @@ export function TodoWidget() {
         <Popover.Content
           sideOffset={8}
           align="end"
-          className="z-[95] w-[min(320px,calc(100vw-24px))] rounded-card border border-border bg-surface shadow-card outline-none"
+          className="ui-popover z-[95] w-[min(320px,calc(100vw-24px))] rounded-card outline-none"
         >
-          <div className="flex items-center gap-1.5 border-b border-faint px-2 py-1.5">
-            <h2 className="shrink-0 text-[11px] font-medium text-text">{t("todo.title")}</h2>
+          <div className="flex min-h-nav items-center gap-compact border-b border-faint px-2 py-compact">
+            <h2 className="shrink-0 text-ui-meta font-medium text-text">{t("todo.title")}</h2>
             <span
               role="progressbar"
               aria-valuenow={vm.percent}
               aria-valuemin={0}
               aria-valuemax={100}
-              className="shrink-0 text-[10px] text-muted"
+              className="shrink-0 text-ui-micro text-muted"
             >
               {summary}
             </span>
             <div className="ml-auto flex shrink-0 items-center gap-1">
               <TodoModeSwitch />
               <Popover.Close asChild>
-                <button
-                  type="button"
-                  aria-label={t("todo.close")}
-                  className="rounded-input p-0.5 text-muted transition-colors hover:bg-surface-2 hover:text-text"
-                >
-                  <X size={12} aria-hidden />
-                </button>
+                <IconButton icon={X} label={t("todo.close")} size="compact" />
               </Popover.Close>
             </div>
           </div>
-          <div className="max-h-[min(56vh,420px)] overflow-y-auto p-1.5">
+          <div className="max-h-[min(56vh,420px)] overflow-y-auto p-compact">
             <TodoTaskList tasks={vm.tasks} compact />
           </div>
           <Popover.Arrow className="fill-surface" />

@@ -58,7 +58,7 @@ export function InboxTab({
   }
   return (
     <div>
-      <div className="mb-4 flex flex-col gap-3 rounded-card border border-border bg-surface p-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="ui-card-flat mb-4 flex flex-col gap-3 rounded-card p-3 sm:flex-row sm:items-center sm:justify-between">
         <label className="flex min-h-11 cursor-pointer items-center gap-2 px-1 text-sm text-text">
           <input
             type="checkbox"

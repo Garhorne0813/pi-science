@@ -61,7 +61,7 @@ export function FilesTab({
   const groups = views[view];
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3 rounded-card border border-border bg-surface p-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="ui-card-flat flex flex-col gap-3 rounded-card p-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap gap-1">
           {(["by_type", "by_topic", "by_month"] as const).map((value) => (
             <button key={value} type="button" onClick={() => setView(value)} className={cn("min-h-11 rounded-input px-3 py-2 text-sm", view === value ? "bg-surface-2 font-medium text-text" : "text-muted hover:text-text")}>
@@ -75,7 +75,7 @@ export function FilesTab({
       </div>
 
       {settingsOpen && policy && (
-        <section className="rounded-card border border-border bg-surface p-5 shadow-card">
+        <section className="ui-card-flat rounded-card p-5">
           <h2 className="flex items-center gap-2 font-serif text-lg text-text"><Lock size={16} className="text-accent" /> {t("knowledge.organizationPolicy")}</h2>
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <label className="text-xs font-medium text-muted">
@@ -96,7 +96,7 @@ export function FilesTab({
 
       <div className="grid gap-4 lg:grid-cols-2">
         {Object.entries(groups).sort(([a], [b]) => a.localeCompare(b)).map(([group, rows]) => (
-          <section key={group} className="overflow-hidden rounded-card border border-border bg-surface shadow-card">
+          <section key={group} className="ui-card-flat overflow-hidden rounded-card">
             <div className="flex items-center justify-between border-b border-faint px-4 py-3">
               <h2 className="truncate text-sm font-semibold text-text">{group}</h2>
               <span className="font-mono text-xs text-muted">{rows.length}</span>

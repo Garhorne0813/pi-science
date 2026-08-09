@@ -147,7 +147,7 @@ export function NotebookEditor({
 
       <div className="min-h-0 flex-1 overflow-y-auto bg-surface-2 p-3 sm:p-4">
         {loading && (
-          <div className="flex items-center gap-2 rounded-card border border-border bg-surface p-4 text-sm text-muted">
+          <div className="ui-card-flat flex items-center gap-2 rounded-card p-4 text-sm text-muted">
             <Loader2 size={15} className="animate-spin" /> {t("notebook.loading")}
           </div>
         )}
@@ -158,7 +158,7 @@ export function NotebookEditor({
           </div>
         )}
         {!loading && !error && cells.length === 0 && (
-          <div className="rounded-card border border-border bg-surface p-8 text-center text-sm text-muted">
+          <div className="ui-card-flat rounded-card p-8 text-center text-sm text-muted">
             {t("notebook.empty")}
           </div>
         )}
@@ -200,14 +200,14 @@ function NotebookCellView({
   const { t } = useTranslation();
   if (cell.cell_type === "markdown") {
     return (
-      <section className="rounded-card border border-border bg-surface px-5 py-4">
+      <section className="ui-card-flat rounded-card px-5 py-4">
         <MarkdownViewer>{cell.code}</MarkdownViewer>
       </section>
     );
   }
   if (cell.cell_type !== "code") {
     return (
-      <section className="rounded-card border border-border bg-surface p-4">
+      <section className="ui-card-flat rounded-card p-4">
         <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">{t("notebook.rawCell", { index: index + 1 })}</div>
         <pre className="whitespace-pre-wrap font-mono text-xs leading-5 text-text">{cell.code}</pre>
       </section>
@@ -215,7 +215,7 @@ function NotebookCellView({
   }
 
   return (
-    <section className="overflow-hidden rounded-card border border-border bg-surface">
+    <section className="ui-card-flat overflow-hidden rounded-card">
       <div className="flex min-h-11 items-center gap-2 border-b border-faint bg-surface-2 px-3">
         <span className="font-mono text-[11px] tabular-nums text-muted">
           In [{cell.execution_count ?? " "}]

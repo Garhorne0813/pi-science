@@ -171,7 +171,7 @@ export function SkillsPage() {
           <span className="font-mono text-xs">~/.pi/agent/skills/</span> {t("skills.userSource")}, {t("skills.descriptionSuffix")}
           </>
         } />
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-card border border-border bg-surface px-4 py-3">
+        <div className="ui-card-flat mt-5 flex flex-wrap items-center justify-between gap-3 rounded-card px-4 py-3">
           <div>
             <div className="flex items-center gap-2 text-xs font-medium text-text">
               <span className={configured ? "text-accent" : "text-ok"}>{configured ? t("skills.customSelection") : t("skills.autoDiscovery")}</span>
@@ -231,7 +231,7 @@ function Section({ title, icon, count, children }: { title: string; icon: React.
       <h2 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted">
         {icon} {title} <span className="text-muted/50">({count})</span>
       </h2>
-      <div className="divide-y divide-border overflow-hidden rounded-card border border-border bg-surface">
+      <div className="ui-card-flat divide-y divide-border overflow-hidden rounded-card">
         {children}
       </div>
     </section>
@@ -284,7 +284,7 @@ export function SkillDetail({ skill, cwd, readiness, readinessError, onClose }: 
     }
   };
   return (
-    <div className="mt-6 rounded-card border border-border bg-surface p-4" role="dialog" aria-label={t("skills.details", { name: skill.name })}>
+    <div className="ui-card-flat mt-6 rounded-card p-4" role="dialog" aria-label={t("skills.details", { name: skill.name })}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-text">{skill.name}</h2>

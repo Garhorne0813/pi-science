@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Cpu, FlaskConical, Languages, Loader2, Puzzle, Server, X } from "lucide-react";
+import { Cpu, FlaskConical, Languages, Loader2, Puzzle, Server, X, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/ui";
 import { settingsApi } from "../../lib/settings";
@@ -9,15 +9,16 @@ import { ExtensionsTab } from "./ExtensionsTab";
 import { GeneralTab } from "./GeneralTab";
 import { LLMTab } from "./LLMTab";
 import { MCPTab } from "./MCPTab";
+import { Icon, IconButton } from "../ui/Icon";
 
 type Tab = "general" | "llm" | "extensions" | "mcp" | "compute";
 
-const TABS: { id: Tab; labelKey: string; titleKey: string; icon: React.ReactNode }[] = [
-  { id: "general", labelKey: "settings.general", titleKey: "settings.general", icon: <Languages size={16} /> },
-  { id: "llm", labelKey: "settings.llm", titleKey: "settings.model.pageTitle", icon: <Cpu size={16} /> },
-  { id: "extensions", labelKey: "settings.extensions", titleKey: "settings.extensions", icon: <Puzzle size={16} /> },
-  { id: "mcp", labelKey: "settings.mcp", titleKey: "settings.mcpPage.title", icon: <FlaskConical size={16} /> },
-  { id: "compute", labelKey: "settings.compute", titleKey: "settings.computePage.title", icon: <Server size={16} /> },
+const TABS: { id: Tab; labelKey: string; titleKey: string; icon: LucideIcon }[] = [
+  { id: "general", labelKey: "settings.general", titleKey: "settings.general", icon: Languages },
+  { id: "llm", labelKey: "settings.llm", titleKey: "settings.model.pageTitle", icon: Cpu },
+  { id: "extensions", labelKey: "settings.extensions", titleKey: "settings.extensions", icon: Puzzle },
+  { id: "mcp", labelKey: "settings.mcp", titleKey: "settings.mcpPage.title", icon: FlaskConical },
+  { id: "compute", labelKey: "settings.compute", titleKey: "settings.computePage.title", icon: Server },
 ];
 
 /** Settings page content: vertical navigation on the left, active tab on the
@@ -137,17 +138,15 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       {/* Settings navigation */}
-      <aside className="flex w-16 shrink-0 flex-col border-r border-faint bg-surface-2/20 px-2 py-3 md:w-44 md:px-3 md:py-4">
+      <aside className="flex w-16 shrink-0 flex-col border-r border-faint bg-surface-2/20 px-2 py-panel md:w-44 md:px-3 md:py-4">
         <div className="flex shrink-0 items-center">
-          <button
-            type="button"
+          <IconButton
+            icon={X}
+            label={t("common.close")}
+            size="touch"
             onClick={onClose}
-            aria-label={t("common.close")}
-            title={t("common.close")}
-            className="flex h-10 w-10 items-center justify-center rounded-input bg-surface-2/70 text-muted transition-colors hover:bg-surface-2 hover:text-text"
-          >
-            <X size={16} />
-          </button>
+            className="bg-surface-2/70"
+          />
         </div>
         <div className="sr-only">{scope ? t("settings.scope.workspace") : t("settings.scope.global")}</div>
         <nav role="tablist" aria-orientation="vertical" aria-label={t("nav.settings")} onKeyDown={handleNavKeyDown} className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pt-4 md:pt-3">
@@ -163,11 +162,11 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
               onClick={() => changeTab(item.id)}
               title={t(item.labelKey)}
               className={cn(
-                "relative flex h-8 min-h-0 w-full items-center justify-center gap-1.5 rounded-input px-1.5 text-left text-[13px] font-medium transition-colors md:justify-start md:px-1.5",
+                "relative flex h-nav min-h-0 w-full items-center justify-center gap-1.5 rounded-input px-2 text-left text-ui-label font-medium transition-colors md:justify-start",
                 tab === item.id ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2 hover:text-text",
               )}
             >
-              <span className="shrink-0" aria-hidden="true">{item.icon}</span>
+              <Icon icon={item.icon} size="md" className="shrink-0" />
               <span className="hidden min-w-0 truncate md:inline">{t(item.labelKey)}</span>
             </button>
           ))}
@@ -176,21 +175,21 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
 
       {/* Active tab */}
       <div ref={scrollRef} id="settings-tabpanel" role="tabpanel" aria-labelledby={`settings-tab-${tab}`} className="settings-page min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex min-h-full w-full max-w-[1080px] flex-col px-4 py-4 md:px-5 md:py-5 lg:px-6">
-          <header className="flex shrink-0 items-end justify-between gap-4 border-b border-faint pb-3 md:pb-4">
-            <h1 id="settings-panel-title" className="text-[20px] font-medium tracking-tight text-text">
+        <div className="mx-auto flex min-h-full w-full max-w-[1080px] flex-col px-card py-card md:px-5 md:py-5 lg:px-6">
+          <header className="flex shrink-0 items-end justify-between gap-card border-b border-faint pb-panel md:pb-4">
+            <h1 id="settings-panel-title" className="text-ui-title font-medium tracking-tight text-text">
               {t(activeTab.titleKey)}
             </h1>
           </header>
           <div className="min-h-0 flex-1">
             {loading ? (
               <div className="flex min-h-[240px] items-center justify-center text-sm text-muted">
-                <Loader2 size={18} className="mr-2 animate-spin" />
+                <Icon icon={Loader2} size={18} className="mr-2 animate-spin" />
                 {t("common.loading")}
               </div>
             ) : (
               <>
-                {error && <p role="alert" className="mb-4 rounded-input bg-error/10 px-3 py-2 text-[11px] text-error">{error}</p>}
+                {error && <p role="alert" className="mb-card rounded-input bg-error/10 px-panel py-2 text-ui-caption text-error">{error}</p>}
                 {tab === "general" && <GeneralTab />}
                 {tab === "llm" && <LLMTab config={config} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} saveModel={saveModel} saveCompaction={saveCompaction} onConfigReload={loadConfig} />}
                 {tab === "extensions" && <ExtensionsTab workspaceCwd={scope} />}

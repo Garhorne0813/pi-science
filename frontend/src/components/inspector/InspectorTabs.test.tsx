@@ -65,9 +65,9 @@ describe("InspectorTabs", () => {
     render(<InspectorTabs tabs={tabs} activeTabId={inspectorTabId(second)} cwd="project" reserveControls />);
 
     const tablist = screen.getByRole("tablist", { name: "Open file previews" });
-    expect(tablist.parentElement).toHaveClass("h-10", "mr-14");
-    expect(tablist).toHaveClass("h-9", "overflow-x-auto", "overflow-y-hidden", "[scrollbar-width:none]");
-    expect(tablist.firstElementChild).toHaveClass("h-9", "w-max", "min-w-full");
+    expect(tablist.parentElement).toHaveClass("h-primary", "mr-14");
+    expect(tablist).toHaveClass("h-control", "overflow-x-auto", "overflow-y-hidden", "[scrollbar-width:none]");
+    expect(tablist.firstElementChild).toHaveClass("h-control", "w-max", "min-w-full");
     const activeTabContainer = screen.getByRole("tab", { name: "two.txt" }).parentElement;
     expect(activeTabContainer).toHaveClass("h-full");
     expect(activeTabContainer).not.toHaveClass("focus-within:ring-2", "focus-within:ring-accent");

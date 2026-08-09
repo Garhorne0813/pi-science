@@ -533,7 +533,7 @@ function Body({
   if (kind === "image") {
     return url ? (
       <div className="flex items-center justify-center min-h-full p-4">
-        <img src={url} alt={filename} className="max-w-full max-h-full rounded-sm bg-white shadow-card object-contain" />
+        <img src={url} alt={filename} className="max-h-full max-w-full rounded-sm border border-border bg-white object-contain" />
       </div>
     ) : (
       <Note text={t("filePreview.loading")} />
@@ -547,7 +547,7 @@ function Body({
         <video
           src={url}
           controls
-          className="max-h-[80vh] max-w-full rounded-sm bg-black shadow-card"
+          className="max-h-[80vh] max-w-full rounded-sm border border-border bg-black"
         />
       </div>
     ) : (
@@ -649,7 +649,7 @@ export function PreviewError({
   if (!tooLarge) return <div className="p-4 text-sm text-muted">{error}</div>;
   return (
     <div className="p-4">
-      <div className="rounded-card border border-border bg-surface p-4 text-sm text-muted">
+      <div className="ui-card-flat rounded-card p-4 text-sm text-muted">
         <div className="mb-1 font-medium text-text">{t("filePreview.tooLargeTitle", { filename })}</div>
         <p className="mb-3">{t("filePreview.tooLargeBody")}</p>
         <div className="flex flex-wrap gap-2">

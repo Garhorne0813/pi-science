@@ -150,7 +150,7 @@ export function NotebooksPage() {
           }
         />
 
-        <div className="mt-6 flex items-center justify-between rounded-card border border-border bg-surface px-4 py-3">
+        <div className="ui-card-flat mt-6 flex items-center justify-between rounded-card px-4 py-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-medium text-text">
               {environment?.ready && <CheckCircle2 size={14} className="text-ok" />}
@@ -169,7 +169,7 @@ export function NotebooksPage() {
         </div>
 
         {/* Jupyter Server */}
-        <div className={cn("mt-3 rounded-card border p-4 mb-6", jupyter.running && jupyter.matches_workspace ? "border-ok/40 bg-ok/5" : "border-border bg-surface")}>
+        <div className={cn("mb-6 mt-3 rounded-card border p-4", jupyter.running && jupyter.matches_workspace ? "border-ok/40 bg-ok/5" : "ui-card-flat")}>
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-sm font-medium text-text">{t("notebooks.jupyterLab")}</h2>
@@ -224,7 +224,7 @@ export function NotebooksPage() {
             <p className="text-xs text-muted mt-1">{t("notebooks.emptyHint")}</p>
           </div>
         ) : (
-          <div className="rounded-card border border-border bg-surface overflow-hidden">
+          <div className="ui-card-flat overflow-hidden rounded-card">
             {notebooks.map((nb) => (
               <button
                 key={nb.path}

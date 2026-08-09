@@ -230,7 +230,7 @@ export function GenomeView({ filename, text }: { filename: string; text: string 
 
         {hover && (
           <div
-            className="pointer-events-none absolute z-10 max-w-xs rounded-input border border-border bg-surface px-2.5 py-1.5 text-[11px] shadow-card"
+            className="ui-popover pointer-events-none absolute z-10 max-w-xs rounded-input px-2.5 py-1.5 text-[11px]"
             style={{ left: Math.min(hover.x + 12, width - 200), top: hover.y + 12 }}
           >
             {hover.f.name && <div className="font-medium text-text">{hover.f.name}</div>}

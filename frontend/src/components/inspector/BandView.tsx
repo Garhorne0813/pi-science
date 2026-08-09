@@ -24,7 +24,7 @@ export function BandView({ filename, bytes }: { filename: string; bytes: ArrayBu
   if (parsed.error || !parsed.data) {
     return (
       <div className="flex h-full items-center justify-center p-6">
-        <div className="flex max-w-sm items-start gap-2 rounded-card border border-border bg-surface p-4 text-sm text-muted">
+        <div className="ui-card-flat flex max-w-sm items-start gap-2 rounded-card p-4 text-sm text-muted">
           <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warn" />
           <span>{t("band.readError", { error: parsed.error ?? t("band.unknownFormat") })}</span>
         </div>

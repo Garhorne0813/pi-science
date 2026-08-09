@@ -256,9 +256,9 @@ export function ProjectsPage() {
   return (
     <ErrorBoundary>
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto w-full max-w-[1200px] px-4 py-8 sm:px-6 lg:px-8 lg:py-12">
+      <div className="mx-auto w-full max-w-[1200px] px-card py-page sm:px-page lg:py-12">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="mb-page flex items-center justify-between">
           <div>
             <h1 className="font-serif text-xl text-text">{t("nav.projects")}</h1>
             <p className="mt-1 text-sm text-muted">{t("projects.workspaceCount", { count: workspaces.length })}</p>
@@ -274,16 +274,16 @@ export function ProjectsPage() {
             />
             <button
               onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="rounded-input bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg flex items-center gap-1.5 hover:opacity-90"
+              className="flex h-primary items-center gap-compact rounded-input bg-accent px-panel text-ui-body font-medium text-accent-fg hover:opacity-90"
             >
               {t("projects.newWorkspace")} <ChevronDown size={14} />
             </button>
             {dropdownOpen && (
-              <div className="absolute right-0 top-full mt-1 z-20 w-56 rounded-card border border-border bg-surface p-1.5 shadow-pop">
-                <button onClick={handleCreate} disabled={creating || importingFolder} className="flex items-center gap-2.5 rounded-input px-3 py-2 text-[13px] text-text hover:bg-surface-2 w-full text-left disabled:opacity-60">
+              <div className="ui-popover absolute right-0 top-full z-20 mt-1 w-56 rounded-card p-compact">
+                <button onClick={handleCreate} disabled={creating || importingFolder} className="flex h-control w-full items-center gap-2.5 rounded-input px-panel text-left text-ui-label text-text hover:bg-surface-2 disabled:opacity-60">
                   {creating ? <Loader2 size={15} className="animate-spin text-muted" /> : <Plus size={15} className="text-muted" />} {t("projects.newWorkspace")}
                 </button>
-                <button onClick={handleOpenFolder} disabled={creating || importingFolder} className="flex items-center gap-2.5 rounded-input px-3 py-2 text-[13px] text-text hover:bg-surface-2 w-full text-left disabled:opacity-60">
+                <button onClick={handleOpenFolder} disabled={creating || importingFolder} className="flex h-control w-full items-center gap-2.5 rounded-input px-panel text-left text-ui-label text-text hover:bg-surface-2 disabled:opacity-60">
                   {importingFolder ? <Loader2 size={15} className="animate-spin text-muted" /> : <FolderInput size={15} className="text-muted" />} {t("projects.openFolder")}
                 </button>
               </div>
@@ -293,11 +293,11 @@ export function ProjectsPage() {
 
         {/* Demo cards (dismissible) */}
         {demos.filter(d => !dismissedDemos.has(d.name)).length > 0 && (
-          <div className="mb-6 flex flex-col gap-3 lg:flex-row">
+          <div className="mb-page flex flex-col gap-panel lg:flex-row">
             {demos.filter(d => !dismissedDemos.has(d.name)).map(d => (
               <article key={d.name} className="relative flex-1 group/demo">
                 <button type="button" onClick={() => void installDemo(d.name)} disabled={installingDemo}
-                  className="flex w-full items-center gap-3 rounded-card border border-accent/30 bg-accent/5 p-4 pr-10 text-left transition-all hover:border-accent/50 hover:shadow-pop disabled:cursor-wait disabled:opacity-60"
+                  className="ui-card-accent flex w-full items-center gap-panel rounded-card p-card pr-10 text-left transition-all hover:border-accent/60 hover:shadow-pop disabled:cursor-wait disabled:opacity-60"
                 >
                   <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent ring-1 ring-accent/20"><d.icon size={18} strokeWidth={1.75} /></span>
                   <span className="flex-1">
@@ -332,23 +332,23 @@ export function ProjectsPage() {
             {/* Pinned section */}
             {pinnedWs.length > 0 && (
               <>
-                <div className="flex items-center gap-2 mb-3">
+                <div className="mb-panel flex h-nav items-center gap-2">
                   <Pin size={13} className="text-accent" />
-                  <span className="text-xs font-medium uppercase tracking-wider text-muted">{t("projects.pinned")}</span>
+                  <span className="text-ui-caption font-medium uppercase tracking-wider text-muted">{t("projects.pinned")}</span>
                   <span className="text-[10px] text-muted/60 ml-1">{pinnedWs.length}</span>
                 </div>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-6">
+                <div className="mb-page grid grid-cols-1 gap-card sm:grid-cols-2 lg:grid-cols-4">
                   {pinnedWs.map(w => <WorkspaceCard key={w.path} w={w} {...{ pinned, togglePin, editingName, setEditingName, editValue, setEditValue, handleRename, handleDelete, nameInputRef, navigate, timeAgo }} />)}
                 </div>
                 {unpinnedWs.length > 0 && (
-                  <div className="border-t border-faint mb-6" />
+                  <div className="mb-page border-t border-faint" />
                 )}
               </>
             )}
 
             {/* Unpinned grid */}
             {unpinnedWs.length > 0 && (
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="grid grid-cols-1 gap-card sm:grid-cols-2 lg:grid-cols-4">
                 {unpinnedWs.map(w => <WorkspaceCard key={w.path} w={w} {...{ pinned, togglePin, editingName, setEditingName, editValue, setEditValue, handleRename, handleDelete, nameInputRef, navigate, timeAgo }} />)}
               </div>
             )}
@@ -390,13 +390,12 @@ function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingName, edit
     <div
       onClick={() => navigate(`/workspace/${encodeURIComponent(w.path)}`)}
       className={cn(
-        "group relative rounded-card border border-border bg-surface p-4 text-left shadow-card cursor-pointer",
-        "hover:border-accent/40 hover:shadow-pop transition-all",
+        "ui-card-interactive group relative cursor-pointer rounded-card p-card text-left",
         isPinned && "ring-1 ring-accent/30",
       )}
     >
       {/* Hover action buttons — bottom-right of card */}
-      <div className="absolute right-2 bottom-2 hidden group-hover:flex items-center gap-0.5 bg-surface/95 rounded-input border border-border/60 p-0.5 shadow-card z-10"
+      <div className="ui-popover absolute right-2 bottom-2 z-10 hidden items-center gap-0.5 rounded-input p-0.5 group-hover:flex"
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -422,9 +421,9 @@ function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingName, edit
         </button>
       </div>
 
-      <div className="flex items-start justify-between mb-3">
+      <div className="mb-panel flex items-start justify-between">
         <FolderOpen size={22} className="text-accent/60" />
-        <span className="text-[10px] text-muted/60">{timeAgo(w.last_modified)}</span>
+        <span className="text-ui-caption text-muted/75">{timeAgo(w.last_modified)}</span>
       </div>
 
       {editingName === w.path ? (
@@ -445,7 +444,7 @@ function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingName, edit
         <h3 className="text-sm font-medium text-text truncate">{w.name}</h3>
       )}
 
-      <div className="flex items-center gap-1.5 mt-2 text-[11px] text-muted">
+      <div className="mt-2 flex items-center gap-compact text-ui-caption text-muted">
         <MessageSquare size={12} /> <span>{t("projects.sessionCount", { count: w.session_count })}</span>
       </div>
     </div>

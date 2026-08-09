@@ -147,7 +147,7 @@ export function FilesPage() {
             <p className="text-sm text-muted">{t("files.empty")}</p>
           </div>
         ) : (
-          <div className="rounded-card border border-border bg-surface overflow-hidden">
+          <div className="ui-card-flat overflow-hidden rounded-card">
             {entries.map((e) => (
               <div key={e.path} onContextMenu={(ev) => handleContextMenu(ev, e)}
                 className="group flex items-center gap-3 px-4 py-2.5 border-b border-faint last:border-b-0 hover:bg-surface-2 cursor-pointer text-sm">

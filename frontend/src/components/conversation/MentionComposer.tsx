@@ -228,7 +228,7 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
   return (
     <>
       {choices.length > 0 && (
-        <div ref={menuRef} role="listbox" aria-label="Subagents" className="absolute bottom-full left-0 right-0 z-50 mb-1 max-h-56 overflow-y-auto rounded-card border border-border bg-surface p-1 shadow-card">
+        <div ref={menuRef} role="listbox" aria-label="Subagents" className="ui-popover absolute bottom-full left-0 right-0 z-50 mb-1 max-h-56 overflow-y-auto rounded-card p-1">
           {choices.map((agent, index) => (
             <button
               key={`${agent.source ?? "agent"}-${agent.name}`}

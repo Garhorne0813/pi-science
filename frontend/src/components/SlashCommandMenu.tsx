@@ -85,7 +85,7 @@ export function SlashCommandMenu({ input, onSelect, onDismiss }: Props) {
   if (commands.length === 0) return null;
 
   return (
-    <div ref={menuRef} role="listbox" className="absolute bottom-full left-0 right-0 z-50 mb-1 max-h-56 w-full max-w-full overflow-y-auto rounded-card border border-border bg-surface p-1 shadow-card">
+    <div ref={menuRef} role="listbox" className="ui-popover absolute bottom-full left-0 right-0 z-50 mb-1 max-h-56 w-full max-w-full overflow-y-auto rounded-card p-1">
       {commands.map((command, index) => (
         <button
           key={`${command.source || "builtin"}-${command.name}`}

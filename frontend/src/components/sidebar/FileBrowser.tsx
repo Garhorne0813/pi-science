@@ -7,6 +7,7 @@ import { workspaceFiles } from "../../lib/workspace";
 import { useFeedback } from "../feedback/feedback-context";
 import { FileContextMenu, type ContextPoint, type FileListEntry } from "./FileContextMenu";
 import { useRuntimeStore } from "../../lib/agent-runtime";
+import { Icon } from "../ui/Icon";
 
 interface DirState { entries: FileListEntry[]; loading: boolean; error: string | null }
 
@@ -219,22 +220,22 @@ export function FileBrowser({ cwd }: { cwd: string }) {
     <div className="border-t border-faint mt-2 pt-2">
       <div
         onClick={() => { setExpanded(!expanded); if (!expanded) void loadFiles(); }}
-        className="flex items-center justify-between w-full px-2 py-1 text-xs font-medium uppercase tracking-wider text-muted hover:text-text cursor-pointer"
+        className="flex h-tool w-full cursor-pointer items-center justify-between px-2 text-ui-caption font-medium uppercase tracking-wider text-muted hover:text-text"
       >
         <span className="flex items-center gap-1.5">
-          {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+          <Icon icon={expanded ? ChevronDown : ChevronRight} size="xs" />
           {t("nav.files")}
         </span>
         <span onClick={(e) => { e.stopPropagation(); refreshFiles(); }} className="hover:text-text cursor-pointer">
-          <RefreshCw size={10} className={loading ? "animate-spin" : ""} />
+          <Icon icon={RefreshCw} size="xs" className={loading ? "animate-spin" : ""} />
         </span>
       </div>
       {expanded && (
         <div className="mt-1 flex flex-col gap-0.5 max-h-72 overflow-y-auto">
           {loading && entries.length === 0 ? (
-            <p className="px-2 text-[11px] text-muted/60 italic">{t("common.loading")}</p>
+            <p className="px-2 text-ui-meta italic text-muted/60">{t("common.loading")}</p>
           ) : entries.length === 0 ? (
-            <p className="px-2 text-[11px] text-muted/60 italic">{t("files.empty")}</p>
+            <p className="px-2 text-ui-meta italic text-muted/60">{t("files.empty")}</p>
           ) : (
             folderEntries.map((e) => {
               const state = folderStates.get(e.path);
@@ -245,16 +246,16 @@ export function FileBrowser({ cwd }: { cwd: string }) {
                   <button
                     onClick={() => handleClick(e)}
                     onContextMenu={(ev) => handleContextMenu(ev, e)}
-                    className="flex items-center gap-2 px-2 py-0.5 text-[12px] text-text/80 hover:bg-surface-2 rounded text-left truncate w-full"
+                    className="flex h-icon w-full items-center gap-2 truncate rounded px-2 text-left text-ui-caption text-text/80 hover:bg-surface-2"
                     title={e.path}
                     style={{ paddingLeft: `${8 + e.depth * 12}px` }}
                   >
-                    {e.isDir && openFolders.has(e.path) ? <ChevronDown size={10} className="text-muted shrink-0" /> : e.isDir ? <ChevronRight size={10} className="text-muted shrink-0" /> : null}
-                    {e.isDir ? <FolderOpen size={12} className="text-muted shrink-0" /> : <File size={12} className="text-muted shrink-0" />}
+                    {e.isDir ? <Icon icon={openFolders.has(e.path) ? ChevronDown : ChevronRight} size="xs" className="shrink-0 text-muted" /> : null}
+                    <Icon icon={e.isDir ? FolderOpen : File} size="sm" className="shrink-0 text-muted" />
                     <span className="truncate">{e.name}</span>
-                    {isLoading && <Loader2 size={10} className="animate-spin text-muted shrink-0 ml-auto" />}
+                    {isLoading && <Icon icon={Loader2} size="xs" className="ml-auto shrink-0 animate-spin text-muted" />}
                   </button>
-                  {error && <p className="px-2 text-[10px] text-error/80 italic" style={{ paddingLeft: `${20 + e.depth * 12}px` }}>{error}</p>}
+                  {error && <p className="px-2 text-ui-micro italic text-error/80" style={{ paddingLeft: `${20 + e.depth * 12}px` }}>{error}</p>}
                 </div>
               );
             })

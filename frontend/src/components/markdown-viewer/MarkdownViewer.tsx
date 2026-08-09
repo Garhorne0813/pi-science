@@ -22,8 +22,8 @@ const STYLES: Record<Variant, Record<string, string>> = {
   chat: {
     // Assistant prose reads in a serif (Claude-style response typography);
     // UI chrome and code stay sans/mono. CJK falls back to system serif.
-    root: "text-[15.5px] leading-[1.75] text-text [font-family:'Source_Serif_4','Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
-    p: "my-2 first:mt-0 last:mb-0",
+    root: "text-[15px] leading-[1.65] text-text [font-family:'Source_Serif_4','Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
+    p: "my-1.5 first:mt-0 last:mb-0",
     a: "text-link underline underline-offset-2",
     code: "rounded bg-surface-2 px-1 py-0.5 font-mono text-[13px] text-link",
     pre: "my-3 overflow-x-auto rounded-input bg-surface-2 p-3 font-mono text-[13px] leading-5 [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-text",

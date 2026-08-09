@@ -24,7 +24,7 @@ const ZH_THINKING_LABELS: Record<string, string> = {
   max: "最高",
 };
 
-const MENU_CONTENT_CLASS = "z-[90] min-w-[180px] max-w-[min(300px,calc(100vw-16px))] overflow-y-auto rounded-card border border-border bg-surface p-1.5 text-xs text-text shadow-pop outline-none";
+const MENU_CONTENT_CLASS = "ui-popover z-[90] min-w-[180px] max-w-[min(300px,calc(100vw-16px))] overflow-y-auto rounded-card p-1.5 text-xs text-text outline-none";
 const MENU_ITEM_CLASS = "flex min-h-9 cursor-default select-none items-center gap-2 rounded-input px-2.5 py-2 text-xs text-text outline-none transition-colors data-[highlighted]:bg-surface-2 data-[state=open]:bg-surface-2 data-[disabled]:opacity-40";
 
 export function ModelControlMenu({
