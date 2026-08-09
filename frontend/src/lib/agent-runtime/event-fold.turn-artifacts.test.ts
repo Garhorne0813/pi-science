@@ -270,6 +270,57 @@ describe("attachTurnArtifacts (history restore)", () => {
     expect(next.blocks[7]).toMatchObject({ turnId: "turn-3" });
   });
 
+  it("anchors by ended_at across record-less turns with out-of-order write times (session 019fdd43)", () => {
+    // Browser-verified failure: four turns, the third (u3/msg-3) produced no
+    // artifact record; legacy duplicate ordinals [1,1] plus a new ordinal 2
+    // cannot express the gap. The ended_at timestamp identifies the true turn
+    // even when JSONL write order differs from chronological order (turn A
+    // at 17:27 is written BEFORE turn B at 17:12).
+    const thread = threadWith([
+      { kind: "user", id: "u1", text: "a", timestamp: "2026-08-07T17:27:02.000Z" },
+      { kind: "agent", id: "msg-1", parts: [{ id: "msg-1", text: "r1" }], timestamp: "2026-08-07T17:27:37.000Z" },
+      { kind: "user", id: "u2", text: "b", timestamp: "2026-08-07T17:12:17.000Z" },
+      { kind: "agent", id: "msg-2", parts: [{ id: "msg-2", text: "r2" }], timestamp: "2026-08-07T17:12:39.000Z" },
+      { kind: "user", id: "u3", text: "c", timestamp: "2026-08-07T17:32:55.000Z" },
+      { kind: "agent", id: "msg-3", parts: [{ id: "msg-3", text: "r3" }], timestamp: "2026-08-07T17:33:24.000Z" },
+      { kind: "user", id: "u4", text: "d", timestamp: "2026-08-09T07:45:47.000Z" },
+      { kind: "agent", id: "msg-4", parts: [{ id: "msg-4", text: "r4" }], timestamp: "2026-08-09T07:46:02.000Z" },
+    ]);
+    const next = attachTurnArtifacts(thread, [
+      { turn_id: "turn-1mbo", session_id: "s", assistant_message_id: null, turn_ordinal: 1, ended_at: "2026-08-07T17:27:37.836Z", artifacts: [{ path: "1MBO.pdb", kind: "structure", mime: "text/plain", size: 1 }] },
+      { turn_id: "turn-1lyz", session_id: "s", assistant_message_id: null, turn_ordinal: 1, ended_at: "2026-08-07T17:12:39.091Z", artifacts: [{ path: "1LYZ.pdb", kind: "structure", mime: "text/plain", size: 2 }] },
+      { turn_id: "turn-2ptn", session_id: "s", assistant_message_id: null, turn_ordinal: 2, ended_at: "2026-08-09T07:46:02.885Z", artifacts: [{ path: "2PTN.pdb", kind: "structure", mime: "text/plain", size: 3 }] },
+    ]);
+    expect(next.blocks.map((block) => block.kind)).toEqual([
+      "user", "agent", "artifact-summary",
+      "user", "agent", "artifact-summary",
+      "user", "agent",
+      "user", "agent", "artifact-summary",
+    ]);
+    // 1MBO after turn A (u1/msg-1), 1LYZ after turn B (u2/msg-2), 2PTN after
+    // turn D (u4/msg-4) — the record-less turn C (u3/msg-3) is skipped.
+    expect(next.index["turn-artifacts-turn-1mbo"]).toBe(2);
+    expect(next.index["turn-artifacts-turn-1lyz"]).toBe(5);
+    expect(next.index["turn-artifacts-turn-2ptn"]).toBe(10);
+  });
+
+  it("falls back to ordinals when no timestamped user block exists", () => {
+    // Paged history can lack user timestamps: ended_at anchoring must give up
+    // and let the ordinal/record-position path take over.
+    const thread = threadWith([
+      { kind: "user", id: "u1", text: "a" },
+      { kind: "agent", id: "msg-1", parts: [{ id: "msg-1", text: "r1" }] },
+      { kind: "user", id: "u2", text: "b" },
+      { kind: "agent", id: "msg-2", parts: [{ id: "msg-2", text: "r2" }] },
+    ]);
+    const next = attachTurnArtifacts(thread, [
+      { turn_id: "turn-1", session_id: "s", assistant_message_id: null, turn_ordinal: 1, ended_at: "2026-08-07T17:27:37.836Z", artifacts: [{ path: "1MBO.pdb", kind: "structure", mime: "text/plain", size: 1 }] },
+      { turn_id: "turn-2", session_id: "s", assistant_message_id: null, turn_ordinal: 2, ended_at: "2026-08-07T17:12:39.091Z", artifacts: [{ path: "1LYZ.pdb", kind: "structure", mime: "text/plain", size: 2 }] },
+    ]);
+    expect(next.index["turn-artifacts-turn-1"]).toBe(2);
+    expect(next.index["turn-artifacts-turn-2"]).toBe(5);
+  });
+
   it("anchors by turn_ordinal to the END of a multi-message turn", () => {
     // Turn 1 spans two assistant messages (anonymous part ids, no message id)
     // — the strip must land after the LAST one, not between them.
