@@ -412,10 +412,10 @@ export function LiveSessionPage() {
     ? t("conversation.newSession")
     : getSessionName(workspaceCwd, activeSessionId) || activeSession?.name || activeSessionId.slice(0, 8);
 
-  // Rendered above the composer card in both layouts, so it lives in a variable:
-  // in the welcome layout it belongs to the growing top region (otherwise its
-  // height would push the composer card off the vertical centre).
-  const modePicker = !research.draft && !research.activeLoop
+  // Workflow starters are entry points for a blank conversation. Once the
+  // first turn exists, the composer stays focused on the active conversation
+  // instead of continuing to show the onboarding shortcuts.
+  const modePicker = thread.blocks.length === 0 && !research.draft && !research.activeLoop
     ? <ResearchModePicker className={showWelcome ? "px-0 pb-0" : undefined} selected={research.mode} disabled={working || interactionPending || reviewingProject || research.busy} onSelect={(mode, prompt) => { const selected = research.mode === mode ? null : mode; research.setMode(selected); research.setPrompt(selected ? prompt : t("conversation.defaultPrompt")); composer.inputRef.current?.focus(); }} />
     : null;
 
@@ -513,7 +513,7 @@ export function LiveSessionPage() {
                     Footer: ConversationFooter,
                   }}
                   itemContent={(_index, group) => (
-                    <div className="mx-auto w-full max-w-[824px] px-8 pb-4">
+                    <div className="mx-auto w-full max-w-[824px] px-8 pb-3">
                       {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock)}
                     </div>
                   )}
@@ -552,7 +552,7 @@ export function LiveSessionPage() {
                   type="button"
                   aria-label={t("conversation.scrollToLatest")}
                   onClick={scrollToBottom}
-                  className="absolute -top-10 left-1/2 z-10 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-card transition-colors hover:bg-surface-2 hover:text-text"
+                  className="ui-popover absolute -top-10 left-1/2 z-10 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full text-muted transition-colors hover:bg-surface-2 hover:text-text"
                 >
                   <ArrowDown size={15} />
                 </button>
@@ -561,8 +561,8 @@ export function LiveSessionPage() {
           )}
           <div
             className={cn(
-              "relative mx-auto max-w-[760px] rounded-card border bg-surface shadow-card transition-colors",
-              composer.dragOver ? "border-accent bg-accent/5" : "border-border",
+              "ui-card relative mx-auto max-w-[760px] rounded-card transition-colors",
+              composer.dragOver && "border-accent bg-accent/5",
             )}
             onDragOver={(e) => { e.preventDefault(); composer.setDragOver(true); }}
             onDragLeave={() => composer.setDragOver(false)}
@@ -633,13 +633,14 @@ export function LiveSessionPage() {
                 ) : (
                   <button
                     type="button"
+                    aria-label="Review"
                     onClick={() => void handleProjectReview()}
                     disabled={working || interactionPending || reviewingProject}
                     className="flex min-h-7 items-center gap-1 rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2 hover:text-text disabled:cursor-wait disabled:opacity-50"
                     title={t("conversation.reviewTitle")}
                   >
                     {reviewingProject ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                    Review
+                    <span className="composer-review-label">Review</span>
                   </button>
                 )}
                 {model.modelError && <span className="max-w-[180px] truncate text-[10px] text-error" title={model.modelError}>{model.modelError}</span>}

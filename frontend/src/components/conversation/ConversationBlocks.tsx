@@ -83,7 +83,7 @@ function ToolGroup({ blocks }: { blocks: ToolCallBlock[] }) {
   const doneCount = blocks.filter((block) => block.status === "done").length;
   const tools = [...new Set(blocks.map((block) => block.tool))].join(", ");
   return (
-    <div className="rounded-input border border-border bg-surface overflow-hidden animate-fadeIn">
+    <div className="ui-card-flat animate-fadeIn overflow-hidden rounded-input">
       <button
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-2 w-full px-3 py-2 text-left text-[12.5px] text-muted hover:bg-surface-2"
@@ -109,9 +109,9 @@ function UserMessage({ id, text, timestamp }: { id: string; text: string; timest
   const references = referencesFromMessage(text);
   const copyText = visibleText || references.map((reference) => reference.path).join("\n");
   return (
-    <div id={`user-msg-${id}`} className="group/message ml-auto flex max-w-[85%] scroll-mt-4 flex-col items-end gap-1.5">
+    <div id={`user-msg-${id}`} className="group/message ml-auto flex max-w-[85%] scroll-mt-4 flex-col items-end gap-1">
       {visibleText && (
-        <div className="rounded-card bg-surface-2 px-4 py-3 text-[15px] leading-relaxed text-text whitespace-pre-wrap">
+        <div className="ui-user-message rounded-card px-3 py-2 text-sm leading-relaxed text-text whitespace-pre-wrap">
           {visibleText}
         </div>
       )}
@@ -186,8 +186,8 @@ function ToolCard({ block }: { block: ToolCallBlock }) {
 
   return (
     <div className={cn(
-      "rounded-input border px-3 py-2",
-      status === "error" ? "border-error/30 bg-error/5" : "border-border bg-surface",
+      "rounded-input px-3 py-2",
+      status === "error" ? "border border-error/30 bg-error/5" : "ui-card-inset",
     )}>
       <button
         onClick={() => output && setExpanded(!expanded)}

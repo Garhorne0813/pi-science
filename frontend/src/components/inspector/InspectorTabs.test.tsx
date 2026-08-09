@@ -45,7 +45,7 @@ describe("InspectorTabs", () => {
 
     expect(screen.getByRole("tab", { name: "two.txt" })).toHaveAttribute("aria-selected", "true");
     const activePanel = screen.getByRole("tabpanel");
-    expect(within(activePanel).getByRole("banner")).toHaveClass("h-10");
+    expect(within(activePanel).getByRole("banner")).toHaveClass("h-9");
     expect(within(activePanel).queryByRole("button", { name: "Close" })).toBeNull();
     expect(within(activePanel).queryByRole("button", { name: "Open" })).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: "one.txt" }));
@@ -65,9 +65,10 @@ describe("InspectorTabs", () => {
     render(<InspectorTabs tabs={tabs} activeTabId={inspectorTabId(second)} cwd="project" reserveControls />);
 
     const tablist = screen.getByRole("tablist", { name: "Open file previews" });
-    expect(tablist.parentElement).toHaveClass("h-10", "mr-14");
-    expect(tablist).toHaveClass("h-9", "overflow-x-auto", "overflow-y-hidden", "[scrollbar-width:none]");
-    expect(tablist.firstElementChild).toHaveClass("h-9", "w-max", "min-w-full");
+    expect(tablist.parentElement).toHaveClass("h-primary", "bg-surface");
+    expect(tablist.parentElement).not.toHaveClass("mr-14");
+    expect(tablist).toHaveClass("h-control", "overflow-x-auto", "overflow-y-hidden", "[scrollbar-width:none]");
+    expect(tablist.firstElementChild).toHaveClass("h-control", "w-max", "min-w-full", "pr-14");
     const activeTabContainer = screen.getByRole("tab", { name: "two.txt" }).parentElement;
     expect(activeTabContainer).toHaveClass("h-full");
     expect(activeTabContainer).not.toHaveClass("focus-within:ring-2", "focus-within:ring-accent");
@@ -128,6 +129,11 @@ describe("InspectorTabs", () => {
     const header = within(screen.getByRole("dialog", { name: "two.txt" })).getByRole("banner");
     const zoomGroup = screen.getByRole("button", { name: "Reset zoom to 100%" }).parentElement;
     const editButton = within(header).getByRole("button", { name: "Edit file" });
+    const historyButton = within(header).getByRole("button", { name: "Version history" });
+    const maximizeButton = within(header).getByRole("button", { name: "Restore panel" });
+    for (const button of [editButton, historyButton, maximizeButton]) {
+      expect(button).toHaveClass("h-icon", "w-icon", "rounded-input", "text-text");
+    }
     expect(Array.from(header.children).indexOf(zoomGroup as Element)).toBeLessThan(
       Array.from(header.children).indexOf(editButton),
     );

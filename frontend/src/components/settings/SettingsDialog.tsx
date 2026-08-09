@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
+import { IconButton } from "../ui/Icon";
 
 /** The settings content (vertical nav + five tabs) is the heavy part; it only
  *  loads once the dialog is first opened. */
@@ -75,21 +76,20 @@ export function SettingsDialog() {
         tabIndex={-1}
         onKeyDown={handlePanelKeyDown}
         className={cn(
-          "flex h-full w-full overflow-hidden bg-bg outline-none",
-          "rounded-none border-0 md:h-[min(80vh,820px)] md:w-[min(760px,calc(100vw-32px))] md:rounded-[16px] md:border md:border-border md:shadow-pop",
+          "ui-dialog flex h-full w-full overflow-hidden outline-none",
+          "rounded-none border-0 shadow-none md:h-[min(80vh,820px)] md:w-[min(760px,calc(100vw-32px))] md:rounded-[16px] md:border md:shadow-pop",
         )}
       >
         <Suspense fallback={(
           <div className="flex min-h-0 flex-1">
-            <div className="flex w-16 shrink-0 items-start justify-center border-r border-faint bg-surface-2/20 px-2 py-3 md:w-44 md:justify-start md:px-3 md:py-4">
-              <button
-                type="button"
+            <div className="flex w-16 shrink-0 items-start justify-center border-r border-faint bg-surface-2/20 px-2 py-panel md:w-44 md:justify-start md:px-3 md:py-4">
+              <IconButton
+                icon={X}
+                label={t("common.close")}
+                size="touch"
                 onClick={closeSettings}
-                aria-label={t("common.close")}
-                className="flex h-10 w-10 items-center justify-center rounded-input bg-surface-2/70 text-muted transition-colors hover:bg-surface-2 hover:text-text"
-              >
-                <X size={16} />
-              </button>
+                className="bg-surface-2/70"
+              />
             </div>
             <div className="flex flex-1 items-center justify-center text-sm text-muted">{t("common.loading")}</div>
           </div>

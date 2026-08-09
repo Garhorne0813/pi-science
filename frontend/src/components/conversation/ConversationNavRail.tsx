@@ -98,7 +98,7 @@ export function ConversationNavRail({
         ref={listRef}
         aria-label={t("conversation.threadNav")}
         className={cn(
-          "pointer-events-auto invisible absolute right-2 top-1/2 flex max-h-[55vh] w-60 -translate-y-1/2 translate-x-2 flex-col overflow-y-auto rounded-card border border-border bg-surface py-1.5 opacity-0 shadow-card transition-all duration-150",
+          "ui-popover pointer-events-auto invisible absolute right-2 top-1/2 flex max-h-[55vh] w-60 -translate-y-1/2 translate-x-2 flex-col overflow-y-auto rounded-card py-1.5 opacity-0 transition-all duration-150",
           "group-hover:visible group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:visible group-focus-within:translate-x-0 group-focus-within:opacity-100",
         )}
       >

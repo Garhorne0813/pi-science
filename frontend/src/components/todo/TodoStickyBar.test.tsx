@@ -62,9 +62,9 @@ describe("TodoStickyBar", () => {
     expect(panel!.className).toContain("absolute");
     expect(panel!.className).toContain("top-full");
     expect(panel!.className).toContain("overflow-y-auto");
-    expect(panel!.className).toContain("p-1.5");
+    expect(panel!.className).toContain("p-compact");
     expect(panel!.querySelector("ul")!.className).toContain("space-y-0.5");
-    expect(panel!.querySelector("li")!.className).toContain("py-1.5");
+    expect(panel!.querySelector("li")!.className).toContain("py-compact");
   });
 
   it("renders nothing without todo tasks", () => {

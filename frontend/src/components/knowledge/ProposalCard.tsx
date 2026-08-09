@@ -75,7 +75,7 @@ export function ProposalCard({
   };
 
   return (
-    <article className={cn("rounded-card border bg-surface shadow-card transition-colors", selected ? "border-accent/50" : "border-border")}>
+    <article className={cn("ui-card-flat rounded-card transition-colors", selected && "border-accent/50")}>
       <div className="flex items-start gap-3 p-4 sm:p-5">
         <label className="flex min-h-11 min-w-8 cursor-pointer items-start justify-center pt-1" aria-label={t("knowledge.selectProposal")}>
           <input type="checkbox" checked={selected} onChange={(event) => onSelect(event.target.checked)} className="h-4 w-4 accent-[var(--accent)]" />

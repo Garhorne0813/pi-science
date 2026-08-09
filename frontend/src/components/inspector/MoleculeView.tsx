@@ -184,7 +184,7 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
       <div ref={containerRef} className="absolute inset-0" aria-label={t("molecule.viewerLabel")} />
 
       <div
-        className="absolute left-3 top-3 flex items-center gap-2 rounded-input border border-border/70 bg-surface/90 p-1 shadow-card backdrop-blur"
+        className="ui-popover absolute left-3 top-3 flex items-center gap-2 rounded-input bg-surface/90 p-1 backdrop-blur"
         data-molecule-controls="true"
       >
         <div className="flex items-center gap-1 px-1.5 text-xs font-medium text-muted">
@@ -216,13 +216,13 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
         </button>
       </div>
 
-      <div className="pointer-events-none absolute bottom-3 right-3 rounded-input border border-border/70 bg-surface/90 px-3 py-1.5 text-xs text-muted shadow-card backdrop-blur">
+      <div className="ui-popover pointer-events-none absolute bottom-3 right-3 rounded-input bg-surface/90 px-3 py-1.5 text-xs text-muted backdrop-blur">
         <span className="font-medium text-text">{format.toUpperCase()}</span>
         {atomCount !== null && <span className="ml-2">{t("molecule.atomCount", { count: atomCount })}</span>}
       </div>
 
       {(rendering || error) && (
-        <div className="pointer-events-none absolute bottom-3 left-3 max-w-[70%] rounded-input border border-border/70 bg-surface/95 px-3 py-1.5 text-xs text-muted shadow-card backdrop-blur">
+        <div className="ui-popover pointer-events-none absolute bottom-3 left-3 max-w-[70%] rounded-input bg-surface/95 px-3 py-1.5 text-xs text-muted backdrop-blur">
           {rendering ? t("molecule.rendering") : error}
         </div>
       )}

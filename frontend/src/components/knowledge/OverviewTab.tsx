@@ -13,7 +13,7 @@ export function OverviewTab({ document, summary, memorySummary }: { document: st
     .replace(/\n{3,}/g, "\n\n");
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_240px]">
-      <article className="overflow-hidden rounded-card border border-border bg-white shadow-card">
+      <article className="overflow-hidden rounded-card border border-border bg-white">
         <div className="flex items-center justify-between border-b border-[#eee7dc] px-5 py-3">
           <div>
             <p className="text-sm font-medium text-[#2b2620]">{t("knowledge.projectDocument")}</p>
@@ -30,7 +30,7 @@ export function OverviewTab({ document, summary, memorySummary }: { document: st
         <MetricCard label={t("knowledge.researchRuns")} value={memorySummary?.run_count ?? 0} />
         <MetricCard label={t("knowledge.researchArtifacts")} value={memorySummary?.artifact_count ?? 0} />
         <MetricCard label={t("knowledge.researchLoops")} value={memorySummary?.research_loop_count ?? 0} emphasis={(memorySummary?.active_research_loop_count ?? 0) > 0} />
-        <div className="rounded-card border border-border bg-surface p-4 text-xs leading-5 text-muted">
+        <div className="ui-card-flat rounded-card p-4 text-xs leading-5 text-muted">
           <Lock size={15} className="mb-2 text-accent" />
           {t("knowledge.approvalBoundary")}
         </div>

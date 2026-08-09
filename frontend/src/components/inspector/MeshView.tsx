@@ -259,7 +259,7 @@ export function MeshView({ filename, bytes }: { filename: string; bytes: ArrayBu
     <div className="relative h-full min-h-[420px] w-full touch-none select-none overflow-hidden">
       <div ref={mountRef} className="absolute inset-0" aria-label={t("mesh.viewerLabel")} />
 
-      <div className="absolute left-3 top-3 flex items-center gap-2 rounded-input border border-border/70 bg-surface/90 p-1 shadow-card backdrop-blur">
+      <div className="ui-popover absolute left-3 top-3 flex items-center gap-2 rounded-input bg-surface/90 p-1 backdrop-blur">
         <div className="flex items-center gap-1 px-1.5 text-xs font-medium text-muted">
           <Box size={13} /> {"3D"}
         </div>
@@ -295,7 +295,7 @@ export function MeshView({ filename, bytes }: { filename: string; bytes: ArrayBu
         </button>
       </div>
 
-      <div className="pointer-events-none absolute bottom-3 right-3 rounded-input border border-border/70 bg-surface/90 px-3 py-1.5 text-xs text-muted shadow-card backdrop-blur">
+      <div className="ui-popover pointer-events-none absolute bottom-3 right-3 rounded-input bg-surface/90 px-3 py-1.5 text-xs text-muted backdrop-blur">
         <span className="font-medium text-text">{ext.toUpperCase()}</span>
         {meta && (
           <span className="ml-2">
@@ -305,13 +305,13 @@ export function MeshView({ filename, bytes }: { filename: string; bytes: ArrayBu
       </div>
 
       {(rendering || error) && (
-        <div className="pointer-events-none absolute bottom-3 left-3 max-w-[70%] rounded-input border border-border/70 bg-surface/95 px-3 py-1.5 text-xs text-muted shadow-card backdrop-blur">
+        <div className="ui-popover pointer-events-none absolute bottom-3 left-3 max-w-[70%] rounded-input bg-surface/95 px-3 py-1.5 text-xs text-muted backdrop-blur">
           {rendering ? t("mesh.rendering") : error}
         </div>
       )}
 
       {notice && !rendering && !error && (
-        <div className="pointer-events-none absolute left-1/2 top-1/2 max-w-[80%] -translate-x-1/2 -translate-y-1/2 rounded-input border border-warn/40 bg-surface/95 px-4 py-3 text-center text-sm text-text shadow-card backdrop-blur">
+        <div className="ui-popover pointer-events-none absolute left-1/2 top-1/2 max-w-[80%] -translate-x-1/2 -translate-y-1/2 rounded-input border-warn/40 bg-surface/95 px-4 py-3 text-center text-sm text-text backdrop-blur">
           <div className="mb-1 flex items-center justify-center gap-1.5 font-medium text-warn">
             <AlertTriangle size={14} /> {"File problem"}
           </div>

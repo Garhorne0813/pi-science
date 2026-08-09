@@ -16,6 +16,7 @@ import { parseTableFile } from "@/lib/shared";
 import { formatNumber } from "@/i18n/format";
 import { CodeViewer } from "@/components/code-viewer/CodeViewer";
 import { MarkdownViewer } from "@/components/markdown-viewer/MarkdownViewer";
+import { IconButton } from "@/components/ui/Icon";
 import { ProvenancePanel } from "./ProvenancePanel";
 import { TablePreview } from "./TablePreview";
 import { TableChart } from "./TableChart";
@@ -216,7 +217,7 @@ export function FilePreviewInspector({
 
   return (
     <div className="flex h-full flex-col">
-      <header className={cn("flex shrink-0 items-center gap-2 border-b border-border px-4", compactHeader ? "h-10" : "h-12")}>
+      <header className={cn("flex shrink-0 items-center gap-2 border-b border-border px-4", compactHeader ? "h-9" : "h-12")}>
         {showTitle && <span className="truncate text-sm font-medium text-text">{data.filename}</span>}
         <span className="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">
           {data.artifact || t("filePreview.file")}
@@ -258,40 +259,42 @@ export function FilePreviewInspector({
           </>
         ) : (
           editable && !showHistory && (
-            <button
-              className="text-text hover:opacity-60"
-              aria-label={t("filePreview.edit")}
-              title={t("filePreview.edit")}
+            <IconButton
+              icon={Pencil}
+              label={t("filePreview.edit")}
+              size="compact"
+              className="text-text"
               onClick={startEdit}
-            >
-              <Pencil size={14} strokeWidth={1.5} />
-            </button>
+            />
           )
         )}
-        <button
-          className={cn(showHistory ? "text-accent" : "text-text hover:opacity-60")}
-          aria-label={t("filePreview.versionHistory")}
-          title={t("filePreview.versionHistory")}
+        <IconButton
+          icon={History}
+          label={t("filePreview.versionHistory")}
+          size="compact"
+          className={showHistory ? "bg-surface-2 text-accent" : "text-text"}
           aria-pressed={showHistory}
           onClick={() => setShowHistory((v) => !v)}
-        >
-          <History size={14} strokeWidth={1.5} />
-        </button>
+        />
         {showOpenExternally && kind !== "html" && (
-          <button
-            className="text-text hover:opacity-60"
-            aria-label={t("common.open")}
+          <IconButton
+            icon={ExternalLink}
+            label={t("common.open")}
+            size="compact"
+            className="text-text"
             title={t("filePreview.openExternally")}
             onClick={() => void openArtifactExternally(data.path, data.root, cwd)}
-          >
-            <ExternalLink size={14} strokeWidth={1.5} />
-          </button>
+          />
         )}
         {controls}
         {showClose && (
-          <button className="text-text hover:opacity-60" aria-label={t("common.close")} onClick={onClose}>
-            <X size={14} strokeWidth={1.5} />
-          </button>
+          <IconButton
+            icon={X}
+            label={t("common.close")}
+            size="compact"
+            className="text-text"
+            onClick={onClose}
+          />
         )}
       </header>
 
@@ -533,7 +536,7 @@ function Body({
   if (kind === "image") {
     return url ? (
       <div className="flex items-center justify-center min-h-full p-4">
-        <img src={url} alt={filename} className="max-w-full max-h-full rounded-sm bg-white shadow-card object-contain" />
+        <img src={url} alt={filename} className="max-h-full max-w-full rounded-sm border border-border bg-white object-contain" />
       </div>
     ) : (
       <Note text={t("filePreview.loading")} />
@@ -547,7 +550,7 @@ function Body({
         <video
           src={url}
           controls
-          className="max-h-[80vh] max-w-full rounded-sm bg-black shadow-card"
+          className="max-h-[80vh] max-w-full rounded-sm border border-border bg-black"
         />
       </div>
     ) : (
@@ -649,7 +652,7 @@ export function PreviewError({
   if (!tooLarge) return <div className="p-4 text-sm text-muted">{error}</div>;
   return (
     <div className="p-4">
-      <div className="rounded-card border border-border bg-surface p-4 text-sm text-muted">
+      <div className="ui-card-flat rounded-card p-4 text-sm text-muted">
         <div className="mb-1 font-medium text-text">{t("filePreview.tooLargeTitle", { filename })}</div>
         <p className="mb-3">{t("filePreview.tooLargeBody")}</p>
         <div className="flex flex-wrap gap-2">

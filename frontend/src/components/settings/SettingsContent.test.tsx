@@ -52,6 +52,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
   queryClient.clear();
   useUiStore.setState({ settingsOpen: false, settingsScope: null });
+  useUiStore.getState().setPreviewPaneSide("right");
 });
 
 afterEach(() => {
@@ -65,6 +66,16 @@ describe("SettingsContent", () => {
     expect(nav).toHaveAttribute("aria-orientation", "vertical");
     expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tabpanel", { name: "General" })).toHaveAttribute("aria-labelledby", "settings-tab-general");
+  });
+
+  it("persists the selected conversation and preview order", async () => {
+    renderContent(null);
+    const order = await screen.findByLabelText("Conversation and preview layout");
+
+    fireEvent.change(order, { target: { value: "left" } });
+
+    expect(useUiStore.getState().previewPaneSide).toBe("left");
+    expect(window.localStorage.getItem("pi-science.layout.previewPaneSide")).toBe('"left"');
   });
 
   it("switches tabs and resets aria-selected", async () => {

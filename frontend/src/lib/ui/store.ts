@@ -16,6 +16,9 @@ interface UiState {
   sidebarWidth: number;
   setSidebarCollapsed: (c: boolean) => void;
   setSidebarWidth: (w: number) => void;
+  /** Which side of the conversation the preview occupies on desktop. */
+  previewPaneSide: "left" | "right";
+  setPreviewPaneSide: (side: "left" | "right") => void;
   inspectorOpen: boolean;
   inspectorWidth: number;
   inspectorMaximized: boolean;
@@ -125,6 +128,12 @@ export const useUiStore = create<UiState>((set) => ({
   setSidebarWidth: (w) => {
     saveToStorage("sidebar.width", w);
     set({ sidebarWidth: w });
+  },
+
+  previewPaneSide: loadFromStorage<"left" | "right">("layout.previewPaneSide", "right"),
+  setPreviewPaneSide: (side) => {
+    saveToStorage("layout.previewPaneSide", side);
+    set({ previewPaneSide: side });
   },
 
   inspectorOpen: false,

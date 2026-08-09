@@ -75,7 +75,7 @@ describe("TodoWidget", () => {
     const popover = screen.getByRole("dialog");
     expect(popover).toHaveClass("w-[min(320px,calc(100vw-24px))]");
     expect(popover.querySelector("ul")).toHaveClass("space-y-0.5");
-    expect(popover.querySelector("li")).toHaveClass("py-1.5");
+    expect(popover.querySelector("li")).toHaveClass("py-compact");
   });
 
   it("keeps an unfinished list collapsed when restoring an existing session", () => {

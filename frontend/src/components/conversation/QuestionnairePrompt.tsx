@@ -226,7 +226,7 @@ export function QuestionnairePrompt({
   };
 
   return (
-    <section data-request-id={interaction.requestId} className="overflow-hidden rounded-card border border-accent/35 bg-surface shadow-card animate-fadeIn" aria-label={t("questionnaire.title")}>
+    <section data-request-id={interaction.requestId} className="ui-card-flat animate-fadeIn overflow-hidden rounded-card border-accent/35" aria-label={t("questionnaire.title")}>
       <header className="border-b border-faint bg-accent/5 px-4 py-2 sm:px-5">
         <div className="flex items-center gap-2">
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent text-accent-fg">

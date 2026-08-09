@@ -18,6 +18,7 @@ beforeAll(async () => {
 beforeEach(() => {
   cleanup();
   useUiStore.getState().closeInspector();
+  useUiStore.setState({ previewPaneSide: "right" });
 });
 
 describe("PreviewPaneControls", () => {
@@ -27,7 +28,8 @@ describe("PreviewPaneControls", () => {
 
     const hide = screen.getByRole("button", { name: "Hide preview panel" });
     const controls = hide.parentElement!;
-    expect(controls).toHaveClass("fixed", "right-4", "h-9", "gap-2");
+    expect(controls).toHaveClass("fixed", "right-card", "h-control", "gap-2");
+    expect(hide).toHaveClass("bg-surface", "text-text");
     expect(hide.querySelector("svg")).toHaveAttribute("width", "14");
     expect(controls.lastElementChild).toBe(hide);
 
@@ -52,5 +54,15 @@ describe("PreviewPaneControls", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Restore panel width" }));
     expect(useUiStore.getState().inspectorMaximized).toBe(false);
+  });
+
+  it("can anchor the controls inside a left-side preview pane", () => {
+    useUiStore.setState({ previewPaneSide: "left" });
+    useUiStore.getState().openInspector(file);
+    render(<PreviewPaneControls embedded />);
+
+    const hide = screen.getByRole("button", { name: "Hide preview panel" });
+    expect(hide.parentElement).toHaveClass("absolute", "right-card");
+    expect(hide.parentElement).not.toHaveClass("fixed");
   });
 });

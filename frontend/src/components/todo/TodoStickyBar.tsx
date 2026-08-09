@@ -7,6 +7,7 @@ import { todoViewModel } from "@/lib/conversation/todos";
 import { cn } from "@/lib/ui";
 import { TodoTaskList } from "./TodoTaskList";
 import { useTodoAutoOpenOnce } from "./useTodoAutoOpenOnce";
+import { Icon, IconButton } from "../ui/Icon";
 
 /** Mode-switch control shared by both widgets (kept tiny so the streak/auto
  *  open semantics live in one place per widget). */
@@ -17,15 +18,13 @@ export function TodoModeSwitch({ className }: { className?: string }) {
   const target = mode === "sticky" ? "fab" : "sticky";
   const label = t("todo.switchMode", { mode: t(`todo.mode.${target}`) });
   return (
-    <button
-      type="button"
+    <IconButton
+      icon={target === "fab" ? Minimize2 : Pin}
+      label={label}
+      size="compact"
       onClick={() => setTodoUiMode(target)}
-      aria-label={label}
-      title={label}
-      className={cn("flex h-6 w-6 shrink-0 items-center justify-center rounded-input border border-border text-muted transition-colors hover:bg-surface-2 hover:text-text", className)}
-    >
-      {target === "fab" ? <Minimize2 size={13} aria-hidden /> : <Pin size={13} aria-hidden />}
-    </button>
+      className={cn("border border-border", className)}
+    />
   );
 }
 
@@ -59,16 +58,16 @@ export function TodoStickyBar() {
       className="pointer-events-auto absolute inset-x-3 top-3 z-30 mx-auto max-w-[760px]"
       onKeyDown={onKeyDown}
     >
-      <div className="rounded-card border border-border bg-surface shadow-card">
+      <div className="ui-card rounded-card">
         <div className="flex items-center gap-1.5 pr-2 pl-1">
           <button
             type="button"
             onClick={() => (open ? close() : setOpen(true))}
             aria-expanded={open}
             aria-controls="todo-sticky-list"
-            className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-input px-2 py-2 text-left transition-colors hover:bg-surface-2 md:min-h-9"
+            className="flex min-h-header min-w-0 flex-1 items-center gap-2 rounded-input px-2 py-2 text-left transition-colors hover:bg-surface-2 md:min-h-9"
           >
-            <ListTodo size={14} className="shrink-0 text-accent" aria-hidden />
+            <Icon icon={ListTodo} size="sm" className="shrink-0 text-accent" />
             <span
               role="progressbar"
               aria-valuenow={vm.percent}
@@ -80,13 +79,13 @@ export function TodoStickyBar() {
               {vm.percent}% · {vm.completed}/{vm.total}
             </span>
             {vm.allCompleted ? (
-              <span className="shrink-0 text-[11px] text-ok">{t("todo.allCompleted")}</span>
+              <span className="shrink-0 text-ui-meta text-ok">{t("todo.allCompleted")}</span>
             ) : activeLabel ? (
-              <span className="min-w-0 flex-1 truncate text-[11px] text-muted" title={activeLabel}>
+              <span className="min-w-0 flex-1 truncate text-ui-meta text-muted" title={activeLabel}>
                 {activeLabel}
               </span>
             ) : null}
-            <ChevronDown size={13} className={cn("shrink-0 text-muted transition-transform", open && "rotate-180")} aria-hidden />
+            <Icon icon={ChevronDown} size="sm" className={cn("shrink-0 text-muted transition-transform", open && "rotate-180")} />
           </button>
           <TodoModeSwitch />
         </div>
@@ -94,7 +93,7 @@ export function TodoStickyBar() {
       {open && (
         <div
           id="todo-sticky-list"
-          className="absolute left-0 right-0 top-full mt-1 max-h-[min(42vh,360px)] overflow-y-auto rounded-card border border-border bg-surface p-1.5 shadow-card"
+          className="ui-popover absolute left-0 right-0 top-full mt-1 max-h-[min(42vh,360px)] overflow-y-auto rounded-card p-compact"
         >
           <TodoTaskList tasks={vm.tasks} compact />
         </div>

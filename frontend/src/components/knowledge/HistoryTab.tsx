@@ -60,7 +60,7 @@ export function HistoryTab({
         const canUndo = event === "file_operation.applied" && !undone.has(id);
         const versionId = event === "project_document.version" && row.version_id ? String(row.version_id) : null;
         return (
-          <article key={id} className="flex flex-col gap-3 rounded-card border border-border bg-surface p-4 sm:flex-row sm:items-center">
+          <article key={id} className="ui-card-flat flex flex-col gap-3 rounded-card p-4 sm:flex-row sm:items-center">
             <div className="min-w-0 flex-1">
               <div className="font-mono text-xs text-accent">{event}</div>
               <div className="mt-1 truncate text-sm text-text">{String(row.proposal_id || row.knowledge_id || row.session_id || id)}</div>

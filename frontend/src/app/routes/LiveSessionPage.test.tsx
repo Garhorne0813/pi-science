@@ -357,7 +357,7 @@ describe("conversation research workflows", () => {
     expect(screen.queryByText("Confirm Compare approaches")).toBeNull();
   });
 
-  it("keeps workflow starters available after a conversation has already begun", async () => {
+  it("hides workflow starters after a conversation has already begun", async () => {
     useRuntimeStore.setState({
       thread: {
         blocks: [{ kind: "user", id: "u1", text: "Earlier analysis", timestamp: new Date().toISOString() }],
@@ -368,8 +368,8 @@ describe("conversation research workflows", () => {
 
     await renderReady();
 
-    expect(screen.getByRole("button", { name: "Optimize" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Reproduce experiment" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Optimize" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reproduce experiment" })).toBeNull();
   });
 
   it("turns optimize into an editable loop draft and infers a deterministic metric", async () => {

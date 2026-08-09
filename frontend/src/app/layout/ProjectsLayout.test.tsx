@@ -56,7 +56,7 @@ describe("SettingsNavItem", () => {
     expect(useUiStore.getState().settingsOpen).toBe(true);
     expect(useUiStore.getState().settingsScope).toBe("proj");
     expect(screen.getByTestId("path").textContent).toBe("/workspace/proj");
-    expect(screen.getByRole("button", { name: "Settings" })).toHaveClass("h-7");
+    expect(screen.getByRole("button", { name: "Settings" })).toHaveClass("h-nav");
   });
 
   it("opens the dialog with the global scope from the collapsed form", () => {

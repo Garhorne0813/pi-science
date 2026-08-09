@@ -11,7 +11,7 @@ export function KnowledgeTab({ items }: { items: KnowledgeItem[] }) {
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       {Object.entries(groups).map(([type, rows]) => (
-        <section key={type} className="rounded-card border border-border bg-surface p-4 shadow-card">
+        <section key={type} className="ui-card-flat rounded-card p-4">
           <div className="flex items-center justify-between border-b border-faint pb-3">
             <h2 className="font-serif text-lg text-text">{KNOWLEDGE_LABELS[type as keyof typeof KNOWLEDGE_LABELS]}</h2>
             <span className="font-mono text-xs text-muted">{rows.length}</span>

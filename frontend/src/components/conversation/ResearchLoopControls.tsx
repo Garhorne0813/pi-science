@@ -16,7 +16,7 @@ export interface ResearchLoopDraft { taskType: Extract<ResearchTaskType, "resear
 
 export function ResearchLoopDraftCard({ draft, busy, onCancel, onConfirm }: { draft: ResearchLoopDraft; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
   const { t } = useTranslation();
-  return <section className="rounded-card border border-accent/30 bg-accent/5 p-4 shadow-card">
+  return <section className="ui-card-accent rounded-card p-4">
     <div className="flex items-start justify-between gap-3"><div><h3 className="flex items-center gap-2 text-sm font-semibold text-text"><FlaskConical size={15} className="text-accent" /> {t("research.confirmTitle", { mode: t(`research.mode.${draft.taskType}.label`) })}</h3><p className="mt-1 text-xs leading-5 text-muted">{t("research.confirmDescription")}</p></div><button type="button" onClick={onCancel} disabled={busy} aria-label={t("research.cancelSetup")} className="min-h-9 min-w-9 text-muted hover:text-text"><X size={15} /></button></div>
     <div className="mt-4 rounded-input border border-border/70 bg-surface px-4 py-3">
       <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">{t("research.objective")}</div>
@@ -37,7 +37,7 @@ export function ResearchLoopDraftCard({ draft, busy, onCancel, onConfirm }: { dr
 export function ResearchLoopStatusCard({ loop, candidates, busy, onRefresh, onAction, onOpenDetails }: { loop: ResearchLoop; candidates: ExperienceRecord[]; busy: boolean; onRefresh: () => void; onAction: (action: "pause" | "resume" | "cancel") => void; onOpenDetails: () => void }) {
   const { t } = useTranslation();
   const current = candidates.at(-1); const metrics = current?.evaluation?.metrics; const latestMetric = metrics ? Object.entries(metrics)[0] : undefined;
-  return <section className="rounded-card border border-accent/30 bg-surface p-4 shadow-card">
+  return <section className="ui-card-flat rounded-card border-accent/30 p-4">
     <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><FlaskConical size={15} className="text-accent" /><h3 className="text-sm font-semibold text-text">{loop.title}</h3><span className="rounded-full bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-muted">{t(`research.status.${loop.status}`, { defaultValue: loop.status })}</span></div><p className="mt-1 text-xs leading-5 text-muted">{loop.objective}</p></div><button type="button" onClick={onRefresh} disabled={busy} aria-label={t("research.refresh")} className="min-h-9 min-w-9 text-muted hover:text-text"><RotateCcw size={14} className={busy ? "animate-spin" : ""} /></button></div>
     {loop.status === "pausing" && <p className="mt-2 text-xs text-warn">{t("research.pausingHint")}</p>}
     {loop.status === "needs_attention" && <p className="mt-2 text-xs text-error">{t("research.needsAttention", { reason: loop.stop_reason })}</p>}

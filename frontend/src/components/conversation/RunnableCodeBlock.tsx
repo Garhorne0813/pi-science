@@ -41,7 +41,7 @@ export function RunnableCodeBlock({ code, cwd, sessionId, preClassName, children
         onClick={() => void run()}
         disabled={running}
         aria-label={t("conversation.runCode")}
-        className="absolute right-1.5 top-1.5 flex items-center gap-1 rounded-input border border-border bg-surface px-1.5 py-0.5 font-sans text-[11px] text-muted shadow-card transition-colors hover:text-text disabled:cursor-wait"
+        className="ui-popover absolute right-1.5 top-1.5 flex items-center gap-1 rounded-input px-1.5 py-0.5 font-sans text-[11px] text-muted transition-colors hover:text-text disabled:cursor-wait"
       >
         {running ? <Loader2 size={11} className="animate-spin text-accent" /> : <Play size={11} />}
         {running ? t("conversation.runningCode") : t("conversation.runCode")}

@@ -46,7 +46,7 @@ export function FileContextMenu({ entry, point, onClose, onReference, onCopy, on
   }, [onClose]);
 
   return (
-    <div ref={ref} role="menu" className="fixed z-50 w-[180px] max-w-[calc(100vw-16px)] rounded-card border border-border bg-surface p-1 shadow-pop" style={{ left: point.x, top: point.y, transform: `translate(${direction.left ? "-100%" : "0"}, ${direction.up ? "-100%" : "0"})` }} onClick={(event) => event.stopPropagation()}>
+    <div ref={ref} role="menu" className="ui-popover fixed z-50 w-[180px] max-w-[calc(100vw-16px)] rounded-card p-1" style={{ left: point.x, top: point.y, transform: `translate(${direction.left ? "-100%" : "0"}, ${direction.up ? "-100%" : "0"})` }} onClick={(event) => event.stopPropagation()}>
       <MenuButton icon={<Link2 size={12} />} label={entry.isDir ? t("files.referenceFolder") : t("files.referenceFile")} onClick={onReference} />
       <MenuButton icon={<Copy size={12} />} label={t("files.copyPath")} onClick={() => onCopy(entry.path)} />
       <MenuButton icon={<Copy size={12} />} label={t("files.copyName")} onClick={() => onCopy(entry.name)} />

@@ -65,7 +65,7 @@ export function RunsPage() {
         ) : (
           <div className="flex flex-col gap-2">
             {runs.map((r) => (
-              <div key={r.runId} className="rounded-card border border-border bg-surface overflow-hidden">
+              <div key={r.runId} className="ui-card-flat overflow-hidden rounded-card">
                 <div className="flex items-center gap-3 px-4 py-3">
                   <span className={cn("shrink-0", r.status === "ok" ? "text-ok" : r.status === "running" ? "text-warn" : "text-error")}>
                     {r.status === "ok" ? <Check size={16} /> : r.status === "running" ? <Loader2 size={16} className="animate-spin" /> : <X size={16} />}
