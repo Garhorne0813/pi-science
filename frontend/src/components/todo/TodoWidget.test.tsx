@@ -111,7 +111,7 @@ describe("TodoWidget", () => {
   it("switches to sticky mode via the mode switch", async () => {
     render(<TodoWidget />);
     act(() => setThread([todoBlock({ action: "create", nextId: 2, tasks: [{ id: 1, subject: "Load", status: "pending" }] })]));
-    fireEvent.click(screen.getByRole("button", { name: /Sticky mode/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Pin to top/ }));
     expect(useUiStore.getState().todoUiMode).toBe("sticky");
   });
 

@@ -126,7 +126,7 @@ describe("TodoStickyBar", () => {
   it("switches to fab mode via the mode switch", () => {
     setThread([todoBlock({ action: "create", nextId: 2, tasks: [{ id: 1, subject: "Load", status: "pending" }] })]);
     render(<TodoStickyBar />);
-    fireEvent.click(screen.getByRole("button", { name: /Floating mode/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Minimize/ }));
     expect(useUiStore.getState().todoUiMode).toBe("fab");
   });
 
