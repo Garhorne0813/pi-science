@@ -69,10 +69,12 @@ beforeEach(async () => {
   process.env.FAKE_PI_LOG = join(root, "rpc.jsonl");
   process.env.FAKE_PI_ARGS_LOG = join(root, "pi-args.json");
   process.env.FAKE_PI_STARTS = join(root, "starts.txt");
-  // Leave enough headroom for spawning the fake Pi under parallel CI load.
+  // Leave enough headroom for spawning the fake Pi under CI load. Windows
+  // process startup and pipe delivery are substantially slower even when the
+  // server test files themselves are serialized.
   // Timeout-specific tests still complete quickly because the fake process is
   // already running before the intentionally unanswered RPC is sent.
-  process.env.PI_SCIENCE_RPC_TIMEOUT_MS = "500";
+  process.env.PI_SCIENCE_RPC_TIMEOUT_MS = process.platform === "win32" ? "1500" : "500";
   process.env.PI_SCIENCE_RECONCILE_DELAY_MS = "20";
   process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS = "700";
   process.env.PI_SCIENCE_IDLE_RUNTIME_MS = "0";
