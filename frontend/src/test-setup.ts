@@ -35,3 +35,40 @@ if (typeof window !== "undefined" && typeof window.ResizeObserver !== "function"
     value: ResizeObserverStub,
   });
 }
+
+// Node 26 exposes localStorage as an experimental global that is undefined
+// under jsdom (it requires --localstorage-file). Components and stores read
+// localStorage at render time, so provide an in-memory fallback when the
+// browser implementation is missing.
+function memoryStorage(): Storage {
+  let data = new Map<string, string>();
+  return {
+    get length() {
+      return data.size;
+    },
+    clear: () => {
+      data = new Map();
+    },
+    getItem: (key: string) => (data.has(key) ? data.get(key)! : null),
+    key: (index: number) => [...data.keys()][index] ?? null,
+    removeItem: (key: string) => {
+      data.delete(key);
+    },
+    setItem: (key: string, value: string) => {
+      data.set(key, String(value));
+    },
+  };
+}
+
+if (typeof window !== "undefined" && typeof window.localStorage === "undefined") {
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: memoryStorage(),
+  });
+}
+if (typeof window !== "undefined" && typeof window.sessionStorage === "undefined") {
+  Object.defineProperty(window, "sessionStorage", {
+    configurable: true,
+    value: memoryStorage(),
+  });
+}
