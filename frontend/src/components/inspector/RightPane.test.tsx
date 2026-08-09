@@ -110,6 +110,28 @@ describe("RightPane resizing", () => {
     expect(divider).toHaveAttribute("aria-valuenow", "436");
   });
 
+  it("moves the divider and reverses resize direction for a left-side preview", () => {
+    render(
+      <RightPane side="left" onMinimize={vi.fn()}>
+        <div>Preview</div>
+      </RightPane>,
+    );
+
+    const divider = screen.getByRole("separator", { name: "Resize preview panel" });
+    const pane = divider.parentElement!;
+    expect(pane).toHaveClass("order-1");
+    expect(divider).toHaveClass("right-0");
+    expect(divider).not.toHaveClass("left-0");
+
+    fireEvent.pointerDown(divider, { button: 0, pointerId: 1, clientX: 420 });
+    fireEvent.pointerMove(divider, { pointerId: 1, clientX: 360 });
+    fireEvent.pointerUp(divider, { pointerId: 1 });
+    expect(useUiStore.getState().inspectorWidth).toBe(360);
+
+    fireEvent.keyDown(divider, { key: "ArrowRight" });
+    expect(useUiStore.getState().inspectorWidth).toBe(376);
+  });
+
   it("fills the layout beside the sidebar when expanded", () => {
     useUiStore.setState({ inspectorMaximized: true });
     const { container } = render(

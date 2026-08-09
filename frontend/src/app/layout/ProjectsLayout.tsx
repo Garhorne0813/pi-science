@@ -27,6 +27,7 @@ export function ProjectsLayout() {
   const { t } = useTranslation();
   const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed);
   const sidebarWidth = useUiStore((s) => s.sidebarWidth);
+  const previewPaneSide = useUiStore((s) => s.previewPaneSide);
   const setSidebarCollapsed = useUiStore((s) => s.setSidebarCollapsed);
   const inspectorOpen = useUiStore((s) => s.inspectorOpen);
   const inspectorTabs = useUiStore((s) => s.inspectorTabs);
@@ -46,6 +47,7 @@ export function ProjectsLayout() {
   const isConversationRoute = isWorkspace && (
     location.pathname === workspaceRoot || location.pathname.startsWith(`${workspaceRoot}/session/`)
   );
+  const previewOnLeft = isConversationRoute && previewPaneSide === "left";
   const clampSidebarWidth = (width: number) => Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
   const beginSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -213,6 +215,7 @@ export function ProjectsLayout() {
         "relative flex min-w-0 flex-1 flex-col overflow-hidden",
         sidebarCollapsed && "pt-12 md:pt-0 md:pl-12",
         inspectorMaximized && "hidden",
+        previewOnLeft && "order-2",
       )}>
         <Outlet />
         <Suspense fallback={null}>
@@ -220,11 +223,15 @@ export function ProjectsLayout() {
         </Suspense>
       </main>
 
-      {isConversationRoute && <PreviewPaneControls />}
+      {isConversationRoute && (!previewOnLeft || !inspectorOpen) && <PreviewPaneControls />}
 
       {/* Inspector — only in workspace context */}
       {isWorkspace && inspectorOpen && activeInspectorTabId && inspectorTabs.length > 0 && (
-        <RightPane onMinimize={() => setInspectorVisible(false)}>
+        <RightPane
+          side={previewOnLeft ? "left" : "right"}
+          onMinimize={() => setInspectorVisible(false)}
+        >
+          {previewOnLeft && <PreviewPaneControls embedded />}
           <InspectorTabs
             tabs={inspectorTabs}
             activeTabId={activeInspectorTabId}

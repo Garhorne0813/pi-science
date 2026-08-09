@@ -18,6 +18,7 @@ beforeAll(async () => {
 beforeEach(() => {
   cleanup();
   useUiStore.getState().closeInspector();
+  useUiStore.setState({ previewPaneSide: "right" });
 });
 
 describe("PreviewPaneControls", () => {
@@ -53,5 +54,15 @@ describe("PreviewPaneControls", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Restore panel width" }));
     expect(useUiStore.getState().inspectorMaximized).toBe(false);
+  });
+
+  it("can anchor the controls inside a left-side preview pane", () => {
+    useUiStore.setState({ previewPaneSide: "left" });
+    useUiStore.getState().openInspector(file);
+    render(<PreviewPaneControls embedded />);
+
+    const hide = screen.getByRole("button", { name: "Hide preview panel" });
+    expect(hide.parentElement).toHaveClass("absolute", "right-card");
+    expect(hide.parentElement).not.toHaveClass("fixed");
   });
 });

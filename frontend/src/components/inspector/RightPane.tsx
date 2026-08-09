@@ -11,17 +11,19 @@ const COLLAPSE_BELOW = 280;
 const MAX_FRACTION = 0.7;
 
 /**
- * Resizable right pane hosting an inspector or the session Files browser.
- * The left-edge divider drags within [INSPECTOR_MIN, INSPECTOR_MAX] (persisted);
- * dragging it far right minimizes the pane. Maximized, the pane covers the
- * all layout space to the right of the sidebar while the conversation hides.
+ * Resizable preview pane that can sit on either side of the conversation.
+ * Its conversation-facing divider drags within [INSPECTOR_MIN, INSPECTOR_MAX]
+ * (persisted); dragging toward the pane minimizes it. Maximized, the pane
+ * covers all layout space to the right of the sidebar while conversation hides.
  */
 export function RightPane({
   children,
   onMinimize,
+  side = "right",
 }: {
   children: React.ReactNode;
   onMinimize: () => void;
+  side?: "left" | "right";
 }) {
   const { t } = useTranslation();
   // Field-level selectors so unrelated UI-store writes do not re-render the pane.
@@ -60,9 +62,10 @@ export function RightPane({
 
   const onDividerPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
-    // The pane ends at the window's right edge, so the width is whatever is
-    // right of the pointer.
-    const w = window.innerWidth - e.clientX;
+    const paneLeft = paneRef.current?.getBoundingClientRect().left ?? 0;
+    // A right-side pane grows toward the left; a left-side pane grows toward
+    // the right, so the same divider gesture maps to opposite width formulas.
+    const w = side === "right" ? window.innerWidth - e.clientX : e.clientX - paneLeft;
     if (w < COLLAPSE_BELOW) {
       // Snap to the hidden state without discarding tabs. The pane unmounts,
       // which also ends the drag, and can be restored from the header button.
@@ -107,7 +110,9 @@ export function RightPane({
   const onDividerKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
     e.preventDefault();
-    const delta = e.key === "ArrowLeft" ? 16 : -16;
+    const delta = side === "right"
+      ? (e.key === "ArrowLeft" ? 16 : -16)
+      : (e.key === "ArrowRight" ? 16 : -16);
     setInspectorWidth(clamp(inspectorWidth + delta));
   };
 
@@ -120,13 +125,14 @@ export function RightPane({
       ref={paneRef}
       className={cn(
         "relative hidden h-full shrink-0 lg:block",
+        side === "left" && "order-1",
         dragging && "will-change-[width] select-none",
       )}
       style={{ width: inspectorWidth }}
     >
       <div className={cn("h-full", dragging && "pointer-events-none")}>{children}</div>
       {/* Drag divider: resize within [INSPECTOR_MIN, INSPECTOR_MAX]; dragging
-          far right minimizes the pane while retaining its tabs. */}
+          toward the pane minimizes it while retaining its tabs. */}
       <div
         role="separator"
         aria-orientation="vertical"
@@ -140,11 +146,15 @@ export function RightPane({
         onPointerUp={onDividerPointerUp}
         onPointerCancel={onDividerPointerUp}
         onKeyDown={onDividerKeyDown}
-        className="group absolute inset-y-0 left-0 z-10 w-2 cursor-col-resize touch-none select-none"
+        className={cn(
+          "group absolute inset-y-0 z-10 w-2 cursor-col-resize touch-none select-none",
+          side === "right" ? "left-0" : "right-0",
+        )}
       >
         <div
           className={cn(
-            "absolute inset-y-0 left-0 w-[2px] transition-colors",
+            "absolute inset-y-0 w-[2px] transition-colors",
+            side === "right" ? "left-0" : "right-0",
             dragging ? "bg-accent/60" : "bg-transparent group-hover:bg-accent/40",
           )}
         />

@@ -170,10 +170,10 @@ describe("SettingsDialog", () => {
     renderDialog();
     openSettings(null);
     await screen.findByRole("dialog");
-    // The language select is the last focusable element in the default tab.
-    const language = await screen.findByLabelText("Language");
-    language.focus();
-    fireEvent.keyDown(language, { key: "Tab" });
+    // The panel-order select is the last focusable element in the default tab.
+    const panelOrder = await screen.findByLabelText("Conversation and preview layout");
+    panelOrder.focus();
+    fireEvent.keyDown(panelOrder, { key: "Tab" });
     expect(document.activeElement).toBe(screen.getByLabelText("Close"));
   });
 
@@ -184,10 +184,10 @@ describe("SettingsDialog", () => {
     const close = screen.getByLabelText("Close");
     close.focus();
     fireEvent.keyDown(close, { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(screen.getByLabelText("Language"));
+    expect(document.activeElement).toBe(screen.getByLabelText("Conversation and preview layout"));
     // Right after opening, focus sits on the panel itself: Shift+Tab wraps too.
     dialog.focus();
     fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(screen.getByLabelText("Language"));
+    expect(document.activeElement).toBe(screen.getByLabelText("Conversation and preview layout"));
   });
 });
