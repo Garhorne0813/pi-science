@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ListTodo } from "lucide-react";
+import { ChevronDown, ListTodo, Minimize2, Pin } from "lucide-react";
 import { useRuntimeStore } from "@/lib/agent-runtime";
 import { useUiStore } from "@/lib/ui";
 import { todoViewModel } from "@/lib/conversation/todos";
@@ -15,14 +15,16 @@ export function TodoModeSwitch({ className }: { className?: string }) {
   const mode = useUiStore((s) => s.todoUiMode);
   const setTodoUiMode = useUiStore((s) => s.setTodoUiMode);
   const target = mode === "sticky" ? "fab" : "sticky";
+  const label = t("todo.switchMode", { mode: t(`todo.mode.${target}`) });
   return (
     <button
       type="button"
       onClick={() => setTodoUiMode(target)}
-      aria-label={t("todo.switchMode", { mode: t(`todo.mode.${target}`) })}
-      className={cn("shrink-0 rounded-input border border-border px-2 py-1 text-[10px] text-muted transition-colors hover:bg-surface-2 hover:text-text", className)}
+      aria-label={label}
+      title={label}
+      className={cn("flex h-6 w-6 shrink-0 items-center justify-center rounded-input border border-border text-muted transition-colors hover:bg-surface-2 hover:text-text", className)}
     >
-      {t(`todo.mode.${target}`)}
+      {target === "fab" ? <Minimize2 size={13} aria-hidden /> : <Pin size={13} aria-hidden />}
     </button>
   );
 }
@@ -37,11 +39,12 @@ export function TodoStickyBar() {
   const { t } = useTranslation();
   const mode = useUiStore((s) => s.todoUiMode);
   const blocks = useRuntimeStore((s) => s.thread.blocks);
+  const threadLoaded = useRuntimeStore((s) => s.thread.loaded);
   const cwd = useRuntimeStore((s) => s.cwd);
   const sessionId = useRuntimeStore((s) => s.activeSessionId);
   const vm = useMemo(() => todoViewModel(blocks), [blocks]);
   const hasOpenTasks = Boolean(vm && !vm.allCompleted);
-  const { open, setOpen, close } = useTodoAutoOpenOnce(hasOpenTasks, `${cwd}:${sessionId ?? ""}`);
+  const { open, setOpen, close } = useTodoAutoOpenOnce(hasOpenTasks, `${cwd}:${sessionId ?? ""}`, threadLoaded);
 
   const onKeyDown = useCallback((event: React.KeyboardEvent) => {
     if (event.key === "Escape") close();

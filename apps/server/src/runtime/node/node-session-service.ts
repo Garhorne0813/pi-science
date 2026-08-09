@@ -878,9 +878,12 @@ export class NodeSessionService {
             }, shouldPublish);
             if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
             await this.eventHub.publish(runtime.cwd, runtime.activeSessionId, { type: "session.idle", sessionId: runtime.activeSessionId }, shouldPublish);
-            if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
+            // The synthetic idle event resets the pending operation state via
+            // the normal runtime-event path. Its generation token must still
+            // be cleared here unless a newer operation replaced it.
+            if (runtime.operationToken !== operationToken) return;
           }
-          if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
+          if (runtime.operationToken !== operationToken) return;
           this.clearPendingOperation(runtime);
           return;
         }

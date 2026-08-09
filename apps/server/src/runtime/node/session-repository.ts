@@ -3,6 +3,7 @@ import { join, relative, resolve } from "node:path";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { readProject } from "../../project/project-registry.js";
+import { isAiTitlePrompt } from "../title/title-prompt.js";
 
 export interface SessionInfoRecord {
   id: string;
@@ -47,6 +48,7 @@ interface SessionFile {
   header: Record<string, unknown>;
   subagent: boolean;
   sessionInfo: boolean;
+  aiTitle: boolean;
   modified: Date;
 }
 
@@ -55,12 +57,14 @@ interface CachedFile {
   header: Record<string, unknown>;
   subagent: boolean;
   sessionInfo: boolean;
+  aiTitle: boolean;
 }
 
 interface ParsedSessionHeader {
   header: Record<string, unknown>;
   subagent: boolean;
   sessionInfo: boolean;
+  aiTitle: boolean;
 }
 
 function sessionsRoot(cwd: string): string {
@@ -243,6 +247,7 @@ interface CachedCandidate {
   header: Record<string, unknown> | null; // null = not (yet) a valid session
   subagent: boolean;
   sessionInfo: boolean;
+  aiTitle: boolean;
 }
 
 interface DirCache {
@@ -284,17 +289,33 @@ async function tryParseHeader(path: string): Promise<ParsedSessionHeader | null>
     // these implementation sessions without hiding ordinary user forks.
     let sessionInfo = false;
     let subagent = false;
+    let aiTitle = false;
+    let firstMessageSeen = false;
     for (const line of lines.slice(1)) {
       try {
         const entry = JSON.parse(line) as Record<string, unknown>;
-        if (entry.type !== "session_info") continue;
-        sessionInfo = true;
-        if (typeof entry.name === "string" && entry.name.startsWith("subagent-")) subagent = true;
+        if (entry.type === "session_info") {
+          sessionInfo = true;
+          if (typeof entry.name === "string" && entry.name.startsWith("subagent-")) subagent = true;
+          continue;
+        }
+        if (entry.type !== "message" || firstMessageSeen) continue;
+        firstMessageSeen = true;
+        const message = entry.message;
+        if (!message || typeof message !== "object" || Array.isArray(message)) continue;
+        const record = message as Record<string, unknown>;
+        if (record.role !== "user" || !Array.isArray(record.content)) continue;
+        const text = record.content
+          .filter((part): part is Record<string, unknown> => Boolean(part) && typeof part === "object" && !Array.isArray(part))
+          .filter((part) => part.type === "text" && typeof part.text === "string")
+          .map((part) => String(part.text))
+          .join("\n");
+        aiTitle = isAiTitlePrompt(text);
       } catch {
         // Ignore non-JSON lines while looking for session metadata.
       }
     }
-    return { header, subagent, sessionInfo };
+    return { header, subagent, sessionInfo, aiTitle };
   } catch {
     // A partially-written or corrupt session is not a valid candidate yet.
     return null;
@@ -336,7 +357,7 @@ async function scanSessionFiles(root: string): Promise<Record<string, DirCache>>
         continue;
       }
       const parsed = await tryParseHeader(path);
-      candidates.push({ path, mtimeMs: meta.mtimeMs, size: meta.size, header: parsed?.header ?? null, subagent: parsed?.subagent ?? false, sessionInfo: parsed?.sessionInfo ?? false });
+      candidates.push({ path, mtimeMs: meta.mtimeMs, size: meta.size, header: parsed?.header ?? null, subagent: parsed?.subagent ?? false, sessionInfo: parsed?.sessionInfo ?? false, aiTitle: parsed?.aiTitle ?? false });
     }
     dirs[directory] = { mtimeMs: dirStat.mtimeMs, candidates };
   }
@@ -354,7 +375,7 @@ function filesFromDirs(dirs: Record<string, DirCache>): CachedFile[] {
         && candidate.header.type === "session"
         && typeof candidate.header.id === "string"
       ) {
-        files.push({ path: candidate.path, header: candidate.header, subagent: candidate.subagent, sessionInfo: candidate.sessionInfo });
+        files.push({ path: candidate.path, header: candidate.header, subagent: candidate.subagent, sessionInfo: candidate.sessionInfo, aiTitle: candidate.aiTitle });
       }
     }
   }
@@ -393,7 +414,7 @@ async function revalidateCache(root: string, cached: CacheEntry): Promise<Cached
       }
       if (meta.mtimeMs !== candidate.mtimeMs || meta.size !== candidate.size) {
         const parsed = await tryParseHeader(candidate.path);
-        candidates.push({ path: candidate.path, mtimeMs: meta.mtimeMs, size: meta.size, header: parsed?.header ?? null, subagent: parsed?.subagent ?? false, sessionInfo: parsed?.sessionInfo ?? false });
+        candidates.push({ path: candidate.path, mtimeMs: meta.mtimeMs, size: meta.size, header: parsed?.header ?? null, subagent: parsed?.subagent ?? false, sessionInfo: parsed?.sessionInfo ?? false, aiTitle: parsed?.aiTitle ?? false });
         dirty = true;
       } else {
         candidates.push(candidate);
@@ -472,7 +493,7 @@ async function sessionFilesWithMtime(root: string): Promise<SessionFile[]> {
     cached.map(async (file) => {
       try {
         const metadata = await stat(file.path);
-        return { path: file.path, header: file.header, subagent: file.subagent, sessionInfo: file.sessionInfo, modified: metadata.mtime };
+        return { path: file.path, header: file.header, subagent: file.subagent, sessionInfo: file.sessionInfo, aiTitle: file.aiTitle, modified: metadata.mtime };
       } catch {
         return null;
       }
@@ -496,7 +517,7 @@ function isNestedSubagentSession(root: string, path: string): boolean {
 }
 
 function isUserVisibleSession(root: string, file: SessionFile): boolean {
-  return !file.subagent && !isNestedSubagentSession(root, file.path);
+  return !file.subagent && !file.aiTitle && !isNestedSubagentSession(root, file.path);
 }
 
 export class SessionRepository {

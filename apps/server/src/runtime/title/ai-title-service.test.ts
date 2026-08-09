@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -100,8 +100,11 @@ describe("AiTitleService", () => {
 
   it("disposes the title runtime through manager.stop so the process map does not leak", async () => {
     const stopped: string[] = [];
+    let runtimeSessionDir = "";
     const manager = {
-      async start(key: string) {
+      async start(key: string, options: { web?: { runtime?: { sessionDir?: string } } }) {
+        runtimeSessionDir = options.web?.runtime?.sessionDir ?? "";
+        await writeFile(join(runtimeSessionDir, "background-title.jsonl"), "ghost", "utf8");
         return { sendCommand: async () => ({ success: true, data: null }), shutdown: async () => {} };
       },
       async stop(key: string) {
@@ -111,8 +114,12 @@ describe("AiTitleService", () => {
     process.env.PI_CLI_PATH = "/nonexistent-pi-cli";
     const factory = new PiTitleRuntimeFactory(manager as never, { environment: async () => ({}) } as never);
     const runtime = await factory.start(cwd);
+    expect(runtimeSessionDir).toContain(join(cwd, ".pi-science", "title-runtimes"));
+    expect(runtimeSessionDir).not.toBe(join(cwd, ".pi-science", "sessions"));
+    await expect(access(runtimeSessionDir)).resolves.toBeUndefined();
     await runtime.dispose();
     expect(stopped).toHaveLength(1);
+    await expect(access(runtimeSessionDir)).rejects.toThrow();
   });
 
   it("generates a title from the latest messages and disposes the runtime", async () => {

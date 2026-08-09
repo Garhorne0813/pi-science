@@ -20,6 +20,12 @@ export function registerSessionReadRoutes(app: FastifyInstance, sessionRepositor
       const live = nodeSessionService.liveSessions(cwd);
       for (const runtime of live.reverse()) {
         if (!sessions.some((session) => session.id === runtime.id)) {
+          // A persisted session that is absent from the repository's
+          // user-facing list was deliberately classified as internal (for
+          // example a legacy AI-title runtime). Directly resuming such a file
+          // can make it live, but must not bypass that visibility decision.
+          // A genuinely new live session has no file yet and is still added.
+          if (await sessionRepository.findPath(cwd, runtime.id)) continue;
           sessions.unshift({ id: runtime.id, cwd, project_id: project.id, name: null, created_at: null, updated_at: new Date().toISOString() });
         }
       }

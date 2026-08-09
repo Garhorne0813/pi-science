@@ -94,6 +94,15 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         const targetSessionId = sessionId;
         set({ activeSessionId: targetSessionId });
 
+        // Restore the sidebar metadata independently from the heavier session
+        // activation below. On a direct page refresh the runtime store starts
+        // empty; waiting for history + runtime state before listing sessions
+        // leaves the sidebar showing the raw session id, and an early recovery
+        // return can prevent the list (and its persisted title) from loading at
+        // all. Stale-list protection in loadSessionsInternal keeps this safe
+        // when the user switches workspaces/sessions while the request runs.
+        void loadSessionsInternal(cwd);
+
         // Optimistic render: if we have a cached message snapshot for this
         // session, render it immediately so the user sees the conversation
         // while the network request is still in flight.
@@ -210,7 +219,6 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         set({ status: "error", working: true });
       }
 
-      if (generation === generations.connection) void loadSessionsInternal();
     };
 
   const connectDeduped = (cwd: string, sessionId?: string): Promise<void> => {

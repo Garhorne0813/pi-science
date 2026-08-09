@@ -20,7 +20,7 @@ afterEach(async () => {
     await makeWritable(path).catch(() => undefined);
     await rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }));
-});
+}, 30_000);
 
 async function workspace(): Promise<string> {
   const cwd = await mkdtemp(join(tmpdir(), "pi-science-research-loop-"));
