@@ -7,6 +7,7 @@ import { registerNodeSessionRoutes } from "./node-session-routes.js";
 import { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import { registerSessionReadRoutes } from "./session-routes.js";
 import { sessionRepository } from "../../runtime/node/session-repository.js";
+import { AI_TITLE_PROMPT_INSTRUCTION } from "../../runtime/title/title-prompt.js";
 
 const cleanup: string[] = [];
 const nodeSessionService = new NodeSessionService(undefined, undefined, undefined, {
@@ -172,6 +173,34 @@ describe("native Node conversation routes", () => {
       expect(state.statusCode).toBe(200);
       expect(state.json()).toMatchObject({ ok: true, id });
     }
+    await server.close();
+  });
+
+  it("does not re-add a hidden AI-title session merely because it was resumed", async () => {
+    const cwd = await workspaceWithSessions();
+    const sessionId = "legacy-title-runtime";
+    await writeFile(join(cwd, ".pi-science", "sessions", `${sessionId}.jsonl`), [
+      JSON.stringify({ type: "session", id: sessionId, cwd, timestamp: "2026-07-23T00:00:00.000Z" }),
+      JSON.stringify({
+        type: "message",
+        id: "title-prompt",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: `${AI_TITLE_PROMPT_INSTRUCTION}\n\nConversation:\nuser: hidden` }],
+        },
+      }),
+    ].join("\n") + "\n", "utf8");
+    const server = app();
+
+    const resumed = await server.inject({
+      method: "POST",
+      url: `/api/sessions/${sessionId}/resume?cwd=${encodeURIComponent(cwd)}`,
+    });
+    expect(resumed.statusCode).toBe(200);
+    expect(nodeSessionService.liveSessions(cwd).map((session) => session.id)).toContain(sessionId);
+
+    const listed = await server.inject({ method: "GET", url: `/api/sessions?cwd=${encodeURIComponent(cwd)}` });
+    expect((listed.json() as Array<{ id: string }>).some((session) => session.id === sessionId)).toBe(false);
     await server.close();
   });
 
