@@ -412,10 +412,10 @@ export function LiveSessionPage() {
     ? t("conversation.newSession")
     : getSessionName(workspaceCwd, activeSessionId) || activeSession?.name || activeSessionId.slice(0, 8);
 
-  // Rendered above the composer card in both layouts, so it lives in a variable:
-  // in the welcome layout it belongs to the growing top region (otherwise its
-  // height would push the composer card off the vertical centre).
-  const modePicker = !research.draft && !research.activeLoop
+  // Workflow starters are entry points for a blank conversation. Once the
+  // first turn exists, the composer stays focused on the active conversation
+  // instead of continuing to show the onboarding shortcuts.
+  const modePicker = thread.blocks.length === 0 && !research.draft && !research.activeLoop
     ? <ResearchModePicker className={showWelcome ? "px-0 pb-0" : undefined} selected={research.mode} disabled={working || interactionPending || reviewingProject || research.busy} onSelect={(mode, prompt) => { const selected = research.mode === mode ? null : mode; research.setMode(selected); research.setPrompt(selected ? prompt : t("conversation.defaultPrompt")); composer.inputRef.current?.focus(); }} />
     : null;
 
