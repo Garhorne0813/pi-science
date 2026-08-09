@@ -27,7 +27,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  useRuntimeStore.setState({ thread: emptyThread(), cwd: "proj", activeSessionId: "s1" });
+  useRuntimeStore.setState({ thread: { ...emptyThread(), loaded: true }, cwd: "proj", activeSessionId: "s1" });
   useUiStore.setState({ todoUiMode: "fab" });
   localStorage.removeItem("pi-science.todo-widget-position");
 });
@@ -58,16 +58,16 @@ describe("TodoWidget", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders the FAB with progress and auto-expands the card once on mount", () => {
-    setThread([todoBlock({
+  it("renders the FAB with progress and auto-expands when a new list appears", () => {
+    render(<TodoWidget />);
+    act(() => setThread([todoBlock({
       action: "create",
       nextId: 3,
       tasks: [
         { id: 1, subject: "Load", status: "completed" },
         { id: 2, subject: "Fit", status: "in_progress", activeForm: "正在拟合模型" },
       ],
-    })]);
-    render(<TodoWidget />);
+    })]));
     expect(screen.getAllByText("50% · 1/2").length).toBeGreaterThan(0);
     // Auto-expanded: the task list is in the popover content.
     expect(screen.getByText("Load")).toBeInTheDocument();
@@ -78,9 +78,18 @@ describe("TodoWidget", () => {
     expect(popover.querySelector("li")).toHaveClass("py-1.5");
   });
 
-  it("closes the card on Escape and does not reopen during the same streak", async () => {
+  it("keeps an unfinished list collapsed when restoring an existing session", () => {
     setThread([todoBlock({ action: "create", nextId: 2, tasks: [{ id: 1, subject: "Load", status: "pending" }] })]);
     render(<TodoWidget />);
+
+    const trigger = screen.getByRole("progressbar", { name: "Task list" }).closest("button")!;
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("closes the card on Escape and does not reopen during the same streak", async () => {
+    render(<TodoWidget />);
+    act(() => setThread([todoBlock({ action: "create", nextId: 2, tasks: [{ id: 1, subject: "Load", status: "pending" }] })]));
     expect(screen.getAllByText("Load").length).toBeGreaterThan(0);
     fireEvent.keyDown(document.body, { key: "Escape" });
     await waitFor(() => expect(screen.queryAllByText("Load")).toHaveLength(1));
@@ -90,8 +99,8 @@ describe("TodoWidget", () => {
   });
 
   it("reopens for a new streak after all todos disappear", async () => {
-    setThread([todoBlock({ action: "create", nextId: 2, tasks: [{ id: 1, subject: "Load", status: "pending" }] })]);
     render(<TodoWidget />);
+    act(() => setThread([todoBlock({ action: "create", nextId: 2, tasks: [{ id: 1, subject: "Load", status: "pending" }] })]));
     fireEvent.keyDown(document.body, { key: "Escape" });
     await waitFor(() => expect(screen.queryAllByText("Load")).toHaveLength(1));
     act(() => setThread([]));
@@ -100,8 +109,8 @@ describe("TodoWidget", () => {
   });
 
   it("switches to sticky mode via the mode switch", async () => {
-    setThread([todoBlock({ action: "create", nextId: 2, tasks: [{ id: 1, subject: "Load", status: "pending" }] })]);
     render(<TodoWidget />);
+    act(() => setThread([todoBlock({ action: "create", nextId: 2, tasks: [{ id: 1, subject: "Load", status: "pending" }] })]));
     fireEvent.click(screen.getByRole("button", { name: /Sticky mode/ }));
     expect(useUiStore.getState().todoUiMode).toBe("sticky");
   });
