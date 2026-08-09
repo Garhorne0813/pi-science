@@ -436,9 +436,12 @@ function afterTurnEnd(blocks: ThreadBlock[], turnIndex: number): number {
  *  Legacy-data compatibility: records persisted before turn ordinals were
  *  derived from the persisted log (runtime rebuilds used to reset the
  *  counter) can carry duplicate ordinals (e.g. two records with
- *  turn_ordinal=1). When an ordinal repeats, the later record falls back to
- *  its record position (the M-th record anchors the M-th turn) so each strip
- *  still lands in its own turn instead of stacking on the first. */
+ *  turn_ordinal=1). When an ordinal repeats, every LATER record falls back to
+ *  its record position (the M-th record anchors the M-th turn): a mixed
+ *  sequence such as [1,1,2] would otherwise misplace the trailing ordinal=2
+ *  record (its true turn is 3), so once the sequence is known broken the
+ *  ordinal is ignored entirely. Unique ordinals (including gaps like [2,3]
+ *  from turns without records) stay authoritative. */
 export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): Thread {
   if (!turns || turns.length === 0) return thread;
   let blocks = thread.blocks;
@@ -446,6 +449,7 @@ export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): 
   let changed = false;
   let insertedBefore = blocks.filter((b) => b.kind === "artifact-summary").length;
   const usedOrdinals = new Set<number>();
+  let ordinalBroken = false;
   let recordIndex = 0;
   for (const turn of turns) {
     const items = Array.isArray(turn.artifacts) ? turn.artifacts as TurnArtifactItem[] : [];
@@ -456,15 +460,18 @@ export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): 
     const ordinal = Number(turn.turn_ordinal);
     let insertAt = -1;
     if (assistantMessageId && index[assistantMessageId] !== undefined) insertAt = index[assistantMessageId] + 1;
-    if (insertAt < 0 && Number.isInteger(ordinal) && ordinal > 0 && !usedOrdinals.has(ordinal)) {
+    if (insertAt < 0 && !ordinalBroken && Number.isInteger(ordinal) && ordinal > 0 && !usedOrdinals.has(ordinal)) {
       // Anchor to the END of the ordinal-th turn (user-message delimited) so
       // multi-assistant-message turns get their strip after the last message;
       // falls back to the n-th agent block when user boundaries are missing.
       usedOrdinals.add(ordinal);
       insertAt = afterTurnEnd(blocks, ordinal);
-    } else if (insertAt < 0 && Number.isInteger(ordinal) && ordinal > 0) {
-      // Duplicate ordinal (stale records from a runtime rebuild that reset the
-      // counter): use the record position so the strip lands in its own turn.
+    } else if (insertAt < 0) {
+      // A repeated ordinal (stale records from a runtime rebuild that reset
+      // the counter) breaks the whole sequence: from here on, every record
+      // uses its record position (the M-th record anchors the M-th turn) so
+      // mixed data like [1,1,2] still lands each strip in its own turn.
+      ordinalBroken = true;
       insertAt = afterTurnEnd(blocks, recordIndex);
     }
     if (insertAt < 0) {

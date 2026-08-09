@@ -202,6 +202,36 @@ describe("attachTurnArtifacts (history restore)", () => {
     expect(next.index["turn-artifacts-turn-2"]).toBe(5);
   });
 
+  it("resolves mixed legacy+new ordinals [1,1,2] by record position after the duplicate", () => {
+    // Browser-verified failure (session 019fdd43): legacy records 1MBO/1LYZ
+    // both carry turn_ordinal=1 (runtime-rebuild counter reset), then a new
+    // record 2PTN carries turn_ordinal=2 (nextTurnOrdinal = max(1)+1). The
+    // ordinal=2 is unique but its true turn is 3; once the sequence is known
+    // broken (duplicate seen), every later record must use its record
+    // position so all three strips land in turns 1/2/3.
+    const thread = threadWith([
+      { kind: "user", id: "u1", text: "a" },
+      { kind: "agent", id: "msg-1", parts: [{ id: "msg-1", text: "r1" }] },
+      { kind: "user", id: "u2", text: "b" },
+      { kind: "agent", id: "msg-2", parts: [{ id: "msg-2", text: "r2" }] },
+      { kind: "user", id: "u3", text: "c" },
+      { kind: "agent", id: "msg-3", parts: [{ id: "msg-3", text: "r3" }] },
+    ]);
+    const next = attachTurnArtifacts(thread, [
+      { turn_id: "turn-1mbo", session_id: "s", assistant_message_id: null, turn_ordinal: 1, ended_at: "t", artifacts: [{ path: "1MBO.pdb", kind: "structure", mime: "text/plain", size: 1 }] },
+      { turn_id: "turn-1lyz", session_id: "s", assistant_message_id: null, turn_ordinal: 1, ended_at: "t", artifacts: [{ path: "1LYZ.pdb", kind: "structure", mime: "text/plain", size: 2 }] },
+      { turn_id: "turn-2ptn", session_id: "s", assistant_message_id: null, turn_ordinal: 2, ended_at: "t", artifacts: [{ path: "2PTN.pdb", kind: "structure", mime: "text/plain", size: 3 }] },
+    ]);
+    expect(next.blocks.map((block) => block.kind)).toEqual([
+      "user", "agent", "artifact-summary",
+      "user", "agent", "artifact-summary",
+      "user", "agent", "artifact-summary",
+    ]);
+    expect(next.index["turn-artifacts-turn-1mbo"]).toBe(2);
+    expect(next.index["turn-artifacts-turn-1lyz"]).toBe(5);
+    expect(next.index["turn-artifacts-turn-2ptn"]).toBe(8);
+  });
+
   it("keeps unique ordinals authoritative over record order", () => {
     // turn-1 has no record; turn-2/turn-3 carry ordinals 2/3 (unique). The
     // record order fallback must not take over when ordinals are unique.
