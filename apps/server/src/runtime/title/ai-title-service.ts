@@ -13,11 +13,14 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
 import type { PiManager } from "../pi/pi-manager.js";
 import type { PiResult } from "../pi/pi-process.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
 import { sessionRepository } from "../node/session-repository.js";
 import { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
+import { AI_TITLE_PROMPT_INSTRUCTION } from "./title-prompt.js";
 
 /** Minimum runtime surface the title service needs; tests provide a fake. */
 export interface TitleRuntime {
@@ -42,18 +45,39 @@ export class PiTitleRuntimeFactory {
   async start(cwd: string): Promise<TitleRuntime> {
     const config = loadDefaultPiConfig();
     const environment = await this.environments.environment(cwd);
-    const options = buildPiProcessOptions(cwd, config, undefined, environment);
-    if (!options) throw new Error("PI_CLI_PATH is not configured");
+    // Pi Orbit 0.1.0 can persist dynamically-created web runtimes even when
+    // the host was launched with --no-session. Give title generation its own
+    // disposable session directory so those implementation conversations can
+    // never enter the user-facing `.pi-science/sessions` index.
+    const temporaryRoot = join(cwd, ".pi-science", "title-runtimes");
+    await mkdir(temporaryRoot, { recursive: true });
+    const temporarySessionDir = await mkdtemp(join(temporaryRoot, "runtime-"));
+    const options = buildPiProcessOptions(cwd, config, undefined, environment, temporarySessionDir);
+    if (!options) {
+      await rm(temporarySessionDir, { recursive: true, force: true });
+      throw new Error("PI_CLI_PATH is not configured");
+    }
     // Keep the manager key so dispose can go through manager.stop(key): a raw
     // process.shutdown() would leave the entry in the manager's processes map
     // forever (web runtimes are detached, so no exit event fires) and the map
     // would grow without bound across title generations.
     const key = randomUUID();
-    const process = await this.manager.start(key, options);
-    return {
-      sendCommand: (type, params = {}) => process.sendCommand(type, params),
-      dispose: () => this.manager.stop(key),
-    };
+    try {
+      const process = await this.manager.start(key, options);
+      return {
+        sendCommand: (type, params = {}) => process.sendCommand(type, params),
+        dispose: async () => {
+          try {
+            await this.manager.stop(key);
+          } finally {
+            await rm(temporarySessionDir, { recursive: true, force: true });
+          }
+        },
+      };
+    } catch (error) {
+      await rm(temporarySessionDir, { recursive: true, force: true });
+      throw error;
+    }
   }
 }
 
@@ -104,7 +128,7 @@ async function buildPrompt(cwd: string, sessionId: string): Promise<string | nul
   const history = await excerpt(cwd, sessionId);
   if (!history) return null;
   return [
-    "You are a helpful assistant. Write a concise title (at most 8 words) for this conversation. Reply with only the title — no quotes, no label, no punctuation decoration.",
+    AI_TITLE_PROMPT_INSTRUCTION,
     "",
     "Conversation:",
     history,
