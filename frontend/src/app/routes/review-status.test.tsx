@@ -108,7 +108,9 @@ describe("composer review control", () => {
     renderPage();
 
     const button = await screen.findByRole("button", { name: "Review" });
+    expect(button).toHaveAttribute("aria-label", "Review");
     expect(button).toHaveAttribute("title", "Review this conversation for durable project knowledge");
+    expect(button.querySelector(".composer-review-label")).toHaveTextContent("Review");
     expect(screen.queryByRole("button", { name: "Auto review on" })).toBeNull();
   });
 

@@ -633,13 +633,14 @@ export function LiveSessionPage() {
                 ) : (
                   <button
                     type="button"
+                    aria-label="Review"
                     onClick={() => void handleProjectReview()}
                     disabled={working || interactionPending || reviewingProject}
                     className="flex min-h-7 items-center gap-1 rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2 hover:text-text disabled:cursor-wait disabled:opacity-50"
                     title={t("conversation.reviewTitle")}
                   >
                     {reviewingProject ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                    Review
+                    <span className="composer-review-label">Review</span>
                   </button>
                 )}
                 {model.modelError && <span className="max-w-[180px] truncate text-[10px] text-error" title={model.modelError}>{model.modelError}</span>}

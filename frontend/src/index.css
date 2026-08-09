@@ -10,6 +10,15 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Composer controls respond to the conversation pane itself. The preview can
+   resize or move without changing the viewport, so a viewport media query
+   would not reflect the actual space available to the composer. */
+@container (max-width: 800px) {
+  .composer-review-label {
+    display: none;
+  }
+}
+
 /* Semantic density utilities live in the imported stylesheet, rather than
    relying only on Tailwind's startup-time config. This keeps them available
    during Vite HMR when the density scale changes without a server restart. */

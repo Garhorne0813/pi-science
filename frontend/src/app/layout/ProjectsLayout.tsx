@@ -212,7 +212,7 @@ export function ProjectsLayout() {
 
       {/* Main */}
       <main id="main-content" tabIndex={-1} className={cn(
-        "relative flex min-w-0 flex-1 flex-col overflow-hidden",
+        "relative flex min-w-0 flex-1 flex-col overflow-hidden [container-type:inline-size]",
         sidebarCollapsed && "pt-12 md:pt-0 md:pl-12",
         inspectorMaximized && "hidden",
         previewOnLeft && "order-2",
