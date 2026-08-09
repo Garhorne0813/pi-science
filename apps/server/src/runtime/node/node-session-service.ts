@@ -195,6 +195,12 @@ export class NodeSessionService {
       const runtime = activated;
       const mutating = new Set(["prompt", "new_session", "switch_session", "fork", "clone", "set_model", "set_thinking_level", "compact", "abort"]);
       if (mutating.has(type) && type !== "abort") {
+        // Item 5: revive a KNOWN-dead event stream BEFORE the mutation
+        // preflight. A dead stream often means get_state also fails, which
+        // would otherwise short-circuit reconcileForMutation before the
+        // health check gets a chance to reconnect/restart.
+        const healthy = await this.ensureHealthyEventStream(runtime, type);
+        if (!healthy.success) return healthy;
         const ready = await this.reconcileForMutation(runtime);
         if (!ready.success) return ready;
       }
@@ -1052,6 +1058,53 @@ export class NodeSessionService {
       return { success: false, code: "reconcile_failed", error: "Pi runtime state does not match the requested session configuration" };
     }
     runtime.config = { ...config };
+    return { success: true };
+  }
+
+  /** Prompt-time event-stream health check (item 5). A KNOWN-dead stream
+   *  (was alive, then failed: eventStreamAlive === false with lastEventAt > 0)
+   *  is reconnected before the mutation is sent; if the runtime also stops
+   *  answering get_state it is restarted (reconcileForMutation has already
+   *  guaranteed !busy). Freshly started runtimes (never connected,
+   *  lastEventAt === 0) and alive streams are left alone; a stale-but-alive
+   *  stream is only logged. Runs inside the mutation lock, so the reconnect
+   *  race is bounded to 5s because the underlying events request has no
+   *  timeout of its own. */
+  private async ensureHealthyEventStream(runtime: RuntimeRecord, type: string): Promise<PiResult> {
+    const process = runtime.process;
+    if (!process.attachedToHost) return { success: true };
+    if (process.eventStreamAlive) {
+      if (process.lastEventAt > 0 && Date.now() - process.lastEventAt > eventWatchdogMs() * 2) {
+        this.log("warn", `Pi Orbit event stream stale (${Math.round((Date.now() - process.lastEventAt) / 1000)}s of silence) before ${type}; continuing`);
+      }
+      return { success: true };
+    }
+    if (!process.lastEventAt) return { success: true }; // still establishing
+    this.log("warn", `Pi Orbit event stream dead before ${type}; reconnecting`);
+    try {
+      await Promise.race([
+        process.reconnectEventStream(),
+        new Promise<never>((_, reject) => {
+          const timer = setTimeout(() => reject(new Error("event stream reconnect timed out after 5s")), 5_000);
+          timer.unref?.();
+        }),
+      ]);
+    } catch (error) {
+      this.log("warn", `Pi Orbit event stream reconnect failed: ${String(error)}`);
+    }
+    const state = await process.sendCommand("get_state");
+    if (state.success) return { success: true, data: state.data };
+    this.log("warn", `Pi Orbit runtime unresponsive before ${type} (get_state failed after reconnect); restarting`);
+    const config = { ...runtime.config };
+    const oldId = runtime.activeSessionId;
+    const restarted = await this.restartRuntimeUnlocked(runtime, config);
+    if ("error" in restarted) {
+      return { success: false, code: "runtime_restart_failed", error: `unable to restart runtime before ${type}: ${restarted.error}` };
+    }
+    if (oldId && restarted.activeSessionId !== oldId) {
+      return { success: false, code: "session_mismatch", error: `runtime restarted but session identity changed (${oldId} -> ${restarted.activeSessionId})` };
+    }
+    this.log("info", `Pi Orbit runtime restarted before ${type} (event stream was dead)`);
     return { success: true };
   }
 

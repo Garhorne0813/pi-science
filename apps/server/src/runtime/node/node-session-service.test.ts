@@ -939,13 +939,16 @@ describe("automatic project review", () => {
 });
 
 describe("Event-stream watchdog", () => {
-  function fakeHostProcess(overrides: Partial<{ lastEventAt: number; sendCommandResult: Record<string, unknown> }>) {
+  function fakeHostProcess(overrides: Partial<{ lastEventAt: number; eventStreamAlive: boolean; sendCommandResult: Record<string, unknown>; sendCommandImpl: (type: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>> }>) {
     const reconnectEventStream = vi.fn(async () => {});
-    const sendCommand = vi.fn(async () => overrides.sendCommandResult ?? { success: true });
+    const sendCommand = vi.fn(async (type: string, params?: Record<string, unknown>) => {
+      if (overrides.sendCommandImpl) return overrides.sendCommandImpl(type, params);
+      return overrides.sendCommandResult ?? { success: true };
+    });
     const piProcess = {
       attachedToHost: true,
       lastEventAt: overrides.lastEventAt ?? 0,
-      eventStreamAlive: true,
+      eventStreamAlive: overrides.eventStreamAlive ?? true,
       reconnectEventStream,
       sendCommand,
     } as unknown as import("../pi/pi-process.js").PiProcess;
@@ -1005,6 +1008,68 @@ describe("Event-stream watchdog", () => {
     await new Promise((resolve) => setTimeout(resolve, 150));
     clearInterval(keepFresh);
     expect(reconnectEventStream).not.toHaveBeenCalled();
+    await service.shutdownAll();
+  });
+
+  it("revives a known-dead event stream before a prompt mutation (item 5)", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions("s1");
+    const stateData = { sessionId: "s1", busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: "openrouter", id: "openai/gpt-5.1" }, thinkingLevel: "high" };
+    const { process: piProcess, reconnectEventStream, sendCommand } = fakeHostProcess({
+      lastEventAt: Date.now() - 60_000,
+      eventStreamAlive: false,
+      sendCommandImpl: async (type) => type === "get_state" ? { success: true, data: stateData } : { success: true },
+    });
+    injectRuntime(service, piProcess, cwd, "s1");
+    const result = await service.command("s1", cwd, "prompt", { message: "hi" });
+    expect(result.success).toBe(true);
+    expect(reconnectEventStream).toHaveBeenCalledTimes(1);
+    // The prompt itself was still delivered after the revive.
+    expect(sendCommand.mock.calls.some((call) => call[0] === "prompt")).toBe(true);
+    await service.shutdownAll();
+  });
+
+  it("restarts the runtime when a dead stream cannot be revived and get_state fails (item 5)", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions("s1");
+    const { process: piProcess, reconnectEventStream, sendCommand } = fakeHostProcess({
+      lastEventAt: Date.now() - 60_000,
+      eventStreamAlive: false,
+      sendCommandImpl: async () => ({ success: false, code: "timeout", error: "unresponsive" }),
+    });
+    injectRuntime(service, piProcess, cwd, "s1");
+    const restart = vi.fn(async () => ({ error: "boom", code: "spawn_failed" }));
+    (service as unknown as { restartRuntimeUnlocked: unknown }).restartRuntimeUnlocked = restart;
+    const result = await service.command("s1", cwd, "prompt", { message: "hi" });
+    expect(reconnectEventStream).toHaveBeenCalledTimes(1);
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(false);
+    expect(result.code).toBe("runtime_restart_failed");
+    await service.shutdownAll();
+  });
+
+  it("leaves alive or still-connecting streams alone before mutations (item 5)", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions("s1", "s2");
+    const stateData = { sessionId: "s1", busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: "openrouter", id: "openai/gpt-5.1" }, thinkingLevel: "high" };
+    // Alive stream: no reconnect.
+    const alive = fakeHostProcess({
+      lastEventAt: Date.now() - 1_000,
+      eventStreamAlive: true,
+      sendCommandImpl: async (type) => type === "get_state" ? { success: true, data: stateData } : { success: true },
+    });
+    injectRuntime(service, alive.process, cwd, "s1");
+    await service.command("s1", cwd, "prompt", { message: "hi" });
+    expect(alive.reconnectEventStream).not.toHaveBeenCalled();
+    // Still connecting (never connected): no reconnect either.
+    const connecting = fakeHostProcess({
+      lastEventAt: 0,
+      eventStreamAlive: false,
+      sendCommandImpl: async (type) => type === "get_state" ? { success: true, data: stateData } : { success: true },
+    });
+    injectRuntime(service, connecting.process, cwd, "s2");
+    await service.command("s2", cwd, "prompt", { message: "hi" });
+    expect(connecting.reconnectEventStream).not.toHaveBeenCalled();
     await service.shutdownAll();
   });
 });
