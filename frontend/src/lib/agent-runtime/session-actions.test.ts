@@ -48,6 +48,41 @@ describe("runtime session actions", () => {
     expect(FakeEventSource.instances).toHaveLength(1);
   });
 
+  it("restores persisted session titles before slow session activation finishes", async () => {
+    let resolveMessages!: (response: Response) => void;
+    let resolveState!: (response: Response) => void;
+    const messages = new Promise<Response>((resolve) => { resolveMessages = resolve; });
+    const runtimeState = new Promise<Response>((resolve) => { resolveState = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return messages;
+      if (url.includes("/state")) return runtimeState;
+      if (url.startsWith("/api/sessions?")) {
+        return jsonResponse([{
+          id: "session-a",
+          cwd: "/workspace",
+          name: "Persisted experiment title",
+          updated_at: "2026-01-01T00:00:00Z",
+        }]);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    const connecting = useRuntimeStore.getState().connect("/workspace", "session-a");
+
+    // The activation requests are deliberately still pending. The session
+    // list must already carry the server-persisted title after a page refresh.
+    await vi.waitFor(() => {
+      expect(useRuntimeStore.getState().sessions).toContainEqual(
+        expect.objectContaining({ id: "session-a", name: "Persisted experiment title" }),
+      );
+    });
+
+    resolveMessages(jsonResponse({ messages: [] }));
+    resolveState(jsonResponse(state("session-a")));
+    await connecting;
+  });
+
   it("restores authoritative running, model, thinking and history state", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
