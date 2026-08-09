@@ -71,6 +71,16 @@ export class PiProcess extends EventEmitter {
   private exitEmitted = false;
   private removeHostListeners: (() => void) | undefined;
 
+  /** Wall-clock time of the last frame received from the Pi Orbit event
+   *  stream (0 when nothing has ever arrived). A live stream keeps this
+   *  fresh; the watchdog uses it to detect a silently dead connection. */
+  lastEventAt = 0;
+
+  /** True while the event stream connection is established. Set false when
+   *  the stream fails (consumeEventStream rejects); a later reconnect (EOF
+   *  re-request or reconnectEventStream) sets it true again. */
+  eventStreamAlive = false;
+
   private constructor(options: PiProcessOptions, webHost?: PiOrbitHost, descriptor?: PiOrbitRuntimeDescriptor) {
     super();
     const environmentTimeout = Number(process.env.PI_SCIENCE_RUNTIME_TIMEOUT_MS ?? process.env.PI_SCIENCE_RPC_TIMEOUT_MS ?? 0);
@@ -280,7 +290,9 @@ export class PiProcess extends EventEmitter {
     this.eventAbort = controller;
     const response = await this.webHost!.request("GET", `${this.runtimePath()}/events?after=0`, undefined, 0, controller.signal);
     if (!response.ok || !response.body) throw new Error(await this.webHost!.responseError(response));
+    this.eventStreamAlive = true;
     void this.consumeEventStream(response, controller).catch((error: unknown) => {
+      this.eventStreamAlive = false;
       if (!this.closed && !controller.signal.aborted) this.emit("stderr", `Pi Orbit event stream failed: ${String(error)}\n`);
     });
   }
@@ -288,6 +300,15 @@ export class PiProcess extends EventEmitter {
   private async replaceEventStream(): Promise<void> {
     this.eventAbort?.abort();
     await this.startEventStream();
+  }
+
+  /** Re-establish the event stream from the last seen sequence. Public so the
+   *  runtime watchdog can revive a silently dead connection without tearing
+   *  down the runtime. Fire-and-forget from locked contexts: the underlying
+   *  request has no timeout and would otherwise hold the lock forever. */
+  async reconnectEventStream(): Promise<void> {
+    if (this.closed) return;
+    await this.replaceEventStream();
   }
 
   private async consumeEventStream(initialResponse: Response, controller: AbortController): Promise<void> {
@@ -311,6 +332,7 @@ export class PiProcess extends EventEmitter {
           try {
             const payload = JSON.parse(data) as Record<string, unknown>;
             if (typeof payload.sequence === "number") lastSequence = payload.sequence;
+            this.lastEventAt = Date.now();
             const event = payload.event && typeof payload.event === "object" ? payload.event as PiEvent : undefined;
             if (event?.type) {
               this.emit("event", event);
@@ -330,6 +352,7 @@ export class PiProcess extends EventEmitter {
       if (this.closed || controller.signal.aborted) return;
       response = await this.webHost!.request("GET", `${this.runtimePath()}/events?after=${lastSequence}`, undefined, 0, controller.signal);
       if (!response.ok) throw new Error(await this.webHost!.responseError(response));
+      this.eventStreamAlive = true;
     }
   }
 

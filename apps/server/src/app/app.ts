@@ -32,6 +32,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   });
 
   nodeSessionService.configureLogging((level, message) => app.log[level](message));
+  events.configureLogging((level, message) => app.log[level](message));
 
   void app.register(cors, { credentials: true, origin: config.corsOrigins });
 

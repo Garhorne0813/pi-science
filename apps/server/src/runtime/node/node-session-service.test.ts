@@ -6,11 +6,12 @@ import { ConversationEventHub, conversationEventHub } from "../events/conversati
 import type { SseEventRecord } from "../events/event-store.js";
 import { NodeSessionService } from "./node-session-service.js";
 import { loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
+import { readJsonLines } from "../../storage/persistence.js";
 import { ProjectReviewService } from "../../project-review/service.js";
 import { parseReviewResult, type ReviewRunRequest, type ReviewRunResult, type ReviewSubagentRunner } from "../../project-review/types.js";
 
 const cleanup: string[] = [];
-const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE, piMode: process.env.PI_SCIENCE_PI_MODE, argsLog: process.env.FAKE_PI_ARGS_LOG, stateDelay: process.env.FAKE_PI_STATE_DELAY, activeProbe: process.env.FAKE_PI_ACTIVE_PROBE, agentStartDelay: process.env.FAKE_PI_AGENT_START_DELAY };
+const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE, piMode: process.env.PI_SCIENCE_PI_MODE, argsLog: process.env.FAKE_PI_ARGS_LOG, stateDelay: process.env.FAKE_PI_STATE_DELAY, activeProbe: process.env.FAKE_PI_ACTIVE_PROBE, agentStartDelay: process.env.FAKE_PI_AGENT_START_DELAY, watchdog: process.env.PI_SCIENCE_EVENT_WATCHDOG_MS, sessionFile: process.env.FAKE_PI_SESSION_FILE };
 
 beforeEach(async () => {
   const root = join(tmpdir(), `pi-science-node-service-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -51,7 +52,7 @@ beforeEach(async () => {
     '  if (request.type === "get_state") { stateRequests++; if (process.env.FAKE_PI_MODE === "restart-fail-once" && startNumber === 2) return; if (process.env.FAKE_PI_MODE === "new-session-state-fails" && sessionId.startsWith("generated-")) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (Number(process.env.FAKE_PI_FAIL_STATE_AFTER || 0) > 0 && stateRequests > Number(process.env.FAKE_PI_FAIL_STATE_AFTER)) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (process.env.FAKE_PI_MODE === "never-starts") return respond(request, { data: { sessionId, busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); if (process.env.FAKE_PI_MODE === "delayed-agent-start") { if (stateRequests > Number(process.env.FAKE_PI_STATE_DELAY || 3)) { if (!agentStartNotified) { agentStartNotified = true; process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); } return respond(request, { data: { sessionId, busy: true, isStreaming: true, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); } return respond(request, { data: { sessionId, busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); } const orbitBusyOnly = process.env.FAKE_PI_MODE === "orbit-busy-without-agent-start"; return respond(request, { data: { sessionId, busy, isStreaming: orbitBusyOnly ? false : busy, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }',
     '  if (request.type === "switch_session") { sessionId = JSON.parse(fs.readFileSync(request.sessionPath, "utf8").split("\\n")[0]).id; return respond(request); }',
     '  if (request.type === "new_session" || request.type === "clone" || request.type === "fork") { sessionId = `generated-${++counter}-${process.pid}`; return respond(request); }',
-    '  if (request.type === "prompt") { if (process.env.FAKE_PI_MODE === "prompt-timeout") return; if (process.env.FAKE_PI_MODE === "idle-active-idle" || process.env.FAKE_PI_MODE === "late-agent-start") promptAccepted = true; busy = true; respond(request); if (process.env.FAKE_PI_MODE === "turn-artifacts") { process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); setTimeout(() => { if (process.env.FAKE_PI_WRITE_FILE) { fs.mkdirSync(path.dirname(process.env.FAKE_PI_WRITE_FILE), { recursive: true }); fs.writeFileSync(process.env.FAKE_PI_WRITE_FILE, "turn artifact data\\n"); } busy = false; process.stdout.write(JSON.stringify({ type: "agent_settled", messageId: "msg-turn-1" }) + "\\n"); }, 50); return; } if (process.env.FAKE_PI_MODE === "turn-artifacts-partid") { process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); setTimeout(() => { if (process.env.FAKE_PI_WRITE_FILE) { fs.mkdirSync(path.dirname(process.env.FAKE_PI_WRITE_FILE), { recursive: true }); fs.writeFileSync(process.env.FAKE_PI_WRITE_FILE, "turn artifact data\\n"); } process.stdout.write(JSON.stringify({ type: "message_update", message: { id: "msg-early" }, assistantMessageEvent: { type: "text_delta", text: "hel", contentIndex: "0" } }) + "\\n"); process.stdout.write(JSON.stringify({ type: "message_update", message: { id: "part-turn-1" }, assistantMessageEvent: { type: "text_end", text: "hello", contentIndex: "0" } }) + "\\n"); busy = false; process.stdout.write(JSON.stringify({ type: "agent_settled" }) + "\\n"); }, 50); return; } if (process.env.FAKE_PI_MODE !== "orbit-busy-without-agent-start" && process.env.FAKE_PI_MODE !== "never-starts" && process.env.FAKE_PI_MODE !== "delayed-agent-start" && process.env.FAKE_PI_MODE !== "idle-active-idle" && process.env.FAKE_PI_MODE !== "late-agent-start") process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); return; }',
+    '  if (request.type === "prompt") { if (process.env.FAKE_PI_MODE === "prompt-timeout") return; if (process.env.FAKE_PI_MODE === "runs-without-events") { busy = true; respond(request); setTimeout(() => { if (process.env.FAKE_PI_SESSION_FILE) { fs.appendFileSync(process.env.FAKE_PI_SESSION_FILE, JSON.stringify({ type: "message", id: `msg-rwe-${counter++}`, parentId: null, timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "recovered reply" }] } }) + "\\n"); } if (process.env.FAKE_PI_WRITE_FILE) { fs.mkdirSync(path.dirname(process.env.FAKE_PI_WRITE_FILE), { recursive: true }); fs.writeFileSync(process.env.FAKE_PI_WRITE_FILE, "recovered artifact\\n"); } busy = false; }, 50); return; } if (process.env.FAKE_PI_MODE === "idle-active-idle" || process.env.FAKE_PI_MODE === "late-agent-start") promptAccepted = true; busy = true; respond(request); if (process.env.FAKE_PI_MODE === "turn-artifacts") { process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); setTimeout(() => { if (process.env.FAKE_PI_WRITE_FILE) { fs.mkdirSync(path.dirname(process.env.FAKE_PI_WRITE_FILE), { recursive: true }); fs.writeFileSync(process.env.FAKE_PI_WRITE_FILE, "turn artifact data\\n"); } busy = false; process.stdout.write(JSON.stringify({ type: "agent_settled", messageId: "msg-turn-1" }) + "\\n"); }, 50); return; } if (process.env.FAKE_PI_MODE === "turn-artifacts-partid") { process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); setTimeout(() => { if (process.env.FAKE_PI_WRITE_FILE) { fs.mkdirSync(path.dirname(process.env.FAKE_PI_WRITE_FILE), { recursive: true }); fs.writeFileSync(process.env.FAKE_PI_WRITE_FILE, "turn artifact data\\n"); } process.stdout.write(JSON.stringify({ type: "message_update", message: { id: "msg-early" }, assistantMessageEvent: { type: "text_delta", text: "hel", contentIndex: "0" } }) + "\\n"); process.stdout.write(JSON.stringify({ type: "message_update", message: { id: "part-turn-1" }, assistantMessageEvent: { type: "text_end", text: "hello", contentIndex: "0" } }) + "\\n"); busy = false; process.stdout.write(JSON.stringify({ type: "agent_settled" }) + "\\n"); }, 50); return; } if (process.env.FAKE_PI_MODE !== "orbit-busy-without-agent-start" && process.env.FAKE_PI_MODE !== "never-starts" && process.env.FAKE_PI_MODE !== "delayed-agent-start" && process.env.FAKE_PI_MODE !== "idle-active-idle" && process.env.FAKE_PI_MODE !== "late-agent-start") process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); return; }',
     '  if (request.type === "compact") { if (process.env.FAKE_PI_MODE === "compact-timeout") return; return respond(request); }',
     '  if (request.type === "abort") { busy = false; respond(request); process.stdout.write(JSON.stringify({ type: "agent_settled", handledWithoutTurn: true }) + "\\n"); return; }',
     '  if (request.type === "get_commands") return process.env.FAKE_PI_MODE === "cancel-commands" ? respond(request, { data: { cancelled: true } }) : respond(request, { data: { commands: [{ name: "review", source: "skill" }] } });',
@@ -96,8 +97,12 @@ afterEach(async () => {
   else process.env.FAKE_PI_ACTIVE_PROBE = original.activeProbe;
   if (original.agentStartDelay === undefined) delete process.env.FAKE_PI_AGENT_START_DELAY;
   else process.env.FAKE_PI_AGENT_START_DELAY = original.agentStartDelay;
+  if (original.sessionFile === undefined) delete process.env.FAKE_PI_SESSION_FILE;
+  else process.env.FAKE_PI_SESSION_FILE = original.sessionFile;
   if (original.piMode === undefined) delete process.env.PI_SCIENCE_PI_MODE;
   else process.env.PI_SCIENCE_PI_MODE = original.piMode;
+  if (original.watchdog === undefined) delete process.env.PI_SCIENCE_EVENT_WATCHDOG_MS;
+  else process.env.PI_SCIENCE_EVENT_WATCHDOG_MS = original.watchdog;
   delete process.env.FAKE_PI_LOG;
   delete process.env.FAKE_PI_ARGS_LOG;
   delete process.env.FAKE_PI_STARTS;
@@ -674,6 +679,34 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
+  it("recovers the artifact summary from message-side evidence when the event stream is dead", async () => {
+    process.env.FAKE_PI_MODE = "runs-without-events";
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-rwe");
+    process.env.FAKE_PI_SESSION_FILE = join(cwd, ".pi-science", "sessions", "session-rwe.jsonl");
+    process.env.FAKE_PI_WRITE_FILE = join(cwd, "work", "recovered.txt");
+    await service.resume("session-rwe", cwd);
+    const publish = vi.spyOn(conversationEventHub, "publish");
+    publish.mockClear();
+    await expect(service.command("session-rwe", cwd, "prompt", { message: "go" })).resolves.toMatchObject({ success: true });
+    // The turn completes on the Pi side (assistant message appended to the
+    // session JSONL) with zero events emitted; reconciliation must end the
+    // operation normally instead of reporting did-not-start.
+    await waitFor(() => publish.mock.calls.some(([, , payload]) => (payload as { type?: string }).type === "session.idle"));
+    expect(publish.mock.calls.some(([, , payload]) => String((payload as { message?: unknown }).message ?? "").includes("did not start"))).toBe(false);
+    // Recovered artifact summary: persisted record + turn.artifacts event.
+    const turnEvent = publish.mock.calls.find(([, , payload]) => (payload as { type?: string }).type === "turn.artifacts")?.[2] as Record<string, unknown> | undefined;
+    expect(turnEvent).toBeDefined();
+    expect(turnEvent!.artifacts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "work/recovered.txt" }),
+    ]));
+    const turnId = turnEvent!.turnId as string;
+    const records = await readJsonLines<{ turn_id?: string; artifacts?: Array<{ path?: string }> }>(join(cwd, ".pi-science", "turn-artifacts.jsonl"));
+    expect(records.some((r) => r.turn_id === turnId && r.artifacts?.some((a) => a.path === "work/recovered.txt"))).toBe(true);
+    await service.shutdownAll();
+    publish.mockRestore();
+  });
+
   it("anchors turn.artifacts to the last assistant message id from raw message_update events", async () => {
     process.env.FAKE_PI_MODE = "turn-artifacts-partid";
     const service = testService();
@@ -694,6 +727,41 @@ describe("Node session lifecycle", () => {
       expect.objectContaining({ path: "work/plot.png", kind: "image" }),
     ]));
     await service.shutdownAll();
+  });
+
+  it("continues turn ordinals across runtime rebuilds from persisted records", async () => {
+    process.env.FAKE_PI_MODE = "turn-artifacts-partid";
+    const cwd = await workspaceWithSessions("session-turn-ordinal-rebuild");
+    process.env.FAKE_PI_WRITE_FILE = join(cwd, "work", "plot.png");
+
+    // First runtime handles the first turn, then the whole service (and its
+    // runtime) is torn down — the second runtime is a fresh process.
+    const first = testService();
+    await first.resume("session-turn-ordinal-rebuild", cwd);
+    const firstPublish = vi.spyOn(conversationEventHub, "publish");
+    // Clear the spy before prompting: earlier tests may have left calls behind,
+    // which would let waitFor succeed on stale events and tear down the runtime
+    // before this turn actually completes.
+    firstPublish.mockClear();
+    await expect(first.command("session-turn-ordinal-rebuild", cwd, "prompt", { message: "go" })).resolves.toMatchObject({ success: true });
+    await waitFor(() => {
+      return firstPublish.mock.calls.some(([, , payload]) => (payload as { type?: string }).type === "turn.artifacts");
+    });
+    const firstEvent = firstPublish.mock.calls.find(([, , payload]) => (payload as { type?: string }).type === "turn.artifacts")?.[2] as Record<string, unknown>;
+    expect(firstEvent).toMatchObject({ type: "turn.artifacts", turnOrdinal: 1 });
+    await first.shutdownAll();
+
+    const second = testService();
+    await second.resume("session-turn-ordinal-rebuild", cwd);
+    const secondPublish = vi.spyOn(conversationEventHub, "publish");
+    secondPublish.mockClear();
+    await expect(second.command("session-turn-ordinal-rebuild", cwd, "prompt", { message: "go" })).resolves.toMatchObject({ success: true });
+    await waitFor(() => {
+      return secondPublish.mock.calls.some(([, , payload]) => (payload as { type?: string }).type === "turn.artifacts");
+    });
+    const secondEvent = secondPublish.mock.calls.find(([, , payload]) => (payload as { type?: string }).type === "turn.artifacts")?.[2] as Record<string, unknown>;
+    expect(secondEvent).toMatchObject({ type: "turn.artifacts", turnOrdinal: 2 });
+    await second.shutdownAll();
   });
 
   it("cleans a failed restart handshake, restores the old session, and publishes blank replacements", async () => {
@@ -875,6 +943,142 @@ describe("automatic project review", () => {
     await service.command("session-a", cwd, "abort");
     await waitFor(async () => (await proposals(cwd)).length === 1);
     expect(await service.state("session-a", cwd)).toMatchObject({ id: "session-a" });
+    await service.shutdownAll();
+  });
+});
+
+describe("Event-stream watchdog", () => {
+  function fakeHostProcess(overrides: Partial<{ lastEventAt: number; eventStreamAlive: boolean; sendCommandResult: Record<string, unknown>; sendCommandImpl: (type: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>> }>) {
+    const reconnectEventStream = vi.fn(async () => {});
+    const sendCommand = vi.fn(async (type: string, params?: Record<string, unknown>) => {
+      if (overrides.sendCommandImpl) return overrides.sendCommandImpl(type, params);
+      return overrides.sendCommandResult ?? { success: true };
+    });
+    const piProcess = {
+      attachedToHost: true,
+      lastEventAt: overrides.lastEventAt ?? 0,
+      eventStreamAlive: overrides.eventStreamAlive ?? true,
+      reconnectEventStream,
+      sendCommand,
+    } as unknown as import("../pi/pi-process.js").PiProcess;
+    return { process: piProcess, reconnectEventStream, sendCommand };
+  }
+
+  function injectRuntime(service: NodeSessionService, process: ReturnType<typeof fakeHostProcess>["process"], cwd: string, sessionId: string) {
+    const runtime = {
+      cwd: resolve(cwd),
+      managerKey: "test-key",
+      process,
+      activeSessionId: sessionId,
+      config: { model: null, provider: null, api_key: null, thinking: null, compaction_enabled: true, compaction_threshold_percent: 87, model_context_window: null, skills: [], extensions: [] },
+      busy: false,
+      restartPending: false,
+      closing: false,
+    };
+    (service as unknown as { runtimes: Map<string, unknown> }).runtimes.set(`${resolve(cwd)}\0${sessionId}`, runtime);
+    return runtime;
+  }
+
+  it("reconnects the silent event stream while busy, then restarts only after get_state fails", async () => {
+    process.env.PI_SCIENCE_EVENT_WATCHDOG_MS = "40";
+    const service = testService();
+    const cwd = resolve(join(tmpdir(), `watchdog-cwd-${Date.now()}-${Math.random().toString(16).slice(2)}`));
+    await mkdir(cwd, { recursive: true });
+    const { process: piProcess, reconnectEventStream, sendCommand } = fakeHostProcess({ sendCommandResult: { success: false, code: "timeout", error: "unresponsive" } });
+    injectRuntime(service, piProcess, cwd, "s1");
+    const restart = vi.fn(async () => ({ error: "boom", code: "spawn_failed" }));
+    (service as unknown as { restartRuntimeUnlocked: unknown }).restartRuntimeUnlocked = restart;
+    (service as unknown as { beginPendingOperation: (runtime: unknown, op: string) => void }).beginPendingOperation(
+      (service as unknown as { runtimes: Map<string, unknown> }).runtimes.get(`${resolve(cwd)}\0s1`)!,
+      "prompt",
+    );
+    await waitFor(() => reconnectEventStream.mock.calls.length >= 2);
+    await waitFor(() => sendCommand.mock.calls.length >= 1);
+    await waitFor(() => restart.mock.calls.length === 1);
+    expect(restart).toHaveBeenCalledTimes(1);
+    await service.shutdownAll();
+  });
+
+  it("does not fire while the runtime is idle or the stream is fresh", async () => {
+    process.env.PI_SCIENCE_EVENT_WATCHDOG_MS = "40";
+    const service = testService();
+    const cwd = resolve(join(tmpdir(), `watchdog-cwd-${Date.now()}-${Math.random().toString(16).slice(2)}`));
+    await mkdir(cwd, { recursive: true });
+    const { process: piProcess, reconnectEventStream } = fakeHostProcess({ lastEventAt: Date.now() });
+    const runtime = injectRuntime(service, piProcess, cwd, "s1");
+    // Idle (no pending operation, not busy): arming the watchdog must not
+    // schedule anything.
+    (service as unknown as { scheduleEventWatchdog: (runtime: unknown) => void }).scheduleEventWatchdog(runtime);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(reconnectEventStream).not.toHaveBeenCalled();
+    // Fresh stream while busy: watchdog re-arms instead of reconnecting.
+    (service as unknown as { beginPendingOperation: (runtime: unknown, op: string) => void }).beginPendingOperation(runtime, "prompt");
+    const keepFresh = setInterval(() => { piProcess.lastEventAt = Date.now(); }, 10);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    clearInterval(keepFresh);
+    expect(reconnectEventStream).not.toHaveBeenCalled();
+    await service.shutdownAll();
+  });
+
+  it("revives a known-dead event stream before a prompt mutation (item 5)", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions("s1");
+    const stateData = { sessionId: "s1", busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: "openrouter", id: "openai/gpt-5.1" }, thinkingLevel: "high" };
+    const { process: piProcess, reconnectEventStream, sendCommand } = fakeHostProcess({
+      lastEventAt: Date.now() - 60_000,
+      eventStreamAlive: false,
+      sendCommandImpl: async (type) => type === "get_state" ? { success: true, data: stateData } : { success: true },
+    });
+    injectRuntime(service, piProcess, cwd, "s1");
+    const result = await service.command("s1", cwd, "prompt", { message: "hi" });
+    expect(result.success).toBe(true);
+    expect(reconnectEventStream).toHaveBeenCalledTimes(1);
+    // The prompt itself was still delivered after the revive.
+    expect(sendCommand.mock.calls.some((call) => call[0] === "prompt")).toBe(true);
+    await service.shutdownAll();
+  });
+
+  it("restarts the runtime when a dead stream cannot be revived and get_state fails (item 5)", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions("s1");
+    const { process: piProcess, reconnectEventStream, sendCommand } = fakeHostProcess({
+      lastEventAt: Date.now() - 60_000,
+      eventStreamAlive: false,
+      sendCommandImpl: async () => ({ success: false, code: "timeout", error: "unresponsive" }),
+    });
+    injectRuntime(service, piProcess, cwd, "s1");
+    const restart = vi.fn(async () => ({ error: "boom", code: "spawn_failed" }));
+    (service as unknown as { restartRuntimeUnlocked: unknown }).restartRuntimeUnlocked = restart;
+    const result = await service.command("s1", cwd, "prompt", { message: "hi" });
+    expect(reconnectEventStream).toHaveBeenCalledTimes(1);
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(false);
+    expect(result.code).toBe("runtime_restart_failed");
+    await service.shutdownAll();
+  });
+
+  it("leaves alive or still-connecting streams alone before mutations (item 5)", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions("s1", "s2");
+    const stateData = { sessionId: "s1", busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: "openrouter", id: "openai/gpt-5.1" }, thinkingLevel: "high" };
+    // Alive stream: no reconnect.
+    const alive = fakeHostProcess({
+      lastEventAt: Date.now() - 1_000,
+      eventStreamAlive: true,
+      sendCommandImpl: async (type) => type === "get_state" ? { success: true, data: stateData } : { success: true },
+    });
+    injectRuntime(service, alive.process, cwd, "s1");
+    await service.command("s1", cwd, "prompt", { message: "hi" });
+    expect(alive.reconnectEventStream).not.toHaveBeenCalled();
+    // Still connecting (never connected): no reconnect either.
+    const connecting = fakeHostProcess({
+      lastEventAt: 0,
+      eventStreamAlive: false,
+      sendCommandImpl: async (type) => type === "get_state" ? { success: true, data: stateData } : { success: true },
+    });
+    injectRuntime(service, connecting.process, cwd, "s2");
+    await service.command("s2", cwd, "prompt", { message: "hi" });
+    expect(connecting.reconnectEventStream).not.toHaveBeenCalled();
     await service.shutdownAll();
   });
 });

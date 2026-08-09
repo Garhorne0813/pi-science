@@ -46,6 +46,12 @@ type RuntimeRecord = {
   restartPending: boolean;
   reconcileTimer?: NodeJS.Timeout;
   idleTimer?: NodeJS.Timeout;
+  /** Event-stream watchdog: fires while an operation is pending / the runtime
+   *  is busy and the Pi Orbit event stream has gone silent. Reconnects first
+   *  (cheap), restarts only when the runtime also stops answering get_state. */
+  watchdogTimer?: NodeJS.Timeout;
+  /** Consecutive watchdog reconnects for the current operation window. */
+  watchdogReconnects?: number;
   closing: boolean;
   lastState?: Record<string, unknown>;
   lastStateAt?: number;
@@ -63,6 +69,13 @@ type RuntimeRecord = {
    *  to the n-th agent block even when earlier turns produced no files (pure
    *  record-ordinal fallback misplaces strips when a turn has no record). */
   turnOrdinal?: number;
+  /** JSONL cursor captured at prompt-accept time (fallback evidence when the
+   *  Pi event stream dies and agent_start never arrives): snapshot_version,
+   *  last message role/id. The reconciliation probe compares a fresh tail read
+   *  against this to prove the turn actually completed from the message file
+   *  alone, so it can recover the artifact summary instead of misreporting
+   *  did-not-start. */
+  acceptSnapshot?: Promise<{ version: string; role: string | null; id: string | null } | null>;
 };
 
 function runtimeKey(cwd: string, sessionId: string): string {
@@ -84,6 +97,13 @@ function reconciliationDeadlineMs(): number {
 function idleRuntimeMs(): number {
   const configured = process.env.PI_SCIENCE_IDLE_RUNTIME_MS;
   if (configured === undefined || configured === "") return 30 * 60_000;
+  const value = Number(configured);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function eventWatchdogMs(): number {
+  const configured = process.env.PI_SCIENCE_EVENT_WATCHDOG_MS;
+  if (configured === undefined || configured === "") return 60_000;
   const value = Number(configured);
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
@@ -175,6 +195,12 @@ export class NodeSessionService {
       const runtime = activated;
       const mutating = new Set(["prompt", "new_session", "switch_session", "fork", "clone", "set_model", "set_thinking_level", "compact", "abort"]);
       if (mutating.has(type) && type !== "abort") {
+        // Item 5: revive a KNOWN-dead event stream BEFORE the mutation
+        // preflight. A dead stream often means get_state also fails, which
+        // would otherwise short-circuit reconcileForMutation before the
+        // health check gets a chance to reconnect/restart.
+        const healthy = await this.ensureHealthyEventStream(runtime, type);
+        if (!healthy.success) return healthy;
         const ready = await this.reconcileForMutation(runtime);
         if (!ready.success) return ready;
       }
@@ -190,6 +216,7 @@ export class NodeSessionService {
         return result;
       }
       if (type === "prompt" || type === "compact") {
+        if (type === "prompt") this.recordAcceptTurnBaseline(runtime);
         this.scheduleOperationReconciliation(runtime, false);
         return result;
       }
@@ -486,6 +513,7 @@ export class NodeSessionService {
     for (const runtime of this.runtimes.values()) {
       runtime.closing = true;
       this.clearIdleTimer(runtime);
+      this.clearEventWatchdog(runtime);
       this.eventHub.expectExit(runtime.process);
     }
     await this.manager.shutdownAll();
@@ -556,9 +584,13 @@ export class NodeSessionService {
         // cannot publish a synthetic terminal event for the next turn.
         this.invalidatePendingOperation(runtime);
         runtime.busy = busy;
-        if (!busy && runtime.restartPending) {
+        if (busy) {
+          // The turn is running: keep the event-stream watchdog armed so a
+          // silently dead stream is detected and revived mid-turn.
+          this.scheduleEventWatchdog(runtime);
+        } else if (runtime.restartPending) {
           queueMicrotask(() => { void this.reloadRuntimeAfterTurn(runtime); });
-        } else if (!busy) {
+        } else {
           this.scheduleIdleCleanup(runtime);
         }
       },
@@ -575,7 +607,12 @@ export class NodeSessionService {
           runtime.turnId = randomUUID();
           runtime.turnBaseline = snapshotWorkspace(cwd);
           runtime.turnAssistantPartId = undefined;
-          runtime.turnOrdinal = (runtime.turnOrdinal ?? 0) + 1;
+          // Derive the ordinal from persisted records so it keeps counting
+          // across runtime rebuilds (idle cleanup, restarts); the in-memory
+          // field alone would reset to 1 and misanchor strips for later turns.
+          runtime.turnOrdinal = await turnArtifactRepository
+            .nextTurnOrdinal(runtime.cwd, sessionId)
+            .catch(() => (runtime.turnOrdinal ?? 0) + 1);
         }
         // Pi's raw event type is "message_update" with an inner
         // assistantMessageEvent (text_delta/text/text_end); the hub normalizes
@@ -610,6 +647,40 @@ export class NodeSessionService {
     });
   }
 
+  /** Standby per-turn tracking captured at prompt-accept time. The Pi event
+   *  stream is the authoritative turn signal, but when it dies (silently, no
+   *  exception) agent_start/agent_settled never arrive and the turn bookkeeping
+   *  never starts. Recording a baseline snapshot + JSONL cursor here gives the
+   *  reconciliation probe enough evidence to recover the artifact summary.
+   *  A real agent_start overwrites these fields with fresh turn values. */
+  private recordAcceptTurnBaseline(runtime: RuntimeRecord): void {
+    if (runtime.operationPending !== "prompt" || !runtime.activeSessionId) return;
+    runtime.turnId ??= randomUUID();
+    runtime.turnBaseline ??= snapshotWorkspace(runtime.cwd);
+    runtime.acceptSnapshot = this.repository
+      .messagesPage(runtime.cwd, runtime.activeSessionId, { limit: 1 })
+      .then((page) => {
+        const last = page.messages[page.messages.length - 1];
+        return { version: page.snapshot_version, role: last?.role ?? null, id: last?.id ?? null };
+      })
+      .catch(() => null);
+  }
+
+  /** Compare the message file against the accept-time cursor: any version
+   *  change whose newest message is an assistant reply proves the accepted
+   *  prompt actually produced a turn, even with a dead event stream. */
+  private async turnCompletedEvidence(runtime: RuntimeRecord): Promise<"none" | "completed" | "unknown"> {
+    const accept = runtime.acceptSnapshot;
+    if (!accept) return "unknown";
+    const before = await accept;
+    if (!before) return "unknown";
+    const page = await this.repository.messagesPage(runtime.cwd, runtime.activeSessionId, { limit: 1 }).catch(() => null);
+    if (!page) return "unknown";
+    if (page.snapshot_version === before.version) return "none";
+    const last = page.messages[page.messages.length - 1];
+    return last?.role === "assistant" ? "completed" : "none";
+  }
+
   private beginPendingOperation(runtime: RuntimeRecord, operation: PendingOperation): void {
     if (runtime.reconcileTimer) clearTimeout(runtime.reconcileTimer);
     runtime.reconcileTimer = undefined;
@@ -619,6 +690,76 @@ export class NodeSessionService {
     runtime.reconcileAttempts = 0;
     runtime.reconcileFromTimeout = false;
     runtime.busy = true;
+    this.scheduleEventWatchdog(runtime);
+  }
+
+  /** Start (or extend) the event-stream watchdog while an operation is in
+   *  flight. Pure-idle runtimes never run it: zero events are the normal idle
+   *  state. Only Pi Orbit runtimes have an event stream to watch. */
+  private scheduleEventWatchdog(runtime: RuntimeRecord): void {
+    if (runtime.watchdogTimer) clearTimeout(runtime.watchdogTimer);
+    runtime.watchdogTimer = undefined;
+    const intervalMs = eventWatchdogMs();
+    if (intervalMs <= 0 || !runtime.process.attachedToHost) return;
+    if (runtime.closing || (!runtime.busy && !runtime.operationPending)) return;
+    runtime.watchdogTimer = setTimeout(() => {
+      runtime.watchdogTimer = undefined;
+      void this.runEventWatchdog(runtime);
+    }, intervalMs);
+  }
+
+  private clearEventWatchdog(runtime: RuntimeRecord): void {
+    if (runtime.watchdogTimer) clearTimeout(runtime.watchdogTimer);
+    runtime.watchdogTimer = undefined;
+  }
+
+  private async runEventWatchdog(runtime: RuntimeRecord): Promise<void> {
+    if (runtime.closing || (!runtime.busy && !runtime.operationPending)) return;
+    // A live stream keeps lastEventAt fresh. Anything that arrived within the
+    // interval is proof of life; re-arm and move on.
+    if (runtime.process.lastEventAt > 0 && Date.now() - runtime.process.lastEventAt < eventWatchdogMs()) {
+      this.scheduleEventWatchdog(runtime);
+      return;
+    }
+    // Stream silent for the whole window while work is supposed to happen:
+    // revive the connection first (cheap, never hold the lock on the
+    // untimeoutable request), escalating to a runtime restart only when the
+    // runtime also stops answering get_state.
+    const reconnects = runtime.watchdogReconnects ?? 0;
+    if (reconnects < 2) {
+      runtime.watchdogReconnects = reconnects + 1;
+      this.log("warn", `Pi Orbit event stream silent for ${eventWatchdogMs()}ms while busy; reconnecting (attempt ${reconnects + 1})`);
+      void runtime.process.reconnectEventStream().catch((error: unknown) => {
+        this.log("warn", `Pi Orbit event stream reconnect failed: ${String(error)}`);
+      });
+      this.scheduleEventWatchdog(runtime);
+      return;
+    }
+    // Reconnects exhausted: confirm the runtime is unresponsive before
+    // restarting it (a busy-but-answering runtime must never be torn down).
+    const state = await runtime.process.sendCommand("get_state");
+    if (state.success) {
+      this.scheduleEventWatchdog(runtime);
+      return;
+    }
+    const key = runtimeKey(runtime.cwd, runtime.activeSessionId);
+    await this.withLock(key, async () => {
+      const current = this.runtimes.get(key);
+      if (current !== runtime || runtime.closing) return;
+      const sessionId = runtime.activeSessionId;
+      const config = { ...runtime.config };
+      this.log("warn", `Pi Orbit runtime unresponsive (event stream dead, get_state failed); restarting runtime for ${sessionId}`);
+      this.resetPendingOperationState(runtime);
+      const restarted = await this.restartRuntimeUnlocked(runtime, config);
+      if ("error" in restarted && sessionId) {
+        await this.eventHub.publish(runtime.cwd, sessionId, {
+          type: "error",
+          sessionId,
+          message: `Unable to restart unresponsive Pi runtime: ${restarted.error}`,
+          terminal: true,
+        });
+      }
+    });
   }
 
   private invalidatePendingOperation(runtime: RuntimeRecord): void {
@@ -627,6 +768,7 @@ export class NodeSessionService {
     runtime.operationToken = undefined;
     runtime.operationPending = undefined;
     runtime.operationDeadline = undefined;
+    this.clearEventWatchdog(runtime);
   }
 
   private resetPendingOperationState(runtime: RuntimeRecord): void {
@@ -637,6 +779,8 @@ export class NodeSessionService {
     runtime.reconcileAttempts = 0;
     runtime.reconcileFromTimeout = false;
     runtime.busy = false;
+    this.clearEventWatchdog(runtime);
+    runtime.watchdogReconnects = 0;
   }
 
   private clearPendingOperation(runtime: RuntimeRecord): void {
@@ -690,6 +834,25 @@ export class NodeSessionService {
         }
         const operation = runtime.operationPending;
         if (!state || (state.success && !active)) {
+          // Message-side evidence: when the Pi event stream dies, agent_start/
+          // agent_settled never arrive and the get_state probe stays idle even
+          // though the turn actually ran (messages were appended to the session
+          // JSONL by Pi Orbit). Compare a fresh tail read against the cursor
+          // captured at accept time: a new assistant message proves completion
+          // and lets us recover the artifact summary + end the operation
+          // normally instead of misreporting did-not-start.
+          if (operation === "prompt" && (await this.turnCompletedEvidence(runtime)) === "completed") {
+            if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
+            await this.finishTurnArtifacts(runtime, {}, runtime.activeSessionId).catch(() => undefined);
+            if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
+            await this.eventHub.publish(runtime.cwd, runtime.activeSessionId, {
+              type: "session.idle",
+              sessionId: runtime.activeSessionId,
+            }, () => this.isCurrentPendingOperation(runtime, operationToken));
+            if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
+            this.clearPendingOperation(runtime);
+            return;
+          }
           // An accepted prompt/compact may remain idle while Pi Orbit resumes
           // a session or warms a model. This startup window is not a timeout for
           // the full agent response. Attempts are diagnostic only: keep probing
@@ -786,7 +949,13 @@ export class NodeSessionService {
       ended_at: new Date().toISOString(),
       artifacts: items,
     };
-    await turnArtifactRepository.append(runtime.cwd, record).catch(() => undefined);
+    // Defensive idempotency: a reconciliation-recovered turn and a late
+    // (replayed) agent_settled could both carry the same turn id; never append
+    // a duplicate record for one turn.
+    const existing = await turnArtifactRepository.forSession(runtime.cwd, sessionId).catch(() => []);
+    if (!existing.some((r) => r.turn_id === turnId)) {
+      await turnArtifactRepository.append(runtime.cwd, record).catch(() => undefined);
+    }
     await this.eventHub.publish(runtime.cwd, sessionId, {
       type: "turn.artifacts",
       sessionId,
@@ -895,6 +1064,53 @@ export class NodeSessionService {
     return { success: true };
   }
 
+  /** Prompt-time event-stream health check (item 5). A KNOWN-dead stream
+   *  (was alive, then failed: eventStreamAlive === false with lastEventAt > 0)
+   *  is reconnected before the mutation is sent; if the runtime also stops
+   *  answering get_state it is restarted (reconcileForMutation has already
+   *  guaranteed !busy). Freshly started runtimes (never connected,
+   *  lastEventAt === 0) and alive streams are left alone; a stale-but-alive
+   *  stream is only logged. Runs inside the mutation lock, so the reconnect
+   *  race is bounded to 5s because the underlying events request has no
+   *  timeout of its own. */
+  private async ensureHealthyEventStream(runtime: RuntimeRecord, type: string): Promise<PiResult> {
+    const process = runtime.process;
+    if (!process.attachedToHost) return { success: true };
+    if (process.eventStreamAlive) {
+      if (process.lastEventAt > 0 && Date.now() - process.lastEventAt > eventWatchdogMs() * 2) {
+        this.log("warn", `Pi Orbit event stream stale (${Math.round((Date.now() - process.lastEventAt) / 1000)}s of silence) before ${type}; continuing`);
+      }
+      return { success: true };
+    }
+    if (!process.lastEventAt) return { success: true }; // still establishing
+    this.log("warn", `Pi Orbit event stream dead before ${type}; reconnecting`);
+    try {
+      await Promise.race([
+        process.reconnectEventStream(),
+        new Promise<never>((_, reject) => {
+          const timer = setTimeout(() => reject(new Error("event stream reconnect timed out after 5s")), 5_000);
+          timer.unref?.();
+        }),
+      ]);
+    } catch (error) {
+      this.log("warn", `Pi Orbit event stream reconnect failed: ${String(error)}`);
+    }
+    const state = await process.sendCommand("get_state");
+    if (state.success) return { success: true, data: state.data };
+    this.log("warn", `Pi Orbit runtime unresponsive before ${type} (get_state failed after reconnect); restarting`);
+    const config = { ...runtime.config };
+    const oldId = runtime.activeSessionId;
+    const restarted = await this.restartRuntimeUnlocked(runtime, config);
+    if ("error" in restarted) {
+      return { success: false, code: "runtime_restart_failed", error: `unable to restart runtime before ${type}: ${restarted.error}` };
+    }
+    if (oldId && restarted.activeSessionId !== oldId) {
+      return { success: false, code: "session_mismatch", error: `runtime restarted but session identity changed (${oldId} -> ${restarted.activeSessionId})` };
+    }
+    this.log("info", `Pi Orbit runtime restarted before ${type} (event stream was dead)`);
+    return { success: true };
+  }
+
   private async reconcileForMutation(runtime: RuntimeRecord): Promise<PiResult> {
     const state = await this.refreshState(runtime);
     if (!state.success || !state.data || typeof state.data !== "object") return failure(state, "unable to confirm runtime state before mutation");
@@ -931,6 +1147,7 @@ export class NodeSessionService {
     if (runtime.closing) return;
     runtime.closing = true;
     if (runtime.reconcileTimer) clearTimeout(runtime.reconcileTimer);
+    this.clearEventWatchdog(runtime);
     this.clearIdleTimer(runtime);
     this.eventHub.expectExit(runtime.process);
     const registeredKeys = [...this.runtimes.entries()]

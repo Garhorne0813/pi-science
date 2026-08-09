@@ -166,8 +166,16 @@ export class ConversationEventHub {
   private readonly turns = new Map<string, TurnState>();
   private readonly bound = new WeakSet<PiProcess>();
   private readonly expectedExits = new WeakSet<PiProcess>();
+  /** Per-process throttle for immediate stderr forwarding (ms). */
+  private readonly stderrLogAt = new WeakMap<PiProcess, number>();
+  private log: (level: "info" | "warn" | "error", message: string) => void = () => {};
 
   constructor(private readonly eventStore: EventStore = durableEventStore) {}
+
+  /** Route runtime stderr diagnostics to the control-plane logger. */
+  configureLogging(log: (level: "info" | "warn" | "error", message: string) => void): void {
+    this.log = log;
+  }
 
   async flush(): Promise<void> {
     // Process exit handlers append terminal records through their event queue.
@@ -225,6 +233,15 @@ export class ConversationEventHub {
     process.on("stderr", (chunk: string) => {
       stderr.push({ text: cap(chunk, 4_000), at: Date.now(), turn: turnNumber });
       while (stderr.reduce((size, item) => size + item.text.length, 0) > 16_000) stderr.shift();
+      // Forward diagnostics immediately (throttled) instead of hiding them in
+      // the exit-only buffer: a silently failed event stream must be visible
+      // in the control-plane log at the moment it happens.
+      const now = Date.now();
+      const last = this.stderrLogAt.get(process) ?? 0;
+      if (now - last >= 2_000) {
+        this.stderrLogAt.set(process, now);
+        this.log("warn", `Pi runtime stderr: ${cap(chunk, 500).trimEnd()}`);
+      }
     });
     process.on("malformed", (line: string) => {
       const sessionId = options.activeSessionId();

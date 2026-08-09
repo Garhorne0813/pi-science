@@ -206,6 +206,42 @@ describe("Node Pi Orbit adapter", () => {
     await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
+  it("tracks event-stream liveness instrumentation", async () => {
+    const manager = new PiManager();
+    managers.push(manager);
+    const runtime = await fakeWebRuntime();
+    const process = await manager.start("web-workspace-liveness", runtime);
+    expect(process.attachedToHost).toBe(true);
+    for (let attempt = 0; attempt < 50 && process.lastEventAt === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(process.lastEventAt).toBeGreaterThan(0);
+    expect(process.eventStreamAlive).toBe(true);
+    await manager.shutdownAll();
+    await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it("reconnects the event stream from the last sequence", async () => {
+    const manager = new PiManager();
+    managers.push(manager);
+    const runtime = await fakeWebRuntime();
+    const process = await manager.start("web-workspace-reconnect", runtime);
+    const events: string[] = [];
+    process.on("event", (event: { type: string }) => events.push(event.type));
+    for (let attempt = 0; attempt < 50 && process.lastEventAt === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await process.reconnectEventStream();
+    expect(process.eventStreamAlive).toBe(true);
+    await expect(manager.sendCommand("web-workspace-reconnect", "prompt", { message: "hello" })).resolves.toMatchObject({ success: true });
+    for (let attempt = 0; attempt < 50 && !events.includes("agent_start"); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(events).toContain("agent_start");
+    await manager.shutdownAll();
+    await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
   it("preserves stable Pi Orbit initialization errors and diagnostics", async () => {
     const manager = new PiManager();
     managers.push(manager);
