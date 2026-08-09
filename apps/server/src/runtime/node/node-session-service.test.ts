@@ -10,7 +10,7 @@ import { ProjectReviewService } from "../../project-review/service.js";
 import { parseReviewResult, type ReviewRunRequest, type ReviewRunResult, type ReviewSubagentRunner } from "../../project-review/types.js";
 
 const cleanup: string[] = [];
-const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE, piMode: process.env.PI_SCIENCE_PI_MODE, argsLog: process.env.FAKE_PI_ARGS_LOG, stateDelay: process.env.FAKE_PI_STATE_DELAY, activeProbe: process.env.FAKE_PI_ACTIVE_PROBE, agentStartDelay: process.env.FAKE_PI_AGENT_START_DELAY };
+const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE, piMode: process.env.PI_SCIENCE_PI_MODE, argsLog: process.env.FAKE_PI_ARGS_LOG, stateDelay: process.env.FAKE_PI_STATE_DELAY, activeProbe: process.env.FAKE_PI_ACTIVE_PROBE, agentStartDelay: process.env.FAKE_PI_AGENT_START_DELAY, watchdog: process.env.PI_SCIENCE_EVENT_WATCHDOG_MS };
 
 beforeEach(async () => {
   const root = join(tmpdir(), `pi-science-node-service-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -96,6 +96,8 @@ afterEach(async () => {
   else process.env.FAKE_PI_AGENT_START_DELAY = original.agentStartDelay;
   if (original.piMode === undefined) delete process.env.PI_SCIENCE_PI_MODE;
   else process.env.PI_SCIENCE_PI_MODE = original.piMode;
+  if (original.watchdog === undefined) delete process.env.PI_SCIENCE_EVENT_WATCHDOG_MS;
+  else process.env.PI_SCIENCE_EVENT_WATCHDOG_MS = original.watchdog;
   delete process.env.FAKE_PI_LOG;
   delete process.env.FAKE_PI_ARGS_LOG;
   delete process.env.FAKE_PI_STARTS;
@@ -866,6 +868,77 @@ describe("automatic project review", () => {
     await service.command("session-a", cwd, "abort");
     await waitFor(async () => (await proposals(cwd)).length === 1);
     expect(await service.state("session-a", cwd)).toMatchObject({ id: "session-a" });
+    await service.shutdownAll();
+  });
+});
+
+describe("Event-stream watchdog", () => {
+  function fakeHostProcess(overrides: Partial<{ lastEventAt: number; sendCommandResult: Record<string, unknown> }>) {
+    const reconnectEventStream = vi.fn(async () => {});
+    const sendCommand = vi.fn(async () => overrides.sendCommandResult ?? { success: true });
+    const piProcess = {
+      attachedToHost: true,
+      lastEventAt: overrides.lastEventAt ?? 0,
+      eventStreamAlive: true,
+      reconnectEventStream,
+      sendCommand,
+    } as unknown as import("../pi/pi-process.js").PiProcess;
+    return { process: piProcess, reconnectEventStream, sendCommand };
+  }
+
+  function injectRuntime(service: NodeSessionService, process: ReturnType<typeof fakeHostProcess>["process"], cwd: string, sessionId: string) {
+    const runtime = {
+      cwd: resolve(cwd),
+      managerKey: "test-key",
+      process,
+      activeSessionId: sessionId,
+      config: { model: null, provider: null, api_key: null, thinking: null, compaction_enabled: true, compaction_threshold_percent: 87, model_context_window: null, skills: [], extensions: [] },
+      busy: false,
+      restartPending: false,
+      closing: false,
+    };
+    (service as unknown as { runtimes: Map<string, unknown> }).runtimes.set(`${resolve(cwd)}\0${sessionId}`, runtime);
+    return runtime;
+  }
+
+  it("reconnects the silent event stream while busy, then restarts only after get_state fails", async () => {
+    process.env.PI_SCIENCE_EVENT_WATCHDOG_MS = "40";
+    const service = testService();
+    const cwd = resolve(join(tmpdir(), `watchdog-cwd-${Date.now()}-${Math.random().toString(16).slice(2)}`));
+    await mkdir(cwd, { recursive: true });
+    const { process: piProcess, reconnectEventStream, sendCommand } = fakeHostProcess({ sendCommandResult: { success: false, code: "timeout", error: "unresponsive" } });
+    injectRuntime(service, piProcess, cwd, "s1");
+    const restart = vi.fn(async () => ({ error: "boom", code: "spawn_failed" }));
+    (service as unknown as { restartRuntimeUnlocked: unknown }).restartRuntimeUnlocked = restart;
+    (service as unknown as { beginPendingOperation: (runtime: unknown, op: string) => void }).beginPendingOperation(
+      (service as unknown as { runtimes: Map<string, unknown> }).runtimes.get(`${resolve(cwd)}\0s1`)!,
+      "prompt",
+    );
+    await waitFor(() => reconnectEventStream.mock.calls.length >= 2);
+    await waitFor(() => sendCommand.mock.calls.length >= 1);
+    await waitFor(() => restart.mock.calls.length === 1);
+    expect(restart).toHaveBeenCalledTimes(1);
+    await service.shutdownAll();
+  });
+
+  it("does not fire while the runtime is idle or the stream is fresh", async () => {
+    process.env.PI_SCIENCE_EVENT_WATCHDOG_MS = "40";
+    const service = testService();
+    const cwd = resolve(join(tmpdir(), `watchdog-cwd-${Date.now()}-${Math.random().toString(16).slice(2)}`));
+    await mkdir(cwd, { recursive: true });
+    const { process: piProcess, reconnectEventStream } = fakeHostProcess({ lastEventAt: Date.now() });
+    const runtime = injectRuntime(service, piProcess, cwd, "s1");
+    // Idle (no pending operation, not busy): arming the watchdog must not
+    // schedule anything.
+    (service as unknown as { scheduleEventWatchdog: (runtime: unknown) => void }).scheduleEventWatchdog(runtime);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(reconnectEventStream).not.toHaveBeenCalled();
+    // Fresh stream while busy: watchdog re-arms instead of reconnecting.
+    (service as unknown as { beginPendingOperation: (runtime: unknown, op: string) => void }).beginPendingOperation(runtime, "prompt");
+    const keepFresh = setInterval(() => { piProcess.lastEventAt = Date.now(); }, 10);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    clearInterval(keepFresh);
+    expect(reconnectEventStream).not.toHaveBeenCalled();
     await service.shutdownAll();
   });
 });

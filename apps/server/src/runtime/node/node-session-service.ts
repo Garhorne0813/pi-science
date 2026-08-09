@@ -46,6 +46,12 @@ type RuntimeRecord = {
   restartPending: boolean;
   reconcileTimer?: NodeJS.Timeout;
   idleTimer?: NodeJS.Timeout;
+  /** Event-stream watchdog: fires while an operation is pending / the runtime
+   *  is busy and the Pi Orbit event stream has gone silent. Reconnects first
+   *  (cheap), restarts only when the runtime also stops answering get_state. */
+  watchdogTimer?: NodeJS.Timeout;
+  /** Consecutive watchdog reconnects for the current operation window. */
+  watchdogReconnects?: number;
   closing: boolean;
   lastState?: Record<string, unknown>;
   lastStateAt?: number;
@@ -84,6 +90,13 @@ function reconciliationDeadlineMs(): number {
 function idleRuntimeMs(): number {
   const configured = process.env.PI_SCIENCE_IDLE_RUNTIME_MS;
   if (configured === undefined || configured === "") return 30 * 60_000;
+  const value = Number(configured);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function eventWatchdogMs(): number {
+  const configured = process.env.PI_SCIENCE_EVENT_WATCHDOG_MS;
+  if (configured === undefined || configured === "") return 60_000;
   const value = Number(configured);
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
@@ -486,6 +499,7 @@ export class NodeSessionService {
     for (const runtime of this.runtimes.values()) {
       runtime.closing = true;
       this.clearIdleTimer(runtime);
+      this.clearEventWatchdog(runtime);
       this.eventHub.expectExit(runtime.process);
     }
     await this.manager.shutdownAll();
@@ -556,9 +570,13 @@ export class NodeSessionService {
         // cannot publish a synthetic terminal event for the next turn.
         this.invalidatePendingOperation(runtime);
         runtime.busy = busy;
-        if (!busy && runtime.restartPending) {
+        if (busy) {
+          // The turn is running: keep the event-stream watchdog armed so a
+          // silently dead stream is detected and revived mid-turn.
+          this.scheduleEventWatchdog(runtime);
+        } else if (runtime.restartPending) {
           queueMicrotask(() => { void this.reloadRuntimeAfterTurn(runtime); });
-        } else if (!busy) {
+        } else {
           this.scheduleIdleCleanup(runtime);
         }
       },
@@ -619,6 +637,76 @@ export class NodeSessionService {
     runtime.reconcileAttempts = 0;
     runtime.reconcileFromTimeout = false;
     runtime.busy = true;
+    this.scheduleEventWatchdog(runtime);
+  }
+
+  /** Start (or extend) the event-stream watchdog while an operation is in
+   *  flight. Pure-idle runtimes never run it: zero events are the normal idle
+   *  state. Only Pi Orbit runtimes have an event stream to watch. */
+  private scheduleEventWatchdog(runtime: RuntimeRecord): void {
+    if (runtime.watchdogTimer) clearTimeout(runtime.watchdogTimer);
+    runtime.watchdogTimer = undefined;
+    const intervalMs = eventWatchdogMs();
+    if (intervalMs <= 0 || !runtime.process.attachedToHost) return;
+    if (runtime.closing || (!runtime.busy && !runtime.operationPending)) return;
+    runtime.watchdogTimer = setTimeout(() => {
+      runtime.watchdogTimer = undefined;
+      void this.runEventWatchdog(runtime);
+    }, intervalMs);
+  }
+
+  private clearEventWatchdog(runtime: RuntimeRecord): void {
+    if (runtime.watchdogTimer) clearTimeout(runtime.watchdogTimer);
+    runtime.watchdogTimer = undefined;
+  }
+
+  private async runEventWatchdog(runtime: RuntimeRecord): Promise<void> {
+    if (runtime.closing || (!runtime.busy && !runtime.operationPending)) return;
+    // A live stream keeps lastEventAt fresh. Anything that arrived within the
+    // interval is proof of life; re-arm and move on.
+    if (runtime.process.lastEventAt > 0 && Date.now() - runtime.process.lastEventAt < eventWatchdogMs()) {
+      this.scheduleEventWatchdog(runtime);
+      return;
+    }
+    // Stream silent for the whole window while work is supposed to happen:
+    // revive the connection first (cheap, never hold the lock on the
+    // untimeoutable request), escalating to a runtime restart only when the
+    // runtime also stops answering get_state.
+    const reconnects = runtime.watchdogReconnects ?? 0;
+    if (reconnects < 2) {
+      runtime.watchdogReconnects = reconnects + 1;
+      this.log("warn", `Pi Orbit event stream silent for ${eventWatchdogMs()}ms while busy; reconnecting (attempt ${reconnects + 1})`);
+      void runtime.process.reconnectEventStream().catch((error: unknown) => {
+        this.log("warn", `Pi Orbit event stream reconnect failed: ${String(error)}`);
+      });
+      this.scheduleEventWatchdog(runtime);
+      return;
+    }
+    // Reconnects exhausted: confirm the runtime is unresponsive before
+    // restarting it (a busy-but-answering runtime must never be torn down).
+    const state = await runtime.process.sendCommand("get_state");
+    if (state.success) {
+      this.scheduleEventWatchdog(runtime);
+      return;
+    }
+    const key = runtimeKey(runtime.cwd, runtime.activeSessionId);
+    await this.withLock(key, async () => {
+      const current = this.runtimes.get(key);
+      if (current !== runtime || runtime.closing) return;
+      const sessionId = runtime.activeSessionId;
+      const config = { ...runtime.config };
+      this.log("warn", `Pi Orbit runtime unresponsive (event stream dead, get_state failed); restarting runtime for ${sessionId}`);
+      this.resetPendingOperationState(runtime);
+      const restarted = await this.restartRuntimeUnlocked(runtime, config);
+      if ("error" in restarted && sessionId) {
+        await this.eventHub.publish(runtime.cwd, sessionId, {
+          type: "error",
+          sessionId,
+          message: `Unable to restart unresponsive Pi runtime: ${restarted.error}`,
+          terminal: true,
+        });
+      }
+    });
   }
 
   private invalidatePendingOperation(runtime: RuntimeRecord): void {
@@ -627,6 +715,7 @@ export class NodeSessionService {
     runtime.operationToken = undefined;
     runtime.operationPending = undefined;
     runtime.operationDeadline = undefined;
+    this.clearEventWatchdog(runtime);
   }
 
   private resetPendingOperationState(runtime: RuntimeRecord): void {
@@ -637,6 +726,8 @@ export class NodeSessionService {
     runtime.reconcileAttempts = 0;
     runtime.reconcileFromTimeout = false;
     runtime.busy = false;
+    this.clearEventWatchdog(runtime);
+    runtime.watchdogReconnects = 0;
   }
 
   private clearPendingOperation(runtime: RuntimeRecord): void {
@@ -928,6 +1019,7 @@ export class NodeSessionService {
     if (runtime.closing) return;
     runtime.closing = true;
     if (runtime.reconcileTimer) clearTimeout(runtime.reconcileTimer);
+    this.clearEventWatchdog(runtime);
     this.clearIdleTimer(runtime);
     this.eventHub.expectExit(runtime.process);
     const registeredKeys = [...this.runtimes.entries()]
