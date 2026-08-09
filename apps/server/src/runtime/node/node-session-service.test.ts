@@ -69,10 +69,12 @@ beforeEach(async () => {
   process.env.FAKE_PI_LOG = join(root, "rpc.jsonl");
   process.env.FAKE_PI_ARGS_LOG = join(root, "pi-args.json");
   process.env.FAKE_PI_STARTS = join(root, "starts.txt");
-  // Leave enough headroom for spawning the fake Pi under parallel CI load.
+  // Leave enough headroom for spawning the fake Pi under CI load. Windows
+  // process startup and pipe delivery are substantially slower even when the
+  // server test files themselves are serialized.
   // Timeout-specific tests still complete quickly because the fake process is
   // already running before the intentionally unanswered RPC is sent.
-  process.env.PI_SCIENCE_RPC_TIMEOUT_MS = "500";
+  process.env.PI_SCIENCE_RPC_TIMEOUT_MS = process.platform === "win32" ? "1500" : "500";
   process.env.PI_SCIENCE_RECONCILE_DELAY_MS = "20";
   process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS = "700";
   process.env.PI_SCIENCE_IDLE_RUNTIME_MS = "0";
@@ -514,9 +516,13 @@ describe("Node session lifecycle", () => {
 
     await expect(service.command("session-deadline-no-probe", cwd, "prompt", { message: "test" })).resolves.toMatchObject({ success: true });
     await waitFor(() => publish.mock.calls.some((call) => (call[2] as { message?: string } | undefined)?.message === "The prompt was accepted but the Pi runtime did not start an agent turn."));
-    // The guarded error call is recorded before the paired terminal idle
-    // publish resolves under slower Windows process scheduling.
-    await waitFor(() => publish.mock.calls.some((call) => (call[2] as { type?: string } | undefined)?.type === "session.idle"));
+    // The spy records the terminal idle call before its asynchronous publish
+    // resolves. Wait for the reconciliation cleanup itself so slower Windows
+    // scheduling cannot observe the operation between publish and cleanup.
+    const runtime = (service as unknown as { runtimes: Map<string, { operationToken?: string; operationPending?: string }> }).runtimes.get(`${resolve(cwd)}\0session-deadline-no-probe`);
+    await waitFor(() => publish.mock.calls.some((call) => (call[2] as { type?: string } | undefined)?.type === "session.idle")
+      && runtime?.operationToken === undefined
+      && runtime?.operationPending === undefined);
 
     const log = await readFile(process.env.FAKE_PI_LOG!, "utf8");
     const lines = log.split("\n");
@@ -524,7 +530,6 @@ describe("Node session lifecycle", () => {
     const probesAfterPrompt = lines.slice(promptLine + 1).filter((line) => line.includes('"type":"get_state"'));
     expect(probesAfterPrompt).toHaveLength(0);
     expect(publish.mock.calls.filter((call) => (call[2] as { type?: string } | undefined)?.type === "session.idle")).toHaveLength(1);
-    const runtime = (service as unknown as { runtimes: Map<string, { operationToken?: string; operationPending?: string }> }).runtimes.get(`${resolve(cwd)}\0session-deadline-no-probe`);
     expect(runtime?.operationToken).toBeUndefined();
     expect(runtime?.operationPending).toBeUndefined();
     publish.mockRestore();
@@ -607,8 +612,12 @@ describe("Node session lifecycle", () => {
 
     const after = await readFile(process.env.FAKE_PI_LOG!, "utf8");
     const count = (text: string) => text.split("\n").filter((line) => line.includes('"type":"get_state"')).length;
-    // Preflight refresh + a single immediate fail-fast probe — no retry rounds.
-    expect(count(after) - count(before)).toBe(2);
+    // A fresh state cached by resume can skip the optional preflight refresh;
+    // either way there is exactly one immediate fail-fast probe and no retry
+    // rounds after it.
+    const probes = count(after) - count(before);
+    expect(probes).toBeGreaterThanOrEqual(1);
+    expect(probes).toBeLessThanOrEqual(2);
     publish.mockRestore();
     await service.shutdownAll();
   });

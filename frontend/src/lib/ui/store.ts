@@ -52,6 +52,10 @@ interface UiState {
    *  conversation, or a floating action button in the corner. */
   todoUiMode: "sticky" | "fab";
   setTodoUiMode: (mode: "sticky" | "fab") => void;
+  /** Shared expansion state so switching todo presentation modes preserves
+   *  whether the current list is open. This is intentionally not persisted. */
+  todoUiOpen: boolean;
+  setTodoUiOpen: (open: boolean) => void;
 }
 
 export interface InspectorTab {
@@ -210,6 +214,8 @@ export const useUiStore = create<UiState>((set) => ({
     saveToStorage("todo.uiMode", mode);
     set({ todoUiMode: mode });
   },
+  todoUiOpen: false,
+  setTodoUiOpen: (open) => set({ todoUiOpen: open }),
 
   settingsOpen: false,
   settingsScope: null,

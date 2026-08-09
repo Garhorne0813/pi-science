@@ -35,11 +35,12 @@ export function TodoWidget() {
   const { t } = useTranslation();
   const mode = useUiStore((s) => s.todoUiMode);
   const blocks = useRuntimeStore((s) => s.thread.blocks);
+  const threadLoaded = useRuntimeStore((s) => s.thread.loaded);
   const cwd = useRuntimeStore((s) => s.cwd);
   const sessionId = useRuntimeStore((s) => s.activeSessionId);
   const vm = useMemo(() => todoViewModel(blocks), [blocks]);
   const hasOpenTasks = Boolean(vm && !vm.allCompleted);
-  const { open, setOpen, close } = useTodoAutoOpenOnce(hasOpenTasks, `${cwd}:${sessionId ?? ""}`);
+  const { open, setOpen, close } = useTodoAutoOpenOnce(hasOpenTasks, `${cwd}:${sessionId ?? ""}`, threadLoaded);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const positionRef = useRef<TodoPosition | null>(null);
   const dragRef = useRef<{
