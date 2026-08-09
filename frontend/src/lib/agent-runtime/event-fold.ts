@@ -431,26 +431,41 @@ function afterTurnEnd(blocks: ThreadBlock[], turnIndex: number): number {
  *  thread. Turns spanning several assistant messages anchor after the LAST
  *  one (Pi emits anonymous part ids without a message id); when user
  *  boundaries are unavailable (paged history) it falls back to the n-th
- *  agent block approximation. */
+ *  agent block approximation.
+ *
+ *  Legacy-data compatibility: records persisted before turn ordinals were
+ *  derived from the persisted log (runtime rebuilds used to reset the
+ *  counter) can carry duplicate ordinals (e.g. two records with
+ *  turn_ordinal=1). When an ordinal repeats, the later record falls back to
+ *  its record position (the M-th record anchors the M-th turn) so each strip
+ *  still lands in its own turn instead of stacking on the first. */
 export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): Thread {
   if (!turns || turns.length === 0) return thread;
   let blocks = thread.blocks;
   let index = thread.index;
   let changed = false;
   let insertedBefore = blocks.filter((b) => b.kind === "artifact-summary").length;
+  const usedOrdinals = new Set<number>();
+  let recordIndex = 0;
   for (const turn of turns) {
     const items = Array.isArray(turn.artifacts) ? turn.artifacts as TurnArtifactItem[] : [];
     if (!turn.turn_id || items.length === 0) continue;
+    recordIndex += 1;
     const blockId = `turn-artifacts-${turn.turn_id}`;
     const assistantMessageId = turn.assistant_message_id ?? null;
     const ordinal = Number(turn.turn_ordinal);
     let insertAt = -1;
     if (assistantMessageId && index[assistantMessageId] !== undefined) insertAt = index[assistantMessageId] + 1;
-    if (insertAt < 0 && Number.isInteger(ordinal) && ordinal > 0) {
+    if (insertAt < 0 && Number.isInteger(ordinal) && ordinal > 0 && !usedOrdinals.has(ordinal)) {
       // Anchor to the END of the ordinal-th turn (user-message delimited) so
       // multi-assistant-message turns get their strip after the last message;
       // falls back to the n-th agent block when user boundaries are missing.
+      usedOrdinals.add(ordinal);
       insertAt = afterTurnEnd(blocks, ordinal);
+    } else if (insertAt < 0 && Number.isInteger(ordinal) && ordinal > 0) {
+      // Duplicate ordinal (stale records from a runtime rebuild that reset the
+      // counter): use the record position so the strip lands in its own turn.
+      insertAt = afterTurnEnd(blocks, recordIndex);
     }
     if (insertAt < 0) {
       // Anchor by turn order: the next ordinal strip goes right after the

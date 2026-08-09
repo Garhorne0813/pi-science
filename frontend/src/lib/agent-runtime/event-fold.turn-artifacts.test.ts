@@ -183,6 +183,45 @@ describe("attachTurnArtifacts (history restore)", () => {
     expect(next.blocks[5]).toMatchObject({ turnId: "turn-2" });
   });
 
+  it("resolves duplicate ordinals by record position (stale runtime-rebuild data)", () => {
+    // Legacy data: two records both carry turn_ordinal=1 because the counter
+    // used to live on the runtime record and reset on rebuild. Each strip must
+    // still land in its own turn (1st and 2nd turn ends).
+    const thread = threadWith([
+      { kind: "user", id: "u1", text: "a" },
+      { kind: "agent", id: "msg-1", parts: [{ id: "msg-1", text: "r1" }] },
+      { kind: "user", id: "u2", text: "b" },
+      { kind: "agent", id: "msg-2", parts: [{ id: "msg-2", text: "r2" }] },
+    ]);
+    const next = attachTurnArtifacts(thread, [
+      { turn_id: "turn-1", session_id: "s", assistant_message_id: null, turn_ordinal: 1, ended_at: "t", artifacts: [{ path: "x.png", kind: "image", mime: "image/png", size: 1 }] },
+      { turn_id: "turn-2", session_id: "s", assistant_message_id: null, turn_ordinal: 1, ended_at: "t", artifacts: [{ path: "y.csv", kind: "table", mime: "text/csv", size: 2 }] },
+    ]);
+    expect(next.blocks.map((block) => block.kind)).toEqual(["user", "agent", "artifact-summary", "user", "agent", "artifact-summary"]);
+    expect(next.index["turn-artifacts-turn-1"]).toBe(2);
+    expect(next.index["turn-artifacts-turn-2"]).toBe(5);
+  });
+
+  it("keeps unique ordinals authoritative over record order", () => {
+    // turn-1 has no record; turn-2/turn-3 carry ordinals 2/3 (unique). The
+    // record order fallback must not take over when ordinals are unique.
+    const thread = threadWith([
+      { kind: "user", id: "u1", text: "a" },
+      { kind: "agent", id: "msg-1", parts: [{ id: "msg-1", text: "r1" }] },
+      { kind: "user", id: "u2", text: "b" },
+      { kind: "agent", id: "msg-2", parts: [{ id: "msg-2", text: "r2" }] },
+      { kind: "user", id: "u3", text: "c" },
+      { kind: "agent", id: "msg-3", parts: [{ id: "msg-3", text: "r3" }] },
+    ]);
+    const next = attachTurnArtifacts(thread, [
+      { turn_id: "turn-2", session_id: "s", assistant_message_id: null, turn_ordinal: 2, ended_at: "t", artifacts: [{ path: "x.png", kind: "image", mime: "image/png", size: 1 }] },
+      { turn_id: "turn-3", session_id: "s", assistant_message_id: null, turn_ordinal: 3, ended_at: "t", artifacts: [{ path: "y.csv", kind: "table", mime: "text/csv", size: 2 }] },
+    ]);
+    expect(next.blocks.map((block) => block.kind)).toEqual(["user", "agent", "user", "agent", "artifact-summary", "user", "agent", "artifact-summary"]);
+    expect(next.index["turn-artifacts-turn-2"]).toBe(4);
+    expect(next.index["turn-artifacts-turn-3"]).toBe(7);
+  });
+
   it("anchors by turn_ordinal when earlier turns produced no records", () => {
     const thread = threadWith([
       { kind: "user", id: "u1", text: "a" },
