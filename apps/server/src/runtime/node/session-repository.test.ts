@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { invalidateSessionFileCache, SessionRepository } from "./session-repository.js";
 import { ensureProject } from "../../project/project-registry.js";
+import { AI_TITLE_PROMPT_INSTRUCTION } from "../title/title-prompt.js";
 
 const tempDirs: string[] = [];
 
@@ -157,6 +158,26 @@ describe("SessionRepository cache", () => {
       expect.objectContaining({ id: "parent" }),
     ]));
     await expect(repo.list(cwd)).resolves.toHaveLength(2);
+  });
+
+  it("hides legacy AI-title runtime sessions while keeping normal conversations visible", async () => {
+    const cwd = await makeWorkspace();
+    const sessions = join(cwd, ".pi-science", "sessions");
+    const repo = new SessionRepository();
+    await writeFile(
+      join(sessions, "normal.jsonl"),
+      `${sessionHeader("normal", cwd)}${messageLine("m1", "user", "Analyse this experiment")}`,
+      "utf8",
+    );
+    await writeFile(
+      join(sessions, "legacy-title-runtime.jsonl"),
+      `${sessionHeader("legacy-title-runtime", cwd)}${messageLine("m2", "user", `${AI_TITLE_PROMPT_INSTRUCTION}\n\nConversation:\nuser: Analyse this experiment`)}`,
+      "utf8",
+    );
+
+    await expect(repo.list(cwd)).resolves.toEqual([
+      expect.objectContaining({ id: "normal" }),
+    ]);
   });
 
   it("re-discovers a session file that was completed in place after being corrupt", async () => {

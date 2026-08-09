@@ -251,6 +251,18 @@ describe("Pi runtime custom provider materialization", () => {
     expect(options.web?.runtime).toMatchObject({ cwd, sessionDir: join(cwd, ".pi-science", "sessions") });
   });
 
+  it("allows isolated runtimes to override the web session directory", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-isolated-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const isolatedSessions = join(cwd, ".pi-science", "title-runtimes", "runtime-1");
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+
+    const options = buildPiProcessOptions(cwd, undefined, undefined, {}, isolatedSessions)!;
+
+    expect(options.web?.runtime.sessionDir).toBe(isolatedSessions);
+    expect(options.web?.runtime.sessionDir).not.toBe(join(cwd, ".pi-science", "sessions"));
+  });
+
   it("reuses the shared web port and token until reset allocates fresh ones", () => {
     const cwd = join(tmpdir(), `pi-runtime-shared-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(cwd);

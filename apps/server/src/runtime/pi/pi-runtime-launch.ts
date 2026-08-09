@@ -45,7 +45,7 @@ export function resetWebRuntimeAllocation(): void {
   sharedWebToken = null;
 }
 
-export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: [], extensions: [] }, sessionPath?: string, workspaceEnvironment: NodeJS.ProcessEnv = {}): PiProcessOptions | null {
+export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: [], extensions: [] }, sessionPath?: string, workspaceEnvironment: NodeJS.ProcessEnv = {}, sessionDirectory?: string): PiProcessOptions | null {
   const cliPath = process.env.PI_CLI_PATH;
   if (!cliPath) return null;
   const nodePath = process.env.PI_NODE_PATH || process.execPath;
@@ -70,7 +70,7 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
   } else {
     command = cliPath;
   }
-  const sessionDir = join(cwd, ".pi-science", "sessions");
+  const sessionDir = sessionDirectory ? resolve(sessionDirectory) : join(cwd, ".pi-science", "sessions");
   args.push("--mode", useRpcMode ? "rpc" : "web");
   if (useRpcMode) args.push("--session-dir", sessionDir);
   else args.push("--host", "127.0.0.1", "--port", String(reservedWebPort), "--web-app-managed", "--no-session");
