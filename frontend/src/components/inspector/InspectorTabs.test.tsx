@@ -45,7 +45,7 @@ describe("InspectorTabs", () => {
 
     expect(screen.getByRole("tab", { name: "two.txt" })).toHaveAttribute("aria-selected", "true");
     const activePanel = screen.getByRole("tabpanel");
-    expect(within(activePanel).getByRole("banner")).toHaveClass("h-10");
+    expect(within(activePanel).getByRole("banner")).toHaveClass("h-9");
     expect(within(activePanel).queryByRole("button", { name: "Close" })).toBeNull();
     expect(within(activePanel).queryByRole("button", { name: "Open" })).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: "one.txt" }));
