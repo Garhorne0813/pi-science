@@ -129,6 +129,11 @@ describe("InspectorTabs", () => {
     const header = within(screen.getByRole("dialog", { name: "two.txt" })).getByRole("banner");
     const zoomGroup = screen.getByRole("button", { name: "Reset zoom to 100%" }).parentElement;
     const editButton = within(header).getByRole("button", { name: "Edit file" });
+    const historyButton = within(header).getByRole("button", { name: "Version history" });
+    const maximizeButton = within(header).getByRole("button", { name: "Restore panel" });
+    for (const button of [editButton, historyButton, maximizeButton]) {
+      expect(button).toHaveClass("h-icon", "w-icon", "rounded-input", "text-text");
+    }
     expect(Array.from(header.children).indexOf(zoomGroup as Element)).toBeLessThan(
       Array.from(header.children).indexOf(editButton),
     );

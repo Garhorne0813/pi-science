@@ -16,6 +16,7 @@ import { parseTableFile } from "@/lib/shared";
 import { formatNumber } from "@/i18n/format";
 import { CodeViewer } from "@/components/code-viewer/CodeViewer";
 import { MarkdownViewer } from "@/components/markdown-viewer/MarkdownViewer";
+import { IconButton } from "@/components/ui/Icon";
 import { ProvenancePanel } from "./ProvenancePanel";
 import { TablePreview } from "./TablePreview";
 import { TableChart } from "./TableChart";
@@ -258,40 +259,42 @@ export function FilePreviewInspector({
           </>
         ) : (
           editable && !showHistory && (
-            <button
-              className="text-text hover:opacity-60"
-              aria-label={t("filePreview.edit")}
-              title={t("filePreview.edit")}
+            <IconButton
+              icon={Pencil}
+              label={t("filePreview.edit")}
+              size="compact"
+              className="text-text"
               onClick={startEdit}
-            >
-              <Pencil size={14} strokeWidth={1.5} />
-            </button>
+            />
           )
         )}
-        <button
-          className={cn(showHistory ? "text-accent" : "text-text hover:opacity-60")}
-          aria-label={t("filePreview.versionHistory")}
-          title={t("filePreview.versionHistory")}
+        <IconButton
+          icon={History}
+          label={t("filePreview.versionHistory")}
+          size="compact"
+          className={showHistory ? "bg-surface-2 text-accent" : "text-text"}
           aria-pressed={showHistory}
           onClick={() => setShowHistory((v) => !v)}
-        >
-          <History size={14} strokeWidth={1.5} />
-        </button>
+        />
         {showOpenExternally && kind !== "html" && (
-          <button
-            className="text-text hover:opacity-60"
-            aria-label={t("common.open")}
+          <IconButton
+            icon={ExternalLink}
+            label={t("common.open")}
+            size="compact"
+            className="text-text"
             title={t("filePreview.openExternally")}
             onClick={() => void openArtifactExternally(data.path, data.root, cwd)}
-          >
-            <ExternalLink size={14} strokeWidth={1.5} />
-          </button>
+          />
         )}
         {controls}
         {showClose && (
-          <button className="text-text hover:opacity-60" aria-label={t("common.close")} onClick={onClose}>
-            <X size={14} strokeWidth={1.5} />
-          </button>
+          <IconButton
+            icon={X}
+            label={t("common.close")}
+            size="compact"
+            className="text-text"
+            onClick={onClose}
+          />
         )}
       </header>
 
