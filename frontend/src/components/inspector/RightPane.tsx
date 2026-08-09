@@ -3,8 +3,8 @@ import { useTranslation } from "react-i18next";
 import { INSPECTOR_MAX, INSPECTOR_MIN, useUiStore } from "@/lib/ui";
 import { cn } from "@/lib/ui";
 
-/** Dragging the divider below this pane width closes the pane — the same
- *  snap-shut behaviour as the sidebar. Sits below INSPECTOR_MIN for a clear snap. */
+/** Dragging the divider below this pane width minimizes the pane while keeping
+ *  its open tabs, matching the preview visibility button. */
 const COLLAPSE_BELOW = 280;
 
 /** The pane may never squeeze the conversation out on small windows. */
@@ -13,15 +13,15 @@ const MAX_FRACTION = 0.7;
 /**
  * Resizable right pane hosting an inspector or the session Files browser.
  * The left-edge divider drags within [INSPECTOR_MIN, INSPECTOR_MAX] (persisted);
- * dragging it far right snaps the pane closed. Maximized, the pane covers the
+ * dragging it far right minimizes the pane. Maximized, the pane covers the
  * all layout space to the right of the sidebar while the conversation hides.
  */
 export function RightPane({
   children,
-  onClose,
+  onMinimize,
 }: {
   children: React.ReactNode;
-  onClose: () => void;
+  onMinimize: () => void;
 }) {
   const { t } = useTranslation();
   // Field-level selectors so unrelated UI-store writes do not re-render the pane.
@@ -64,12 +64,13 @@ export function RightPane({
     // right of the pointer.
     const w = window.innerWidth - e.clientX;
     if (w < COLLAPSE_BELOW) {
-      // Snap closed — the pane unmounts, which also ends the drag.
+      // Snap to the hidden state without discarding tabs. The pane unmounts,
+      // which also ends the drag, and can be restored from the header button.
       if (dragFrameRef.current !== null) cancelAnimationFrame(dragFrameRef.current);
       dragFrameRef.current = null;
       dragWidthRef.current = null;
       setDragging(false);
-      onClose();
+      onMinimize();
       return;
     }
     const nextWidth = clamp(w);
@@ -125,7 +126,7 @@ export function RightPane({
     >
       <div className={cn("h-full", dragging && "pointer-events-none")}>{children}</div>
       {/* Drag divider: resize within [INSPECTOR_MIN, INSPECTOR_MAX]; dragging
-          far right snaps the pane closed. */}
+          far right minimizes the pane while retaining its tabs. */}
       <div
         role="separator"
         aria-orientation="vertical"

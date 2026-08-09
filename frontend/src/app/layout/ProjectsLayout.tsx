@@ -33,6 +33,7 @@ export function ProjectsLayout() {
   const activeInspectorTabId = useUiStore((s) => s.activeInspectorTabId);
   const inspectorMaximized = useUiStore((s) => s.inspectorMaximized);
   const closeInspector = useUiStore((s) => s.closeInspector);
+  const setInspectorVisible = useUiStore((s) => s.setInspectorVisible);
   const setInspectorMaximized = useUiStore((s) => s.setInspectorMaximized);
   const setSidebarWidth = useUiStore((s) => s.setSidebarWidth);
   const [sidebarDragWidth, setSidebarDragWidth] = useState<number | null>(null);
@@ -223,7 +224,7 @@ export function ProjectsLayout() {
 
       {/* Inspector — only in workspace context */}
       {isWorkspace && inspectorOpen && activeInspectorTabId && inspectorTabs.length > 0 && (
-        <RightPane onClose={closeInspector}>
+        <RightPane onMinimize={() => setInspectorVisible(false)}>
           <InspectorTabs
             tabs={inspectorTabs}
             activeTabId={activeInspectorTabId}

@@ -3,6 +3,11 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { RightPane } from "./RightPane";
 import { useUiStore } from "@/lib/ui";
 import i18n from "@/i18n";
+import type { FilePreviewInspector } from "@/types/thread";
+
+function file(path: string): FilePreviewInspector {
+  return { variant: "file", path, filename: path, cwd: "project", root: "workspace" };
+}
 
 describe("RightPane resizing", () => {
   let captured = false;
@@ -47,7 +52,7 @@ describe("RightPane resizing", () => {
 
   it("updates the live pane width during a pointer drag and persists on release", () => {
     render(
-      <RightPane onClose={vi.fn()}>
+      <RightPane onMinimize={vi.fn()}>
         <div>Preview</div>
       </RightPane>,
     );
@@ -72,7 +77,7 @@ describe("RightPane resizing", () => {
       return frames.length;
     });
     render(
-      <RightPane onClose={vi.fn()}>
+      <RightPane onMinimize={vi.fn()}>
         <div>Preview</div>
       </RightPane>,
     );
@@ -93,7 +98,7 @@ describe("RightPane resizing", () => {
 
   it("supports keyboard width adjustments on the divider", () => {
     render(
-      <RightPane onClose={vi.fn()}>
+      <RightPane onMinimize={vi.fn()}>
         <div>Preview</div>
       </RightPane>,
     );
@@ -108,12 +113,32 @@ describe("RightPane resizing", () => {
   it("fills the layout beside the sidebar when expanded", () => {
     useUiStore.setState({ inspectorMaximized: true });
     const { container } = render(
-      <RightPane onClose={vi.fn()}>
+      <RightPane onMinimize={vi.fn()}>
         <div>Preview</div>
       </RightPane>,
     );
 
     expect(container.firstElementChild).toHaveClass("flex-1");
     expect(container.firstElementChild).not.toHaveClass("fixed", "inset-0");
+  });
+
+  it("minimizes below the collapse threshold without discarding preview tabs", () => {
+    const preview = file("report.md");
+    useUiStore.getState().openInspector(preview);
+    render(
+      <RightPane onMinimize={() => useUiStore.getState().setInspectorVisible(false)}>
+        <div>Preview</div>
+      </RightPane>,
+    );
+
+    const divider = screen.getByRole("separator", { name: "Resize preview panel" });
+    fireEvent.pointerDown(divider, { button: 0, pointerId: 1 });
+    fireEvent.pointerMove(divider, { pointerId: 1, clientX: window.innerWidth - 240 });
+
+    expect(useUiStore.getState()).toMatchObject({
+      inspectorOpen: false,
+      inspectorData: preview,
+      inspectorTabs: [{ data: preview }],
+    });
   });
 });
