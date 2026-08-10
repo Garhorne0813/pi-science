@@ -37,7 +37,7 @@ const IGNORED_DIRS = new Set([
 ]);
 
 /** Directories at the workspace root whose contents matter for artifacts. */
-const ROOT_INCLUDE_DIRS = new Set(["work", "output", "results", "figures", "plots", "data", "scripts", "reports", "assets", "docs", "notebooks"]);
+const ROOT_INCLUDE_DIRS = new Set(["work", "output", "outputs", "results", "figures", "plots", "data", "scripts", "reports", "assets", "docs", "notebooks", "structures", "docking", "pdb", "ligands", "molecules", "models", "input", "report", "logs", "experiments", "timing", "notes"]);
 
 function isIgnoredDir(name: string): boolean {
   if (IGNORED_DIRS.has(name)) return true;

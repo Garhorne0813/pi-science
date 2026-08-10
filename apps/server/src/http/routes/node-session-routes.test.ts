@@ -109,6 +109,51 @@ describe("native Node conversation routes", () => {
     await server.close();
   });
 
+  it("persists the generated AI title server-side without a client PUT", async () => {
+    const cwd = await workspaceWithSessions("session-title-persist");
+    const aiTitleService = {
+      async generateTitle() { return "AI 自动标题"; },
+    };
+    const server = Fastify({ logger: false });
+    registerSessionReadRoutes(server, sessionRepository, nodeSessionService);
+    registerNodeSessionRoutes(server, nodeSessionService, sessionRepository, aiTitleService as never);
+    const response = await server.inject({ method: "POST", url: `/api/sessions/session-title-persist/title?cwd=${encodeURIComponent(cwd)}` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, title: "AI 自动标题" });
+    // No client PUT involved: the title is already on disk and in the list.
+    const raw = await readFile(join(cwd, ".pi-science", "session-titles.jsonl"), "utf8");
+    expect(raw).toContain('"session_id":"session-title-persist"');
+    expect(raw).toContain("AI 自动标题");
+    const listed = await server.inject({ method: "GET", url: `/api/sessions?cwd=${encodeURIComponent(cwd)}` });
+    expect((listed.json() as Array<{ id: string; name: string | null }>).find((s) => s.id === "session-title-persist")?.name).toBe("AI 自动标题");
+    await server.close();
+  });
+
+  it("does not persist when AI title generation returns null", async () => {
+    const cwd = await workspaceWithSessions("session-title-null");
+    const aiTitleService = { async generateTitle() { return null; } };
+    const server = Fastify({ logger: false });
+    registerNodeSessionRoutes(server, nodeSessionService, sessionRepository, aiTitleService as never);
+    const response = await server.inject({ method: "POST", url: `/api/sessions/session-title-null/title?cwd=${encodeURIComponent(cwd)}` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, title: null });
+    await expect(readFile(join(cwd, ".pi-science", "session-titles.jsonl"), "utf8")).rejects.toThrow();
+    await server.close();
+  });
+
+  it("accepts a title PUT for a live session before its file exists on disk", async () => {
+    const cwd = await workspaceWithSessions();
+    const server = app();
+    const created = await server.inject({ method: "POST", url: "/api/sessions", payload: { cwd } });
+    expect(created.statusCode).toBe(200);
+    const sessionId = created.json().id as string;
+    expect(nodeSessionService.liveSessions(cwd).some((session) => session.id === sessionId)).toBe(true);
+    const put = await server.inject({ method: "PUT", url: `/api/sessions/${sessionId}/title?cwd=${encodeURIComponent(cwd)}`, payload: { title: "live session title" } });
+    expect(put.statusCode).toBe(200);
+    expect(put.json()).toMatchObject({ ok: true, title: "live session title" });
+    await server.close();
+  });
+
   it("rejects a title request for an invalid workspace with 403", async () => {
     const aiTitleService = {
       async generateTitle() {

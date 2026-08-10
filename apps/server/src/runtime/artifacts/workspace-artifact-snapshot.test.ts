@@ -2,7 +2,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { diffWorkspaceSnapshots, snapshotWorkspace, type WorkspaceSnapshotEntry } from "./workspace-artifact-snapshot.js";
+import { diffWorkspaceSnapshots, previewKind, previewMime, snapshotWorkspace, type WorkspaceSnapshotEntry } from "./workspace-artifact-snapshot.js";
 
 const cleanup: string[] = [];
 
@@ -58,6 +58,32 @@ describe("workspace artifact snapshot", () => {
     const diff = diffWorkspaceSnapshots(before, after!);
     expect(diff.created.map((entry) => entry.path)).toEqual(["work/c.png"]);
     expect(diff.modified.map((entry) => entry.path)).toEqual(["work/a.csv"]);
+  });
+
+  it("captures structure files under scientific dirs as structure artifacts (regression: structures/)", async () => {
+    const cwd = await workspace();
+    await mkdir(join(cwd, "structures"), { recursive: true });
+    await writeFile(join(cwd, "structures", "1HEL.pdb"), "ATOM  ...\n", "utf8");
+    await writeFile(join(cwd, "structures", "aspirin.sdf"), "aspirin\n", "utf8");
+    const before = await snapshotWorkspace(cwd);
+
+    await writeFile(join(cwd, "structures", "1CRN.pdb"), "ATOM  ...\n", "utf8");
+    await writeFile(join(cwd, "structures", "caffeine.sdf"), "caffeine\n", "utf8");
+    const after = await snapshotWorkspace(cwd);
+
+    const paths = (after ?? []).map((entry) => entry.path).sort();
+    expect(paths).toEqual(["structures/1CRN.pdb", "structures/1HEL.pdb", "structures/aspirin.sdf", "structures/caffeine.sdf"]);
+
+    const diff = diffWorkspaceSnapshots(before, after!);
+    expect(diff.created.map((entry) => entry.path).sort()).toEqual(["structures/1CRN.pdb", "structures/caffeine.sdf"]);
+    expect(diff.modified).toEqual([]);
+
+    const pdb = (after ?? []).find((entry) => entry.path === "structures/1CRN.pdb")!;
+    const sdf = (after ?? []).find((entry) => entry.path === "structures/caffeine.sdf")!;
+    expect(previewKind(pdb.path)).toBe("structure");
+    expect(previewMime(pdb.path)).toBe("chemical/x-pdb");
+    expect(previewKind(sdf.path)).toBe("structure");
+    expect(previewMime(sdf.path)).toBe("chemical/x-mdl-sdfile");
   });
 
   it("treats a null baseline as no diff (degraded start)", async () => {

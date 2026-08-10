@@ -1,5 +1,10 @@
 import { readJsonLines, withFileWriteLock, workspaceFile } from "../../storage/persistence.js";
-import { writeFile } from "node:fs/promises";
+import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { dirname } from "node:path";
+
+const TITLE_RENAME_RETRIES = 5;
+const TITLE_RENAME_RETRY_MS = 20;
 
 /** Persisted session display titles. Kept in
  *  `<workspace>/.pi-science/session-titles.jsonl` so the conversation list
@@ -53,7 +58,26 @@ export class SessionTitleRepository {
 
 async function rewriteTitles(file: string, records: SessionTitleRecord[]): Promise<void> {
   const lines = records.map((record) => JSON.stringify(record)).join("\n");
-  await writeFile(file, lines ? `${lines}\n` : "", "utf8");
+  const content = lines ? `${lines}\n` : "";
+  // Atomic replace: write a same-directory temp file, then rename over the
+  // target so a crash mid-write cannot truncate the whole title store.
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  await mkdir(dirname(file), { recursive: true });
+  try {
+    await writeFile(temporary, content, "utf8");
+    for (let attempt = 0; ; attempt += 1) {
+      try { await rename(temporary, file); return; }
+      catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "EPERM" && code !== "EBUSY" && code !== "EEXIST") throw error;
+        if (attempt >= TITLE_RENAME_RETRIES - 1) throw error;
+        await new Promise((resolveWait) => setTimeout(resolveWait, TITLE_RENAME_RETRY_MS * (attempt + 1)));
+      }
+    }
+  } catch (error) {
+    await unlink(temporary).catch(() => undefined);
+    throw error;
+  }
 }
 
 export const sessionTitleRepository = new SessionTitleRepository();

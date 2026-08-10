@@ -77,6 +77,9 @@ export function registerNodeSessionRoutes(
     const exists = await sessionRepository.findPath(workspace, sessionId);
     if (!exists) return reply.code(404).send({ ok: false, code: "not_found", error: "session not found" });
     const title = await aiTitleService.generateTitle(workspace, sessionId);
+    // Persist the generated title server-side so a lost client PUT (tab closed,
+    // network drop) cannot lose it; null means no title was produced.
+    if (title) await titles.setTitle(workspace, sessionId, title);
     return { ok: true, title };
   });
 
@@ -92,7 +95,11 @@ export function registerNodeSessionRoutes(
     } catch (error) {
       return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) });
     }
-    const exists = await sessionRepository.findPath(workspace, sessionId);
+    // A brand-new session is live before its JSONL lands on disk (the file is
+    // written when the first message arrives), so accept the derived-name PUT
+    // for live sessions too; unknown sessions still 404, scoped per workspace.
+    const exists = (await sessionRepository.findPath(workspace, sessionId)) !== null
+      || nodeSessionService.liveSessions(workspace).some((session) => session.id === sessionId);
     if (!exists) return reply.code(404).send({ ok: false, code: "not_found", error: "session not found" });
     await titles.setTitle(workspace, sessionId, title);
     return { ok: true, title };
