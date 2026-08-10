@@ -46,4 +46,12 @@ describe("TodoTaskList", () => {
     expect(screen.getByText("Depends on #1")).toBeInTheDocument();
     expect(screen.getAllByText("Blocked")).toHaveLength(1);
   });
+
+  it("uses the same typography for completed and unfinished tasks in compact mode", () => {
+    render(<TodoTaskList tasks={tasks} compact />);
+    const completed = screen.getByText("Load dataset");
+    const pending = screen.getByText("Write report");
+    expect(completed.className).toBe(pending.className);
+    expect(completed).not.toHaveClass("line-through", "text-muted");
+  });
 });

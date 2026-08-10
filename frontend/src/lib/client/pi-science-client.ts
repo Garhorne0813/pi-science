@@ -165,6 +165,10 @@ export class PiScienceClient {
     this.transport.connect(sessionId, cwd);
   }
 
+  reconnect(sessionId: string, cwd?: string): void {
+    this.transport.reconnect(sessionId, cwd);
+  }
+
   disconnect(): void {
     this.transport.disconnect();
   }

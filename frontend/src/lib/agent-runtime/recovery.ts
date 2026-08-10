@@ -330,13 +330,11 @@ export async function reconcileAfterGap(
   void loadSessionsInternal();
 }
 
-/** How many consecutive idle REST rounds with no confirmed reply before the
- *  late-stream monitor gives up and settles the UI anyway. While the stream
- *  is open each 250 ms tick is a round (~30 s for 120); while it is closed a
- *  round runs every 4 ticks (~1 s, ~2 min for 120). Each idle round performs
- *  a state REST read and, when idle, an additional messages read. A finished
- *  turn with no output or a wedged agent must not leave Send disabled
- *  forever. */
+/** How many consecutive one-second idle REST rounds with no confirmed reply
+ *  before the late-stream monitor gives up and settles the UI anyway. Each
+ *  idle round performs a state read and, when idle, an additional messages
+ *  read. A finished turn with no output or a wedged agent must not leave Send
+ *  disabled forever. */
 const DEFAULT_IDLE_LIMIT_TICKS = 120;
 
 export async function reconcilePromptAfterLateStream(
@@ -346,14 +344,17 @@ export async function reconcilePromptAfterLateStream(
   monitorGeneration: number,
   promptTimestamp?: number,
   idleLimitTicks = DEFAULT_IDLE_LIMIT_TICKS,
+  expectedActivityGeneration?: number,
 ): Promise<void> {
   let ticks = 0;
   let idleTicks = 0;
+  let forcedReconnect = false;
   while (true) {
     await new Promise((resolve) => globalThis.setTimeout(resolve, 250));
     const current = useRuntimeStore.getState();
     if (
       monitorGeneration !== generations.promptMonitor
+      || (expectedActivityGeneration !== undefined && expectedActivityGeneration !== generations.activity)
       || current.activeSessionId !== sessionId
       || current.cwd !== cwd
       || !current.working
@@ -361,13 +362,23 @@ export async function reconcilePromptAfterLateStream(
 
     ticks += 1;
     const streamOpen = client.isOpenTo(sessionId, cwd);
-    if (!streamOpen && ticks % 4 !== 0) continue;
+    // An OPEN EventSource is not proof that bytes are still flowing: laptops
+    // waking from sleep and old-session switches can leave a half-open socket.
+    // Probe REST once per second in either connection state. If an apparently
+    // open stream has produced no terminal event, rebuild it once with its
+    // resume cursor so missed text/tool/idle events can be replayed.
+    if (ticks % 4 !== 0) continue;
+    if (streamOpen && !forcedReconnect) {
+      forcedReconnect = true;
+      client.reconnect(sessionId, cwd);
+    }
 
     try {
       const runtimeState = await client.getSessionState(sessionId, cwd);
       const latest = useRuntimeStore.getState();
       if (
         monitorGeneration !== generations.promptMonitor
+        || (expectedActivityGeneration !== undefined && expectedActivityGeneration !== generations.activity)
         || latest.activeSessionId !== sessionId
         || latest.cwd !== cwd
         || !latest.working
@@ -411,6 +422,7 @@ export async function reconcilePromptAfterLateStream(
         const recheck = useRuntimeStore.getState();
         if (
           monitorGeneration !== generations.promptMonitor
+          || (expectedActivityGeneration !== undefined && expectedActivityGeneration !== generations.activity)
           || recheck.activeSessionId !== sessionId
           || recheck.cwd !== cwd
           || !recheck.working
@@ -422,9 +434,6 @@ export async function reconcilePromptAfterLateStream(
         return;
       }
       idleTicks = 0;
-      // Once the stream is open while the runtime is authoritatively busy, its
-      // subscriber is attached and will receive the eventual terminal event.
-      if (streamOpen) return;
     } catch {
       // Keep polling while the stream is still connecting. Transport failure
       // handling remains responsible for the visible connection status.

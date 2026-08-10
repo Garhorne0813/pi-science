@@ -57,9 +57,41 @@ afterEach(() => {
 describe("ConversationNavRail", () => {
   it("renders one entry per item with the summary label", () => {
     renderRail();
-    expect(screen.getByRole("navigation", { name: "Conversation" })).toBeInTheDocument();
+    const navigation = screen.getByRole("navigation", { name: "Conversation" });
+    expect(navigation).toBeInTheDocument();
+    expect(navigation).toHaveStyle({ maxHeight: "min(55vh, 520px)" });
     expect(screen.getByRole("button", { name: "First question about models" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Second question about data" })).toBeInTheDocument();
+  });
+
+  it("shows only the hovered message preview and removes it on mouse leave", () => {
+    renderRail();
+    const first = screen.getByRole("button", { name: "First question about models" });
+
+    fireEvent.mouseMove(first);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("First question about models");
+    expect(screen.getByRole("tooltip")).not.toHaveTextContent("Second question about data");
+
+    fireEvent.mouseLeave(screen.getByRole("navigation", { name: "Conversation" }).parentElement!);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("activates the nearest row from movement anywhere in the transparent rail hit area", () => {
+    renderRail([
+      { id: "u1", label: "One" },
+      { id: "u2", label: "Two" },
+      { id: "u3", label: "Three" },
+    ]);
+    const navigation = screen.getByRole("navigation", { name: "Conversation" });
+    vi.spyOn(navigation, "getBoundingClientRect").mockReturnValue({
+      x: 0, y: 100, top: 100, left: 0, right: 80, bottom: 148, width: 80, height: 48, toJSON: () => ({}),
+    });
+
+    // Target the nav container itself—not a button or the visible 8px stroke.
+    fireEvent.pointerMove(navigation, { clientY: 124 });
+
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Two");
+    expect(screen.getByRole("button", { name: "Two" }).querySelector<HTMLElement>("[data-nav-indicator]")).toHaveStyle({ width: "48px" });
   });
 
   it("renders nothing for an empty item list", () => {
@@ -80,6 +112,45 @@ describe("ConversationNavRail", () => {
     const button = screen.getByRole("button", { name: "Second question about data" });
     expect(button).toHaveAttribute("aria-current", "true");
     expect(screen.getByRole("button", { name: "First question about models" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("keeps every line short at rest and moves the length gradient with hover", () => {
+    renderRail([
+      { id: "u1", label: "One" },
+      { id: "u2", label: "Two" },
+      { id: "u3", label: "Three" },
+      { id: "u4", label: "Four" },
+      { id: "u5", label: "Five" },
+    ]);
+
+    const width = (name: string) => screen.getByRole("button", { name }).querySelector<HTMLElement>("[data-nav-indicator]")?.style.width;
+    expect(["One", "Two", "Three", "Four", "Five"].map(width)).toEqual(["8px", "8px", "8px", "8px", "8px"]);
+
+    fireEvent.mouseMove(screen.getByRole("button", { name: "Three" }));
+    expect(width("Three")).toBe("48px");
+    expect(width("Two")).toBe("36px");
+    expect(width("Four")).toBe("36px");
+    expect(width("One")).toBe("24px");
+    expect(width("Five")).toBe("24px");
+
+    fireEvent.mouseMove(screen.getByRole("button", { name: "Five" }));
+    expect(width("Five")).toBe("48px");
+    expect(width("Four")).toBe("36px");
+    expect(width("Three")).toBe("24px");
+    expect(width("One")).toBe("8px");
+
+    fireEvent.mouseLeave(screen.getByRole("navigation", { name: "Conversation" }).parentElement!);
+    expect(["One", "Two", "Three", "Four", "Five"].map(width)).toEqual(["8px", "8px", "8px", "8px", "8px"]);
+  });
+
+  it("compresses long conversations inside the bounded scroll rail", () => {
+    const items = Array.from({ length: 45 }, (_, index) => ({ id: `u${index}`, label: `Question ${index}` }));
+    renderRail(items);
+
+    const navigation = screen.getByRole("navigation", { name: "Conversation" });
+    expect(navigation).toHaveClass("overflow-y-auto");
+    expect(screen.getByRole("button", { name: "Question 0" })).toHaveStyle({ height: "12px" });
+    expect(screen.getByRole("button", { name: "Question 44" })).toBeInTheDocument();
   });
 
   it("highlights the intersecting entry from the observer callback", () => {

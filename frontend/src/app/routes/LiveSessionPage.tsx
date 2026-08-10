@@ -39,7 +39,7 @@ type ConversationVirtuosoProps = VirtuosoProps<ThreadBlock[], ConversationVirtuo
 const LazyVirtuoso = lazy(() => import("react-virtuoso").then(({ Virtuoso }) => ({
   default: Virtuoso as unknown as ComponentType<ConversationVirtuosoProps>,
 })));
-const TodoStickyBar = lazy(() => import("../../components/todo/TodoStickyBar").then((m) => ({ default: m.TodoStickyBar })));
+const ComposerTodo = lazy(() => import("../../components/todo/ComposerTodo").then((m) => ({ default: m.ComposerTodo })));
 
 /**
  * Keep the virtual-list footer component type stable. Defining Footer inline
@@ -460,9 +460,6 @@ export function LiveSessionPage() {
           grow equally, so the composer card lands on the vertical centre while
           the welcome copy hangs off its bottom edge. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
-        <Suspense fallback={null}>
-          <TodoStickyBar />
-        </Suspense>
         {/* Thread */}
         <div className={cn("flex-1 overflow-hidden [overflow-anchor:none]", showWelcome && "flex flex-col justify-end")}>
           {/* 824 = 760 composer column + the px-8 gutters, so thread content lines up with the composer's edges.
@@ -536,7 +533,7 @@ export function LiveSessionPage() {
           </div>
         </div>
 
-        {/* ChatGPT-style rail: jump between user queries (desktop only) */}
+        {/* Compact conversation minimap: hover a line to preview, click to jump. */}
         {userNavItems.length >= 1 && (
           <ConversationNavRail items={userNavItems} rootRef={scrollRef} onSelect={handleNavSelect} />
         )}
@@ -559,6 +556,9 @@ export function LiveSessionPage() {
               )}
             </div>
           )}
+          <Suspense fallback={null}>
+            <ComposerTodo />
+          </Suspense>
           <div
             className={cn(
               "ui-card relative mx-auto max-w-[760px] rounded-card transition-colors",

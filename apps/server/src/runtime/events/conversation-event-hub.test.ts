@@ -257,6 +257,38 @@ describe("central conversation event hub", () => {
     expect(text.at(-1)).toMatchObject({ text: "replacement", replace: true, partId: "m2" });
   });
 
+  it("uses partial snapshots to discard repeated and overlapping streaming deltas", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub();
+    const process = new EventEmitter() as PiProcess;
+    const received: Array<Record<string, unknown>> = [];
+    hub.bind(cwd, process, { activeSessionId: () => "session-overlap", onBusy: () => undefined, onExit: () => undefined });
+    await hub.subscribe(cwd, "session-overlap", undefined, (record) => received.push(JSON.parse(record.data)));
+
+    const partial = (value: string) => ({
+      role: "assistant",
+      content: [{ type: "text", text: value }],
+    });
+    const emitDelta = (delta: string, snapshot: string) => process.emit("event", {
+      type: "message_update",
+      message: { id: "m-overlap" },
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial: partial(snapshot) },
+    });
+
+    process.emit("event", { type: "agent_start" });
+    emitDelta("生成出版级图表(matplotlib，带单位", "生成出版级图表(matplotlib，带单位");
+    // Duplicate delivery: no new text in the authoritative snapshot.
+    emitDelta("生成出版级图表(matplotlib，带单位", "生成出版级图表(matplotlib，带单位");
+    // Provider chunk overlaps the previous chunk, but the snapshot advances
+    // by only the non-overlapping suffix.
+    emitDelta("图表(matplotlib，带单位标注、色盲友好配色", "生成出版级图表(matplotlib，带单位标注、色盲友好配色");
+    process.emit("event", { type: "agent_settled" });
+    await eventually(() => received.some((event) => event.type === "session.idle"));
+
+    expect(received.filter((event) => event.type === "text.updated").map((event) => event.text).join(""))
+      .toBe("生成出版级图表(matplotlib，带单位标注、色盲友好配色");
+  });
+
   it("continues the durable cursor sequence after the hub is recreated", async () => {
     const cwd = await workspace();
     const store = new DurableEventStore();
