@@ -5,15 +5,26 @@ import { cn } from "../../lib/ui";
 export interface ConversationNavItem {
   id: string;
   label: string;
-  /** Full message text for the tooltip; `label` stays truncated for display. */
+  /** Full message text retained for accessibility and native fallback text. */
   full?: string;
   /** Cursor for a user message that is indexed but not loaded in the thread yet. */
   before?: string;
 }
 
-/** ChatGPT-style rail on the right of the conversation: one entry per user
- *  query, the entry in the current viewport is highlighted, clicking one
- *  scrolls the thread to that message. Desktop only (`lg:`). */
+type Preview = { id: string; top: number };
+
+const IDLE_INDICATOR_WIDTH = 8;
+
+function indicatorWidth(distance: number): number {
+  if (distance === 0) return 48;
+  if (distance === 1) return 36;
+  if (distance === 2) return 24;
+  return IDLE_INDICATOR_WIDTH;
+}
+
+/** Compact conversation minimap: one line per user query. The current query
+ *  and its neighbours form a length gradient; hover/focus reveals only that
+ *  query's preview, and clicking keeps the existing jump/load behaviour. */
 export function ConversationNavRail({
   items,
   rootRef,
@@ -24,11 +35,36 @@ export function ConversationNavRail({
   onSelect: (id: string) => void;
 }) {
   const { t } = useTranslation();
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(items.at(-1)?.id ?? null);
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const [paneWidth, setPaneWidth] = useState(0);
   const signature = items.map((item) => item.id).join("\u0000");
   const itemsRef = useRef(items);
   itemsRef.current = items;
+  const previewItem = preview ? items.find((item) => item.id === preview.id) : undefined;
+  const hoverIndex = preview ? items.findIndex((item) => item.id === preview.id) : -1;
+  const rowHeight = items.length <= 20 ? 16 : 12;
+
+  useEffect(() => {
+    if (activeId && items.some((item) => item.id === activeId)) return;
+    setActiveId(items.at(-1)?.id ?? null);
+  }, [activeId, signature, items]);
+
+  // Split panes can be narrow even on a desktop viewport, so use the actual
+  // conversation scroller width instead of relying only on Tailwind's lg
+  // breakpoint. Below 480 px the minimap yields all space to the thread.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const update = () => setPaneWidth(root.getBoundingClientRect().width || root.clientWidth || 0);
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, [rootRef]);
 
   // Track which user message occupies the top band of the viewport.
   useEffect(() => {
@@ -42,12 +78,10 @@ export function ConversationNavRail({
         if (entry.isIntersecting) visible.set(id, entry.intersectionRatio);
         else visible.delete(id);
       }
-      // Near the bottom, the last message is the active one even when the
-      // top band has nothing in it (e.g. the composer is on screen).
       const nearBottom = root.scrollHeight - root.scrollTop - root.clientHeight < 96;
       if (nearBottom) {
         const last = current[current.length - 1]?.id ?? null;
-        setActiveId((prev) => (prev !== last ? last : prev));
+        setActiveId((previous) => (previous !== last ? last : previous));
         return;
       }
       let best: string | null = null;
@@ -58,69 +92,130 @@ export function ConversationNavRail({
           bestRatio = ratio;
         }
       }
-      setActiveId((prev) => (prev !== best ? best : prev));
+      setActiveId((previous) => (previous !== best ? best : previous));
     }, { root, rootMargin: "0px 0px -45% 0px" });
     for (const item of itemsRef.current) {
-      // getElementById needs no CSS.escape and the anchors are unique.
-      const el = document.getElementById(`user-msg-${item.id}`);
-      if (el && root.contains(el)) io.observe(el);
+      const element = document.getElementById(`user-msg-${item.id}`);
+      if (element && root.contains(element)) io.observe(element);
     }
     return () => io.disconnect();
   }, [rootRef, signature]);
 
-  // Keep the active entry visible inside the rail's own scroll area without
-  // scrolling the thread container.
+  // Long conversations scroll inside the bounded minimap. Keep the active
+  // line near its centre without affecting the conversation's own scroll.
   useEffect(() => {
     if (!activeId || !listRef.current) return;
     const button = listRef.current.querySelector<HTMLElement>(`[data-nav-id="${activeId}"]`);
     if (!button) return;
-    const top = button.offsetTop - listRef.current.offsetTop - 8;
-    if (top < listRef.current.scrollTop || top > listRef.current.scrollTop + listRef.current.clientHeight - 32) {
-      listRef.current.scrollTo({ top });
+    const top = button.offsetTop - listRef.current.offsetTop;
+    const desired = top - (listRef.current.clientHeight - button.offsetHeight) / 2;
+    if (top < listRef.current.scrollTop || top + button.offsetHeight > listRef.current.scrollTop + listRef.current.clientHeight) {
+      listRef.current.scrollTo({ top: Math.max(0, desired) });
     }
   }, [activeId]);
 
-  if (items.length === 0) return null;
+  if (items.length === 0 || (paneWidth > 0 && paneWidth < 480)) return null;
+
+  const showPreview = (id: string, element: HTMLElement) => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const itemRect = element.getBoundingClientRect();
+    const itemCenter = itemRect.top + itemRect.height / 2;
+    // Clamp against the viewport, not the rail height. A short conversation
+    // may have a 32–48 px rail while its tooltip is much taller.
+    const viewportCenter = Math.max(52, Math.min(window.innerHeight - 52, itemCenter));
+    const top = viewportCenter - wrapperRect.top;
+    setPreview((current) => current?.id === id && current.top === top ? current : { id, top });
+  };
+
+  const activateFromPointer = (event: React.MouseEvent<HTMLElement> | React.PointerEvent<HTMLElement>) => {
+    const target = event.target instanceof Element
+      ? event.target.closest<HTMLElement>("[data-nav-id]")
+      : null;
+    if (target?.dataset.navId) {
+      showPreview(target.dataset.navId, target);
+      return;
+    }
+    // The visual strokes are deliberately tiny. When the pointer is inside
+    // the wider transparent rail hit area, resolve the closest row from its Y
+    // position so hovering never requires pixel-perfect targeting or a click.
+    const list = listRef.current;
+    if (!list) return;
+    const listRect = list.getBoundingClientRect();
+    const contentY = event.clientY - listRect.top + list.scrollTop;
+    const index = Math.max(0, Math.min(items.length - 1, Math.floor(contentY / rowHeight)));
+    const item = items[index];
+    const button = item
+      ? list.querySelector<HTMLElement>(`[data-nav-id="${item.id}"]`)
+      : null;
+    if (item && button) showPreview(item.id, button);
+  };
 
   return (
-    <div className="group pointer-events-none absolute right-0 top-1/2 z-20 hidden -translate-y-1/2 lg:block">
-      {/* Narrow vertical handle; hovering it (or focusing it) slides out the
-          query list to the left, ChatGPT-style. */}
-      <button
-        type="button"
-        aria-label={t("conversation.threadNav")}
-        title={t("conversation.threadNav")}
-        className="pointer-events-auto flex h-16 w-8 items-center justify-center rounded-input outline-none focus-visible:ring-2 focus-visible:ring-accent"
-      >
-        <span className="h-14 w-2 rounded-full bg-[#a8a49a] transition-colors group-hover:bg-accent group-focus-within:bg-accent" />
-      </button>
+    <div
+      ref={wrapperRef}
+      className="pointer-events-auto absolute left-2 top-1/2 z-20 hidden -translate-y-1/2 lg:block"
+      onMouseLeave={() => setPreview(null)}
+    >
       <nav
         ref={listRef}
         aria-label={t("conversation.threadNav")}
-        className={cn(
-          "ui-popover pointer-events-auto invisible absolute right-2 top-1/2 flex max-h-[55vh] w-60 -translate-y-1/2 translate-x-2 flex-col overflow-y-auto rounded-card py-1.5 opacity-0 transition-all duration-150",
-          "group-hover:visible group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:visible group-focus-within:translate-x-0 group-focus-within:opacity-100",
-        )}
+        onPointerMove={activateFromPointer}
+        onMouseMove={activateFromPointer}
+        onScroll={() => setPreview(null)}
+        className="flex w-20 flex-col overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        style={{ maxHeight: "min(55vh, 520px)" }}
       >
-        {items.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            data-nav-id={item.id}
-            aria-current={activeId === item.id ? "true" : undefined}
-            onClick={() => { setActiveId(item.id); onSelect(item.id); }}
-            title={item.full ?? item.label}
-            className={cn(
-              "relative flex min-h-8 w-full shrink-0 items-center gap-2 px-2.5 text-left text-xs transition-colors",
-              "focus-visible:bg-surface-2 focus-visible:text-text focus-visible:outline-none",
-              activeId === item.id ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2 hover:text-text",
-              activeId === item.id && "after:absolute after:left-0 after:top-1/2 after:h-4 after:w-0.5 after:-translate-y-1/2 after:rounded-full after:bg-accent",
-            )}
-          >
-            <span className="min-w-0 flex-1 truncate">{item.label}</span>
-          </button>
-        ))}
+        {items.map((item, index) => {
+          const active = activeId === item.id;
+          const hovered = preview?.id === item.id;
+          const distance = hoverIndex < 0 ? Number.POSITIVE_INFINITY : Math.abs(index - hoverIndex);
+          return (
+            <button
+              key={item.id}
+              type="button"
+              data-nav-id={item.id}
+              aria-label={item.label}
+              aria-current={active ? "true" : undefined}
+              title={item.full ?? item.label}
+              onFocus={(event) => showPreview(item.id, event.currentTarget)}
+              onBlur={() => setPreview(null)}
+              onClick={() => { setActiveId(item.id); onSelect(item.id); }}
+              className="group flex w-20 shrink-0 items-center justify-start rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+              style={{ height: rowHeight }}
+            >
+              <span
+                data-nav-indicator
+                className={cn(
+                  "block rounded-full transition-[width,background-color] duration-150",
+                  hovered ? "h-[3px] bg-text opacity-100" : "h-0.5 bg-muted opacity-60 group-hover:opacity-100",
+                )}
+                style={{ width: hoverIndex < 0 ? IDLE_INDICATOR_WIDTH : indicatorWidth(distance) }}
+              />
+            </button>
+          );
+        })}
       </nav>
+
+      {previewItem && preview && (
+        <div
+          role="tooltip"
+          className={cn(
+            "ui-popover pointer-events-none absolute left-24 z-30 w-80 -translate-y-1/2 rounded-card px-3.5 py-3 text-sm text-text",
+            paneWidth > 0 && paneWidth < 640 && "w-60",
+          )}
+          style={{ top: preview.top }}
+        >
+          <p className="line-clamp-3 whitespace-pre-wrap break-words leading-5">{itemPreview(previewItem)}</p>
+        </div>
+      )}
     </div>
   );
+}
+
+function itemPreview(item: ConversationNavItem): string {
+  // `full` may contain hidden workspace-reference markup; `label` is already
+  // the user-visible, sanitized message summary prepared by LiveSessionPage.
+  return item.label;
 }

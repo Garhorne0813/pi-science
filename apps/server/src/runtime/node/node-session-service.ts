@@ -583,6 +583,12 @@ export class NodeSessionService {
         // invalidate any in-flight reconciliation so a late get_state result
         // cannot publish a synthetic terminal event for the next turn.
         this.invalidatePendingOperation(runtime);
+        // The lifecycle event is newer than any cached get_state snapshot.
+        // Without invalidation, a refresh within the 500 ms cache window can
+        // restore an already-settled turn as streaming; its terminal SSE event
+        // has passed, so the browser then remains stuck on Working forever.
+        runtime.lastState = undefined;
+        runtime.lastStateAt = undefined;
         runtime.busy = busy;
         if (busy) {
           // The turn is running: keep the event-stream watchdog armed so a

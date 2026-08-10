@@ -100,6 +100,20 @@ describe("PiScienceClient conversation transport", () => {
 });
 
 describe("PiScienceClient SSE cursor resumption", () => {
+  it("forcibly rebuilds an open stream while preserving its resume cursor", () => {
+    const client = new PiScienceClient();
+    client.connect("session-a", "/workspace");
+    const first = FakeEventSource.instances[0];
+    first.open();
+    first.emit("text.updated", { type: "text.updated", sessionId: "session-a", text: "hello" }, "epoch:42");
+
+    client.reconnect("session-a", "/workspace");
+
+    expect(first.readyState).toBe(FakeEventSource.CLOSED);
+    expect(FakeEventSource.instances).toHaveLength(2);
+    expect(FakeEventSource.instances[1].url).toContain("lastEventId=epoch%3A42");
+  });
+
   it("passes the last known event id as a query parameter on reconnect", () => {
     const client = new PiScienceClient();
     client.connect("session-a", "/workspace");

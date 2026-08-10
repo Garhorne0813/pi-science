@@ -185,6 +185,22 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         set(nextState);
         if (nextState.thread) backfillSessionName(cwd, targetSessionId, nextState.thread);
 
+        // A refresh can restore a cached busy snapshot after the turn's final
+        // SSE event has already passed. Keep checking the authoritative state
+        // until it is idle, and resync history, instead of leaving Working
+        // latched forever waiting for an event that cannot be replayed.
+        if (!liveActivityArrived && nextState.working === true) {
+          void reconcilePromptAfterLateStream(
+            client,
+            targetSessionId,
+            cwd,
+            generations.promptMonitor,
+            undefined,
+            1,
+            connectActivityGeneration,
+          );
+        }
+
         const failure = messagesResult.status === "rejected"
           ? messagesResult.reason
           : runtimeStateResult.status === "rejected"
@@ -311,8 +327,6 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         set({ activeSessionId, client, status: "connecting" });
         client.connect(activeSessionId, cwd);
       }
-      const streamWasOpen = client.isOpenTo(activeSessionId, cwd);
-
       const activityGeneration = ++generations.activity;
       ++generations.localMutation;
       resetTurnBuffer();
@@ -327,16 +341,21 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       const promptTimestamp = Date.now();
       try {
         await client.sendPrompt(activeSessionId, message, cwd);
-        if (!streamWasOpen) {
-          const monitorGeneration = ++generations.promptMonitor;
-          void reconcilePromptAfterLateStream(
-            client,
-            activeSessionId,
-            cwd,
-            monitorGeneration,
-            promptTimestamp,
-          );
-        }
+        // Monitor every prompt, including those sent through an EventSource
+        // that currently reports OPEN. Old-session sockets can be half-open:
+        // the backend accepts and persists the turn while no live event reaches
+        // the browser. REST reconciliation and a cursor-preserving reconnect
+        // make that failure self-healing.
+        const monitorGeneration = ++generations.promptMonitor;
+        void reconcilePromptAfterLateStream(
+          client,
+          activeSessionId,
+          cwd,
+          monitorGeneration,
+          promptTimestamp,
+          undefined,
+          activityGeneration,
+        );
         return activeSessionId;
       } catch (error) {
         const current = get();

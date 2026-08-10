@@ -109,17 +109,39 @@ function browserQuestionnaireRequestId(title: unknown): string | null {
   }
 }
 
-function assistantText(event: PiEvent): { type: string; text: string; messageId: string; contentIndex: string } | null {
+function textSnapshot(value: unknown, contentIndex: number): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const content = (value as Record<string, unknown>).content;
+  if (!Array.isArray(content)) return undefined;
+  const part = content[contentIndex];
+  if (!part || typeof part !== "object" || Array.isArray(part)) return undefined;
+  const record = part as Record<string, unknown>;
+  return record.type === "text" && typeof record.text === "string" ? record.text : undefined;
+}
+
+function assistantText(event: PiEvent): { type: string; text: string; snapshot?: string; messageId: string; contentIndex: string } | null {
   if (event.type !== "message_update") return null;
   const assistant = event.assistantMessageEvent as Record<string, unknown> | undefined;
   if (!assistant) return null;
   const type = String(assistant.type ?? "");
   if (!["text_delta", "text", "text_end"].includes(type)) return null;
   const message = event.message as Record<string, unknown> | undefined;
-  const text = String(assistant.text ?? assistant.delta ?? assistant.content ?? "");
+  const contentIndex = Number(assistant.contentIndex ?? 0);
+  const text = String(
+    type === "text_delta"
+      ? assistant.delta ?? assistant.text ?? assistant.content ?? ""
+      : assistant.content ?? assistant.text ?? assistant.delta ?? "",
+  );
+  // Pi includes the complete in-progress assistant message on every delta.
+  // Prefer that authoritative snapshot over heuristics on provider chunks:
+  // some providers resend or overlap deltas, while the snapshot remains
+  // correct. `event.message` is a compatibility fallback for older runtimes.
+  const snapshot = textSnapshot(assistant.partial, contentIndex)
+    ?? textSnapshot(message, contentIndex);
   return {
     type,
     text,
+    ...(snapshot === undefined ? {} : { snapshot }),
     messageId: typeof message?.id === "string" ? message.id : "",
     contentIndex: String(assistant.contentIndex ?? "0"),
   };
@@ -503,7 +525,18 @@ export class ConversationEventHub {
       const accumulated = turn.textByKey.get(key) ?? "";
       let emitted = text.text;
       let replace = false;
-      if (text.type === "text_end") {
+      if (text.snapshot !== undefined) {
+        if (text.snapshot === accumulated) emitted = "";
+        else if (text.snapshot.startsWith(accumulated)) emitted = text.snapshot.slice(accumulated.length);
+        else if (accumulated) {
+          emitted = text.snapshot;
+          replace = true;
+        } else {
+          emitted = text.snapshot;
+        }
+        turn.textByKey.set(key, text.snapshot);
+        if (text.type === "text_end" && !text.messageId) turn.activeAnonymousKey = null;
+      } else if (text.type === "text_end") {
         if (text.text === accumulated) emitted = "";
         else if (text.text.startsWith(accumulated)) emitted = text.text.slice(accumulated.length);
         else if (accumulated) replace = true;

@@ -190,6 +190,20 @@ export class SseTransport {
     };
   }
 
+  /** Rebuild the current subscription even when EventSource still reports
+   *  OPEN. A half-open connection can otherwise look healthy forever while
+   *  silently missing a turn. The per-session cursor is intentionally kept,
+   *  so the replacement stream replays only events that were missed. */
+  reconnect(sessionId: string, cwd?: string): void {
+    const targetCwd = cwd ?? null;
+    if (this.sessionId !== sessionId || this.cwd !== targetCwd) {
+      this.connect(sessionId, cwd);
+      return;
+    }
+    this.closeEventSource();
+    this.connect(sessionId, cwd);
+  }
+
   disconnect(): void {
     const sessionId = this.sessionId;
     ++this.connectionGeneration;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ThreadBlock } from "../../types/thread";
-import { extractTodoSnapshot, visibleTasks } from "./todos";
+import { extractLatestTodoBatchSnapshot, extractTodoSnapshot, todoViewModel, visibleTasks } from "./todos";
 
 function todoBlock(details: unknown, overrides: Partial<Extract<ThreadBlock, { kind: "tool" }>> = {}): ThreadBlock {
   const block: Extract<ThreadBlock, { kind: "tool" }> = {
@@ -89,7 +89,46 @@ describe("visibleTasks", () => {
   });
 });
 
-import { todoViewModel } from "./todos";
+describe("extractLatestTodoBatchSnapshot", () => {
+  it("keeps consecutive creates in one plan but starts a new batch after the next user turn", () => {
+    const firstTask = { id: 1, subject: "Old A", status: "completed" };
+    const secondTask = { id: 2, subject: "Old B", status: "completed" };
+    const thirdTask = { id: 3, subject: "New A", status: "in_progress" };
+    const fourthTask = { id: 4, subject: "New B", status: "pending" };
+    const blocks: ThreadBlock[] = [
+      { kind: "user", id: "u1", text: "first plan" },
+      todoBlock({ action: "create", params: { subject: "Old A" }, tasks: [firstTask], nextId: 2 }, { callId: "c1" }),
+      todoBlock({ action: "create", params: { subject: "Old B" }, tasks: [firstTask, secondTask], nextId: 3 }, { callId: "c2" }),
+      { kind: "user", id: "u2", text: "second plan" },
+      todoBlock({ action: "create", params: { subject: "New A" }, tasks: [firstTask, secondTask, thirdTask], nextId: 4 }, { callId: "c3" }),
+      todoBlock({ action: "create", params: { subject: "New B" }, tasks: [firstTask, secondTask, thirdTask, fourthTask], nextId: 5 }, { callId: "c4" }),
+    ];
+
+    expect(extractLatestTodoBatchSnapshot(blocks)?.tasks.map((task) => task.id)).toEqual([3, 4]);
+    const vm = todoViewModel(blocks);
+    expect(vm?.total).toBe(2);
+    expect(vm?.activeIndex).toBe(1);
+  });
+
+  it("starts a new batch when new tasks follow a completed plan in the same turn", () => {
+    const completed = { id: 1, subject: "Old", status: "completed" };
+    const current = { id: 2, subject: "New", status: "pending" };
+    const blocks = [
+      todoBlock({ action: "create", params: { subject: "Old" }, tasks: [{ ...completed, status: "pending" }], nextId: 2 }, { callId: "c1" }),
+      todoBlock({ action: "update", params: { id: 1, status: "completed" }, tasks: [completed], nextId: 2 }, { callId: "c2" }),
+      todoBlock({ action: "create", params: { subject: "New" }, tasks: [completed, current], nextId: 3 }, { callId: "c3" }),
+    ];
+
+    expect(extractLatestTodoBatchSnapshot(blocks)?.tasks.map((task) => task.id)).toEqual([2]);
+  });
+
+  it("falls back to the full latest snapshot when create boundaries are unavailable", () => {
+    const snapshot = extractLatestTodoBatchSnapshot([
+      todoBlock({ action: "update", params: { id: 2 }, tasks: tasksV1, nextId: 3 }),
+    ]);
+    expect(snapshot?.tasks).toHaveLength(2);
+  });
+});
 
 describe("todoViewModel", () => {
   it("returns null when the thread has no visible todo tasks", () => {
@@ -114,6 +153,7 @@ describe("todoViewModel", () => {
     expect(vm!.completed).toBe(2);
     expect(vm!.percent).toBe(67);
     expect(vm!.allCompleted).toBe(false);
+    expect(vm!.activeIndex).toBe(3);
   });
 
   it("prefers in_progress over pending for the active task and uses subject", () => {
@@ -125,6 +165,7 @@ describe("todoViewModel", () => {
       ],
     })]);
     expect(vm!.activeTask).toMatchObject({ id: 2, subject: "Fit" });
+    expect(vm!.activeIndex).toBe(2);
   });
 
   it("counts only tasks blocked by unfinished dependencies", () => {
@@ -153,5 +194,6 @@ describe("todoViewModel", () => {
     expect(vm!.allCompleted).toBe(true);
     expect(vm!.percent).toBe(100);
     expect(vm!.activeTask).toBeNull();
+    expect(vm!.activeIndex).toBeNull();
   });
 });

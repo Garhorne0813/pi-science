@@ -23,4 +23,24 @@ describe("parseSuggestions", () => {
     expect(suggestions).toEqual(["new one"]);
     expect(clean).toBe("A  B");
   });
+
+  it("repairs a repeated nested marker and removes duplicate suggestions", () => {
+    const { clean, suggestions } = parseSuggestions(
+      "完成。\n<!--suggest:帮我看看需求。<!--suggest:帮我看看这个工作区里有什么 | 我想这个工作区里有什么 | 我想这个工作区里有什么-->",
+    );
+
+    expect(clean).toBe("完成。");
+    expect(suggestions).toEqual([
+      "帮我看看需求。",
+      "帮我看看这个工作区里有什么",
+      "我想这个工作区里有什么",
+    ]);
+    expect(suggestions.join("")).not.toContain("<!--suggest:");
+  });
+
+  it("deduplicates suggestions across spacing, width, case, and terminal punctuation", () => {
+    expect(parseSuggestions(
+      "x <!--suggest: Plot results |  plot   results. | Ｐｌｏｔ results！ | Compare baseline -->",
+    ).suggestions).toEqual(["Plot results", "Compare baseline"]);
+  });
 });

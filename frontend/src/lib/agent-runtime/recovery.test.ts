@@ -116,6 +116,73 @@ describe("runtime conversation recovery", () => {
     expect(stateReads).toBeGreaterThanOrEqual(2);
   });
 
+  it("settles a stale busy snapshot restored by a page refresh without another refresh", async () => {
+    let stateReads = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [
+        { id: "user-1", role: "user", content: [{ type: "text", text: "question" }] },
+        { id: "agent-1", role: "assistant", content: [{ type: "text", text: "already finished" }] },
+      ] });
+      if (url.includes("/state")) {
+        stateReads += 1;
+        // The initial refresh races a stale server-side state cache. No SSE
+        // terminal event will follow because the turn has already completed.
+        return jsonResponse(state("session-a", { is_streaming: stateReads === 1 }));
+      }
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    expect(useRuntimeStore.getState().working).toBe(true);
+
+    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false), { timeout: 4_000 });
+    expect(stateReads).toBeGreaterThanOrEqual(2);
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
+      expect.objectContaining({ kind: "agent", id: "agent-1" }),
+    );
+  });
+
+  it("repairs an open but silent old-session stream and restores the persisted reply", async () => {
+    let stateReads = 0;
+    let messageReads = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) {
+        messageReads += 1;
+        return jsonResponse({ messages: messageReads >= 2 ? [
+          { id: "user-1", role: "user", content: [{ type: "text", text: "continue" }], timestamp: new Date(Date.now() - 60_000).toISOString() },
+          { id: "agent-1", role: "assistant", content: [{ type: "text", text: "persisted reply" }], timestamp: new Date(Date.now() + 60_000).toISOString() },
+        ] : [] });
+      }
+      if (url.includes("/state")) {
+        stateReads += 1;
+        // Initial activation is idle, the accepted prompt is busy for one
+        // monitor round, then finishes without emitting anything to this SSE.
+        return jsonResponse(state("session-a", { is_streaming: stateReads === 2 }));
+      }
+      if (url.includes("/prompt")) return jsonResponse({ ok: true, id: "session-a" });
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    FakeEventSource.instances[0].open();
+    await useRuntimeStore.getState().sendPrompt("continue");
+    expect(useRuntimeStore.getState().working).toBe(true);
+
+    await vi.waitFor(() => expect(useRuntimeStore.getState().working).toBe(false), { timeout: 5_000 });
+    expect(FakeEventSource.instances.length).toBeGreaterThan(1);
+    await vi.waitFor(() => expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
+      expect.objectContaining({
+        kind: "agent",
+        id: "agent-1",
+        parts: expect.arrayContaining([expect.objectContaining({ text: "persisted reply" })]),
+      }),
+    ));
+  });
+
   it("retries a failed reconnect state read before settling idle", async () => {
     let stateReads = 0;
     let recoveryStateFailures = 0;

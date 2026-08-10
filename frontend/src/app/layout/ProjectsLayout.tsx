@@ -21,8 +21,6 @@ import { Icon, IconButton } from "../../components/ui/Icon";
 const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 420;
 
-const TodoWidget = lazy(() => import("../../components/todo/TodoWidget").then((m) => ({ default: m.TodoWidget })));
-
 export function ProjectsLayout() {
   const { t } = useTranslation();
   const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed);
@@ -218,9 +216,6 @@ export function ProjectsLayout() {
         previewOnLeft && "order-2",
       )}>
         <Outlet />
-        <Suspense fallback={null}>
-          <TodoWidget />
-        </Suspense>
       </main>
 
       {isConversationRoute && (!previewOnLeft || !inspectorOpen) && <PreviewPaneControls />}
