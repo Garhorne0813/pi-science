@@ -60,6 +60,24 @@ describe("SessionTitleRepository", () => {
     expect((await repo.getTitles(a)).get("s1")).toBe("in-a");
   });
 
+  it("keeps the file as valid JSONL with a trailing newline and leaves no temp files", async () => {
+    const repo = new SessionTitleRepository();
+    const cwd = await workspace();
+    await repo.setTitle(cwd, "s1", "one");
+    await repo.setTitle(cwd, "s2", "two");
+    await repo.setTitle(cwd, "s1", "one-updated");
+    await repo.deleteTitle(cwd, "s2");
+    const file = join(cwd, ".pi-science", "session-titles.jsonl");
+    const raw = await readFile(file, "utf8");
+    expect(raw.endsWith("\n")).toBe(true);
+    expect(raw.split("\n").filter(Boolean).map((line) => JSON.parse(line))).toEqual([
+      { session_id: "s1", title: "one-updated", updated_at: expect.any(String) },
+    ]);
+    const { readdir } = await import("node:fs/promises");
+    const entries = await readdir(join(cwd, ".pi-science"));
+    expect(entries).toEqual(expect.not.arrayContaining([expect.stringContaining(".tmp")]));
+  });
+
   it("ignores corrupt records when reading", async () => {
     const repo = new SessionTitleRepository();
     const cwd = await workspace();
