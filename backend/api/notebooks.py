@@ -1,9 +1,9 @@
 """Notebook management API — list .ipynb files, manage Jupyter Lab with uv."""
 
+import asyncio
 import os
 import secrets
 import shutil
-import asyncio
 import socket
 import subprocess
 from datetime import datetime, timezone
@@ -12,28 +12,31 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from config import BASE_DIR
-
 router = APIRouter(prefix="/api/notebooks", tags=["notebooks"])
 
-JUPYTER_ENV = BASE_DIR / "jupyter-env"
+_IS_WINDOWS = os.name == "nt"
+_BIN_DIR = "Scripts" if _IS_WINDOWS else "bin"
+_PYTHON_NAME = "python.exe" if _IS_WINDOWS else "python"
+_JUPYTER_NAME = "jupyter-lab.exe" if _IS_WINDOWS else "jupyter-lab"
 JUPYTER_PACKAGES = ["jupyterlab", "ipykernel", "numpy", "pandas", "matplotlib"]
 
 
-def _jupyter_bin() -> Path:
-    return JUPYTER_ENV / "bin" / "jupyter-lab"
+def _workspace_venv(workspace: Path) -> Path:
+    return workspace / ".venv"
 
 
-def _env_python() -> str:
-    return str(JUPYTER_ENV / "bin" / "python")
+def _jupyter_bin(workspace: Path) -> Path:
+    return _workspace_venv(workspace) / _BIN_DIR / _JUPYTER_NAME
+
+
+def _env_python(workspace: Path) -> Path:
+    return _workspace_venv(workspace) / _BIN_DIR / _PYTHON_NAME
 
 
 def _find_uv() -> str | None:
     return shutil.which("uv")
 
-_jupyter_process: subprocess.Popen | None = None
-_jupyter_port = 8888
-import asyncio
+
 _setup_lock = asyncio.Lock()  # Prevent concurrent setup
 
 
@@ -69,18 +72,20 @@ async def list_notebooks(cwd: str = Query(".", description="Working directory"))
 # ── Jupyter Environment Setup ──
 
 @router.get("/jupyter/env-status")
-async def jupyter_env_status():
-    """Check if the managed Jupyter environment is ready."""
+async def jupyter_env_status(cwd: str = Query(".", description="Working directory")):
+    """Check if Jupyter is installed in the workspace environment."""
+    ws = _workspace_dir(cwd)
     return {
-        "ready": _jupyter_bin().exists(),
-        "path": str(JUPYTER_ENV),
+        "ready": _jupyter_bin(ws).exists(),
+        "path": str(_workspace_venv(ws)),
         "uv_available": _find_uv() is not None,
     }
 
 
-@router.post("/jupyter/setup")
-async def setup_jupyter_env():
-    """Provision the isolated Jupyter environment using uv. Returns SSE progress."""
+@router.get("/jupyter/setup")
+async def setup_jupyter_env(cwd: str = Query(".", description="Working directory")):
+    """Install Jupyter into the workspace environment. Returns SSE progress."""
+    ws = _workspace_dir(cwd)
     if _setup_lock.locked():
         raise HTTPException(status_code=409, detail="Setup already in progress")
 
@@ -88,36 +93,44 @@ async def setup_jupyter_env():
     if not uv:
         raise HTTPException(status_code=400, detail="uv not found. Install from https://docs.astral.sh/uv/")
 
-    async with _setup_lock:
-        async def event_stream():
-            try:
-                # Create venv
-                yield f"data: {_sse_msg('Creating venv...')}\n\n"
-                if not JUPYTER_ENV.exists():
-                    result = subprocess.run(
-                        [uv, "venv", str(JUPYTER_ENV), "--python", "3.12"],
-                        capture_output=True, text=True, timeout=120,
-                    )
-                    if result.returncode != 0:
-                        yield f"data: {_sse_msg('error', result.stderr[-200:])}\n\n"
-                        return
+    # Acquire before returning the streaming response so two requests cannot both
+    # pass the locked() check while waiting for their generators to be consumed.
+    await _setup_lock.acquire()
 
-                # Install packages
-                for pkg in JUPYTER_PACKAGES:
-                    yield f"data: {_sse_msg(f'Installing {pkg}...')}\n\n"
-                    result = subprocess.run(
-                        [uv, "pip", "install", pkg, "--python", _env_python()],
-                        capture_output=True, text=True, timeout=300,
-                    )
-                    if result.returncode != 0:
-                        yield f"data: {_sse_msg('error', result.stderr[-200:])}\n\n"
-                        return
+    async def event_stream():
+        try:
+            venv = _workspace_venv(ws)
+            yield f"data: {_sse_msg(text='Creating workspace environment...')}\n\n"
+            if not _env_python(ws).exists():
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    [uv, "venv", str(venv), "--python", "3.12"],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                if result.returncode != 0:
+                    yield f"data: {_sse_msg('error', result.stderr[-200:])}\n\n"
+                    return
 
-                yield f"data: {_sse_msg('done', 'Jupyter environment ready')}\n\n"
-            finally:
-                pass  # Lock released by async with
+            for pkg in JUPYTER_PACKAGES:
+                yield f"data: {_sse_msg(text=f'Installing {pkg}...')}\n\n"
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    [uv, "pip", "install", pkg, "--python", str(_env_python(ws))],
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+                if result.returncode != 0:
+                    yield f"data: {_sse_msg('error', result.stderr[-200:])}\n\n"
+                    return
 
-        return StreamingResponse(event_stream(), media_type="text/event-stream")
+            yield f"data: {_sse_msg('done', 'Jupyter environment ready')}\n\n"
+        finally:
+            _setup_lock.release()
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 def _sse_msg(status: str = "progress", text: str = "") -> str:
@@ -183,11 +196,12 @@ async def shutdown_jupyter_server() -> None:
 async def jupyter_status(cwd: str | None = Query(None, description="Current working directory")):
     """Get Jupyter Lab server status."""
     payload = _jupyter_payload()
-    payload["env_ready"] = _jupyter_bin().exists()
+    ws = _workspace_dir(cwd) if cwd is not None else None
+    payload["env_ready"] = _jupyter_bin(ws).exists() if ws is not None else False
     payload["matches_workspace"] = (
         not payload["running"]
-        or cwd is None
-        or payload["cwd"] == str(_workspace_dir(cwd))
+        or ws is None
+        or payload["cwd"] == str(ws)
     )
     return payload
 
@@ -210,17 +224,18 @@ async def start_jupyter(cwd: str = Query(".", description="Working directory")):
             )
         _stop_jupyter_process()
         try:
+            jupyter_bin = _jupyter_bin(ws)
+            if not jupyter_bin.exists():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Jupyter Lab is not installed in the workspace environment",
+                )
             _jupyter_port = _find_available_port()
             _jupyter_cwd = str(ws)
             # Random token keeps Jupyter auth on: an unauthenticated server on
             # 127.0.0.1 is still reachable by any local process or a DNS-rebound
             # browser page, and Jupyter is an arbitrary-code-execution surface.
             _jupyter_token = secrets.token_hex(24)
-            # Prefer the managed uv environment, then PATH; the bare name lets
-            # Popen raise FileNotFoundError -> 400 when nothing is installed.
-            jupyter_bin = _jupyter_bin()
-            if not jupyter_bin.exists():
-                jupyter_bin = Path(shutil.which("jupyter-lab") or "jupyter-lab")
             _jupyter_process = subprocess.Popen(
                 [
                     str(jupyter_bin),
