@@ -1,6 +1,7 @@
 """Notebook listing and managed Jupyter server tests."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -34,6 +35,14 @@ def reset_jupyter_state(monkeypatch):
     monkeypatch.setattr(notebooks, "_jupyter_process", None)
     monkeypatch.setattr(notebooks, "_jupyter_port", None)
     monkeypatch.setattr(notebooks, "_jupyter_cwd", None)
+    monkeypatch.setattr(notebooks, "_jupyter_token", None)
+
+
+def install_fake_jupyter(workspace: Path) -> Path:
+    executable = notebooks._jupyter_bin(workspace)
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.touch()
+    return executable
 
 
 @pytest.mark.anyio
@@ -52,6 +61,8 @@ async def test_list_notebooks_skips_hidden_directories(client, temp_workspace):
 
 @pytest.mark.anyio
 async def test_jupyter_start_is_scoped_to_workspace(client, temp_workspace, monkeypatch):
+    install_fake_jupyter(temp_workspace)
+    resolved_workspace = temp_workspace.resolve()
     spawned = []
 
     def fake_popen(args, **_kwargs):
@@ -72,7 +83,8 @@ async def test_jupyter_start_is_scoped_to_workspace(client, temp_workspace, monk
     assert data["running"] is True
     assert data["port"] == 43123
     assert data["cwd"] == str(temp_workspace.resolve())
-    assert f"--ServerApp.root_dir={temp_workspace.resolve()}" in spawned[0].args
+    assert spawned[0].args[0] == str(notebooks._jupyter_bin(resolved_workspace))
+    assert f"--ServerApp.root_dir={resolved_workspace}" in spawned[0].args
 
     status = await client.get(
         "/api/notebooks/jupyter/status",
@@ -83,6 +95,7 @@ async def test_jupyter_start_is_scoped_to_workspace(client, temp_workspace, monk
 
 @pytest.mark.anyio
 async def test_jupyter_rejects_cross_workspace_start_and_stop(client, temp_workspace, monkeypatch):
+    install_fake_jupyter(temp_workspace)
     other = temp_workspace / "other"
     other.mkdir()
     (other / ".pi-science").mkdir()
@@ -133,3 +146,72 @@ async def test_jupyter_rejects_missing_workspace(client, temp_workspace):
         params={"cwd": str(missing)},
     )
     assert response.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_jupyter_environment_status_uses_workspace_venv(client, temp_workspace):
+    before = await client.get(
+        "/api/notebooks/jupyter/env-status",
+        params={"cwd": str(temp_workspace)},
+    )
+    assert before.status_code == 200
+    assert before.json()["ready"] is False
+    assert before.json()["path"] == str(temp_workspace.resolve() / ".venv")
+
+    install_fake_jupyter(temp_workspace)
+    after = await client.get(
+        "/api/notebooks/jupyter/env-status",
+        params={"cwd": str(temp_workspace)},
+    )
+    assert after.json()["ready"] is True
+
+
+@pytest.mark.anyio
+async def test_jupyter_setup_is_get_sse_and_installs_into_workspace(
+    client, temp_workspace, monkeypatch
+):
+    commands = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(notebooks, "_find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr(notebooks.subprocess, "run", fake_run)
+
+    response = await client.get(
+        "/api/notebooks/jupyter/setup",
+        params={"cwd": str(temp_workspace)},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert '"status": "progress"' in response.text
+    assert '"text": "Installing jupyterlab..."' in response.text
+    assert commands[0] == [
+        "/usr/bin/uv",
+        "venv",
+        str(temp_workspace.resolve() / ".venv"),
+        "--python",
+        "3.12",
+    ]
+    assert commands[1][-1] == str(notebooks._env_python(temp_workspace.resolve()))
+
+    post_response = await client.post(
+        "/api/notebooks/jupyter/setup",
+        params={"cwd": str(temp_workspace)},
+    )
+    assert post_response.status_code == 405
+
+
+def test_windows_workspace_environment_paths(temp_workspace, monkeypatch):
+    monkeypatch.setattr(notebooks, "_BIN_DIR", "Scripts")
+    monkeypatch.setattr(notebooks, "_PYTHON_NAME", "python.exe")
+    monkeypatch.setattr(notebooks, "_JUPYTER_NAME", "jupyter-lab.exe")
+
+    assert notebooks._env_python(temp_workspace) == (
+        temp_workspace / ".venv" / "Scripts" / "python.exe"
+    )
+    assert notebooks._jupyter_bin(temp_workspace) == (
+        temp_workspace / ".venv" / "Scripts" / "jupyter-lab.exe"
+    )

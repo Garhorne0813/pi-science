@@ -92,7 +92,7 @@ export function NotebooksPage() {
     setSettingUp(true);
     setSetupProgress([]);
     try {
-      closeSetupStreamRef.current = openJsonEventStream<JupyterSetupEvent>("/api/notebooks/jupyter/setup", {
+      closeSetupStreamRef.current = openJsonEventStream<JupyterSetupEvent>(`/api/notebooks/jupyter/setup?cwd=${encodeURIComponent(workspaceCwd)}`, {
         onMessage: (d) => {
         if (d.status === "done") {
           setSetupProgress((p) => [...p, "✅ " + d.text]);
