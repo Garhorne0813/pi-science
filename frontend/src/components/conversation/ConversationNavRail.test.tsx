@@ -23,7 +23,7 @@ const ITEMS: ConversationNavItem[] = [
   { id: "u2", label: "Second question about data" },
 ];
 
-function renderRail(items: ConversationNavItem[] = ITEMS) {
+function renderRail(items: ConversationNavItem[] = ITEMS, options: { bookmarkedIds?: ReadonlySet<string>; onActiveChange?: (id: string | null) => void } = {}) {
   const root = document.createElement("div");
   for (const item of items) {
     const el = document.createElement("div");
@@ -35,7 +35,7 @@ function renderRail(items: ConversationNavItem[] = ITEMS) {
   Object.defineProperty(root, "scrollHeight", { value: 2000, configurable: true });
   Object.defineProperty(root, "clientHeight", { value: 600, configurable: true });
   const onSelect = vi.fn();
-  render(<ConversationNavRail items={items} rootRef={{ current: root }} onSelect={onSelect} />);
+  render(<ConversationNavRail items={items} rootRef={{ current: root }} onSelect={onSelect} onActiveChange={options.onActiveChange} bookmarkedIds={options.bookmarkedIds} />);
   return { onSelect };
 }
 
@@ -183,5 +183,50 @@ describe("ConversationNavRail", () => {
       io.cb([{ target, isIntersecting: false, intersectionRatio: 0 } as unknown as IntersectionObserverEntry], io as unknown as IntersectionObserver);
     });
     expect(screen.getByRole("button", { name: "Second question about data" })).toHaveAttribute("aria-current", "true");
+  });
+});
+
+describe("ConversationNavRail attention hooks", () => {
+  it("reports the active id only when it changes", () => {
+    const onActiveChange = vi.fn();
+    const root = document.createElement("div");
+    for (const item of ITEMS) {
+      const el = document.createElement("div");
+      el.id = `user-msg-${item.id}`;
+      root.appendChild(el);
+    }
+    Object.defineProperty(root, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(root, "clientHeight", { value: 600, configurable: true });
+    render(<ConversationNavRail items={ITEMS} rootRef={{ current: root }} onSelect={vi.fn()} onActiveChange={onActiveChange} />);
+    // Initial mount reports the last item once.
+    expect(onActiveChange).toHaveBeenCalledTimes(1);
+    expect(onActiveChange).toHaveBeenLastCalledWith("u2");
+
+    // A later IO callback that resolves to the same active id does not re-fire.
+    const io = IOStub.instances[IOStub.instances.length - 1];
+    const target2 = document.createElement("div");
+    target2.id = "user-msg-u2";
+    Object.defineProperty(root, "scrollTop", { value: 500, configurable: true });
+    act(() => {
+      io.cb([{ target: target2, isIntersecting: true, intersectionRatio: 0.8 } as unknown as IntersectionObserverEntry], io as unknown as IntersectionObserver);
+    });
+    expect(onActiveChange).toHaveBeenCalledTimes(1);
+
+    const target1 = document.createElement("div");
+    target1.id = "user-msg-u1";
+    act(() => {
+      io.cb([{ target: target1, isIntersecting: true, intersectionRatio: 0.9 } as unknown as IntersectionObserverEntry], io as unknown as IntersectionObserver);
+    });
+    expect(onActiveChange).toHaveBeenCalledTimes(2);
+    expect(onActiveChange).toHaveBeenLastCalledWith("u1");
+  });
+
+  it("marks user messages that carry an accepted bookmark", () => {
+    renderRail(ITEMS, { bookmarkedIds: new Set(["u1"]) });
+    // The marker is a decorative accent dot inside the u1 row.
+    const row = screen.getByRole("button", { name: "First question about models" });
+    expect(row.querySelector(".bg-accent")).not.toBeNull();
+    const other = screen.getByRole("button", { name: "Second question about data" });
+    expect(other.querySelector(".bg-accent")).toBeNull();
   });
 });

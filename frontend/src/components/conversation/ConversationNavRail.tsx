@@ -29,10 +29,16 @@ export function ConversationNavRail({
   items,
   rootRef,
   onSelect,
+  onActiveChange,
+  bookmarkedIds,
 }: {
   items: ConversationNavItem[];
   rootRef: React.RefObject<HTMLDivElement | null>;
   onSelect: (id: string) => void;
+  /** Fired only when the active (viewport-top) user message actually changes. */
+  onActiveChange?: (id: string | null) => void;
+  /** User-message ids that carry an accepted bookmark; renders a marker dot. */
+  bookmarkedIds?: ReadonlySet<string>;
 }) {
   const { t } = useTranslation();
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -51,6 +57,15 @@ export function ConversationNavRail({
     if (activeId && items.some((item) => item.id === activeId)) return;
     setActiveId(items.at(-1)?.id ?? null);
   }, [activeId, signature, items]);
+
+  // Report the active id only when it actually changed (initial mount included,
+  // so the caller can persist the initial reading position after its restore
+  // suppression window ends).
+  const onActiveChangeRef = useRef(onActiveChange);
+  onActiveChangeRef.current = onActiveChange;
+  useEffect(() => {
+    onActiveChangeRef.current?.(activeId);
+  }, [activeId]);
 
   // Split panes can be narrow even on a desktop viewport, so use the actual
   // conversation scroller width instead of relying only on Tailwind's lg
@@ -182,7 +197,7 @@ export function ConversationNavRail({
               onFocus={(event) => showPreview(item.id, event.currentTarget)}
               onBlur={() => setPreview(null)}
               onClick={() => { setActiveId(item.id); onSelect(item.id); }}
-              className="group flex w-20 shrink-0 items-center justify-start rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+              className="group flex w-20 shrink-0 items-center justify-start gap-0.5 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
               style={{ height: rowHeight }}
             >
               <span
@@ -193,6 +208,12 @@ export function ConversationNavRail({
                 )}
                 style={{ width: hoverIndex < 0 ? IDLE_INDICATOR_WIDTH : indicatorWidth(distance) }}
               />
+              {bookmarkedIds?.has(item.id) && (
+                <span
+                  aria-hidden
+                  className="ml-0.5 h-1 w-1 shrink-0 rounded-full bg-accent"
+                />
+              )}
             </button>
           );
         })}

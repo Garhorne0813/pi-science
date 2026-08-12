@@ -33,6 +33,7 @@ export const routeBoundaries: readonly RouteBoundary[] = [
   { prefix: "/api/agent-profiles", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/result-reviews", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/bookmarks", owner: "node-control-plane", availability: "native" },
+  { prefix: "/api/attention", owner: "node-control-plane", availability: "native" },
 ];
 
 function matchesPrefix(pathname: string, prefix: string): boolean {

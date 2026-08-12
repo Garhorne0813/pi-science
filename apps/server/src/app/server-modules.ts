@@ -14,11 +14,13 @@ import { ResearchLoopCoordinator } from "../research-loop/coordinator.js";
 import { PiResearchSubagentRunner } from "../research-loop/subagent-runner.js";
 import { ProjectReviewService } from "../project-review/service.js";
 import { PiReviewSubagentRunner } from "../project-review/subagent-runner.js";
+import { ConversationNavigationRepository } from "../conversation-navigation/repository.js";
 
 export interface ServerModules {
   readonly sessions: NodeSessionService;
   readonly events: ConversationEventHub;
   readonly sessionRepository: SessionRepository;
+  readonly navigation: ConversationNavigationRepository;
   readonly piManager: PiManager;
   readonly settings: SettingsStore;
   readonly jobs: JobCoordinator;
@@ -32,6 +34,7 @@ export interface ServerModules {
 export function createServerModules(config?: ServerConfig): ServerModules {
   const events = new ConversationEventHub();
   const sessionRepository = new SessionRepository();
+  const navigation = new ConversationNavigationRepository(sessionRepository);
   const piManager = new PiManager();
   const environments = new WorkspaceEnvironmentService(config?.pythonExecutable);
   const projectReview = new ProjectReviewService(new PiReviewSubagentRunner(environments, piManager), sessionRepository);
@@ -48,5 +51,5 @@ export function createServerModules(config?: ServerConfig): ServerModules {
     idleTimeoutMs: config?.scientificIdleMs,
     startupTimeoutMs: config?.scientificStartupMs,
   });
-  return { sessions, events, sessionRepository, piManager, settings, jobs, research, projectReview, scientificRuntime, environments };
+  return { sessions, events, sessionRepository, navigation, piManager, settings, jobs, research, projectReview, scientificRuntime, environments };
 }

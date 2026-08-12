@@ -5,6 +5,7 @@ import { SettingsNavItem, WorkspaceSessionList } from "./ProjectsLayout";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { FeedbackContext } from "../../components/feedback/feedback-context";
+import { queryClient } from "../../lib/client/query-client";
 import i18n from "../../i18n";
 import type { SessionInfo } from "../../lib/client/types";
 
@@ -285,5 +286,90 @@ describe("WorkspaceSessionList", () => {
     const createNewSession = useRuntimeStore.getState().createNewSession as ReturnType<typeof vi.fn>;
     expect(createNewSession).not.toHaveBeenCalled();
     expect(useUiStore.getState().suppressAutoSessionNav).toBe(false);
+  });
+});
+
+describe("WorkspaceSessionList attention badges", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  function renderList() {
+    return render(
+      <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
+        <MemoryRouter initialEntries={["/workspace/proj/session/s1"]}>
+          <Routes>
+            <Route
+              path="/workspace/:cwd/session/:sessionId"
+              element={<><WorkspaceSessionList cwd="proj" /><LocationProbe /></>}
+            />
+          </Routes>
+        </MemoryRouter>
+      </FeedbackContext.Provider>,
+    );
+  }
+
+  function jsonResponse(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  }
+
+  function attentionResponse(items: Array<{ session_id: string; status: string; updated_at?: string | null }>) {
+    const counts = { needs_you: 0, running: 0, unread: 0 };
+    for (const item of items) {
+      if (item.status in counts) counts[item.status as keyof typeof counts] += 1;
+    }
+    return { items, counts, truncated: false };
+  }
+
+  beforeEach(() => {
+    queryClient.clear();
+    fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/attention")) {
+        return jsonResponse(attentionResponse([
+          { session_id: "s1", status: "needs_you", updated_at: null },
+          { session_id: "s2", status: "running", updated_at: null },
+          { session_id: "s3", status: "unread", updated_at: null },
+          { session_id: "s4", status: "idle", updated_at: null },
+        ]));
+      }
+      if (url.startsWith("/api/sessions")) return jsonResponse([]);
+      return jsonResponse({ error: `unhandled ${url}` }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useRuntimeStore.setState({
+      sessions: [session("s1", "Session A"), session("s2", "Session B"), session("s3", "Session C"), session("s4", "Session D")],
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("renders per-session attention badges by priority status", async () => {
+    renderList();
+    // Needs you / Running / New badges appear on the matching rows.
+    await waitFor(() => expect(screen.getByRole("button", { name: /Session A/ }).textContent).toContain("Needs you"));
+    expect(screen.getByRole("button", { name: /Session B/ }).textContent).toContain("Running");
+    expect(screen.getByRole("button", { name: /Session C/ }).textContent).toContain("New");
+    // Idle sessions show no badge.
+    expect(screen.getByRole("button", { name: /Session D/ }).textContent).not.toContain("New");
+    expect(screen.getByRole("button", { name: /Session D/ }).textContent).not.toContain("Running");
+    // The header summarizes the counts.
+    await waitFor(() => expect(screen.getByLabelText("Attention summary")).toBeInTheDocument());
+    expect(screen.getByLabelText("Attention summary").textContent).toContain("1 Needs you");
+    expect(screen.getByLabelText("Attention summary").textContent).toContain("1 Running");
+    expect(screen.getByLabelText("Attention summary").textContent).toContain("1 New");
+  });
+
+  it("degrades gracefully when the attention endpoint fails", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input).startsWith("/api/attention")) return jsonResponse({ error: "unavailable" }, 503);
+      if (String(input).startsWith("/api/sessions")) return jsonResponse([]);
+      return jsonResponse({ error: `unhandled ${String(input)}` }, 404);
+    });
+    renderList();
+    // The session list still renders without badges and without crashing.
+    expect(await screen.findByRole("button", { name: /Session A/ })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Attention summary")).toBeNull();
+    expect(screen.getByRole("button", { name: /Session A/ }).textContent).not.toContain("Needs you");
   });
 });

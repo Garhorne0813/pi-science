@@ -9,6 +9,7 @@ import { registerSessionReadRoutes } from "../http/routes/session-routes.js";
 import { registerSseRoutes } from "../http/routes/sse-routes.js";
 import { registerFileReadRoutes } from "../http/routes/file-routes.js";
 import { registerNodeSessionRoutes } from "../http/routes/node-session-routes.js";
+import { registerConversationNavigationRoutes } from "../http/routes/conversation-navigation-routes.js";
 import { registerJobRoutes } from "../http/routes/job-routes.js";
 import { registerArtifactRoutes } from "../http/routes/artifact-routes.js";
 import { registerTurnArtifactRoutes } from "../http/routes/turn-artifact-routes.js";
@@ -119,9 +120,10 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   });
 
   if (config.nodeSessions || config.nodePiManager) registerSessionReadRoutes(app, sessionRepository, nodeSessionService);
+  if (config.nodeSessions || config.nodePiManager) registerConversationNavigationRoutes(app, modules.navigation, sessionRepository, nodeSessionService, events);
   if (config.nodeSse || config.nodePiManager) registerSseRoutes(app, nodeSessionService, events);
   if (config.nodeFiles) registerFileReadRoutes(app);
-  if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository, new AiTitleService(new PiTitleRuntimeFactory(piManager)));
+  if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository, new AiTitleService(new PiTitleRuntimeFactory(piManager)), undefined, modules.navigation);
   if (config.nodeJobs !== false) registerJobRoutes(app, jobs);
   registerEnvironmentRoutes(app, environments);
   if (config.nodeArtifacts !== false) registerArtifactRoutes(app);

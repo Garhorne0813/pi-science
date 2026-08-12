@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { artifactManifestSchema, createResearchLoopSchema, createSessionRequestSchema, gatewayHealthSchema, jobRecordSchema, piRpcCommandSchema, researchLoopSchema, sessionEventSchema, skillContentSchema } from "./index.js";
+import { artifactManifestSchema, conversationAttentionResponseSchema, conversationBookmarkCreateSchema, conversationBookmarkSchema, conversationBookmarkUpdateSchema, conversationReadStateResponseSchema, createResearchLoopSchema, createSessionRequestSchema, gatewayHealthSchema, jobRecordSchema, piRpcCommandSchema, researchLoopSchema, sessionEventSchema, sessionMessageIndexEntrySchema, skillContentSchema } from "./index.js";
 
 describe("gateway contracts", () => {
   it("accepts a healthy Node gateway response", () => {
@@ -51,6 +51,72 @@ describe("gateway contracts", () => {
     expect(() => skillContentSchema.parse({
       skill_id: "s1", name: "alpha", digest: "0123456789abcdef",
       source: "builtin", location: "alpha/SKILL.md",
+    })).toThrow();
+  });
+
+  it("validates conversation bookmarks and rejects invalid roles and lengths", () => {
+    expect(conversationBookmarkSchema.parse({
+      bookmark_id: "b1", session_id: "s1", message_id: "m1", role: "user",
+      quote: "a finding", label: "Key result", origin: "user", status: "accepted",
+      created_at: "now", updated_at: "now",
+    })).toMatchObject({ role: "user", status: "accepted" });
+    expect(() => conversationBookmarkSchema.parse({
+      bookmark_id: "b1", session_id: "s1", message_id: "m1", role: "tool",
+      quote: "a finding", label: null, origin: "user", status: "accepted",
+      created_at: "now", updated_at: "now",
+    })).toThrow();
+    expect(() => conversationBookmarkSchema.parse({
+      bookmark_id: "b1", session_id: "s1", message_id: "m1", role: "assistant",
+      quote: "a", label: "x".repeat(161), origin: "user", status: "accepted",
+      created_at: "now", updated_at: "now",
+    })).toThrow();
+    expect(() => conversationBookmarkSchema.parse({
+      bookmark_id: "b1", session_id: "s1", message_id: "m1", role: "assistant",
+      quote: "q".repeat(501), label: null, origin: "user", status: "accepted",
+      created_at: "now", updated_at: "now",
+    })).toThrow();
+    expect(() => conversationBookmarkUpdateSchema.parse({ status: "pending" })).toThrow();
+    expect(() => conversationBookmarkCreateSchema.parse({ session_id: "s1" })).toThrow();
+  });
+
+  it("validates read-state responses and all-role message index entries", () => {
+    expect(conversationReadStateResponseSchema.parse({
+      session_id: "s1", anchor_message_id: "m2", at_bottom: false,
+      seen_snapshot_version: "v1", updated_at: "now", anchor_available: true, before: "cur",
+    })).toMatchObject({ anchor_available: true, before: "cur" });
+    // The synthetic empty (never-read) response is nullable for updated_at.
+    expect(conversationReadStateResponseSchema.parse({
+      session_id: "s1", anchor_message_id: null, at_bottom: false,
+      seen_snapshot_version: null, updated_at: null, anchor_available: false, before: null,
+    })).toMatchObject({ anchor_available: false, before: null, updated_at: null });
+    expect(() => conversationReadStateResponseSchema.parse({
+      session_id: "s1", anchor_message_id: "m2", at_bottom: false,
+      seen_snapshot_version: "v1", updated_at: "now", anchor_available: true,
+    })).toThrow();
+    expect(sessionMessageIndexEntrySchema.parse({
+      id: "m1", role: "assistant", text: "hi", timestamp: null, before: "cur",
+    })).toMatchObject({ role: "assistant" });
+    expect(() => sessionMessageIndexEntrySchema.parse({
+      id: "m1", role: "tool", text: "hi", timestamp: null, before: "cur",
+    })).toThrow();
+  });
+
+  it("validates attention responses and rejects negative limits", () => {
+    const parsed = conversationAttentionResponseSchema.parse({
+      items: [
+        { session_id: "s1", status: "needs_you", updated_at: null },
+        { session_id: "s2", status: "running", updated_at: null },
+        { session_id: "s3", status: "unread", updated_at: null },
+        { session_id: "s4", status: "idle", updated_at: null },
+      ],
+      counts: { needs_you: 1, running: 1, unread: 1 },
+      truncated: false,
+    });
+    expect(parsed.counts).toMatchObject({ needs_you: 1, running: 1, unread: 1 });
+    expect(() => conversationAttentionResponseSchema.parse({
+      items: [{ session_id: "s1", status: "drafting", updated_at: null }],
+      counts: { needs_you: 0, running: 0, unread: 0 },
+      truncated: false,
     })).toThrow();
   });
 });

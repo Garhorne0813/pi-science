@@ -318,6 +318,23 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
+  it("exposes busy session ids for attention without leaking runtime records", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-busy", "session-idle");
+    await service.resume("session-busy", cwd);
+    await service.resume("session-idle", cwd);
+    expect(service.busySessionIds(cwd)).toEqual([]);
+
+    await expect(service.command("session-busy", cwd, "prompt", { message: "hold" })).resolves.toMatchObject({ success: true });
+    await expect(service.command("session-busy", cwd, "prompt", { message: "second" })).resolves.toMatchObject({ code: "busy" });
+    expect(service.busySessionIds(cwd)).toEqual(["session-busy"]);
+    expect(service.busySessionIds(join(cwd, "..", "other-workspace"))).toEqual([]);
+
+    await service.command("session-busy", cwd, "abort");
+    expect(service.busySessionIds(cwd)).toEqual([]);
+    await service.shutdownAll();
+  });
+
   it("preserves nested model IDs and supports commands, fork, and interaction notifications", async () => {
     const service = testService();
     const cwd = await workspaceWithSessions("session-a");

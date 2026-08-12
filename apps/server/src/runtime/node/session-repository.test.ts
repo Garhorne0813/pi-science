@@ -295,6 +295,69 @@ describe("SessionRepository messages streaming", () => {
     expect(page.messages.map((message) => message.id)).toEqual(["m2", "m3"]);
   });
 
+  it("indexes assistant messages with roles=all and excludes tool results", async () => {
+    const cwd = await makeWorkspace();
+    const repo = new SessionRepository();
+    const lines = [
+      sessionHeader("all-roles", cwd),
+      messageLine("m1", "user", "one"),
+      messageLine("m2", "assistant", "two"),
+      `${JSON.stringify({ type: "message", id: "m3", timestamp: "2026-07-25T00:00:03.000Z", message: { role: "toolResult", toolCallId: "c1", content: [{ type: "text", text: "tool output" }] } })}\n`,
+      `${JSON.stringify({ type: "message", id: "m4", timestamp: "2026-07-25T00:00:04.000Z", message: { role: "assistant", content: [{ type: "text", text: "" }] } })}\n`,
+      messageLine("m5", "assistant", "three"),
+    ];
+    await writeFile(join(cwd, ".pi-science", "sessions", "all-roles.jsonl"), lines.join(""), "utf8");
+
+    const userOnly = await repo.userMessageIndex(cwd, "all-roles");
+    expect(userOnly.messages.map((message) => message.id)).toEqual(["m1"]);
+
+    const all = await repo.messageIndex(cwd, "all-roles", "all");
+    expect(all.messages.map((message) => [message.id, message.role])).toEqual([["m1", "user"], ["m2", "assistant"], ["m5", "assistant"]]);
+    // Tool results and text-less assistant messages never enter the index.
+    expect(all.messages.some((message) => message.id === "m3" || message.id === "m4")).toBe(false);
+  });
+
+  it("resolves a persisted message locator and re-resolves after appends", async () => {
+    const cwd = await makeWorkspace();
+    const repo = new SessionRepository();
+    const lines = [
+      sessionHeader("located", cwd),
+      messageLine("m1", "user", "one"),
+      messageLine("m2", "assistant", "two"),
+    ];
+    await writeFile(join(cwd, ".pi-science", "sessions", "located.jsonl"), lines.join(""), "utf8");
+
+    const locator = await repo.messageLocator(cwd, "located", "m2");
+    expect(locator).toMatchObject({ role: "assistant", text: "two" });
+    expect(locator?.before).toEqual(expect.any(String));
+    expect(await repo.messageLocator(cwd, "located", "ghost")).toBeNull();
+    expect(await repo.messageLocator(cwd, "ghost", "m1")).toBeNull();
+
+    // The locator stays valid after the session grows (cursor is re-derived).
+    await appendFile(join(cwd, ".pi-science", "sessions", "located.jsonl"), messageLine("m3", "user", "three"), "utf8");
+    const page = await repo.messagesPage(cwd, "located", { before: locator!.before, limit: 2 });
+    expect(page.messages.map((message) => message.id)).toEqual(["m1", "m2"]);
+    expect(page.messages.some((message) => message.id === "m2")).toBe(true);
+  });
+
+  it("reports the latest visible message and snapshot for attention", async () => {
+    const cwd = await makeWorkspace();
+    const repo = new SessionRepository();
+    await writeFile(join(cwd, ".pi-science", "sessions", "latest.jsonl"), [
+      sessionHeader("latest", cwd),
+      messageLine("m1", "user", "one"),
+      messageLine("m2", "assistant", "two"),
+    ].join(""), "utf8");
+
+    const latest = await repo.latestVisibleMessage(cwd, "latest");
+    expect(latest.role).toBe("assistant");
+    expect(latest.snapshot_version).toContain(":");
+    expect((await repo.latestVisibleMessage(cwd, "ghost")).role).toBeNull();
+
+    expect(await repo.sessionSnapshotVersion(cwd, "latest")).toContain(":");
+    expect(await repo.sessionSnapshotVersion(cwd, "ghost")).toBe("0:0");
+  });
+
   it("rejects malformed history cursors and oversized pages", async () => {
     const cwd = await makeWorkspace();
     const repo = new SessionRepository();

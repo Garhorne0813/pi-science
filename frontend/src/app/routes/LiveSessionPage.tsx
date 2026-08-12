@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import type { ComponentType, ReactNode, Ref } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, Loader2, Square, Plus, Sparkles, X, File, FolderOpen } from "lucide-react";
+import { ArrowDown, ArrowUp, Bookmark, Loader2, Square, Plus, Sparkles, X, File, FolderOpen } from "lucide-react";
 import type { VirtuosoHandle, VirtuosoProps } from "react-virtuoso";
 import { getClient, getSessionName } from "../../lib/client/pi-science-client";
 import { queryClient } from "../../lib/client/query-client";
@@ -21,6 +21,10 @@ import { MentionComposer } from "../../components/conversation/MentionComposer";
 import { QuestionnairePrompt } from "../../components/conversation/QuestionnairePrompt";
 import { groupBlocks, renderBlockGroup } from "../../components/conversation/ConversationBlocks";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
+import { ConversationBookmarksPanel } from "../../components/conversation/ConversationBookmarksPanel";
+import type { MessageBookmarkAction } from "../../components/conversation/MessageActions";
+import { useConversationNavigation } from "../../hooks/useConversationNavigation";
+import type { ConversationBookmark } from "../../lib/conversation-navigation";
 import { visibleUserMessage } from "../../lib/files";
 import { useTranslation } from "react-i18next";
 import { ResearchLoopDraftCard, ResearchLoopStatusCard, ResearchModePicker } from "../../components/conversation/ResearchLoopControls";
@@ -143,10 +147,124 @@ export function LiveSessionPage() {
 
   const messageIndexQuery = useQuery({
     queryKey: ["session-message-index", workspaceCwd, sessionId ?? null],
-    queryFn: () => getClient().getUserMessageIndex(sessionId!, workspaceCwd),
+    queryFn: () => getClient().getMessageIndex(sessionId!, workspaceCwd, "all"),
     enabled: Boolean(sessionId),
     staleTime: 30_000,
   }, queryClient);
+
+  // ── Durable navigation: bookmarks, read position, attention ──
+  const { readState, readStateLoading, bookmarks, bookmarksLoading, createBookmark, acceptBookmark, rejectBookmark, deleteBookmark, proposeBookmarks, scheduleAnchorWrite, scheduleMarkSeen, cancelPendingWrites } = useConversationNavigation(workspaceCwd, sessionId);
+  const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  const bookmarksTriggerRef = useRef<HTMLButtonElement>(null);
+  const bookmarksPanelId = "conversation-bookmarks-panel";
+  const closeBookmarks = useCallback(() => {
+    setBookmarksOpen(false);
+    bookmarksTriggerRef.current?.focus();
+  }, []);
+  // Rejected bookmarks stay on the server record but are never displayed or
+  // counted in the UI: they only exist so a later user action can revive them.
+  const sessionBookmarks = useMemo(
+    () => bookmarks.filter((bookmark) => bookmark.session_id === sessionId && bookmark.status !== "rejected"),
+    [bookmarks, sessionId],
+  );
+  const headerBookmarkCount = sessionBookmarks.length;
+  // While a restore is being decided / executed, viewport-driven read-state
+  // writes are suppressed so a stale cursor cannot overwrite the saved one.
+  const suppressReadWriteRef = useRef(true);
+  const restoreSessionRef = useRef<string | null>(null);
+  const wasWorkingNav = useRef(false);
+
+  useEffect(() => {
+    // New session: cancel stale writes and suppress read-state writes until
+    // the restore decision has been made.
+    suppressReadWriteRef.current = true;
+    restoreSessionRef.current = null;
+    cancelPendingWrites();
+  }, [sessionId, workspaceCwd, cancelPendingWrites]);
+
+  // Read-state loading safety timeout: if the query never settles (network
+  // hang / server down), stop waiting, mark the restore done and release
+  // viewport-driven writes so navigation is not blocked indefinitely.
+  useEffect(() => {
+    if (!sessionId) return;
+    const handle = window.setTimeout(() => {
+      if (sessionRef.current !== sessionId) return;
+      if (restoreSessionRef.current !== sessionId) {
+        restoreSessionRef.current = sessionId;
+        suppressReadWriteRef.current = false;
+      }
+    }, 8000);
+    return () => window.clearTimeout(handle);
+  }, [sessionId]);
+
+  // A completed turn invalidates the all-role index and the attention queue so
+  // new bookmarks and sidebar badges appear without a manual refresh.
+  useEffect(() => {
+    if (wasWorkingNav.current && !working) {
+      void queryClient.invalidateQueries({ queryKey: ["session-message-index", workspaceCwd, sessionId ?? null] });
+      void queryClient.invalidateQueries({ queryKey: ["conversation-navigation", "attention", workspaceCwd] });
+    }
+    wasWorkingNav.current = working;
+  }, [working, workspaceCwd, sessionId]);
+
+  // Optimistic user blocks (id `user-<timestamp>`) are created locally on
+  // send and never match the server index directly. Reconcile them to their
+  // persisted entry by exact visible text (consuming persisted entries in
+  // order) so nav dedup, bookmark actions and jumps use the durable id — the
+  // canonical transcript is not rewritten.
+  const optimisticUserMatch = useMemo(() => {
+    const match = new Map<string, string>();
+    const persistedByText = new Map<string, string[]>();
+    for (const entry of messageIndexQuery.data?.messages ?? []) {
+      if (entry.role !== "user" || !entry.text) continue;
+      const ids = persistedByText.get(entry.text) ?? [];
+      ids.push(entry.id);
+      persistedByText.set(entry.text, ids);
+    }
+    const used = new Set<string>();
+    for (const block of thread.blocks) {
+      if (block.kind !== "user" || !block.text) continue;
+      if (block.id.startsWith("user-") && persistedByText.has(block.text)) {
+        for (const candidate of persistedByText.get(block.text)!) {
+          if (used.has(candidate)) continue;
+          used.add(candidate);
+          match.set(block.id, candidate);
+          break;
+        }
+      }
+    }
+    return match;
+  }, [messageIndexQuery.data?.messages, thread.blocks]);
+
+  // Bookmark actions are only offered for messages the server all-role index
+  // has confirmed as persisted — live temporary ids never qualify. Optimistic
+  // user blocks resolve through `optimisticUserMatch` to their durable id.
+  const bookmarkActions = useMemo(() => {
+    const indexed = new Set((messageIndexQuery.data?.messages ?? []).map((entry) => entry.id));
+    const byMessage = new Map<string, ConversationBookmark>();
+    for (const bookmark of sessionBookmarks) {
+      byMessage.set(bookmark.message_id, bookmark);
+    }
+    const actions = new Map<string, MessageBookmarkAction>();
+    for (const block of thread.blocks) {
+      if (block.kind !== "user" && block.kind !== "agent") continue;
+      const persistedId = block.kind === "user"
+        ? (indexed.has(block.id) ? block.id : optimisticUserMatch.get(block.id) ?? null)
+        : (indexed.has(block.id) ? block.id : null);
+      if (!persistedId) continue;
+      const existing = byMessage.get(persistedId);
+      const status: MessageBookmarkAction["status"] = existing?.status === "accepted" ? "accepted" : existing?.status === "proposed" ? "proposed" : "none";
+      actions.set(block.id, {
+        status,
+        onToggle: () => {
+          if (!existing) createBookmark(persistedId);
+          else if (existing.status === "accepted") deleteBookmark(existing.bookmark_id);
+          else acceptBookmark(existing.bookmark_id);
+        },
+      });
+    }
+    return actions;
+  }, [sessionBookmarks, messageIndexQuery.data?.messages, thread.blocks, optimisticUserMatch, createBookmark, acceptBookmark, deleteBookmark]);
 
   useEffect(() => {
     connect(workspaceCwd, sessionId || undefined);
@@ -165,7 +283,31 @@ export function LiveSessionPage() {
     const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 96;
     followOutputRef.current = nearBottom;
     setShowScrollDown(!nearBottom);
-  }, []);
+    // Reaching the bottom marks the current snapshot as seen (deduplicated
+    // server-side by snapshot version), which clears the sidebar New badge.
+    if (nearBottom && !suppressReadWriteRef.current) {
+      const snapshot = messageIndexQuery.data?.snapshot_version;
+      if (snapshot && !(readState?.at_bottom === true && readState.seen_snapshot_version === snapshot)) {
+        scheduleMarkSeen(snapshot);
+      }
+    }
+  }, [messageIndexQuery.data?.snapshot_version, scheduleMarkSeen, readState]);
+
+  // Viewport reading position: the rail reports the active user message only
+  // when it actually changes; near-bottom is handled by the mark-seen path.
+  const handleActiveChange = useCallback((id: string | null) => {
+    if (!id || suppressReadWriteRef.current) return;
+    const scroller = scrollRef.current;
+    const nearBottom = scroller ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 96 : false;
+    if (nearBottom) return;
+    scheduleAnchorWrite(id);
+  }, [scheduleAnchorWrite]);
+
+  const bookmarkedUserIds = useMemo(() => new Set(
+    bookmarks
+      .filter((bookmark) => bookmark.session_id === sessionId && bookmark.status === "accepted" && bookmark.role === "user")
+      .map((bookmark) => bookmark.message_id),
+  ), [bookmarks, sessionId]);
 
   const attachScroller = useCallback((element: Window | HTMLElement | null) => {
     if (scrollRef.current) scrollRef.current.removeEventListener("scroll", handleThreadScroll);
@@ -227,38 +369,69 @@ export function LiveSessionPage() {
   const userNavItems = useMemo<ConversationNavItem[]>(() => {
     const loadedUsers = thread.blocks.filter((block): block is Extract<ThreadBlock, { kind: "user" }> => block.kind === "user");
     const loadedById = new Map(loadedUsers.map((block) => [block.id, block]));
+    // A persisted entry that is loaded under its own id OR matched to an
+    // optimistic block is already on screen — no `before` cursor needed.
+    const matchedPersistedIds = new Set(optimisticUserMatch.values());
     const seen = new Set<string>();
     const toItem = (id: string, text: string, before?: string): ConversationNavItem => {
       const visible = visibleUserMessage(text);
       return { id, label: (visible || t("conversation.attachment")).slice(0, 120), full: text, before };
     };
-    const indexed = (messageIndexQuery.data?.messages ?? []).map((entry) => {
-      const loaded = loadedById.get(entry.id);
-      seen.add(entry.id);
-      return toItem(entry.id, loaded?.text ?? entry.text, loaded ? undefined : entry.before);
-    });
+    const indexed = (messageIndexQuery.data?.messages ?? [])
+      .filter((entry) => entry.role === "user")
+      .map((entry) => {
+        const loaded = loadedById.get(entry.id) ?? (matchedPersistedIds.has(entry.id) ? { text: entry.text } : undefined);
+        seen.add(entry.id);
+        return toItem(entry.id, loaded?.text ?? entry.text, loaded ? undefined : entry.before);
+      });
+    // Optimistic blocks matched to a persisted entry are represented by the
+    // persisted item above; unmatched ones remain as live items.
     const live = loadedUsers
-      .filter((block) => !seen.has(block.id))
+      .filter((block) => !seen.has(block.id) && !optimisticUserMatch.has(block.id))
       .map((block) => toItem(block.id, block.text));
     return [...indexed, ...live];
-  }, [messageIndexQuery.data?.messages, t, thread.blocks]);
+  }, [messageIndexQuery.data?.messages, t, thread.blocks, optimisticUserMatch]);
 
   const smoothScroll = () => !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   // Runs fn after `delay` only while the page still shows the same session;
   // every pending handle is tracked so newer interactions/unmount can cancel.
-  const scheduleSessionScoped = (fn: () => void, delay: number) => {
+  const scheduleSessionScoped = useCallback((fn: () => void, delay: number) => {
     const scheduledSession = sessionRef.current;
     const handle = window.setTimeout(() => {
       if (sessionRef.current !== scheduledSession) return;
       fn();
     }, delay);
     scrollTimersRef.current.push(handle);
-  };
-  const cancelPendingScrollTimers = () => {
+  }, []);
+  const cancelPendingScrollTimers = useCallback(() => {
     for (const handle of scrollTimersRef.current) window.clearTimeout(handle);
     scrollTimersRef.current = [];
-  };
-  const scrollToLoadedTarget = (id: string) => {
+  }, []);
+  // Load the page containing a target with bounded retries. A 0 result can
+  // mean the store's history load is already in flight (historyLoading) or the
+  // session changed; retries absorb the transient case, and the session guard
+  // drops stale callbacks so an old session's promise can never release the
+  // current session's write suppression. `onSettled` always fires exactly once
+  // for the current session (loaded count or 0 after retries are exhausted).
+  const loadOlderForTarget = useCallback((before: string, onSettled: (loaded: number) => void, retries = 3) => {
+    const scheduledSession = sessionRef.current;
+    let attempts = 0;
+    const attempt = (): void => {
+      if (sessionRef.current !== scheduledSession) return;
+      void loadMessagesForNavigation(before).then((loaded) => {
+        if (sessionRef.current !== scheduledSession) return;
+        if (loaded > 0) { onSettled(loaded); return; }
+        if (attempts < retries) {
+          attempts += 1;
+          scheduleSessionScoped(attempt, 150);
+          return;
+        }
+        onSettled(0);
+      });
+    };
+    attempt();
+  }, [loadMessagesForNavigation, scheduleSessionScoped]);
+  const scrollToLoadedTarget = useCallback((id: string) => {
     const scrollToExact = () => {
       const target = document.getElementById(`user-msg-${id}`);
       if (!target) return false;
@@ -301,7 +474,7 @@ export function LiveSessionPage() {
     } else {
       scrollToExact();
     }
-  };
+  }, [scheduleSessionScoped]);
   const handleNavSelect = (id: string) => {
     // Stop the follow-output effect from yanking the viewport back to the bottom.
     followOutputRef.current = false;
@@ -310,13 +483,77 @@ export function LiveSessionPage() {
     cancelPendingScrollTimers();
     const target = userNavItems.find((item) => item.id === id);
     if (target?.before) {
-      void loadMessagesForNavigation(target.before).then((loadedMessages) => {
-        if (loadedMessages > 0) scheduleSessionScoped(() => scrollToLoadedTarget(id), 0);
+      loadOlderForTarget(target.before, (loaded) => {
+        // Zero (after retries): the target may already be mounted — try a
+        // direct scroll instead of silently doing nothing.
+        if (loaded > 0) scheduleSessionScoped(() => scrollToLoadedTarget(id), 0);
+        else scrollToLoadedTarget(id);
       });
       return;
     }
     scrollToLoadedTarget(id);
   };
+
+  // Restore the persisted reading position once per session entry. Lives
+  // after the scroll helpers so the restore can reuse them.
+  useEffect(() => {
+    if (!sessionId || readStateLoading || restoreSessionRef.current === sessionId) return;
+    restoreSessionRef.current = sessionId;
+    const restoreSession = sessionId;
+    if (!readState) {
+      // No read state (or the endpoint is unavailable): nothing to restore,
+      // viewport-driven writes are safe.
+      suppressReadWriteRef.current = false;
+      return;
+    }
+    if (readState.at_bottom) {
+      // Already at the newest content: keep the default bottom behavior.
+      suppressReadWriteRef.current = false;
+      return;
+    }
+    if (readState.anchor_available && readState.before && readState.anchor_message_id) {
+      const anchorId = readState.anchor_message_id;
+      loadOlderForTarget(readState.before, (loaded) => {
+        // Session guard: a stale promise from a previous session must never
+        // release the current session's suppression.
+        if (sessionRef.current !== restoreSession) return;
+        if (loaded > 0) {
+          scheduleSessionScoped(() => {
+            scrollToLoadedTarget(anchorId);
+            suppressReadWriteRef.current = false;
+          }, 0);
+        } else {
+          // Retries exhausted: direct-scroll fallback if the anchor is already
+          // mounted, then release writes (bottom fallback for the rest).
+          scrollToLoadedTarget(anchorId);
+          suppressReadWriteRef.current = false;
+        }
+      });
+      // Safety net: never leave writes suppressed if the page load stalls.
+      scheduleSessionScoped(() => {
+        if (sessionRef.current === restoreSession) suppressReadWriteRef.current = false;
+      }, 4000);
+    } else {
+      // Anchor missing or stale: fall back to the bottom.
+      suppressReadWriteRef.current = false;
+    }
+  }, [readState, readStateLoading, sessionId, loadOlderForTarget, scheduleSessionScoped, scrollToLoadedTarget]);
+
+  // Bookmark jumps reuse the pagination machinery: the target may live in an
+  // older page that has not been loaded yet (user and assistant anchors).
+  const jumpToBookmark = useCallback((id: string) => {
+    followOutputRef.current = false;
+    cancelPendingScrollTimers();
+    const entry = (messageIndexQuery.data?.messages ?? []).find((candidate) => candidate.id === id);
+    if (entry?.before) {
+      loadOlderForTarget(entry.before, (loaded) => {
+        if (loaded > 0) scheduleSessionScoped(() => scrollToLoadedTarget(id), 0);
+        else scrollToLoadedTarget(id);
+      });
+      return;
+    }
+    scrollToLoadedTarget(id);
+  }, [messageIndexQuery.data?.messages, loadOlderForTarget, scrollToLoadedTarget]);
   const scrollToBottom = () => {
     followOutputRef.current = true;
     const scroller = scrollRef.current;
@@ -454,6 +691,38 @@ export function LiveSessionPage() {
           )} title={status} />
           <h1 className="min-w-0 truncate text-[13px] font-medium text-text">{title}</h1>
         </div>
+        <div className="relative shrink-0">
+          <button
+            ref={bookmarksTriggerRef}
+            type="button"
+            aria-label={t("conversation.bookmarks")}
+            aria-haspopup="true"
+            aria-expanded={bookmarksOpen}
+            aria-controls={bookmarksPanelId}
+            onClick={() => setBookmarksOpen((open) => !open)}
+            className="relative flex h-7 w-7 items-center justify-center rounded-full text-muted transition-colors hover:bg-surface-2 hover:text-text"
+          >
+            <Bookmark size={14} fill={headerBookmarkCount > 0 ? "currentColor" : "none"} className={cn(headerBookmarkCount > 0 && "text-accent")} />
+            {headerBookmarkCount > 0 && (
+              <span className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-0.5 text-[8px] font-medium leading-none text-accent-fg">
+                {headerBookmarkCount}
+              </span>
+            )}
+          </button>
+          <ConversationBookmarksPanel
+            id={bookmarksPanelId}
+            bookmarks={sessionBookmarks}
+            loading={bookmarksLoading}
+            open={bookmarksOpen}
+            onClose={closeBookmarks}
+            onJump={jumpToBookmark}
+            onAccept={(bookmarkId) => acceptBookmark(bookmarkId)}
+            onReject={(bookmarkId) => rejectBookmark(bookmarkId)}
+            onDelete={(bookmarkId) => deleteBookmark(bookmarkId)}
+            onSuggest={() => proposeBookmarks()}
+            suggesting={false}
+          />
+        </div>
       </header>
 
       {/* Welcome layout: this top region and the spacer below the composer both
@@ -511,7 +780,7 @@ export function LiveSessionPage() {
                   }}
                   itemContent={(_index, group) => (
                     <div className="mx-auto w-full max-w-[824px] px-8 pb-3">
-                      {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock)}
+                      {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock, bookmarkActions)}
                     </div>
                   )}
                 />
@@ -535,7 +804,7 @@ export function LiveSessionPage() {
 
         {/* Compact conversation minimap: hover a line to preview, click to jump. */}
         {userNavItems.length >= 1 && (
-          <ConversationNavRail items={userNavItems} rootRef={scrollRef} onSelect={handleNavSelect} />
+          <ConversationNavRail items={userNavItems} rootRef={scrollRef} onSelect={handleNavSelect} onActiveChange={handleActiveChange} bookmarkedIds={bookmarkedUserIds} />
         )}
 
         {/* Composer */}

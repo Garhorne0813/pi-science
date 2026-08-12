@@ -17,7 +17,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ComponentType, ReactNode, Ref } from "react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { VirtuosoHandle } from "react-virtuoso";
 
 const { virtuosoProps } = vi.hoisted(() => ({ virtuosoProps: [] as Array<Record<string, unknown>> }));
@@ -763,8 +763,8 @@ describe("conversation nav rail and scroll-to-latest", () => {
       if (url.startsWith("/api/sessions/s1/messages/index")) {
         return Promise.resolve(jsonResponse({
           messages: [
-            { id: "u-old", text: "Old question", before: "cursor-old" },
-            { id: "u-latest", text: "Latest question", before: "cursor-latest" },
+            { id: "u-old", role: "user", text: "Old question", before: "cursor-old" },
+            { id: "u-latest", role: "user", text: "Latest question", before: "cursor-latest" },
           ],
           snapshot_version: "1:1",
         }));
@@ -1176,5 +1176,373 @@ describe("defensive thread shape and copy actions (docs/pr30markdown.md 3.4/3.5/
 
     const copyButtons = screen.getAllByRole("button", { name: "Copy" });
     expect(copyButtons).toHaveLength(1);
+  });
+});
+
+describe("durable navigation (bookmarks + read position)", () => {
+  const INDEX_URL = "/api/sessions/s1/messages/index";
+
+  function threadWith(blocks: ThreadBlock[]) {
+    const index: Record<string, number> = {};
+    blocks.forEach((block, i) => { index[block.id] = i; });
+    useRuntimeStore.setState({ thread: { blocks, index, loaded: true } });
+  }
+
+  function allRoleIndex(entries: Array<{ id: string; role: string; text: string; before: string }>) {
+    overrides.push((url) => {
+      if (url.startsWith(INDEX_URL)) {
+        return Promise.resolve(jsonResponse({ messages: entries, snapshot_version: "1:1" }));
+      }
+      return null;
+    });
+  }
+
+  it("restores a saved reading position in an older page after refresh", async () => {
+    threadWith([userBlock("u-latest", "Latest question"), agentBlock("a-latest", "latest reply")]);
+    allRoleIndex([
+      { id: "u-old", role: "user", text: "Old question", before: "cursor-old" },
+      { id: "a-old", role: "assistant", text: "Old answer", before: "cursor-old" },
+      { id: "u-latest", role: "user", text: "Latest question", before: "cursor-latest" },
+    ]);
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/read-state")) {
+        return Promise.resolve(jsonResponse({
+          session_id: "s1", anchor_message_id: "u-old", at_bottom: false,
+          seen_snapshot_version: null, updated_at: "now", anchor_available: true, before: "cursor-old",
+        }));
+      }
+      if (url.includes("/api/sessions/s1/messages?") && url.includes("before=cursor-old")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u-old", role: "user", content: [{ type: "text", text: "Old question" }] },
+            { id: "a-old", role: "assistant", content: [{ type: "text", text: "Old answer" }] },
+          ],
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    await waitFor(() => expect(document.getElementById("user-msg-u-old")).toBeInTheDocument());
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it("keeps the bottom behavior when the read state is at_bottom", async () => {
+    threadWith([userBlock("u1", "Question"), agentBlock("a1", "reply")]);
+    allRoleIndex([{ id: "u1", role: "user", text: "Question", before: "cursor-latest" }]);
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/read-state")) {
+        return Promise.resolve(jsonResponse({
+          session_id: "s1", anchor_message_id: "u1", at_bottom: true,
+          seen_snapshot_version: "1:1", updated_at: "now", anchor_available: true, before: "cursor-latest",
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The at-bottom restore must not trigger an older-page load.
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/sessions/s1/messages?") && String(url).includes("before="))).toBe(false);
+  });
+
+  it("jumps to an assistant bookmark in an older page from the bookmarks panel", async () => {
+    threadWith([userBlock("u-latest", "Latest question"), agentBlock("a-latest", "latest reply")]);
+    allRoleIndex([
+      { id: "a-old", role: "assistant", text: "Old answer", before: "cursor-old" },
+      { id: "u-latest", role: "user", text: "Latest question", before: "cursor-latest" },
+    ]);
+    overrides.push((url) => {
+      if (url.includes("/api/bookmarks")) {
+        return Promise.resolve(jsonResponse({
+          bookmarks: [
+            { bookmark_id: "b1", session_id: "s1", message_id: "a-old", role: "assistant", quote: "Old answer", label: null, origin: "user", status: "accepted", created_at: "now", updated_at: "now" },
+          ],
+          legacy_skipped: 0,
+        }));
+      }
+      if (url.includes("/api/sessions/s1/messages?") && url.includes("before=cursor-old")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u-old", role: "user", content: [{ type: "text", text: "Old question" }] },
+            { id: "a-old", role: "assistant", content: [{ type: "text", text: "Old answer" }] },
+          ],
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    fireEvent.click(screen.getByRole("button", { name: "Bookmarks" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Jump to message/ }));
+    await waitFor(() => expect(document.getElementById("agent-msg-a-old")).toBeInTheDocument());
+  });
+
+  it("offers bookmark actions only for messages confirmed by the server index", async () => {
+    threadWith([userBlock("u-live", "not yet persisted"), agentBlock("a1", "settled answer")]);
+    allRoleIndex([{ id: "a1", role: "assistant", text: "settled answer", before: "cursor-a1" }]);
+    await renderReady();
+    // Wait for the virtual list to mount both message rows.
+    await waitFor(() => expect(document.getElementById("user-msg-u-live")).not.toBeNull());
+    await waitFor(() => expect(document.getElementById("agent-msg-a1")).not.toBeNull());
+
+    // The live user block has no bookmark button; the indexed agent block does.
+    const liveRow = document.getElementById("user-msg-u-live")!;
+    expect(liveRow.querySelector('[aria-label="Bookmark message"]')).toBeNull();
+    const agentRow = document.getElementById("agent-msg-a1")!;
+    expect(agentRow.querySelector('[aria-label="Bookmark message"]')).not.toBeNull();
+    // Exactly one bookmark toggle in the whole thread.
+    expect(screen.getAllByRole("button", { name: "Bookmark message" })).toHaveLength(1);
+  });
+
+  it("creates a bookmark from the message toggle and shows the header count", async () => {
+    threadWith([userBlock("u1", "Question"), agentBlock("a1", "answer")]);
+    allRoleIndex([
+      { id: "u1", role: "user", text: "Question", before: "c1" },
+      { id: "a1", role: "assistant", text: "answer", before: "c2" },
+    ]);
+    const createdBookmark = { bookmark_id: "b-new", session_id: "s1", message_id: "u1", role: "user", quote: "Question", label: null, origin: "user", status: "accepted", created_at: "now", updated_at: "now" };
+    let posted = false;
+    overrides.push((url, init) => {
+      if (String(url).includes("/api/bookmarks") && init?.method === "POST") {
+        posted = true;
+        return Promise.resolve(jsonResponse({ bookmark: createdBookmark }));
+      }
+      if (String(url).includes("/api/bookmarks")) {
+        // The refetch after the mutation must reflect the created bookmark.
+        return Promise.resolve(jsonResponse({ bookmarks: posted ? [createdBookmark] : [], legacy_skipped: 0 }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    // Wait for both the virtual list row and the all-role index (which makes
+    // the bookmark toggle eligible) to be ready.
+    await waitFor(() => {
+      const row = document.getElementById("user-msg-u1");
+      expect(row?.querySelector('[aria-label="Bookmark message"]')).not.toBeNull();
+    });
+    const userRow = document.getElementById("user-msg-u1")!;
+    fireEvent.click(userRow.querySelector('[aria-label="Bookmark message"]')!);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) => String(url).includes("/api/bookmarks") && init?.method === "POST")).toBe(true));
+    // The mutation invalidates the bookmarks query; the header count reflects
+    // the new accepted bookmark once refetched.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Bookmarks" }).textContent).toContain("1"));
+  });
+});
+
+describe("durable navigation review fixes", () => {
+  const INDEX_URL = "/api/sessions/s1/messages/index";
+
+  function threadWith(blocks: ThreadBlock[]) {
+    const index: Record<string, number> = {};
+    blocks.forEach((block, i) => { index[block.id] = i; });
+    useRuntimeStore.setState({ thread: { blocks, index, loaded: true } });
+  }
+
+  function allRoleIndex(entries: Array<{ id: string; role: string; text: string; before: string }>) {
+    overrides.push((url) => {
+      if (url.startsWith(INDEX_URL)) {
+        return Promise.resolve(jsonResponse({ messages: entries, snapshot_version: "1:1" }));
+      }
+      return null;
+    });
+  }
+
+  it("reconciles an optimistic user block with its persisted index entry", async () => {
+    threadWith([userBlock("user-123", "Question"), agentBlock("a1", "answer")]);
+    allRoleIndex([
+      { id: "m-real", role: "user", text: "Question", before: "c1" },
+      { id: "a1", role: "assistant", text: "answer", before: "c2" },
+    ]);
+    overrides.push((url, init) => {
+      if (String(url).includes("/api/bookmarks") && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({
+          bookmark: { bookmark_id: "b-opt", session_id: "s1", message_id: "m-real", role: "user", quote: "Question", label: null, origin: "user", status: "accepted", created_at: "now", updated_at: "now" },
+        }));
+      }
+      if (String(url).includes("/api/bookmarks")) {
+        return Promise.resolve(jsonResponse({ bookmarks: [], legacy_skipped: 0 }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    // The optimistic block gets a bookmark toggle (resolved to the persisted id).
+    await waitFor(() => {
+      const row = document.getElementById("user-msg-user-123");
+      expect(row?.querySelector('[aria-label="Bookmark message"]')).not.toBeNull();
+    });
+    // The nav rail shows ONE entry for the question: the temp block is
+    // reconciled to the persisted entry instead of duplicating it.
+    expect(screen.getAllByRole("button", { name: "Question" })).toHaveLength(1);
+
+    fireEvent.click(document.getElementById("user-msg-user-123")!.querySelector('[aria-label="Bookmark message"]')!);
+    await waitFor(() => {
+      const post = fetchMock.mock.calls.find(([url, init]) => String(url).includes("/api/bookmarks") && init?.method === "POST");
+      expect(post).toBeTruthy();
+      expect(String(post![1]?.body)).toContain('"message_id":"m-real"');
+    });
+  });
+
+  it("hides rejected bookmarks from the panel, actions and header count", async () => {
+    threadWith([userBlock("u1", "Question"), agentBlock("a1", "answer")]);
+    allRoleIndex([
+      { id: "u1", role: "user", text: "Question", before: "c1" },
+      { id: "a1", role: "assistant", text: "answer", before: "c2" },
+    ]);
+    overrides.push((url) => {
+      if (String(url).includes("/api/bookmarks")) {
+        return Promise.resolve(jsonResponse({
+          bookmarks: [
+            { bookmark_id: "b-rej", session_id: "s1", message_id: "u1", role: "user", quote: "Question", label: null, origin: "user", status: "rejected", created_at: "now", updated_at: "now" },
+          ],
+          legacy_skipped: 0,
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    await waitFor(() => {
+      const row = document.getElementById("user-msg-u1");
+      expect(row?.querySelector('[aria-label="Bookmark message"]')).not.toBeNull();
+    });
+    // Rejected records are invisible: no header count, empty panel, and the
+    // message toggle still offers to create (which revives server-side).
+    expect(screen.getByRole("button", { name: "Bookmarks" }).textContent).not.toContain("1");
+    fireEvent.click(screen.getByRole("button", { name: "Bookmarks" }));
+    expect(await screen.findByText(/No bookmarks yet/i)).toBeInTheDocument();
+    // Both indexed messages still offer to create (a rejected record is
+    // invisible; creating revives it server-side).
+    const row = document.getElementById("user-msg-u1")!;
+    expect(row.querySelector('[aria-label="Bookmark message"]')).not.toBeNull();
+  });
+
+  it("direct-scrolls to a mounted bookmark target when the page load returns zero", async () => {
+    threadWith([userBlock("u1", "Question"), agentBlock("a1", "answer")]);
+    allRoleIndex([
+      { id: "u1", role: "user", text: "Question", before: "c1" },
+      { id: "a1", role: "assistant", text: "answer", before: "c2" },
+    ]);
+    overrides.push((url) => {
+      if (String(url).includes("/api/bookmarks")) {
+        return Promise.resolve(jsonResponse({
+          bookmarks: [
+            { bookmark_id: "b1", session_id: "s1", message_id: "u1", role: "user", quote: "Question", label: null, origin: "user", status: "accepted", created_at: "now", updated_at: "now" },
+          ],
+          legacy_skipped: 0,
+        }));
+      }
+      if (String(url).includes("/api/sessions/s1/messages?") && String(url).includes("before=c1")) {
+        return Promise.resolve(jsonResponse({ messages: [], next_cursor: null, has_more: false, snapshot_version: "2:2" }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Bookmarks" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Jump to message/ }));
+    // The empty page resolves 0; after bounded retries the direct-scroll
+    // fallback fires for the already-mounted target.
+    await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalled());
+  });
+
+  it("returns focus to the trigger when the bookmarks panel closes", async () => {
+    threadWith([userBlock("u1", "Question"), agentBlock("a1", "answer")]);
+    allRoleIndex([{ id: "u1", role: "user", text: "Question", before: "c1" }]);
+    await renderReady();
+    const trigger = screen.getByRole("button", { name: "Bookmarks" });
+    fireEvent.click(trigger);
+    expect(await screen.findByRole("region", { name: "Bookmarks" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Bookmarks" })).not.toBeInTheDocument());
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("does not let a stale previous-session restore act on the current session", async () => {
+    function SwitchButton() {
+      const navigate = useNavigate();
+      return (
+        <button
+          type="button"
+          onClick={() => {
+            // The real navigation flow updates the store's active session
+            // before the route change; mirror it so history loads target s2.
+            // (historyLoading is reset here because the pre-existing store
+            // loadHistoryPage keeps it true when a mid-flight load's session
+            // no longer matches — not part of this review's scope.)
+            useRuntimeStore.setState({ activeSessionId: "s2", historyLoading: false });
+            navigate(`/workspace/${CWD}/session/s2`);
+          }}
+        >
+          switch-session
+        </button>
+      );
+    }
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/read-state")) {
+        return Promise.resolve(jsonResponse({
+          session_id: "s1", anchor_message_id: "u1-old", at_bottom: false,
+          seen_snapshot_version: null, updated_at: "now", anchor_available: true, before: "cur-s1",
+        }));
+      }
+      if (url.startsWith("/api/sessions/s2/read-state")) {
+        return Promise.resolve(jsonResponse({
+          session_id: "s2", anchor_message_id: "u2-old", at_bottom: false,
+          seen_snapshot_version: null, updated_at: "now", anchor_available: true, before: "cur-s2",
+        }));
+      }
+      if (String(url).includes("/api/sessions/s1/messages?") && String(url).includes("before=cur-s1")) {
+        // Resolves only AFTER the session switch; the stale promise must be dropped.
+        return new Promise((resolve) => setTimeout(() => resolve(jsonResponse({
+          messages: [
+            { id: "u1-old", role: "user", content: [{ type: "text", text: "Old s1 question" }] },
+            { id: "a1-old", role: "assistant", content: [{ type: "text", text: "Old s1 answer" }] },
+          ],
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        })), 400));
+      }
+      if (String(url).includes("/api/sessions/s2/messages?") && String(url).includes("before=cur-s2")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u2-old", role: "user", content: [{ type: "text", text: "Old s2 question" }] },
+            { id: "a2-old", role: "assistant", content: [{ type: "text", text: "Old s2 answer" }] },
+          ],
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        }));
+      }
+      return null;
+    });
+    threadWith([userBlock("u1", "Question"), agentBlock("a1", "answer")]);
+    useRuntimeStore.setState({ sessions: [
+      { id: "s1", cwd: CWD, name: "Session" },
+      { id: "s2", cwd: CWD, name: "Session 2" },
+    ] });
+
+    const view = render(
+      <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
+        <MemoryRouter initialEntries={[`/workspace/${CWD}/session/s1`]}>
+          <Routes>
+            <Route path="/workspace/:cwd/session/:sessionId" element={<WorkspaceProvider><SwitchButton /><LiveSessionPage /></WorkspaceProvider>} />
+          </Routes>
+        </MemoryRouter>
+      </FeedbackContext.Provider>,
+    );
+    await screen.findByTestId("model-control");
+    (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
+
+    // Switch to s2 while s1's restore page is still in flight.
+    fireEvent.click(screen.getByRole("button", { name: "switch-session" }));
+    // s2's own restore completes with its anchor mounted.
+    await waitFor(() => expect(document.getElementById("user-msg-u2-old")).toBeInTheDocument());
+    // Let s1's delayed page resolve: it must NOT scroll the stale target.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(document.getElementById("user-msg-u1-old")).toBeNull();
+    view.unmount();
   });
 });

@@ -195,6 +195,109 @@ export type JobRecord = z.infer<typeof jobRecordSchema>;
 export type ArtifactManifest = z.infer<typeof artifactManifestSchema>;
 export type ProvenanceRecord = z.infer<typeof provenanceRecordSchema>;
 
+// ── Conversation navigation (durable bookmarks / read state / attention) ──
+
+export const conversationBookmarkSchema = z.object({
+  bookmark_id: z.string().min(1),
+  session_id: z.string().min(1),
+  message_id: z.string().min(1),
+  role: z.enum(["user", "assistant"]),
+  quote: z.string().min(1).max(500),
+  label: z.string().max(160).nullable(),
+  origin: z.enum(["user", "agent_proposal", "legacy_auto"]),
+  status: z.enum(["accepted", "proposed", "rejected"]),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const conversationBookmarkCreateSchema = z.object({
+  session_id: z.string().min(1),
+  message_id: z.string().min(1),
+  label: z.string().max(160).nullish(),
+});
+
+export const conversationBookmarkUpdateSchema = z.object({
+  status: z.enum(["accepted", "rejected"]),
+});
+
+export const conversationBookmarkListResponseSchema = z.object({
+  bookmarks: z.array(conversationBookmarkSchema),
+  legacy_skipped: z.number().int().nonnegative().default(0),
+});
+
+export const conversationBookmarkProposeResponseSchema = z.object({
+  session_id: z.string().min(1),
+  bookmarks: z.array(conversationBookmarkSchema),
+  skipped: z.number().int().nonnegative(),
+});
+
+export const conversationReadStateSchema = z.object({
+  session_id: z.string().min(1),
+  anchor_message_id: z.string().nullable(),
+  at_bottom: z.boolean(),
+  seen_snapshot_version: z.string().nullable(),
+  updated_at: z.string(),
+});
+
+export const conversationReadStateUpdateSchema = z.object({
+  anchor_message_id: z.string().nullable().optional(),
+  at_bottom: z.boolean().optional(),
+  mark_seen: z.boolean().optional(),
+});
+
+/** GET /read-state appends a dynamic locator so the client can load the page
+ *  that contains the anchor without persisting a stale opaque cursor. The
+ *  empty (never-read) response carries `updated_at: null` — a persisted read
+ *  state always has a string timestamp, only the synthetic empty response
+ *  is nullable. */
+export const conversationReadStateResponseSchema = conversationReadStateSchema.extend({
+  anchor_available: z.boolean(),
+  before: z.string().nullable(),
+  updated_at: z.string().nullable(),
+});
+
+export const sessionMessageIndexEntrySchema = z.object({
+  id: z.string().min(1),
+  role: z.enum(["user", "assistant"]),
+  text: z.string(),
+  timestamp: z.string().nullable(),
+  before: z.string(),
+});
+
+export const sessionMessageIndexSchema = z.object({
+  messages: z.array(sessionMessageIndexEntrySchema),
+  snapshot_version: z.string(),
+});
+
+export const conversationAttentionItemSchema = z.object({
+  session_id: z.string().min(1),
+  status: z.enum(["needs_you", "running", "unread", "idle"]),
+  updated_at: z.string().nullable(),
+});
+
+export const conversationAttentionResponseSchema = z.object({
+  items: z.array(conversationAttentionItemSchema),
+  counts: z.object({
+    needs_you: z.number().int().nonnegative(),
+    running: z.number().int().nonnegative(),
+    unread: z.number().int().nonnegative(),
+  }),
+  truncated: z.boolean(),
+});
+
+export type ConversationBookmark = z.infer<typeof conversationBookmarkSchema>;
+export type ConversationBookmarkCreate = z.infer<typeof conversationBookmarkCreateSchema>;
+export type ConversationBookmarkUpdate = z.infer<typeof conversationBookmarkUpdateSchema>;
+export type ConversationBookmarkListResponse = z.infer<typeof conversationBookmarkListResponseSchema>;
+export type ConversationBookmarkProposeResponse = z.infer<typeof conversationBookmarkProposeResponseSchema>;
+export type ConversationReadState = z.infer<typeof conversationReadStateSchema>;
+export type ConversationReadStateUpdate = z.infer<typeof conversationReadStateUpdateSchema>;
+export type ConversationReadStateResponse = z.infer<typeof conversationReadStateResponseSchema>;
+export type SessionMessageIndexEntry = z.infer<typeof sessionMessageIndexEntrySchema>;
+export type SessionMessageIndex = z.infer<typeof sessionMessageIndexSchema>;
+export type ConversationAttentionItem = z.infer<typeof conversationAttentionItemSchema>;
+export type ConversationAttentionResponse = z.infer<typeof conversationAttentionResponseSchema>;
+
 // ── Durable subagent research loops ────────────────────────────────
 
 export const researchMetricSchema = z.object({

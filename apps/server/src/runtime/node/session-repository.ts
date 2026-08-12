@@ -37,10 +37,22 @@ export interface SessionMessagePage {
 
 export interface SessionUserMessageIndexEntry {
   id: string;
+  role: "user" | "assistant";
   text: string;
   timestamp: string | null;
   /** Cursor just after this message; passing it as `before` includes this message in a page. */
   before: string;
+}
+
+export interface SessionMessageLocator {
+  role: "user" | "assistant";
+  text: string;
+  before: string;
+}
+
+export interface SessionLatestVisible {
+  role: "user" | "assistant" | null;
+  snapshot_version: string;
 }
 
 interface SessionFile {
@@ -197,10 +209,14 @@ async function readMessagePage(
 
 /**
  * Build a lightweight navigation index without returning assistant/tool
- * payloads. The `before` cursor points immediately after each user-message
- * line, so the normal paginated history endpoint can load the target on click.
+ * payloads. The `before` cursor points immediately after each indexed line,
+ * so the normal paginated history endpoint can load the target on click.
+ *
+ * `roles: "user"` keeps the legacy user-only minimap behavior;
+ * `roles: "all"` additionally indexes assistant messages that carry visible
+ * text (tool results never qualify — they cannot be bookmarked or anchored).
  */
-async function readUserMessageIndex(path: string): Promise<SessionUserMessageIndexEntry[]> {
+async function readMessageIndex(path: string, roles: "user" | "all"): Promise<SessionUserMessageIndexEntry[]> {
   const entries: SessionUserMessageIndexEntry[] = [];
   const stream = createReadStream(path);
   let pending = Buffer.alloc(0);
@@ -208,11 +224,17 @@ async function readUserMessageIndex(path: string): Promise<SessionUserMessageInd
 
   const consume = (line: Buffer, endOffset: number) => {
     const message = parseMessageLine(line.toString("utf8"));
-    if (!message || message.role !== "user" || !message.id) return;
+    if (!message || !message.id) return;
+    if (roles === "user") {
+      if (message.role !== "user") return;
+    } else if (message.role !== "user" && message.role !== "assistant") {
+      return;
+    }
     const text = textFromMessage(message);
     if (!text) return;
     entries.push({
       id: message.id,
+      role: message.role === "assistant" ? "assistant" : "user",
       text,
       timestamp: message.timestamp ?? null,
       before: encodeMessageCursor(endOffset),
@@ -593,16 +615,68 @@ export class SessionRepository {
   }
 
   async userMessageIndex(cwd: string, sessionId: string): Promise<{ messages: SessionUserMessageIndexEntry[]; snapshot_version: string }> {
+    return this.messageIndex(cwd, sessionId, "user");
+  }
+
+  /** Generalized message index. `roles: "all"` includes assistant messages
+   *  with visible text; the default keeps the user-only behavior. */
+  async messageIndex(cwd: string, sessionId: string, roles: "user" | "all" = "user"): Promise<{ messages: SessionUserMessageIndexEntry[]; snapshot_version: string }> {
     const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
     if (!file) return { messages: [], snapshot_version: "0:0" };
     try {
       const metadata = await stat(file.path);
       return {
-        messages: await readUserMessageIndex(file.path),
+        messages: await readMessageIndex(file.path, roles),
         snapshot_version: snapshotVersion(metadata.size, metadata.mtimeMs),
       };
     } catch {
       return { messages: [], snapshot_version: "0:0" };
+    }
+  }
+
+  /** Resolve a persisted message to its role, visible text and a fresh
+   *  `before` locator. Returns null for unknown sessions or messages without
+   *  visible text (tool results / live-only blocks). */
+  async messageLocator(cwd: string, sessionId: string, messageId: string): Promise<SessionMessageLocator | null> {
+    const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
+    if (!file) return null;
+    try {
+      const entries = await readMessageIndex(file.path, "all");
+      const entry = entries.find((candidate) => candidate.id === messageId);
+      return entry ? { role: entry.role, text: entry.text, before: entry.before } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Lightweight latest-visible-message query for the attention queue: the
+   *  role of the newest indexed (user/assistant with text) message plus the
+   *  session snapshot version. */
+  async latestVisibleMessage(cwd: string, sessionId: string): Promise<SessionLatestVisible> {
+    const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
+    if (!file) return { role: null, snapshot_version: "0:0" };
+    try {
+      const metadata = await stat(file.path);
+      const entries = await readMessageIndex(file.path, "all");
+      const last = entries[entries.length - 1];
+      return {
+        role: last?.role ?? null,
+        snapshot_version: snapshotVersion(metadata.size, metadata.mtimeMs),
+      };
+    } catch {
+      return { role: null, snapshot_version: "0:0" };
+    }
+  }
+
+  /** Current snapshot version (size:mtime) of the session message file. */
+  async sessionSnapshotVersion(cwd: string, sessionId: string): Promise<string> {
+    const file = (await sessionFiles(sessionsRoot(cwd))).find(({ header }) => header.id === sessionId);
+    if (!file) return "0:0";
+    try {
+      const metadata = await stat(file.path);
+      return snapshotVersion(metadata.size, metadata.mtimeMs);
+    } catch {
+      return "0:0";
     }
   }
 

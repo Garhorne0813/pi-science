@@ -12,7 +12,7 @@ import { referencesFromMessage, visibleUserMessage } from "../../lib/files";
 import { agentActionTextByBlock } from "../../lib/conversation";
 import { extractCitations } from "../../lib/citations";
 import { parseSuggestions } from "../../lib/conversation";
-import { MessageActions } from "./MessageActions";
+import { MessageActions, type MessageBookmarkAction } from "./MessageActions";
 
 /** Render blocks, grouping consecutive tool cards together. */
 export function groupBlocks(blocks: ThreadBlock[]): ThreadBlock[][] {
@@ -36,7 +36,7 @@ export function groupBlocks(blocks: ThreadBlock[]): ThreadBlock[][] {
   return groups;
 }
 
-export function renderBlockGroup(blocks: ThreadBlock[], codeRunner: CodeRunner, actionTextByBlock?: Map<string, string>) {
+export function renderBlockGroup(blocks: ThreadBlock[], codeRunner: CodeRunner, actionTextByBlock?: Map<string, string>, bookmarkActions?: Map<string, MessageBookmarkAction>) {
   const result: React.ReactNode[] = [];
   // Compute the copy-button map across the WHOLE thread once (see
   // renderBlocks): the guard inside agentActionTextByBlock needs the blocks
@@ -50,23 +50,23 @@ export function renderBlockGroup(blocks: ThreadBlock[], codeRunner: CodeRunner, 
     return result;
   }
   for (const block of blocks) {
-    result.push(<BlockRenderer key={block.id} block={block} actionText={effectiveActionText.get(block.id)} codeRunner={codeRunner} />);
+    result.push(<BlockRenderer key={block.id} block={block} actionText={effectiveActionText.get(block.id)} bookmark={bookmarkActions?.get(block.id)} codeRunner={codeRunner} />);
   }
   return result;
 }
 
-export function renderBlocks(blocks: ThreadBlock[], codeRunner: CodeRunner) {
+export function renderBlocks(blocks: ThreadBlock[], codeRunner: CodeRunner, bookmarkActions?: Map<string, MessageBookmarkAction>) {
   if (!Array.isArray(blocks)) return null;
   const actionTextByBlock = agentActionTextByBlock(blocks);
-  return groupBlocks(blocks).flatMap((group) => renderBlockGroup(group, codeRunner, actionTextByBlock));
+  return groupBlocks(blocks).flatMap((group) => renderBlockGroup(group, codeRunner, actionTextByBlock, bookmarkActions));
 }
 
 /* ── Block Renderers ── */
 
-function BlockRenderer({ block, actionText, codeRunner }: { block: ThreadBlock; actionText?: string; codeRunner: CodeRunner }) {
+function BlockRenderer({ block, actionText, bookmark, codeRunner }: { block: ThreadBlock; actionText?: string; bookmark?: MessageBookmarkAction; codeRunner: CodeRunner }) {
   switch (block.kind) {
-    case "user": return <UserMessage id={block.id} text={block.text} timestamp={block.timestamp} />;
-    case "agent": return <AgentMessage parts={block.parts} partial={block.partial} timestamp={block.timestamp} actionText={actionText} codeRunner={codeRunner} />;
+    case "user": return <UserMessage id={block.id} text={block.text} timestamp={block.timestamp} bookmark={bookmark} />;
+    case "agent": return <AgentMessage id={block.id} parts={block.parts} partial={block.partial} timestamp={block.timestamp} actionText={actionText} bookmark={bookmark} codeRunner={codeRunner} />;
     case "tool": return <ToolCard block={block} />;
     case "status-line": return <StatusLine block={block} />;
     case "artifact-summary": return <TurnArtifactStrip artifacts={block.artifacts} cwd={codeRunner?.cwd} />;
@@ -104,7 +104,7 @@ function ToolGroup({ blocks }: { blocks: ToolCallBlock[] }) {
   );
 }
 
-function UserMessage({ id, text, timestamp }: { id: string; text: string; timestamp?: string }) {
+function UserMessage({ id, text, timestamp, bookmark }: { id: string; text: string; timestamp?: string; bookmark?: MessageBookmarkAction }) {
   const visibleText = visibleUserMessage(text);
   const references = referencesFromMessage(text);
   const copyText = visibleText || references.map((reference) => reference.path).join("\n");
@@ -125,12 +125,12 @@ function UserMessage({ id, text, timestamp }: { id: string; text: string; timest
           ))}
         </div>
       )}
-      <MessageActions text={copyText} timestamp={timestamp} align="right" />
+      <MessageActions text={copyText} timestamp={timestamp} align="right" bookmark={bookmark} />
     </div>
   );
 }
 
-function AgentMessage({ parts, partial, timestamp, actionText, codeRunner }: { parts: { id: string; text: string }[]; partial?: boolean; timestamp?: string; actionText?: string; codeRunner?: CodeRunner }) {
+function AgentMessage({ id, parts, partial, timestamp, actionText, bookmark, codeRunner }: { id: string; parts: { id: string; text: string }[]; partial?: boolean; timestamp?: string; actionText?: string; bookmark?: MessageBookmarkAction; codeRunner?: CodeRunner }) {
   const { t } = useTranslation();
   const rawText = parts.map((p) => p.text).join("");
   if (!rawText && partial) return null;
@@ -140,7 +140,7 @@ function AgentMessage({ parts, partial, timestamp, actionText, codeRunner }: { p
   const citations = extractCitations(text);
 
   return (
-    <div className="group/message">
+    <div id={`agent-msg-${id}`} className="group/message scroll-mt-4">
       <MarkdownViewer variant="chat" codeRunner={codeRunner}>{text}</MarkdownViewer>
       {citations.length > 0 && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -159,7 +159,7 @@ function AgentMessage({ parts, partial, timestamp, actionText, codeRunner }: { p
           ))}
         </div>
       )}
-      {actionText && <MessageActions text={parseSuggestions(actionText).clean} timestamp={timestamp} />}
+      {(actionText || bookmark) && <MessageActions text={actionText ? parseSuggestions(actionText).clean : ""} timestamp={timestamp} bookmark={bookmark} />}
     </div>
   );
 }

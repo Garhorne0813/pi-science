@@ -2,11 +2,12 @@ import Fastify from "fastify";
 import { access, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerNodeSessionRoutes } from "./node-session-routes.js";
 import { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import { registerSessionReadRoutes } from "./session-routes.js";
 import { sessionRepository } from "../../runtime/node/session-repository.js";
+import { ConversationNavigationRepository } from "../../conversation-navigation/repository.js";
 import { AI_TITLE_PROMPT_INSTRUCTION } from "../../runtime/title/title-prompt.js";
 
 const cleanup: string[] = [];
@@ -445,6 +446,37 @@ describe("native Node conversation routes", () => {
     const { readFile } = await import("node:fs/promises");
     const raw = await readFile(join(cwd, ".pi-science", "session-titles.jsonl"), "utf8").catch(() => "");
     expect(raw.includes("gone soon")).toBe(false);
+    await server.close();
+  });
+
+  it("cleans up navigation state when a session is deleted", async () => {
+    const cwd = await workspaceWithSessions("session-nav");
+    const navigation = new ConversationNavigationRepository(sessionRepository);
+    await navigation.createBookmark(cwd, { session_id: "session-nav", message_id: "session-nav-user" });
+    await navigation.updateReadState(cwd, "session-nav", { at_bottom: true, mark_seen: true });
+    const server = Fastify({ logger: false });
+    registerNodeSessionRoutes(server, nodeSessionService, sessionRepository, undefined, undefined, navigation);
+
+    const deleted = await server.inject({ method: "DELETE", url: `/api/sessions/session-nav?cwd=${encodeURIComponent(cwd)}` });
+    expect(deleted.statusCode).toBe(200);
+    expect((await navigation.bookmarks(cwd, "session-nav")).bookmarks).toHaveLength(0);
+    expect(await navigation.readState(cwd, "session-nav")).toBeNull();
+    await server.close();
+  });
+
+  it("still deletes the session when navigation cleanup fails (best-effort)", async () => {
+    const cwd = await workspaceWithSessions("session-nav-fail");
+    const navigation = {
+      cleanupSession: vi.fn(async () => { throw new Error("navigation state corrupt"); }),
+    } as unknown as ConversationNavigationRepository;
+    const server = Fastify({ logger: false });
+    registerNodeSessionRoutes(server, nodeSessionService, sessionRepository, undefined, undefined, navigation);
+
+    const deleted = await server.inject({ method: "DELETE", url: `/api/sessions/session-nav-fail?cwd=${encodeURIComponent(cwd)}` });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json()).toMatchObject({ ok: true });
+    await expect(access(join(cwd, ".pi-science", "sessions", "session-nav-fail.jsonl"))).rejects.toThrow();
+    expect(navigation.cleanupSession).toHaveBeenCalledWith(cwd, "session-nav-fail");
     await server.close();
   });
 });

@@ -378,6 +378,17 @@ export class NodeSessionService {
     } catch { return []; }
   }
 
+  /** Read-only attention introspection: ids of sessions whose runtime is
+   *  currently busy. Never exposes the PiProcess or mutable runtime records. */
+  busySessionIds(cwdValue: string): string[] {
+    try {
+      const cwd = resolve(cwdValue);
+      return [...this.runtimes.values()]
+        .filter((runtime) => runtime.cwd === cwd && runtime.activeSessionId && runtime.busy)
+        .map((runtime) => runtime.activeSessionId);
+    } catch { return []; }
+  }
+
   async availableModels(cwdValue: string): Promise<PiResult> {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }

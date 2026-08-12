@@ -1,5 +1,5 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
-import { lazy, Suspense, useState, useEffect, useRef } from "react";
+import { lazy, Suspense, useState, useEffect, useRef, useMemo } from "react";
 import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical, type LucideIcon } from "lucide-react";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
@@ -9,6 +9,8 @@ import { PreviewPaneControls } from "../../components/inspector/PreviewPaneContr
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
 import { useWorkspaceCwd } from "../../lib/workspace";
 import { usePendingProposalCount } from "../../lib/knowledge";
+import { useConversationAttention } from "../../hooks/useConversationNavigation";
+import type { AttentionStatus } from "../../lib/conversation-navigation";
 import { cn } from "../../lib/ui";
 
 // The settings bundle (dialog + five tabs) only loads on first open.
@@ -254,6 +256,9 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
   const forkSession = useRuntimeStore((s) => s.forkSession);
   const loadSessions = useRuntimeStore((s) => s.loadSessions);
   const deleteSession = useRuntimeStore((s) => s.deleteSession);
+  const attention = useConversationAttention(cwd);
+  const attentionBySession = useMemo(() => new Map(attention.items.map((item) => [item.session_id, item.status])), [attention.items]);
+  const attentionCounts = attention.counts;
   const navigate = useNavigate();
   const location = useLocation();
   const workspaceRoot = `/workspace/${encodeURIComponent(cwd)}`;
@@ -362,6 +367,13 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
     <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
       <div className="mb-1 flex h-tool items-center justify-between px-2">
         <span className="text-ui-caption font-medium uppercase tracking-wider text-muted">{t("conversation.sessions")}</span>
+        {(attentionCounts.needs_you > 0 || attentionCounts.running > 0 || attentionCounts.unread > 0) && (
+          <span className="flex items-center gap-1 text-ui-micro text-muted" aria-label={t("conversation.attentionSummary")}>
+            {attentionCounts.needs_you > 0 && <span className="rounded-full bg-warn/15 px-1.5 py-px text-[9px] text-warn">{attentionCounts.needs_you} {t("conversation.attentionNeedsYou")}</span>}
+            {attentionCounts.running > 0 && <span className="rounded-full bg-accent/15 px-1.5 py-px text-[9px] text-accent">{attentionCounts.running} {t("conversation.attentionRunning")}</span>}
+            {attentionCounts.unread > 0 && <span className="rounded-full bg-ok/15 px-1.5 py-px text-[9px] text-ok">{attentionCounts.unread} {t("conversation.attentionNew")}</span>}
+          </span>
+        )}
         <IconButton
           icon={Plus}
           label={t("conversation.newSession")}
@@ -393,6 +405,7 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
               >
                 <Icon icon={MessageSquare} size="sm" className="shrink-0 text-muted" />
                 <span className="truncate flex-1">{s.name === "New Session" ? t("conversation.newSession") : s.name || s.id.slice(0, 8)}</span>
+                {attentionBadge(attentionBySession.get(s.id), t)}
                 {(s.updated_at || s.created_at) && (
                   <span className="mr-1 shrink-0 text-ui-micro text-muted/60 group-hover:hidden">
                     {relativeTime(s.updated_at || s.created_at!)}
@@ -430,6 +443,21 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
 }
 
 /* ── Helpers ── */
+
+function attentionBadge(status: AttentionStatus | undefined, t: (key: string) => string) {
+  if (!status || status === "idle") return null;
+  const config: Record<Exclude<AttentionStatus, "idle">, { label: string; className: string; title: string }> = {
+    needs_you: { label: t("conversation.attentionNeedsYou"), className: "bg-warn/15 text-warn", title: t("conversation.attentionNeedsYouTitle") },
+    running: { label: t("conversation.attentionRunning"), className: "bg-accent/15 text-accent", title: t("conversation.attentionRunningTitle") },
+    unread: { label: t("conversation.attentionNew"), className: "bg-ok/15 text-ok", title: t("conversation.attentionNewTitle") },
+  };
+  const item = config[status];
+  return (
+    <span className={cn("mr-1 shrink-0 rounded-full px-1.5 py-px text-[9px] leading-none", item.className)} title={item.title}>
+      {item.label}
+    </span>
+  );
+}
 
 function relativeTime(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
