@@ -179,34 +179,21 @@ describe("seedWorkspaceAssets", () => {
     expect(readFileSync(join(external, "keep.txt"), "utf8")).toBe("do not delete");
   });
 
-  it.skipIf(process.platform === "win32")("replaces a dangling AGENTS.md symlink with the seeded file", () => {
+  it("does not create a workspace AGENTS.md", () => {
     const cwd = tempCwd();
-    symlinkSync(join(cwd, "does-not-exist.md"), join(cwd, "AGENTS.md"));
 
     seedWorkspaceAssets(cwd);
 
-    const info = lstatSync(join(cwd, "AGENTS.md"));
-    expect(info.isSymbolicLink()).toBe(false);
-    expect(info.isFile()).toBe(true);
-    expect(readFileSync(join(cwd, "AGENTS.md"), "utf8")).toBe(
-      readFileSync(join(projectRoot, "harness", "AGENTS.md"), "utf8"),
-    );
+    expect(existsSync(join(cwd, "AGENTS.md"))).toBe(false);
   });
 
-  it.skipIf(process.platform === "win32")("replaces an external-pointing AGENTS.md symlink and never writes through it", () => {
+  it("preserves a user-owned workspace AGENTS.md", () => {
     const cwd = tempCwd();
-    const external = tempExternal();
-    writeFileSync(join(external, "keep.txt"), "do not delete", "utf8");
-    symlinkSync(external, join(cwd, "AGENTS.md"));
+    writeFileSync(join(cwd, "AGENTS.md"), "# Project instructions\n", "utf8");
 
     seedWorkspaceAssets(cwd);
 
-    const info = lstatSync(join(cwd, "AGENTS.md"));
-    expect(info.isSymbolicLink()).toBe(false);
-    expect(info.isFile()).toBe(true);
-    expect(existsSync(join(cwd, "AGENTS.md", "keep.txt"))).toBe(false);
-    // The external directory the link pointed at is untouched.
-    expect(readFileSync(join(external, "keep.txt"), "utf8")).toBe("do not delete");
+    expect(readFileSync(join(cwd, "AGENTS.md"), "utf8")).toBe("# Project instructions\n");
   });
 
   it("logs a warning when removing stale entries", () => {
