@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import type { PiConfig } from "@pi-science/contracts";
-import type { PiProcessOptions } from "./pi-process.js";
+import type { PiProcessOptions, RuntimeSkillPolicy } from "./pi-process.js";
 import { configRoot } from "../../storage/persistence.js";
 
 // The Pi Orbit host is a singleton per control plane: one port + one auth
@@ -51,6 +51,7 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
   const nodePath = process.env.PI_NODE_PATH || process.execPath;
   const dataRoot = configRoot();
   const settings = readSettings(dataRoot);
+  const skillPolicy = workspaceSkillPolicy(settings, cwd);
   const effectiveModel = config.model || (typeof settings.model === "string" ? settings.model : "");
   const effectiveThinking = config.thinking || (typeof settings.thinking === "string" ? settings.thinking : "high");
   const args: string[] = [];
@@ -137,10 +138,23 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
           ...(effectiveModel ? { model: effectiveModel } : {}),
           ...(effectiveModel && effectiveThinking ? { thinking: effectiveThinking } : {}),
           runtimeEnv: Object.fromEntries(Object.entries(env).map(([key, value]) => [key, value ?? null])),
+          skillPolicy,
         },
       },
     } : {}),
   };
+}
+
+function workspaceSkillPolicy(settings: Record<string, any>, cwd: string): RuntimeSkillPolicy {
+  const policies = settings.skill_policies;
+  const policy = policies && typeof policies === "object" ? policies[resolve(cwd)] : undefined;
+  if (!policy || typeof policy !== "object") return { mode: "inherit" };
+  if (policy.mode === "inherit" || policy.mode === "none") return { mode: policy.mode };
+  if ((policy.mode === "allowlist" || policy.mode === "denylist") && Array.isArray(policy.skills)) {
+    const skills = [...new Set((policy.skills as unknown[]).map(String).filter((name): name is string => Boolean(name)))].sort();
+    return { mode: policy.mode, skills };
+  }
+  return { mode: "inherit" };
 }
 
 export function seedWorkspaceAssets(cwd: string): string[] {

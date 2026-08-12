@@ -692,7 +692,7 @@
   "skills.descriptionSuffix": "and bundled with pi-science.",
   "skills.customSelection": "Custom skill selection",
   "skills.autoDiscovery": "Auto-discovery enabled",
-  "skills.selectionHint": "Use the switches below to control skills for newly started Pi processes. Existing conversations keep their current runtime.",
+  "skills.selectionHint": "Use the switches below to update skills for this workspace. Active conversations update without restarting.",
   "skills.resetDiscovery": "Reset to auto-discover",
   "skills.scientificEnvironment": "Scientific Environment",
   "skills.toolDetectionUnavailable": "Tool detection unavailable",

@@ -69,7 +69,7 @@ export function SkillsPage() {
     Promise.all([
       skillsApi.list<Skill>(cwd),
       skillsApi.tools<Tool>(),
-      settingsApi.skills<{ skills?: Array<{ name: string; enabled: boolean }>; configured?: boolean }>(),
+      settingsApi.skills<{ skills?: Array<{ name: string; enabled: boolean }>; configured?: boolean }>(cwd),
     ]).then(([skillData, toolData, settingsData]) => {
       if (cancelled) return;
       const enabled = new Map<string, boolean>((settingsData.skills || []).map((item: { name: string; enabled: boolean }) => [item.name, item.enabled]));
@@ -134,7 +134,7 @@ export function SkillsPage() {
       const result = await apiRequest<{ session_replacements?: SessionReplacement[] }>("/api/settings/skills/toggle", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: skill.name, enabled }),
+        body: JSON.stringify({ cwd, name: skill.name, enabled }),
       });
       if (result.session_replacements) applySessionReplacements(result.session_replacements);
       invalidateSkillSelection();
@@ -151,7 +151,8 @@ export function SkillsPage() {
     setSaving("reset");
     setError(null);
     try {
-      const result = await apiRequest<{ session_replacements?: SessionReplacement[] }>("/api/settings/skills", { method: "DELETE" });
+      if (!cwd) throw new Error("A workspace is required to reset runtime skills");
+      const result = await apiRequest<{ session_replacements?: SessionReplacement[] }>(`/api/settings/skills?cwd=${encodeURIComponent(cwd)}`, { method: "DELETE" });
       if (result.session_replacements) applySessionReplacements(result.session_replacements);
       invalidateSkillSelection();
       setSkills((current) => current.map((item) => ({ ...item, enabled: true })));

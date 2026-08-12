@@ -9,6 +9,7 @@ describe("Pi runtime installation contract", () => {
     const installScript = await readFile(resolve(projectRoot, "scripts/install.sh"), "utf8");
 
     expect(fetchScript).toContain('archive="pi-orbit-${platform}-${arch}.tar.gz"');
+    expect(fetchScript).toContain('PI_ORBIT_VERSION="${PI_ORBIT_VERSION:-0.2.0}"');
     expect(fetchScript).toContain('curl --fail --location --silent --show-error');
     expect(fetchScript).toContain('actual="$(shasum -a 256');
     expect(fetchScript).toContain('printf \'%s\\n\' "$pi_cli" > "$CLI_MARKER"');

@@ -78,10 +78,10 @@ async function fakeWebRuntime(
     'const server = http.createServer(async (request, response) => {',
     '  if (request.headers.authorization !== `Bearer ${token}` && request.url !== "/api/health") return json(response, 401, { error: "Unauthorized" });',
     '  if (request.url === "/api/health") return json(response, 200, { status: "ok" });',
-    '  if (request.url === "/api/capabilities") return json(response, 200, { protocolVersion: 1, isolationModel: "single-user-shared-process", features: { runtimeApi: true, eventReplay: true, browserSessionAuth: true, workspaceBinding: true, projectTrustApi: true, legacySessionApi: true } });',
+    '  if (request.url === "/api/capabilities") return json(response, 200, { protocolVersion: 1, isolationModel: "single-user-shared-process", features: { runtimeApi: true, eventReplay: true, runtimeSkillOverrides: true, runtimeSkillRefresh: true, browserSessionAuth: true, workspaceBinding: true, projectTrustApi: true, legacySessionApi: true } });',
     `  if (request.url?.startsWith("/api/project-trust?") && request.method === "GET") return json(response, 200, { cwd: ${JSON.stringify(cwd)}, required: true, decision: trustDecision });`,
     '  if (request.url === "/api/project-trust" && request.method === "PUT") { const value = await body(request); trustDecision = value.decision; return json(response, 200, { cwd: value.cwd, required: true, decision: trustDecision }); }',
-    `  if (request.url === "/api/runtimes" && request.method === "POST") { const value = await body(request); if (trustDecision !== true) return json(response, 409, { error: "Trust required", code: "project_trust_required" }); ${createFailure ? 'return json(response, 422, { error: "Runtime initialization failed", code: "runtime_initialization_failed", diagnostics: [{ type: "error", message: "broken skill" }] });' : 'const runtimeId = `runtime-${++counter}`; const piSessionId = `session-${counter}`; const runtime = { runtimeId, piSessionId, sessionPath: `${value.sessionDir}/${piSessionId}.jsonl`, sessionDir: value.sessionDir, workspaceCwd: value.cwd, persisted: true, diagnostics: [] }; runtimes.set(runtimeId, runtime); return json(response, 201, runtime);'} }`,
+    `  if (request.url === "/api/runtimes" && request.method === "POST") { const value = await body(request); if (trustDecision !== true) return json(response, 409, { error: "Trust required", code: "project_trust_required" }); ${createFailure ? 'return json(response, 422, { error: "Runtime initialization failed", code: "runtime_initialization_failed", diagnostics: [{ type: "error", message: "broken skill" }] });' : 'const runtimeId = `runtime-${++counter}`; const piSessionId = `session-${counter}`; const runtime = { runtimeId, piSessionId, sessionPath: `${value.sessionDir}/${piSessionId}.jsonl`, sessionDir: value.sessionDir, workspaceCwd: value.cwd, persisted: true, diagnostics: [], skillPolicy: value.skillPolicy ?? { mode: "inherit" } }; runtimes.set(runtimeId, runtime); return json(response, 201, runtime);'} }`,
     '  const parsed = new URL(request.url ?? "/", "http://127.0.0.1"); const parts = parsed.pathname.split("/");',
     '  if (parts[1] === "api" && parts[2] === "runtimes" && parts[3]) {',
     '    const runtimeId = parts[3]; const suffix = parts.length > 4 ? `/${parts.slice(4).join("/")}` : ""; const runtime = runtimes.get(runtimeId);',
@@ -90,6 +90,9 @@ async function fakeWebRuntime(
     '    if (suffix === "/events") { response.writeHead(200, { "content-type": "text/event-stream" }); response.write(`event: connected\\ndata: ${JSON.stringify({ runtimeId })}\\n\\n`); const set = clients.get(runtimeId) ?? new Set(); set.add(response); clients.set(runtimeId, set); request.on("close", () => set.delete(response)); return; }',
     '    if (suffix === "/state") return json(response, 200, { piSessionId: runtime.piSessionId, isStreaming: false, pendingMessageCount: 0 });',
     '    if (suffix === "/commands") return json(response, 200, { commands: [{ name: "review", source: "skill" }] });',
+    '    if (suffix === "/skills" && request.method === "GET") return json(response, 200, { policy: runtime.skillPolicy, skills: [{ name: "review", description: "Review", enabled: runtime.skillPolicy.mode !== "none" }], diagnostics: [] });',
+    '    if (suffix === "/skills" && request.method === "PUT") { runtime.skillPolicy = await body(request); event(runtimeId, { type: "runtime_skills_changed", reason: "policy", policy: runtime.skillPolicy, enabledSkills: runtime.skillPolicy.mode === "none" ? [] : ["review"] }); return json(response, 200, { policy: runtime.skillPolicy, skills: [], diagnostics: [] }); }',
+    '    if (suffix === "/skills/refresh" && request.method === "POST") { event(runtimeId, { type: "runtime_skills_changed", reason: "refresh", policy: runtime.skillPolicy, enabledSkills: [] }); return json(response, 200, { policy: runtime.skillPolicy, skills: [], diagnostics: [] }); }',
     '    if (suffix === "/resume" && request.method === "POST") { const value = await body(request); runtime.piSessionId = "restored-session"; runtime.sessionPath = value.sessionPath; if (detachEventsOnResume) clients.set(runtimeId, new Set()); return json(response, 200, { success: true, runtimeId, piSessionId: runtime.piSessionId }); }',
     '    if (suffix === "/prompt" && request.method === "POST") { await body(request); json(response, 202, { success: true }); event(runtimeId, { type: "agent_start", sessionId: runtime.piSessionId }); return; }',
     '    if (suffix === "/fork" && request.method === "POST") { await body(request); runtime.piSessionId = `fork-${++counter}`; runtime.sessionPath = `${runtime.sessionDir}/${runtime.piSessionId}.jsonl`; return json(response, 200, { success: true, runtimeId, piSessionId: runtime.piSessionId }); }',
@@ -169,6 +172,9 @@ describe("Node Pi Orbit adapter", () => {
       success: true,
       data: { commands: [{ name: "review", source: "skill" }] },
     });
+    await expect(process.setRuntimeSkillPolicy({ mode: "none" })).resolves.toMatchObject({ success: true, data: { policy: { mode: "none" } } });
+    await expect(process.runtimeSkills()).resolves.toMatchObject({ success: true, data: { policy: { mode: "none" } } });
+    await expect(process.refreshRuntimeSkills()).resolves.toMatchObject({ success: true });
     await expect(manager.sendCommand("web-workspace", "prompt", { message: "hello" })).resolves.toMatchObject({ success: true });
     for (let attempt = 0; attempt < 50 && !events.includes("agent_start"); attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -404,7 +410,7 @@ describe("Node Pi Orbit adapter", () => {
         'const server = http.createServer(async (request, response) => {',
         '  const parsed = new URL(request.url ?? "/", "http://127.0.0.1");',
         '  if (parsed.pathname === "/api/health") return json(response, 200, { status: "ok" });',
-        '  if (parsed.pathname === "/api/capabilities") return json(response, 200, { protocolVersion: 1, isolationModel: "single-user-shared-process", features: { runtimeApi: true, eventReplay: true, browserSessionAuth: true, workspaceBinding: true, projectTrustApi: true, legacySessionApi: true } });',
+        '  if (parsed.pathname === "/api/capabilities") return json(response, 200, { protocolVersion: 1, isolationModel: "single-user-shared-process", features: { runtimeApi: true, eventReplay: true, runtimeSkillOverrides: true, runtimeSkillRefresh: true, browserSessionAuth: true, workspaceBinding: true, projectTrustApi: true, legacySessionApi: true } });',
         '  if (parsed.pathname.startsWith("/api/project-trust")) return json(response, 200, { cwd: String(parsed.searchParams.get("cwd") ?? ""), required: false, decision: true });',
         '  if (parsed.pathname === "/api/runtimes" && request.method === "POST") {',
         '    const chunks = []; for await (const chunk of request) chunks.push(chunk);',
