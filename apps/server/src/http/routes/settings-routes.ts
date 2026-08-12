@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { configPath } from "../../storage/persistence.js";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
@@ -7,6 +8,8 @@ import { validateOutboundHttpUrl } from "../../security/outbound-security.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { SettingsStore, type SettingsData as Settings } from "../../storage/settings-store.js";
 import { loadPiAiCatalog } from "../../config/model-catalog-fallback.js";
+import { catalog as skillCatalog } from "../../catalog/skill-catalog.js";
+import type { RuntimeSkillPolicy } from "../../runtime/pi/pi-process.js";
 
 const PROVIDER_ENV: Record<string, string> = { anthropic: "ANTHROPIC_API_KEY", openai: "OPENAI_API_KEY", google: "GEMINI_API_KEY", deepseek: "DEEPSEEK_API_KEY", groq: "GROQ_API_KEY", openrouter: "OPENROUTER_API_KEY", mistral: "MISTRAL_API_KEY", xai: "XAI_API_KEY", zai: "ZAI_API_KEY", fireworks: "FIREWORKS_API_KEY", together: "TOGETHER_API_KEY" };
 const BUILTIN_SUBAGENTS = [
@@ -59,6 +62,38 @@ const FALLBACK_MODEL_HINTS: Record<string, { contextWindow: number; thinkingLeve
 async function respondWithRuntimeReload<T extends Record<string, unknown>>(nodeSessionService: NodeSessionService, reply: FastifyReply, payload: T): Promise<(T & { session_replacements: Array<{ cwd: string; oldId: string; newId: string }> }) | FastifyReply> {
   try { return { ...payload, session_replacements: await nodeSessionService.reloadConfiguration() }; }
   catch (error) { return reply.code(502).send({ ok: false, error: `Settings were saved, but Pi runtime reload failed: ${String(error)}` }); }
+}
+function storedSkillPolicy(config: Settings, cwd: string): RuntimeSkillPolicy {
+  const policy = config.skill_policies?.[resolve(cwd)];
+  if (!policy) return { mode: "inherit" };
+  if (policy.mode === "inherit" || policy.mode === "none") return { mode: policy.mode };
+  return { mode: policy.mode, skills: [...new Set(policy.skills.map(String).filter(Boolean))].sort() };
+}
+function skillEnabled(policy: RuntimeSkillPolicy, name: string): boolean {
+  if (policy.mode === "inherit") return true;
+  if (policy.mode === "none") return false;
+  return policy.mode === "allowlist" ? policy.skills.includes(name) : !policy.skills.includes(name);
+}
+function toggledSkillPolicy(policy: RuntimeSkillPolicy, name: string, enabled: boolean): RuntimeSkillPolicy {
+  if (policy.mode === "inherit") return enabled ? policy : { mode: "denylist", skills: [name] };
+  if (policy.mode === "none") return enabled ? { mode: "allowlist", skills: [name] } : policy;
+  const skills = new Set(policy.skills);
+  if (policy.mode === "allowlist") enabled ? skills.add(name) : skills.delete(name);
+  else enabled ? skills.delete(name) : skills.add(name);
+  const values = [...skills].sort();
+  if (policy.mode === "denylist" && values.length === 0) return { mode: "inherit" };
+  return { mode: policy.mode, skills: values };
+}
+function reconcileSkillPolicy(policy: RuntimeSkillPolicy, names: Set<string>): RuntimeSkillPolicy {
+  if (policy.mode === "inherit" || policy.mode === "none") return policy;
+  const skills = policy.skills.filter((name) => names.has(name));
+  if (policy.mode === "denylist" && skills.length === 0) return { mode: "inherit" };
+  return { mode: policy.mode, skills };
+}
+function runtimeSkillFailure(reply: FastifyReply, error: unknown): FastifyReply {
+  const code = typeof error === "object" && error && "code" in error ? String(error.code) : "runtime_error";
+  const status = code === "runtime_busy" ? 409 : code === "runtime_skill_control_unavailable" ? 501 : code === "unknown_runtime_skills" ? 400 : 502;
+  return reply.code(status).send({ ok: false, code, error: error instanceof Error ? error.message : String(error) });
 }
 function active(config: Settings): Record<string, boolean> { return Object.fromEntries(Object.keys(PROVIDER_ENV).map((id) => [id, Boolean(config.api_keys?.[id] || process.env[PROVIDER_ENV[id]!] || (id === "openai" && process.env.OPENAI_API_KEY))])); }
 function fallbackModel(provider: string, model: string, label: string, custom: boolean, reasoning: boolean, contextWindow = 128000, thinkingLevels?: string[]): Record<string, unknown> { return { id: `${provider}/${model}`, provider, model, label, custom, reasoning, thinking_levels: reasoning ? (thinkingLevels?.length ? thinkingLevels : ["off", "minimal", "low", "medium", "high", "xhigh"]) : ["off"], context_window: contextWindow, capability_source: "pi-science fallback" }; }
@@ -327,8 +362,75 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
   app.put("/api/settings/web-access", async (request, reply) => { const body = (request.body ?? {}) as { provider?: unknown; workflow?: unknown; api_keys?: unknown; remove_keys?: unknown }; const supported = ["openai", "exa", "brave", "parallel", "tavily", "perplexity", "gemini"]; if (body.api_keys && typeof body.api_keys === "object") for (const key of Object.keys(body.api_keys as Record<string, unknown>)) if (!supported.includes(key)) return reply.code(400).send({ error: `Unknown web search provider: ${key}` }); await mutate((config) => { const web = config.web_access ?? {}; web.provider = String(body.provider ?? "auto"); web.workflow = String(body.workflow ?? "none"); const stored = typeof web.api_keys === "object" && web.api_keys ? web.api_keys as Record<string, string> : {}; if (body.api_keys && typeof body.api_keys === "object") for (const [key, value] of Object.entries(body.api_keys as Record<string, unknown>)) if (String(value).trim()) stored[key] = String(value).trim(); if (Array.isArray(body.remove_keys)) for (const key of body.remove_keys.map(String)) delete stored[key]; web.api_keys = stored; config.web_access = web; }); const response = await app.inject({ method: "GET", url: "/api/settings/web-access" }); return respondWithReload(reply, { ok: true, ...(response.json() as Record<string, unknown>) }); });
   app.get("/api/settings/mcp", async () => { const config = await load(); const source = typeof config.mcp_config_path === "string" ? config.mcp_config_path : configPath("mcp.json"); let definitions: Record<string, unknown> = {}; try { const payload = JSON.parse(await readFile(source, "utf8")) as { mcpServers?: unknown }; definitions = payload.mcpServers && typeof payload.mcpServers === "object" ? payload.mcpServers as Record<string, unknown> : {}; } catch { /* empty catalog */ } const configured = Object.keys(definitions); const enabled = Array.isArray(config.mcp_servers) ? config.mcp_servers.filter((id) => configured.includes(id)) : configured; return { servers: enabled, configured, config_path: source }; });
   app.put<{ Params: { server_id: string } }>("/api/settings/mcp/:server_id", async (request, reply) => { const on = String((request.query as { enabled?: string }).enabled ?? "true") !== "false"; await mutate((config) => { const enabled = new Set(Array.isArray(config.mcp_servers) ? config.mcp_servers : []); if (on) enabled.add(request.params.server_id); else enabled.delete(request.params.server_id); config.mcp_servers = [...enabled].sort(); }); return respondWithReload(reply, { ok: true, server: request.params.server_id, enabled: on }); });
-  app.get("/api/settings/skills", async () => { const config = await load(); return { skills: [], configured: Boolean(config.skills_configured) }; });
-  app.delete("/api/settings/skills", async (_request, reply) => { await mutate((config) => { delete config.skills_configured; delete config.skill_paths; }); return respondWithReload(reply, { ok: true, message: "Skills reset to auto-discover mode" }); });
+  app.get("/api/settings/skills", async (request, reply) => {
+    const requestedCwd = query(request, "cwd", "");
+    if (!requestedCwd) return { skills: [], policy: { mode: "inherit" }, configured: false };
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(requestedCwd); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+    const policy = storedSkillPolicy(await load(), cwd);
+    const skills = (await skillCatalog(cwd)).map((skill) => ({ name: skill.name, enabled: skillEnabled(policy, skill.name) }));
+    return { skills, policy, configured: policy.mode !== "inherit" };
+  });
+  app.put("/api/settings/skills/toggle", async (request, reply) => {
+    const body = (request.body ?? {}) as { cwd?: unknown; name?: unknown; enabled?: unknown };
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(String(body.cwd ?? "")); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+    const name = String(body.name ?? "").trim();
+    const discovered = await skillCatalog(cwd);
+    if (!name || !discovered.some((skill) => skill.name === name)) return reply.code(400).send({ ok: false, code: "unknown_runtime_skills", error: `Unknown runtime skill: ${name || "(empty)"}` });
+    const current = reconcileSkillPolicy(storedSkillPolicy(await load(), cwd), new Set(discovered.map((skill) => skill.name)));
+    const policy = toggledSkillPolicy(current, name, body.enabled === true);
+    try {
+      await nodeSessionService.refreshWorkspaceSkills(cwd);
+      await nodeSessionService.setWorkspaceSkillPolicy(cwd, policy);
+    }
+    catch (error) { return runtimeSkillFailure(reply, error); }
+    await mutate((config) => {
+      config.skill_policies = { ...(config.skill_policies ?? {}), [resolve(cwd)]: policy };
+      delete config.skills_configured;
+      delete config.skill_paths;
+    });
+    return { ok: true, policy, configured: policy.mode !== "inherit" };
+  });
+  app.post("/api/settings/skills/refresh", async (request, reply) => {
+    const body = (request.body ?? {}) as { cwd?: unknown };
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(String(body.cwd ?? "")); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+    const discovered = await skillCatalog(cwd);
+    const policy = reconcileSkillPolicy(storedSkillPolicy(await load(), cwd), new Set(discovered.map((skill) => skill.name)));
+    try {
+      await nodeSessionService.refreshWorkspaceSkills(cwd);
+      await nodeSessionService.setWorkspaceSkillPolicy(cwd, policy);
+    }
+    catch (error) { return runtimeSkillFailure(reply, error); }
+    await mutate((config) => {
+      if (policy.mode === "inherit") {
+        if (config.skill_policies) delete config.skill_policies[resolve(cwd)];
+      } else config.skill_policies = { ...(config.skill_policies ?? {}), [resolve(cwd)]: policy };
+    });
+    return { ok: true, policy, configured: policy.mode !== "inherit" };
+  });
+  app.delete("/api/settings/skills", async (request, reply) => {
+    const requestedCwd = query(request, "cwd", "");
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(requestedCwd); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+    const policy: RuntimeSkillPolicy = { mode: "inherit" };
+    try {
+      await nodeSessionService.refreshWorkspaceSkills(cwd);
+      await nodeSessionService.setWorkspaceSkillPolicy(cwd, policy);
+    }
+    catch (error) { return runtimeSkillFailure(reply, error); }
+    await mutate((config) => {
+      if (config.skill_policies) delete config.skill_policies[resolve(cwd)];
+      delete config.skills_configured;
+      delete config.skill_paths;
+    });
+    return { ok: true, policy, configured: false, message: "Skills reset to auto-discover mode" };
+  });
   app.get("/api/settings/extensions", async () => ({ extensions: runtimeExtensionStatus() }));
   app.get("/api/settings/subagents/discovery", async (request, reply) => {
     let cwd: string;

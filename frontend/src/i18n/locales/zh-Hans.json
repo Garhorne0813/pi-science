@@ -692,7 +692,7 @@
   "skills.descriptionSuffix": "以及 pi-science 内置技能。",
   "skills.customSelection": "自定义技能选择",
   "skills.autoDiscovery": "已启用自动发现",
-  "skills.selectionHint": "使用下方开关控制新启动 Pi 进程加载的技能；现有对话继续使用当前运行时。",
+  "skills.selectionHint": "使用下方开关控制此工作区的技能；现有对话无需重启即可立即更新。",
   "skills.resetDiscovery": "恢复自动发现",
   "skills.scientificEnvironment": "科学计算环境",
   "skills.toolDetectionUnavailable": "无法检测工具",

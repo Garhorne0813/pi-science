@@ -1,4 +1,5 @@
 import { configPath, readJson, writeJsonAtomic } from "./persistence.js";
+import type { RuntimeSkillPolicy } from "../runtime/pi/pi-process.js";
 
 export type SettingsData = {
   api_keys?: Record<string, string>;
@@ -13,6 +14,7 @@ export type SettingsData = {
   mcp_servers?: string[];
   skills_configured?: boolean;
   skill_paths?: string[];
+  skill_policies?: Record<string, RuntimeSkillPolicy>;
   model_endpoints?: unknown[];
   [key: string]: unknown;
 };

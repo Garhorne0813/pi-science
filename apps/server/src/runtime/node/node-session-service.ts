@@ -7,7 +7,7 @@ import { ConversationEventHub, conversationEventHub } from "../events/conversati
 import { observeNodePiEvent } from "../events/node-event-observer.js";
 import { PiManager, piManager } from "../pi/pi-manager.js";
 import { PiOrbitRequestError } from "../pi/pi-orbit-host.js";
-import type { PiProcess, PiProcessOptions, PiResult } from "../pi/pi-process.js";
+import type { PiProcess, PiProcessOptions, PiResult, RuntimeSkillPolicy } from "../pi/pi-process.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
 import type { ProjectReviewService } from "../../project-review/service.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
@@ -507,6 +507,30 @@ export class NodeSessionService {
       throw new Error(failures.map((item) => `${item.cwd}: ${item.code}: ${item.error}`).join("; "));
     }
     return replacements;
+  }
+
+  async setWorkspaceSkillPolicy(cwdValue: string, policy: RuntimeSkillPolicy): Promise<void> {
+    const cwd = await validateWorkspaceCwd(cwdValue);
+    const runtimes = [...new Set([...this.runtimes.values()].filter((runtime) => runtime.cwd === cwd))];
+    for (const runtime of runtimes) {
+      const result = await this.withLock(runtimeKey(runtime.cwd, runtime.activeSessionId), async () => {
+        if (runtime.busy) return { success: false, code: "runtime_busy", error: "Runtime is busy" };
+        return runtime.process.setRuntimeSkillPolicy(policy);
+      });
+      if (!result.success) throw Object.assign(new Error(String(result.error ?? "Unable to update runtime skills")), { code: String(result.code ?? "runtime_error") });
+    }
+  }
+
+  async refreshWorkspaceSkills(cwdValue: string): Promise<void> {
+    const cwd = await validateWorkspaceCwd(cwdValue);
+    const runtimes = [...new Set([...this.runtimes.values()].filter((runtime) => runtime.cwd === cwd))];
+    for (const runtime of runtimes) {
+      const result = await this.withLock(runtimeKey(runtime.cwd, runtime.activeSessionId), async () => {
+        if (runtime.busy) return { success: false, code: "runtime_busy", error: "Runtime is busy" };
+        return runtime.process.refreshRuntimeSkills();
+      });
+      if (!result.success) throw Object.assign(new Error(String(result.error ?? "Unable to refresh runtime skills")), { code: String(result.code ?? "runtime_error") });
+    }
   }
 
   async shutdownAll(): Promise<void> {
