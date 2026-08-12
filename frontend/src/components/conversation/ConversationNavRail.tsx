@@ -16,9 +16,9 @@ type Preview = { id: string; top: number };
 const IDLE_INDICATOR_WIDTH = 8;
 
 function indicatorWidth(distance: number): number {
-  if (distance === 0) return 48;
-  if (distance === 1) return 36;
-  if (distance === 2) return 24;
+  if (distance === 0) return 32;
+  if (distance === 1) return 24;
+  if (distance === 2) return 16;
   return IDLE_INDICATOR_WIDTH;
 }
 
