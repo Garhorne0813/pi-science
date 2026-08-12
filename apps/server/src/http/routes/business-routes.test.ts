@@ -31,7 +31,7 @@ async function workspace(): Promise<string> {
 }
 
 describe("native control-plane business routes", () => {
-  it("persists workspace skill policies without replacing active sessions", async () => {
+  it("persists the unified skill policy without replacing active sessions", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
     const app = buildApp(config());
@@ -42,16 +42,16 @@ describe("native control-plane business routes", () => {
     const toggled = await app.inject({
       method: "PUT",
       url: "/api/settings/skills/toggle",
-      payload: { cwd, name: skill.name, enabled: false },
+      payload: { name: skill.name, enabled: false },
     });
 
     expect(toggled.statusCode).toBe(200);
     expect(toggled.json()).toMatchObject({ ok: true, configured: true, policy: { mode: "denylist", skills: [skill.name] } });
     expect(toggled.json()).not.toHaveProperty("session_replacements");
-    const listed = await app.inject({ method: "GET", url: `/api/settings/skills?cwd=${encodeURIComponent(cwd)}` });
-    expect(listed.json().skills).toContainEqual({ name: skill.name, enabled: false });
+    const listed = await app.inject({ method: "GET", url: "/api/settings/skills" });
+    expect(listed.json().skills).toEqual(expect.arrayContaining([expect.objectContaining({ name: skill.name, enabled: false })]));
 
-    const reset = await app.inject({ method: "DELETE", url: `/api/settings/skills?cwd=${encodeURIComponent(cwd)}` });
+    const reset = await app.inject({ method: "DELETE", url: "/api/settings/skills" });
     expect(reset.statusCode).toBe(200);
     expect(reset.json()).toMatchObject({ ok: true, configured: false, policy: { mode: "inherit" } });
   });

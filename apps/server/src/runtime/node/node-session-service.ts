@@ -509,9 +509,8 @@ export class NodeSessionService {
     return replacements;
   }
 
-  async setWorkspaceSkillPolicy(cwdValue: string, policy: RuntimeSkillPolicy): Promise<void> {
-    const cwd = await validateWorkspaceCwd(cwdValue);
-    const runtimes = [...new Set([...this.runtimes.values()].filter((runtime) => runtime.cwd === cwd))];
+  async setGlobalSkillPolicy(policy: RuntimeSkillPolicy): Promise<void> {
+    const runtimes = [...new Set(this.runtimes.values())];
     for (const runtime of runtimes) {
       const result = await this.withLock(runtimeKey(runtime.cwd, runtime.activeSessionId), async () => {
         if (runtime.busy) return { success: false, code: "runtime_busy", error: "Runtime is busy" };
@@ -521,9 +520,8 @@ export class NodeSessionService {
     }
   }
 
-  async refreshWorkspaceSkills(cwdValue: string): Promise<void> {
-    const cwd = await validateWorkspaceCwd(cwdValue);
-    const runtimes = [...new Set([...this.runtimes.values()].filter((runtime) => runtime.cwd === cwd))];
+  async refreshAllRuntimeSkills(): Promise<void> {
+    const runtimes = [...new Set(this.runtimes.values())];
     for (const runtime of runtimes) {
       const result = await this.withLock(runtimeKey(runtime.cwd, runtime.activeSessionId), async () => {
         if (runtime.busy) return { success: false, code: "runtime_busy", error: "Runtime is busy" };

@@ -15,7 +15,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   return <WorkspaceCwdContext.Provider value={cwd}>{children}</WorkspaceCwdContext.Provider>;
 }
 
-/** Decoded workspace cwd, or `null` on the routes that render outside a workspace (`/`, `/settings`, `/skills`). */
+/** Decoded workspace cwd, or `null` on routes that render outside a workspace (`/`, `/settings`). */
 export function useWorkspaceCwd(): string | null {
   const cwd = useContext(WorkspaceCwdContext);
   if (cwd === undefined) throw new Error("useWorkspaceCwd must be used inside <WorkspaceProvider>");

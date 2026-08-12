@@ -28,6 +28,12 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
     if (url.includes("fail")) return Promise.resolve(jsonResponse({ ok: false, error: "boom" }, 500));
     return Promise.resolve(jsonResponse({ ok: true, model: "deepseek/deepseek-v4-flash", thinking: "high" }));
   }
+  if (url === "/api/settings/skills") {
+    return Promise.resolve(jsonResponse({
+      skills: [{ skill_id: "alpha", name: "alpha", description: "Analyze alpha data", enabled: true, validation: { valid: true } }],
+      configured: false,
+    }));
+  }
   return Promise.resolve(jsonResponse({ error: `unhandled ${method} ${url}` }, 404));
 }
 
@@ -86,6 +92,17 @@ describe("SettingsContent", () => {
     expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("tabpanel", { name: "LLM" })).toHaveAttribute("aria-labelledby", "settings-tab-llm");
     expect(await screen.findByText("Models")).toBeInTheDocument();
+  });
+
+  it("shows one unified Skills list inside Settings", async () => {
+    renderContent(null);
+    await screen.findByRole("tablist", { name: "Settings" });
+    fireEvent.click(screen.getByRole("tab", { name: "Skills" }));
+    expect(await screen.findByText("Analyze alpha data")).toBeInTheDocument();
+    expect(screen.getByLabelText("Enable alpha")).toBeChecked();
+    expect(screen.queryByText("Scientific Environment")).not.toBeInTheDocument();
+    expect(screen.queryByText("Built-in Skills")).not.toBeInTheDocument();
+    expect(screen.queryByText("Project Skills")).not.toBeInTheDocument();
   });
 
   it("supports arrow-key navigation between tabs", async () => {

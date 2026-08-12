@@ -51,7 +51,7 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
   const nodePath = process.env.PI_NODE_PATH || process.execPath;
   const dataRoot = configRoot();
   const settings = readSettings(dataRoot);
-  const skillPolicy = workspaceSkillPolicy(settings, cwd);
+  const skillPolicy = globalSkillPolicy(settings);
   const effectiveModel = config.model || (typeof settings.model === "string" ? settings.model : "");
   const effectiveThinking = config.thinking || (typeof settings.thinking === "string" ? settings.thinking : "high");
   const args: string[] = [];
@@ -145,9 +145,8 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
   };
 }
 
-function workspaceSkillPolicy(settings: Record<string, any>, cwd: string): RuntimeSkillPolicy {
-  const policies = settings.skill_policies;
-  const policy = policies && typeof policies === "object" ? policies[resolve(cwd)] : undefined;
+function globalSkillPolicy(settings: Record<string, any>): RuntimeSkillPolicy {
+  const policy = settings.skill_policy;
   if (!policy || typeof policy !== "object") return { mode: "inherit" };
   if (policy.mode === "inherit" || policy.mode === "none") return { mode: policy.mode };
   if ((policy.mode === "allowlist" || policy.mode === "denylist") && Array.isArray(policy.skills)) {

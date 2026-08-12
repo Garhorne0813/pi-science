@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { lazy, Suspense, useState, useEffect, useRef } from "react";
-import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical, type LucideIcon } from "lucide-react";
+import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, FileText, BookOpen, Play, Inbox, FlaskConical, type LucideIcon } from "lucide-react";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { InspectorTabs } from "../../components/inspector/InspectorTabs";
@@ -11,7 +11,7 @@ import { useWorkspaceCwd } from "../../lib/workspace";
 import { usePendingProposalCount } from "../../lib/knowledge";
 import { cn } from "../../lib/ui";
 
-// The settings bundle (dialog + five tabs) only loads on first open.
+// The settings bundle (dialog + tabs) only loads on first open.
 const SettingsDialog = lazy(() => import("../../components/settings/SettingsDialog").then((m) => ({ default: m.SettingsDialog })));
 import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
@@ -112,7 +112,6 @@ export function ProjectsLayout() {
           />
           {/* Icon-only nav */}
           <CollapsedNavItem to="/" icon={isWorkspace ? ArrowLeft : FolderOpen} label={t("nav.projects")} />
-          {!isWorkspace && <CollapsedNavItem to="/skills" icon={Puzzle} label={t("nav.skills")} />}
           {isWorkspace && (
             <>
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} icon={FileText} label={t("nav.files")} />
@@ -152,11 +151,9 @@ export function ProjectsLayout() {
                 icon={isWorkspace ? ArrowLeft : FolderOpen}
                 active={false}
               />
-              {!isWorkspace && <SidebarNavItem to="/skills" label={t("nav.skills")} icon={Puzzle} active={false} />}
               {isWorkspace && (
                 <>
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} label={t("nav.files")} icon={FileText} active={location.pathname.endsWith("/files")} />
-                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/skills`} label={t("nav.skills")} icon={Puzzle} active={location.pathname.endsWith("/skills")} />
                   <KnowledgeNavItem cwd={activeCwd!} active={location.pathname.endsWith("/knowledge")} />
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/research`} label={t("nav.research")} icon={FlaskConical} active={location.pathname.endsWith("/research")} />
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} label={t("nav.notebooks")} icon={BookOpen} active={location.pathname.endsWith("/notebooks")} />

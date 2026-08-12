@@ -47,7 +47,7 @@ async function fakeWebRuntime(
   web: {
     baseUrl: string;
     authToken: string;
-    runtime: { cwd: string; sessionDir: string };
+    runtime: { cwd: string; sessionDir: string; skillPolicy?: { mode: "inherit" | "none" } | { mode: "allowlist" | "denylist"; skills: string[] } };
   };
 }> {
   const cwd = join(tmpdir(), `pi-science-pi-orbit-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -187,6 +187,22 @@ describe("Node Pi Orbit adapter", () => {
     await expect(manager.sendCommand("web-workspace-2", "get_state")).resolves.toMatchObject({ success: true });
     await manager.shutdownAll();
     expect(manager.hostProcessCount).toBe(0);
+    await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it("intersects a global named skill policy with each runtime catalog", async () => {
+    const manager = new PiManager();
+    managers.push(manager);
+    const runtime = await fakeWebRuntime();
+    runtime.web.runtime.skillPolicy = { mode: "allowlist", skills: ["review", "workspace-only-elsewhere"] };
+
+    const process = await manager.start("filtered-skills", runtime);
+
+    await expect(process.runtimeSkills()).resolves.toMatchObject({
+      success: true,
+      data: { policy: { mode: "allowlist", skills: ["review"] } },
+    });
+    await manager.shutdownAll();
     await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 

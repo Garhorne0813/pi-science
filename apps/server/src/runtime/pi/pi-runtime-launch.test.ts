@@ -263,13 +263,13 @@ describe("Pi runtime custom provider materialization", () => {
     expect(options.web?.runtime.sessionDir).not.toBe(join(cwd, ".pi-science", "sessions"));
   });
 
-  it("restores the workspace skill policy when creating a Pi Orbit runtime", async () => {
+  it("restores the global skill policy when creating a Pi Orbit runtime", async () => {
     const cwd = join(tmpdir(), `pi-runtime-skills-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(cwd);
     await mkdir(cwd, { recursive: true });
     await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
     await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), JSON.stringify({
-      skill_policies: { [cwd]: { mode: "denylist", skills: ["browser"] } },
+      skill_policy: { mode: "denylist", skills: ["browser"] },
     }), "utf8");
 
     const options = buildPiProcessOptions(cwd)!;

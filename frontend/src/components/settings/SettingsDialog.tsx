@@ -6,7 +6,7 @@ import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
 import { IconButton } from "../ui/Icon";
 
-/** The settings content (vertical nav + five tabs) is the heavy part; it only
+/** The settings content (vertical nav + tabs) is the heavy part; it only
  *  loads once the dialog is first opened. */
 const SettingsContent = lazy(() => import("./SettingsContent").then((m) => ({ default: m.SettingsContent })));
 
