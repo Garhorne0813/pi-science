@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Loader2, MessageSquare, Package, RotateCcw, Terminal } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -8,7 +8,9 @@ import { listRuns, reproduceRunPrompt } from "@/lib/runs";
 import { useRuntimeStore } from "@/lib/agent-runtime";
 import { CodeViewer } from "@/components/code-viewer/CodeViewer";
 import { DiffView } from "@/components/code-viewer/DiffView";
-import { ArtifactLineagePanel } from "./ArtifactLineagePanel";
+// Lineage UI is only needed once History is open; keep it (and its artifact-
+// lineage client) out of the initial bundle.
+const ArtifactLineagePanel = lazy(() => import("./ArtifactLineagePanel").then((module) => ({ default: module.ArtifactLineagePanel })));
 import { cn } from "@/lib/ui";
 import i18n from "@/i18n";
 
@@ -133,7 +135,11 @@ export function ProvenancePanel({ path, language, cwd: cwdOverride, initialVersi
   // provenance history. It renders nothing when this file has no artifact
   // manifest, so ordinary file history is not crowded. Version-targeted opens
   // pin the lineage to the exact artifact version instead of the latest.
-  const lineagePanel = <ArtifactLineagePanel path={path} cwd={cwd} artifactId={artifactVersion?.artifact_id} version={artifactVersion?.version} />;
+  const lineagePanel = (
+    <Suspense fallback={<div className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs text-muted"><Loader2 size={12} className="animate-spin" /> {t("lineage.loading")}</div>}>
+      <ArtifactLineagePanel path={path} cwd={cwd} artifactId={artifactVersion?.artifact_id} version={artifactVersion?.version} />
+    </Suspense>
+  );
 
   if (records.length === 0) {
     return (
