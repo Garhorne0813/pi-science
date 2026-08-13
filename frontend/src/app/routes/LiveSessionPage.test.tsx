@@ -740,6 +740,12 @@ describe("conversation nav rail and scroll-to-latest", () => {
     return element as HTMLElement;
   }
 
+  it("keeps the conversation centred when the vertical scrollbar occupies space", async () => {
+    threadWith([userBlock("u1", "Question"), agentBlock("a1", "Reply")]);
+    await renderReady();
+    expect(scroller()).toHaveClass("conversation-scroller", "overflow-y-auto");
+  });
+
   it("shows one summary entry per user query once there are at least two", async () => {
     threadWith([
       userBlock("u1", "First question about models"),

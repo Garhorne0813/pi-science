@@ -91,7 +91,7 @@ describe("ConversationNavRail", () => {
     fireEvent.pointerMove(navigation, { clientY: 124 });
 
     expect(screen.getByRole("tooltip")).toHaveTextContent("Two");
-    expect(screen.getByRole("button", { name: "Two" }).querySelector<HTMLElement>("[data-nav-indicator]")).toHaveStyle({ width: "48px" });
+    expect(screen.getByRole("button", { name: "Two" }).querySelector<HTMLElement>("[data-nav-indicator]")).toHaveStyle({ width: "32px" });
   });
 
   it("renders nothing for an empty item list", () => {
@@ -127,16 +127,16 @@ describe("ConversationNavRail", () => {
     expect(["One", "Two", "Three", "Four", "Five"].map(width)).toEqual(["8px", "8px", "8px", "8px", "8px"]);
 
     fireEvent.mouseMove(screen.getByRole("button", { name: "Three" }));
-    expect(width("Three")).toBe("48px");
-    expect(width("Two")).toBe("36px");
-    expect(width("Four")).toBe("36px");
-    expect(width("One")).toBe("24px");
-    expect(width("Five")).toBe("24px");
+    expect(width("Three")).toBe("32px");
+    expect(width("Two")).toBe("24px");
+    expect(width("Four")).toBe("24px");
+    expect(width("One")).toBe("16px");
+    expect(width("Five")).toBe("16px");
 
     fireEvent.mouseMove(screen.getByRole("button", { name: "Five" }));
-    expect(width("Five")).toBe("48px");
-    expect(width("Four")).toBe("36px");
-    expect(width("Three")).toBe("24px");
+    expect(width("Five")).toBe("32px");
+    expect(width("Four")).toBe("24px");
+    expect(width("Three")).toBe("16px");
     expect(width("One")).toBe("8px");
 
     fireEvent.mouseLeave(screen.getByRole("navigation", { name: "Conversation" }).parentElement!);

@@ -147,7 +147,7 @@ export class PiOrbitHost extends EventEmitter {
             isolationModel?: unknown;
             features?: Record<string, unknown>;
           };
-          const requiredFeatures = ["runtimeApi", "eventReplay", "browserSessionAuth", "workspaceBinding", "projectTrustApi", "legacySessionApi"];
+          const requiredFeatures = ["runtimeApi", "eventReplay", "runtimeSkillOverrides", "runtimeSkillRefresh", "browserSessionAuth", "workspaceBinding", "projectTrustApi", "legacySessionApi"];
           if (
             payload.protocolVersion !== 1
             || payload.isolationModel !== "single-user-shared-process"

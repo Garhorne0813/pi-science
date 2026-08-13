@@ -320,6 +320,12 @@ button:disabled {
   background-clip: content-box;
 }
 
+/* Keep the conversation column centred on the composer when a classic
+   scrollbar consumes layout width on the right side of the scroller. */
+.conversation-scroller {
+  scrollbar-gutter: stable both-edges;
+}
+
 @keyframes fade-in {
   from { opacity: 0; }
   to { opacity: 1; }

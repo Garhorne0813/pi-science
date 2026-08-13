@@ -45,7 +45,7 @@ export class PiTitleRuntimeFactory {
   async start(cwd: string): Promise<TitleRuntime> {
     const config = loadDefaultPiConfig();
     const environment = await this.environments.environment(cwd);
-    // Pi Orbit 0.1.0 can persist dynamically-created web runtimes even when
+    // Pi Orbit can persist dynamically-created web runtimes even when
     // the host was launched with --no-session. Give title generation its own
     // disposable session directory so those implementation conversations can
     // never enter the user-facing `.pi-science/sessions` index.

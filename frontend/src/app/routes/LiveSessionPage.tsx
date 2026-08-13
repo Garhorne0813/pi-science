@@ -315,7 +315,7 @@ export function LiveSessionPage() {
     if (scrollRef.current) {
       // Keep the stable class hook used by the conversation rail and by
       // integrations that locate the active conversation scroller.
-      scrollRef.current.classList.add("overflow-y-auto");
+      scrollRef.current.classList.add("conversation-scroller", "overflow-y-auto");
       scrollRef.current.addEventListener("scroll", handleThreadScroll);
     }
   }, [handleThreadScroll]);

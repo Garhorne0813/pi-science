@@ -11,6 +11,19 @@ export interface PiOrbitRuntimeRequest {
   model?: string;
   thinking?: string;
   runtimeEnv?: Record<string, string | null>;
+  skillPolicy?: RuntimeSkillPolicy;
+}
+
+export type RuntimeSkillPolicy =
+  | { mode: "inherit" }
+  | { mode: "none" }
+  | { mode: "allowlist"; skills: string[] }
+  | { mode: "denylist"; skills: string[] };
+
+export interface RuntimeSkillsState {
+  policy: RuntimeSkillPolicy;
+  skills: Array<{ name: string; description: string; enabled: boolean; [key: string]: unknown }>;
+  diagnostics: unknown[];
 }
 
 export interface PiProcessOptions {
@@ -176,6 +189,21 @@ export class PiProcess extends EventEmitter {
     await new Promise<void>((resolve, reject) => {
       stdin.write(command, "utf8", (error) => error ? reject(error) : resolve());
     });
+  }
+
+  async runtimeSkills(): Promise<PiResult> {
+    if (!this.webHost) return { success: false, code: "runtime_skill_control_unavailable", error: "Runtime skill control requires Pi Orbit Web Mode" };
+    return this.webRequest("GET", `${this.runtimePath()}/skills`);
+  }
+
+  async setRuntimeSkillPolicy(policy: RuntimeSkillPolicy): Promise<PiResult> {
+    if (!this.webHost) return { success: false, code: "runtime_skill_control_unavailable", error: "Runtime skill control requires Pi Orbit Web Mode" };
+    return this.webRequest("PUT", `${this.runtimePath()}/skills`, policy);
+  }
+
+  async refreshRuntimeSkills(): Promise<PiResult> {
+    if (!this.webHost) return { success: false, code: "runtime_skill_control_unavailable", error: "Runtime skill control requires Pi Orbit Web Mode" };
+    return this.webRequest("POST", `${this.runtimePath()}/skills/refresh`);
   }
 
   async shutdown(): Promise<void> {
