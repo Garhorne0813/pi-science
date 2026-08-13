@@ -373,18 +373,32 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
+  // Known integration-test budget: this test spawns four real child processes
+  // (resume + create per mode) and waits out two intentionally unanswered
+  // prompt/compact RPCs (1500ms each on Windows), so it exceeds vitest's 5000ms
+  // global default on Windows CI (measured 6561ms). The 15s budget matches the
+  // other child-process tests in this file. The RPC timeout cannot be shrunk
+  // here: it is captured per process at construction and also bounds the
+  // post-spawn switch_session/get_state/set_model handshakes, which need the
+  // beforeEach's Windows spawn headroom.
   it("reconciles timed-out prompt and compact operations without leaving the workspace permanently busy", async () => {
     for (const mode of ["prompt-timeout", "compact-timeout"]) {
       process.env.FAKE_PI_MODE = mode;
       const service = testService();
-      const cwd = await workspaceWithSessions(`session-${mode}`);
-      await service.resume(`session-${mode}`, cwd);
-      await expect(service.command(`session-${mode}`, cwd, mode.startsWith("prompt") ? "prompt" : "compact", { message: "test" })).resolves.toMatchObject({ code: "timeout" });
-      await new Promise((resolve) => setTimeout(resolve, 130));
-      await expect(service.create({ cwd, config: { skills: [], extensions: [] } })).resolves.toHaveProperty("id");
-      await service.shutdownAll();
+      try {
+        const cwd = await workspaceWithSessions(`session-${mode}`);
+        await service.resume(`session-${mode}`, cwd);
+        await expect(service.command(`session-${mode}`, cwd, mode.startsWith("prompt") ? "prompt" : "compact", { message: "test" })).resolves.toMatchObject({ code: "timeout" });
+        await new Promise((resolve) => setTimeout(resolve, 130));
+        await expect(service.create({ cwd, config: { skills: [], extensions: [] } })).resolves.toHaveProperty("id");
+      } finally {
+        // Child cleanup must complete before the shared afterEach removes the
+        // temp workspaces: a run that skips shutdownAll leaves the fake Pi
+        // processes alive and rm fails with EBUSY on Windows.
+        await service.shutdownAll();
+      }
     }
-  });
+  }, 15_000);
 
   it("uses Pi Orbit runtime busy state when the agent_start event is delayed", async () => {
     process.env.FAKE_PI_MODE = "orbit-busy-without-agent-start";
