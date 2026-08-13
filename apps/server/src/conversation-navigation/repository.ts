@@ -386,8 +386,20 @@ export class ConversationNavigationRepository {
 
   async deleteBookmark(cwd: string, bookmarkId: string): Promise<void> {
     await this.withState(cwd, (state) => {
+      const bookmark = state.bookmarks.find((candidate) => candidate.bookmark_id === bookmarkId);
+      if (!bookmark) throw new NavigationError("not_found", "bookmark not found");
+      // Deleting an unaccepted agent proposal dismisses it instead of removing
+      // the record: the rejected status durably suppresses the next heuristic
+      // run from immediately re-proposing the same message, while a later
+      // manual bookmark can still revive it (see createBookmark). Legacy
+      // bookmarks keep the tombstone path below (their rows live in a file
+      // that is never rewritten).
+      if (bookmark.status === "proposed" && bookmark.origin === "agent_proposal") {
+        bookmark.status = "rejected";
+        bookmark.updated_at = new Date().toISOString();
+        return;
+      }
       const index = state.bookmarks.findIndex((candidate) => candidate.bookmark_id === bookmarkId);
-      if (index < 0) throw new NavigationError("not_found", "bookmark not found");
       const [removed] = state.bookmarks.splice(index, 1);
       // Legacy bookmarks live in `bookmarks.jsonl` which is never rewritten
       // (rollback safety). Record a durable tombstone so the fold cannot

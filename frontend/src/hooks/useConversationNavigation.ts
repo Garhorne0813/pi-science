@@ -72,6 +72,17 @@ export function useConversationNavigation(cwd: string, sessionId: string | undef
     onSuccess: invalidate,
   }, queryClient);
 
+  // In-flight guard: repeat clicks on the suggest action must not stack
+  // concurrent POSTs (TanStack Query v5 does not dedupe keyless mutations).
+  const proposeInFlightRef = useRef(false);
+
+  // Proposal feedback is scoped to the active session: switching sessions must
+  // never leak a stale "added N suggestions" result or error into the next one.
+  useEffect(() => {
+    proposeInFlightRef.current = false;
+    proposeMutation.reset();
+  }, [sessionId, cwd]);
+
   // ── Read-position writes (debounced, deduplicated, session-scoped) ──
   // Anchor and seen writes use SEPARATE timers. Scheduling one kind cancels
   // the other (the newest user action wins) and resets the other kind's dedup
@@ -178,9 +189,15 @@ export function useConversationNavigation(cwd: string, sessionId: string | undef
     void deleteBookmarkMutation.mutateAsync(bookmarkId).catch(() => undefined);
   }, [deleteBookmarkMutation.mutateAsync]);
 
+  /** Run the heuristic suggestion. Errors are NOT swallowed: they surface on
+   *  `proposeError` for the panel to render; the catch below only prevents an
+   *  unhandled rejection from the fire-and-forget promise. */
   const proposeBookmarks = useCallback(() => {
-    if (!sessionId) return;
-    void proposeMutation.mutateAsync(sessionId).catch(() => undefined);
+    if (!sessionId || proposeInFlightRef.current) return;
+    proposeInFlightRef.current = true;
+    void proposeMutation.mutateAsync(sessionId)
+      .catch(() => undefined)
+      .finally(() => { proposeInFlightRef.current = false; });
   }, [sessionId, proposeMutation.mutateAsync]);
 
   return useMemo(() => ({
@@ -193,10 +210,16 @@ export function useConversationNavigation(cwd: string, sessionId: string | undef
     rejectBookmark,
     deleteBookmark,
     proposeBookmarks,
+    /** True while a suggestion run is in flight (drives the disabled button). */
+    proposePending: proposeMutation.isPending,
+    /** Last suggestion run result, cleared on session switch. */
+    proposeResult: proposeMutation.data ?? null,
+    /** Last suggestion run error, cleared on session switch. */
+    proposeError: proposeMutation.error ?? null,
     scheduleAnchorWrite,
     scheduleMarkSeen,
     cancelPendingWrites,
-  }), [bookmarksQuery.data, bookmarksQuery.isLoading, readStateQuery.data, readStateQuery.isLoading, createBookmark, acceptBookmark, rejectBookmark, deleteBookmark, proposeBookmarks, scheduleAnchorWrite, scheduleMarkSeen, cancelPendingWrites]);
+  }), [bookmarksQuery.data, bookmarksQuery.isLoading, readStateQuery.data, readStateQuery.isLoading, createBookmark, acceptBookmark, rejectBookmark, deleteBookmark, proposeBookmarks, proposeMutation.isPending, proposeMutation.data, proposeMutation.error, scheduleAnchorWrite, scheduleMarkSeen, cancelPendingWrites]);
 }
 
 /** Attention queue for the workspace sidebar. Fails soft: the session list

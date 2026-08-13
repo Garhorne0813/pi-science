@@ -153,7 +153,7 @@ export function LiveSessionPage() {
   }, queryClient);
 
   // ── Durable navigation: bookmarks, read position, attention ──
-  const { readState, readStateLoading, bookmarks, bookmarksLoading, createBookmark, acceptBookmark, rejectBookmark, deleteBookmark, proposeBookmarks, scheduleAnchorWrite, scheduleMarkSeen, cancelPendingWrites } = useConversationNavigation(workspaceCwd, sessionId);
+  const { readState, readStateLoading, bookmarks, bookmarksLoading, createBookmark, acceptBookmark, rejectBookmark, deleteBookmark, proposeBookmarks, proposePending, proposeResult, proposeError, scheduleAnchorWrite, scheduleMarkSeen, cancelPendingWrites } = useConversationNavigation(workspaceCwd, sessionId);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const bookmarksTriggerRef = useRef<HTMLButtonElement>(null);
   const bookmarksPanelId = "conversation-bookmarks-panel";
@@ -167,7 +167,9 @@ export function LiveSessionPage() {
     () => bookmarks.filter((bookmark) => bookmark.session_id === sessionId && bookmark.status !== "rejected"),
     [bookmarks, sessionId],
   );
-  const headerBookmarkCount = sessionBookmarks.length;
+  // The header badge counts ACCEPTED bookmarks only — proposals are pending
+  // review and must not inflate the number shown on the trigger.
+  const headerBookmarkCount = sessionBookmarks.filter((bookmark) => bookmark.status === "accepted").length;
   // While a restore is being decided / executed, viewport-driven read-state
   // writes are suppressed so a stale cursor cannot overwrite the saved one.
   const suppressReadWriteRef = useRef(true);
@@ -720,7 +722,9 @@ export function LiveSessionPage() {
             onReject={(bookmarkId) => rejectBookmark(bookmarkId)}
             onDelete={(bookmarkId) => deleteBookmark(bookmarkId)}
             onSuggest={() => proposeBookmarks()}
-            suggesting={false}
+            suggesting={proposePending}
+            proposeResult={proposeResult}
+            proposeError={proposeError}
           />
         </div>
       </header>

@@ -139,3 +139,89 @@ describe("useConversationNavigation read-position writes", () => {
     unmount();
   });
 });
+
+describe("useConversationNavigation proposal feedback", () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  }
+
+  const PROPOSED = {
+    session_id: "s1",
+    bookmarks: [{ bookmark_id: "p1", session_id: "s1", message_id: "m1", role: "assistant", quote: "final result verified", label: null, origin: "agent_proposal", status: "proposed", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }],
+    skipped: 0,
+  };
+
+  /** Fetch mock with a controllable propose response; all other navigation
+   *  reads return empty data so invalidation refetches settle immediately. */
+  function proposeFetch(proposeHandler: () => Promise<Response>): ReturnType<typeof vi.fn> {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (method === "POST" && url.includes("/api/bookmarks/propose")) return proposeHandler();
+      if (url.includes("/api/bookmarks")) return jsonResponse({ bookmarks: [], legacy_skipped: 0 });
+      if (url.includes("/read-state")) return jsonResponse({ session_id: "s1", anchor_message_id: null, at_bottom: false, seen_snapshot_version: null, updated_at: null, anchor_available: false, before: null });
+      return jsonResponse({ error: `unhandled ${url}` }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("exposes proposePending and proposeResult and ignores repeat clicks while in flight", async () => {
+    const gate = deferred<Response>();
+    const fetchMock = proposeFetch(() => gate.promise);
+    const { result, unmount } = renderHook(() => useConversationNavigation("proj", "s1"));
+
+    act(() => { result.current.proposeBookmarks(); });
+    act(() => { result.current.proposeBookmarks(); });
+    const posts = () => fetchMock.mock.calls.filter(([url, init]) => init?.method === "POST" && String(url).includes("/api/bookmarks/propose"));
+    // The mutation runs mutationFn in a microtask; the repeat click must still
+    // be deduplicated by the in-flight guard.
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    await waitFor(() => expect(result.current.proposePending).toBe(true));
+    expect(result.current.proposeResult).toBeNull();
+
+    await act(async () => { gate.resolve(jsonResponse(PROPOSED)); });
+    await waitFor(() => expect(result.current.proposePending).toBe(false));
+    expect(result.current.proposeResult?.bookmarks).toHaveLength(1);
+    expect(result.current.proposeResult?.bookmarks[0]?.status).toBe("proposed");
+    expect(result.current.proposeError).toBeNull();
+    unmount();
+  });
+
+  it("surfaces propose errors on proposeError instead of swallowing them", async () => {
+    const fetchMock = proposeFetch(() => Promise.resolve(jsonResponse({ error: "suggestion failed" }, 500)));
+    const { result, unmount } = renderHook(() => useConversationNavigation("proj", "s1"));
+
+    act(() => { result.current.proposeBookmarks(); });
+    await waitFor(() => expect(result.current.proposeError).toBeInstanceOf(Error));
+    expect(result.current.proposeError?.message).toContain("suggestion failed");
+    expect(result.current.proposePending).toBe(false);
+    expect(result.current.proposeResult).toBeNull();
+    // A later run is not blocked by the failed one.
+    fetchMock.mockClear();
+    act(() => { result.current.proposeBookmarks(); });
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.filter(([url, init]) => init?.method === "POST" && String(url).includes("/api/bookmarks/propose")).length).toBe(1);
+    });
+    unmount();
+  });
+
+  it("clears proposal feedback when the session changes", async () => {
+    proposeFetch(() => Promise.resolve(jsonResponse(PROPOSED)));
+    const { result, rerender, unmount } = renderHook(
+      ({ cwd, sessionId }: { cwd: string; sessionId: string | undefined }) => useConversationNavigation(cwd, sessionId),
+      { initialProps: { cwd: "proj", sessionId: "s1" } },
+    );
+    act(() => { result.current.proposeBookmarks(); });
+    await waitFor(() => expect(result.current.proposeResult?.bookmarks).toHaveLength(1));
+
+    rerender({ cwd: "proj", sessionId: "s2" });
+    await waitFor(() => expect(result.current.proposeResult).toBeNull());
+    expect(result.current.proposeError).toBeNull();
+    expect(result.current.proposePending).toBe(false);
+    unmount();
+  });
+});

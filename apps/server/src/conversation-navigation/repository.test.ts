@@ -93,6 +93,26 @@ describe("ConversationNavigationRepository", () => {
     await expect(repo.deleteBookmark(cwd, bookmark.bookmark_id)).rejects.toMatchObject({ code: "not_found" });
   });
 
+  it("turns a proposed bookmark deletion into a durable rejection", async () => {
+    const cwd = await makeWorkspace();
+    const repo = makeRepository(cwd);
+    await writeSession(cwd, "s1", [messageLine("m1", "assistant", "final result verified")]);
+
+    const first = await repo.proposeBookmarks(cwd, "s1", ["m1"]);
+    expect(first.bookmarks[0]!.status).toBe("proposed");
+
+    // Deleting an unaccepted proposal dismisses it instead of removing it, so
+    // the next heuristic run cannot immediately re-suggest the same message.
+    await repo.deleteBookmark(cwd, first.bookmarks[0]!.bookmark_id);
+    const list = await repo.bookmarks(cwd, "s1");
+    expect(list.bookmarks).toHaveLength(1);
+    expect(list.bookmarks[0]!.status).toBe("rejected");
+
+    const second = await repo.proposeBookmarks(cwd, "s1", ["m1"]);
+    expect(second.bookmarks).toHaveLength(0);
+    expect(second.skipped).toBe(1);
+  });
+
   it("deduplicates manual bookmarks for the same session+message and revives rejected ones", async () => {
     const cwd = await makeWorkspace();
     const repo = makeRepository(cwd);

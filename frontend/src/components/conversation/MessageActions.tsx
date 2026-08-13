@@ -40,7 +40,7 @@ export function MessageActions({ text, timestamp, align = "left", bookmark }: { 
           onClick={() => bookmark.onToggle()}
           className={cn(
             "flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-surface-2",
-            bookmark.status === "accepted" ? "text-accent" : "text-muted hover:text-text",
+            bookmark.status === "accepted" ? "text-accent" : bookmark.status === "proposed" ? "text-warn" : "text-muted hover:text-text",
             align === "right" && "order-3",
           )}
           aria-label={bookmark.status === "accepted" ? t("conversation.bookmarkRemove") : bookmark.status === "proposed" ? t("conversation.bookmarkAcceptProposal") : t("conversation.bookmarkAdd")}

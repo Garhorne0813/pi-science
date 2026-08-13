@@ -2,7 +2,7 @@ import { Bookmark, Check, Loader2, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/ui";
-import type { ConversationBookmark } from "../../lib/conversation-navigation";
+import type { ConversationBookmark, ConversationBookmarkProposeResponse } from "../../lib/conversation-navigation";
 
 export function ConversationBookmarksPanel({
   id,
@@ -16,6 +16,8 @@ export function ConversationBookmarksPanel({
   onDelete,
   onSuggest,
   suggesting,
+  proposeResult,
+  proposeError,
 }: {
   id?: string;
   bookmarks: ConversationBookmark[];
@@ -29,8 +31,16 @@ export function ConversationBookmarksPanel({
   onDelete: (bookmarkId: string) => void;
   onSuggest: () => void;
   suggesting: boolean;
+  /** Result of the last heuristic suggestion run (null before any run). */
+  proposeResult: ConversationBookmarkProposeResponse | null;
+  /** Error of the last suggestion run (null when the last run succeeded). */
+  proposeError: Error | null;
 }) {
   const { t } = useTranslation();
+  // The header count covers ACCEPTED bookmarks only; proposed candidates are
+  // shown separately so the badge never inflates with unreviewed suggestions.
+  const acceptedCount = bookmarks.filter((bookmark) => bookmark.status === "accepted").length;
+  const proposedCount = bookmarks.filter((bookmark) => bookmark.status === "proposed").length;
   // Non-modal popover: Escape closes it and hands focus back to the trigger
   // (the page's `closeBookmarks` refocuses the header button).
   useEffect(() => {
@@ -57,7 +67,12 @@ export function ConversationBookmarksPanel({
         <span className="flex items-center gap-1.5 text-xs font-medium text-text">
           <Bookmark size={12} className="text-accent" />
           {t("conversation.bookmarks")}
-          {bookmarks.length > 0 && <span className="text-muted">({bookmarks.length})</span>}
+          {acceptedCount > 0 && <span className="text-muted">({acceptedCount})</span>}
+          {proposedCount > 0 && (
+            <span className="rounded-full bg-warn/15 px-1.5 py-px text-[9px] font-normal text-warn">
+              {t("conversation.bookmarkProposedCount", { count: proposedCount })}
+            </span>
+          )}
         </span>
         <button
           type="button"
@@ -136,6 +151,21 @@ export function ConversationBookmarksPanel({
       </div>
 
       <div className="border-t border-faint px-2 py-1.5">
+        {proposeError ? (
+          <p role="alert" className="px-1 pb-1 text-[10px] text-error">
+            {t("conversation.bookmarkSuggestError")}: {proposeError.message}
+          </p>
+        ) : proposeResult ? (
+          proposeResult.bookmarks.length > 0 ? (
+            <p role="status" className="px-1 pb-1 text-[10px] text-ok">
+              {t("conversation.bookmarkSuggestCreated", { count: proposeResult.bookmarks.length })}
+            </p>
+          ) : (
+            <p role="status" className="px-1 pb-1 text-[10px] text-muted">
+              {t("conversation.bookmarkSuggestNone")}
+            </p>
+          )
+        ) : null}
         <button
           type="button"
           onClick={onSuggest}
@@ -148,6 +178,7 @@ export function ConversationBookmarksPanel({
           {suggesting ? <Loader2 size={12} className="animate-spin text-accent" /> : <Sparkles size={12} className="text-accent" />}
           {t("conversation.bookmarkSuggest")}
         </button>
+        <p className="px-1 pt-1 text-[9px] leading-snug text-muted/60">{t("conversation.bookmarkSuggestHint")}</p>
       </div>
     </div>
   );

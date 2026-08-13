@@ -38,6 +38,8 @@ function renderPanel(props: Partial<Parameters<typeof ConversationBookmarksPanel
       onDelete={onDelete}
       onSuggest={onSuggest}
       suggesting={false}
+      proposeResult={null}
+      proposeError={null}
       {...props}
     />,
   );
@@ -96,6 +98,42 @@ describe("ConversationBookmarksPanel", () => {
     const { onSuggest } = renderPanel();
     fireEvent.click(screen.getByRole("button", { name: "Suggest bookmarks" }));
     expect(onSuggest).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables the suggest action while a suggestion run is pending", () => {
+    const { onSuggest } = renderPanel({ suggesting: true });
+    const button = screen.getByRole("button", { name: "Suggest bookmarks" });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(onSuggest).not.toHaveBeenCalled();
+  });
+
+  it("shows created feedback after a suggestion run", () => {
+    renderPanel({ proposeResult: { session_id: "s1", bookmarks: [bookmark("p1", { status: "proposed", origin: "agent_proposal" })], skipped: 0 } });
+    expect(screen.getByText(/Added 1 suggestion/i)).toBeInTheDocument();
+  });
+
+  it("shows a no-candidates message when nothing was created (zero matches or all skipped)", () => {
+    renderPanel({ proposeResult: { session_id: "s1", bookmarks: [], skipped: 3 } });
+    expect(screen.getByText(/No new candidates/i)).toBeInTheDocument();
+  });
+
+  it("shows the failure reason after a failed suggestion run", () => {
+    renderPanel({ proposeError: new Error("suggestion failed") });
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(/Suggestion failed/);
+    expect(alert).toHaveTextContent(/suggestion failed/);
+  });
+
+  it("counts accepted bookmarks in the header and separates proposed ones", () => {
+    renderPanel({ bookmarks: [bookmark("a1"), bookmark("a2"), bookmark("p1", { status: "proposed", origin: "agent_proposal" })] });
+    expect(screen.getByText("(2)")).toBeInTheDocument();
+    expect(screen.getByText("1 proposed")).toBeInTheDocument();
+  });
+
+  it("explains that suggestions are local heuristics requiring manual review", () => {
+    renderPanel();
+    expect(screen.getByText(/Heuristic suggestions/i)).toBeInTheDocument();
   });
 
   it("uses a non-modal region role and closes on Escape", () => {

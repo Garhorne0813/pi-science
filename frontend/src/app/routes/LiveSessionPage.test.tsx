@@ -1552,3 +1552,66 @@ describe("durable navigation review fixes", () => {
     view.unmount();
   });
 });
+
+describe("bookmark suggestion flow", () => {
+  it("suggests bookmarks and accepts a proposal through the panel", async () => {
+    // Minimal stateful server: propose creates a proposal row, accept flips it
+    // to accepted, list returns the current records.
+    const server: Array<Record<string, unknown>> = [];
+    overrides.push((url, init) => {
+      const method = (init.method || "GET").toUpperCase();
+      if (method === "GET" && url.startsWith("/api/bookmarks")) {
+        return Promise.resolve(jsonResponse({ bookmarks: server, legacy_skipped: 0 }));
+      }
+      if (method === "POST" && url.startsWith("/api/bookmarks/propose")) {
+        const proposal = {
+          bookmark_id: "p1",
+          session_id: SESSION_ID,
+          message_id: "a1",
+          role: "assistant",
+          quote: "final result verified",
+          label: null,
+          origin: "agent_proposal",
+          status: "proposed",
+          created_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-01T00:00:00.000Z",
+        };
+        server.push(proposal);
+        return Promise.resolve(jsonResponse({ session_id: SESSION_ID, bookmarks: [proposal], skipped: 0 }));
+      }
+      if (method === "PATCH" && url.startsWith("/api/bookmarks/")) {
+        const id = String(url).match(/\/api\/bookmarks\/([^?]+)/)?.[1];
+        const record = server.find((entry) => entry.bookmark_id === id);
+        if (record) {
+          record.status = "accepted";
+          record.updated_at = "2026-01-01T00:00:01.000Z";
+        }
+        return Promise.resolve(jsonResponse({ bookmark: record }));
+      }
+      return null;
+    });
+    await renderReady();
+
+    fireEvent.click(screen.getByRole("button", { name: "Bookmarks" }));
+    const panel = await screen.findByRole("region", { name: "Bookmarks" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Suggest bookmarks" }));
+
+    // The propose POST fires exactly once and the refreshed list shows the
+    // proposal row with created-feedback.
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, init]) => init?.method === "POST" && String(url).startsWith("/api/bookmarks/propose"))).toBe(true);
+    });
+    const accept = await within(panel).findByRole("button", { name: "Accept" });
+    expect(server).toHaveLength(1);
+    expect(server[0]?.status).toBe("proposed");
+    expect(within(panel).getByText(/Added 1 suggestion/i)).toBeInTheDocument();
+
+    // Manual acceptance: the user must click Accept; the server record only
+    // moves to accepted through the PATCH.
+    fireEvent.click(accept);
+    await waitFor(() => expect(server[0]?.status).toBe("accepted"));
+    await waitFor(() => expect(within(panel).queryByRole("button", { name: "Accept" })).not.toBeInTheDocument());
+    expect(within(panel).getByRole("button", { name: "Remove bookmark" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url, init]) => init?.method === "PATCH" && String(url).startsWith("/api/bookmarks/p1"))).toBe(true);
+  });
+});

@@ -147,6 +147,68 @@ describe("conversation navigation routes", () => {
     expect(second.json().skipped).toBe(1);
   });
 
+  it("proposes CJK candidates via substring matching (ASCII word boundaries never fire between CJK chars)", async () => {
+    const cwd = await workspace();
+    // The keywords sit between other CJK characters, so a `\b`-wrapped regex
+    // could never match them; substring matching must find them.
+    await writeSession(cwd, "s1", [
+      messageLine("m1", "user", "问题说明"),
+      messageLine("m2", "assistant", "我们得出结论：方案可行"),
+      messageLine("m3", "assistant", "最终结果如下"),
+      messageLine("m4", "assistant", "补充说明"),
+    ]);
+    const app = buildApp(config());
+    apps.push(app);
+
+    const response = await app.inject({ method: "POST", url: `/api/bookmarks/propose?cwd=${encodeURIComponent(cwd)}&session_id=s1` });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { bookmarks: Array<{ message_id: string }>; skipped: number };
+    // Deterministic: the last two matching messages win, in document order.
+    expect(body.bookmarks.map((bookmark) => bookmark.message_id)).toEqual(["m2", "m3"]);
+    expect(body.skipped).toBe(0);
+  });
+
+  it("keeps the English heuristic bounded to whole words", async () => {
+    const cwd = await workspace();
+    await writeSession(cwd, "s1", [
+      messageLine("m1", "assistant", "nothing resulted from this"),
+      messageLine("m2", "assistant", "The final conclusion stands"),
+      messageLine("m3", "assistant", "data saved twice"),
+    ]);
+    const app = buildApp(config());
+    apps.push(app);
+
+    const response = await app.inject({ method: "POST", url: `/api/bookmarks/propose?cwd=${encodeURIComponent(cwd)}&session_id=s1` });
+    const body = response.json() as { bookmarks: Array<{ message_id: string }> };
+    // "resulted" must NOT match `\bresult\b`; "conclusion" and "saved" do.
+    expect(body.bookmarks.map((bookmark) => bookmark.message_id)).toEqual(["m2", "m3"]);
+  });
+
+  it("dismissing a proposal via DELETE durably suppresses re-proposal", async () => {
+    const cwd = await workspace();
+    await writeSession(cwd, "s1", [messageLine("m1", "assistant", "final result verified")]);
+    const app = buildApp(config());
+    apps.push(app);
+
+    const first = await app.inject({ method: "POST", url: `/api/bookmarks/propose?cwd=${encodeURIComponent(cwd)}&session_id=s1` });
+    const proposed = first.json().bookmarks[0] as { bookmark_id: string; status: string };
+    expect(proposed.status).toBe("proposed");
+
+    const deleted = await app.inject({ method: "DELETE", url: `/api/bookmarks/${proposed.bookmark_id}?cwd=${encodeURIComponent(cwd)}` });
+    expect(deleted.statusCode).toBe(200);
+
+    // The record is retained as rejected (not physically removed), so a later
+    // heuristic run cannot immediately re-suggest the same message.
+    const second = await app.inject({ method: "POST", url: `/api/bookmarks/propose?cwd=${encodeURIComponent(cwd)}&session_id=s1` });
+    expect(second.json().bookmarks).toHaveLength(0);
+    expect(second.json().skipped).toBe(1);
+
+    const listed = await app.inject({ method: "GET", url: `/api/bookmarks?cwd=${encodeURIComponent(cwd)}&session_id=s1` });
+    const record = listed.json().bookmarks[0] as { bookmark_id: string; status: string };
+    expect(record.bookmark_id).toBe(proposed.bookmark_id);
+    expect(record.status).toBe("rejected");
+  });
+
   it("serves read state with a dynamic locator and marks the seen snapshot server-side", async () => {
     const cwd = await workspace();
     await writeSession(cwd, "s1", [messageLine("m1", "user", "one"), messageLine("m2", "assistant", "two")]);

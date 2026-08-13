@@ -48,4 +48,11 @@ describe("MessageActions", () => {
     view.rerender(<MessageActions text="hello" bookmark={{ status: "proposed", onToggle }} />);
     expect(screen.getByRole("button", { name: "Accept bookmark proposal" })).toBeInTheDocument();
   });
+
+  it("renders a proposed bookmark with a distinct pending style", () => {
+    render(<MessageActions text="hello" bookmark={{ status: "proposed", onToggle: vi.fn() }} />);
+    const button = screen.getByRole("button", { name: "Accept bookmark proposal" });
+    expect(button.className).toContain("text-warn");
+    expect(button.className).not.toContain("text-accent");
+  });
 });
