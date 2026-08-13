@@ -128,6 +128,19 @@ assert_status() {
     fi
 }
 
+assert_post_status() {
+    local expected="$1"
+    local payload="$2"
+    local url="$3"
+    local actual
+    actual="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+        -X POST -H 'Content-Type: application/json' -d "$payload" "$url")"
+    if [ "$actual" != "$expected" ]; then
+        echo "expected HTTP $expected from POST $url, got $actual" >&2
+        exit 40
+    fi
+}
+
 assert_body_contains() {
     local needle="$1"
     local url="$2"
@@ -242,6 +255,96 @@ ARTIFACT_JSON="$(curl --fail --silent --show-error -X POST -H 'Content-Type: app
     "http://127.0.0.1:${NODE_PORT}/api/artifacts/publish?cwd=${WORKSPACE_Q}")"
 if ! echo "$ARTIFACT_JSON" | grep -q '"version":1'; then
     echo "artifact publication failed" >&2
+    exit 40
+fi
+
+echo "[smoke] artifact v2 lineage and versioned relations"
+mkdir -p "$SMOKE_WORKSPACE/lineage"
+printf 'raw,data,v1\n' > "$SMOKE_WORKSPACE/lineage/raw.csv"
+printf 'clean,data,v1\n' > "$SMOKE_WORKSPACE/lineage/clean.csv"
+printf 'report v1\n' > "$SMOKE_WORKSPACE/lineage/report.md"
+printf 'legacy out\n' > "$SMOKE_WORKSPACE/lineage/legacy_out.txt"
+printf 'plain\n' > "$SMOKE_WORKSPACE/lineage/plain.txt"
+printf 'self v1\n' > "$SMOKE_WORKSPACE/lineage/same.txt"
+printf 'bad\n' > "$SMOKE_WORKSPACE/lineage/bad.txt"
+printf 'dup\n' > "$SMOKE_WORKSPACE/lineage/dup.txt"
+RAW_JSON="$(curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
+    -d '{"path":"lineage/raw.csv","session_id":"smoke-session","classification":"intermediate"}' \
+    "http://127.0.0.1:${NODE_PORT}/api/artifacts/publish?cwd=${WORKSPACE_Q}")"
+if ! echo "$RAW_JSON" | grep -q '"schema_version":2' || ! echo "$RAW_JSON" | grep -q '"classification":"intermediate"'; then
+    echo "intermediate artifact publish failed: $RAW_JSON" >&2
+    exit 40
+fi
+RAW_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["artifact_id"])' "$RAW_JSON")"
+CLEAN_JSON="$(curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
+    -d "{\"path\":\"lineage/clean.csv\",\"session_id\":\"smoke-session\",\"inputs\":[{\"artifact_id\":\"${RAW_ID}\",\"version\":1}]}" \
+    "http://127.0.0.1:${NODE_PORT}/api/artifacts/publish?cwd=${WORKSPACE_Q}")"
+if ! echo "$CLEAN_JSON" | grep -q '"version":1'; then
+    echo "dependent artifact publish failed: $CLEAN_JSON" >&2
+    exit 40
+fi
+CLEAN_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["artifact_id"])' "$CLEAN_JSON")"
+CLEAN_LINEAGE="$(curl --fail --silent --show-error "http://127.0.0.1:${NODE_PORT}/api/artifacts/${CLEAN_ID}/lineage?cwd=${WORKSPACE_Q}")"
+python3 -c 'import json,sys; body=json.loads(sys.argv[1]); assert body["artifact"]["path"]=="lineage/clean.csv", body; assert [entry["kind"] for entry in body["upstream"]]==["consumes"], body; assert body["downstream"]==[], body; assert body["unresolved_inputs"]==[], body' "$CLEAN_LINEAGE"
+RAW_LINEAGE="$(curl --fail --silent --show-error "http://127.0.0.1:${NODE_PORT}/api/artifacts/${RAW_ID}/lineage?cwd=${WORKSPACE_Q}")"
+python3 -c 'import json,sys; body=json.loads(sys.argv[1]); assert [entry["kind"] for entry in body["downstream"]]==["consumed_by"], body; assert body["downstream"][0]["artifact"]["path"]=="lineage/clean.csv", body' "$RAW_LINEAGE"
+LINEAGE_HEADERS="$TEMP_DIR/lineage.headers"
+curl --fail --silent --show-error --dump-header "$LINEAGE_HEADERS" --output /dev/null \
+    "http://127.0.0.1:${NODE_PORT}/api/artifacts/${CLEAN_ID}/lineage?cwd=${WORKSPACE_Q}"
+assert_header_file_contains "$LINEAGE_HEADERS" 'x-pi-science-runtime: node-control-plane'
+
+REPORT_JSON="$(curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
+    -d '{"path":"lineage/report.md","session_id":"smoke-session"}' \
+    "http://127.0.0.1:${NODE_PORT}/api/artifacts/publish?cwd=${WORKSPACE_Q}")"
+REPORT_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["artifact_id"])' "$REPORT_JSON")"
+printf 'report v2 revised\n' > "$SMOKE_WORKSPACE/lineage/report.md"
+REPORT2_JSON="$(curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
+    -d "{\"path\":\"lineage/report.md\",\"session_id\":\"smoke-session\",\"supersedes\":{\"artifact_id\":\"${REPORT_ID}\",\"version\":1}}" \
+    "http://127.0.0.1:${NODE_PORT}/api/artifacts/publish?cwd=${WORKSPACE_Q}")"
+if ! echo "$REPORT2_JSON" | grep -q '"version":2'; then
+    echo "superseding publish did not create version 2: $REPORT2_JSON" >&2
+    exit 40
+fi
+REPORT2_LINEAGE="$(curl --fail --silent --show-error "http://127.0.0.1:${NODE_PORT}/api/artifacts/${REPORT_ID}/lineage?cwd=${WORKSPACE_Q}&version=2")"
+python3 -c 'import json,sys; body=json.loads(sys.argv[1]); assert [entry["kind"] for entry in body["upstream"]]==["supersedes"], body; assert body["upstream"][0]["artifact"]["version"]==1, body' "$REPORT2_LINEAGE"
+REPORT1_LINEAGE="$(curl --fail --silent --show-error "http://127.0.0.1:${NODE_PORT}/api/artifacts/${REPORT_ID}/lineage?cwd=${WORKSPACE_Q}&version=1")"
+python3 -c 'import json,sys; body=json.loads(sys.argv[1]); assert [entry["kind"] for entry in body["downstream"]]==["superseded_by"], body; assert body["downstream"][0]["artifact"]["version"]==2, body' "$REPORT1_LINEAGE"
+REPORT_V1_JSON="$(curl --fail --silent --show-error "http://127.0.0.1:${NODE_PORT}/api/artifacts/${REPORT_ID}?cwd=${WORKSPACE_Q}&version=1")"
+python3 -c 'import json,sys; assert json.loads(sys.argv[1])["version"]==1' "$REPORT_V1_JSON"
+LATEST_REPORT_JSON="$(curl --fail --silent --show-error "http://127.0.0.1:${NODE_PORT}/api/artifacts?cwd=${WORKSPACE_Q}&path=lineage/report.md&latest=1")"
+python3 -c 'import json,sys; artifacts=json.loads(sys.argv[1])["artifacts"]; assert len(artifacts)==1 and artifacts[0]["version"]==2, artifacts' "$LATEST_REPORT_JSON"
+
+LEGACY_JSON="$(curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
+    -d '{"path":"lineage/legacy_out.txt","session_id":"smoke-session","inputs":["old/input.csv"]}' \
+    "http://127.0.0.1:${NODE_PORT}/api/artifacts/publish?cwd=${WORKSPACE_Q}")"
+LEGACY_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["artifact_id"])' "$LEGACY_JSON")"
+LEGACY_LINEAGE="$(curl --fail --silent --show-error "http://127.0.0.1:${NODE_PORT}/api/artifacts/${LEGACY_ID}/lineage?cwd=${WORKSPACE_Q}")"
+python3 -c 'import json,sys; body=json.loads(sys.argv[1]); assert body["upstream"]==[], body; assert body["unresolved_inputs"]==["old/input.csv"], body' "$LEGACY_LINEAGE"
+PLAIN_JSON="$(curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
+    -d '{"path":"lineage/plain.txt","session_id":"smoke-session"}' \
+    "http://127.0.0.1:${NODE_PORT}/api/artifacts/publish?cwd=${WORKSPACE_Q}")"
+python3 -c 'import json,sys; manifest=json.loads(sys.argv[1]); assert manifest["schema_version"]==2 and manifest["version"]==1 and manifest["classification"]=="deliverable" and manifest["inputs"]==[] and manifest["supersedes"] is None, manifest' "$PLAIN_JSON"
+
+assert_post_status 422 '{"path":"lineage/bad.txt","session_id":"smoke-session","inputs":[{"artifact_id":"ghost-id","version":1}]}' "http://127.0.0.1:${NODE_PORT}/api/artifacts/publish?cwd=${WORKSPACE_Q}"
+assert_post_status 422 '{"path":"lineage/dup.txt","session_id":"smoke-session","inputs":[{"artifact_id":"'"$RAW_ID"'","version":1},{"artifact_id":"'"$RAW_ID"'","version":1}]}' "http://127.0.0.1:${NODE_PORT}/api/artifacts/publish?cwd=${WORKSPACE_Q}"
+SAME_JSON="$(curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
+    -d '{"path":"lineage/same.txt","session_id":"smoke-session"}' \
+    "http://127.0.0.1:${NODE_PORT}/api/artifacts/publish?cwd=${WORKSPACE_Q}")"
+SAME_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["artifact_id"])' "$SAME_JSON")"
+printf 'self v2\n' > "$SMOKE_WORKSPACE/lineage/same.txt"
+assert_post_status 422 "{\"path\":\"lineage/same.txt\",\"session_id\":\"smoke-session\",\"inputs\":[{\"artifact_id\":\"${SAME_ID}\",\"version\":2}]}" "http://127.0.0.1:${NODE_PORT}/api/artifacts/publish?cwd=${WORKSPACE_Q}"
+assert_post_status 422 '{"path":"lineage/raw.csv","session_id":"smoke-session","classification":"published"}' "http://127.0.0.1:${NODE_PORT}/api/artifacts/publish?cwd=${WORKSPACE_Q}"
+assert_post_status 404 '{"path":"lineage/missing.txt","session_id":"smoke-session"}' "http://127.0.0.1:${NODE_PORT}/api/artifacts/publish?cwd=${WORKSPACE_Q}"
+assert_post_status 400 '{"path":"../escape.txt","session_id":"smoke-session"}' "http://127.0.0.1:${NODE_PORT}/api/artifacts/publish?cwd=${WORKSPACE_Q}"
+assert_post_status 400 '{"path":"/etc/passwd","session_id":"smoke-session"}' "http://127.0.0.1:${NODE_PORT}/api/artifacts/publish?cwd=${WORKSPACE_Q}"
+mkdir -p "$TEMP_DIR/workspace-b/.pi-science"
+printf 'b\n' > "$TEMP_DIR/workspace-b/b.txt"
+WORKSPACE_B_Q="$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$TEMP_DIR/workspace-b")"
+CROSS_JSON="$(curl --silent --show-error -X POST -H 'Content-Type: application/json' \
+    -d "{\"path\":\"b.txt\",\"session_id\":\"smoke-session\",\"inputs\":[{\"artifact_id\":\"${RAW_ID}\",\"version\":1}]}" \
+    "http://127.0.0.1:${NODE_PORT}/api/artifacts/publish?cwd=${WORKSPACE_B_Q}")"
+if ! echo "$CROSS_JSON" | grep -q 'does not exist'; then
+    echo "cross-workspace artifact ref was not rejected: $CROSS_JSON" >&2
     exit 40
 fi
 

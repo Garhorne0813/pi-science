@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { queryClient } from "../lib/client/query-client";
+import { useRuntimeStore } from "../lib/agent-runtime";
 import { navigationApi } from "../lib/conversation-navigation";
 import type { ConversationReadStateUpdate } from "../lib/conversation-navigation";
 
@@ -234,8 +235,40 @@ export function useConversationAttention(cwd: string | null) {
     },
     enabled: Boolean(cwd),
     staleTime: 15_000,
-    refetchOnWindowFocus: false,
+    // Fallback heartbeat: sessions other than the one mounted in the thread
+    // have no live event stream in this tab, so their badges converge within
+    // one interval even without any local activity.
+    refetchInterval: 15_000,
+    // Returning to the tab refreshes immediately instead of waiting for the
+    // next heartbeat.
+    refetchOnWindowFocus: true,
   }, queryClient);
+
+  // Event-driven refresh: the runtime store knows when THIS workspace's
+  // prompts start/settle, ask-user interactions appear/resolve, and sessions
+  // are created, renamed or deleted. Each transition invalidates the
+  // attention query so sidebar badges flip promptly instead of waiting for
+  // the heartbeat interval.
+  useEffect(() => {
+    if (!cwd) return;
+    const refetch = () => {
+      void queryClient.invalidateQueries({ queryKey: conversationAttentionKey(cwd) });
+    };
+    const hasPending = (state: { pendingInteraction: unknown; pendingQuestionnaire: unknown }) =>
+      Boolean(state.pendingInteraction || state.pendingQuestionnaire);
+    return useRuntimeStore.subscribe((state, prev) => {
+      // Only transitions for this workspace (or a workspace switch) touch the
+      // attention surface; ignore store churn from other workspaces.
+      if (state.cwd !== cwd && prev.cwd !== cwd) return;
+      const relevant =
+        state.cwd !== prev.cwd
+        || state.working !== prev.working
+        || hasPending(state) !== hasPending(prev)
+        || state.sessions !== prev.sessions
+        || state.activeSessionId !== prev.activeSessionId;
+      if (relevant) refetch();
+    });
+  }, [cwd]);
 
   return useMemo(() => ({
     items: query.data?.items ?? [],

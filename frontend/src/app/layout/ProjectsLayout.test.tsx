@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { SettingsNavItem, WorkspaceSessionList } from "./ProjectsLayout";
 import { useUiStore } from "../../lib/ui";
@@ -34,6 +34,9 @@ beforeEach(() => {
     sessions: [],
     activeSessionId: null,
     cwd: "proj",
+    working: false,
+    pendingInteraction: null,
+    pendingQuestionnaire: null,
     loadSessions: vi.fn(async () => []),
     deleteSession: vi.fn(async () => undefined),
     createNewSession: vi.fn(async () => "created"),
@@ -350,14 +353,100 @@ describe("WorkspaceSessionList attention badges", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /Session A/ }).textContent).toContain("Needs you"));
     expect(screen.getByRole("button", { name: /Session B/ }).textContent).toContain("Running");
     expect(screen.getByRole("button", { name: /Session C/ }).textContent).toContain("New");
+    // Each badge is an icon with a tooltip and a screen-reader text fallback.
+    expect(within(screen.getByRole("button", { name: /Session A/ })).getByTitle("Waiting for your response")).toBeInTheDocument();
+    expect(within(screen.getByRole("button", { name: /Session B/ })).getByTitle("Agent is working")).toBeInTheDocument();
+    expect(within(screen.getByRole("button", { name: /Session C/ })).getByTitle("Unread new messages")).toBeInTheDocument();
     // Idle sessions show no badge.
     expect(screen.getByRole("button", { name: /Session D/ }).textContent).not.toContain("New");
     expect(screen.getByRole("button", { name: /Session D/ }).textContent).not.toContain("Running");
-    // The header summarizes the counts.
+    // The header summarizes the counts with icons and sr-only labels.
     await waitFor(() => expect(screen.getByLabelText("Attention summary")).toBeInTheDocument());
-    expect(screen.getByLabelText("Attention summary").textContent).toContain("1 Needs you");
-    expect(screen.getByLabelText("Attention summary").textContent).toContain("1 Running");
-    expect(screen.getByLabelText("Attention summary").textContent).toContain("1 New");
+    expect(screen.getByLabelText("Attention summary").textContent).toContain("Needs you: 1");
+    expect(screen.getByLabelText("Attention summary").textContent).toContain("Running: 1");
+    expect(screen.getByLabelText("Attention summary").textContent).toContain("New: 1");
+  });
+
+  it("refreshes badges promptly when a prompt starts in this workspace", async () => {
+    let attentionCalls = 0;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/attention")) {
+        attentionCalls += 1;
+        return jsonResponse(attentionResponse(attentionCalls === 1
+          ? [{ session_id: "s1", status: "idle", updated_at: null }]
+          : [{ session_id: "s1", status: "running", updated_at: null }]));
+      }
+      if (url.startsWith("/api/sessions")) return jsonResponse([]);
+      return jsonResponse({ error: `unhandled ${url}` }, 404);
+    });
+    useRuntimeStore.setState({ sessions: [session("s1", "Session A")], activeSessionId: "s1" });
+    renderList();
+    await waitFor(() => expect(attentionCalls).toBeGreaterThanOrEqual(1));
+    expect(within(screen.getByRole("button", { name: /Session A/ })).queryByTitle("Agent is working")).toBeNull();
+
+    // A prompt starts in this workspace: the store flips `working`, and the
+    // sidebar refetches attention without waiting for the polling interval.
+    act(() => { useRuntimeStore.setState({ working: true }); });
+    await waitFor(() => expect(attentionCalls).toBeGreaterThanOrEqual(2));
+    expect(within(screen.getByRole("button", { name: /Session A/ })).getByTitle("Agent is working")).toBeInTheDocument();
+  });
+
+  it("refreshes badges promptly when an ask-user interaction becomes pending", async () => {
+    let attentionCalls = 0;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/attention")) {
+        attentionCalls += 1;
+        return jsonResponse(attentionResponse(attentionCalls === 1
+          ? [{ session_id: "s1", status: "running", updated_at: null }]
+          : [{ session_id: "s1", status: "needs_you", updated_at: null }]));
+      }
+      if (url.startsWith("/api/sessions")) return jsonResponse([]);
+      return jsonResponse({ error: `unhandled ${url}` }, 404);
+    });
+    useRuntimeStore.setState({ sessions: [session("s1", "Session A")], activeSessionId: "s1", working: true });
+    renderList();
+    await waitFor(() => expect(attentionCalls).toBeGreaterThanOrEqual(1));
+    expect(within(screen.getByRole("button", { name: /Session A/ })).queryByTitle("Waiting for your response")).toBeNull();
+
+    // The agent asks the user something: pendingInteraction appears and the
+    // sidebar flips the badge to needs_you immediately.
+    act(() => {
+      useRuntimeStore.setState({
+        pendingInteraction: { requestId: "r1", method: "confirm", title: "Confirm?" },
+      });
+    });
+    await waitFor(() => expect(attentionCalls).toBeGreaterThanOrEqual(2));
+    expect(within(screen.getByRole("button", { name: /Session A/ })).getByTitle("Waiting for your response")).toBeInTheDocument();
+  });
+
+  it("refreshes badges when a session is created or removed", async () => {
+    let attentionCalls = 0;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/attention")) {
+        attentionCalls += 1;
+        return jsonResponse(attentionResponse(
+          attentionCalls === 1
+            ? [{ session_id: "s1", status: "idle", updated_at: null }]
+            : [{ session_id: "s1", status: "idle", updated_at: null }, { session_id: "s2", status: "unread", updated_at: null }],
+        ));
+      }
+      if (url.startsWith("/api/sessions")) return jsonResponse([]);
+      return jsonResponse({ error: `unhandled ${url}` }, 404);
+    });
+    useRuntimeStore.setState({ sessions: [session("s1", "Session A")], activeSessionId: "s1" });
+    renderList();
+    await waitFor(() => expect(attentionCalls).toBeGreaterThanOrEqual(1));
+    expect(screen.queryByRole("button", { name: /Session B/ })).toBeNull();
+
+    // The session list changes (new session arrives): badges refresh.
+    act(() => {
+      useRuntimeStore.setState({ sessions: [session("s1", "Session A"), session("s2", "Session B")] });
+    });
+    await waitFor(() => expect(attentionCalls).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(within(screen.getByRole("button", { name: /Session B/ })).getByTitle("Unread new messages")).toBeInTheDocument());
   });
 
   it("degrades gracefully when the attention endpoint fails", async () => {

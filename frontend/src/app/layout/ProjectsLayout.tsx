@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { lazy, Suspense, useState, useEffect, useRef, useMemo } from "react";
-import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical, type LucideIcon } from "lucide-react";
+import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical, BellRing, LoaderCircle, CircleDot, type LucideIcon } from "lucide-react";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { InspectorTabs } from "../../components/inspector/InspectorTabs";
@@ -369,9 +369,27 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
         <span className="text-ui-caption font-medium uppercase tracking-wider text-muted">{t("conversation.sessions")}</span>
         {(attentionCounts.needs_you > 0 || attentionCounts.running > 0 || attentionCounts.unread > 0) && (
           <span className="flex items-center gap-1 text-ui-micro text-muted" aria-label={t("conversation.attentionSummary")}>
-            {attentionCounts.needs_you > 0 && <span className="rounded-full bg-warn/15 px-1.5 py-px text-[9px] text-warn">{attentionCounts.needs_you} {t("conversation.attentionNeedsYou")}</span>}
-            {attentionCounts.running > 0 && <span className="rounded-full bg-accent/15 px-1.5 py-px text-[9px] text-accent">{attentionCounts.running} {t("conversation.attentionRunning")}</span>}
-            {attentionCounts.unread > 0 && <span className="rounded-full bg-ok/15 px-1.5 py-px text-[9px] text-ok">{attentionCounts.unread} {t("conversation.attentionNew")}</span>}
+            {attentionCounts.needs_you > 0 && (
+              <span className="flex items-center gap-0.5 rounded-full bg-warn/15 px-1.5 py-px text-[9px] leading-none text-warn" title={t("conversation.attentionNeedsYouTitle")}>
+                <Icon icon={BellRing} size="xs" className="shrink-0" />
+                <span className="sr-only">{t("conversation.attentionNeedsYou")}: </span>
+                {attentionCounts.needs_you}
+              </span>
+            )}
+            {attentionCounts.running > 0 && (
+              <span className="flex items-center gap-0.5 rounded-full bg-accent/15 px-1.5 py-px text-[9px] leading-none text-accent" title={t("conversation.attentionRunningTitle")}>
+                <Icon icon={LoaderCircle} size="xs" className="shrink-0 animate-spin" />
+                <span className="sr-only">{t("conversation.attentionRunning")}: </span>
+                {attentionCounts.running}
+              </span>
+            )}
+            {attentionCounts.unread > 0 && (
+              <span className="flex items-center gap-0.5 rounded-full bg-ok/15 px-1.5 py-px text-[9px] leading-none text-ok" title={t("conversation.attentionNewTitle")}>
+                <Icon icon={CircleDot} size="xs" className="shrink-0" />
+                <span className="sr-only">{t("conversation.attentionNew")}: </span>
+                {attentionCounts.unread}
+              </span>
+            )}
           </span>
         )}
         <IconButton
@@ -446,15 +464,16 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
 
 function attentionBadge(status: AttentionStatus | undefined, t: (key: string) => string) {
   if (!status || status === "idle") return null;
-  const config: Record<Exclude<AttentionStatus, "idle">, { label: string; className: string; title: string }> = {
-    needs_you: { label: t("conversation.attentionNeedsYou"), className: "bg-warn/15 text-warn", title: t("conversation.attentionNeedsYouTitle") },
-    running: { label: t("conversation.attentionRunning"), className: "bg-accent/15 text-accent", title: t("conversation.attentionRunningTitle") },
-    unread: { label: t("conversation.attentionNew"), className: "bg-ok/15 text-ok", title: t("conversation.attentionNewTitle") },
+  const config: Record<Exclude<AttentionStatus, "idle">, { icon: LucideIcon; label: string; className: string; title: string }> = {
+    needs_you: { icon: BellRing, label: t("conversation.attentionNeedsYou"), className: "text-warn", title: t("conversation.attentionNeedsYouTitle") },
+    running: { icon: LoaderCircle, label: t("conversation.attentionRunning"), className: "text-accent animate-spin", title: t("conversation.attentionRunningTitle") },
+    unread: { icon: CircleDot, label: t("conversation.attentionNew"), className: "text-ok", title: t("conversation.attentionNewTitle") },
   };
   const item = config[status];
   return (
-    <span className={cn("mr-1 shrink-0 rounded-full px-1.5 py-px text-[9px] leading-none", item.className)} title={item.title}>
-      {item.label}
+    <span className="mr-1 flex shrink-0 items-center" title={item.title}>
+      <Icon icon={item.icon} size="sm" className={cn("shrink-0", item.className)} />
+      <span className="sr-only">{item.label}</span>
     </span>
   );
 }
