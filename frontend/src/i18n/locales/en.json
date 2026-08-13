@@ -849,5 +849,19 @@
   "conversation.attentionNew": "New",
   "conversation.attentionNeedsYouTitle": "Waiting for your response",
   "conversation.attentionRunningTitle": "Agent is working",
-  "conversation.attentionNewTitle": "Unread new messages"
+  "conversation.attentionNewTitle": "Unread new messages",
+  "lineage.loading": "Loading lineage…",
+  "lineage.title": "Lineage",
+  "lineage.inputs": "Inputs & supersedes",
+  "lineage.dependents": "Dependents",
+  "lineage.unresolved": "Unresolved inputs",
+  "lineage.unresolvedTitle": "Legacy path input without an exact version",
+  "lineage.consumes": "Consumes this version",
+  "lineage.supersedes": "Supersedes",
+  "lineage.consumedBy": "Consumed by",
+  "lineage.supersededBy": "Superseded by",
+  "lineage.classification.intermediate": "Intermediate",
+  "lineage.classification.deliverable": "Deliverable",
+  "lineage.classification.unspecified": "Unspecified",
+  "filePreview.artifactVersionNotice": "Artifact record v{{version}} — the preview below shows the CURRENT file; History shows the versioned record."
 }

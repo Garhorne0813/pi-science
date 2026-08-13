@@ -158,6 +158,45 @@ export const artifactManifestSchema = z.object({
   published_at: z.string(),
 }).passthrough();
 
+/** Exact version reference used by artifact lineage edges. */
+export const artifactVersionRefSchema = z.object({
+  artifact_id: z.string().min(1),
+  version: z.number().int().positive(),
+});
+
+export const artifactClassificationSchema = z.enum(["intermediate", "deliverable", "unspecified"]);
+
+/** Manifest v2: adds versioned input references, supersession and a
+ *  classification. Legacy v1 rows (no schema_version) are interpreted as
+ *  `unspecified` in-memory; files are never rewritten. */
+export const artifactManifestV2Schema = z.object({
+  schema_version: z.literal(2),
+  artifact_id: z.string().min(1),
+  version: z.number().int().positive(),
+  path: z.string().min(1),
+  kind: z.string().min(1),
+  mime: z.string().min(1),
+  size: z.number().int().nonnegative(),
+  sha256: z.string().min(16).max(64),
+  published_at: z.string(),
+  inputs: z.array(z.union([artifactVersionRefSchema, z.string().min(1)])).max(100).default([]),
+  supersedes: artifactVersionRefSchema.nullable().default(null),
+  classification: artifactClassificationSchema.default("unspecified"),
+}).passthrough();
+
+export const artifactLineageResponseSchema = z.object({
+  artifact: artifactManifestV2Schema,
+  upstream: z.array(z.object({
+    kind: z.enum(["consumes", "supersedes"]),
+    artifact: artifactManifestV2Schema,
+  })).default([]),
+  downstream: z.array(z.object({
+    kind: z.enum(["consumed_by", "superseded_by"]),
+    artifact: artifactManifestV2Schema,
+  })).default([]),
+  unresolved_inputs: z.array(z.string()).default([]),
+});
+
 export const provenanceRecordSchema = z.object({
   id: z.string().min(1),
   action: z.string().min(1),
@@ -193,6 +232,10 @@ export type PiRpcResponse = z.infer<typeof piRpcResponseSchema>;
 export type PiRuntimeEvent = z.infer<typeof piRuntimeEventSchema>;
 export type JobRecord = z.infer<typeof jobRecordSchema>;
 export type ArtifactManifest = z.infer<typeof artifactManifestSchema>;
+export type ArtifactVersionRef = z.infer<typeof artifactVersionRefSchema>;
+export type ArtifactClassification = z.infer<typeof artifactClassificationSchema>;
+export type ArtifactManifestV2 = z.infer<typeof artifactManifestV2Schema>;
+export type ArtifactLineageResponse = z.infer<typeof artifactLineageResponseSchema>;
 export type ProvenanceRecord = z.infer<typeof provenanceRecordSchema>;
 
 // ── Conversation navigation (durable bookmarks / read state / attention) ──

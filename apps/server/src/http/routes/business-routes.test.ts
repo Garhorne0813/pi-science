@@ -293,7 +293,7 @@ describe("native control-plane business routes", () => {
     await import("node:fs/promises").then(({ writeFile }) => writeFile(join(cwd, "result.txt"), "artifact", "utf8"));
     const artifact = await app.inject({ method: "POST", url: `/api/artifacts/publish?cwd=${encodeURIComponent(cwd)}`, payload: { path: "result.txt", session_id: "s1" } });
     expect(artifact.statusCode).toBe(200);
-    expect(artifact.json()).toMatchObject({ path: "result.txt", version: 1 });
+    expect(artifact.json()).toMatchObject({ path: "result.txt", version: 1, classification: "deliverable", schema_version: 2 });
     const provenance = await app.inject({ method: "GET", url: `/api/provenance?cwd=${encodeURIComponent(cwd)}` });
     expect(provenance.json().records.length).toBeGreaterThan(0);
   }, 20_000);

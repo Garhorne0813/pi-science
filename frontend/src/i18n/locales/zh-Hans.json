@@ -849,5 +849,19 @@
   "conversation.attentionNew": "新内容",
   "conversation.attentionNeedsYouTitle": "等待你的回复",
   "conversation.attentionRunningTitle": "助手正在运行",
-  "conversation.attentionNewTitle": "有未读的新消息"
+  "conversation.attentionNewTitle": "有未读的新消息",
+  "lineage.loading": "正在加载产物关系…",
+  "lineage.title": "产物关系",
+  "lineage.inputs": "输入与取代",
+  "lineage.dependents": "下游产物",
+  "lineage.unresolved": "未解析的输入",
+  "lineage.unresolvedTitle": "旧版路径输入，无精确版本",
+  "lineage.consumes": "使用此版本",
+  "lineage.supersedes": "取代",
+  "lineage.consumedBy": "被使用",
+  "lineage.supersededBy": "被取代",
+  "lineage.classification.intermediate": "中间产物",
+  "lineage.classification.deliverable": "交付物",
+  "lineage.classification.unspecified": "未分类",
+  "filePreview.artifactVersionNotice": "产物记录 v{{version}} —— 下方预览显示的是当前文件；历史记录中可查看该版本的记录。"
 }

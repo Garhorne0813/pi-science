@@ -58,12 +58,14 @@ export interface InspectorTab {
   data: Inspector;
 }
 
-/** A stable identity lets repeated opens focus the existing tab. */
+/** A stable identity lets repeated opens focus the existing tab. Version-
+ *  targeted opens (lineage relation jumps) get their own tab identity so an
+ *  exact version never silently reuses the live-file tab. */
 export function inspectorTabId(data: Inspector): string {
   switch (data.variant) {
     case "file":
     case "notebook-file":
-      return JSON.stringify([data.variant, data.cwd ?? "", data.root ?? "", data.path]);
+      return JSON.stringify([data.variant, data.cwd ?? "", data.root ?? "", data.path, data.variant === "file" && data.artifactVersion ? `${data.artifactVersion.artifact_id}:${data.artifactVersion.version}` : ""]);
     case "pdf":
       return JSON.stringify([data.variant, data.path ?? data.filename ?? ""]);
     case "artifact":

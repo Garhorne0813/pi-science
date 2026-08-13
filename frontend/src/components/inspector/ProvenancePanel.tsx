@@ -8,6 +8,7 @@ import { listRuns, reproduceRunPrompt } from "@/lib/runs";
 import { useRuntimeStore } from "@/lib/agent-runtime";
 import { CodeViewer } from "@/components/code-viewer/CodeViewer";
 import { DiffView } from "@/components/code-viewer/DiffView";
+import { ArtifactLineagePanel } from "./ArtifactLineagePanel";
 import { cn } from "@/lib/ui";
 import i18n from "@/i18n";
 
@@ -60,7 +61,7 @@ function packageSnapshot(
  * that produced it, the tool, the model, and a link back to the originating
  * conversation. Data comes from `.pi-science/provenance.jsonl`.
  */
-export function ProvenancePanel({ path, language, cwd: cwdOverride }: { path: string; language?: string; cwd?: string }) {
+export function ProvenancePanel({ path, language, cwd: cwdOverride, initialVersion, artifactVersion }: { path: string; language?: string; cwd?: string; /** Provenance record version to expand initially (version-targeted opens). */ initialVersion?: number; /** Exact artifact version this panel is pinned to (lineage relation jumps). */ artifactVersion?: { artifact_id: string; version: number } }) {
   const { t } = useTranslation();
   const runtimeCwd = useRuntimeStore((s) => s.cwd);
   const cwd = cwdOverride || runtimeCwd;
@@ -106,7 +107,7 @@ export function ProvenancePanel({ path, language, cwd: cwdOverride }: { path: st
     void listProvenance(cwd, path).then((r) => {
       if (controller.signal.aborted) return;
       setRecords(r); // backend returns newest first
-      setExpanded(r.length > 0 ? r[0].version : null);
+      setExpanded(r.length > 0 ? (initialVersion !== undefined && r.some((rec) => rec.version === initialVersion) ? initialVersion : r[0].version) : null);
       // Load the runs any of these versions were produced by, for the recipe.
       if (r.some((rec) => rec.runId)) {
         void listRuns(cwd).then((runs) => {
@@ -118,7 +119,7 @@ export function ProvenancePanel({ path, language, cwd: cwdOverride }: { path: st
     return () => {
       controller.abort();
     };
-  }, [cwd, path]);
+  }, [cwd, path, initialVersion]);
 
   if (records === null) {
     return (
@@ -128,18 +129,29 @@ export function ProvenancePanel({ path, language, cwd: cwdOverride }: { path: st
     );
   }
 
+  // Versioned lineage (exact inputs, supersession, dependents) sits above the
+  // provenance history. It renders nothing when this file has no artifact
+  // manifest, so ordinary file history is not crowded. Version-targeted opens
+  // pin the lineage to the exact artifact version instead of the latest.
+  const lineagePanel = <ArtifactLineagePanel path={path} cwd={cwd} artifactId={artifactVersion?.artifact_id} version={artifactVersion?.version} />;
+
   if (records.length === 0) {
     return (
-      <div className="p-4 text-sm text-muted">
-        {t("provenance.emptyPrefix")}{" "}
-        <span className="font-mono text-text">{path}</span>
-        {t("provenance.emptySuffix")}
-      </div>
+      <>
+        {lineagePanel}
+        <div className="p-4 text-sm text-muted">
+          {t("provenance.emptyPrefix")}{" "}
+          <span className="font-mono text-text">{path}</span>
+          {t("provenance.emptySuffix")}
+        </div>
+      </>
     );
   }
 
   return (
-    <ul className="space-y-2 p-3">
+    <>
+      {lineagePanel}
+      <ul className="space-y-2 p-3">
       {records.map((r) => {
         const open = expanded === r.version;
         const packages = packageSnapshot(r.env);
@@ -269,6 +281,7 @@ export function ProvenancePanel({ path, language, cwd: cwdOverride }: { path: st
         );
       })}
     </ul>
+    </>
   );
 }
 

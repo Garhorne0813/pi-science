@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { artifactManifestSchema, conversationAttentionResponseSchema, conversationBookmarkCreateSchema, conversationBookmarkSchema, conversationBookmarkUpdateSchema, conversationReadStateResponseSchema, createResearchLoopSchema, createSessionRequestSchema, gatewayHealthSchema, jobRecordSchema, piRpcCommandSchema, researchLoopSchema, sessionEventSchema, sessionMessageIndexEntrySchema, skillContentSchema } from "./index.js";
+import { artifactLineageResponseSchema, artifactManifestSchema, artifactManifestV2Schema, artifactVersionRefSchema, conversationAttentionResponseSchema, conversationBookmarkCreateSchema, conversationBookmarkSchema, conversationBookmarkUpdateSchema, conversationReadStateResponseSchema, createResearchLoopSchema, createSessionRequestSchema, gatewayHealthSchema, jobRecordSchema, piRpcCommandSchema, researchLoopSchema, sessionEventSchema, sessionMessageIndexEntrySchema, skillContentSchema } from "./index.js";
 
 describe("gateway contracts", () => {
   it("accepts a healthy Node gateway response", () => {
@@ -33,6 +33,55 @@ describe("gateway contracts", () => {
       stop_conditions: { target_metrics: {}, patience: 3, min_improvement: 0 },
       created_at: "now", updated_at: "now",
     }).task_type).toBe("research_loop");
+  });
+
+  it("validates artifact v2 manifests with exact version refs", () => {
+    const ref = artifactVersionRefSchema.parse({ artifact_id: "a1", version: 2 });
+    expect(ref).toEqual({ artifact_id: "a1", version: 2 });
+    expect(() => artifactVersionRefSchema.parse({ artifact_id: "a1", version: 0 })).toThrow();
+    expect(() => artifactVersionRefSchema.parse({ artifact_id: "a1", version: 2.5 })).toThrow();
+
+    const manifest = artifactManifestV2Schema.parse({
+      schema_version: 2, artifact_id: "a2", version: 3, path: "out/plot.png", kind: "image",
+      mime: "image/png", size: 10, sha256: "1234567890abcdef", published_at: "now",
+      inputs: [{ artifact_id: "a1", version: 2 }, "legacy/path.txt"],
+      supersedes: { artifact_id: "a2", version: 2 },
+      classification: "deliverable",
+    });
+    expect(manifest.inputs).toHaveLength(2);
+    expect(manifest.supersedes).toEqual({ artifact_id: "a2", version: 2 });
+    expect(manifest.classification).toBe("deliverable");
+
+    // Invalid classification and over-limit inputs are rejected.
+    expect(() => artifactManifestV2Schema.parse({
+      schema_version: 2, artifact_id: "a2", version: 3, path: "out.txt", kind: "text",
+      mime: "text/plain", size: 1, sha256: "1234567890abcdef", published_at: "now",
+      classification: "published",
+    })).toThrow();
+    expect(() => artifactManifestV2Schema.parse({
+      schema_version: 2, artifact_id: "a2", version: 3, path: "out.txt", kind: "text",
+      mime: "text/plain", size: 1, sha256: "1234567890abcdef", published_at: "now",
+      inputs: Array.from({ length: 101 }, (_, i) => ({ artifact_id: `a${i}`, version: 1 })),
+    })).toThrow();
+  });
+
+  it("validates artifact lineage responses", () => {
+    const manifest = (overrides: Record<string, unknown> = {}) => ({
+      schema_version: 2, artifact_id: "a2", version: 3, path: "out/plot.png", kind: "image",
+      mime: "image/png", size: 10, sha256: "1234567890abcdef", published_at: "now",
+      inputs: [], supersedes: null, classification: "deliverable", ...overrides,
+    });
+    expect(artifactLineageResponseSchema.parse({
+      artifact: manifest(),
+      upstream: [{ kind: "consumes", artifact: manifest({ artifact_id: "a1", version: 2, path: "in.csv" }) }],
+      downstream: [{ kind: "consumed_by", artifact: manifest({ artifact_id: "a3", version: 1, path: "final.csv" }) }],
+      unresolved_inputs: ["legacy/path.txt"],
+    })).toMatchObject({ unresolved_inputs: ["legacy/path.txt"] });
+    expect(() => artifactLineageResponseSchema.parse({
+      artifact: manifest(),
+      upstream: [{ kind: "uses", artifact: manifest() }],
+      unresolved_inputs: [],
+    })).toThrow();
   });
 
   it("validates skill content and rejects absolute locations", () => {

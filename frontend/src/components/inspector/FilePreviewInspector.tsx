@@ -86,7 +86,10 @@ export function FilePreviewInspector({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"preview" | "code">(policy.defaultTab);
-  const [showHistory, setShowHistory] = useState(false);
+  // Version-targeted opens (lineage relation jumps) land in History: the
+  // preview shows CURRENT bytes, so opening history prevents the inspector
+  // from pretending the live file is the exact version.
+  const [showHistory, setShowHistory] = useState(Boolean(data.artifactVersion));
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -300,7 +303,12 @@ export function FilePreviewInspector({
 
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto bg-surface-2">
         <div className="h-full min-h-full" style={{ zoom: contentZoom }}>
-        {showHistory && <ProvenancePanel path={data.path} language={data.language} cwd={cwd} />}
+        {data.artifactVersion && (
+          <div className="border-b border-border bg-surface-2 px-4 py-1.5 text-[11px] text-muted">
+            {t("filePreview.artifactVersionNotice", { version: data.artifactVersion.version })}
+          </div>
+        )}
+        {showHistory && <ProvenancePanel path={data.path} language={data.language} cwd={cwd} initialVersion={data.artifactVersion?.version} artifactVersion={data.artifactVersion} />}
         {!showHistory && editing && draft !== null && (
           <div className="flex h-full flex-col">
             <textarea

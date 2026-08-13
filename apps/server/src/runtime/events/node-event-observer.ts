@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { extname, relative, resolve } from "node:path";
 import { appendJsonLine, readJsonLines, workspaceFile } from "../../storage/persistence.js";
+import { collapseManifests } from "../artifacts/artifact-manifest.js";
+import type { ArtifactManifestV2 } from "../artifacts/artifact-manifest.js";
 import type { PiEvent } from "../pi/pi-process.js";
 
 type Publish = (payload: Record<string, unknown>) => Promise<void>;
@@ -78,16 +80,19 @@ async function observeWrittenArtifact(cwd: string, model: string | null, event: 
   await serialized(workspaceFile(cwd, "artifacts.jsonl"), async () => {
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     const artifactId = createHash("sha256").update(`${workspace}:${path}`).digest("hex").slice(0, 24);
-    const artifacts = await readJsonLines<Record<string, unknown>>(workspaceFile(cwd, "artifacts.jsonl"));
-    const previous = artifacts.filter((item) => item.artifact_id === artifactId).at(-1);
+    // Collapse duplicate artifact_id+version rows (verification updates append
+    // a refreshed row for an OLD version) and take the highest version, so a
+    // stale verification row at the tail can never reset the version counter.
+    const manifests = collapseManifests(await readJsonLines<unknown>(workspaceFile(cwd, "artifacts.jsonl")));
+    const previous = manifests.filter((item) => item.artifact_id === artifactId).sort((left, right) => right.version - left.version)[0];
     const previousVersion = Number(previous?.version ?? 0);
     if (previous?.sha256 === sha256) return;
     const contentType = mime(path);
     const verification = { status: "passed", checks: { exists: true, readable: true, size: metadata.size, sha256 }, checked_at: new Date().toISOString() };
-    const manifest = {
-      artifact_id: artifactId, version: previousVersion + 1, path, kind: kind(path, contentType), mime: contentType,
+    const manifest: ArtifactManifestV2 = {
+      schema_version: 2, artifact_id: artifactId, version: previousVersion + 1, path, kind: kind(path, contentType), mime: contentType,
       size: metadata.size, sha256, published_at: new Date().toISOString(),
-      producer: { tool, session_id: sessionId, ...(model ? { model } : {}) }, inputs: [], environment: {}, verification,
+      producer: { tool, session_id: sessionId, ...(model ? { model } : {}) }, inputs: [], supersedes: null, classification: "intermediate", environment: {}, verification,
     };
     await appendJsonLine(workspaceFile(cwd, "artifacts.jsonl"), manifest);
     await appendProvenance(cwd, path, tool, sessionId, model, event, sha256, artifactId, previousVersion + 1);
