@@ -1,7 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildPiProcessOptions, loadDefaultPiConfig, resetWebRuntimeAllocation, runtimeExtensionStatus } from "./pi-runtime-launch.js";
 
@@ -107,6 +107,26 @@ describe("Pi runtime custom provider materialization", () => {
     expect(guidance).toContain("call the todo tool (action: create)");
     expect(guidance).toContain("exactly one task in_progress at a time");
     expect(guidance).toContain("Simple single-step requests do not need a todo list");
+  });
+
+  it("injects the Pi-Science system prompt without creating a workspace context file", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-system-prompt-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+
+    const webOptions = buildPiProcessOptions(cwd)!;
+    const webPrompts = webOptions.args.flatMap((arg, index) => arg === "--append-system-prompt" ? [webOptions.args[index + 1]] : []);
+    const systemPrompt = resolve(import.meta.dirname, "../../../../..", "harness", "AGENTS.md");
+
+    expect(webPrompts).toContain(systemPrompt);
+    expect(webPrompts.some((path) => path?.endsWith("APPEND_SYSTEM.md"))).toBe(true);
+    await expect(readFile(join(cwd, "AGENTS.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+    process.env.PI_SCIENCE_PI_MODE = "rpc";
+    const rpcOptions = buildPiProcessOptions(cwd)!;
+    const rpcPrompts = rpcOptions.args.flatMap((arg, index) => arg === "--append-system-prompt" ? [rpcOptions.args[index + 1]] : []);
+    expect(rpcPrompts).toContain(systemPrompt);
+    expect(rpcPrompts.some((path) => path?.endsWith("APPEND_SYSTEM.md"))).toBe(true);
   });
 
   it("passes workspace package isolation into the agent runtime", async () => {

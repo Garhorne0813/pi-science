@@ -15,6 +15,7 @@ import { configRoot } from "../../storage/persistence.js";
 let sharedWebPort: number | null = null;
 let sharedWebToken: string | null = null;
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
+const PI_SCIENCE_SYSTEM_PROMPT = join(PROJECT_ROOT, "harness", "AGENTS.md");
 const BROWSER_QUESTIONNAIRE_ADAPTER = join(
   PROJECT_ROOT,
   "apps",
@@ -121,6 +122,11 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
   materializeCustomProviders(agentDir, settings.custom_providers, env);
   materializeRuntimeSettings(agentDir, settings, config);
   materializeFollowUpGuidance(agentDir);
+  // Pi-Science's research contract is an application-level prompt, not a
+  // project file. Pass it directly to Pi Orbit while retaining APPEND_SYSTEM
+  // guidance that would otherwise be replaced by explicit CLI prompt sources.
+  if (existsSync(PI_SCIENCE_SYSTEM_PROMPT)) args.push("--append-system-prompt", PI_SCIENCE_SYSTEM_PROMPT);
+  args.push("--append-system-prompt", join(agentDir, "APPEND_SYSTEM.md"));
 
   return {
     cwd,
@@ -166,16 +172,6 @@ export function seedWorkspaceAssets(cwd: string): string[] {
   replaceForeignEntry(join(cwd, ".pi"));
   const metadata = join(cwd, ".pi-science");
   mkdirSync(metadata, { recursive: true });
-  const agents = join(cwd, "AGENTS.md");
-  const sourceAgents = join(projectRoot, "harness", "AGENTS.md");
-  if (existsSync(sourceAgents)) {
-    // A dangling (or external-pointing) AGENTS.md symlink makes existsSync
-    // report "missing" while cpSync still targets the link: the write aborts
-    // with a C++ exception (exit 134) or lands outside the workspace. Drop
-    // any symlink/non-file placeholder before deciding whether to seed.
-    removeUnlinkable(agents);
-    if (!existsSync(agents)) cpSync(sourceAgents, agents);
-  }
   const sourceSkills = join(projectRoot, "skills");
   const targetSkills = join(cwd, ".pi", "skills");
   // The .pi/skills tree is managed state: if a previous seed or the runtime
