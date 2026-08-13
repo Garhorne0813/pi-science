@@ -183,4 +183,20 @@ describe("literature-review skill content", () => {
     expect(allRequired.has("inline_identifier_citations")).toBe(true);
     expect(allRequired.has("direct_api_search_record")).toBe(true);
   });
+  it("documents the recoverable stage workflow and convergence rules", async () => {
+    const body = await readFile(SKILL_MD, "utf8");
+
+    expect(body).toContain("## Stages");
+    expect(body).toContain("waypoints.jsonl");
+    expect(body).toContain("Resume by reading the waypoint log");
+    for (const stage of ["scope", "search", "screen", "evidence", "synthesize", "cite"]) {
+      expect(body).toContain(stage);
+    }
+    expect(body).toContain("needs_confirmation");
+    expect(body).toContain("two consecutive");
+    expect(body).toContain("Max search rounds");
+    for (const mode of ["provider_down", "gateway_blocked", "invented_identifier"]) {
+      expect(body).toContain(mode);
+    }
+  });
 });

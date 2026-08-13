@@ -1,0 +1,24 @@
+[
+  {
+    "prompt": "Audit the traceability of this manuscript",
+    "expected_trigger": true,
+    "trigger_terms": [
+      "traceability",
+      "manuscript"
+    ],
+    "required_outputs": [
+      "extraction_record",
+      "citation_resolutions",
+      "number_sources",
+      "figure_checks",
+      "review_block"
+    ],
+    "produced_outputs": [
+      "extraction_record",
+      "citation_resolutions",
+      "number_sources",
+      "figure_checks",
+      "review_block"
+    ]
+  }
+]

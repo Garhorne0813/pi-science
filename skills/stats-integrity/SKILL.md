@@ -89,3 +89,33 @@ Copy the ` ```review ` block as the **last thing** in your message — the app
 renders it as dismissible reviewer cards. Never tell the user the analysis is
 "correct", "sound", or that a relationship is causal from observational data —
 the gate checks specific risks only.
+## Stages — a recoverable analysis SOP
+
+Run analysis work as stages below. Append one waypoint per stage to
+`.pi-science/sop/stats-integrity/waypoints.jsonl` (schema:
+`references/waypoint-schemas.md`). **Resume by reading the waypoint log**, never
+from memory.
+
+| # | Stage | Purpose | Waypoint `checkpoint` holds |
+| --- | --- | --- | --- |
+| 1 | `plan` | State the analysis question, the design (and whether it supports causal claims), and the preregistration file if any | design summary, prereg ref, declared predictors |
+| 2 | `run` | Execute analyses with fixed seeds; record raw output verbatim | script refs, seeds, raw output refs |
+| 3 | `gate` | Run `stats_integrity_check.py` and record its ```review block | gate output, flagged risks |
+| 4 | `report` | Report estimates + uncertainty; never overclaim | report ref, effect sizes, wording |
+
+**Human gate**: stage 1 (`plan`) — if the design cannot support a causal claim,
+or the preregistration is missing for a confirmatory analysis, stop with
+`status: "needs_confirmation"` and get explicit user sign-off before running.
+
+**Convergence**: single pass, no retry rounds. If `run` fails, fix the script
+and re-run once; then continue.
+
+**Completion condition**: a `completed` waypoint for stage 4 whose
+`checkpoint` holds the report reference and the final gate ```review block.
+
+**Common failure modes** (record as `failed` with the matching cause):
+- `seed_missing` — a randomised step has no fixed seed; stop and fix.
+- `gate_harking` — the gate flags a preregistration violation; stop and get
+  user confirmation before reporting.
+- `format_unreadable` — .dta/.sav cannot be read; never transcribe numbers
+  from memory.
