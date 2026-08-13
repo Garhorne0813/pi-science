@@ -7,6 +7,7 @@ export interface CellResult {
   stdout: string;
   result: string | null;
   error: string | null;
+  execution_id?: string;
 }
 
 export interface KernelCapabilities {

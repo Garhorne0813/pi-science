@@ -21,7 +21,8 @@ venv/
 /implementation_docs/
 .pi-science/sessions/
 .pi-science/provenance.jsonl
-.pi-science/runs.jsonl
+.pi-science/execution-events-v1.jsonl
+.pi-science/executions/
 .pi-science/research-records-v2.jsonl
 .pi-science/research-sessions/
 .pi-science/solutions/

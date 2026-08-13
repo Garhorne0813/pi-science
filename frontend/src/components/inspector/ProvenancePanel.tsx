@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Loader2, MessageSquare, Package, RotateCcw, Terminal } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import type { ProvenanceEnvironment, ProvenanceRecord, RunRecord } from "../../types/thread";
+import type { ExecutionRecord, ProvenanceEnvironment, ProvenanceRecord } from "../../types/thread";
 import { listProvenance, readEnvLockfile } from "@/lib/provenance";
 import { listRuns, reproduceRunPrompt } from "@/lib/runs";
 import { useRuntimeStore } from "@/lib/agent-runtime";
@@ -66,8 +66,8 @@ export function ProvenancePanel({ path, language, cwd: cwdOverride }: { path: st
   const cwd = cwdOverride || runtimeCwd;
   const [records, setRecords] = useState<ProvenanceRecord[] | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
-  // Runs a version can be produced by, keyed by runId — links a file to its recipe.
-  const [runsById, setRunsById] = useState<Map<string, RunRecord>>(new Map());
+  // Executions a version can be produced by, keyed by execution id.
+  const [runsById, setRunsById] = useState<Map<string, ExecutionRecord>>(new Map());
   // The package lockfile currently shown, keyed by its content hash.
   const [lockfile, setLockfile] = useState<{ hash: string; text: string | null } | null>(null);
   const navigate = useNavigate();
@@ -91,7 +91,7 @@ export function ProvenancePanel({ path, language, cwd: cwdOverride }: { path: st
   // produced by a run, reproduce the RUN (re-run its command, compare outputs);
   // for an authored file, reproduce its recorded code.
   const reproduce = (r: ProvenanceRecord) => {
-    const run = r.runId ? runsById.get(r.runId) : undefined;
+    const run = r.executionId ? runsById.get(r.executionId) : undefined;
     setComposerDraft(run ? reproduceRunPrompt(run) : reproducePrompt(r));
     navigate(
       r.sessionId
@@ -108,10 +108,10 @@ export function ProvenancePanel({ path, language, cwd: cwdOverride }: { path: st
       setRecords(r); // backend returns newest first
       setExpanded(r.length > 0 ? r[0].version : null);
       // Load the runs any of these versions were produced by, for the recipe.
-      if (r.some((rec) => rec.runId)) {
+      if (r.some((rec) => rec.executionId)) {
         void listRuns(cwd).then((runs) => {
           if (controller.signal.aborted) return;
-          setRunsById(new Map(runs.map((run) => [run.runId, run])));
+          setRunsById(new Map(runs.map((run) => [run.execution_id, run])));
         });
       }
     });
@@ -194,12 +194,12 @@ export function ProvenancePanel({ path, language, cwd: cwdOverride }: { path: st
                   )}
                   {r.log && <span className="truncate">{r.log}</span>}
                   <span className="flex-1" />
-                  {(r.content || (r.runId && runsById.has(r.runId))) && (
+                  {(r.content || (r.executionId && runsById.has(r.executionId))) && (
                     <button
                       className="flex items-center gap-1 text-link hover:underline"
                       onClick={() => reproduce(r)}
                       title={
-                        r.runId
+                        r.executionId
                           ? t("provenance.reproduceRunTitle")
                           : t("provenance.reproduceVersionTitle")
                       }
@@ -237,22 +237,22 @@ export function ProvenancePanel({ path, language, cwd: cwdOverride }: { path: st
                   <CodeViewer code={r.content} language={language} />
                 ) : r.diff ? (
                   <DiffView diff={r.diff} className="max-h-80 overflow-y-auto" />
-                ) : r.runId ? (
+                ) : r.executionId ? (
                   <div className="flex items-start gap-2 rounded-input border border-border bg-surface-2 px-2.5 py-2 text-xs text-muted">
                     <Terminal size={13} className="mt-0.5 shrink-0" />
                     <span>
                       {t("provenance.producedByRunPrefix")}{" "}
                       <button
                         className="font-mono text-link hover:underline"
-                        onClick={() => navigate(`${workspaceRoute}/runs?run=${encodeURIComponent(r.runId!)}`)}
+                        onClick={() => navigate(`${workspaceRoute}/runs?execution=${encodeURIComponent(r.executionId!)}`)}
                         title={t("provenance.openRunTitle")}
                       >
-                        {r.runId}
+                        {r.executionId}
                       </button>
-                      {runsById.get(r.runId) && (
+                      {runsById.get(r.executionId) && (
                         <>
                           {t("provenance.commandSeparator")}
-                          <span className="font-mono text-text">{runsById.get(r.runId)!.command}</span>
+                          <span className="font-mono text-text">{runsById.get(r.executionId)!.request.command?.join(" ") ?? runsById.get(r.executionId)!.request.tool ?? r.executionId}</span>
                         </>
                       )}
                       {t("provenance.producedByRunSuffix")}

@@ -5,6 +5,7 @@ import { readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { metadataRoot, readJson, withFileWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
 import { defaultPythonExecutable, WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
+import { executionIdFor, executionRepository, type ExecutionRepository } from "../executions/execution-repository.js";
 
 export type JobStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled" | "timed_out";
 export interface JobRequirement { cpu?: number; memory_mb?: number; gpu?: boolean; runtime?: string; packages?: string[]; timeout_seconds?: number; [key: string]: unknown }
@@ -12,7 +13,7 @@ export type JobProcessIdentity = { kind: "linux-proc-start-ticks"; value: string
 export type JobOwnerProcessIdentity = { kind: "linux-proc-start-ticks" | "ps-lstart-utc"; platform: NodeJS.Platform; value: string };
 export interface JobChildIdentity { pid: number; process_identity: JobProcessIdentity | null; process_group: boolean; platform: NodeJS.Platform; ownership_generation: number; ownership_token: string }
 export interface JobOwnership { instance_id: string; pid: number; process_started_at: string; process_identity?: JobOwnerProcessIdentity; generation: number; token: string; heartbeat_at: string; lease_expires_at: string; child?: JobChildIdentity }
-export interface JobRecord { job_id: string; command: string[]; cwd: string; execution_cwd?: string; surface: string; status: JobStatus; created_at: string; started_at?: string; ended_at?: string; return_code?: number | null; stdout: string; stderr: string; artifact_ids: string[]; environment: Record<string, unknown>; requirement: JobRequirement; ownership?: JobOwnership }
+export interface JobRecord { job_id: string; execution_id?: string; command: string[]; cwd: string; execution_cwd?: string; surface: string; status: JobStatus; created_at: string; started_at?: string; ended_at?: string; return_code?: number | null; stdout: string; stderr: string; artifact_ids: string[]; environment: Record<string, unknown>; requirement: JobRequirement; ownership?: JobOwnership }
 export type PublicJobRecord = Omit<JobRecord, "ownership">;
 export function publicJobRecord(record: JobRecord): PublicJobRecord { const { ownership: _ownership, ...publicRecord } = record; return publicRecord; }
 
@@ -42,7 +43,7 @@ export class JobCoordinator {
   private readonly leaseMs: number;
   private readonly heartbeatMs: number;
 
-  constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService(), private readonly hooks: JobCoordinatorHooks = {}) {
+  constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService(), private readonly hooks: JobCoordinatorHooks = {}, private readonly executions: Pick<ExecutionRepository, "start" | "finish"> = executionRepository) {
     const platform = hooks.platform ?? process.platform;
     this.processIdentity = hooks.ownerProcessIdentity ? hooks.ownerProcessIdentity(process.pid, platform) : ownerProcessIdentity(process.pid, platform);
     this.processStartedAt = this.processIdentity?.value ?? new Date(Date.now() - process.uptime() * 1000).toISOString();
@@ -79,9 +80,25 @@ export class JobCoordinator {
     if (isAbsolute(executionRelative) || executionRelative === ".." || executionRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) throw new Error("execution cwd escapes the workspace");
     const now = this.now();
     const ownership: JobOwnership = { instance_id: this.instanceId, pid: process.pid, process_started_at: this.processStartedAt, ...(this.processIdentity ? { process_identity: this.processIdentity } : {}), generation: 1, token: randomUUID(), heartbeat_at: new Date(now).toISOString(), lease_expires_at: new Date(now + this.leaseMs).toISOString() };
-    const record: JobRecord = { job_id: `job_${randomUUID().replaceAll("-", "").slice(0, 16)}`, command, cwd, ...(executionCwd !== resolve(cwd) ? { execution_cwd: executionCwd } : {}), surface, status: "pending", created_at: new Date(now).toISOString(), stdout: "", stderr: "", artifact_ids: [], environment: { platform: process.platform, node: process.version, virtual_env: environment.VIRTUAL_ENV, npm_prefix: environment.npm_config_prefix }, requirement, ownership };
+    const jobId = `job_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+    const executionId = executionIdFor("job", resolve(cwd), jobId);
+    const record: JobRecord = { job_id: jobId, execution_id: executionId, command, cwd, ...(executionCwd !== resolve(cwd) ? { execution_cwd: executionCwd } : {}), surface, status: "pending", created_at: new Date(now).toISOString(), stdout: "", stderr: "", artifact_ids: [], environment: { platform: process.platform, node: process.version, virtual_env: environment.VIRTUAL_ENV, npm_prefix: environment.npm_config_prefix }, requirement, ownership };
     LIVE_JOB_OWNERS.add(ownership.token);
-    try { await this.save(record); } catch (error) { LIVE_JOB_OWNERS.delete(ownership.token); throw error; }
+    await this.executions.start(cwd, {
+      execution_id: executionId,
+      kind: "job",
+      surface: executionSurface(surface),
+      producer: "node-job-coordinator",
+      created_at: record.created_at,
+      correlation: correlationFrom(body, jobId),
+      request: { command: redactCommand(command), cwd: record.execution_cwd ?? record.cwd, requirement },
+      runtime: record.environment,
+    });
+    try { await this.save(record); } catch (error) {
+      LIVE_JOB_OWNERS.delete(ownership.token);
+      await this.executions.finish(cwd, executionId, { status: "failed", producer: "node-job-coordinator", result: { error: String(error) } }).catch(() => undefined);
+      throw error;
+    }
     const task = this.run(record, environment);
     this.jobs.set(record.job_id, task);
     void task.catch(() => undefined).finally(() => { if (this.jobs.get(record.job_id) === task) this.jobs.delete(record.job_id); });
@@ -110,7 +127,7 @@ export class JobCoordinator {
     const child = this.children.get(id);
     if (child) terminate(child);
     const path = this.jobPath(cwd, id);
-    return withFileWriteLock(path, async () => {
+    const cancelled = await withFileWriteLock(path, async () => {
       const record = await readJson<JobRecord | null>(path, null);
       if (!record) { this.cancelled.delete(id); return null; }
       if (isTerminal(record.status)) { if (record.status !== "cancelled") this.cancelled.delete(id); return record; }
@@ -122,6 +139,8 @@ export class JobCoordinator {
       record.status = "cancelled"; record.ended_at = new Date(this.now()).toISOString(); await writeJsonAtomic(path, record);
       return record;
     });
+    if (cancelled) await this.finishExecution(cancelled);
+    return cancelled;
   }
   async shutdown(): Promise<void> {
     for (const child of this.children.values()) terminate(child);
@@ -159,7 +178,7 @@ export class JobCoordinator {
   private async healOrphan(record: JobRecord): Promise<JobRecord> {
     if (!isNonterminal(record.status) || this.jobs.has(record.job_id)) return record;
     const path = this.jobPath(record.cwd, record.job_id);
-    return withFileWriteLock(path, async () => {
+    const healed = await withFileWriteLock(path, async () => {
       const current = await readJson<JobRecord | null>(path, null);
       if (!current || !isNonterminal(current.status) || this.jobs.has(current.job_id)) return current ?? record;
       const now = this.now();
@@ -174,6 +193,8 @@ export class JobCoordinator {
       await writeJsonAtomic(path, current);
       return current;
     });
+    if (isTerminal(healed.status)) await this.finishExecution(healed);
+    return healed;
   }
   private startHeartbeat(record: JobRecord): void {
     if (!record.ownership || this.heartbeats.has(record.job_id)) return;
@@ -203,7 +224,7 @@ export class JobCoordinator {
   }
   private async run(record: JobRecord, environment: NodeJS.ProcessEnv): Promise<void> {
     const path = this.jobPath(record.cwd, record.job_id);
-    if (this.cancelled.has(record.job_id)) { record.status = "cancelled"; record.ended_at = new Date(this.now()).toISOString(); await this.save(record); this.cancelled.delete(record.job_id); LIVE_JOB_OWNERS.delete(record.ownership?.token ?? ""); return; }
+    if (this.cancelled.has(record.job_id)) { record.status = "cancelled"; record.ended_at = new Date(this.now()).toISOString(); await this.save(record); await this.finishExecution(record); this.cancelled.delete(record.job_id); LIVE_JOB_OWNERS.delete(record.ownership?.token ?? ""); return; }
     let enteredRunning = false;
     try { enteredRunning = await withFileWriteLock(path, async () => {
       const current = await readJson<JobRecord | null>(path, null);
@@ -274,8 +295,56 @@ export class JobCoordinator {
         LIVE_JOB_OWNERS.delete(record.ownership?.token ?? "");
         this.cancelled.delete(record.job_id);
       }
+      await this.finishExecution(record);
     }
   }
+
+  private async finishExecution(record: JobRecord): Promise<void> {
+    if (!isTerminal(record.status)) return;
+    const executionId = record.execution_id ?? executionIdFor("job", resolve(record.cwd), record.job_id);
+    const status = record.status === "succeeded" ? "succeeded"
+      : record.status === "cancelled" ? "cancelled"
+        : record.status === "timed_out" ? "timed_out"
+          : "failed";
+    await this.executions.finish(record.cwd, executionId, {
+      status,
+      producer: "node-job-coordinator",
+      ended_at: record.ended_at,
+      result: {
+        exit_code: record.return_code ?? null,
+        stdout_preview: record.stdout.slice(-64_000),
+        stderr_preview: record.stderr.slice(-64_000),
+      },
+    }).catch(() => undefined);
+  }
+}
+
+function executionSurface(surface: string): "local" | "ssh" | "hpc" | "research" {
+  if (surface === "ssh" || surface.startsWith("ssh:")) return "ssh";
+  if (surface === "hpc" || surface.startsWith("hpc:")) return "hpc";
+  if (surface.startsWith("research")) return "research";
+  return "local";
+}
+
+function correlationFrom(body: Record<string, unknown>, jobId: string) {
+  const result: Record<string, string> = { job_id: jobId };
+  for (const key of ["session_id", "turn_id", "message_id", "run_id", "operation_id", "loop_id", "candidate_id", "parent_execution_id", "request_id"] as const) {
+    if (typeof body[key] === "string" && body[key]) result[key] = body[key];
+  }
+  return result;
+}
+
+function redactCommand(command: string[]): string[] {
+  const result = command.slice();
+  for (let index = 0; index < result.length; index += 1) {
+    const value = result[index] ?? "";
+    if (/^--?(?:api[-_]?key|token|secret|password|authorization|credential)$/i.test(value) && index + 1 < result.length) {
+      result[index + 1] = "[redacted]";
+    } else if (/^--?(?:api[-_]?key|token|secret|password|authorization|credential)=/i.test(value)) {
+      result[index] = `${value.slice(0, value.indexOf("=") + 1)}[redacted]`;
+    }
+  }
+  return result;
 }
 
 /** Asks the whole job process group to stop, then forces it after a short grace. */

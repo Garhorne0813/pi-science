@@ -11,10 +11,10 @@ afterEach(() => {
 
 describe("notebook runtime", () => {
   it("executes a cell through one notebook-scoped interface", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, stdout: "42\n", result: null, error: null }), { status: 200, headers: JSON_HEADERS }));
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, stdout: "42\n", result: null, error: null, execution_id: "exec_cell" }), { status: 200, headers: JSON_HEADERS }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(notebookRuntime.execute("nb 1", "/tmp/lab", "python", "print(42)")).resolves.toMatchObject({ ok: true, stdout: "42\n" });
+    await expect(notebookRuntime.execute("nb 1", "/tmp/lab", "python", "print(42)")).resolves.toMatchObject({ ok: true, stdout: "42\n", execution_id: "exec_cell" });
     expect(fetchMock).toHaveBeenCalledWith("/api/kernels/execute?cwd=%2Ftmp%2Flab", expect.objectContaining({ method: "POST" }));
     expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toEqual({ language: "python", code: "print(42)", notebook_id: "nb 1" });
   });

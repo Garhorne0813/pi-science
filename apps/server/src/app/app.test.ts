@@ -24,6 +24,9 @@ async function startUpstream() {
   });
   upstream.post("/api/kernels/execute", async (request) => {
     const cwd = String((request.query as { cwd?: unknown }).cwd ?? "");
+    const body = request.body as { code?: string };
+    if (body.code === "write-output") await writeFile(join(cwd, "cell-output.csv"), "value\n42\n", "utf8");
+    if (body.code === "kernel-error") return { ok: false, stdout: "before failure\n", result: null, error: "cell failed" };
     try { await access(join(cwd, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python")); return { isolated: true }; }
     catch { return { isolated: false }; }
   });
@@ -95,7 +98,67 @@ describe("Node control plane", () => {
     const response = await app.inject({ method: "POST", url: `/api/kernels/execute?cwd=${encodeURIComponent(workspace)}`, payload: { language: "python", code: "1+1" } });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ isolated: true });
+    expect(response.json()).toMatchObject({ isolated: true, execution_id: expect.stringMatching(/^exec_/) });
+    const executions = await app.inject({ method: "GET", url: `/api/executions?cwd=${encodeURIComponent(workspace)}` });
+    expect(executions.json().executions).toEqual([
+      expect.objectContaining({
+        execution_id: response.json().execution_id,
+        kind: "kernel_cell",
+        surface: "python",
+        status: "succeeded",
+        request: expect.objectContaining({ code: "1+1", notebook_id: "default" }),
+      }),
+    ]);
+    await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }, 30_000);
+
+  it("detects files written by a kernel cell as execution evidence", async () => {
+    const workspace = join(tmpdir(), `pi-science-kernel-output-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    const app = buildApp(config(await startUpstream()));
+    openApps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/kernels/execute?cwd=${encodeURIComponent(workspace)}`,
+      payload: { language: "r", code: "write-output", notebook_id: "analysis" },
+    });
+    const executionId = response.json().execution_id;
+    const execution = await app.inject({ method: "GET", url: `/api/executions/${executionId}?cwd=${encodeURIComponent(workspace)}` });
+
+    expect(response.statusCode).toBe(200);
+    expect(execution.json()).toMatchObject({
+      kind: "kernel_cell",
+      surface: "r",
+      status: "succeeded",
+      request: { notebook_id: "analysis", code: "write-output" },
+      files: { written: [{ path: "cell-output.csv", detection: "snapshot" }] },
+    });
+    await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }, 30_000);
+
+  it("records a kernel-level cell error as a failed execution", async () => {
+    const workspace = join(tmpdir(), `pi-science-kernel-failure-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    const app = buildApp(config(await startUpstream()));
+    openApps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/kernels/execute?cwd=${encodeURIComponent(workspace)}`,
+      payload: { language: "python", code: "kernel-error" },
+    });
+    const execution = await app.inject({
+      method: "GET",
+      url: `/api/executions/${response.json().execution_id}?cwd=${encodeURIComponent(workspace)}`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ ok: false, error: "cell failed" });
+    expect(execution.json()).toMatchObject({
+      status: "failed",
+      result: { error: "cell failed", stdout_preview: "before failure\n" },
+    });
     await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }, 30_000);
 
