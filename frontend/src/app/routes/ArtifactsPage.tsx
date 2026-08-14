@@ -5,6 +5,7 @@ import { cn } from "../../lib/ui";
 import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "../../components/layout/WorkspacePage";
 import { useTranslation } from "react-i18next";
 import { listArtifacts, groupArtifacts, type ArtifactLibraryEntry } from "../../lib/artifacts/artifact-library";
+import type { ArtifactClassification } from "../../lib/artifacts/artifact-lineage";
 import { useRequiredWorkspaceCwd } from "../../lib/workspace";
 
 export function artifactLibraryKey(cwd: string) {
@@ -49,7 +50,7 @@ export function ArtifactsPage() {
             onClick={() => setFilter(value)}
             className={cn("rounded-full px-2.5 py-1", filter === value ? "bg-accent/15 text-accent" : "text-muted hover:bg-surface-2")}
           >
-            {t("artifacts.filter." + value)}
+            {classificationFilterLabel(value, t)}
           </button>
         ))}
       </div>
@@ -75,11 +76,11 @@ function ArtifactEntryRow({ entry, expanded, onToggle }: { entry: ArtifactLibrar
         <GitBranch size={14} className="shrink-0 text-accent" />
         <span className="truncate font-mono text-xs">{latest.path}</span>
         <span className="shrink-0 rounded bg-surface-2 px-1.5 py-px text-[10px] text-muted">{versions.length} v</span>
-        <span className={cn("shrink-0 rounded bg-surface-2 px-1.5 py-px text-[10px]", classificationTone(latest.classification))}>{t("artifacts.classification." + latest.classification)}</span>
+        <span className={cn("shrink-0 rounded bg-surface-2 px-1.5 py-px text-[10px]", classificationTone(latest.classification))}>{artifactClassificationLabel(latest.classification, t)}</span>
         {entry.latestReview && (
           <span className={cn("shrink-0 rounded px-1.5 py-px text-[10px]", entry.latestReview.status === "passed" ? "bg-ok/15 text-ok" : "bg-warn/15 text-warn")}>
             {entry.latestReview.status === "passed" ? <Check size={10} className="inline" /> : <AlertTriangle size={10} className="inline" />}
-            {t("artifacts.review." + entry.latestReview.status)}
+            {reviewLabel(entry.latestReview.status, t)}
           </span>
         )}
       </button>
@@ -103,6 +104,31 @@ function ArtifactEntryRow({ entry, expanded, onToggle }: { entry: ArtifactLibrar
 
 function classificationTone(classification: string): string {
   return classification === "deliverable" ? "text-ok" : classification === "intermediate" ? "text-accent" : "text-muted";
+}
+
+function classificationFilterLabel(value: ClassificationFilter, t: (key: string) => string): string {
+  switch (value) {
+    case "all": return t("artifacts.filter.all");
+    case "deliverable": return t("artifacts.filter.deliverable");
+    case "intermediate": return t("artifacts.filter.intermediate");
+    case "unspecified": return t("artifacts.filter.unspecified");
+  }
+}
+
+function artifactClassificationLabel(value: ArtifactClassification, t: (key: string) => string): string {
+  switch (value) {
+    case "deliverable": return t("artifacts.classification.deliverable");
+    case "intermediate": return t("artifacts.classification.intermediate");
+    case "unspecified": return t("artifacts.classification.unspecified");
+  }
+}
+
+function reviewLabel(status: "passed" | "failed" | "needs_work", t: (key: string) => string): string {
+  switch (status) {
+    case "passed": return t("artifacts.review.passed");
+    case "failed": return t("artifacts.review.failed");
+    case "needs_work": return t("artifacts.review.needs_work");
+  }
 }
 
 function formatBytes(size: number): string {

@@ -205,11 +205,11 @@ export const artifactManifestV2Schema = z.object({
 export const artifactLineageResponseSchema = z.object({
   artifact: artifactManifestV2Schema,
   upstream: z.array(z.object({
-    kind: z.enum(["consumes", "supersedes"]),
+    kind: z.enum(["consumes", "supersedes", "derived_from"]),
     artifact: artifactManifestV2Schema,
   })).default([]),
   downstream: z.array(z.object({
-    kind: z.enum(["consumed_by", "superseded_by"]),
+    kind: z.enum(["consumed_by", "superseded_by", "derived"]),
     artifact: artifactManifestV2Schema,
   })).default([]),
   unresolved_inputs: z.array(z.string()).default([]),

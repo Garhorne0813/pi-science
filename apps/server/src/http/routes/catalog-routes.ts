@@ -408,11 +408,19 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
     const cwd = await ws(request, reply);
     if (!cwd) return;
     if (!remoteJobs) return reply.code(503).send({ error: "Remote dispatch is not configured" });
-    const body = (request.body ?? {}) as { machine_label?: string; command?: unknown; output_glob?: string };
+    const body = (request.body ?? {}) as { machine_label?: string; command?: unknown; output_glob?: unknown };
     if (!body.machine_label) return reply.code(422).send({ error: "machine_label is required" });
-    if (!Array.isArray(body.command) || body.command.length === 0) return reply.code(422).send({ error: "command must be a non-empty array" });
-    const result = await remoteJobs.submit(cwd, { machine_label: String(body.machine_label), command: body.command.map(String), output_glob: body.output_glob === undefined ? undefined : String(body.output_glob) });
-    if ("error" in result) return reply.code(result.code === "machine_not_found" ? 404 : 502).send({ error: result.error });
+    const command = typeof body.command === "string"
+      ? body.command
+      : Array.isArray(body.command)
+        ? body.command.map(String)
+        : null;
+    if (command === null || (typeof command === "string" ? !command.trim() : command.length === 0)) return reply.code(422).send({ error: "command must be a non-empty string or array" });
+    const result = await remoteJobs.submit(cwd, { machine_label: String(body.machine_label), command, output_glob: body.output_glob === undefined ? undefined : String(body.output_glob) });
+    if ("error" in result) {
+      const status = result.code === "machine_not_found" ? 404 : result.code === "invalid_command" || result.code === "invalid_output_glob" ? 422 : 502;
+      return reply.code(status).send({ error: result.error });
+    }
     return { ok: true, job: result };
   });
   app.get("/api/compute/jobs", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; if (!remoteJobs) return reply.code(503).send({ error: "Remote dispatch is not configured" }); return { jobs: await remoteJobs.list(cwd) }; });

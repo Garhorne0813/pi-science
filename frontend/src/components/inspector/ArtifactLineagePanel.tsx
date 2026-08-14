@@ -52,10 +52,10 @@ export function ArtifactLineagePanel({ path, cwd: cwdOverride, artifactId, versi
       </div>
 
       {(artifact.reviews?.length ?? 0) > 0 && (
-        <LineageGroup title="Review">
+        <LineageGroup title={t("lineage.review")}>
           {artifact.reviews!.map((review) => (
             <div key={review.review_id} className="flex items-center gap-1.5 text-[11px]">
-              <span className={reviewTone(review.status)}>{reviewStatusLabel(review.status)}</span>
+              <span className={reviewTone(review.status)}>{reviewStatusLabel(review.status, t)}</span>
               <span className="truncate text-muted">{review.actor}</span>
               <span className="ml-auto shrink-0 text-[10px] text-muted opacity-70" title={review.at}>
                 {new Date(review.at).toLocaleString()}
@@ -68,7 +68,7 @@ export function ArtifactLineagePanel({ path, cwd: cwdOverride, artifactId, versi
       {upstream.length > 0 && (
         <LineageGroup title={t("lineage.inputs")}>
           {upstream.map((entry) => (
-            <LineageRow key={`${entry.kind}:${entry.artifact.artifact_id}:${entry.artifact.version}`} path={entry.artifact.path} version={entry.artifact.version} tone={entry.kind === "supersedes" ? "warn" : "default"} title={entry.kind === "supersedes" ? t("lineage.supersedes") : t("lineage.consumes")} onClick={() => openVersionedFile(entry.artifact)} />
+            <LineageRow key={`${entry.kind}:${entry.artifact.artifact_id}:${entry.artifact.version}`} path={entry.artifact.path} version={entry.artifact.version} tone={entry.kind === "supersedes" ? "warn" : "default"} title={upstreamTitle(entry.kind, t)} onClick={() => openVersionedFile(entry.artifact)} />
           ))}
         </LineageGroup>
       )}
@@ -76,7 +76,7 @@ export function ArtifactLineagePanel({ path, cwd: cwdOverride, artifactId, versi
       {downstream.length > 0 && (
         <LineageGroup title={t("lineage.dependents")}>
           {downstream.map((entry) => (
-            <LineageRow key={`${entry.kind}:${entry.artifact.artifact_id}:${entry.artifact.version}`} path={entry.artifact.path} version={entry.artifact.version} tone={entry.kind === "superseded_by" ? "warn" : "default"} title={entry.kind === "superseded_by" ? t("lineage.supersededBy") : t("lineage.consumedBy")} onClick={() => openVersionedFile(entry.artifact)} />
+            <LineageRow key={`${entry.kind}:${entry.artifact.artifact_id}:${entry.artifact.version}`} path={entry.artifact.path} version={entry.artifact.version} tone={entry.kind === "superseded_by" ? "warn" : "default"} title={downstreamTitle(entry.kind, t)} onClick={() => openVersionedFile(entry.artifact)} />
           ))}
         </LineageGroup>
       )}
@@ -94,12 +94,32 @@ export function ArtifactLineagePanel({ path, cwd: cwdOverride, artifactId, versi
   );
 }
 
-function reviewStatusLabel(status: "passed" | "failed" | "needs_work"): string {
-  return status === "passed" ? "passed" : status === "failed" ? "failed" : "needs work";
+function reviewStatusLabel(status: "passed" | "failed" | "needs_work", t: (key: string) => string): string {
+  switch (status) {
+    case "passed": return t("lineage.reviewStatus.passed");
+    case "failed": return t("lineage.reviewStatus.failed");
+    case "needs_work": return t("lineage.reviewStatus.needs_work");
+  }
 }
 
 function reviewTone(status: "passed" | "failed" | "needs_work"): string {
   return status === "passed" ? "text-ok" : status === "failed" ? "text-error" : "text-warn";
+}
+
+function upstreamTitle(kind: "consumes" | "supersedes" | "derived_from", t: (key: string) => string): string {
+  switch (kind) {
+    case "consumes": return t("lineage.consumes");
+    case "supersedes": return t("lineage.supersedes");
+    case "derived_from": return t("lineage.derivedFrom");
+  }
+}
+
+function downstreamTitle(kind: "consumed_by" | "superseded_by" | "derived", t: (key: string) => string): string {
+  switch (kind) {
+    case "consumed_by": return t("lineage.consumedBy");
+    case "superseded_by": return t("lineage.supersededBy");
+    case "derived": return t("lineage.derived");
+  }
 }
 
 function LineageGroup({ title, children }: { title: string; children: React.ReactNode }) {

@@ -43,6 +43,8 @@ describe("RemoteJobCoordinator", () => {
     const staged = await readFile(join(cwd, ".pi-science", "staging", (job as RemoteJobRecord).job_id, "run.sh"), "utf8");
     expect(staged).toContain("python");
     expect(staged).toContain("train.py");
+    expect(staged).toMatch(/\ncd ~\/\.pi-jobs\/[a-f0-9]+\npython train\.py\n/);
+    expect(staged).toContain("exit_code=$?");
     // Record persisted.
     const record = await coordinator.get(cwd, (job as RemoteJobRecord).job_id);
     expect(record?.status).toBe("running");
@@ -80,6 +82,30 @@ describe("RemoteJobCoordinator", () => {
     expect(refreshed?.ended_at).not.toBeNull();
   });
 
+  it("marks a non-zero remote exit as failed", async () => {
+    const machine: ComputeMachine = { label: "gpu", host: "h" };
+    const cwd = await workspace(machine);
+    const executor = stubExecutor(async (_m, cmd) => {
+      if (cmd.includes("kill -0")) return ok("failed\n");
+      if (cmd.includes("cat ")) return ok("7\n");
+      return ok("");
+    });
+    const coordinator = new RemoteJobCoordinator(executor, vi.fn(async () => ({ artifact_id: "a" })));
+    const job = await coordinator.submit(cwd, { machine_label: "gpu", command: "python train.py" });
+
+    const refreshed = await coordinator.refresh(cwd, (job as RemoteJobRecord).job_id);
+    expect(refreshed).toMatchObject({ status: "failed", exit_code: 7 });
+  });
+
+  it("rejects shell operators in output globs", async () => {
+    const machine: ComputeMachine = { label: "gpu", host: "h" };
+    const cwd = await workspace(machine);
+    const coordinator = new RemoteJobCoordinator(stubExecutor(async () => ok("")), vi.fn(async () => ({ artifact_id: "a" })));
+
+    const result = await coordinator.submit(cwd, { machine_label: "gpu", command: "echo ok", output_glob: "*; rm -rf /" });
+    expect(result).toMatchObject({ code: "invalid_output_glob" });
+  });
+
   it("cancels a running job and marks it cancelled", async () => {
     const machine: ComputeMachine = { label: "gpu", host: "h" };
     const cwd = await workspace(machine);
@@ -99,12 +125,16 @@ describe("RemoteJobCoordinator", () => {
 
   it("harvests declared outputs back and publishes them as artifacts", async () => {
     const machine: ComputeMachine = { label: "gpu", host: "h" };
+    const fetchedCommands: string[] = [];
     const cwd = await workspace(machine);
     const executor = stubExecutor(async (_m, cmd) => {
       if (cmd.includes("kill -0")) return ok("exited\n");
       if (cmd.includes("for f in")) return ok("results.csv 8\noutput.log 500\nexit.code 2\n");
       if (cmd.includes("exit.code")) return ok("0\n");
-      if (cmd.includes("base64")) return ok(Buffer.from("a,b\n1,2\n").toString("base64"));
+      if (cmd.includes("base64")) {
+        fetchedCommands.push(cmd);
+        return ok(Buffer.from("a,b\n1,2\n").toString("base64"));
+      }
       if (cmd.includes("cat > ")) return ok("88\n");
       return ok("");
     });
@@ -116,6 +146,7 @@ describe("RemoteJobCoordinator", () => {
     expect(harvested.files).toEqual(["results.csv"]);
     expect(harvested.artifact_ids).toEqual(["artifact-1"]);
     expect(publish).toHaveBeenCalledTimes(1);
+    expect(fetchedCommands[0]).toMatch(/base64 \"\$HOME\/\.pi-jobs\/\"[a-f0-9]+\"\/\"results\.csv$/);
     // The harvested file exists in the workspace.
     const content = await readFile(join(cwd, "results.csv"), "utf8");
     expect(content).toBe("a,b\n1,2\n");

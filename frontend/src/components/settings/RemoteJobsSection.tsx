@@ -2,7 +2,7 @@
  * submit a job to a configured machine, list jobs, refresh status, cancel,
  * and harvest outputs into the workspace as artifacts. */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Play, RefreshCw, X, Download, ChevronDown, ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { apiRequest } from "../../lib/client/api";
@@ -25,6 +25,8 @@ interface RemoteJobsSectionProps {
   machineLabels: string[];
 }
 
+type RemoteJobAction = "cancel" | "harvest";
+
 export function RemoteJobsSection({ workspaceCwd, machineLabels }: RemoteJobsSectionProps) {
   const { t } = useTranslation();
   const [command, setCommand] = useState("");
@@ -37,6 +39,7 @@ export function RemoteJobsSection({ workspaceCwd, machineLabels }: RemoteJobsSec
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [busyJob, setBusyJob] = useState<string | null>(null);
+  const loadGeneration = useRef(0);
 
   useEffect(() => {
     if (machineLabels.length > 0 && !machine) setMachine(machineLabels[0]!);
@@ -44,10 +47,22 @@ export function RemoteJobsSection({ workspaceCwd, machineLabels }: RemoteJobsSec
 
   const load = useCallback(async () => {
     if (!workspaceCwd) return;
+    const generation = ++loadGeneration.current;
     setLoading(true);
     try {
       const data = await apiRequest<{ jobs?: RemoteJob[] }>(`/api/compute/jobs?cwd=${encodeURIComponent(workspaceCwd)}`);
-      setJobs(data.jobs ?? []);
+      const listed = data.jobs ?? [];
+      const active = listed.filter((job) => job.status === "pending" || job.status === "running" || job.status === "unknown");
+      const refreshed = await Promise.all(active.map(async (job) => {
+        try {
+          return await apiRequest<RemoteJob>(`/api/compute/jobs/${encodeURIComponent(job.job_id)}?cwd=${encodeURIComponent(workspaceCwd)}`);
+        } catch {
+          return job;
+        }
+      }));
+      if (generation !== loadGeneration.current) return;
+      const byId = new Map(refreshed.map((job) => [job.job_id, job]));
+      setJobs(listed.map((job) => byId.get(job.job_id) ?? job));
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "load failed");
@@ -58,6 +73,12 @@ export function RemoteJobsSection({ workspaceCwd, machineLabels }: RemoteJobsSec
 
   useEffect(() => { void load(); }, [load]);
 
+  useEffect(() => {
+    if (!workspaceCwd) return;
+    const timer = window.setInterval(() => { void load(); }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [load, workspaceCwd]);
+
   const submit = async () => {
     if (!workspaceCwd || !command.trim() || !machine) return;
     setSubmitting(true);
@@ -66,7 +87,7 @@ export function RemoteJobsSection({ workspaceCwd, machineLabels }: RemoteJobsSec
       await apiRequest(`/api/compute/run?cwd=${encodeURIComponent(workspaceCwd)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ machine_label: machine, command: command.trim().split(/\s+/), output_glob: outputGlob.trim() || undefined }),
+        body: JSON.stringify({ machine_label: machine, command: command.trim(), output_glob: outputGlob.trim() || undefined }),
       });
       setCommand("");
       await load();
@@ -77,7 +98,7 @@ export function RemoteJobsSection({ workspaceCwd, machineLabels }: RemoteJobsSec
     }
   };
 
-  const act = async (jobId: string, action: string) => {
+  const act = async (jobId: string, action: RemoteJobAction) => {
     if (!workspaceCwd) return;
     setBusyJob(jobId);
     setError(null);
@@ -100,13 +121,13 @@ export function RemoteJobsSection({ workspaceCwd, machineLabels }: RemoteJobsSec
         <select value={machine} onChange={(event) => setMachine(event.target.value)} className="rounded-md border border-border bg-surface-1 px-2 py-1 text-xs">
           {machineLabels.map((label) => <option key={label} value={label}>{label}</option>)}
         </select>
-        <input value={command} onChange={(event) => setCommand(event.target.value)} placeholder={t("settings.computePage.commandPlaceholder")} className="min-w-[260px] flex-1 rounded-md border border-border bg-surface-1 px-2 py-1 text-xs" />
-        <input value={outputGlob} onChange={(event) => setOutputGlob(event.target.value)} title={t("settings.computePage.outputGlobTitle")} className="w-28 rounded-md border border-border bg-surface-1 px-2 py-1 text-xs" />
-        <button onClick={submit} disabled={submitting || !command.trim()} className="inline-flex items-center gap-1 rounded-md bg-accent/15 px-2.5 py-1 text-xs text-accent hover:bg-accent/25 disabled:opacity-50">
+        <input value={command} onChange={(event) => setCommand(event.target.value)} placeholder={t("settings.computePage.commandPlaceholder")} aria-label={t("settings.computePage.commandPlaceholder")} className="min-w-[260px] flex-1 rounded-md border border-border bg-surface-1 px-2 py-1 text-xs" />
+        <input value={outputGlob} onChange={(event) => setOutputGlob(event.target.value)} title={t("settings.computePage.outputGlobTitle")} aria-label={t("settings.computePage.outputGlobTitle")} className="w-28 rounded-md border border-border bg-surface-1 px-2 py-1 text-xs" />
+        <button type="button" onClick={submit} disabled={submitting || !command.trim()} className="inline-flex items-center gap-1 rounded-md bg-accent/15 px-2.5 py-1 text-xs text-accent hover:bg-accent/25 disabled:opacity-50">
           {submitting ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
           {t("settings.computePage.submitJob")}
         </button>
-        <button onClick={() => void load()} className="inline-flex items-center gap-1 rounded-md bg-surface-2 px-2.5 py-1 text-xs text-muted" title={t("common.refresh")}>
+        <button type="button" onClick={() => void load()} className="inline-flex items-center gap-1 rounded-md bg-surface-2 px-2.5 py-1 text-xs text-muted" title={t("common.refresh")} aria-label={t("common.refresh")}>
           <RefreshCw size={11} />
         </button>
       </div>
@@ -117,7 +138,7 @@ export function RemoteJobsSection({ workspaceCwd, machineLabels }: RemoteJobsSec
         {jobs.map((job) => (
           <div key={job.job_id} className="rounded-md border border-border bg-surface-1/50 px-3 py-2">
             <div className="flex items-center gap-2 text-xs">
-              <button onClick={() => setExpanded((p) => ({ ...p, [job.job_id]: !p[job.job_id] }))} className="flex items-center gap-1 text-left">
+              <button type="button" onClick={() => setExpanded((p) => ({ ...p, [job.job_id]: !p[job.job_id] }))} className="flex items-center gap-1 text-left">
                 {expanded[job.job_id] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                 <span className="font-mono">{job.job_id.slice(0, 8)}</span>
               </button>
@@ -125,12 +146,12 @@ export function RemoteJobsSection({ workspaceCwd, machineLabels }: RemoteJobsSec
               <span className="truncate text-muted">{job.host} · {job.output_glob}</span>
               <span className="ml-auto flex shrink-0 items-center gap-1">
                 {(job.status === "running" || job.status === "pending") && (
-                  <button onClick={() => void act(job.job_id, "cancel")} disabled={busyJob === job.job_id} className="rounded bg-surface-2 px-1.5 py-px text-[10px] text-muted hover:bg-warn/15 hover:text-warn">
+                  <button type="button" onClick={() => void act(job.job_id, "cancel")} disabled={busyJob === job.job_id} aria-label={t("common.cancel")} className="rounded bg-surface-2 px-1.5 py-px text-[10px] text-muted hover:bg-warn/15 hover:text-warn">
                     <X size={10} />
                   </button>
                 )}
                 {(job.status === "succeeded" || job.status === "failed") && (
-                  <button onClick={() => void act(job.job_id, "harvest")} disabled={busyJob === job.job_id} className="rounded bg-surface-2 px-1.5 py-px text-[10px] text-muted hover:bg-accent/15 hover:text-accent" title={t("settings.computePage.harvest")}>
+                  <button type="button" onClick={() => void act(job.job_id, "harvest")} disabled={busyJob === job.job_id} aria-label={t("settings.computePage.harvest")} className="rounded bg-surface-2 px-1.5 py-px text-[10px] text-muted hover:bg-accent/15 hover:text-accent" title={t("settings.computePage.harvest")}>
                     <Download size={10} />
                   </button>
                 )}

@@ -19,6 +19,8 @@ export type ArtifactClassification = "intermediate" | "deliverable" | "unspecifi
 export interface ArtifactManifestV2 {
   schema_version: 2;
   artifact_id: string;
+  /** Stable identity across path changes; legacy manifests may omit it. */
+  logical_id?: string;
   version: number;
   path: string;
   kind: string;
@@ -27,6 +29,7 @@ export interface ArtifactManifestV2 {
   sha256: string;
   published_at: string;
   inputs: Array<ArtifactVersionRef | string>;
+  derived_from?: ArtifactVersionRef[];
   supersedes: ArtifactVersionRef | null;
   classification: ArtifactClassification;
   reviews?: Array<{ review_id: string; actor: string; status: "passed" | "failed" | "needs_work"; at: string }>;
@@ -37,8 +40,8 @@ export interface ArtifactManifestV2 {
 
 export interface ArtifactLineage {
   artifact: ArtifactManifestV2;
-  upstream: Array<{ kind: "consumes" | "supersedes"; artifact: ArtifactManifestV2 }>;
-  downstream: Array<{ kind: "consumed_by" | "superseded_by"; artifact: ArtifactManifestV2 }>;
+  upstream: Array<{ kind: "consumes" | "supersedes" | "derived_from"; artifact: ArtifactManifestV2 }>;
+  downstream: Array<{ kind: "consumed_by" | "superseded_by" | "derived"; artifact: ArtifactManifestV2 }>;
   unresolved_inputs: string[];
 }
 

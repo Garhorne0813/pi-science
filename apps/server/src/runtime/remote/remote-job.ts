@@ -5,7 +5,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { dirname, join } from "node:path";
 import { readJson, withFileWriteLock, workspaceFile, writeJsonAtomic } from "../../storage/persistence.js";
 import { resolveWorkspaceFile } from "../../security/workspace-security.js";
 import type { ComputeMachine, SshExecutor } from "./ssh-executor.js";
@@ -31,11 +31,31 @@ export interface RemoteJobRecord {
 
 export interface RemoteJobSubmitInput {
   machine_label: string;
-  command: string[];
+  command: RemoteCommand;
   output_glob?: string;
 }
 
 const REMOTE_DIR = (jobId: string) => `~/.pi-jobs/${jobId}`;
+
+type RemoteCommand = string | readonly string[];
+
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return "'" + value.split("'").join("'\\''") + "'";
+}
+
+function normalizeCommand(input: RemoteCommand): string {
+  const parts = typeof input === "string"
+    ? [input.trim()]
+    : input.filter((part) => typeof part === "string" && part).map((part) => shellQuote(part));
+  return parts.join(" ").trim();
+}
+
+function isSafeOutputGlob(value: string): boolean {
+  if (!value || value.startsWith("/") || value.includes("\0")) return false;
+  if (value.includes(String.fromCharCode(96)) || /[\s;&|$(){}<>\\'"!]/.test(value)) return false;
+  return !value.split("/").some((part) => part === ".." || part === "~");
+}
 
 function jobsPath(cwd: string, jobId: string): string {
   return workspaceFile(cwd, `jobs/remote-${jobId}.json`);
@@ -48,8 +68,12 @@ function jobDir(cwd: string, jobId: string): string {
 function normalizeStatusLine(line: string): RemoteJobStatus {
   const text = line.trim().toLowerCase();
   if (text.includes("running")) return "running";
-  if (text.includes("exited")) return "succeeded";
-  if (text.startsWith("failed")) return "failed";
+  if (text.includes("succeeded")) return "succeeded";
+  if (text.includes("failed")) return "failed";
+  if (text.startsWith("exited")) {
+    const code = Number(text.split(/\s+/)[1] ?? 0);
+    return Number.isFinite(code) && code !== 0 ? "failed" : "succeeded";
+  }
   return "unknown";
 }
 
@@ -62,25 +86,28 @@ export class RemoteJobCoordinator {
   ) {}
 
   async submit(cwd: string, input: RemoteJobSubmitInput): Promise<RemoteJobRecord | { error: string; code?: string }> {
-    const command = input.command.filter((part) => typeof part === "string" && part);
+    const command = normalizeCommand(input.command);
     if (command.length === 0) return { error: "command is required" };
+    if (/[\r\n]/.test(command)) return { error: "command must be a single line", code: "invalid_command" };
+    const outputGlob = String(input.output_glob ?? "*").trim() || "*";
+    if (!isSafeOutputGlob(outputGlob)) return { error: "output_glob must be a relative file glob without shell operators", code: "invalid_output_glob" };
     const machines = await readJson<{ machines?: ComputeMachine[] }>(workspaceFile(cwd, "compute.json"), {});
     const machine = (machines.machines ?? []).find((item) => item.label === input.machine_label);
     if (!machine) return { error: `Compute machine not found: ${input.machine_label}`, code: "machine_not_found" };
     const jobId = randomUUID().replaceAll("-", "").slice(0, 16);
-    const script = ["#!/bin/sh", "set +e", "cd ~", ...command, "echo $? > exit.code", "echo done"].join("\n") + "\n";
+    const remoteDir = REMOTE_DIR(jobId);
+    const script = ["#!/bin/sh", "set +e", `cd ${remoteDir}`, command, "exit_code=$?", "printf '%s\\n' \"$exit_code\" > exit.code", "exit \"$exit_code\""].join("\n") + "\n";
     const scriptSha = createHash("sha256").update(script).digest("hex").slice(0, 16);
     const record: RemoteJobRecord = {
       job_id: jobId, machine_label: machine.label, host: machine.host, user: machine.user ?? null,
       status: "pending", remote_pid: null, script, script_sha256: scriptSha,
-      output_glob: String(input.output_glob ?? "*"), created_at: new Date().toISOString(),
+      output_glob: outputGlob, created_at: new Date().toISOString(),
       started_at: null, ended_at: null, exit_code: null, artifact_ids: [],
     };
     // Local staging (rollback-safe: the record is only written after launch).
     await mkdir(jobDir(cwd, jobId), { recursive: true });
     await writeFile(join(jobDir(cwd, jobId), "run.sh"), script, "utf8");
     // Remote launch: stream the script over stdin, start it detached, print the pid.
-    const remoteDir = REMOTE_DIR(jobId);
     const launch = `mkdir -p ${remoteDir} && cat > ${remoteDir}/run.sh && (nohup sh ${remoteDir}/run.sh > ${remoteDir}/output.log 2>&1 & echo $! > ${remoteDir}/pid) && cat ${remoteDir}/pid`;
     const result = await this.executor.run(machine, launch, script, 30_000);
     if (!result.success) {
@@ -120,13 +147,14 @@ export class RemoteJobCoordinator {
     const machines = await readJson<{ machines?: ComputeMachine[] }>(workspaceFile(cwd, "compute.json"), {});
     const machine = (machines.machines ?? []).find((item) => item.label === record.machine_label);
     if (!machine) return record;
-    const probe = `if kill -0 ${record.remote_pid} 2>/dev/null; then echo running; elif [ -f ${REMOTE_DIR(record.job_id)}/exit.code ]; then echo exited; else echo missing; fi`;
+    const remoteDir = REMOTE_DIR(record.job_id);
+    const probe = `if kill -0 ${record.remote_pid} 2>/dev/null; then echo running; elif [ -f ${remoteDir}/exit.code ]; then code=$(cat ${remoteDir}/exit.code 2>/dev/null || echo 1); if [ "$code" -eq 0 ] 2>/dev/null; then echo succeeded; else echo failed; fi; else echo missing; fi`;
     const result = await this.executor.run(machine, probe, undefined, 15_000);
     const status = result.success ? normalizeStatusLine(result.stdout) : "unknown";
     const updated: RemoteJobRecord = { ...record, status };
     if (status === "succeeded" || status === "failed") updated.ended_at = new Date().toISOString();
-    if (status === "succeeded") {
-      const codeResult = await this.executor.run(machine, `cat ${REMOTE_DIR(record.job_id)}/exit.code`, undefined, 15_000);
+    if (status === "succeeded" || status === "failed") {
+      const codeResult = await this.executor.run(machine, `cat ${remoteDir}/exit.code`, undefined, 15_000);
       updated.exit_code = codeResult.success ? Number(codeResult.stdout.trim()) : null;
     }
     await withFileWriteLock(jobsPath(cwd, jobId), async () => writeJsonAtomic(jobsPath(cwd, jobId), updated));
@@ -157,8 +185,8 @@ export class RemoteJobCoordinator {
     const machine = (machines.machines ?? []).find((item) => item.label === record.machine_label);
     if (!machine) return { artifact_ids: [], files: [], error: "Compute machine not found" };
     const remoteDir = REMOTE_DIR(jobId);
-    // List matching files with sizes; skip output.log and exit.code.
-    const listCmd = `cd ${remoteDir} && for f in ${record.output_glob}; do [ -f "$f" ] && [ "$f" != "output.log" ] && [ "$f" != "exit.code" ] && echo "$f \$(wc -c < "$f")"; done`;
+    // List matching files with sizes; skip job bookkeeping files.
+    const listCmd = `cd ${remoteDir} && for f in ${record.output_glob}; do [ -f "$f" ] && [ "$f" != "output.log" ] && [ "$f" != "exit.code" ] && [ "$f" != "run.sh" ] && [ "$f" != "pid" ] && printf '%s %s\\n' "$f" "$(wc -c < "$f")"; done`;
     const list = await this.executor.run(machine, listCmd, undefined, 15_000);
     if (!list.success) return { artifact_ids: [], files: [], error: `Failed to list remote outputs: ${list.stderr.trim()}` };
     const artifactIds: string[] = [];
@@ -167,15 +195,19 @@ export class RemoteJobCoordinator {
       const [name, sizeText] = line.split(/\s+/);
       const size = Number(sizeText ?? 0);
       if (!name || !Number.isFinite(size) || size > 8 * 1024 * 1024) continue;
-      const fetched = await this.executor.run(machine, `base64 ${remoteDir}/${name}`, undefined, 30_000);
+      // Keep $HOME outside the quoted filename: quoting the complete
+      // `~/.pi-jobs/...` path would suppress tilde expansion on the remote
+      // shell and make every harvest look like a missing file.
+      const remoteFile = `"$HOME/.pi-jobs/"${shellQuote(record.job_id)}"/"${shellQuote(name)}`;
+      const fetched = await this.executor.run(machine, `base64 ${remoteFile}`, undefined, 30_000);
       if (!fetched.success) continue;
       const content = Buffer.from(fetched.stdout.replace(/\s+/g, ""), "base64");
       if (content.length !== size) continue;
-      const target = relative(process.cwd(), join(cwd, name));
-      const safe = target.startsWith("..") ? name.replace(/^\/+/, "") : target;
-      try { await resolveWorkspaceFile(cwd, safe); } catch { continue; }
-      await mkdir(join(cwd, safe).slice(0, Math.max(0, join(cwd, safe).lastIndexOf("/"))), { recursive: true }).catch(() => undefined);
-      await writeFile(join(cwd, safe), content);
+      const safe = name.replaceAll("\\", "/");
+      let target: string;
+      try { target = await resolveWorkspaceFile(cwd, safe); } catch { continue; }
+      await mkdir(dirname(target), { recursive: true }).catch(() => undefined);
+      await writeFile(target, content);
       const published = await this.publishArtifact(cwd, safe.replaceAll("\\", "/"), content, "remote_job", sessionId);
       artifactIds.push(published.artifact_id);
       files.push(safe);

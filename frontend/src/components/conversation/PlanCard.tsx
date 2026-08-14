@@ -26,12 +26,14 @@ export interface PlanCardProps {
   steps: PlanStep[];
   onApprove: () => void;
   onRequestChanges?: () => void;
+  approveLabel?: string;
+  requestChangesLabel?: string;
   approving?: boolean;
   /** Optional note shown under the actions (e.g. what changes were asked). */
   note?: string;
 }
 
-export function PlanCard({ title, version, steps, onApprove, onRequestChanges, approving, note }: PlanCardProps) {
+export function PlanCard({ title, version, steps, onApprove, onRequestChanges, approveLabel, requestChangesLabel, approving, note }: PlanCardProps) {
   const { t } = useTranslation();
   return (
     <div className="rounded-lg border border-border bg-surface-1/60 p-3">
@@ -60,17 +62,18 @@ export function PlanCard({ title, version, steps, onApprove, onRequestChanges, a
       </ol>
       <div className="mt-3 flex items-center gap-2">
         <button
+          type="button"
           onClick={onApprove}
           disabled={approving}
           className="inline-flex items-center gap-1 rounded-md bg-ok/15 px-2.5 py-1 text-xs text-ok hover:bg-ok/25 disabled:opacity-50"
         >
           {approving ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
-          {t("planCard.approve")}
+          {approveLabel ?? t("planCard.approve")}
         </button>
         {onRequestChanges && (
-          <button onClick={onRequestChanges} className="inline-flex items-center gap-1 rounded-md bg-surface-2 px-2.5 py-1 text-xs text-muted hover:bg-surface-2/70">
+          <button type="button" onClick={onRequestChanges} disabled={approving} className="inline-flex items-center gap-1 rounded-md bg-surface-2 px-2.5 py-1 text-xs text-muted hover:bg-surface-2/70 disabled:opacity-50">
             <RotateCcw size={11} />
-            {t("planCard.requestChanges")}
+            {requestChangesLabel ?? t("planCard.requestChanges")}
           </button>
         )}
       </div>

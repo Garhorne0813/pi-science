@@ -10,7 +10,7 @@ import { apiRequest } from "../../lib/client/api";
 import type { ArtifactManifestV2 } from "./artifact-lineage";
 
 export interface ArtifactLibraryEntry {
-  /** Path-derived identity (first-seen path for multi-path logical chains). */
+  /** Stable logical identity, falling back to the legacy path-derived id. */
   artifact_id: string;
   /** Latest manifest of the chain. */
   latest: ArtifactManifestV2;
@@ -27,13 +27,14 @@ export async function listArtifacts(cwd: string, limit = 1000): Promise<Artifact
   return data.artifacts ?? [];
 }
 
-/** Group manifests by artifact_id, versions newest-first, latest derived. */
+/** Group manifests by logical_id when available, otherwise artifact_id. */
 export function groupArtifacts(manifests: readonly ArtifactManifestV2[]): ArtifactLibraryEntry[] {
   const byId = new Map<string, ArtifactManifestV2[]>();
   for (const manifest of manifests) {
-    const list = byId.get(manifest.artifact_id) ?? [];
+    const identity = manifest.logical_id ?? manifest.artifact_id;
+    const list = byId.get(identity) ?? [];
     list.push(manifest);
-    byId.set(manifest.artifact_id, list);
+    byId.set(identity, list);
   }
   const entries: ArtifactLibraryEntry[] = [];
   for (const [artifactId, versions] of byId) {
