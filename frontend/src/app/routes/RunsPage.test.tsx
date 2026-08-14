@@ -131,6 +131,7 @@ describe("RunsPage execution ledger", () => {
 
     await screen.findAllByText("write");
     await waitFor(() => expect(screen.getByLabelText("location")).toHaveTextContent("execution=exec_tool"));
+    expect(screen.getByTestId("runs-workbench")).toHaveAttribute("data-compact-detail", "false");
     expect(screen.getByText("node-pi-event-observer")).toBeInTheDocument();
     expect(screen.getAllByText("Running", { selector: "dd" }).length).toBeGreaterThan(0);
   });
@@ -142,7 +143,11 @@ describe("RunsPage execution ledger", () => {
     expect(screen.getByText("Failed", { selector: "dd" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /analysis\.ipynb/ }));
     await waitFor(() => expect(screen.getByLabelText("location")).toHaveTextContent("execution=exec_kernel"));
+    expect(screen.getByTestId("runs-workbench")).toHaveAttribute("data-compact-detail", "true");
     expect(screen.getByText("node-kernel-gateway")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to executions" }));
+    expect(screen.getByTestId("runs-workbench")).toHaveAttribute("data-compact-detail", "false");
   });
 
   it("filters by search text, kind, and status", async () => {

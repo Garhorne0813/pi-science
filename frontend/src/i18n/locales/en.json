@@ -781,6 +781,7 @@
   "runs.duration": "Duration",
   "runs.running": "Running",
   "runs.detailTabs": "Execution detail sections",
+  "runs.backToLedger": "Back to executions",
   "runs.tab.summary": "Summary",
   "runs.tab.input": "Input",
   "runs.tab.output": "Output",

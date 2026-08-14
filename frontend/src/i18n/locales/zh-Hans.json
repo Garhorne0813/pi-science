@@ -781,6 +781,7 @@
   "runs.duration": "耗时",
   "runs.running": "运行中",
   "runs.detailTabs": "执行详情分类",
+  "runs.backToLedger": "返回执行列表",
   "runs.tab.summary": "概览",
   "runs.tab.input": "输入",
   "runs.tab.output": "输出",

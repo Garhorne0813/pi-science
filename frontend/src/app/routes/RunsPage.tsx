@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  AlertTriangle, Ban, Check, Circle, CircleDashed, Clock3, FileOutput,
+  AlertTriangle, ArrowLeft, Ban, Check, Circle, CircleDashed, Clock3, FileOutput,
   FileSearch, Loader2, Play, Search, X,
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
@@ -32,6 +32,7 @@ export function RunsPage() {
   const [kind, setKind] = useState<KindFilter>("all");
   const [status, setStatus] = useState<StatusFilter>("all");
   const [detailTab, setDetailTab] = useState<DetailTab>("summary");
+  const [compactDetailOpen, setCompactDetailOpen] = useState(() => searchParams.has("execution"));
   const [logs, setLogs] = useState<Record<string, string>>({});
   const [loadingLogs, setLoadingLogs] = useState<Record<string, boolean>>({});
 
@@ -84,6 +85,7 @@ export function RunsPage() {
     next.set("execution", executionId);
     setSearchParams(next);
     setDetailTab("summary");
+    setCompactDetailOpen(true);
   };
 
   return (
@@ -96,7 +98,7 @@ export function RunsPage() {
         actions={<WorkspacePageRefreshButton label={t("common.refresh")} loading={loading} onClick={() => void runsResult.refetch()} />}
       />
 
-      <div className="mt-5 flex flex-wrap items-center gap-2">
+      <div className="runs-toolbar mt-5 flex flex-wrap items-center gap-2 rounded-card border border-border p-2">
         <label className="relative min-w-[220px] flex-1">
           <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
           <input
@@ -125,8 +127,8 @@ export function RunsPage() {
         ) : filteredRuns.length === 0 ? (
           <EmptyState icon={<FileSearch size={36} />} title={t("runs.noMatches")} hint={t("runs.noMatchesHint")} />
         ) : (
-          <div className="runs-ledger-layout grid min-h-[540px] overflow-hidden rounded-card border border-border bg-surface">
-            <section aria-label={t("runs.ledger")} className="min-w-0 border-b border-border lg:border-b-0 lg:border-r">
+          <div data-testid="runs-workbench" data-compact-detail={compactDetailOpen ? "true" : "false"} className="runs-ledger-layout runs-workbench grid min-h-[540px] overflow-hidden rounded-card border border-border bg-surface">
+            <section aria-label={t("runs.ledger")} className="runs-ledger-pane min-w-0 border-b border-border lg:border-b-0 lg:border-r">
               <div className="runs-ledger-columns grid items-center gap-2 border-b border-border bg-surface-2/60 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
                 <span>#</span><span>{t("runs.execution")}</span><span>{t("runs.duration")}</span>
               </div>
@@ -134,8 +136,8 @@ export function RunsPage() {
                 {filteredRuns.map((run, index) => <ExecutionRow key={run.execution_id} run={run} index={index + 1} selected={run.execution_id === selected?.execution_id} onClick={() => selectExecution(run.execution_id)} />)}
               </div>
             </section>
-            <section aria-label={t("runs.details")} className="min-w-0 bg-bg/40">
-              {selected && <ExecutionDetails run={selected} tab={detailTab} onTabChange={setDetailTab} log={logs[selected.execution_id]} loadingLog={Boolean(loadingLogs[selected.execution_id])} />}
+            <section aria-label={t("runs.details")} className="runs-detail-pane min-w-0 bg-bg/40">
+              {selected && <ExecutionDetails run={selected} tab={detailTab} onTabChange={setDetailTab} onBack={() => setCompactDetailOpen(false)} log={logs[selected.execution_id]} loadingLog={Boolean(loadingLogs[selected.execution_id])} />}
             </section>
           </div>
         )}
@@ -148,7 +150,7 @@ function ExecutionRow({ run, index, selected, onClick }: { run: ExecutionRecord;
   const { t } = useTranslation();
   const outputs = outputCount(run);
   return (
-    <button type="button" onClick={onClick} aria-current={selected ? "true" : undefined} className={cn("runs-ledger-columns grid w-full items-start gap-2 border-b border-faint px-3 py-3 text-left transition-colors last:border-b-0 hover:bg-surface-2/70", selected && "runs-ledger-row-selected bg-accent/5 hover:bg-accent/5")}>
+    <button type="button" onClick={onClick} aria-current={selected ? "true" : undefined} className={cn("runs-ledger-columns runs-ledger-row grid w-full items-start gap-2 border-b border-faint px-3 py-3 text-left transition-colors last:border-b-0", selected && "runs-ledger-row-selected")}>
       <span className="pt-0.5 text-[10px] tabular-nums text-muted">{index}</span>
       <span className="min-w-0">
         <span className="flex items-center gap-2"><ExecutionStatusIcon status={run.status} /><span className="truncate font-mono text-[12px] text-text">{executionLabel(run)}</span></span>
@@ -162,12 +164,15 @@ function ExecutionRow({ run, index, selected, onClick }: { run: ExecutionRecord;
   );
 }
 
-function ExecutionDetails({ run, tab, onTabChange, log, loadingLog }: { run: ExecutionRecord; tab: DetailTab; onTabChange: (tab: DetailTab) => void; log?: string; loadingLog: boolean }) {
+function ExecutionDetails({ run, tab, onTabChange, onBack, log, loadingLog }: { run: ExecutionRecord; tab: DetailTab; onTabChange: (tab: DetailTab) => void; onBack: () => void; log?: string; loadingLog: boolean }) {
   const { t } = useTranslation();
   const tabs: DetailTab[] = ["summary", "input", "output", "files", "runtime", "timing"];
   return (
     <div className="flex h-full min-h-[540px] flex-col">
-      <div className="border-b border-border px-4 py-4">
+      <div className="runs-detail-header border-b border-border px-4 py-4">
+        <button type="button" onClick={onBack} className="runs-detail-back mb-3 items-center gap-1.5 text-[11px] text-muted hover:text-text">
+          <ArrowLeft size={13} />{t("runs.backToLedger")}
+        </button>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2"><ExecutionStatusIcon status={run.status} size={16} /><h2 className="truncate font-mono text-sm text-text">{executionLabel(run)}</h2></div>
