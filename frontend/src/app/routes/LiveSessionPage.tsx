@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import type { ComponentType, ReactNode, Ref } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, Loader2, Square, Plus, Sparkles, X, File, FolderOpen } from "lucide-react";
+import { ArrowDown, ArrowUp, Bookmark, Loader2, Square, Plus, Sparkles, X, File, FolderOpen } from "lucide-react";
 import type { VirtuosoHandle, VirtuosoProps } from "react-virtuoso";
 import { getClient, getSessionName } from "../../lib/client/pi-science-client";
 import { queryClient } from "../../lib/client/query-client";
@@ -21,6 +21,10 @@ import { MentionComposer } from "../../components/conversation/MentionComposer";
 import { QuestionnairePrompt } from "../../components/conversation/QuestionnairePrompt";
 import { groupBlocks, renderBlockGroup } from "../../components/conversation/ConversationBlocks";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
+import { ConversationBookmarksPanel } from "../../components/conversation/ConversationBookmarksPanel";
+import type { MessageBookmarkAction } from "../../components/conversation/MessageActions";
+import { useConversationNavigation } from "../../hooks/useConversationNavigation";
+import type { ConversationBookmark } from "../../lib/conversation-navigation";
 import { visibleUserMessage } from "../../lib/files";
 import { useTranslation } from "react-i18next";
 import { ResearchLoopDraftCard, ResearchLoopStatusCard, ResearchModePicker } from "../../components/conversation/ResearchLoopControls";
@@ -40,6 +44,27 @@ const LazyVirtuoso = lazy(() => import("react-virtuoso").then(({ Virtuoso }) => 
   default: Virtuoso as unknown as ComponentType<ConversationVirtuosoProps>,
 })));
 const ComposerTodo = lazy(() => import("../../components/todo/ComposerTodo").then((m) => ({ default: m.ComposerTodo })));
+
+/** Reading-position restore retry interval and budget. The store refuses
+ *  history loads while the newest page is still loading (a cold Pi runtime
+ *  spawn can keep it busy for seconds), and the restored page then needs
+ *  several more seconds to render its anchor through the virtual list, so the
+ *  restore retries within this window instead of giving up early. The safety
+ *  net still bounds the worst case, and any user navigation (nav select,
+ *  bookmark jump, send, back-to-latest) cancels the restore immediately. */
+const RESTORE_RETRY_MS = 250;
+const RESTORE_BUDGET_MS = 30_000;
+/** Suppression grace after the anchor scroll: viewport-driven read-state
+ *  writes stay paused through the scroll-correction window so the restored
+ *  position cannot be overwritten by a premature bottom-seen write. */
+const RESTORE_SETTLE_MS = 400;
+/** Scroll events arriving within this window after a programmatic scroll
+ *  (entry bottom snap, working-turn snap) are treated as part of that
+ *  programmatic scroll: they must not count as manual user interaction and
+ *  cancel a pending reading-position restore. Real browsers deliver the
+ *  scroll event a frame or two after the programmatic scroll, so the window
+ *  is a few frames wide. */
+const PROGRAMMATIC_SCROLL_WINDOW_MS = 400;
 
 /**
  * Keep the virtual-list footer component type stable. Defining Footer inline
@@ -127,6 +152,7 @@ export function LiveSessionPage() {
     return () => {
       for (const handle of scrollTimersRef.current) window.clearTimeout(handle);
       scrollTimersRef.current = [];
+      if (programmaticScrollTimerRef.current !== null) window.clearTimeout(programmaticScrollTimerRef.current);
     };
   }, []);
 
@@ -143,10 +169,162 @@ export function LiveSessionPage() {
 
   const messageIndexQuery = useQuery({
     queryKey: ["session-message-index", workspaceCwd, sessionId ?? null],
-    queryFn: () => getClient().getUserMessageIndex(sessionId!, workspaceCwd),
+    queryFn: () => getClient().getMessageIndex(sessionId!, workspaceCwd, "all"),
     enabled: Boolean(sessionId),
     staleTime: 30_000,
   }, queryClient);
+
+  // ── Durable navigation: bookmarks, read position, attention ──
+  const { readState, readStateLoading, bookmarks, bookmarksLoading, createBookmark, acceptBookmark, rejectBookmark, deleteBookmark, proposeBookmarks, proposePending, proposeResult, proposeError, scheduleAnchorWrite, scheduleMarkSeen, cancelPendingWrites } = useConversationNavigation(workspaceCwd, sessionId);
+  const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  const bookmarksTriggerRef = useRef<HTMLButtonElement>(null);
+  const bookmarksPanelId = "conversation-bookmarks-panel";
+  const closeBookmarks = useCallback(() => {
+    setBookmarksOpen(false);
+    bookmarksTriggerRef.current?.focus();
+  }, []);
+  // Rejected bookmarks stay on the server record but are never displayed or
+  // counted in the UI: they only exist so a later user action can revive them.
+  const sessionBookmarks = useMemo(
+    () => bookmarks.filter((bookmark) => bookmark.session_id === sessionId && bookmark.status !== "rejected"),
+    [bookmarks, sessionId],
+  );
+  // The header badge counts ACCEPTED bookmarks only — proposals are pending
+  // review and must not inflate the number shown on the trigger.
+  const headerBookmarkCount = sessionBookmarks.filter((bookmark) => bookmark.status === "accepted").length;
+  // While a restore is being decided / executed, viewport-driven read-state
+  // writes are suppressed so a stale cursor cannot overwrite the saved one.
+  const suppressReadWriteRef = useRef(true);
+  const restoreSessionRef = useRef<string | null>(null);
+  const wasWorkingNav = useRef(false);
+  // Persistent user-interaction cancellation marker for the reading-position
+  // restore: once the user has manually scrolled, changed the active anchor
+  // or explicitly navigated while the read state was still loading, a late
+  // read-state response must NOT start a restore (or yank the viewport to
+  // the saved position). Reset only on a session/workspace change.
+  const userNavInterruptedRef = useRef(false);
+  // True while a programmatic scroll (entry bottom snap, working-turn snap)
+  // is in flight, so its scroll events are not mistaken for manual user
+  // interaction. Programmatic restore scrolls must not self-cancel.
+  const programmaticScrollRef = useRef(false);
+  const programmaticScrollTimerRef = useRef<number | null>(null);
+  // The rail's first active report is its mount-time baseline (the first
+  // entry its observer geometry establishes — nothing is active before
+  // that), not a user position change; it must not cancel a pending
+  // restore. Any later active-anchor change is a user position signal.
+  const railReportedRef = useRef(false);
+  // The user-intent listeners (declared before cancelRestore) cancel an
+  // already-running restore through this ref, so their declaration order
+  // stays independent of cancelRestore's. Kept in sync right after the
+  // cancelRestore callback below.
+  const cancelRestoreRef = useRef<() => void>(() => undefined);
+
+  // Session-scoped reset as a LAYOUT effect: React flushes child passive
+  // effects before parent passive effects in the same commit, and the
+  // Suspense-delayed first commit mounts the nav rail (whose mount report
+  // reaches handleActiveChange) before a passive reset would run — the
+  // rail's first report must never be mistaken for a user position change.
+  // Layout effects always flush before any passive effect, so the reset is
+  // guaranteed to land before the rail's mount report.
+  useLayoutEffect(() => {
+    // New session: cancel stale writes and suppress read-state writes until
+    // the restore decision has been made. The user-interaction marker is
+    // session-scoped: a fresh entry may restore its saved position again.
+    suppressReadWriteRef.current = true;
+    restoreSessionRef.current = null;
+    userNavInterruptedRef.current = false;
+    railReportedRef.current = false;
+    programmaticScrollRef.current = false;
+    cancelPendingWrites();
+  }, [sessionId, workspaceCwd, cancelPendingWrites]);
+
+  // Read-state loading safety timeout: if the query never settles (network
+  // hang / server down), stop waiting and release viewport-driven writes so
+  // navigation is not blocked indefinitely. The restore is deliberately NOT
+  // marked done here: a read state that arrives late must still restore the
+  // saved position instead of being silently discarded (the restore effect
+  // re-asserts suppression when it runs, so the released window is bounded).
+  const readStateLoadingRef = useRef(readStateLoading);
+  useEffect(() => { readStateLoadingRef.current = readStateLoading; }, [readStateLoading]);
+  useEffect(() => {
+    if (!sessionId) return;
+    const handle = window.setTimeout(() => {
+      if (sessionRef.current !== sessionId) return;
+      if (restoreSessionRef.current !== sessionId && readStateLoadingRef.current) {
+        suppressReadWriteRef.current = false;
+      }
+    }, 8000);
+    return () => window.clearTimeout(handle);
+  }, [sessionId]);
+
+  // A completed turn invalidates the all-role index and the attention queue so
+  // new bookmarks and sidebar badges appear without a manual refresh.
+  useEffect(() => {
+    if (wasWorkingNav.current && !working) {
+      void queryClient.invalidateQueries({ queryKey: ["session-message-index", workspaceCwd, sessionId ?? null] });
+      void queryClient.invalidateQueries({ queryKey: ["conversation-navigation", "attention", workspaceCwd] });
+    }
+    wasWorkingNav.current = working;
+  }, [working, workspaceCwd, sessionId]);
+
+  // Optimistic user blocks (id `user-<timestamp>`) are created locally on
+  // send and never match the server index directly. Reconcile them to their
+  // persisted entry by exact visible text (consuming persisted entries in
+  // order) so nav dedup, bookmark actions and jumps use the durable id — the
+  // canonical transcript is not rewritten.
+  const optimisticUserMatch = useMemo(() => {
+    const match = new Map<string, string>();
+    const persistedByText = new Map<string, string[]>();
+    for (const entry of messageIndexQuery.data?.messages ?? []) {
+      if (entry.role !== "user" || !entry.text) continue;
+      const ids = persistedByText.get(entry.text) ?? [];
+      ids.push(entry.id);
+      persistedByText.set(entry.text, ids);
+    }
+    const used = new Set<string>();
+    for (const block of thread.blocks) {
+      if (block.kind !== "user" || !block.text) continue;
+      if (block.id.startsWith("user-") && persistedByText.has(block.text)) {
+        for (const candidate of persistedByText.get(block.text)!) {
+          if (used.has(candidate)) continue;
+          used.add(candidate);
+          match.set(block.id, candidate);
+          break;
+        }
+      }
+    }
+    return match;
+  }, [messageIndexQuery.data?.messages, thread.blocks]);
+
+  // Bookmark actions are only offered for messages the server all-role index
+  // has confirmed as persisted — live temporary ids never qualify. Optimistic
+  // user blocks resolve through `optimisticUserMatch` to their durable id.
+  const bookmarkActions = useMemo(() => {
+    const indexed = new Set((messageIndexQuery.data?.messages ?? []).map((entry) => entry.id));
+    const byMessage = new Map<string, ConversationBookmark>();
+    for (const bookmark of sessionBookmarks) {
+      byMessage.set(bookmark.message_id, bookmark);
+    }
+    const actions = new Map<string, MessageBookmarkAction>();
+    for (const block of thread.blocks) {
+      if (block.kind !== "user" && block.kind !== "agent") continue;
+      const persistedId = block.kind === "user"
+        ? (indexed.has(block.id) ? block.id : optimisticUserMatch.get(block.id) ?? null)
+        : (indexed.has(block.id) ? block.id : null);
+      if (!persistedId) continue;
+      const existing = byMessage.get(persistedId);
+      const status: MessageBookmarkAction["status"] = existing?.status === "accepted" ? "accepted" : existing?.status === "proposed" ? "proposed" : "none";
+      actions.set(block.id, {
+        status,
+        onToggle: () => {
+          if (!existing) createBookmark(persistedId);
+          else if (existing.status === "accepted") deleteBookmark(existing.bookmark_id);
+          else acceptBookmark(existing.bookmark_id);
+        },
+      });
+    }
+    return actions;
+  }, [sessionBookmarks, messageIndexQuery.data?.messages, thread.blocks, optimisticUserMatch, createBookmark, acceptBookmark, deleteBookmark]);
 
   useEffect(() => {
     connect(workspaceCwd, sessionId || undefined);
@@ -165,25 +343,113 @@ export function LiveSessionPage() {
     const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 96;
     followOutputRef.current = nearBottom;
     setShowScrollDown(!nearBottom);
+    // A scroll that is not part of a programmatic scroll (entry bottom snap,
+    // working-turn snap) is manual user interaction: it marks the
+    // reading-position restore as superseded, so a read state that is still
+    // loading cannot later start a restore that yanks the viewport away.
+    if (!programmaticScrollRef.current) userNavInterruptedRef.current = true;
+    // Reaching the bottom marks the current snapshot as seen (deduplicated
+    // server-side by snapshot version), which clears the sidebar New badge.
+    if (nearBottom && !suppressReadWriteRef.current) {
+      const snapshot = messageIndexQuery.data?.snapshot_version;
+      if (snapshot && !(readState?.at_bottom === true && readState.seen_snapshot_version === snapshot)) {
+        scheduleMarkSeen(snapshot);
+      }
+    }
+  }, [messageIndexQuery.data?.snapshot_version, scheduleMarkSeen, readState]);
+
+  // User-intent listeners on the scroller: wheel / touch / pointer input is
+  // manual user interaction even when its scroll events land inside the
+  // programmatic-scroll grace window (programmatic `.scrollTo` never emits
+  // these events). Marking the session entry here closes the hole where a
+  // user wheeled during the entry bottom-snap grace and a late read-state
+  // response still started a restore that yanked the viewport away.
+  const handleUserIntent = useCallback(() => {
+    userNavInterruptedRef.current = true;
+    // A wheel/touch/pointer input also supersedes an ALREADY-RUNNING restore
+    // (retry timers + write suppression), not just a pending decision: the
+    // user is actively reading history, so a late correction scroll must not
+    // yank the viewport away.
+    cancelRestoreRef.current();
   }, []);
 
+  // Viewport reading position: the rail reports the active user message only
+  // when it actually changes; near-bottom is handled by the mark-seen path.
+  const handleActiveChange = useCallback((id: string | null) => {
+    if (!id) return;
+    // The rail's first report is its mount-time baseline (the newest user
+    // message), not a user position change: it must not cancel a pending
+    // restore. Any LATER active-anchor change before the restore decision is
+    // a user signal that the saved reading position is stale.
+    if (railReportedRef.current) {
+      userNavInterruptedRef.current = true;
+    } else {
+      railReportedRef.current = true;
+    }
+    if (suppressReadWriteRef.current) return;
+    const scroller = scrollRef.current;
+    const nearBottom = scroller ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 96 : false;
+    if (nearBottom) return;
+    // Live optimistic user blocks carry temporary ids that the server refuses
+    // as anchors; resolve them to the persisted id once the all-role index
+    // knows it. While the message is still live-only, skip the write rather
+    // than failing it against the server.
+    const persistedId = optimisticUserMatch.get(id)
+      ?? ((messageIndexQuery.data?.messages ?? []).some((entry) => entry.id === id) ? id : null);
+    if (!persistedId) return;
+    scheduleAnchorWrite(persistedId);
+  }, [scheduleAnchorWrite, optimisticUserMatch, messageIndexQuery.data?.messages]);
+
+  const bookmarkedUserIds = useMemo(() => new Set(
+    bookmarks
+      .filter((bookmark) => bookmark.session_id === sessionId && bookmark.status === "accepted" && bookmark.role === "user")
+      .map((bookmark) => bookmark.message_id),
+  ), [bookmarks, sessionId]);
+
   const attachScroller = useCallback((element: Window | HTMLElement | null) => {
-    if (scrollRef.current) scrollRef.current.removeEventListener("scroll", handleThreadScroll);
+    if (scrollRef.current) {
+      scrollRef.current.removeEventListener("scroll", handleThreadScroll);
+      scrollRef.current.removeEventListener("wheel", handleUserIntent);
+      scrollRef.current.removeEventListener("touchstart", handleUserIntent);
+      scrollRef.current.removeEventListener("pointerdown", handleUserIntent);
+    }
     scrollRef.current = element instanceof HTMLElement ? element as HTMLDivElement : null;
     if (scrollRef.current) {
       // Keep the stable class hook used by the conversation rail and by
       // integrations that locate the active conversation scroller.
       scrollRef.current.classList.add("conversation-scroller", "overflow-y-auto");
       scrollRef.current.addEventListener("scroll", handleThreadScroll);
+      // Session-scoped cleanup: the user-intent listeners are removed when
+      // the scroller is replaced (above) and die with the element on
+      // unmount, so they can never leak into the next session's page.
+      scrollRef.current.addEventListener("wheel", handleUserIntent);
+      scrollRef.current.addEventListener("touchstart", handleUserIntent);
+      scrollRef.current.addEventListener("pointerdown", handleUserIntent);
     }
-  }, [handleThreadScroll]);
+  }, [handleThreadScroll, handleUserIntent]);
+
+  // Run a viewport scroll that must not count as manual user interaction
+  // (entry bottom snap, working-turn snap): scroll events arriving within the
+  // window are treated as programmatic, so they cannot cancel a pending
+  // reading-position restore.
+  const runProgrammaticScroll = useCallback((scroll: () => void) => {
+    programmaticScrollRef.current = true;
+    if (programmaticScrollTimerRef.current !== null) window.clearTimeout(programmaticScrollTimerRef.current);
+    programmaticScrollTimerRef.current = window.setTimeout(() => {
+      programmaticScrollRef.current = false;
+      programmaticScrollTimerRef.current = null;
+    }, PROGRAMMATIC_SCROLL_WINDOW_MS);
+    scroll();
+  }, []);
 
   useLayoutEffect(() => {
     if (followOutputRef.current) {
-      if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-      virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "auto" });
+      runProgrammaticScroll(() => {
+        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "auto" });
+      });
     }
-  }, [thread.blocks]);
+  }, [thread.blocks, runProgrammaticScroll]);
 
   // When a new turn starts (user sends a message or the agent resumes), snap
   // the view back to the newest content. The user may have scrolled up to read
@@ -198,12 +464,14 @@ export function LiveSessionPage() {
       if (followOutputRef.current === false) return;
       followOutputRef.current = true;
       setShowScrollDown(false);
-      const scroller = scrollRef.current;
-      if (scroller) scroller.scrollTop = scroller.scrollHeight;
-      virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "auto" });
+      runProgrammaticScroll(() => {
+        const scroller = scrollRef.current;
+        if (scroller) scroller.scrollTop = scroller.scrollHeight;
+        virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "auto" });
+      });
     }
     wasWorking.current = working;
-  }, [working]);
+  }, [working, runProgrammaticScroll]);
 
   const blockGroups = useMemo(() => groupBlocks(thread.blocks), [thread.blocks]);
   // Copy-button eligibility computed across the WHOLE thread (not per group):
@@ -224,43 +492,111 @@ export function LiveSessionPage() {
 
   const { suggestions, setSuggestions } = useTurnEffects(working, thread.blocks);
 
+  // Loaded-user-anchor signature for the nav rail: the all-role index knows
+  // every user message id up front (paginated ones carry `before` cursors),
+  // so the rail cannot tell from its items alone when an older page's anchors
+  // mount. This key changes exactly when loaded user blocks change, letting
+  // the rail re-register its observer for the newly attached DOM anchors
+  // (history loads, reading-position restores, streamed user turns).
+  const loadedUserAnchorKey = useMemo(
+    () => thread.blocks.filter((block) => block.kind === "user").map((block) => block.id).join("\u0000"),
+    [thread.blocks],
+  );
+
   const userNavItems = useMemo<ConversationNavItem[]>(() => {
     const loadedUsers = thread.blocks.filter((block): block is Extract<ThreadBlock, { kind: "user" }> => block.kind === "user");
     const loadedById = new Map(loadedUsers.map((block) => [block.id, block]));
+    // A persisted entry that is loaded under its own id OR matched to an
+    // optimistic block is already on screen — no `before` cursor needed.
+    const matchedPersistedIds = new Set(optimisticUserMatch.values());
     const seen = new Set<string>();
     const toItem = (id: string, text: string, before?: string): ConversationNavItem => {
       const visible = visibleUserMessage(text);
       return { id, label: (visible || t("conversation.attachment")).slice(0, 120), full: text, before };
     };
-    const indexed = (messageIndexQuery.data?.messages ?? []).map((entry) => {
-      const loaded = loadedById.get(entry.id);
-      seen.add(entry.id);
-      return toItem(entry.id, loaded?.text ?? entry.text, loaded ? undefined : entry.before);
-    });
+    const indexed = (messageIndexQuery.data?.messages ?? [])
+      .filter((entry) => entry.role === "user")
+      .map((entry) => {
+        const loaded = loadedById.get(entry.id) ?? (matchedPersistedIds.has(entry.id) ? { text: entry.text } : undefined);
+        seen.add(entry.id);
+        return toItem(entry.id, loaded?.text ?? entry.text, loaded ? undefined : entry.before);
+      });
+    // Optimistic blocks matched to a persisted entry are represented by the
+    // persisted item above; unmatched ones remain as live items.
     const live = loadedUsers
-      .filter((block) => !seen.has(block.id))
+      .filter((block) => !seen.has(block.id) && !optimisticUserMatch.has(block.id))
       .map((block) => toItem(block.id, block.text));
     return [...indexed, ...live];
-  }, [messageIndexQuery.data?.messages, t, thread.blocks]);
+  }, [messageIndexQuery.data?.messages, t, thread.blocks, optimisticUserMatch]);
 
   const smoothScroll = () => !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   // Runs fn after `delay` only while the page still shows the same session;
   // every pending handle is tracked so newer interactions/unmount can cancel.
-  const scheduleSessionScoped = (fn: () => void, delay: number) => {
+  const scheduleSessionScoped = useCallback((fn: () => void, delay: number) => {
     const scheduledSession = sessionRef.current;
     const handle = window.setTimeout(() => {
       if (sessionRef.current !== scheduledSession) return;
       fn();
     }, delay);
     scrollTimersRef.current.push(handle);
-  };
-  const cancelPendingScrollTimers = () => {
+  }, []);
+  const cancelPendingScrollTimers = useCallback(() => {
     for (const handle of scrollTimersRef.current) window.clearTimeout(handle);
     scrollTimersRef.current = [];
-  };
-  const scrollToLoadedTarget = (id: string) => {
+  }, []);
+  // The reading-position restore retry loop runs on session-scoped timers and
+  // holds viewport-write suppression while it runs. A user action that
+  // supersedes the restore (nav select, bookmark jump, send, back-to-latest)
+  // must cancel those timers AND release the suppression, or the user's own
+  // scroll/read-state writes stay blocked until the next session change. The
+  // generation bump also invalidates any restore callback already in flight
+  // (a promise continuation cannot be cancelled, so it must bail on its own).
+  const restoreGenerationRef = useRef(0);
+  const cancelRestore = useCallback(() => {
+    restoreGenerationRef.current += 1;
+    cancelPendingScrollTimers();
+    suppressReadWriteRef.current = false;
+  }, [cancelPendingScrollTimers]);
+  // Keep the user-intent ref in sync: cancelRestore's identity is stable
+  // (its only dep cancelPendingScrollTimers is stable), so a render-time
+  // assignment is idempotent and always points at the latest callback.
+  cancelRestoreRef.current = cancelRestore;
+  // Explicit user navigation supersedes the reading-position restore: mark
+  // the session entry persistently so a LATE read-state response (still
+  // loading when the user acted) cannot start a restore, and cancel the
+  // in-flight retry loop + write suppression.
+  const supersedeRestore = useCallback(() => {
+    userNavInterruptedRef.current = true;
+    cancelRestore();
+  }, [cancelRestore]);
+  // Load the page containing a target with bounded retries. A 0 result can
+  // mean the store's history load is already in flight (historyLoading) or the
+  // session changed; retries absorb the transient case, and the session guard
+  // drops stale callbacks so an old session's promise can never release the
+  // current session's write suppression. `onSettled` always fires exactly once
+  // for the current session (loaded count or 0 after retries are exhausted).
+  const loadOlderForTarget = useCallback((before: string, onSettled: (loaded: number) => void, retries = 3) => {
+    const scheduledSession = sessionRef.current;
+    let attempts = 0;
+    const attempt = (): void => {
+      if (sessionRef.current !== scheduledSession) return;
+      void loadMessagesForNavigation(before).then((loaded) => {
+        if (sessionRef.current !== scheduledSession) return;
+        if (loaded > 0) { onSettled(loaded); return; }
+        if (attempts < retries) {
+          attempts += 1;
+          scheduleSessionScoped(attempt, 150);
+          return;
+        }
+        onSettled(0);
+      });
+    };
+    attempt();
+  }, [loadMessagesForNavigation, scheduleSessionScoped]);
+  const scrollToLoadedTarget = useCallback((id: string) => {
+    const targetElement = () => document.getElementById(`user-msg-${id}`) ?? document.getElementById(`agent-msg-${id}`);
     const scrollToExact = () => {
-      const target = document.getElementById(`user-msg-${id}`);
+      const target = targetElement();
       if (!target) return false;
       // Instant positioning (behavior "auto"): a smooth animation would race
       // the getBoundingClientRect offset check below.
@@ -275,7 +611,7 @@ export function LiveSessionPage() {
     const scrollerNow = scrollRef.current;
     const beforeTop = scrollerNow?.scrollTop ?? -1;
     if (scrollToExact() && scrollerNow) {
-      const target = document.getElementById(`user-msg-${id}`);
+      const target = targetElement();
       if (target) {
         const r = target.getBoundingClientRect();
         const vr = scrollerNow.getBoundingClientRect();
@@ -301,23 +637,183 @@ export function LiveSessionPage() {
     } else {
       scrollToExact();
     }
-  };
+  }, [scheduleSessionScoped]);
   const handleNavSelect = (id: string) => {
+    // A new navigation supersedes the reading-position restore: cancel its
+    // retry timers, invalidate in-flight callbacks, release the write
+    // suppression it was holding, and mark the session entry so a late
+    // read-state response cannot start a restore either.
+    supersedeRestore();
     // Stop the follow-output effect from yanking the viewport back to the bottom.
     followOutputRef.current = false;
-    // A new navigation supersedes any pending correction timers from a
-    // previous one (rapid consecutive clicks, session switch).
-    cancelPendingScrollTimers();
     const target = userNavItems.find((item) => item.id === id);
     if (target?.before) {
-      void loadMessagesForNavigation(target.before).then((loadedMessages) => {
-        if (loadedMessages > 0) scheduleSessionScoped(() => scrollToLoadedTarget(id), 0);
+      loadOlderForTarget(target.before, (loaded) => {
+        // Zero (after retries): the target may already be mounted — try a
+        // direct scroll instead of silently doing nothing.
+        if (loaded > 0) scheduleSessionScoped(() => scrollToLoadedTarget(id), 0);
+        else scrollToLoadedTarget(id);
       });
       return;
     }
     scrollToLoadedTarget(id);
   };
+
+  // Restore the persisted reading position once per session entry. Lives
+  // after the scroll helpers so the restore can reuse them.
+  useEffect(() => {
+    if (!sessionId || readStateLoading || restoreSessionRef.current === sessionId) return;
+    restoreSessionRef.current = sessionId;
+    const restoreSession = sessionId;
+    // The user interacted (manual scroll, active-anchor change, or explicit
+    // navigation) while the read state was still loading: a late read-state
+    // response must not start a restore or yank the viewport to the saved
+    // position. The marker is persistent for the session entry, so a later
+    // read-state refetch cannot retry the restore either. Restore done =
+    // cancelled by the user's own position.
+    if (userNavInterruptedRef.current) {
+      suppressReadWriteRef.current = false;
+      return;
+    }
+    const generation = ++restoreGenerationRef.current;
+    const releaseWrites = () => {
+      // Session guard: a stale callback from a previous session must never
+      // release the current session's write suppression.
+      if (sessionRef.current !== restoreSession) return;
+      suppressReadWriteRef.current = false;
+    };
+    // Stale when the session changed or a user action superseded the restore
+    // (cancelRestore bumps the generation). In-flight promise continuations
+    // that cannot be cancelled check this before scheduling anything.
+    const stale = () => sessionRef.current !== restoreSession || restoreGenerationRef.current !== generation;
+    if (!readState) {
+      // No read state (or the endpoint is unavailable): nothing to restore,
+      // viewport-driven writes are safe.
+      releaseWrites();
+      return;
+    }
+    if (readState.at_bottom) {
+      // Already at the newest content: keep the default bottom behavior.
+      releaseWrites();
+      return;
+    }
+    if (!readState.anchor_available || !readState.before || !readState.anchor_message_id) {
+      // Anchor missing or stale (compaction/rewrite, non-indexed message):
+      // fall back to the bottom.
+      releaseWrites();
+      return;
+    }
+    const anchorId = readState.anchor_message_id;
+    // The anchor is the ground truth for the restore: mounted means the page
+    // containing it has landed AND Virtuoso renders it in the viewport range.
+    const anchorMounted = () => Boolean(
+      document.getElementById(`user-msg-${anchorId}`) || document.getElementById(`agent-msg-${anchorId}`),
+    );
+    // The anchor counts as reachable once it is in the loaded thread: the
+    // scroller may still have it virtualized out of the DOM, but
+    // scrollToLoadedTarget mounts it through Virtuoso's scrollToIndex path.
+    const anchorInThread = () => {
+      const threadState = useRuntimeStore.getState().thread;
+      return Boolean(threadState?.index && threadState.index[anchorId] !== undefined);
+    };
+    // The user asked to resume a saved position: stop following output so
+    // live block changes (streaming, a delayed history page landing after the
+    // restore) cannot snap the viewport back to the newest content.
+    followOutputRef.current = false;
+    // Re-assert write suppression: the 8s read-state safety timeout may have
+    // released it while this session's read state was still in flight. The
+    // restore must not race a viewport-driven write during its scroll.
+    suppressReadWriteRef.current = true;
+    const settleAndScroll = () => {
+      // Re-assert on every settle pass: the initial bottom-snap scroll event
+      // can re-enable follow-output while the restore is still correcting, and
+      // a follow-output true would snap the viewport back to newest content
+      // the next time a block lands (virtualizing the anchor away).
+      followOutputRef.current = false;
+      scheduleSessionScoped(() => {
+        if (stale()) return;
+        scrollToLoadedTarget(anchorId);
+      }, 0);
+    };
+    // The initial connect/resync compose the thread asynchronously and can
+    // reorder or drop the anchor page while the restore is running, so a
+    // single load+scroll is not enough. Re-assert until the anchor actually
+    // mounts: each pass loads the page when missing (prepend dedups by id, so
+    // repeats are harmless), scrolls to the anchor's current position, and
+    // once all composition settles the anchor page lands where it belongs.
+    const deadline = Date.now() + RESTORE_BUDGET_MS;
+    const attempt = (): void => {
+      if (stale()) return;
+      // Re-assert on every retry pass (see settleAndScroll): the saved
+      // position is the user's place, so no pass may leave follow-output on.
+      followOutputRef.current = false;
+      if (anchorMounted()) {
+        settleAndScroll();
+        // Keep viewport-driven writes suppressed through the scroll-correction
+        // window so the anchor jump cannot be overwritten by a premature
+        // bottom-seen write, then release them.
+        scheduleSessionScoped(releaseWrites, RESTORE_SETTLE_MS);
+        return;
+      }
+      if (Date.now() >= deadline) {
+        // Budget exhausted: if the anchor is in the thread, one final scroll
+        // attempt; otherwise the bottom is the graceful fallback. Never leave
+        // writes suppressed or follow-output off after giving up.
+        if (anchorInThread()) {
+          settleAndScroll();
+          scheduleSessionScoped(releaseWrites, RESTORE_SETTLE_MS);
+          return;
+        }
+        followOutputRef.current = true;
+        releaseWrites();
+        return;
+      }
+      if (anchorInThread()) {
+        // The page is already loaded (warm cache / same-session entry): keep
+        // scrolling to its (possibly moved) position until it mounts.
+        settleAndScroll();
+        scheduleSessionScoped(attempt, RESTORE_RETRY_MS);
+        return;
+      }
+      // The anchor lives in an older page — or the newest page is still
+      // loading (the store refuses history loads while historyLoading,
+      // returning 0 until the initial page lands after a cold runtime spawn).
+      // Keep retrying past those transient zeros: the saved position is only
+      // restorable once the page containing it has actually arrived.
+      void loadMessagesForNavigation(readState.before!).then(() => {
+        if (stale()) return;
+        settleAndScroll();
+        scheduleSessionScoped(attempt, RESTORE_RETRY_MS);
+      });
+    };
+    attempt();
+    // Safety net: never leave writes suppressed if the load stalls beyond the
+    // retry budget (a long-running load must not block the user's own writes).
+    scheduleSessionScoped(releaseWrites, RESTORE_BUDGET_MS + RESTORE_SETTLE_MS + 1000);
+  }, [readState, readStateLoading, sessionId, loadMessagesForNavigation, scheduleSessionScoped, scrollToLoadedTarget]);
+
+  // Bookmark jumps reuse the pagination machinery: the target may live in an
+  // older page that has not been loaded yet (user and assistant anchors). A
+  // bookmark jump supersedes an in-flight reading-position restore.
+  const jumpToBookmark = useCallback((id: string) => {
+    supersedeRestore();
+    followOutputRef.current = false;
+    const entry = (messageIndexQuery.data?.messages ?? []).find((candidate) => candidate.id === id);
+    if (entry?.before) {
+      loadOlderForTarget(entry.before, (loaded) => {
+        if (loaded > 0) scheduleSessionScoped(() => scrollToLoadedTarget(id), 0);
+        else scrollToLoadedTarget(id);
+      });
+      return;
+    }
+    scrollToLoadedTarget(id);
+  }, [messageIndexQuery.data?.messages, loadOlderForTarget, scrollToLoadedTarget, cancelRestore]);
   const scrollToBottom = () => {
+    // Back-to-latest supersedes the reading-position restore: cancel its
+    // retry loop (so the anchor jump cannot yank the viewport back), release
+    // its write suppression, and mark the session entry so a late read-state
+    // response cannot start a restore either.
+    supersedeRestore();
     followOutputRef.current = true;
     const scroller = scrollRef.current;
     if (scroller) {
@@ -349,8 +845,11 @@ export function LiveSessionPage() {
       // back to the newest content so the fresh reply is immediately visible.
       followOutputRef.current = true;
       setShowScrollDown(false);
-      // A new send supersedes pending corrections from an earlier one.
-      cancelPendingScrollTimers();
+      // A send supersedes the reading-position restore: cancel its retry
+      // timers, invalidate in-flight callbacks, release its write suppression
+      // and mark the session entry so a late read-state response cannot start
+      // a restore either.
+      supersedeRestore();
       const snapToBottom = () => {
         const scroller = scrollRef.current;
         if (scroller) scroller.scrollTop = scroller.scrollHeight;
@@ -454,6 +953,40 @@ export function LiveSessionPage() {
           )} title={status} />
           <h1 className="min-w-0 truncate text-[13px] font-medium text-text">{title}</h1>
         </div>
+        <div className="relative shrink-0">
+          <button
+            ref={bookmarksTriggerRef}
+            type="button"
+            aria-label={t("conversation.bookmarks")}
+            aria-haspopup="true"
+            aria-expanded={bookmarksOpen}
+            aria-controls={bookmarksPanelId}
+            onClick={() => setBookmarksOpen((open) => !open)}
+            className="relative flex h-7 w-7 items-center justify-center rounded-full text-muted transition-colors hover:bg-surface-2 hover:text-text"
+          >
+            <Bookmark size={14} fill={headerBookmarkCount > 0 ? "currentColor" : "none"} className={cn(headerBookmarkCount > 0 && "text-accent")} />
+            {headerBookmarkCount > 0 && (
+              <span className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-0.5 text-[8px] font-medium leading-none text-accent-fg">
+                {headerBookmarkCount}
+              </span>
+            )}
+          </button>
+          <ConversationBookmarksPanel
+            id={bookmarksPanelId}
+            bookmarks={sessionBookmarks}
+            loading={bookmarksLoading}
+            open={bookmarksOpen}
+            onClose={closeBookmarks}
+            onJump={jumpToBookmark}
+            onAccept={(bookmarkId) => acceptBookmark(bookmarkId)}
+            onReject={(bookmarkId) => rejectBookmark(bookmarkId)}
+            onDelete={(bookmarkId) => deleteBookmark(bookmarkId)}
+            onSuggest={() => proposeBookmarks()}
+            suggesting={proposePending}
+            proposeResult={proposeResult}
+            proposeError={proposeError}
+          />
+        </div>
       </header>
 
       {/* Welcome layout: this top region and the spacer below the composer both
@@ -511,7 +1044,7 @@ export function LiveSessionPage() {
                   }}
                   itemContent={(_index, group) => (
                     <div className="mx-auto w-full max-w-[824px] px-8 pb-3">
-                      {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock)}
+                      {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock, bookmarkActions)}
                     </div>
                   )}
                 />
@@ -535,7 +1068,7 @@ export function LiveSessionPage() {
 
         {/* Compact conversation minimap: hover a line to preview, click to jump. */}
         {userNavItems.length >= 1 && (
-          <ConversationNavRail items={userNavItems} rootRef={scrollRef} onSelect={handleNavSelect} />
+          <ConversationNavRail items={userNavItems} rootRef={scrollRef} onSelect={handleNavSelect} onActiveChange={handleActiveChange} bookmarkedIds={bookmarkedUserIds} observationKey={loadedUserAnchorKey} />
         )}
 
         {/* Composer */}

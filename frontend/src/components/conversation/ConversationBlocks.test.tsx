@@ -153,3 +153,38 @@ describe("artifact-summary blocks", () => {
     expect(screen.getByAltText("plot.png")).toBeInTheDocument();
   });
 });
+
+describe("bookmark actions", () => {
+  it("renders bookmark actions only for blocks with a bookmark map entry", () => {
+    const actions = new Map<string, { status: "accepted" | "proposed" | "none"; onToggle: () => void }>([
+      ["u1", { status: "accepted", onToggle: vi.fn() }],
+      ["a1", { status: "none", onToggle: vi.fn() }],
+    ]);
+    render(<>{renderBlockGroup([user("u1", "question"), agent("a1", "answer"), tool("t1", "bash")], codeRunner, undefined, actions)}</>);
+    expect(screen.getByRole("button", { name: "Remove bookmark" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Bookmark message" })).toBeInTheDocument();
+    // Tool blocks never get bookmark actions.
+    expect(screen.getAllByRole("button", { name: /bookmark/i })).toHaveLength(2);
+  });
+
+  it("does not render bookmark actions when no map is provided", () => {
+    render(<>{renderBlocks([user("u1", "question"), agent("a1", "answer")], codeRunner)}</>);
+    expect(screen.queryByRole("button", { name: /bookmark/i })).not.toBeInTheDocument();
+  });
+
+  it("shows a bookmark-only row for an agent message without a copy action", () => {
+    const actions = new Map<string, { status: "accepted" | "proposed" | "none"; onToggle: () => void }>([
+      ["a1", { status: "proposed", onToggle: vi.fn() }],
+    ]);
+    // A non-final agent block has no actionText; only the bookmark appears.
+    render(<>{renderBlockGroup([agent("a1", "mid-turn text"), tool("t1", "bash")], codeRunner, new Map(), actions)}</>);
+    expect(screen.getByRole("button", { name: "Accept bookmark proposal" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
+  });
+
+  it("anchors assistant messages for exact scrolling", () => {
+    render(<>{renderBlocks([user("u1", "q"), agent("a1", "answer")], codeRunner)}</>);
+    expect(document.getElementById("user-msg-u1")).not.toBeNull();
+    expect(document.getElementById("agent-msg-a1")).not.toBeNull();
+  });
+});

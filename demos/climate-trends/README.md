@@ -73,3 +73,13 @@ plt.show()
 The `monthly_global_anomalies.csv` file contains NASA GISTEMP v4 global-mean monthly
 surface temperature anomalies (relative to 1951-1980 baseline), from 1880 through 2024.
 Each row is one month with columns: Year, Month, Anomaly_C.
+
+## 作为示例 Workspace 使用（方案 5.1）
+
+这个 demo 是完整的“可检查成果样板”：复制本目录（含 `.pi-science/` 元数据）到你的工作区后，
+
+- **Artifact Library**（侧边栏 → Artifacts）可以看到 `monthly_global_anomalies.csv` 与 `climate_trends_report.md` 两个产物及其血缘（报告 `inputs` 引用数据表 v1）；
+- **Provenance** 面板可以查看文件的产生记录；
+- 在会话中打开 CSV 可以直接开始复现分析（算趋势、出图、写报告），重跑后新产物会以版本链延续。
+
+复制方式：`cp -R demos/climate-trends <你的工作区目录>/`，然后作为工作区打开。

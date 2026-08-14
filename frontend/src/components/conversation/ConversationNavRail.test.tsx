@@ -8,14 +8,32 @@ class IOStub {
   static instances: IOStub[] = [];
   cb: IntersectionObserverCallback;
   root: Element | null;
+  targets: Element[] = [];
   constructor(cb: IntersectionObserverCallback, options?: IntersectionObserverInit) {
     this.cb = cb;
     this.root = (options?.root instanceof Element ? options.root : null);
     IOStub.instances.push(this);
   }
-  observe() {}
+  observe(target: Element) {
+    // Real IntersectionObservers ignore re-observing an already-observed
+    // target; mirror that so the settle re-registration stays idempotent.
+    if (!this.targets.includes(target)) this.targets.push(target);
+  }
   unobserve() {}
   disconnect() {}
+}
+
+/** Captures its callback so tests can simulate added user-message nodes. */
+class MOStub {
+  static instances: MOStub[] = [];
+  cb: MutationCallback;
+  constructor(cb: MutationCallback) {
+    this.cb = cb;
+    MOStub.instances.push(this);
+  }
+  observe() {}
+  disconnect() {}
+  takeRecords() { return []; }
 }
 
 const ITEMS: ConversationNavItem[] = [
@@ -23,7 +41,7 @@ const ITEMS: ConversationNavItem[] = [
   { id: "u2", label: "Second question about data" },
 ];
 
-function renderRail(items: ConversationNavItem[] = ITEMS) {
+function renderRail(items: ConversationNavItem[] = ITEMS, options: { bookmarkedIds?: ReadonlySet<string>; onActiveChange?: (id: string | null) => void } = {}) {
   const root = document.createElement("div");
   for (const item of items) {
     const el = document.createElement("div");
@@ -35,7 +53,7 @@ function renderRail(items: ConversationNavItem[] = ITEMS) {
   Object.defineProperty(root, "scrollHeight", { value: 2000, configurable: true });
   Object.defineProperty(root, "clientHeight", { value: 600, configurable: true });
   const onSelect = vi.fn();
-  render(<ConversationNavRail items={items} rootRef={{ current: root }} onSelect={onSelect} />);
+  render(<ConversationNavRail items={items} rootRef={{ current: root }} onSelect={onSelect} onActiveChange={options.onActiveChange} bookmarkedIds={options.bookmarkedIds} />);
   return { onSelect };
 }
 
@@ -46,7 +64,9 @@ beforeAll(async () => {
 beforeEach(() => {
   cleanup();
   IOStub.instances = [];
+  MOStub.instances = [];
   vi.stubGlobal("IntersectionObserver", IOStub);
+  vi.stubGlobal("MutationObserver", MOStub);
   Element.prototype.scrollTo = vi.fn();
 });
 
@@ -170,6 +190,61 @@ describe("ConversationNavRail", () => {
     expect(screen.getByRole("button", { name: "First question about models" })).not.toHaveAttribute("aria-current");
   });
 
+  it("renders no aria-current until the observer establishes the active entry", () => {
+    renderRail();
+    // Before the IntersectionObserver reports geometry, no entry is active:
+    // the rail must not default the highlight to the newest message.
+    expect(screen.getByRole("button", { name: "First question about models" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: "Second question about data" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("clears the highlight when the active message stops intersecting", () => {
+    const onActiveChange = vi.fn();
+    renderRail(ITEMS, { onActiveChange });
+    const io = IOStub.instances[IOStub.instances.length - 1];
+    const target2 = document.createElement("div");
+    target2.id = "user-msg-u2";
+    act(() => {
+      io.cb([{ target: target2, isIntersecting: true, intersectionRatio: 0.8 } as unknown as IntersectionObserverEntry], io as unknown as IntersectionObserver);
+    });
+    expect(screen.getByRole("button", { name: "Second question about data" })).toHaveAttribute("aria-current", "true");
+
+    // The active message leaves the viewport band (or unmounts): the observer
+    // reports it non-intersecting and the rail must drop the highlight instead
+    // of keeping a stale active entry.
+    act(() => {
+      io.cb([{ target: target2, isIntersecting: false, intersectionRatio: 0 } as unknown as IntersectionObserverEntry], io as unknown as IntersectionObserver);
+    });
+    expect(screen.getByRole("button", { name: "First question about models" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: "Second question about data" })).not.toHaveAttribute("aria-current");
+    expect(onActiveChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it("clears the highlight when the active item leaves the item list", () => {
+    const root = document.createElement("div");
+    for (const item of ITEMS) {
+      const el = document.createElement("div");
+      el.id = `user-msg-${item.id}`;
+      root.appendChild(el);
+    }
+    Object.defineProperty(root, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(root, "clientHeight", { value: 600, configurable: true });
+    const view = render(<ConversationNavRail items={ITEMS} rootRef={{ current: root }} onSelect={vi.fn()} />);
+    const io = IOStub.instances[IOStub.instances.length - 1];
+    const target2 = document.createElement("div");
+    target2.id = "user-msg-u2";
+    act(() => {
+      io.cb([{ target: target2, isIntersecting: true, intersectionRatio: 0.8 } as unknown as IntersectionObserverEntry], io as unknown as IntersectionObserver);
+    });
+    expect(screen.getByRole("button", { name: "Second question about data" })).toHaveAttribute("aria-current", "true");
+
+    // u2 leaves the nav list (compaction/rewrite): the highlight must clear
+    // rather than fall back to the last remaining entry.
+    view.rerender(<ConversationNavRail items={[ITEMS[0]]} rootRef={{ current: root }} onSelect={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "First question about models" })).not.toHaveAttribute("aria-current");
+    expect(screen.queryByRole("button", { name: "Second question about data" })).toBeNull();
+  });
+
   it("falls back to the last entry when scrolled to the bottom", () => {
     renderRail();
     const io = IOStub.instances[IOStub.instances.length - 1];
@@ -183,5 +258,134 @@ describe("ConversationNavRail", () => {
       io.cb([{ target, isIntersecting: false, intersectionRatio: 0 } as unknown as IntersectionObserverEntry], io as unknown as IntersectionObserver);
     });
     expect(screen.getByRole("button", { name: "Second question about data" })).toHaveAttribute("aria-current", "true");
+  });
+
+  it("observes anchors that mount after the settle window without an observationKey change (MutationObserver)", () => {
+    // The index already lists u3 (paginated, not loaded yet): the items
+    // signature is final even though u3's DOM anchor does not exist yet.
+    const items: ConversationNavItem[] = [
+      { id: "u1", label: "One" },
+      { id: "u2", label: "Two" },
+      { id: "u3", label: "Three", before: "cursor-3" },
+    ];
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    for (const id of ["u1", "u2"]) {
+      const el = document.createElement("div");
+      el.id = `user-msg-${id}`;
+      root.appendChild(el);
+    }
+    Object.defineProperty(root, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(root, "clientHeight", { value: 600, configurable: true });
+    const rootRef = { current: root };
+    render(<ConversationNavRail items={items} rootRef={rootRef} onSelect={vi.fn()} />);
+    const io = IOStub.instances[IOStub.instances.length - 1];
+    expect(io.targets.map((target) => target.id)).toEqual(["user-msg-u1", "user-msg-u2"]);
+
+    try {
+      // u3 mounts well after the 150ms settle, with NO observationKey change
+      // and NO rerender (Virtuoso's own virtualization commit): the rail's
+      // MutationObserver must register it with the IntersectionObserver.
+      const u3 = document.createElement("div");
+      u3.id = "user-msg-u3";
+      root.appendChild(u3);
+      const mo = MOStub.instances[MOStub.instances.length - 1];
+      act(() => {
+        mo.cb([{ addedNodes: [u3], removedNodes: [] }] as unknown as MutationRecord[], mo as unknown as MutationObserver);
+      });
+      expect(io.targets.map((target) => target.id)).toEqual(["user-msg-u1", "user-msg-u2", "user-msg-u3"]);
+    } finally {
+      document.body.removeChild(root);
+    }
+  });
+
+  it("re-registers the observer when anchors mount after the signature was known (observationKey)", () => {
+    // The index already lists u3 (paginated, not loaded yet): the items
+    // signature is final even though u3's DOM anchor does not exist yet.
+    const items: ConversationNavItem[] = [
+      { id: "u1", label: "One" },
+      { id: "u2", label: "Two" },
+      { id: "u3", label: "Three", before: "cursor-3" },
+    ];
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    for (const id of ["u1", "u2"]) {
+      const el = document.createElement("div");
+      el.id = `user-msg-${id}`;
+      root.appendChild(el);
+    }
+    Object.defineProperty(root, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(root, "clientHeight", { value: 600, configurable: true });
+    const rootRef = { current: root };
+    const view = render(<ConversationNavRail items={items} rootRef={rootRef} onSelect={vi.fn()} observationKey="u1\u0000u2" />);
+    const first = IOStub.instances[IOStub.instances.length - 1];
+    expect(first.targets.map((target) => target.id)).toEqual(["user-msg-u1", "user-msg-u2"]);
+
+    try {
+      // The older page lands: u3's anchor mounts, and the page's loaded-user
+      // signature grows. The unchanged items signature must not matter — the
+      // rail has to observe the new anchor.
+      const u3 = document.createElement("div");
+      u3.id = "user-msg-u3";
+      root.appendChild(u3);
+      view.rerender(<ConversationNavRail items={items} rootRef={rootRef} onSelect={vi.fn()} observationKey="u1\u0000u2\u0000u3" />);
+      const second = IOStub.instances[IOStub.instances.length - 1];
+      expect(second).not.toBe(first);
+      expect(second.targets.map((target) => target.id)).toEqual(["user-msg-u1", "user-msg-u2", "user-msg-u3"]);
+    } finally {
+      document.body.removeChild(root);
+    }
+  });
+});
+
+describe("ConversationNavRail attention hooks", () => {
+  it("reports the active id only when it changes", () => {
+    const onActiveChange = vi.fn();
+    const root = document.createElement("div");
+    for (const item of ITEMS) {
+      const el = document.createElement("div");
+      el.id = `user-msg-${item.id}`;
+      root.appendChild(el);
+    }
+    Object.defineProperty(root, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(root, "clientHeight", { value: 600, configurable: true });
+    render(<ConversationNavRail items={ITEMS} rootRef={{ current: root }} onSelect={vi.fn()} onActiveChange={onActiveChange} />);
+    // Initial mount reports no active entry: nothing has been observed yet.
+    expect(onActiveChange).toHaveBeenCalledTimes(1);
+    expect(onActiveChange).toHaveBeenLastCalledWith(null);
+
+    // The observer establishes the active entry from geometry.
+    const io = IOStub.instances[IOStub.instances.length - 1];
+    const target2 = document.createElement("div");
+    target2.id = "user-msg-u2";
+    Object.defineProperty(root, "scrollTop", { value: 500, configurable: true });
+    act(() => {
+      io.cb([{ target: target2, isIntersecting: true, intersectionRatio: 0.8 } as unknown as IntersectionObserverEntry], io as unknown as IntersectionObserver);
+    });
+    expect(onActiveChange).toHaveBeenCalledTimes(2);
+    expect(onActiveChange).toHaveBeenLastCalledWith("u2");
+
+    // A later IO callback that resolves to the same active id does not re-fire.
+    act(() => {
+      io.cb([{ target: target2, isIntersecting: true, intersectionRatio: 0.8 } as unknown as IntersectionObserverEntry], io as unknown as IntersectionObserver);
+    });
+    expect(onActiveChange).toHaveBeenCalledTimes(2);
+
+    const target1 = document.createElement("div");
+    target1.id = "user-msg-u1";
+    act(() => {
+      io.cb([{ target: target1, isIntersecting: true, intersectionRatio: 0.9 } as unknown as IntersectionObserverEntry], io as unknown as IntersectionObserver);
+    });
+    expect(onActiveChange).toHaveBeenCalledTimes(3);
+    expect(onActiveChange).toHaveBeenLastCalledWith("u1");
+  });
+
+  it("marks user messages that carry an accepted bookmark", () => {
+    renderRail(ITEMS, { bookmarkedIds: new Set(["u1"]) });
+    // The marker is a decorative accent dot inside the u1 row.
+    const row = screen.getByRole("button", { name: "First question about models" });
+    expect(row.querySelector(".bg-accent")).not.toBeNull();
+    const other = screen.getByRole("button", { name: "Second question about data" });
+    expect(other.querySelector(".bg-accent")).toBeNull();
   });
 });

@@ -10,7 +10,7 @@ import { clearCachedMessages, readCachedMessages } from "./message-cache";
 import * as rest from "./rest";
 import { clearAiTitle, clearAiTitleAttempted, clearSessionName } from "./session-names";
 import { SseTransport } from "./sse-transport";
-import type { HistoryMessage, InteractionResponse, PiScienceEvent, SessionInfo, SessionMessagePage, SessionState, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
+import type { HistoryMessage, InteractionResponse, PiScienceEvent, SessionInfo, SessionMessageIndex, SessionMessagePage, SessionState, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
 
 export type {
   AvailableModel,
@@ -78,6 +78,11 @@ export class PiScienceClient {
 
   async getUserMessageIndex(sessionId: string, cwd?: string): Promise<SessionUserMessageIndex> {
     return rest.getUserMessageIndex(this.baseUrl, sessionId, cwd);
+  }
+
+  /** All-role message index (user + assistant with visible text). */
+  async getMessageIndex(sessionId: string, cwd?: string, roles: "user" | "all" = "user"): Promise<SessionMessageIndex> {
+    return rest.getMessageIndex(this.baseUrl, sessionId, cwd, roles);
   }
 
   async getTurnArtifacts(sessionId: string, cwd?: string): Promise<{ turns: TurnArtifactTurn[] }> {

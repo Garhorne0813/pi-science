@@ -29,15 +29,30 @@ export function ConversationNavRail({
   items,
   rootRef,
   onSelect,
+  onActiveChange,
+  bookmarkedIds,
+  observationKey,
 }: {
   items: ConversationNavItem[];
   rootRef: React.RefObject<HTMLDivElement | null>;
   onSelect: (id: string) => void;
+  /** Fired only when the active (viewport-top) user message actually changes. */
+  onActiveChange?: (id: string | null) => void;
+  /** User-message ids that carry an accepted bookmark; renders a marker dot. */
+  bookmarkedIds?: ReadonlySet<string>;
+  /** Loaded-user-anchor signature from the page. The item list already knows
+   *  every indexed user message (paginated ones carry `before` cursors), so
+   *  `signature` alone does not change when an older page's anchors mount.
+   *  This key changes exactly when loaded user blocks change, re-registering
+   *  the observer for the newly attached DOM anchors. */
+  observationKey?: string;
 }) {
   const { t } = useTranslation();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const [activeId, setActiveId] = useState<string | null>(items.at(-1)?.id ?? null);
+  // Nothing is active until the IntersectionObserver establishes the
+  // viewport-top entry from real geometry; never default to the last item.
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [paneWidth, setPaneWidth] = useState(0);
   const signature = items.map((item) => item.id).join("\u0000");
@@ -47,10 +62,25 @@ export function ConversationNavRail({
   const hoverIndex = preview ? items.findIndex((item) => item.id === preview.id) : -1;
   const rowHeight = items.length <= 20 ? 16 : 12;
 
+  // Never guess the active entry: an active entry that leaves the item list
+  // clears the highlight instead of falling back to the last item. Only an
+  // explicit near-bottom observer event may select the last entry (and an
+  // explicit click may select its entry).
   useEffect(() => {
-    if (activeId && items.some((item) => item.id === activeId)) return;
-    setActiveId(items.at(-1)?.id ?? null);
+    if (activeId && !items.some((item) => item.id === activeId)) {
+      setActiveId(null);
+    }
   }, [activeId, signature, items]);
+
+  // Report the active id only when it actually changed. Mount reports null
+  // (geometry has not established an active entry yet); the caller treats the
+  // first non-null report as its mount-time baseline, so no reading position
+  // is written before observation starts.
+  const onActiveChangeRef = useRef(onActiveChange);
+  onActiveChangeRef.current = onActiveChange;
+  useEffect(() => {
+    onActiveChangeRef.current?.(activeId);
+  }, [activeId]);
 
   // Split panes can be narrow even on a desktop viewport, so use the actual
   // conversation scroller width instead of relying only on Tailwind's lg
@@ -94,12 +124,50 @@ export function ConversationNavRail({
       }
       setActiveId((previous) => (previous !== best ? best : previous));
     }, { root, rootMargin: "0px 0px -45% 0px" });
-    for (const item of itemsRef.current) {
-      const element = document.getElementById(`user-msg-${item.id}`);
-      if (element && root.contains(element)) io.observe(element);
+    // Register every currently mounted anchor. IntersectionObserver ignores
+    // repeated observe() calls on an already-observed target, so re-running
+    // this after a DOM settle only adds anchors that mounted in between.
+    const observeMounted = () => {
+      for (const item of itemsRef.current) {
+        const element = document.getElementById(`user-msg-${item.id}`);
+        if (element && root.contains(element)) io.observe(element);
+      }
+    };
+    observeMounted();
+    // Virtuoso virtualizes the conversation: anchor nodes unmount and remount
+    // as the user scrolls, and a paginated page's anchors can mount a commit
+    // AFTER the page's loaded-user key changed. Observe the scroller for
+    // added user-message nodes so anchors that mount outside the key-change
+    // + 150ms settle window are registered immediately instead of waiting
+    // for the next observationKey change. IntersectionObserver ignores
+    // repeated observe() calls, so re-observing an already-tracked anchor is
+    // cheap; the known-id filter keeps foreign user-msg ids out.
+    let mutationObserver: MutationObserver | null = null;
+    if (typeof MutationObserver !== "undefined") {
+      mutationObserver = new MutationObserver((mutations) => {
+        const known = new Set(itemsRef.current.map((item) => `user-msg-${item.id}`));
+        for (const mutation of mutations) {
+          for (const node of mutation.addedNodes) {
+            if (!(node instanceof Element)) continue;
+            if (known.has(node.id)) { io.observe(node); continue; }
+            const nested = node.querySelectorAll("[id^='user-msg-']");
+            for (const anchor of nested) if (known.has(anchor.id)) io.observe(anchor);
+          }
+        }
+      });
+      mutationObserver.observe(root, { childList: true, subtree: true });
     }
-    return () => io.disconnect();
-  }, [rootRef, signature]);
+    // Paginated anchors can mount a commit AFTER the page's loaded-user key
+    // changed (Virtuoso renders prepended items in its own update pass), so
+    // re-check once the DOM has settled and register any anchors that
+    // appeared late. The key change itself re-runs this whole effect.
+    const settle = window.setTimeout(observeMounted, 150);
+    return () => {
+      io.disconnect();
+      mutationObserver?.disconnect();
+      window.clearTimeout(settle);
+    };
+  }, [rootRef, signature, observationKey]);
 
   // Long conversations scroll inside the bounded minimap. Keep the active
   // line near its centre without affecting the conversation's own scroll.
@@ -182,7 +250,7 @@ export function ConversationNavRail({
               onFocus={(event) => showPreview(item.id, event.currentTarget)}
               onBlur={() => setPreview(null)}
               onClick={() => { setActiveId(item.id); onSelect(item.id); }}
-              className="group flex w-20 shrink-0 items-center justify-start rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+              className="group flex w-20 shrink-0 items-center justify-start gap-0.5 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
               style={{ height: rowHeight }}
             >
               <span
@@ -193,6 +261,12 @@ export function ConversationNavRail({
                 )}
                 style={{ width: hoverIndex < 0 ? IDLE_INDICATOR_WIDTH : indicatorWidth(distance) }}
               />
+              {bookmarkedIds?.has(item.id) && (
+                <span
+                  aria-hidden
+                  className="ml-0.5 h-1 w-1 shrink-0 rounded-full bg-accent"
+                />
+              )}
             </button>
           );
         })}

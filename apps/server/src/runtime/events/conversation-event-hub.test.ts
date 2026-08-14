@@ -190,6 +190,20 @@ describe("central conversation event hub", () => {
     expect(received).toHaveLength(0);
   });
 
+  it("reports pending interactions for attention without mutating state", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
+    expect(hub.hasPendingInteraction(cwd, "session-attention")).toBe(false);
+
+    await hub.publish(cwd, "session-attention", { type: "question.asked", sessionId: "session-attention", requestId: "request-q1" });
+    expect(hub.hasPendingInteraction(cwd, "session-attention")).toBe(true);
+
+    hub.resolvePendingInteraction(cwd, "session-attention", "request-q1");
+    expect(hub.hasPendingInteraction(cwd, "session-attention")).toBe(false);
+    // A different session stays unaffected.
+    expect(hub.hasPendingInteraction(cwd, "session-other")).toBe(false);
+  });
+
   it("preserves exact message_end errors and emits one durable event per Pi event", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();

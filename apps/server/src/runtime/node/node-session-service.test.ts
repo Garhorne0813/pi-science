@@ -4,6 +4,7 @@ import { delimiter, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConversationEventHub, conversationEventHub } from "../events/conversation-event-hub.js";
 import type { SseEventRecord } from "../events/event-store.js";
+import type { ConversationBookmark } from "../../conversation-navigation/repository.js";
 import { NodeSessionService } from "./node-session-service.js";
 import { loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
 import { readJsonLines } from "../../storage/persistence.js";
@@ -318,6 +319,23 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
+  it("exposes busy session ids for attention without leaking runtime records", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-busy", "session-idle");
+    await service.resume("session-busy", cwd);
+    await service.resume("session-idle", cwd);
+    expect(service.busySessionIds(cwd)).toEqual([]);
+
+    await expect(service.command("session-busy", cwd, "prompt", { message: "hold" })).resolves.toMatchObject({ success: true });
+    await expect(service.command("session-busy", cwd, "prompt", { message: "second" })).resolves.toMatchObject({ code: "busy" });
+    expect(service.busySessionIds(cwd)).toEqual(["session-busy"]);
+    expect(service.busySessionIds(join(cwd, "..", "other-workspace"))).toEqual([]);
+
+    await service.command("session-busy", cwd, "abort");
+    expect(service.busySessionIds(cwd)).toEqual([]);
+    await service.shutdownAll();
+  });
+
   it("preserves nested model IDs and supports commands, fork, and interaction notifications", async () => {
     const service = testService();
     const cwd = await workspaceWithSessions("session-a");
@@ -356,18 +374,32 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
+  // Known integration-test budget: this test spawns four real child processes
+  // (resume + create per mode) and waits out two intentionally unanswered
+  // prompt/compact RPCs (1500ms each on Windows), so it exceeds vitest's 5000ms
+  // global default on Windows CI (measured 6561ms). The 15s budget matches the
+  // other child-process tests in this file. The RPC timeout cannot be shrunk
+  // here: it is captured per process at construction and also bounds the
+  // post-spawn switch_session/get_state/set_model handshakes, which need the
+  // beforeEach's Windows spawn headroom.
   it("reconciles timed-out prompt and compact operations without leaving the workspace permanently busy", async () => {
     for (const mode of ["prompt-timeout", "compact-timeout"]) {
       process.env.FAKE_PI_MODE = mode;
       const service = testService();
-      const cwd = await workspaceWithSessions(`session-${mode}`);
-      await service.resume(`session-${mode}`, cwd);
-      await expect(service.command(`session-${mode}`, cwd, mode.startsWith("prompt") ? "prompt" : "compact", { message: "test" })).resolves.toMatchObject({ code: "timeout" });
-      await new Promise((resolve) => setTimeout(resolve, 130));
-      await expect(service.create({ cwd, config: { skills: [], extensions: [] } })).resolves.toHaveProperty("id");
-      await service.shutdownAll();
+      try {
+        const cwd = await workspaceWithSessions(`session-${mode}`);
+        await service.resume(`session-${mode}`, cwd);
+        await expect(service.command(`session-${mode}`, cwd, mode.startsWith("prompt") ? "prompt" : "compact", { message: "test" })).resolves.toMatchObject({ code: "timeout" });
+        await new Promise((resolve) => setTimeout(resolve, 130));
+        await expect(service.create({ cwd, config: { skills: [], extensions: [] } })).resolves.toHaveProperty("id");
+      } finally {
+        // Child cleanup must complete before the shared afterEach removes the
+        // temp workspaces: a run that skips shutdownAll leaves the fake Pi
+        // processes alive and rm fails with EBUSY on Windows.
+        await service.shutdownAll();
+      }
     }
-  });
+  }, 15_000);
 
   it("uses Pi Orbit runtime busy state when the agent_start event is delayed", async () => {
     process.env.FAKE_PI_MODE = "orbit-busy-without-agent-start";
@@ -1103,4 +1135,35 @@ describe("Event-stream watchdog", () => {
     expect(connecting.reconnectEventStream).not.toHaveBeenCalled();
     await service.shutdownAll();
   });
+
+describe("automatic bookmark proposals", () => {
+  it("proposes bookmarks after a settled turn when messages match keywords", async () => {
+    const cwd = await workspaceWithConversation("bookmark-session");
+    // The conversation already has "because it warms above 20C"; append a
+    // message that carries a bookmark keyword so the heuristic has a candidate.
+    await writeFile(join(cwd, ".pi-science", "sessions", "bookmark-session.jsonl"), JSON.stringify({ type: "message", id: "message-2", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "Conclusion: the buffer drift is thermal." }] } }) + "\n", { flag: "a" });
+
+    const proposeImpl = vi.fn(async (_cwd: string, _sessionId: string, messageIds: string[]): Promise<{ bookmarks: Array<{ bookmark_id: string; message_id: string; status: string }>; skipped: number }> => ({ bookmarks: messageIds.map((id) => ({ bookmark_id: "b-" + id, message_id: id, status: "proposed" })), skipped: 0 }));
+    const propose = proposeImpl as unknown as (cwd: string, sessionId: string, messageIds: string[]) => Promise<{ bookmarks: ConversationBookmark[]; skipped: number }>;
+    const service = new NodeSessionService(undefined, undefined, undefined, passthroughEnvironments, undefined, { proposeBookmarks: propose });
+    process.env.FAKE_PI_MODE = "turn-artifacts";
+    await expect(service.resume("bookmark-session", cwd)).resolves.toEqual({ success: true });
+    await expect(service.command("bookmark-session", cwd, "prompt", { message: "continue" })).resolves.toMatchObject({ success: true });
+    await waitFor(() => proposeImpl.mock.calls.length > 0);
+    expect(propose).toHaveBeenCalledWith(expect.any(String), "bookmark-session", expect.arrayContaining(["message-2"]));
+    await service.shutdownAll();
+  });
+
+  it("does not propose when no message matches keywords", async () => {
+    const cwd = await workspaceWithConversation("bookmark-session-2");
+    const propose = vi.fn(async () => ({ bookmarks: [], skipped: 0 }));
+    const service = new NodeSessionService(undefined, undefined, undefined, passthroughEnvironments, undefined, { proposeBookmarks: propose });
+    process.env.FAKE_PI_MODE = "turn-artifacts";
+    await expect(service.resume("bookmark-session-2", cwd)).resolves.toEqual({ success: true });
+    await expect(service.command("bookmark-session-2", cwd, "prompt", { message: "continue" })).resolves.toMatchObject({ success: true });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(propose).not.toHaveBeenCalled();
+    await service.shutdownAll();
+  });
+});
 });

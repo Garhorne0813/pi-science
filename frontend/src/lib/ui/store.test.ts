@@ -97,6 +97,25 @@ describe("inspector tabs", () => {
     ])).toHaveLength(3);
   });
 
+  it("gives version-targeted file opens a distinct tab identity", () => {
+    const live = file("same.txt");
+    const v1 = { ...file("same.txt"), artifactVersion: { artifact_id: "a1", version: 1 } };
+    const v2 = { ...file("same.txt"), artifactVersion: { artifact_id: "a1", version: 2 } };
+
+    const ids = new Set([inspectorTabId(live), inspectorTabId(v1), inspectorTabId(v2)]);
+    expect(ids).toHaveLength(3);
+    // Re-opening the same exact version refocuses the same tab.
+    expect(inspectorTabId({ ...v1, filename: "renamed.txt" })).toBe(inspectorTabId(v1));
+
+    useUiStore.getState().openInspector(live);
+    useUiStore.getState().openInspector(v1);
+    expect(useUiStore.getState().inspectorTabs).toHaveLength(2);
+    useUiStore.getState().openInspector(v1);
+    expect(useUiStore.getState().inspectorTabs).toHaveLength(2);
+    useUiStore.getState().openInspector(v2);
+    expect(useUiStore.getState().inspectorTabs).toHaveLength(3);
+  });
+
   it("hides and restores the inspector without discarding open tabs", () => {
     const preview = file("report.md");
     useUiStore.getState().openInspector(preview);

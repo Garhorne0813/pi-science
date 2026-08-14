@@ -10,6 +10,8 @@ import { PiOrbitRequestError } from "../pi/pi-orbit-host.js";
 import type { PiProcess, PiProcessOptions, PiResult, RuntimeSkillPolicy } from "../pi/pi-process.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
 import type { ProjectReviewService } from "../../project-review/service.js";
+import type { ConversationNavigationRepository } from "../../conversation-navigation/repository.js";
+import { proposeCandidates } from "../../conversation-navigation/heuristics.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { SessionRepository, invalidateSessionFileCache, sessionRepository } from "./session-repository.js";
 import { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
@@ -146,7 +148,10 @@ export class NodeSessionService {
     private readonly repository: SessionRepository = sessionRepository,
     private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService(),
     private readonly projectReview: Pick<ProjectReviewService, "run"> | null = null,
+    private readonly navigation: Pick<ConversationNavigationRepository, "proposeBookmarks"> | null = null,
   ) {}
+
+  private readonly autoBookmarks = new Set<string>();
 
   configureLogging(log: (level: "info" | "warn" | "error", message: string) => void): void {
     this.log = log;
@@ -375,6 +380,17 @@ export class NodeSessionService {
       return [...this.runtimes.values()]
         .filter((runtime) => runtime.cwd === cwd && runtime.activeSessionId)
         .map((runtime) => ({ id: runtime.activeSessionId, cwd }));
+    } catch { return []; }
+  }
+
+  /** Read-only attention introspection: ids of sessions whose runtime is
+   *  currently busy. Never exposes the PiProcess or mutable runtime records. */
+  busySessionIds(cwdValue: string): string[] {
+    try {
+      const cwd = resolve(cwdValue);
+      return [...this.runtimes.values()]
+        .filter((runtime) => runtime.cwd === cwd && runtime.activeSessionId && runtime.busy)
+        .map((runtime) => runtime.activeSessionId);
     } catch { return []; }
   }
 
@@ -660,6 +676,7 @@ export class NodeSessionService {
         if (event.type === "agent_settled") {
           await this.finishTurnArtifacts(runtime, event, sessionId);
           this.scheduleAutoReview(cwd, sessionId);
+          void this.scheduleAutoBookmarks(cwd, sessionId);
         }
       },
     });
@@ -1038,7 +1055,33 @@ export class NodeSessionService {
       .finally(() => this.autoReviews.delete(key));
   }
 
-  private async restartRuntimeUnlocked(runtime: RuntimeRecord, config: PiConfig): Promise<RuntimeRecord | ServiceFailure> {
+  /** One automatic bookmark proposal pass per settled turn: the keyword
+   *  heuristic picks the last two matching messages; the repository is
+   *  idempotent (existing or durably-rejected messages are skipped), so
+   *  repeated settles never create duplicates. Proposals are never
+   *  auto-accepted — the user decides. */
+  private async scheduleAutoBookmarks(cwd: string, sessionId: string): Promise<void> {
+    const navigation = this.navigation;
+    if (!navigation || !sessionId) return;
+    const key = runtimeKey(cwd, sessionId);
+    if (this.autoBookmarks.has(key)) return;
+    this.autoBookmarks.add(key);
+    try {
+      const messages = await this.repository.messages(cwd, sessionId);
+      const candidates = proposeCandidates(messages);
+      if (candidates.length === 0) return;
+      const { bookmarks, skipped } = await navigation.proposeBookmarks(cwd, sessionId, candidates);
+      if (bookmarks.length > 0 || skipped > 0) {
+        await this.eventHub.publish(cwd, sessionId, { type: "bookmark.proposals", sessionId, count: bookmarks.length, skipped });
+      }
+    } catch (error) {
+      this.log("warn", `automatic bookmark proposals failed for session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      this.autoBookmarks.delete(key);
+    }
+  }
+
+    private async restartRuntimeUnlocked(runtime: RuntimeRecord, config: PiConfig): Promise<RuntimeRecord | ServiceFailure> {
     const cwd = runtime.cwd;
     if (runtime.busy) return { success: false, code: "busy", error: "agent is busy" };
     const oldId = runtime.activeSessionId;

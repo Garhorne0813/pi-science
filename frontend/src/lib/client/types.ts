@@ -48,6 +48,7 @@ export interface SessionMessagePage {
 
 export interface SessionUserMessageIndexEntry {
   id: string;
+  role?: "user" | "assistant";
   text: string;
   timestamp?: string | null;
   before: string;
@@ -55,6 +56,20 @@ export interface SessionUserMessageIndexEntry {
 
 export interface SessionUserMessageIndex {
   messages: SessionUserMessageIndexEntry[];
+  snapshot_version: string;
+}
+
+/** Entry shape returned by the server for both user-only and all-role indexes. */
+export interface SessionMessageIndexEntry {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  timestamp?: string | null;
+  before: string;
+}
+
+export interface SessionMessageIndex {
+  messages: SessionMessageIndexEntry[];
   snapshot_version: string;
 }
 

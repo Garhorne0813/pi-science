@@ -17,17 +17,19 @@ import { formatNumber } from "@/i18n/format";
 import { CodeViewer } from "@/components/code-viewer/CodeViewer";
 import { MarkdownViewer } from "@/components/markdown-viewer/MarkdownViewer";
 import { IconButton } from "@/components/ui/Icon";
-import { ProvenancePanel } from "./ProvenancePanel";
-import { TablePreview } from "./TablePreview";
-import { TableChart } from "./TableChart";
+// History (provenance + lineage) only matters once the user opens it; keep
+// the panel and its data clients out of the initial bundle.
+const ProvenancePanel = lazy(() => import("./ProvenancePanel").then((module) => ({ default: module.ProvenancePanel })));
+const TablePreview = lazy(() => import("./TablePreview").then((module) => ({ default: module.TablePreview })));
+const TableChart = lazy(() => import("./TableChart").then((module) => ({ default: module.TableChart })));
 import { canChart } from "@/lib/shared";
 const DocxView = lazy(() => import("./OfficePreview").then((module) => ({ default: module.DocxView })));
 const PptxView = lazy(() => import("./OfficePreview").then((module) => ({ default: module.PptxView })));
 const XlsxView = lazy(() => import("./OfficePreview").then((module) => ({ default: module.XlsxView })));
 const MoleculeView = lazy(() => import("./MoleculeView").then((module) => ({ default: module.MoleculeView })));
 const MeshView = lazy(() => import("./MeshView").then((module) => ({ default: module.MeshView })));
-import { GenomeView } from "./GenomeView";
-import { FitsView } from "./FitsView";
+const GenomeView = lazy(() => import("./GenomeView").then((module) => ({ default: module.GenomeView })));
+const FitsView = lazy(() => import("./FitsView").then((module) => ({ default: module.FitsView })));
 import { DosView } from "./DosView";
 import { BandView } from "./BandView";
 import { QCodeView } from "./QCodeView";
@@ -86,7 +88,10 @@ export function FilePreviewInspector({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"preview" | "code">(policy.defaultTab);
-  const [showHistory, setShowHistory] = useState(false);
+  // Version-targeted opens (lineage relation jumps) land in History: the
+  // preview shows CURRENT bytes, so opening history prevents the inspector
+  // from pretending the live file is the exact version.
+  const [showHistory, setShowHistory] = useState(Boolean(data.artifactVersion));
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -300,7 +305,16 @@ export function FilePreviewInspector({
 
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto bg-surface-2">
         <div className="h-full min-h-full" style={{ zoom: contentZoom }}>
-        {showHistory && <ProvenancePanel path={data.path} language={data.language} cwd={cwd} />}
+        {data.artifactVersion && (
+          <div className="border-b border-border bg-surface-2 px-4 py-1.5 text-[11px] text-muted">
+            {t("filePreview.artifactVersionNotice", { version: data.artifactVersion.version })}
+          </div>
+        )}
+        {showHistory && (
+          <Suspense fallback={<div className="flex items-center gap-2 p-4 text-sm text-muted"><Loader2 size={15} className="animate-spin" /> {t("provenance.loadingHistory")}</div>}>
+            <ProvenancePanel path={data.path} language={data.language} cwd={cwd} initialVersion={data.artifactVersion?.version} artifactVersion={data.artifactVersion} />
+          </Suspense>
+        )}
         {!showHistory && editing && draft !== null && (
           <div className="flex h-full flex-col">
             <textarea

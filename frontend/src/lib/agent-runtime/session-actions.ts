@@ -103,6 +103,19 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         // when the user switches workspaces/sessions while the request runs.
         void loadSessionsInternal(cwd);
 
+        // The initial history fetch gates the pagination helpers: while it is
+        // in flight, loadMessagesForNavigation/loadOlderMessages return 0, so a
+        // reading-position restore (or a history jump) cannot load an older
+        // page BEFORE the newest page lands and then get its blocks reordered
+        // by the merge below. The gate must be raised BEFORE the cached
+        // snapshot render below: that render awaits turn-artifact reads
+        // (network), and a restore starting in that window would prepend its
+        // page into the empty/cached thread only to have the cached render +
+        // newest-page merge clobber it — leaving the saved anchor permanently
+        // outside the loaded thread on re-entry (reload / switch-out-and-return
+        // with a warm localStorage message cache).
+        set({ historyLoading: true });
+
         // Optimistic render: if we have a cached message snapshot for this
         // session, render it immediately so the user sees the conversation
         // while the network request is still in flight.
@@ -121,8 +134,16 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         if (generation !== generations.connection) return;
         // A prompt/model action may have started while the initial history/state
         // reads were in flight. Never overwrite its optimistic blocks or status
-        // with the older snapshot that just arrived.
-        if (localMutationGeneration !== generations.localMutation) return;
+        // with the older snapshot that just arrived. The pagination gate must
+        // not stay latched either: the newer turn's own flow does not re-run
+        // this connect, so release the gate when this session is still active.
+        if (localMutationGeneration !== generations.localMutation) {
+          const current = get();
+          if (current.cwd === cwd && current.activeSessionId === targetSessionId) {
+            set({ historyLoading: false });
+          }
+          return;
+        }
 
         const nextState: Partial<RuntimeState> = {};
         // History/state requests race the SSE connection. If live events arrived
@@ -182,6 +203,9 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         ) {
           nextState.status = "ready";
         }
+        // The initial history fetch is done (fulfilled or rejected): release
+        // the pagination gate so restores/jumps can load older pages in order.
+        nextState.historyLoading = false;
         set(nextState);
         if (nextState.thread) backfillSessionName(cwd, targetSessionId, nextState.thread);
 
@@ -231,8 +255,10 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         }
         appendRuntimeError(err, sessionId ?? null, cwd);
         // A failed connection is not proof that the backend is idle. Keep the
-        // composer guarded until a subsequent authoritative state read.
-        set({ status: "error", working: true });
+        // composer guarded until a subsequent authoritative state read. The
+        // initial history fetch never settled, so release its pagination gate
+        // (no newer connect will do it for this failure).
+        set({ status: "error", working: true, historyLoading: false });
       }
 
     };

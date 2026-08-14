@@ -3,7 +3,7 @@
 
 import { request, responseError } from "./http";
 import { cacheMessages } from "./message-cache";
-import type { HistoryMessage, InteractionResponse, SessionInfo, SessionMessagePage, SessionState, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
+import type { HistoryMessage, InteractionResponse, SessionInfo, SessionMessageIndex, SessionMessagePage, SessionState, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
 
 export async function createSession(baseUrl: string, cwd: string, model?: string): Promise<{ id: string; cwd?: string; project_id?: string }> {
   const config = model ? { model } : {};
@@ -63,8 +63,15 @@ export async function getMessages(baseUrl: string, sessionId: string, cwd?: stri
 }
 
 export async function getUserMessageIndex(baseUrl: string, sessionId: string, cwd?: string): Promise<SessionUserMessageIndex> {
+  return getMessageIndex(baseUrl, sessionId, cwd, "user");
+}
+
+/** Generalized message index. `roles: "all"` includes assistant messages with
+ *  visible text (used for bookmark eligibility and read anchors). */
+export async function getMessageIndex(baseUrl: string, sessionId: string, cwd?: string, roles: "user" | "all" = "user"): Promise<SessionMessageIndex> {
   const params = new URLSearchParams();
   if (cwd) params.set("cwd", cwd);
+  if (roles === "all") params.set("roles", "all");
   const query = params.toString();
   const res = await request(`${baseUrl}/api/sessions/${sessionId}/messages/index${query ? `?${query}` : ""}`);
   const data = await res.json().catch(() => ({}));

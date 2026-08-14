@@ -6,6 +6,7 @@ import type { SessionTitleRepository } from "../../runtime/node/session-titles.j
 import { sessionTitleRepository } from "../../runtime/node/session-titles.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { AiTitleService } from "../../runtime/title/ai-title-service.js";
+import type { ConversationNavigationRepository } from "../../conversation-navigation/repository.js";
 
 function cwd(request: { query: unknown }): string {
   const value = (request.query as { cwd?: unknown }).cwd;
@@ -49,6 +50,7 @@ export function registerNodeSessionRoutes(
   sessionRepository: SessionRepository,
   aiTitleService?: AiTitleService,
   titles: SessionTitleRepository = sessionTitleRepository,
+  navigation?: ConversationNavigationRepository,
 ): void {
   app.post("/api/sessions", async (request, reply) => {
     const parsed = createSessionRequestSchema.safeParse(request.body);
@@ -195,7 +197,21 @@ export function registerNodeSessionRoutes(
       return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) });
     }
     const result = await nodeSessionService.delete(request.params.session_id, cwd(request));
-    if (result.success) await titles.deleteTitle(workspace, sessionId);
+    if (result.success) {
+      await titles.deleteTitle(workspace, sessionId);
+      // Navigation cleanup is best-effort: the session file is already gone,
+      // so a navigation-state write failure must never turn a successful
+      // delete into an error response. Orphaned bookmarks/read state are
+      // harmless (they only resurface for a recreated session id) and can be
+      // swept on a later delete.
+      if (navigation) {
+        try {
+          await navigation.cleanupSession(workspace, sessionId);
+        } catch (error) {
+          app.log.warn(`navigation cleanup failed for deleted session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    }
     return result.success ? { ok: true } : sendFailure(reply, result as Record<string, unknown>);
   });
 }

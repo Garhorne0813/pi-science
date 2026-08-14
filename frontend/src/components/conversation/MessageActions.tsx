@@ -1,13 +1,20 @@
-import { Check, Copy } from "lucide-react";
+import { Bookmark, Check, Copy } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "../../lib/ui";
 
-export function MessageActions({ text, timestamp, align = "left" }: { text: string; timestamp?: string; align?: "left" | "right" }) {
+export interface MessageBookmarkAction {
+  /** "none" renders an outline toggle that creates a user bookmark on click. */
+  status: "accepted" | "proposed" | "none";
+  onToggle: () => void;
+}
+
+export function MessageActions({ text, timestamp, align = "left", bookmark }: { text: string; timestamp?: string; align?: "left" | "right"; bookmark?: MessageBookmarkAction }) {
   const { t, i18n } = useTranslation();
   const [copied, setCopied] = useState(false);
   const copy = async () => {
+    if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
     } catch {
@@ -27,18 +34,35 @@ export function MessageActions({ text, timestamp, align = "left" }: { text: stri
 
   return (
     <div className={cn("flex min-h-6 items-center gap-1.5 text-[10px] text-muted/70", align === "right" && "justify-end")}>
-      <button
-        type="button"
-        onClick={() => void copy()}
-        className={cn(
-          "flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-surface-2 hover:text-text",
-          align === "right" && "order-2",
-        )}
-        aria-label={copied ? t("conversation.copied") : t("conversation.copy")}
-        title={copied ? t("conversation.copied") : t("conversation.copy")}
-      >
-        {copied ? <Check size={11} /> : <Copy size={11} />}
-      </button>
+      {bookmark && (
+        <button
+          type="button"
+          onClick={() => bookmark.onToggle()}
+          className={cn(
+            "flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-surface-2",
+            bookmark.status === "accepted" ? "text-accent" : bookmark.status === "proposed" ? "text-warn" : "text-muted hover:text-text",
+            align === "right" && "order-3",
+          )}
+          aria-label={bookmark.status === "accepted" ? t("conversation.bookmarkRemove") : bookmark.status === "proposed" ? t("conversation.bookmarkAcceptProposal") : t("conversation.bookmarkAdd")}
+          title={bookmark.status === "accepted" ? t("conversation.bookmarkRemove") : bookmark.status === "proposed" ? t("conversation.bookmarkAcceptProposal") : t("conversation.bookmarkAdd")}
+        >
+          <Bookmark size={11} fill={bookmark.status === "accepted" ? "currentColor" : "none"} />
+        </button>
+      )}
+      {text && (
+        <button
+          type="button"
+          onClick={() => void copy()}
+          className={cn(
+            "flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-surface-2 hover:text-text",
+            align === "right" && "order-2",
+          )}
+          aria-label={copied ? t("conversation.copied") : t("conversation.copy")}
+          title={copied ? t("conversation.copied") : t("conversation.copy")}
+        >
+          {copied ? <Check size={11} /> : <Copy size={11} />}
+        </button>
+      )}
       {time && (
         <time
           dateTime={timestamp}

@@ -4,6 +4,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { queryClient } from "../../lib/client/query-client";
 import { FilePreviewInspector } from "./FilePreviewInspector";
 import { FeedbackContext } from "../feedback/feedback-context";
 import type { FilePreviewInspector as FilePreviewInspectorT } from "../../types/thread";
@@ -147,5 +149,107 @@ describe("FilePreviewInspector edit capability", () => {
     const bTextarea = await screen.findByLabelText("Edit b.txt") as HTMLTextAreaElement;
     expect(bTextarea.value).toContain("line1");
     expect(bTextarea.value).not.toContain("content from a.txt");
+  });
+});
+
+describe("FilePreviewInspector history mode with lineage", () => {
+  it("still shows provenance history when the lineage endpoint fails", async () => {
+    queryClient.clear();
+    const historyFetch = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      const method = (init.method || "GET").toUpperCase();
+      if (url.includes("/api/settings/config")) return jsonResponse({ ok: true, available_models: [], model: "", thinking: "high" });
+      if (url.includes("/api/project-memory/research-loops")) return jsonResponse({ loops: [] });
+      if (url.includes("/api/artifacts?") || url.includes("/lineage")) return jsonResponse({ error: "boom" }, 500);
+      if (url.includes("/api/provenance/versions/")) {
+        return jsonResponse({ versions: [
+          { path: "x.txt", version: 1, ts: 1735689600, tool: "write", sessionId: "s1", content: "code" },
+          { path: "x.txt", version: 2, ts: 1735693200, tool: "edit", sessionId: "s1", diff: "--- a\n+++ b" },
+        ] });
+      }
+      if (url.includes("/api/files/")) return jsonResponse({ path: "x.txt", encoding: "utf8", data: "line1\nline2\n", size: 12 });
+      return jsonResponse({ error: `unhandled ${method} ${url}` }, 404);
+    });
+    vi.stubGlobal("fetch", historyFetch);
+    render(
+      <MemoryRouter>
+        <FilePreviewInspector data={{ kind: "file", path: "x.txt", filename: "x.txt", root: "workspace", language: "plaintext" } as never} onClose={() => {}} cwd="proj" />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByLabelText("Version history"));
+    // Provenance versions render even though the lineage query failed.
+    expect(await screen.findByText("v1")).toBeInTheDocument();
+    expect(screen.getByText("v2")).toBeInTheDocument();
+    // No lineage section is shown (failure must not fake an empty graph).
+    expect(screen.queryByText("Lineage")).not.toBeInTheDocument();
+  });
+
+  it("shows lineage relations above the history when available", async () => {
+    queryClient.clear();
+    const lineageFetch = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      const method = (init.method || "GET").toUpperCase();
+      if (url.includes("/api/settings/config")) return jsonResponse({ ok: true, available_models: [], model: "", thinking: "high" });
+      if (url.includes("/api/project-memory/research-loops")) return jsonResponse({ loops: [] });
+      if (url.includes("/api/artifacts?") && url.includes("latest=1")) {
+        return jsonResponse({ artifacts: [{ schema_version: 2, artifact_id: "a2", version: 2, path: "x.txt", kind: "text", mime: "text/plain", size: 12, sha256: "1234567890abcdef", published_at: "2026-01-01T00:00:00.000Z", inputs: [{ artifact_id: "a1", version: 1 }], supersedes: null, classification: "deliverable" }] });
+      }
+      if (url.includes("/lineage")) {
+        return jsonResponse({ artifact: { artifact_id: "a2", version: 2, path: "x.txt" }, upstream: [{ kind: "consumes", artifact: { artifact_id: "a1", version: 1, path: "raw.txt" } }], downstream: [], unresolved_inputs: [] });
+      }
+      if (url.includes("/api/provenance/versions/")) return jsonResponse({ versions: [{ path: "x.txt", version: 2, ts: 1735693200, tool: "edit", sessionId: "s1", diff: "--- a\n+++ b" }] });
+      if (url.includes("/api/files/")) return jsonResponse({ path: "x.txt", encoding: "utf8", data: "line1\nline2\n", size: 12 });
+      return jsonResponse({ error: `unhandled ${method} ${url}` }, 404);
+    });
+    vi.stubGlobal("fetch", lineageFetch);
+    render(
+      <MemoryRouter>
+        <FilePreviewInspector data={{ kind: "file", path: "x.txt", filename: "x.txt", root: "workspace", language: "plaintext" } as never} onClose={() => {}} cwd="proj" />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByLabelText("Version history"));
+    expect(await screen.findByText("Lineage")).toBeInTheDocument();
+    expect(screen.getByText("raw.txt")).toBeInTheDocument();
+    // The lineage chip (v2) and the provenance version row (v2) coexist.
+    expect(screen.getAllByText("v2").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("opens history at the exact version for version-targeted opens", async () => {
+    queryClient.clear();
+    const exactFetch = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      const method = (init.method || "GET").toUpperCase();
+      if (url.includes("/api/settings/config")) return jsonResponse({ ok: true, available_models: [], model: "", thinking: "high" });
+      if (url.includes("/api/project-memory/research-loops")) return jsonResponse({ loops: [] });
+      if (/\/api\/artifacts\/[^/]+\?cwd=/.test(url)) return jsonResponse({ schema_version: 2, artifact_id: "a2", version: 1, path: "x.txt", kind: "text", mime: "text/plain", size: 12, sha256: "1234567890abcdef", published_at: "2026-01-01T00:00:00.000Z", inputs: [], supersedes: null, classification: "deliverable" });
+      if (url.includes("/lineage")) {
+        return jsonResponse({ artifact: { artifact_id: "a2", version: 1, path: "x.txt" }, upstream: [], downstream: [], unresolved_inputs: [] });
+      }
+      if (url.includes("/api/provenance/versions/")) {
+        return jsonResponse({ versions: [
+          { path: "x.txt", version: 1, ts: 1735689600, tool: "write", sessionId: "s1", content: "code" },
+          { path: "x.txt", version: 2, ts: 1735693200, tool: "edit", sessionId: "s1", diff: "--- a\n+++ b" },
+        ] });
+      }
+      if (url.includes("/api/files/")) return jsonResponse({ path: "x.txt", encoding: "utf8", data: "line1\nline2\n", size: 12 });
+      return jsonResponse({ error: `unhandled ${method} ${url}` }, 404);
+    });
+    vi.stubGlobal("fetch", exactFetch);
+    render(
+      <MemoryRouter>
+        <FilePreviewInspector data={{ kind: "file", path: "x.txt", filename: "x.txt", root: "workspace", language: "plaintext", artifactVersion: { artifact_id: "a2", version: 1 } } as never} onClose={() => {}} cwd="proj" />
+      </MemoryRouter>,
+    );
+
+    // History opens automatically for a version-targeted open…
+    expect(await screen.findByText("v1")).toBeInTheDocument();
+    expect(screen.getByText("v2")).toBeInTheDocument();
+    // …with a notice that the preview shows the CURRENT file, not that version.
+    expect(screen.getByText(/Artifact record v1/)).toBeInTheDocument();
+    // The lineage is fetched for the EXACT version (no latest=1 resolution).
+    expect(exactFetch.mock.calls.some(([url]) => String(url).includes("/api/artifacts/a2?cwd=proj&version=1"))).toBe(true);
+    expect(exactFetch.mock.calls.some(([url]) => String(url).includes("latest=1"))).toBe(false);
   });
 });

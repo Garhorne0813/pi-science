@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
-import { lazy, Suspense, useState, useEffect, useRef } from "react";
-import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical, type LucideIcon } from "lucide-react";
+import { lazy, Suspense, useState, useEffect, useRef, useMemo } from "react";
+import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, GitBranch, FolderOpen, ArrowLeft, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical, BellRing, LoaderCircle, CircleDot, type LucideIcon } from "lucide-react";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { InspectorTabs } from "../../components/inspector/InspectorTabs";
@@ -9,6 +9,8 @@ import { PreviewPaneControls } from "../../components/inspector/PreviewPaneContr
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
 import { useWorkspaceCwd } from "../../lib/workspace";
 import { usePendingProposalCount } from "../../lib/knowledge";
+import { useConversationAttention } from "../../hooks/useConversationNavigation";
+import type { AttentionStatus } from "../../lib/conversation-navigation";
 import { cn } from "../../lib/ui";
 
 // The settings bundle (dialog + five tabs) only loads on first open.
@@ -119,6 +121,7 @@ export function ProjectsLayout() {
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} icon={BookOpen} label={t("nav.notebooks")} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/runs`} icon={Play} label={t("nav.runs")} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/knowledge`} icon={Inbox} label={t("nav.knowledge")} />
+              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/artifacts`} icon={GitBranch} label={t("nav.artifacts")} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/research`} icon={FlaskConical} label={t("nav.research")} />
             </>
           )}
@@ -161,6 +164,7 @@ export function ProjectsLayout() {
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/research`} label={t("nav.research")} icon={FlaskConical} active={location.pathname.endsWith("/research")} />
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} label={t("nav.notebooks")} icon={BookOpen} active={location.pathname.endsWith("/notebooks")} />
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/runs`} label={t("nav.runs")} icon={Play} active={location.pathname.endsWith("/runs")} />
+                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/artifacts`} label={t("nav.artifacts")} icon={GitBranch} active={location.pathname.endsWith("/artifacts")} />
                 </>
               )}
             </nav>
@@ -254,6 +258,9 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
   const forkSession = useRuntimeStore((s) => s.forkSession);
   const loadSessions = useRuntimeStore((s) => s.loadSessions);
   const deleteSession = useRuntimeStore((s) => s.deleteSession);
+  const attention = useConversationAttention(cwd);
+  const attentionBySession = useMemo(() => new Map(attention.items.map((item) => [item.session_id, item.status])), [attention.items]);
+  const attentionCounts = attention.counts;
   const navigate = useNavigate();
   const location = useLocation();
   const workspaceRoot = `/workspace/${encodeURIComponent(cwd)}`;
@@ -362,6 +369,38 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
     <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
       <div className="mb-1 flex h-tool items-center justify-between px-2">
         <span className="text-ui-caption font-medium uppercase tracking-wider text-muted">{t("conversation.sessions")}</span>
+        {(attentionCounts.needs_you > 0 || attentionCounts.running > 0 || attentionCounts.unread > 0 || attentionCounts.plan_ready > 0) && (
+          <span className="flex items-center gap-1 text-ui-micro text-muted" aria-label={t("conversation.attentionSummary")}>
+            {attentionCounts.needs_you > 0 && (
+              <span className="flex items-center gap-0.5 rounded-full bg-warn/15 px-1.5 py-px text-[9px] leading-none text-warn" title={t("conversation.attentionNeedsYouTitle")}>
+                <Icon icon={BellRing} size="xs" className="shrink-0" />
+                <span className="sr-only">{t("conversation.attentionNeedsYou")}: </span>
+                {attentionCounts.needs_you}
+              </span>
+            )}
+            {attentionCounts.running > 0 && (
+              <span className="flex items-center gap-0.5 rounded-full bg-accent/15 px-1.5 py-px text-[9px] leading-none text-accent" title={t("conversation.attentionRunningTitle")}>
+                <Icon icon={LoaderCircle} size="xs" className="shrink-0 animate-spin" />
+                <span className="sr-only">{t("conversation.attentionRunning")}: </span>
+                {attentionCounts.running}
+              </span>
+            )}
+            {attentionCounts.unread > 0 && (
+              <span className="flex items-center gap-0.5 rounded-full bg-ok/15 px-1.5 py-px text-[9px] leading-none text-ok" title={t("conversation.attentionNewTitle")}>
+                <Icon icon={CircleDot} size="xs" className="shrink-0" />
+                <span className="sr-only">{t("conversation.attentionNew")}: </span>
+                {attentionCounts.unread}
+              </span>
+            )}
+            {attentionCounts.plan_ready > 0 && (
+              <span className="flex items-center gap-0.5 rounded-full bg-info/15 px-1.5 py-px text-[9px] leading-none text-info" title={t("conversation.attentionPlanReadyTitle")}>
+                <Icon icon={GitBranch} size="xs" className="shrink-0" />
+                <span className="sr-only">{t("conversation.attentionPlanReady")}: </span>
+                {attentionCounts.plan_ready}
+              </span>
+            )}
+          </span>
+        )}
         <IconButton
           icon={Plus}
           label={t("conversation.newSession")}
@@ -393,6 +432,7 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
               >
                 <Icon icon={MessageSquare} size="sm" className="shrink-0 text-muted" />
                 <span className="truncate flex-1">{s.name === "New Session" ? t("conversation.newSession") : s.name || s.id.slice(0, 8)}</span>
+                {attentionBadge(attentionBySession.get(s.id), t)}
                 {(s.updated_at || s.created_at) && (
                   <span className="mr-1 shrink-0 text-ui-micro text-muted/60 group-hover:hidden">
                     {relativeTime(s.updated_at || s.created_at!)}
@@ -430,6 +470,22 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
 }
 
 /* ── Helpers ── */
+
+function attentionBadge(status: AttentionStatus | undefined, t: (key: string) => string) {
+  if (!status || status === "idle") return null;
+  const config: Record<Exclude<AttentionStatus, "idle">, { icon: LucideIcon; label: string; className: string; title: string }> = {
+    needs_you: { icon: BellRing, label: t("conversation.attentionNeedsYou"), className: "text-warn", title: t("conversation.attentionNeedsYouTitle") },
+    running: { icon: LoaderCircle, label: t("conversation.attentionRunning"), className: "text-accent animate-spin", title: t("conversation.attentionRunningTitle") },
+    unread: { icon: CircleDot, label: t("conversation.attentionNew"), className: "text-ok", title: t("conversation.attentionNewTitle") },
+  };
+  const item = config[status];
+  return (
+    <span className="mr-1 flex shrink-0 items-center" title={item.title}>
+      <Icon icon={item.icon} size="sm" className={cn("shrink-0", item.className)} />
+      <span className="sr-only">{item.label}</span>
+    </span>
+  );
+}
 
 function relativeTime(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();

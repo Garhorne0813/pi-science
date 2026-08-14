@@ -158,6 +158,76 @@ export const artifactManifestSchema = z.object({
   published_at: z.string(),
 }).passthrough();
 
+/** Exact version reference used by artifact lineage edges. */
+export const artifactVersionRefSchema = z.object({
+  artifact_id: z.string().min(1),
+  version: z.number().int().positive(),
+});
+
+export const artifactClassificationSchema = z.enum(["intermediate", "deliverable", "unspecified"]);
+
+/** Manifest v2: adds versioned input references, supersession and a
+ *  classification. Legacy v1 rows (no schema_version) are interpreted as
+ *  `unspecified` in-memory; files are never rewritten. */
+/** One human/automated review verdict on an artifact version. */
+export const artifactReviewRecordSchema = z.object({
+  review_id: z.string().min(1),
+  actor: z.string().min(1),
+  status: z.enum(["passed", "failed", "needs_work"]),
+  at: z.string(),
+}).passthrough();
+
+export const artifactManifestV2Schema = z.object({
+  schema_version: z.literal(2),
+  artifact_id: z.string().min(1),
+  /** Stable logical identity, independent of path. Present on manifests
+   *  published after the logical-id feature; legacy rows omit it. Version
+   *  chains aggregate by `logical_id` when it is present, so a file that is
+   *  renamed or moved keeps one lineage across paths. */
+  logical_id: z.string().min(1).optional(),
+  version: z.number().int().positive(),
+  path: z.string().min(1),
+  kind: z.string().min(1),
+  mime: z.string().min(1),
+  size: z.number().int().nonnegative(),
+  sha256: z.string().min(16).max(64),
+  published_at: z.string(),
+  inputs: z.array(z.union([artifactVersionRefSchema, z.string().min(1)])).max(100).default([]),
+  /** Semantic derivation relations (research lineage), distinct from the
+   *  mechanical `inputs` consumed list. */
+  derived_from: z.array(artifactVersionRefSchema).max(100).optional(),
+  /** Review verdicts attached to this version. */
+  reviews: z.array(artifactReviewRecordSchema).max(50).optional(),
+  supersedes: artifactVersionRefSchema.nullable().default(null),
+  classification: artifactClassificationSchema.default("unspecified"),
+}).passthrough();
+
+export const artifactLineageResponseSchema = z.object({
+  artifact: artifactManifestV2Schema,
+  upstream: z.array(z.object({
+    kind: z.enum(["consumes", "supersedes", "derived_from"]),
+    artifact: artifactManifestV2Schema,
+  })).default([]),
+  downstream: z.array(z.object({
+    kind: z.enum(["consumed_by", "superseded_by", "derived"]),
+    artifact: artifactManifestV2Schema,
+  })).default([]),
+  unresolved_inputs: z.array(z.string()).default([]),
+});
+
+/** Narrow-privilege role profile enforced by the Node control plane
+ *  (reverse-cs-inspiration 4.4): a role fixes what a runtime may read, write
+ *  and command, independent of any prompt text. */
+export const agentRoleProfileSchema = z.object({
+  role: z.string().min(1),
+  read_scope: z.array(z.string().min(1)).default([]),
+  write_scope: z.array(z.string().min(1)).default([]),
+  /** Command types the runtime may issue; absent means unrestricted. */
+  allowed_commands: z.array(z.string().min(1)).optional(),
+  /** False = trace-only: the runtime must never recompute analyses. */
+  computational: z.boolean().default(true),
+});
+
 export const provenanceRecordSchema = z.object({
   id: z.string().min(1),
   action: z.string().min(1),
@@ -177,6 +247,7 @@ export const gatewayHealthSchema = scientificRuntimeHealthSchema.extend({
   scientific_runtime: z.enum(["idle", "starting", "ready", "stopping", "failed", "external"]),
 });
 
+export type AgentRoleProfile = z.infer<typeof agentRoleProfileSchema>;
 export type GatewayHealth = z.infer<typeof gatewayHealthSchema>;
 export type PiConfig = z.infer<typeof piConfigSchema>;
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
@@ -193,7 +264,119 @@ export type PiRpcResponse = z.infer<typeof piRpcResponseSchema>;
 export type PiRuntimeEvent = z.infer<typeof piRuntimeEventSchema>;
 export type JobRecord = z.infer<typeof jobRecordSchema>;
 export type ArtifactManifest = z.infer<typeof artifactManifestSchema>;
+export type ArtifactVersionRef = z.infer<typeof artifactVersionRefSchema>;
+export type ArtifactClassification = z.infer<typeof artifactClassificationSchema>;
+export type ArtifactManifestV2 = z.infer<typeof artifactManifestV2Schema>;
+export type ArtifactLineageResponse = z.infer<typeof artifactLineageResponseSchema>;
 export type ProvenanceRecord = z.infer<typeof provenanceRecordSchema>;
+
+// ── Conversation navigation (durable bookmarks / read state / attention) ──
+
+export const conversationBookmarkSchema = z.object({
+  bookmark_id: z.string().min(1),
+  session_id: z.string().min(1),
+  message_id: z.string().min(1),
+  role: z.enum(["user", "assistant"]),
+  quote: z.string().min(1).max(500),
+  label: z.string().max(160).nullable(),
+  origin: z.enum(["user", "agent_proposal", "legacy_auto"]),
+  status: z.enum(["accepted", "proposed", "rejected"]),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const conversationBookmarkCreateSchema = z.object({
+  session_id: z.string().min(1),
+  message_id: z.string().min(1),
+  label: z.string().max(160).nullish(),
+});
+
+export const conversationBookmarkUpdateSchema = z.object({
+  status: z.enum(["accepted", "rejected"]),
+});
+
+export const conversationBookmarkListResponseSchema = z.object({
+  bookmarks: z.array(conversationBookmarkSchema),
+  legacy_skipped: z.number().int().nonnegative().default(0),
+});
+
+export const conversationBookmarkProposeResponseSchema = z.object({
+  session_id: z.string().min(1),
+  bookmarks: z.array(conversationBookmarkSchema),
+  skipped: z.number().int().nonnegative(),
+});
+
+export const conversationReadStateSchema = z.object({
+  session_id: z.string().min(1),
+  anchor_message_id: z.string().nullable(),
+  at_bottom: z.boolean(),
+  seen_snapshot_version: z.string().nullable(),
+  updated_at: z.string(),
+});
+
+export const conversationReadStateUpdateSchema = z.object({
+  anchor_message_id: z.string().nullable().optional(),
+  at_bottom: z.boolean().optional(),
+  mark_seen: z.boolean().optional(),
+});
+
+/** GET /read-state appends a dynamic locator so the client can load the page
+ *  that contains the anchor without persisting a stale opaque cursor. The
+ *  empty (never-read) response carries `updated_at: null` — a persisted read
+ *  state always has a string timestamp, only the synthetic empty response
+ *  is nullable. */
+export const conversationReadStateResponseSchema = conversationReadStateSchema.extend({
+  anchor_available: z.boolean(),
+  before: z.string().nullable(),
+  updated_at: z.string().nullable(),
+});
+
+export const sessionMessageIndexEntrySchema = z.object({
+  id: z.string().min(1),
+  role: z.enum(["user", "assistant"]),
+  text: z.string(),
+  timestamp: z.string().nullable(),
+  before: z.string(),
+});
+
+export const sessionMessageIndexSchema = z.object({
+  messages: z.array(sessionMessageIndexEntrySchema),
+  snapshot_version: z.string(),
+});
+
+export const conversationAttentionItemSchema = z.object({
+  session_id: z.string().min(1),
+  status: z.enum(["needs_you", "running", "unread", "idle"]),
+  updated_at: z.string().nullable(),
+});
+
+export const conversationAttentionResponseSchema = z.object({
+  items: z.array(conversationAttentionItemSchema),
+  counts: z.object({
+    needs_you: z.number().int().nonnegative(),
+    running: z.number().int().nonnegative(),
+    unread: z.number().int().nonnegative(),
+    /** Workspace-level: research loops whose plan passed preflight and are
+     *  waiting for the user to start them. Loop->session association does not
+     *  exist yet, so this is aggregated at the workspace level rather than
+     *  attributed to a specific session. */
+    plan_ready: z.number().int().nonnegative().default(0),
+  }),
+  truncated: z.boolean(),
+});
+
+export type ConversationBookmark = z.infer<typeof conversationBookmarkSchema>;
+export type ConversationBookmarkCreate = z.infer<typeof conversationBookmarkCreateSchema>;
+export type ConversationBookmarkUpdate = z.infer<typeof conversationBookmarkUpdateSchema>;
+export type ConversationBookmarkListResponse = z.infer<typeof conversationBookmarkListResponseSchema>;
+export type ConversationBookmarkProposeResponse = z.infer<typeof conversationBookmarkProposeResponseSchema>;
+export type ConversationReadState = z.infer<typeof conversationReadStateSchema>;
+export type ConversationReadStateUpdate = z.infer<typeof conversationReadStateUpdateSchema>;
+export type ConversationReadStateResponse = z.infer<typeof conversationReadStateResponseSchema>;
+export type SessionMessageIndexEntry = z.infer<typeof sessionMessageIndexEntrySchema>;
+export type SessionMessageIndex = z.infer<typeof sessionMessageIndexSchema>;
+export type ConversationAttentionItem = z.infer<typeof conversationAttentionItemSchema>;
+export type ConversationAttentionResponse = z.infer<typeof conversationAttentionResponseSchema>;
 
 // ── Durable subagent research loops ────────────────────────────────
 

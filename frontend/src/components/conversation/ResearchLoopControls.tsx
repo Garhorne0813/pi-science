@@ -1,7 +1,8 @@
-import { BarChart3, Check, FlaskConical, Loader2, Pause, Play, RotateCcw, X } from "lucide-react";
+import { BarChart3, FlaskConical, Pause, Play, RotateCcw, X } from "lucide-react";
 import { cn } from "../../lib/ui";
 import type { ExperienceRecord, ResearchLoop, ResearchTaskType } from "../../lib/knowledge";
 import { useTranslation } from "react-i18next";
+import { PlanCard } from "./PlanCard";
 
 export type ResearchStarter = ResearchTaskType;
 
@@ -27,10 +28,16 @@ export function ResearchLoopDraftCard({ draft, busy, onCancel, onConfirm }: { dr
       <div className="rounded-input bg-surface-2 px-4 py-3"><div className="text-[10px] font-semibold uppercase tracking-wide text-muted">{t("research.autoLimits")}</div><p className="mt-1 text-xs leading-5 text-text">{t("research.autoLimitsValue", { rounds: draft.maxCandidates, minutes: Math.ceil(draft.maxWallSeconds / 60) })}</p></div>
     </div>
     <div className="mt-3">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">{t("research.autoPlan")}</div>
-      <ol className="mt-2 space-y-2">{draft.planSteps.map((step, index) => <li key={`${index}-${step}`} className="flex gap-2 text-xs leading-5 text-muted"><span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/10 font-mono text-[10px] text-accent">{index + 1}</span><span>{step}</span></li>)}</ol>
+      <PlanCard
+        title={t("research.autoPlan")}
+        steps={draft.planSteps.map((label) => ({ label }))}
+        onApprove={onConfirm}
+        onRequestChanges={onCancel}
+        approveLabel={t("research.createStart")}
+        requestChangesLabel={t("common.cancel")}
+        approving={busy}
+      />
     </div>
-    <div className="mt-4 flex justify-end gap-2"><button type="button" onClick={onCancel} disabled={busy} className="min-h-9 rounded-input border border-border px-3 text-xs text-muted">{t("common.cancel")}</button><button type="button" onClick={onConfirm} disabled={busy} className="flex min-h-9 items-center gap-1.5 rounded-input bg-accent px-3 text-xs font-medium text-accent-fg disabled:opacity-50">{busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} {t("research.createStart")}</button></div>
   </section>;
 }
 

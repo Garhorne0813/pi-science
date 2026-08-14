@@ -35,6 +35,9 @@ export class PiReviewSubagentRunner implements ReviewSubagentRunner {
     const managerKey = `review:${request.run_id}`;
     const process = await this.manager.start(managerKey, options);
     this.active.set(process, managerKey);
+    // 4.4: the reviewer is a trace-only role — the Node control plane rejects
+    // any command outside its read-only surface regardless of prompt text.
+    process.attachRole("result_reviewer");
     const deadline = Date.now() + RUN_TIMEOUT_MS;
     let text = "";
     let settle: (() => void) | null = null;

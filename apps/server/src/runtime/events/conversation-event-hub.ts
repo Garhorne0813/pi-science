@@ -215,6 +215,12 @@ export class ConversationEventHub {
     return (this.subscribers.get(streamKey(cwd, sessionId))?.size ?? 0) > 0;
   }
 
+  /** Read-only attention introspection: true while an interaction is waiting
+   *  for a browser response in this session. Never mutates pending state. */
+  hasPendingInteraction(cwd: string, sessionId: string): boolean {
+    return this.pendingInteractions.has(streamKey(cwd, sessionId));
+  }
+
   resolvePendingInteraction(cwd: string, sessionId: string, requestId: string): void {
     if (!requestId) return;
     const key = streamKey(cwd, sessionId);

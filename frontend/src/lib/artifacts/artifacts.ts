@@ -187,12 +187,15 @@ export function fileInspectorFromBlock(
   };
 }
 
-/** Build the correct inspector for any workspace path. */
+/** Build the correct inspector for any workspace path. `artifactVersion`
+ *  marks a version-targeted open (lineage relation jump): the inspector shows
+ *  the current file bytes but pins lineage/provenance to that exact version. */
 export function fileInspectorForPath(
   path: string,
   filename = path.split(/[\\/]/).pop() || path,
   root?: FileRoot,
   cwd?: string,
+  artifactVersion?: { artifact_id: string; version: number },
 ): FilePreviewInspector | NotebookFileInspector {
   if (extOf(filename) === "ipynb") {
     return { variant: "notebook-file", path, root, cwd };
@@ -205,6 +208,7 @@ export function fileInspectorForPath(
     cwd,
     artifact: extToKind(extOf(filename)),
     language: EXT_LANG[extOf(filename)],
+    ...(artifactVersion ? { artifactVersion } : {}),
   };
 }
 

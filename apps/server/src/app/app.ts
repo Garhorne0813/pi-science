@@ -9,6 +9,7 @@ import { registerSessionReadRoutes } from "../http/routes/session-routes.js";
 import { registerSseRoutes } from "../http/routes/sse-routes.js";
 import { registerFileReadRoutes } from "../http/routes/file-routes.js";
 import { registerNodeSessionRoutes } from "../http/routes/node-session-routes.js";
+import { registerConversationNavigationRoutes } from "../http/routes/conversation-navigation-routes.js";
 import { registerJobRoutes } from "../http/routes/job-routes.js";
 import { registerArtifactRoutes } from "../http/routes/artifact-routes.js";
 import { registerTurnArtifactRoutes } from "../http/routes/turn-artifact-routes.js";
@@ -23,7 +24,7 @@ import { validateWorkspaceCwd } from "../security/workspace-security.js";
 import { AiTitleService, PiTitleRuntimeFactory } from "../runtime/title/ai-title-service.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
-  const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, jobs, research, projectReview, scientificRuntime, environments } = modules;
+  const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, jobs, remoteJobs, research, projectReview, scientificRuntime, environments } = modules;
   const app = Fastify({
     logger: { level: config.logLevel },
     bodyLimit: config.maxBodyBytes,
@@ -119,16 +120,17 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   });
 
   if (config.nodeSessions || config.nodePiManager) registerSessionReadRoutes(app, sessionRepository, nodeSessionService);
+  if (config.nodeSessions || config.nodePiManager) registerConversationNavigationRoutes(app, modules.navigation, sessionRepository, nodeSessionService, events, async (root) => (await research.list(root)).filter((loop) => loop.status === "ready").length);
   if (config.nodeSse || config.nodePiManager) registerSseRoutes(app, nodeSessionService, events);
   if (config.nodeFiles) registerFileReadRoutes(app);
-  if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository, new AiTitleService(new PiTitleRuntimeFactory(piManager)));
+  if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository, new AiTitleService(new PiTitleRuntimeFactory(piManager)), undefined, modules.navigation);
   if (config.nodeJobs !== false) registerJobRoutes(app, jobs);
   registerEnvironmentRoutes(app, environments);
   if (config.nodeArtifacts !== false) registerArtifactRoutes(app);
   if (config.nodeArtifacts !== false) registerTurnArtifactRoutes(app);
   if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings);
   if (config.nodeRuns !== false) registerRunEndpointRoutes(app);
-  if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, research);
+  if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, research, remoteJobs);
   if (config.nodeProject !== false) registerProjectRoutes(app, research, projectReview);
   if (config.nodeLiterature !== false) registerLiteratureRoutes(app);
   app.addHook("onReady", async () => {

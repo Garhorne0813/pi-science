@@ -67,7 +67,10 @@ export function registerSessionReadRoutes(app: FastifyInstance, sessionRepositor
   app.get<{ Params: { session_id: string } }>("/api/sessions/:session_id/messages/index", async (request, reply) => {
     try {
       const cwd = await validateWorkspaceCwd(queryCwd(request));
-      return await sessionRepository.userMessageIndex(cwd, request.params.session_id);
+      const query = request.query as { roles?: unknown };
+      const roles = query.roles === undefined ? "user" : query.roles === "all" ? "all" : null;
+      if (roles === null) return reply.code(400).send({ error: "roles must be omitted or 'all'" });
+      return await sessionRepository.messageIndex(cwd, request.params.session_id, roles);
     } catch (error) {
       return reply.code(403).send({ error: String(error) });
     }

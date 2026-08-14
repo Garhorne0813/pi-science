@@ -232,6 +232,11 @@ export interface FilePreviewInspector {
   content?: string;
   root?: FileRoot;
   cwd?: string;
+  /** Exact artifact version this inspector was opened for (lineage relation
+   *  jumps). The preview still shows the CURRENT file bytes — History shows
+   *  the versioned provenance record, so the open never pretends the live
+   *  bytes are that version. */
+  artifactVersion?: { artifact_id: string; version: number };
 }
 
 export interface NotebookFileInspector {

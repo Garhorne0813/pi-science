@@ -17,7 +17,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ComponentType, ReactNode, Ref } from "react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { VirtuosoHandle } from "react-virtuoso";
 
 const { virtuosoProps } = vi.hoisted(() => ({ virtuosoProps: [] as Array<Record<string, unknown>> }));
@@ -55,6 +55,13 @@ import { LiveSessionPage } from "./LiveSessionPage";
 import { WorkspaceProvider } from "../../lib/workspace";
 import { FeedbackContext } from "../../components/feedback/feedback-context";
 import { useRuntimeStore } from "../../lib/agent-runtime";
+import { FakeEventSource } from "../../lib/agent-runtime/test-helpers";
+import { clearCachedMessages } from "../../lib/client/pi-science-client";
+// The REAL store actions (captured before beforeEach replaces `connect` with
+// a mock) so tests can exercise the actual connect/session-generation flow
+// against scripted fetch responses.
+const realConnect = useRuntimeStore.getState().connect;
+const realDisconnect = useRuntimeStore.getState().disconnect;
 import { useUiStore } from "../../lib/ui";
 import { queryClient } from "../../lib/client/query-client";
 import { resetDynamicCommands } from "../../lib/conversation";
@@ -132,13 +139,34 @@ function publishedArtifactBlock(path: string): ThreadBlock {
 class IOStub {
   static instances: IOStub[] = [];
   cb: IntersectionObserverCallback;
-  constructor(cb: IntersectionObserverCallback) {
+  targets: Element[] = [];
+  root: Element | null;
+  constructor(cb: IntersectionObserverCallback, options?: IntersectionObserverInit) {
     this.cb = cb;
+    this.root = options?.root instanceof Element ? options.root : null;
     IOStub.instances.push(this);
   }
-  observe() {}
+  observe(target: Element) {
+    // Real IntersectionObservers ignore re-observing an already-observed
+    // target; mirror that so the settle re-registration stays idempotent.
+    if (!this.targets.includes(target)) this.targets.push(target);
+  }
   unobserve() {}
   disconnect() {}
+}
+
+/** MutationObserver stub: the rail observes the scroller for added
+ *  user-message nodes; tests drive the captured callback directly. */
+class MOStub {
+  static instances: MOStub[] = [];
+  cb: MutationCallback;
+  constructor(cb: MutationCallback) {
+    this.cb = cb;
+    MOStub.instances.push(this);
+  }
+  observe() {}
+  disconnect() {}
+  takeRecords() { return []; }
 }
 
 function textarea(): HTMLTextAreaElement {
@@ -193,7 +221,9 @@ beforeEach(() => {
   fetchMock.mockClear();
   vi.stubGlobal("fetch", fetchMock);
   IOStub.instances = [];
+  MOStub.instances = [];
   vi.stubGlobal("IntersectionObserver", IOStub);
+  vi.stubGlobal("MutationObserver", MOStub);
   Element.prototype.scrollIntoView = vi.fn();
   Element.prototype.scrollTo = vi.fn();
   vi.stubGlobal("matchMedia", (query: string) => ({
@@ -735,7 +765,12 @@ describe("conversation nav rail and scroll-to-latest", () => {
   }
 
   function scroller(): HTMLElement {
-    const element = document.querySelector("[class*='overflow-y-auto']");
+    // Prefer react-virtuoso's own scroller hooks: the open bookmarks panel
+    // and the rail's minimap also carry overflow-y-auto, so a bare
+    // class-substring match can land on the wrong element.
+    const element = document.querySelector(".virtuoso-scroller")
+      ?? document.querySelector(".conversation-scroller")
+      ?? document.querySelector("[class*='overflow-y-auto']");
     if (!element) throw new Error("thread scroller not mounted");
     return element as HTMLElement;
   }
@@ -769,8 +804,8 @@ describe("conversation nav rail and scroll-to-latest", () => {
       if (url.startsWith("/api/sessions/s1/messages/index")) {
         return Promise.resolve(jsonResponse({
           messages: [
-            { id: "u-old", text: "Old question", before: "cursor-old" },
-            { id: "u-latest", text: "Latest question", before: "cursor-latest" },
+            { id: "u-old", role: "user", text: "Old question", before: "cursor-old" },
+            { id: "u-latest", role: "user", text: "Latest question", before: "cursor-latest" },
           ],
           snapshot_version: "1:1",
         }));
@@ -1182,5 +1217,1492 @@ describe("defensive thread shape and copy actions (docs/pr30markdown.md 3.4/3.5/
 
     const copyButtons = screen.getAllByRole("button", { name: "Copy" });
     expect(copyButtons).toHaveLength(1);
+  });
+});
+
+describe("durable navigation (bookmarks + read position)", () => {
+  const INDEX_URL = "/api/sessions/s1/messages/index";
+
+  function threadWith(blocks: ThreadBlock[]) {
+    const index: Record<string, number> = {};
+    blocks.forEach((block, i) => { index[block.id] = i; });
+    useRuntimeStore.setState({ thread: { blocks, index, loaded: true } });
+  }
+
+  function allRoleIndex(entries: Array<{ id: string; role: string; text: string; before: string }>) {
+    overrides.push((url) => {
+      if (url.startsWith(INDEX_URL)) {
+        return Promise.resolve(jsonResponse({ messages: entries, snapshot_version: "1:1" }));
+      }
+      return null;
+    });
+  }
+
+  it("restores a saved reading position in an older page after refresh", async () => {
+    threadWith([userBlock("u-latest", "Latest question"), agentBlock("a-latest", "latest reply")]);
+    allRoleIndex([
+      { id: "u-old", role: "user", text: "Old question", before: "cursor-old" },
+      { id: "a-old", role: "assistant", text: "Old answer", before: "cursor-old" },
+      { id: "u-latest", role: "user", text: "Latest question", before: "cursor-latest" },
+    ]);
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/read-state")) {
+        return Promise.resolve(jsonResponse({
+          session_id: "s1", anchor_message_id: "u-old", at_bottom: false,
+          seen_snapshot_version: null, updated_at: "now", anchor_available: true, before: "cursor-old",
+        }));
+      }
+      if (url.includes("/api/sessions/s1/messages?") && url.includes("before=cursor-old")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u-old", role: "user", content: [{ type: "text", text: "Old question" }] },
+            { id: "a-old", role: "assistant", content: [{ type: "text", text: "Old answer" }] },
+          ],
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    await waitFor(() => expect(document.getElementById("user-msg-u-old")).toBeInTheDocument());
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it("keeps the bottom behavior when the read state is at_bottom", async () => {
+    threadWith([userBlock("u1", "Question"), agentBlock("a1", "reply")]);
+    allRoleIndex([{ id: "u1", role: "user", text: "Question", before: "cursor-latest" }]);
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/read-state")) {
+        return Promise.resolve(jsonResponse({
+          session_id: "s1", anchor_message_id: "u1", at_bottom: true,
+          seen_snapshot_version: "1:1", updated_at: "now", anchor_available: true, before: "cursor-latest",
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The at-bottom restore must not trigger an older-page load.
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/sessions/s1/messages?") && String(url).includes("before="))).toBe(false);
+  });
+
+  it("jumps to an assistant bookmark in an older page from the bookmarks panel", async () => {
+    threadWith([userBlock("u-latest", "Latest question"), agentBlock("a-latest", "latest reply")]);
+    allRoleIndex([
+      { id: "a-old", role: "assistant", text: "Old answer", before: "cursor-old" },
+      { id: "u-latest", role: "user", text: "Latest question", before: "cursor-latest" },
+    ]);
+    overrides.push((url) => {
+      if (url.includes("/api/bookmarks")) {
+        return Promise.resolve(jsonResponse({
+          bookmarks: [
+            { bookmark_id: "b1", session_id: "s1", message_id: "a-old", role: "assistant", quote: "Old answer", label: null, origin: "user", status: "accepted", created_at: "now", updated_at: "now" },
+          ],
+          legacy_skipped: 0,
+        }));
+      }
+      if (url.includes("/api/sessions/s1/messages?") && url.includes("before=cursor-old")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u-old", role: "user", content: [{ type: "text", text: "Old question" }] },
+            { id: "a-old", role: "assistant", content: [{ type: "text", text: "Old answer" }] },
+          ],
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    fireEvent.click(screen.getByRole("button", { name: "Bookmarks" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Jump to message/ }));
+    await waitFor(() => expect(document.getElementById("agent-msg-a-old")).toBeInTheDocument());
+  });
+
+  it("offers bookmark actions only for messages confirmed by the server index", async () => {
+    threadWith([userBlock("u-live", "not yet persisted"), agentBlock("a1", "settled answer")]);
+    allRoleIndex([{ id: "a1", role: "assistant", text: "settled answer", before: "cursor-a1" }]);
+    await renderReady();
+    // Wait for the virtual list to mount both message rows.
+    await waitFor(() => expect(document.getElementById("user-msg-u-live")).not.toBeNull());
+    await waitFor(() => expect(document.getElementById("agent-msg-a1")).not.toBeNull());
+
+    // The live user block has no bookmark button; the indexed agent block does.
+    const liveRow = document.getElementById("user-msg-u-live")!;
+    expect(liveRow.querySelector('[aria-label="Bookmark message"]')).toBeNull();
+    const agentRow = document.getElementById("agent-msg-a1")!;
+    expect(agentRow.querySelector('[aria-label="Bookmark message"]')).not.toBeNull();
+    // Exactly one bookmark toggle in the whole thread.
+    expect(screen.getAllByRole("button", { name: "Bookmark message" })).toHaveLength(1);
+  });
+
+  it("creates a bookmark from the message toggle and shows the header count", async () => {
+    threadWith([userBlock("u1", "Question"), agentBlock("a1", "answer")]);
+    allRoleIndex([
+      { id: "u1", role: "user", text: "Question", before: "c1" },
+      { id: "a1", role: "assistant", text: "answer", before: "c2" },
+    ]);
+    const createdBookmark = { bookmark_id: "b-new", session_id: "s1", message_id: "u1", role: "user", quote: "Question", label: null, origin: "user", status: "accepted", created_at: "now", updated_at: "now" };
+    let posted = false;
+    overrides.push((url, init) => {
+      if (String(url).includes("/api/bookmarks") && init?.method === "POST") {
+        posted = true;
+        return Promise.resolve(jsonResponse({ bookmark: createdBookmark }));
+      }
+      if (String(url).includes("/api/bookmarks")) {
+        // The refetch after the mutation must reflect the created bookmark.
+        return Promise.resolve(jsonResponse({ bookmarks: posted ? [createdBookmark] : [], legacy_skipped: 0 }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    // Wait for both the virtual list row and the all-role index (which makes
+    // the bookmark toggle eligible) to be ready.
+    await waitFor(() => {
+      const row = document.getElementById("user-msg-u1");
+      expect(row?.querySelector('[aria-label="Bookmark message"]')).not.toBeNull();
+    });
+    const userRow = document.getElementById("user-msg-u1")!;
+    fireEvent.click(userRow.querySelector('[aria-label="Bookmark message"]')!);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) => String(url).includes("/api/bookmarks") && init?.method === "POST")).toBe(true));
+    // The mutation invalidates the bookmarks query; the header count reflects
+    // the new accepted bookmark once refetched.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Bookmarks" }).textContent).toContain("1"));
+  });
+});
+
+describe("durable navigation review fixes", () => {
+  const INDEX_URL = "/api/sessions/s1/messages/index";
+
+  function threadWith(blocks: ThreadBlock[]) {
+    const index: Record<string, number> = {};
+    blocks.forEach((block, i) => { index[block.id] = i; });
+    useRuntimeStore.setState({ thread: { blocks, index, loaded: true } });
+  }
+
+  function allRoleIndex(entries: Array<{ id: string; role: string; text: string; before: string }>) {
+    overrides.push((url) => {
+      if (url.startsWith(INDEX_URL)) {
+        return Promise.resolve(jsonResponse({ messages: entries, snapshot_version: "1:1" }));
+      }
+      return null;
+    });
+  }
+
+  it("reconciles an optimistic user block with its persisted index entry", async () => {
+    threadWith([userBlock("user-123", "Question"), agentBlock("a1", "answer")]);
+    allRoleIndex([
+      { id: "m-real", role: "user", text: "Question", before: "c1" },
+      { id: "a1", role: "assistant", text: "answer", before: "c2" },
+    ]);
+    overrides.push((url, init) => {
+      if (String(url).includes("/api/bookmarks") && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({
+          bookmark: { bookmark_id: "b-opt", session_id: "s1", message_id: "m-real", role: "user", quote: "Question", label: null, origin: "user", status: "accepted", created_at: "now", updated_at: "now" },
+        }));
+      }
+      if (String(url).includes("/api/bookmarks")) {
+        return Promise.resolve(jsonResponse({ bookmarks: [], legacy_skipped: 0 }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    // The optimistic block gets a bookmark toggle (resolved to the persisted id).
+    await waitFor(() => {
+      const row = document.getElementById("user-msg-user-123");
+      expect(row?.querySelector('[aria-label="Bookmark message"]')).not.toBeNull();
+    });
+    // The nav rail shows ONE entry for the question: the temp block is
+    // reconciled to the persisted entry instead of duplicating it.
+    expect(screen.getAllByRole("button", { name: "Question" })).toHaveLength(1);
+
+    fireEvent.click(document.getElementById("user-msg-user-123")!.querySelector('[aria-label="Bookmark message"]')!);
+    await waitFor(() => {
+      const post = fetchMock.mock.calls.find(([url, init]) => String(url).includes("/api/bookmarks") && init?.method === "POST");
+      expect(post).toBeTruthy();
+      expect(String(post![1]?.body)).toContain('"message_id":"m-real"');
+    });
+  });
+
+  it("hides rejected bookmarks from the panel, actions and header count", async () => {
+    threadWith([userBlock("u1", "Question"), agentBlock("a1", "answer")]);
+    allRoleIndex([
+      { id: "u1", role: "user", text: "Question", before: "c1" },
+      { id: "a1", role: "assistant", text: "answer", before: "c2" },
+    ]);
+    overrides.push((url) => {
+      if (String(url).includes("/api/bookmarks")) {
+        return Promise.resolve(jsonResponse({
+          bookmarks: [
+            { bookmark_id: "b-rej", session_id: "s1", message_id: "u1", role: "user", quote: "Question", label: null, origin: "user", status: "rejected", created_at: "now", updated_at: "now" },
+          ],
+          legacy_skipped: 0,
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    await waitFor(() => {
+      const row = document.getElementById("user-msg-u1");
+      expect(row?.querySelector('[aria-label="Bookmark message"]')).not.toBeNull();
+    });
+    // Rejected records are invisible: no header count, empty panel, and the
+    // message toggle still offers to create (which revives server-side).
+    expect(screen.getByRole("button", { name: "Bookmarks" }).textContent).not.toContain("1");
+    fireEvent.click(screen.getByRole("button", { name: "Bookmarks" }));
+    expect(await screen.findByText(/No bookmarks yet/i)).toBeInTheDocument();
+    // Both indexed messages still offer to create (a rejected record is
+    // invisible; creating revives it server-side).
+    const row = document.getElementById("user-msg-u1")!;
+    expect(row.querySelector('[aria-label="Bookmark message"]')).not.toBeNull();
+  });
+
+  it("direct-scrolls to a mounted bookmark target when the page load returns zero", async () => {
+    threadWith([userBlock("u1", "Question"), agentBlock("a1", "answer")]);
+    allRoleIndex([
+      { id: "u1", role: "user", text: "Question", before: "c1" },
+      { id: "a1", role: "assistant", text: "answer", before: "c2" },
+    ]);
+    overrides.push((url) => {
+      if (String(url).includes("/api/bookmarks")) {
+        return Promise.resolve(jsonResponse({
+          bookmarks: [
+            { bookmark_id: "b1", session_id: "s1", message_id: "u1", role: "user", quote: "Question", label: null, origin: "user", status: "accepted", created_at: "now", updated_at: "now" },
+          ],
+          legacy_skipped: 0,
+        }));
+      }
+      if (String(url).includes("/api/sessions/s1/messages?") && String(url).includes("before=c1")) {
+        return Promise.resolve(jsonResponse({ messages: [], next_cursor: null, has_more: false, snapshot_version: "2:2" }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Bookmarks" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Jump to message/ }));
+    // The empty page resolves 0; after bounded retries the direct-scroll
+    // fallback fires for the already-mounted target.
+    await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalled());
+  });
+
+  it("returns focus to the trigger when the bookmarks panel closes", async () => {
+    threadWith([userBlock("u1", "Question"), agentBlock("a1", "answer")]);
+    allRoleIndex([{ id: "u1", role: "user", text: "Question", before: "c1" }]);
+    await renderReady();
+    const trigger = screen.getByRole("button", { name: "Bookmarks" });
+    fireEvent.click(trigger);
+    expect(await screen.findByRole("region", { name: "Bookmarks" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Bookmarks" })).not.toBeInTheDocument());
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("does not let a stale previous-session restore act on the current session", async () => {
+    function SwitchButton() {
+      const navigate = useNavigate();
+      return (
+        <button
+          type="button"
+          onClick={() => {
+            // The real navigation flow updates the store's active session
+            // before the route change; mirror it so history loads target s2.
+            // (historyLoading is reset here because the pre-existing store
+            // loadHistoryPage keeps it true when a mid-flight load's session
+            // no longer matches — not part of this review's scope.)
+            useRuntimeStore.setState({ activeSessionId: "s2", historyLoading: false });
+            navigate(`/workspace/${CWD}/session/s2`);
+          }}
+        >
+          switch-session
+        </button>
+      );
+    }
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/read-state")) {
+        return Promise.resolve(jsonResponse({
+          session_id: "s1", anchor_message_id: "u1-old", at_bottom: false,
+          seen_snapshot_version: null, updated_at: "now", anchor_available: true, before: "cur-s1",
+        }));
+      }
+      if (url.startsWith("/api/sessions/s2/read-state")) {
+        return Promise.resolve(jsonResponse({
+          session_id: "s2", anchor_message_id: "u2-old", at_bottom: false,
+          seen_snapshot_version: null, updated_at: "now", anchor_available: true, before: "cur-s2",
+        }));
+      }
+      if (String(url).includes("/api/sessions/s1/messages?") && String(url).includes("before=cur-s1")) {
+        // Resolves only AFTER the session switch; the stale promise must be dropped.
+        return new Promise((resolve) => setTimeout(() => resolve(jsonResponse({
+          messages: [
+            { id: "u1-old", role: "user", content: [{ type: "text", text: "Old s1 question" }] },
+            { id: "a1-old", role: "assistant", content: [{ type: "text", text: "Old s1 answer" }] },
+          ],
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        })), 400));
+      }
+      if (String(url).includes("/api/sessions/s2/messages?") && String(url).includes("before=cur-s2")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u2-old", role: "user", content: [{ type: "text", text: "Old s2 question" }] },
+            { id: "a2-old", role: "assistant", content: [{ type: "text", text: "Old s2 answer" }] },
+          ],
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        }));
+      }
+      return null;
+    });
+    threadWith([userBlock("u1", "Question"), agentBlock("a1", "answer")]);
+    useRuntimeStore.setState({ sessions: [
+      { id: "s1", cwd: CWD, name: "Session" },
+      { id: "s2", cwd: CWD, name: "Session 2" },
+    ] });
+
+    const view = render(
+      <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
+        <MemoryRouter initialEntries={[`/workspace/${CWD}/session/s1`]}>
+          <Routes>
+            <Route path="/workspace/:cwd/session/:sessionId" element={<WorkspaceProvider><SwitchButton /><LiveSessionPage /></WorkspaceProvider>} />
+          </Routes>
+        </MemoryRouter>
+      </FeedbackContext.Provider>,
+    );
+    await screen.findByTestId("model-control");
+    (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
+
+    // Switch to s2 while s1's restore page is still in flight.
+    fireEvent.click(screen.getByRole("button", { name: "switch-session" }));
+    // s2's own restore completes with its anchor mounted; the retry loop's
+    // final correction scroll lands within a settle window.
+    await waitFor(() => expect(document.getElementById("user-msg-u2-old")).toBeInTheDocument());
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const callsAfterS2 = (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(callsAfterS2).toBeGreaterThanOrEqual(1);
+    // Let s1's delayed page resolve: it must NOT scroll the stale target.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect((Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfterS2);
+    expect(document.getElementById("user-msg-u1-old")).toBeNull();
+    view.unmount();
+  });
+});
+
+describe("reading-position restore robustness", () => {
+  const INDEX_URL = "/api/sessions/s1/messages/index";
+
+  function threadWith(blocks: ThreadBlock[]) {
+    const index: Record<string, number> = {};
+    blocks.forEach((block, i) => { index[block.id] = i; });
+    useRuntimeStore.setState({ thread: { blocks, index, loaded: true } });
+  }
+
+  function allRoleIndex(entries: Array<{ id: string; role: string; text: string; before: string }>) {
+    overrides.push((url) => {
+      if (url.startsWith(INDEX_URL)) {
+        return Promise.resolve(jsonResponse({ messages: entries, snapshot_version: "1:1" }));
+      }
+      return null;
+    });
+  }
+
+  function scroller(): HTMLElement {
+    // Prefer react-virtuoso's own scroller hooks: the open bookmarks panel
+    // and the rail's minimap also carry overflow-y-auto, so a bare
+    // class-substring match can land on the wrong element.
+    const element = document.querySelector(".virtuoso-scroller")
+      ?? document.querySelector(".conversation-scroller")
+      ?? document.querySelector("[class*='overflow-y-auto']");
+    if (!element) throw new Error("thread scroller not mounted");
+    return element as HTMLElement;
+  }
+
+  it("keeps retrying past a transient zero page load and restores the anchor", async () => {
+    threadWith([userBlock("u-latest", "Latest question"), agentBlock("a-latest", "latest reply")]);
+    allRoleIndex([
+      { id: "u-old", role: "user", text: "Old question", before: "cursor-old" },
+      { id: "a-old", role: "assistant", text: "Old answer", before: "cursor-old" },
+      { id: "u-latest", role: "user", text: "Latest question", before: "cursor-latest" },
+    ]);
+    let pageLoads = 0;
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/read-state")) {
+        return Promise.resolve(jsonResponse({
+          session_id: "s1", anchor_message_id: "u-old", at_bottom: false,
+          seen_snapshot_version: null, updated_at: "now", anchor_available: true, before: "cursor-old",
+        }));
+      }
+      if (url.includes("/api/sessions/s1/messages?") && url.includes("before=cursor-old")) {
+        pageLoads += 1;
+        // The first page load lands while the newest page is still loading:
+        // the store refuses the history load and returns zero without
+        // prepending anything. The restore must retry instead of giving up
+        // after a few hundred milliseconds.
+        if (pageLoads === 1) {
+          return Promise.resolve(jsonResponse({ messages: [], next_cursor: null, has_more: false, snapshot_version: "2:2" }));
+        }
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u-old", role: "user", content: [{ type: "text", text: "Old question" }] },
+            { id: "a-old", role: "assistant", content: [{ type: "text", text: "Old answer" }] },
+          ],
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    await waitFor(() => expect(document.getElementById("user-msg-u-old")).toBeInTheDocument());
+    expect(pageLoads).toBeGreaterThanOrEqual(2);
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it("does not snap back to the bottom when blocks arrive after the restore", async () => {
+    threadWith([userBlock("u-latest", "Latest question"), agentBlock("a-latest", "latest reply")]);
+    allRoleIndex([
+      { id: "u-old", role: "user", text: "Old question", before: "cursor-old" },
+      { id: "u-latest", role: "user", text: "Latest question", before: "cursor-latest" },
+    ]);
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/read-state")) {
+        return Promise.resolve(jsonResponse({
+          session_id: "s1", anchor_message_id: "u-old", at_bottom: false,
+          seen_snapshot_version: null, updated_at: "now", anchor_available: true, before: "cursor-old",
+        }));
+      }
+      if (url.includes("/api/sessions/s1/messages?") && url.includes("before=cursor-old")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u-old", role: "user", content: [{ type: "text", text: "Old question" }] },
+            { id: "a-old", role: "assistant", content: [{ type: "text", text: "Old answer" }] },
+          ],
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    await waitFor(() => expect(document.getElementById("user-msg-u-old")).toBeInTheDocument());
+    // Position the scroller where the restore left it, then append live blocks
+    // the way a streaming turn would. The follow-output snap-to-bottom must
+    // NOT run: the restored position is the user's place, not the newest end.
+    const scrollerEl = scroller();
+    scrollerEl.scrollTop = 500;
+    act(() => {
+      const state = useRuntimeStore.getState();
+      useRuntimeStore.setState({
+        thread: {
+          blocks: [...state.thread.blocks, userBlock("u-live", "Latest live question")],
+          index: { ...state.thread.index, "u-live": state.thread.blocks.length },
+          loaded: true,
+        },
+      });
+    });
+    expect(scrollerEl.scrollTop).toBe(500);
+  });
+
+  it("resolves optimistic user ids to persisted ids before persisting the anchor", async () => {
+    threadWith([userBlock("user-123", "Question"), agentBlock("a1", "answer")]);
+    allRoleIndex([
+      { id: "m-real", role: "user", text: "Question", before: "c1" },
+      { id: "a1", role: "assistant", text: "answer", before: "c2" },
+    ]);
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/read-state")) {
+        // No saved position: the restore releases viewport-driven writes.
+        return Promise.resolve(jsonResponse({
+          session_id: "s1", anchor_message_id: null, at_bottom: false,
+          seen_snapshot_version: null, updated_at: null, anchor_available: false, before: null,
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    // Give the scroller real geometry so the rail does not treat every
+    // position as near-bottom (jsdom reports zero sizes by default).
+    const scrollerEl = scroller();
+    Object.defineProperty(scrollerEl, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(scrollerEl, "clientHeight", { configurable: true, value: 400 });
+    scrollerEl.scrollTop = 100;
+    // Wait for the restore decision (no saved position) so writes are live.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // The rail's intersection observer reports the optimistic block's DOM id;
+    // the anchor write must carry the persisted id, not the temporary one.
+    const io = IOStub.instances.at(-1)!;
+    act(() => {
+      io.cb([{
+        target: { id: "user-msg-user-123" },
+        isIntersecting: true,
+        intersectionRatio: 1,
+      }] as unknown as IntersectionObserverEntry[], io as unknown as IntersectionObserver);
+    });
+    await waitFor(() => {
+      const put = fetchMock.mock.calls.find(([url, init]) => init?.method === "PUT" && String(url).includes("/api/sessions/s1/read-state"));
+      expect(put).toBeTruthy();
+      expect(String(put![1]?.body)).toContain('"anchor_message_id":"m-real"');
+    });
+  });
+
+  it("falls back to the bottom when the saved anchor is gone (compaction/rewrite) and keeps writes live", async () => {
+    // Two user messages: the rail's mount-time near-bottom report (jsdom
+    // geometry is zero, so it picks the LAST user message) must not swallow
+    // the active-id change driven below — the IO target is the FIRST message.
+    threadWith([userBlock("u1", "Question"), agentBlock("a1", "answer"), userBlock("u2", "Follow-up"), agentBlock("a2", "reply")]);
+    allRoleIndex([
+      { id: "u1", role: "user", text: "Question", before: "c1" },
+      { id: "a1", role: "assistant", text: "answer", before: "c2" },
+      { id: "u2", role: "user", text: "Follow-up", before: "c3" },
+      { id: "a2", role: "assistant", text: "reply", before: "c4" },
+    ]);
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/read-state")) {
+        // The anchor id no longer exists in the transcript (compaction,
+        // rewrite, or a non-indexed message): the server reports it as
+        // unavailable and the restore must fall back to the bottom — no
+        // older-page fetch, no stuck write suppression.
+        return Promise.resolve(jsonResponse({
+          session_id: "s1", anchor_message_id: "u-gone", at_bottom: false,
+          seen_snapshot_version: null, updated_at: "now", anchor_available: false, before: null,
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    await waitFor(() => expect(document.getElementById("user-msg-u1")).toBeInTheDocument());
+    // Give the restore decision (no anchor) time to release the writes.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/sessions/s1/messages?") && String(url).includes("before="))).toBe(false);
+
+    // The user scrolls to another message: the viewport-driven write must
+    // fire, proving the restore did not leave suppression stuck.
+    const scrollerEl = scroller();
+    Object.defineProperty(scrollerEl, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(scrollerEl, "clientHeight", { configurable: true, value: 400 });
+    scrollerEl.scrollTop = 100;
+    const io = IOStub.instances.at(-1)!;
+    act(() => {
+      io.cb([{
+        target: { id: "user-msg-u1" },
+        isIntersecting: true,
+        intersectionRatio: 1,
+      }] as unknown as IntersectionObserverEntry[], io as unknown as IntersectionObserver);
+    });
+    await waitFor(() => {
+      const put = fetchMock.mock.calls.find(([url, init]) => init?.method === "PUT" && String(url).includes("/api/sessions/s1/read-state"));
+      expect(put).toBeTruthy();
+      expect(String(put![1]?.body)).toContain('"anchor_message_id":"u1"');
+    });
+  });
+
+  it("restores an assistant-message anchor from an older page", async () => {
+    threadWith([userBlock("u-latest", "Latest question"), agentBlock("a-latest", "latest reply")]);
+    allRoleIndex([
+      { id: "u-old", role: "user", text: "Old question", before: "cursor-old" },
+      { id: "a-old", role: "assistant", text: "Old answer", before: "cursor-old" },
+      { id: "u-latest", role: "user", text: "Latest question", before: "cursor-latest" },
+    ]);
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/read-state")) {
+        // Legacy/read states may anchor an assistant message.
+        return Promise.resolve(jsonResponse({
+          session_id: "s1", anchor_message_id: "a-old", at_bottom: false,
+          seen_snapshot_version: null, updated_at: "now", anchor_available: true, before: "cursor-old",
+        }));
+      }
+      if (url.includes("/api/sessions/s1/messages?") && url.includes("before=cursor-old")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u-old", role: "user", content: [{ type: "text", text: "Old question" }] },
+            { id: "a-old", role: "assistant", content: [{ type: "text", text: "Old answer" }] },
+          ],
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    await waitFor(() => expect(document.getElementById("agent-msg-a-old")).toBeInTheDocument());
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it("still restores when the read state arrives after the safety timeout", async () => {
+    threadWith([userBlock("u-latest", "Latest question"), agentBlock("a-latest", "latest reply")]);
+    allRoleIndex([
+      { id: "u-old", role: "user", text: "Old question", before: "cursor-old" },
+      { id: "a-old", role: "assistant", text: "Old answer", before: "cursor-old" },
+      { id: "u-latest", role: "user", text: "Latest question", before: "cursor-latest" },
+    ]);
+    let resolveReadState: (value: Response) => void = () => {};
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/read-state")) {
+        // The read-state GET hangs well past the 8s safety timeout.
+        return new Promise<Response>((resolve) => { resolveReadState = resolve; });
+      }
+      if (url.includes("/api/sessions/s1/messages?") && url.includes("before=cursor-old")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u-old", role: "user", content: [{ type: "text", text: "Old question" }] },
+            { id: "a-old", role: "assistant", content: [{ type: "text", text: "Old answer" }] },
+          ],
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        }));
+      }
+      return null;
+    });
+
+    vi.useFakeTimers();
+    try {
+      renderPage();
+      // Initial queries and lazy Virtuoso settle.
+      await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+      // The safety timeout expires while the read-state GET is still in
+      // flight: it must release the write suppression WITHOUT marking the
+      // restore done, so the late-arriving read state can still restore.
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+      await act(async () => {
+        resolveReadState(jsonResponse({
+          session_id: "s1", anchor_message_id: "u-old", at_bottom: false,
+          seen_snapshot_version: null, updated_at: "now", anchor_available: true, before: "cursor-old",
+        }));
+        await vi.advanceTimersByTimeAsync(10);
+      });
+      // The restore loads the older page and scrolls to the anchor.
+      await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("before=cursor-old"))).toBe(true);
+      expect(document.getElementById("user-msg-u-old")).toBeInTheDocument();
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not restore when the user manually scrolls while the read state is still loading", async () => {
+    threadWith([userBlock("u-latest", "Latest question"), agentBlock("a-latest", "latest reply")]);
+    allRoleIndex([
+      { id: "u-old", role: "user", text: "Old question", before: "cursor-old" },
+      { id: "a-old", role: "assistant", text: "Old answer", before: "cursor-old" },
+      { id: "u-latest", role: "user", text: "Latest question", before: "cursor-latest" },
+    ]);
+    let resolveReadState: (value: Response) => void = () => {};
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/read-state")) {
+        // The read-state GET hangs: the restore decision stays open while the
+        // user reads history manually.
+        return new Promise<Response>((resolve) => { resolveReadState = resolve; });
+      }
+      if (url.includes("/api/sessions/s1/messages?") && url.includes("before=cursor-old")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u-old", role: "user", content: [{ type: "text", text: "Old question" }] },
+            { id: "a-old", role: "assistant", content: [{ type: "text", text: "Old answer" }] },
+          ],
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    // Let the entry bottom-snap programmatic-scroll window expire so the
+    // manual scroll below is classified as a user interaction.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const scrollerEl = scrollerWithGeometry();
+    scrollerEl.scrollTop = 100;
+    fireEvent.scroll(scrollerEl);
+    // The late read-state response carries a saved older anchor.
+    await act(async () => {
+      resolveReadState(jsonResponse({
+        session_id: "s1", anchor_message_id: "u-old", at_bottom: false,
+        seen_snapshot_version: null, updated_at: "now", anchor_available: true, before: "cursor-old",
+      }));
+    });
+    // The restore must NOT start: no older-page load, no anchor scroll, no
+    // anchor mount.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("before=cursor-old"))).toBe(false);
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+    expect(document.getElementById("user-msg-u-old")).not.toBeInTheDocument();
+    // The restore decision released the write suppression: the viewport's
+    // current anchor persists instead of being dropped.
+    driveActiveAnchor("u-old");
+    await expectAnchorWrite("u-old");
+  });
+
+  it("does not restore when the user wheels inside the programmatic-scroll grace while the read state is still loading", async () => {
+    threadWith([userBlock("u-latest", "Latest question"), agentBlock("a-latest", "latest reply")]);
+    allRoleIndex([
+      { id: "u-old", role: "user", text: "Old question", before: "cursor-old" },
+      { id: "a-old", role: "assistant", text: "Old answer", before: "cursor-old" },
+      { id: "u-latest", role: "user", text: "Latest question", before: "cursor-latest" },
+    ]);
+    let resolveReadState: (value: Response) => void = () => {};
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/read-state")) {
+        // The read-state GET hangs: the restore decision stays open while the
+        // user interacts with the thread.
+        return new Promise<Response>((resolve) => { resolveReadState = resolve; });
+      }
+      if (url.includes("/api/sessions/s1/messages?") && url.includes("before=cursor-old")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u-old", role: "user", content: [{ type: "text", text: "Old question" }] },
+            { id: "a-old", role: "assistant", content: [{ type: "text", text: "Old answer" }] },
+          ],
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        }));
+      }
+      return null;
+    });
+
+    // Fake timers pin the entry bottom-snap's programmatic-scroll grace
+    // (400ms) open, so the wheel below provably lands INSIDE the window where
+    // its scroll events are swallowed as programmatic and the scroll handler
+    // alone could not cancel a late restore.
+    vi.useFakeTimers();
+    try {
+      renderPage();
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      const scrollerEl = scroller();
+      // A real wheel over the scroller is manual user intent even inside the
+      // grace window (programmatic .scrollTo never emits wheel events).
+      fireEvent.wheel(scrollerEl);
+      // Mirror the scroll events a real wheel produces: inside the grace they
+      // are treated as part of the programmatic scroll, so they are NOT the
+      // mechanism that cancels the restore — the wheel listener is.
+      fireEvent.scroll(scrollerEl);
+      // The late read-state response carries a saved older anchor.
+      await act(async () => {
+        resolveReadState(jsonResponse({
+          session_id: "s1", anchor_message_id: "u-old", at_bottom: false,
+          seen_snapshot_version: null, updated_at: "now", anchor_available: true, before: "cursor-old",
+        }));
+        await vi.advanceTimersByTimeAsync(10);
+      });
+      // The restore must NOT start: no older-page load, no anchor scroll, no
+      // anchor mount.
+      await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("before=cursor-old"))).toBe(false);
+      expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+      expect(document.getElementById("user-msg-u-old")).not.toBeInTheDocument();
+      // The restore decision released the write suppression: the viewport's
+      // current anchor persists instead of being dropped.
+      const scrollerWithGeo = scrollerWithGeometry();
+      scrollerWithGeo.scrollTop = 100;
+      driveActiveAnchor("u-old");
+      await act(async () => { await vi.advanceTimersByTimeAsync(450); });
+      const put = fetchMock.mock.calls.find(([url, init]) => init?.method === "PUT" && String(url).includes("/api/sessions/s1/read-state"));
+      expect(put).toBeTruthy();
+      expect(String(put![1]?.body)).toContain('"anchor_message_id":"u-old"');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not restore when the user selects a nav item while the read state is still loading", async () => {
+    threadWith([userBlock("u-latest", "Latest question"), agentBlock("a-latest", "latest reply")]);
+    allRoleIndex([
+      { id: "u-old", role: "user", text: "Old question", before: "cursor-old" },
+      { id: "a-old", role: "assistant", text: "Old answer", before: "cursor-old" },
+      { id: "u-latest", role: "user", text: "Latest question", before: "cursor-latest" },
+    ]);
+    let resolveReadState: (value: Response) => void = () => {};
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/read-state")) {
+        return new Promise<Response>((resolve) => { resolveReadState = resolve; });
+      }
+      if (url.includes("/api/sessions/s1/messages?") && url.includes("before=cursor-old")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u-old", role: "user", content: [{ type: "text", text: "Old question" }] },
+            { id: "a-old", role: "assistant", content: [{ type: "text", text: "Old answer" }] },
+          ],
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    // The user clicks the rail entry for the newest message while the
+    // read-state GET is still in flight. u-latest is already loaded, so the
+    // nav action direct-scrolls to it (exactly one scrollIntoView).
+    fireEvent.click(screen.getByRole("button", { name: "Latest question" }));
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1);
+    // The late read-state response carries a saved older anchor.
+    await act(async () => {
+      resolveReadState(jsonResponse({
+        session_id: "s1", anchor_message_id: "u-old", at_bottom: false,
+        seen_snapshot_version: null, updated_at: "now", anchor_available: true, before: "cursor-old",
+      }));
+    });
+    // The restore must NOT start: no older-page load, no additional scroll.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("before=cursor-old"))).toBe(false);
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(document.getElementById("user-msg-u-old")).not.toBeInTheDocument();
+    // The nav action released the write suppression: a viewport change now
+    // persists the current anchor.
+    driveActiveAnchor("u-old");
+    await expectAnchorWrite("u-old");
+  });
+
+  it("does not restore when the active anchor changes while the read state is still loading", async () => {
+    threadWith([userBlock("u-latest", "Latest question"), agentBlock("a-latest", "latest reply")]);
+    allRoleIndex([
+      { id: "u-old", role: "user", text: "Old question", before: "cursor-old" },
+      { id: "a-old", role: "assistant", text: "Old answer", before: "cursor-old" },
+      { id: "u-latest", role: "user", text: "Latest question", before: "cursor-latest" },
+    ]);
+    let resolveReadState: (value: Response) => void = () => {};
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/read-state")) {
+        return new Promise<Response>((resolve) => { resolveReadState = resolve; });
+      }
+      if (url.includes("/api/sessions/s1/messages?") && url.includes("before=cursor-old")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u-old", role: "user", content: [{ type: "text", text: "Old question" }] },
+            { id: "a-old", role: "assistant", content: [{ type: "text", text: "Old answer" }] },
+          ],
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    // The user scrolled such that the old message occupies the viewport top.
+    // The scroll event itself is the user signal that supersedes the restore;
+    // the rail's active-anchor report that follows is not one (the rail
+    // reports nothing until geometry establishes the first entry).
+    const scrollerEl = scrollerWithGeometry();
+    scrollerEl.scrollTop = 100;
+    fireEvent.scroll(scrollerEl);
+    driveActiveAnchor("u-old");
+
+    // The late read-state response carries the same older anchor.
+    await act(async () => {
+      resolveReadState(jsonResponse({
+        session_id: "s1", anchor_message_id: "u-old", at_bottom: false,
+        seen_snapshot_version: null, updated_at: "now", anchor_available: true, before: "cursor-old",
+      }));
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The restore must NOT start or yank the viewport back.
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("before=cursor-old"))).toBe(false);
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+    expect(document.getElementById("user-msg-u-old")).not.toBeInTheDocument();
+    // The restore decision released the write suppression: the user scrolls
+    // on to another message (the old anchor leaves the viewport band, so the
+    // rail reports the new active message) and the new anchor persists.
+    const io = IOStub.instances.at(-1)!;
+    if (io.root instanceof Element) applyGeometry(io.root as HTMLElement);
+    act(() => {
+      io.cb([
+        { target: { id: "user-msg-u-old" }, isIntersecting: false, intersectionRatio: 0 },
+        { target: { id: "user-msg-u-latest" }, isIntersecting: true, intersectionRatio: 1 },
+      ] as unknown as IntersectionObserverEntry[], io as unknown as IntersectionObserver);
+    });
+    await expectAnchorWrite("u-latest");
+  });
+
+  it("re-registers the rail observer when the restore mounts paginated anchors", async () => {
+    // The all-role index already lists u-old up front (it carries a `before`
+    // cursor), so the rail's item signature is final before the anchor page
+    // loads. Only the loaded-user-anchor key changes when the restore mounts
+    // the older page; without it the rail would never observe u-old's anchor.
+    threadWith([userBlock("u-latest", "Latest question"), agentBlock("a-latest", "latest reply")]);
+    allRoleIndex([
+      { id: "u-old", role: "user", text: "Old question", before: "cursor-old" },
+      { id: "a-old", role: "assistant", text: "Old answer", before: "cursor-old" },
+      { id: "u-latest", role: "user", text: "Latest question", before: "cursor-latest" },
+    ]);
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/read-state")) {
+        return Promise.resolve(jsonResponse({
+          session_id: "s1", anchor_message_id: "u-old", at_bottom: false,
+          seen_snapshot_version: null, updated_at: "now", anchor_available: true, before: "cursor-old",
+        }));
+      }
+      if (url.includes("/api/sessions/s1/messages?") && url.includes("before=cursor-old")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u-old", role: "user", content: [{ type: "text", text: "Old question" }] },
+            { id: "a-old", role: "assistant", content: [{ type: "text", text: "Old answer" }] },
+          ],
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    await waitFor(() => expect(document.getElementById("user-msg-u-old")).toBeInTheDocument());
+    // The last observer registration (or its DOM-settle re-check) must
+    // include the anchor the restore just mounted — re-registration driven by
+    // the loaded-user key, not by the unchanged item signature.
+    await waitFor(() => {
+      const railIo = IOStub.instances.at(-1)!;
+      expect(railIo.targets.map((target) => target.id)).toEqual(
+        expect.arrayContaining(["user-msg-u-latest", "user-msg-u-old"]),
+      );
+    });
+  });
+
+  /** Poll `getCount` until it has stayed unchanged for `windowMs` (bounded),
+   *  then return the settled value. Used to prove a retry loop stopped. */
+  async function stableCount(getCount: () => number, windowMs: number, timeoutMs = 5000): Promise<number> {
+    const deadline = Date.now() + timeoutMs;
+    let previous = getCount();
+    let stableSince = Date.now();
+    while (Date.now() - stableSince < windowMs && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const current = getCount();
+      if (current !== previous) {
+        previous = current;
+        stableSince = Date.now();
+      }
+    }
+    return previous;
+  }
+
+  /** Apply the fake viewport geometry both geometry-sensitive handlers read
+   *  (the rail's IO callback and the page's active-change handler). */
+  function applyGeometry(element: HTMLElement, scrollTop = 100) {
+    Object.defineProperty(element, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(element, "clientHeight", { configurable: true, value: 400 });
+    element.scrollTop = scrollTop;
+  }
+
+  /** Drive the rail's intersection observer to report `anchorId` as the
+   *  active viewport message (jsdom has no real IO; geometry must be set on
+   *  the scroller first so the near-bottom guard lets the write through).
+   *  react-virtuoso can re-create the scroller node in jsdom mid-test, so the
+   *  rail's captured root and the page's scroller ref can diverge: mirror the
+   *  geometry on the observed root as well. */
+  function driveActiveAnchor(anchorId: string) {
+    const io = IOStub.instances.at(-1)!;
+    if (io.root instanceof Element) applyGeometry(io.root as HTMLElement);
+    act(() => {
+      io.cb([{
+        target: { id: `user-msg-${anchorId}` },
+        isIntersecting: true,
+        intersectionRatio: 1,
+      }] as unknown as IntersectionObserverEntry[], io as unknown as IntersectionObserver);
+    });
+  }
+
+  /** Common "restore stuck retrying" setup: the saved anchor lives in an
+   *  older page that never loads, so the restore keeps retrying every 250ms
+   *  until a user action supersedes it. `extraIndex` entries (e.g. a bookmark
+   *  jump target) are inserted between the restore anchor and the newest
+   *  message. Returns the cursor-old request counter. */
+  function stuckRestoreSetup(extraIndex: Array<{ id: string; role: string; text: string; before: string }> = []): () => number {
+    threadWith([userBlock("u-latest", "Latest question"), agentBlock("a-latest", "latest reply")]);
+    allRoleIndex([
+      { id: "u-old", role: "user", text: "Old question", before: "cursor-old" },
+      ...extraIndex,
+      { id: "u-latest", role: "user", text: "Latest question", before: "cursor-latest" },
+    ]);
+    let pageLoads = 0;
+    overrides.push((url) => {
+      if (url.startsWith("/api/sessions/s1/read-state")) {
+        return Promise.resolve(jsonResponse({
+          session_id: "s1", anchor_message_id: "u-old", at_bottom: false,
+          seen_snapshot_version: null, updated_at: "now", anchor_available: true, before: "cursor-old",
+        }));
+      }
+      if (String(url).includes("/api/sessions/s1/messages?") && String(url).includes("before=cursor-old")) {
+        pageLoads += 1;
+        return Promise.resolve(jsonResponse({ messages: [], next_cursor: null, has_more: false, snapshot_version: "2:2" }));
+      }
+      return null;
+    });
+    return () => pageLoads;
+  }
+
+  function scrollerWithGeometry(): HTMLElement {
+    const element = scroller();
+    applyGeometry(element);
+    return element;
+  }
+
+  function expectAnchorWrite(anchorId: string) {
+    return waitFor(() => {
+      const put = fetchMock.mock.calls.find(([url, init]) => init?.method === "PUT" && String(url).includes("/api/sessions/s1/read-state"));
+      expect(put).toBeTruthy();
+      expect(String(put![1]?.body)).toContain(`"anchor_message_id":"${anchorId}"`);
+    });
+  }
+
+  it("cancels the restore retry loop and releases viewport writes when a nav item is selected", async () => {
+    const cursorOldLoads = stuckRestoreSetup();
+    await renderReady();
+    await waitFor(() => expect(cursorOldLoads()).toBeGreaterThanOrEqual(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Latest question" }));
+    // The restore's retry timers are cancelled and in-flight continuations
+    // bail: the cursor-old request count settles and stays put well past one
+    // retry interval.
+    const settled = await stableCount(cursorOldLoads, 400);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(cursorOldLoads()).toBe(settled);
+
+    // The nav action released the restore's write suppression: a viewport
+    // active-change now persists the anchor instead of being dropped.
+    const scrollerEl = scrollerWithGeometry();
+    scrollerEl.scrollTop = 100;
+    driveActiveAnchor("u-old");
+    await expectAnchorWrite("u-old");
+  });
+
+  it("cancels the restore and releases viewport writes when a bookmark jump supersedes it", async () => {
+    const cursorOldLoads = stuckRestoreSetup([{ id: "u-mid", role: "user", text: "Middle question", before: "cursor-mid" }]);
+    overrides.push((url) => {
+      if (String(url).includes("/api/bookmarks")) {
+        return Promise.resolve(jsonResponse({
+          bookmarks: [{
+            bookmark_id: "b-mid", session_id: "s1", message_id: "u-mid", role: "user",
+            quote: "Middle question", label: "mid jump", origin: "user", status: "accepted",
+            created_at: "now", updated_at: "now",
+          }],
+          legacy_skipped: 0,
+        }));
+      }
+      if (String(url).includes("/api/sessions/s1/messages?") && String(url).includes("before=cursor-mid")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u-mid", role: "user", content: [{ type: "text", text: "Middle question" }] },
+            { id: "a-mid", role: "assistant", content: [{ type: "text", text: "Middle answer" }] },
+          ],
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        }));
+      }
+      return null;
+    });
+
+    await renderReady();
+    await waitFor(() => expect(cursorOldLoads()).toBeGreaterThanOrEqual(1));
+    fireEvent.click(screen.getByRole("button", { name: "Bookmarks" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Jump to message/ }));
+
+    // The jump's own cursor-mid page loads and mounts its anchor…
+    await waitFor(() => expect(document.getElementById("user-msg-u-mid")).toBeInTheDocument());
+    // …while the restore's cursor-old retry loop has been cancelled.
+    const settled = await stableCount(cursorOldLoads, 400);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(cursorOldLoads()).toBe(settled);
+    // …and the jump released the restore's write suppression.
+    const scrollerEl = scrollerWithGeometry();
+    scrollerEl.scrollTop = 100;
+    driveActiveAnchor("u-old");
+    await expectAnchorWrite("u-old");
+  });
+
+  it("cancels the restore retry loop and releases viewport writes when the user wheels after the restore started", async () => {
+    const cursorOldLoads = stuckRestoreSetup();
+    await renderReady();
+    // The restore HAS started: its retry loop is live and the anchor page is
+    // still pending. A wheel over the scroller after that point must cancel
+    // the in-flight restore exactly like the explicit superseding actions.
+    await waitFor(() => expect(cursorOldLoads()).toBeGreaterThanOrEqual(1));
+
+    fireEvent.wheel(scrollerWithGeometry());
+    // The restore's retry timers are cancelled and in-flight continuations
+    // bail: the cursor-old request count settles and stays put well past one
+    // retry interval.
+    const settled = await stableCount(cursorOldLoads, 400);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(cursorOldLoads()).toBe(settled);
+
+    // The wheel released the restore's write suppression: a viewport
+    // active-change now persists the anchor instead of being dropped.
+    const scrollerEl = scrollerWithGeometry();
+    scrollerEl.scrollTop = 100;
+    driveActiveAnchor("u-old");
+    await expectAnchorWrite("u-old");
+  });
+
+  it("cancels the restore, releases viewport writes and snaps to newest content when the user sends", async () => {
+    const cursorOldLoads = stuckRestoreSetup();
+    await renderReady();
+    await waitFor(() => expect(cursorOldLoads()).toBeGreaterThanOrEqual(1));
+
+    const scrollerEl = scrollerWithGeometry();
+    fireEvent.change(textarea(), { target: { value: "hello" } });
+    fireEvent.click(sendButton());
+    // The optimistic user block lands (send superseded the restore): the
+    // viewport snaps to the newest content because follow-output is back on.
+    act(() => {
+      const state = useRuntimeStore.getState();
+      useRuntimeStore.setState({
+        thread: {
+          blocks: [...state.thread.blocks, userBlock("u-live", "hello")],
+          index: { ...state.thread.index, "u-live": state.thread.blocks.length },
+          loaded: true,
+        },
+      });
+    });
+    expect(scrollerEl.scrollTop).toBe(1000);
+
+    // The restore's retry loop is cancelled…
+    const settled = await stableCount(cursorOldLoads, 400);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(cursorOldLoads()).toBe(settled);
+    // …and its write suppression was released.
+    scrollerEl.scrollTop = 100;
+    driveActiveAnchor("u-old");
+    await expectAnchorWrite("u-old");
+  });
+
+  it("cancels the restore and releases viewport writes when back-to-latest is clicked", async () => {
+    const cursorOldLoads = stuckRestoreSetup();
+    await renderReady();
+    await waitFor(() => expect(cursorOldLoads()).toBeGreaterThanOrEqual(1));
+
+    // Scroll up so the back-to-latest affordance appears.
+    const scrollerEl = scrollerWithGeometry();
+    scrollerEl.scrollTop = 100;
+    fireEvent.scroll(scrollerEl);
+    await waitFor(() => expect(screen.getByLabelText("Back to latest")).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText("Back to latest"));
+    expect(scrollerEl.scrollTop).toBe(1000);
+
+    // The restore's retry loop is cancelled…
+    const settled = await stableCount(cursorOldLoads, 400);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(cursorOldLoads()).toBe(settled);
+    // …and its write suppression was released.
+    scrollerEl.scrollTop = 100;
+    driveActiveAnchor("u-old");
+    await expectAnchorWrite("u-old");
+  });
+
+  it("re-asserts follow-output false on every restore retry pass", async () => {
+    const cursorOldLoads = stuckRestoreSetup();
+    await renderReady();
+    await waitFor(() => expect(cursorOldLoads()).toBeGreaterThanOrEqual(1));
+
+    // The restore is retrying when the initial bottom-snap scroll event lands:
+    // it re-enables follow-output (the race the reviewer flagged).
+    const scrollerEl = scrollerWithGeometry();
+    scrollerEl.scrollTop = 1000;
+    fireEvent.scroll(scrollerEl);
+    // A retry pass runs every 250ms and must re-assert follow-output false.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    // Park mid-thread: with follow-output on, the next block append would snap
+    // the viewport back to the bottom and virtualize the anchor away.
+    scrollerEl.scrollTop = 100;
+    act(() => {
+      const state = useRuntimeStore.getState();
+      useRuntimeStore.setState({
+        thread: {
+          blocks: [...state.thread.blocks, userBlock("u-live", "Latest live question")],
+          index: { ...state.thread.index, "u-live": state.thread.blocks.length },
+          loaded: true,
+        },
+      });
+    });
+    expect(scrollerEl.scrollTop).toBe(100);
+  });
+});
+
+describe("bookmark suggestion flow", () => {
+  it("suggests bookmarks and accepts a proposal through the panel", async () => {
+    // Minimal stateful server: propose creates a proposal row, accept flips it
+    // to accepted, list returns the current records.
+    const server: Array<Record<string, unknown>> = [];
+    overrides.push((url, init) => {
+      const method = (init.method || "GET").toUpperCase();
+      if (method === "GET" && url.startsWith("/api/bookmarks")) {
+        return Promise.resolve(jsonResponse({ bookmarks: server, legacy_skipped: 0 }));
+      }
+      if (method === "POST" && url.startsWith("/api/bookmarks/propose")) {
+        const proposal = {
+          bookmark_id: "p1",
+          session_id: SESSION_ID,
+          message_id: "a1",
+          role: "assistant",
+          quote: "final result verified",
+          label: null,
+          origin: "agent_proposal",
+          status: "proposed",
+          created_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-01T00:00:00.000Z",
+        };
+        server.push(proposal);
+        return Promise.resolve(jsonResponse({ session_id: SESSION_ID, bookmarks: [proposal], skipped: 0 }));
+      }
+      if (method === "PATCH" && url.startsWith("/api/bookmarks/")) {
+        const id = String(url).match(/\/api\/bookmarks\/([^?]+)/)?.[1];
+        const record = server.find((entry) => entry.bookmark_id === id);
+        if (record) {
+          record.status = "accepted";
+          record.updated_at = "2026-01-01T00:00:01.000Z";
+        }
+        return Promise.resolve(jsonResponse({ bookmark: record }));
+      }
+      return null;
+    });
+    await renderReady();
+
+    fireEvent.click(screen.getByRole("button", { name: "Bookmarks" }));
+    const panel = await screen.findByRole("region", { name: "Bookmarks" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Suggest bookmarks" }));
+
+    // The propose POST fires exactly once and the refreshed list shows the
+    // proposal row with created-feedback.
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, init]) => init?.method === "POST" && String(url).startsWith("/api/bookmarks/propose"))).toBe(true);
+    });
+    const accept = await within(panel).findByRole("button", { name: "Accept" });
+    expect(server).toHaveLength(1);
+    expect(server[0]?.status).toBe("proposed");
+    expect(within(panel).getByText(/Added 1 suggestion/i)).toBeInTheDocument();
+
+    // Manual acceptance: the user must click Accept; the server record only
+    // moves to accepted through the PATCH.
+    fireEvent.click(accept);
+    await waitFor(() => expect(server[0]?.status).toBe("accepted"));
+    await waitFor(() => expect(within(panel).queryByRole("button", { name: "Accept" })).not.toBeInTheDocument());
+    expect(within(panel).getByRole("button", { name: "Remove bookmark" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url, init]) => init?.method === "PATCH" && String(url).startsWith("/api/bookmarks/p1"))).toBe(true);
+  });
+});
+
+describe("re-entering a session with a saved anchor (real connect)", () => {
+  // The reload/re-entry scenario from the browser UAT: a previous entry
+  // cached the NEWEST page in localStorage, so the re-entry's connect renders
+  // the cached snapshot while its turn-artifacts read is in flight. The
+  // reading-position restore must not load the older anchor page into that
+  // empty/cached thread window and then get it clobbered by the connect's
+  // cached render + newest-page merge — the target would never enter the
+  // thread and the restore loop (already done, anchorMounted) would never
+  // bring it back.
+  function newestPageMessages() {
+    return [
+      { id: "a3", role: "assistant", content: [{ type: "text", text: "Newest answer 3" }] },
+      { id: "u3", role: "user", content: [{ type: "text", text: "Newest question 3" }] },
+      { id: "a4", role: "assistant", content: [{ type: "text", text: "Newest answer 4" }] },
+      { id: "u4", role: "user", content: [{ type: "text", text: "Newest question 4" }] },
+    ];
+  }
+  function olderPageMessages() {
+    return [
+      { id: "u1", role: "user", content: [{ type: "text", text: "Old question 1" }] },
+      { id: "a1", role: "assistant", content: [{ type: "text", text: "Old answer 1" }] },
+      { id: "u2", role: "user", content: [{ type: "text", text: "Old question 2 (anchor)" }] },
+      { id: "a2", role: "assistant", content: [{ type: "text", text: "Old answer 2" }] },
+    ];
+  }
+
+  function seedCachedNewestPage() {
+    const storage = new Map<string, string>();
+    storage.set("pi-science.msg-cache", JSON.stringify({
+      [`${CWD}\u0000${SESSION_ID}`]: { messages: newestPageMessages(), cachedAt: Date.now() },
+    }));
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key),
+      clear: () => storage.clear(),
+    });
+  }
+
+  it("keeps the navigation-loaded older page when the re-entry connect resolves from the cached snapshot", async () => {
+    seedCachedNewestPage();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    useRuntimeStore.setState({
+      connect: realConnect,
+      disconnect: realDisconnect,
+      cwd: CWD,
+      activeSessionId: null,
+      sessions: [{ id: SESSION_ID, cwd: CWD, name: "Session" }],
+      thread: { blocks: [], index: {}, loaded: true },
+      historyLoading: false,
+      status: "ready",
+      working: false,
+    });
+    overrides.push((url) => {
+      const path = String(url);
+      if (path.startsWith("/api/sessions/s1/read-state")) {
+        return Promise.resolve(jsonResponse({
+          session_id: SESSION_ID, anchor_message_id: "u2", at_bottom: false,
+          seen_snapshot_version: null, updated_at: "now", anchor_available: true, before: "cursor-old",
+        }));
+      }
+      if (path.startsWith("/api/sessions/s1/messages/index")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u1", role: "user", text: "Old question 1", before: "cursor-old" },
+            { id: "u2", role: "user", text: "Old question 2 (anchor)", before: "cursor-old" },
+            { id: "u3", role: "user", text: "Newest question 3" },
+            { id: "u4", role: "user", text: "Newest question 4" },
+          ],
+          snapshot_version: "1:1",
+        }));
+      }
+      if (path.includes("/api/sessions/s1/messages?") && path.includes("before=cursor-old")) {
+        return Promise.resolve(jsonResponse({
+          messages: olderPageMessages(),
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        }));
+      }
+      if (path.includes("/api/sessions/s1/messages?")) {
+        // The newest page lands AFTER the cached render window so the restore
+        // can slip its older-page load into the empty-thread gap.
+        return new Promise((resolve) => setTimeout(() => resolve(jsonResponse({
+          messages: newestPageMessages(),
+          next_cursor: null, has_more: false, snapshot_version: "3:3",
+        })), 450));
+      }
+      if (path.includes("/api/sessions/s1/state")) {
+        return new Promise((resolve) => setTimeout(() => resolve(jsonResponse({
+          ok: true,
+          id: SESSION_ID,
+          cwd: CWD,
+          is_streaming: false,
+          is_compacting: false,
+          pending_message_count: 0,
+          model: "custom-custom-api/gpt-5.6-luna",
+          thinking: "max",
+          context_tokens: 24000,
+          context_window: 128000,
+          context_percent: 18.75,
+          compaction_enabled: true,
+          compaction_threshold_percent: 85,
+        })), 450));
+      }
+      if (path.includes("/api/sessions/s1/artifacts")) {
+        // Widens the cached-snapshot render window inside connect: while it is
+        // in flight, historyLoading is still false on the buggy ordering. The
+        // window must outlive the restore's first anchor-mount check so the
+        // connect's cached render + merge clobber the older page AFTER the
+        // restore loop has already finished (anchorMounted) — the real-browser
+        // failure shape.
+        return new Promise((resolve) => setTimeout(() => resolve(jsonResponse({ turns: [] })), 400));
+      }
+      return null;
+    });
+
+    await renderReady();
+    // The connect's cached render + turn-artifacts chain + newest-page merge
+    // take ~1.3s to settle; wait past that before asserting the final thread.
+    await new Promise((resolve) => setTimeout(resolve, 1600));
+    const thread = useRuntimeStore.getState().thread;
+    expect(thread.blocks.map((block) => block.id)).toEqual(["u1", "a1", "u2", "a2", "a3", "u3", "a4", "u4"]);
+    // The saved anchor must be in the loaded thread (and stay mountable), not
+    // dropped by the concurrent newest-page connect.
+    expect(thread.index["u2"]).not.toBeUndefined();
+
+    // Cleanup: tear down the real client so its stream/watchdog cannot leak
+    // into later tests, and drop the seeded localStorage cache.
+    useRuntimeStore.getState().client?.disconnect();
+    clearCachedMessages(CWD, SESSION_ID);
+  });
+
+  it("gates navigation history loads behind the newest page even when the cached snapshot renders first", async () => {
+    seedCachedNewestPage();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    useRuntimeStore.setState({
+      connect: realConnect,
+      disconnect: realDisconnect,
+      cwd: CWD,
+      activeSessionId: null,
+      sessions: [{ id: SESSION_ID, cwd: CWD, name: "Session" }],
+      thread: { blocks: [], index: {}, loaded: true },
+      historyLoading: false,
+      status: "ready",
+      working: false,
+    });
+    // The first history navigation request must be gated behind the newest
+    // page: it may only START after the newest-page response has resolved, so
+    // its prepend can never be clobbered by the connect's cached render +
+    // newest-page merge.
+    let newestResolvedAt = Number.POSITIVE_INFINITY;
+    let firstOlderLoadAt = Number.POSITIVE_INFINITY;
+    const startedAt = Date.now();
+    overrides.push((url) => {
+      const path = String(url);
+      if (path.startsWith("/api/sessions/s1/read-state")) {
+        return Promise.resolve(jsonResponse({
+          session_id: SESSION_ID, anchor_message_id: "u2", at_bottom: false,
+          seen_snapshot_version: null, updated_at: "now", anchor_available: true, before: "cursor-old",
+        }));
+      }
+      if (path.startsWith("/api/sessions/s1/messages/index")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u1", role: "user", text: "Old question 1", before: "cursor-old" },
+            { id: "u2", role: "user", text: "Old question 2 (anchor)", before: "cursor-old" },
+            { id: "u3", role: "user", text: "Newest question 3" },
+            { id: "u4", role: "user", text: "Newest question 4" },
+          ],
+          snapshot_version: "1:1",
+        }));
+      }
+      if (path.includes("/api/sessions/s1/messages?") && path.includes("before=cursor-old")) {
+        if (firstOlderLoadAt === Number.POSITIVE_INFINITY) firstOlderLoadAt = Date.now() - startedAt;
+        return Promise.resolve(jsonResponse({
+          messages: olderPageMessages(),
+          next_cursor: null, has_more: false, snapshot_version: "2:2",
+        }));
+      }
+      if (path.includes("/api/sessions/s1/messages?")) {
+        return new Promise((resolve) => setTimeout(() => {
+          newestResolvedAt = Date.now() - startedAt;
+          resolve(jsonResponse({
+            messages: newestPageMessages(),
+            next_cursor: null, has_more: false, snapshot_version: "3:3",
+          }));
+        }, 450));
+      }
+      if (path.includes("/api/sessions/s1/state")) {
+        return new Promise((resolve) => setTimeout(() => resolve(jsonResponse({
+          ok: true,
+          id: SESSION_ID,
+          cwd: CWD,
+          is_streaming: false,
+          is_compacting: false,
+          pending_message_count: 0,
+          model: "custom-custom-api/gpt-5.6-luna",
+          thinking: "max",
+          context_tokens: 24000,
+          context_window: 128000,
+          context_percent: 18.75,
+          compaction_enabled: true,
+          compaction_threshold_percent: 85,
+        })), 450));
+      }
+      if (path.includes("/api/sessions/s1/artifacts")) {
+        // Widens the cached-snapshot render window inside connect: on the
+        // buggy ordering this window had historyLoading still false, letting
+        // the restore's older-page load start before the newest page landed.
+        return new Promise((resolve) => setTimeout(() => resolve(jsonResponse({ turns: [] })), 400));
+      }
+      return null;
+    });
+
+    await renderReady();
+    await new Promise((resolve) => setTimeout(resolve, 1600));
+    expect(firstOlderLoadAt).toBeLessThan(Number.POSITIVE_INFINITY);
+    expect(firstOlderLoadAt).toBeGreaterThan(newestResolvedAt);
+
+    // Cleanup: tear down the real client so its stream/watchdog cannot leak
+    // into later tests, and drop the seeded localStorage cache.
+    useRuntimeStore.getState().client?.disconnect();
+    clearCachedMessages(CWD, SESSION_ID);
   });
 });

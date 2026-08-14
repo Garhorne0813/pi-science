@@ -1,0 +1,38 @@
+[
+  {
+    "prompt": "Run a regression with a fixed seed and report the coefficients",
+    "expected_trigger": true,
+    "trigger_terms": [
+      "regression",
+      "seed",
+      "statistics"
+    ]
+  },
+  {
+    "prompt": "Check the analysis plan for HARKing before reporting results",
+    "expected_trigger": true,
+    "trigger_terms": [
+      "analysis",
+      "harking",
+      "statistics"
+    ]
+  },
+  {
+    "prompt": "Read this Stata file and compute the summary statistics",
+    "expected_trigger": true,
+    "trigger_terms": [
+      "stata",
+      "statistics"
+    ]
+  },
+  {
+    "prompt": "Rename the output file",
+    "expected_trigger": false,
+    "trigger_terms": [
+      "regression",
+      "statistics",
+      "seed",
+      "stata"
+    ]
+  }
+]

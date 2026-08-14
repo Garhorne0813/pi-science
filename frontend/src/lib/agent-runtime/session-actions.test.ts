@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { useRuntimeStore } from "./index";
 import { emptyThread } from "./event-fold";
+import { getClient } from "../client/pi-science-client";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
 
@@ -527,6 +528,60 @@ describe("runtime session actions", () => {
     expect(current.activeSessionId).toBe("forked");
     expect(current.thread.blocks).toContainEqual(
       expect.objectContaining({ kind: "status-line", text: "temporary read failure" }),
+    );
+  });
+
+  it("releases the history pagination gate when a local mutation supersedes the initial connect", async () => {
+    let resolveMessages!: (value: Response) => void;
+    let resolveState!: (value: Response) => void;
+    const messages = new Promise<Response>((resolve) => { resolveMessages = resolve; });
+    const runtimeState = new Promise<Response>((resolve) => { resolveState = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return messages;
+      if (url.includes("/state")) return runtimeState;
+      if (url.includes("/abort")) return jsonResponse({ ok: true });
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    // The composer is enabled once activeSessionId is set, so a user action
+    // can start while the initial history/state reads are still in flight.
+    const connecting = useRuntimeStore.getState().connect("/workspace", "session-a");
+    expect(useRuntimeStore.getState().historyLoading).toBe(true);
+
+    // Abort (like sendPrompt/setModel) bumps the local-mutation generation.
+    // The connect must discard its stale snapshot WITHOUT leaving the
+    // pagination gate latched: restores/history loads would otherwise return
+    // 0 forever and the UI would show "Loading earlier messages…" forever.
+    await useRuntimeStore.getState().abort();
+    resolveMessages(jsonResponse({ messages: [] }));
+    resolveState(jsonResponse(state("session-a")));
+    await connecting;
+
+    expect(useRuntimeStore.getState().historyLoading).toBe(false);
+  });
+
+  it("releases the history pagination gate when the initial connect throws", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    // A synchronous throw from the transport connect (broken socket setup)
+    // reaches the connect catch block directly — the history fetch never
+    // settled, so the gate must be released there.
+    const client = getClient();
+    vi.spyOn(client, "connect").mockImplementation(() => {
+      throw new Error("transport exploded");
+    });
+
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+
+    expect(useRuntimeStore.getState().historyLoading).toBe(false);
+    expect(useRuntimeStore.getState().status).toBe("error");
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
+      expect.objectContaining({ kind: "status-line", text: "transport exploded" }),
     );
   });
 });
