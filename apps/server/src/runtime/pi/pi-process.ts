@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { assertCommandAllowed } from "./roles.js";
 import { EventEmitter } from "node:events";
 import { createInterface } from "node:readline";
 import type { PiOrbitHost, PiOrbitRuntimeDescriptor } from "./pi-orbit-host.js";
@@ -70,6 +71,8 @@ export class PiProcess extends EventEmitter {
   readonly child: ChildProcess;
   readonly runtimeIdentity: PiOrbitRuntimeDescriptor | undefined;
   private readonly pending = new Map<string, PendingRequest>();
+  /** Narrow-privilege role (4.4); undefined = unrestricted. */
+  private role: string | undefined;
   private readonly requestTimeoutMs: number;
   private readonly webHost: PiOrbitHost | undefined;
 
@@ -153,7 +156,17 @@ export class PiProcess extends EventEmitter {
     }
   }
 
-  async sendCommand(type: string, params: Record<string, unknown> = {}): Promise<PiResult> {
+  /** Attach a narrow-privilege role; the command boundary is enforced from
+   *  the next sendCommand on. Returns the previous role. */
+  attachRole(role: string | undefined): string | undefined {
+    const previous = this.role;
+    this.role = role;
+    return previous;
+  }
+
+    async sendCommand(type: string, params: Record<string, unknown> = {}): Promise<PiResult> {
+    const roleCheck = assertCommandAllowed(this.role, type);
+    if (!roleCheck.allowed) return { success: false, code: "role_forbidden", error: roleCheck.error };
     if (this.webHost) return this.sendWebCommand(type, params);
     if (this.closed || !this.child.stdin || this.child.stdin.destroyed) {
       return { success: false, code: "process_closed", error: "pi runtime stdin is unavailable" };

@@ -130,6 +130,27 @@ describe("Node Pi JSONL adapter", () => {
     await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
+
+  it("rejects commands outside the attached narrow role at the boundary", async () => {
+    const manager = new PiManager();
+    managers.push(manager);
+    const runtime = await fakeRuntime();
+    const process = await manager.start("role-workspace", runtime);
+    process.attachRole("result_reviewer");
+
+    // Read-only surface still works.
+    await expect(manager.sendCommand("role-workspace", "get_state")).resolves.toMatchObject({ success: true, data: { type: "get_state" } });
+    // Mutating/executing commands are rejected before reaching the runtime.
+    await expect(manager.sendCommand("role-workspace", "bash")).resolves.toMatchObject({ success: false, code: "role_forbidden" });
+    await expect(manager.sendCommand("role-workspace", "fork")).resolves.toMatchObject({ success: false, code: "role_forbidden" });
+
+    // Detaching the role restores the unrestricted surface.
+    process.attachRole(undefined);
+    await expect(manager.sendCommand("role-workspace", "fork")).resolves.toMatchObject({ success: true });
+    await manager.stop("role-workspace");
+    await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
   it("returns a stable error when the process exits", async () => {
     const manager = new PiManager();
     managers.push(manager);
