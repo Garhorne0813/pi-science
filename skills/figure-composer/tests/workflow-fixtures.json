@@ -1,0 +1,42 @@
+[
+  {
+    "prompt": "Compose panels A, B, and C into a publication figure",
+    "expected_trigger": true,
+    "trigger_terms": [
+      "panels",
+      "figure"
+    ],
+    "required_outputs": [
+      "claim_record",
+      "layout_plan",
+      "composite_artifact",
+      "verification_result",
+      "review_decision"
+    ],
+    "produced_outputs": [
+      "claim_record",
+      "layout_plan",
+      "composite_artifact",
+      "verification_result",
+      "review_decision"
+    ]
+  },
+  {
+    "prompt": "Rework the failed panel and re-verify the figure",
+    "expected_trigger": true,
+    "trigger_terms": [
+      "panel",
+      "figure",
+      "verify"
+    ],
+    "required_outputs": [
+      "composite_artifact",
+      "verification_result"
+    ],
+    "produced_outputs": [
+      "composite_artifact",
+      "verification_result",
+      "review_decision"
+    ]
+  }
+]

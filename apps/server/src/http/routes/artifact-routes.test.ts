@@ -33,7 +33,7 @@ async function writeWorkspaceFile(cwd: string, path: string, content: string): P
   await writeFile(target, content, "utf8");
 }
 
-interface ArtifactJson { artifact_id: string; version: number; path: string; schema_version?: number; classification?: string; inputs?: Array<{ artifact_id: string; version: number } | string>; supersedes?: { artifact_id: string; version: number } | null }
+interface ArtifactJson { artifact_id: string; logical_id?: string; version: number; derived_from?: Array<{ artifact_id: string; version: number }>; path: string; schema_version?: number; classification?: string; inputs?: Array<{ artifact_id: string; version: number } | string>; supersedes?: { artifact_id: string; version: number } | null }
 
 async function publish(app: Awaited<ReturnType<typeof buildApp>>, cwd: string, path: string, payload: Record<string, unknown> = {}): Promise<ArtifactJson> {
   const response = await app.inject({ method: "POST", url: `/api/artifacts/publish?cwd=${encodeURIComponent(cwd)}`, payload: { path, ...payload } });
@@ -267,5 +267,169 @@ describe("artifact lineage routes", () => {
     await publish(app, cwd, "auto.txt", { classification: "intermediate" });
     const listed = await app.inject({ method: "GET", url: `/api/artifacts?cwd=${encodeURIComponent(cwd)}&path=auto.txt&latest=1` });
     expect((listed.json().artifacts as ArtifactJson[])[0]).toMatchObject({ classification: "intermediate", schema_version: 2 });
+  });
+});
+
+describe("logical artifact identity", () => {
+  it("inherits the same-path logical id across versions", async () => {
+    const cwd = await workspace();
+    await writeWorkspaceFile(cwd, "draft.md", "v1\n");
+    const app = buildApp(config());
+    apps.push(app);
+
+    const first = await publish(app, cwd, "draft.md");
+    expect(typeof first.logical_id).toBe("string");
+    await writeWorkspaceFile(cwd, "draft.md", "v2\n");
+    const second = await publish(app, cwd, "draft.md");
+    expect(second.logical_id).toBe(first.logical_id);
+    expect(second.version).toBe(2);
+    expect(second.artifact_id).toBe(first.artifact_id);
+  });
+
+  it("honors an explicit logical_id on publish", async () => {
+    const cwd = await workspace();
+    await writeWorkspaceFile(cwd, "a.csv", "a\n");
+    await writeWorkspaceFile(cwd, "b.csv", "b\n");
+    const app = buildApp(config());
+    apps.push(app);
+
+    const explicit = "logical-abc-123";
+    const published = await publish(app, cwd, "a.csv", { logical_id: explicit });
+    expect(published.logical_id).toBe(explicit);
+    // A different path with the same explicit logical id continues the chain.
+    const continued = await publish(app, cwd, "b.csv", { logical_id: explicit });
+    expect(continued.logical_id).toBe(explicit);
+    expect(continued.version).toBe(2);
+  });
+
+  it("retarget keeps one lineage across a rename with supersession", async () => {
+    const cwd = await workspace();
+    await writeWorkspaceFile(cwd, "old-name.md", "content\n");
+    const app = buildApp(config());
+    apps.push(app);
+    const original = await publish(app, cwd, "old-name.md");
+    expect(original.logical_id).toBeDefined();
+
+    // Simulate a rename: new path, same bytes, retarget the logical chain.
+    await writeWorkspaceFile(cwd, "new-name.md", "content\n");
+    const response = await app.inject({ method: "POST", url: `/api/artifacts/retarget?cwd=${encodeURIComponent(cwd)}`, payload: { path: "new-name.md", logical_id: original.logical_id } });
+    expect(response.statusCode).toBe(200);
+    const moved = response.json() as ArtifactJson & { logical_id?: string };
+    expect(moved.path).toBe("new-name.md");
+    expect(moved.logical_id).toBe(original.logical_id);
+    expect(moved.version).toBe(2);
+    expect(moved.artifact_id).not.toBe(original.artifact_id);
+    expect(moved.supersedes).toEqual({ artifact_id: original.artifact_id, version: 1 });
+
+    // The lineage of the new path shows the superseded old version.
+    const lineage = await app.inject({ method: "GET", url: `/api/artifacts/${moved.artifact_id}/lineage?cwd=${encodeURIComponent(cwd)}` });
+    expect(lineage.statusCode).toBe(200);
+    const body = lineage.json() as { upstream: Array<{ kind: string; artifact: ArtifactJson }> };
+    expect(body.upstream).toEqual([{ kind: "supersedes", artifact: expect.objectContaining({ path: "old-name.md", version: 1 }) }]);
+  });
+
+  it("retarget rejects unknown logical ids and occupied paths", async () => {
+    const cwd = await workspace();
+    await writeWorkspaceFile(cwd, "mine.txt", "m\n");
+    await writeWorkspaceFile(cwd, "taken.txt", "t\n");
+    const app = buildApp(config());
+    apps.push(app);
+    await publish(app, cwd, "taken.txt");
+
+    const missing = await app.inject({ method: "POST", url: `/api/artifacts/retarget?cwd=${encodeURIComponent(cwd)}`, payload: { path: "mine.txt", logical_id: "no-such-logical" } });
+    expect(missing.statusCode).toBe(404);
+
+    const mine = await publish(app, cwd, "mine.txt");
+    const occupied = await app.inject({ method: "POST", url: `/api/artifacts/retarget?cwd=${encodeURIComponent(cwd)}`, payload: { path: "taken.txt", logical_id: mine.logical_id } });
+    expect(occupied.statusCode).toBe(409);
+  });
+});
+
+describe("derived_from relations", () => {
+  it("publishes derived_from refs and surfaces them in lineage both directions", async () => {
+    const cwd = await workspace();
+    await writeWorkspaceFile(cwd, "raw.csv", "raw\n");
+    await writeWorkspaceFile(cwd, "analysis.py", "print(1)\n");
+    await writeWorkspaceFile(cwd, "result.csv", "out\n");
+    const app = buildApp(config());
+    apps.push(app);
+
+    const input = await publish(app, cwd, "raw.csv");
+    const code = await publish(app, cwd, "analysis.py");
+    const result = await publish(app, cwd, "result.csv", {
+      derived_from: [{ artifact_id: input.artifact_id, version: 1 }, { artifact_id: code.artifact_id, version: 1 }],
+    });
+    expect(result.derived_from).toEqual([
+      { artifact_id: input.artifact_id, version: 1 },
+      { artifact_id: code.artifact_id, version: 1 },
+    ]);
+
+    const lineage = await app.inject({ method: "GET", url: `/api/artifacts/${result.artifact_id}/lineage?cwd=${encodeURIComponent(cwd)}` });
+    expect(lineage.statusCode).toBe(200);
+    const body = lineage.json() as { upstream: Array<{ kind: string; artifact: ArtifactJson }> };
+    expect(body.upstream.map((e) => e.kind)).toEqual(["derived_from", "derived_from"]);
+    expect(body.upstream.map((e) => e.artifact.path).sort()).toEqual(["analysis.py", "raw.csv"]);
+
+    // Reverse direction: the input sees itself as a derivation source.
+    const inputLineage = await app.inject({ method: "GET", url: `/api/artifacts/${input.artifact_id}/lineage?cwd=${encodeURIComponent(cwd)}` });
+    expect(inputLineage.json().downstream).toEqual([{ kind: "derived", artifact: expect.objectContaining({ path: "result.csv", version: 1 }) }]);
+  });
+
+  it("rejects missing or self derived_from refs with 422", async () => {
+    const cwd = await workspace();
+    await writeWorkspaceFile(cwd, "a.csv", "a\n");
+    const app = buildApp(config());
+    apps.push(app);
+
+    const missing = await app.inject({ method: "POST", url: `/api/artifacts/publish?cwd=${encodeURIComponent(cwd)}`, payload: { path: "a.csv", derived_from: [{ artifact_id: "ghost", version: 1 }] } });
+    expect(missing.statusCode).toBe(422);
+    expect(missing.json().error).toContain("does not exist");
+
+    const first = await publish(app, cwd, "a.csv");
+    const self = await app.inject({ method: "POST", url: `/api/artifacts/publish?cwd=${encodeURIComponent(cwd)}`, payload: { path: "a.csv", derived_from: [{ artifact_id: first.artifact_id, version: 2 }] } });
+    expect(self.statusCode).toBe(422);
+    expect(self.json().error).toContain("cannot be derived from the version being created");
+  });
+});
+
+describe("artifact review verdicts", () => {
+  it("attaches review verdicts to an artifact version", async () => {
+    const cwd = await workspace();
+    await writeWorkspaceFile(cwd, "report.md", "v1\n");
+    const app = buildApp(config());
+    apps.push(app);
+    const artifact = await publish(app, cwd, "report.md");
+
+    const first = await app.inject({ method: "POST", url: `/api/artifacts/${artifact.artifact_id}/review?cwd=${encodeURIComponent(cwd)}`, payload: { status: "passed", actor: "reviewer" } });
+    expect(first.statusCode).toBe(200);
+    const reviewed = first.json() as ArtifactJson & { reviews?: Array<{ review_id: string; actor: string; status: string; at: string }> };
+    expect(reviewed.reviews).toHaveLength(1);
+    expect(reviewed.reviews?.[0]).toMatchObject({ actor: "reviewer", status: "passed" });
+    expect(reviewed.reviews?.[0]?.review_id).toBeDefined();
+
+    // Re-review replaces the same review_id but keeps the verdict list bounded.
+    const second = await app.inject({ method: "POST", url: `/api/artifacts/${artifact.artifact_id}/review?cwd=${encodeURIComponent(cwd)}`, payload: { status: "needs_work", actor: "reviewer", review_id: reviewed.reviews?.[0]?.review_id } });
+    expect(second.statusCode).toBe(200);
+    const reReviewed = second.json() as ArtifactJson & { reviews?: Array<{ status: string }> };
+    expect(reReviewed.reviews).toHaveLength(1);
+    expect(reReviewed.reviews?.[0]?.status).toBe("needs_work");
+
+    // Reading the artifact returns the persisted reviews.
+    const fetched = await app.inject({ method: "GET", url: `/api/artifacts/${artifact.artifact_id}?cwd=${encodeURIComponent(cwd)}` });
+    expect(fetched.json().reviews).toHaveLength(1);
+  });
+
+  it("rejects invalid statuses and unknown artifacts", async () => {
+    const cwd = await workspace();
+    await writeWorkspaceFile(cwd, "a.txt", "a\n");
+    const app = buildApp(config());
+    apps.push(app);
+    const artifact = await publish(app, cwd, "a.txt");
+
+    const badStatus = await app.inject({ method: "POST", url: `/api/artifacts/${artifact.artifact_id}/review?cwd=${encodeURIComponent(cwd)}`, payload: { status: "maybe" } });
+    expect(badStatus.statusCode).toBe(422);
+
+    const missing = await app.inject({ method: "POST", url: `/api/artifacts/ghost-id/review?cwd=${encodeURIComponent(cwd)}`, payload: { status: "passed" } });
+    expect(missing.statusCode).toBe(404);
   });
 });

@@ -97,3 +97,36 @@ cards; keep it as the LAST thing in the message):
 - Evidence: the exact identifier / quoted sentence / file paths, plus what you
   observed.
 - The note must never claim the document has no errors.
+## Stages — a recoverable audit SOP
+
+Run the audit as stages below. Append one waypoint per stage to
+`.pi-science/sop/traceability-review/waypoints.jsonl` (schema:
+`references/waypoint-schemas.md`). **Resume by reading the waypoint log**, never
+from memory.
+
+| # | Stage | Purpose | Waypoint `checkpoint` holds |
+| --- | --- | --- | --- |
+| 1 | `extract` | Extract text, citation identifiers, and quantitative claims (PDF via `pdf_extract.py`) | extractor backend, page/char counts, identifier lists |
+| 2 | `citations` | Resolve every citation identifier against Crossref / arXiv / PubMed | per-identifier resolution outcome |
+| 3 | `numbers` | Trace every quantitative claim to a workspace source | claim → source mapping, untraceable list |
+| 4 | `figures` | Cross-check referenced figures against generating code and provenance | figure → code timestamps, stale list |
+| 5 | `report` | Emit the ```review block with findings | the review block, note text |
+
+**Human gate**: stage 5 (`report`) — before emitting findings, confirm with the
+user which `warn`-level findings to include; end the stage with
+`status: "needs_confirmation"` and wait.
+
+**Convergence**: this is a single-pass audit, not an iterative loop — no retry
+rounds. If a stage fails (e.g. extractor error), fix the cause and re-run that
+stage once; then continue.
+
+**Completion condition**: a `completed` waypoint for stage 5 whose
+`checkpoint` holds the exact final ```review block.
+
+**Common failure modes** (record as `failed` with the matching cause):
+- `extractor_unavailable` — no PDF backend installed; fall back to readable
+  text and say so plainly.
+- `network_offline` — registries unreachable; report "could not verify
+  (offline)" rather than skipping.
+- `provenance_absent` — `.pi-science/provenance.jsonl` missing; fall back to
+  file mtimes and say so.

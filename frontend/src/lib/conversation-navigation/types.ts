@@ -57,6 +57,6 @@ export interface ConversationAttentionItem {
 
 export interface ConversationAttentionResponse {
   items: ConversationAttentionItem[];
-  counts: { needs_you: number; running: number; unread: number };
+  counts: { needs_you: number; running: number; unread: number; plan_ready: number };
   truncated: boolean;
 }

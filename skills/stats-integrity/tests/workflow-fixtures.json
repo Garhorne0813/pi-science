@@ -1,0 +1,22 @@
+[
+  {
+    "prompt": "Run the regression with a fixed seed and report estimates",
+    "expected_trigger": true,
+    "trigger_terms": [
+      "regression",
+      "seed"
+    ],
+    "required_outputs": [
+      "plan_record",
+      "raw_output",
+      "gate_block",
+      "report"
+    ],
+    "produced_outputs": [
+      "plan_record",
+      "raw_output",
+      "gate_block",
+      "report"
+    ]
+  }
+]

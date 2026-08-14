@@ -14,6 +14,7 @@ const NotebooksPage = lazy(() => import("./routes/NotebooksPage").then((m) => ({
 const RunsPage = lazy(() => import("./routes/RunsPage").then((m) => ({ default: m.RunsPage })));
 const KnowledgePage = lazy(() => import("./routes/KnowledgePage").then((m) => ({ default: m.KnowledgePage })));
 const ResearchPage = lazy(() => import("./routes/ResearchPage").then((m) => ({ default: m.ResearchPage })));
+const ArtifactsPage = lazy(() => import("./routes/ArtifactsPage").then((m) => ({ default: m.ArtifactsPage })));
 
 function LoadingFallback() {
   const { t } = useTranslation();
@@ -36,6 +37,7 @@ export const router = createBrowserRouter([
       { path: "workspace/:cwd/notebooks", element: wrap(<NotebooksPage />) },
       { path: "workspace/:cwd/runs", element: wrap(<RunsPage />) },
       { path: "workspace/:cwd/knowledge", element: wrap(<KnowledgePage />) },
+      { path: "workspace/:cwd/artifacts", element: wrap(<ArtifactsPage />) },
       { path: "workspace/:cwd/research", element: wrap(<ResearchPage />) },
       { path: "workspace/:cwd/settings", element: wrap(<SettingsPage />) },
     ],

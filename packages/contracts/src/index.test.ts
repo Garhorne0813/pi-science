@@ -82,6 +82,12 @@ describe("gateway contracts", () => {
       upstream: [{ kind: "uses", artifact: manifest() }],
       unresolved_inputs: [],
     })).toThrow();
+    expect(artifactLineageResponseSchema.parse({
+      artifact: manifest(),
+      upstream: [{ kind: "derived_from", artifact: manifest({ artifact_id: "a1" }) }],
+      downstream: [{ kind: "derived", artifact: manifest({ artifact_id: "a3" }) }],
+      unresolved_inputs: [],
+    })).toMatchObject({ upstream: [{ kind: "derived_from" }], downstream: [{ kind: "derived" }] });
   });
 
   it("validates skill content and rejects absolute locations", () => {

@@ -101,6 +101,7 @@ export async function getAttention(baseUrl: string, cwd: string, limit?: number)
       needs_you: Number(data.counts?.needs_you ?? 0),
       running: Number(data.counts?.running ?? 0),
       unread: Number(data.counts?.unread ?? 0),
+      plan_ready: Number(data.counts?.plan_ready ?? 0),
     },
     truncated: data.truncated === true,
   };

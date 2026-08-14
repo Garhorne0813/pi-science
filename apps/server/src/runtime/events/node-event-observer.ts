@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { extname, relative, resolve } from "node:path";
 import { appendJsonLine, readJsonLines, workspaceFile } from "../../storage/persistence.js";
@@ -87,10 +87,13 @@ async function observeWrittenArtifact(cwd: string, model: string | null, event: 
     const previous = manifests.filter((item) => item.artifact_id === artifactId).sort((left, right) => right.version - left.version)[0];
     const previousVersion = Number(previous?.version ?? 0);
     if (previous?.sha256 === sha256) return;
+    // Stable logical identity: inherit the same-path chain's identity (so a
+    // renamed file keeps one lineage), otherwise mint a fresh one.
+    const logicalId = previous?.logical_id ?? randomUUID();
     const contentType = mime(path);
     const verification = { status: "passed", checks: { exists: true, readable: true, size: metadata.size, sha256 }, checked_at: new Date().toISOString() };
     const manifest: ArtifactManifestV2 = {
-      schema_version: 2, artifact_id: artifactId, version: previousVersion + 1, path, kind: kind(path, contentType), mime: contentType,
+      schema_version: 2, artifact_id: artifactId, logical_id: logicalId, version: previousVersion + 1, path, kind: kind(path, contentType), mime: contentType,
       size: metadata.size, sha256, published_at: new Date().toISOString(),
       producer: { tool, session_id: sessionId, ...(model ? { model } : {}) }, inputs: [], supersedes: null, classification: "intermediate", environment: {}, verification,
     };

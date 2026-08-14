@@ -126,3 +126,39 @@ The frontend auto-detects DOI strings in assistant messages and renders citation
 ## Review artifacts
 
 For each review also produce (condensed is fine): a search record (provider, exact query, date, hit count per search), an evidence table linking claims to identifiers and evidence strength, explicit inclusion/exclusion criteria, and a limitations section (coverage gaps, provider failures, screening depth). Distinguish retrieved facts from synthesis and unresolved questions.
+## Stages — a recoverable review SOP
+
+Run a literature review as the stages below. Append one waypoint per stage to
+`.pi-science/sop/literature-review/waypoints.jsonl` (schema:
+`references/waypoint-schemas.md`). **Resume by reading the waypoint log**, never
+from memory.
+
+| # | Stage | Purpose | Waypoint `checkpoint` holds |
+| --- | --- | --- | --- |
+| 1 | `scope` | State the evidence question, inclusion/exclusion criteria, and provider set | question, criteria, providers |
+| 2 | `search` | Run queries per provider; deduplicate; record retrieval facts | per-provider search record (query, date, hit count) |
+| 3 | `screen` | Include/exclude records against the criteria | screened list, decisions |
+| 4 | `evidence` | Extract the evidence table linking claims to identifiers and strength | evidence table ref |
+| 5 | `synthesize` | Write the synthesis, labeling retrieved facts vs synthesis vs open questions | synthesis ref |
+| 6 | `cite` | Validate every inline citation and the \`## References\` section | references ref, citation audit |
+
+**Human gates**: stage 3 (`screen`) — confirm inclusion/exclusion decisions
+with the user; stage 6 (`cite`) — confirm the final scope before delivering.
+End those stages with `status: "needs_confirmation"` and wait. Never proceed
+past a pending gate.
+
+**Convergence**: stop searching when retrieval saturates — two consecutive
+rounds across all providers return no new deduplicated records not already
+screened. Max search rounds: **4**.
+
+**Completion condition**: a `completed` waypoint for stage 6 whose
+`checkpoint` holds the references ref and the citation audit (every inline
+identifier resolves to a References entry; no unsourced claim left unlabeled).
+
+**Common failure modes** (record as `failed` with the matching cause):
+- `provider_down` — a provider fails; report it explicitly and continue with
+  the rest; if all fail, stop and say so.
+- `gateway_blocked` — the control-plane gateway hard-blocked a sensitive
+  query; stop and ask the user to approve the exact query and categories.
+- `invented_identifier` — never invent a DOI/PMID/arXiv id; a review that
+  would need one must instead label the claim `(synthesis, unverified)`.

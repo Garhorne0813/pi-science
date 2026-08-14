@@ -154,4 +154,32 @@ describe("ArtifactLineagePanel", () => {
     act(() => { useRuntimeStore.setState({ fileRevision: (useRuntimeStore.getState().fileRevision ?? 0) + 1 }); });
     await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/lineage")).length).toBeGreaterThan(before));
   });
+
+  it("renders review verdicts attached to the artifact manifest", async () => {
+    lineageMode = "ok";
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/artifacts?") && url.includes("latest=1")) {
+        return jsonResponse({ artifacts: [manifest()] });
+      }
+      if (url.includes("/lineage")) {
+        return jsonResponse({
+          artifact: manifest({
+            reviews: [
+              { review_id: "r1", actor: "reviewer", status: "needs_work", at: "2026-08-14T00:00:00.000Z" },
+              { review_id: "r2", actor: "pi", status: "passed", at: "2026-08-14T01:00:00.000Z" },
+            ],
+          }),
+          upstream: [], downstream: [], unresolved_inputs: [],
+        });
+      }
+      return jsonResponse({ error: `unhandled ${url}` }, 404);
+    });
+    renderPanel();
+    await screen.findByText("Review");
+    expect(screen.getByText("passed")).toBeTruthy();
+    expect(screen.getByText("needs work")).toBeTruthy();
+    expect(screen.getByText("reviewer")).toBeTruthy();
+    expect(screen.getByText("pi")).toBeTruthy();
+  });
 });

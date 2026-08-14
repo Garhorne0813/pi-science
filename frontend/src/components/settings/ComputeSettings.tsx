@@ -15,6 +15,7 @@ import { useTranslation } from "react-i18next";
 import { apiRequest } from "../../lib/client/api";
 import { cn } from "../../lib/ui";
 import { queryClient } from "../../lib/client/query-client";
+import { RemoteJobsSection } from "./RemoteJobsSection";
 
 type AuthMethod = "key" | "password";
 
@@ -331,6 +332,7 @@ export function ComputeSettings({ workspaceCwd }: ComputeSettingsProps) {
           </article>
         );
       })}
+          <RemoteJobsSection workspaceCwd={workspaceCwd} machineLabels={machines.map((machine) => machine.label)} />
     </section>
   );
 }
