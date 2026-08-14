@@ -51,6 +51,20 @@ export function ArtifactLineagePanel({ path, cwd: cwdOverride, artifactId, versi
         </span>
       </div>
 
+      {(artifact.reviews?.length ?? 0) > 0 && (
+        <LineageGroup title="Review">
+          {artifact.reviews!.map((review) => (
+            <div key={review.review_id} className="flex items-center gap-1.5 text-[11px]">
+              <span className={reviewTone(review.status)}>{reviewStatusLabel(review.status)}</span>
+              <span className="truncate text-muted">{review.actor}</span>
+              <span className="ml-auto shrink-0 text-[10px] text-muted opacity-70" title={review.at}>
+                {new Date(review.at).toLocaleString()}
+              </span>
+            </div>
+          ))}
+        </LineageGroup>
+      )}
+
       {upstream.length > 0 && (
         <LineageGroup title={t("lineage.inputs")}>
           {upstream.map((entry) => (
@@ -78,6 +92,14 @@ export function ArtifactLineagePanel({ path, cwd: cwdOverride, artifactId, versi
       )}
     </div>
   );
+}
+
+function reviewStatusLabel(status: "passed" | "failed" | "needs_work"): string {
+  return status === "passed" ? "passed" : status === "failed" ? "failed" : "needs work";
+}
+
+function reviewTone(status: "passed" | "failed" | "needs_work"): string {
+  return status === "passed" ? "text-ok" : status === "failed" ? "text-error" : "text-warn";
 }
 
 function LineageGroup({ title, children }: { title: string; children: React.ReactNode }) {

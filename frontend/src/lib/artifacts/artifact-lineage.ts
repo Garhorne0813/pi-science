@@ -29,6 +29,7 @@ export interface ArtifactManifestV2 {
   inputs: Array<ArtifactVersionRef | string>;
   supersedes: ArtifactVersionRef | null;
   classification: ArtifactClassification;
+  reviews?: Array<{ review_id: string; actor: string; status: "passed" | "failed" | "needs_work"; at: string }>;
   producer?: Record<string, unknown>;
   environment?: Record<string, unknown>;
   verification?: Record<string, unknown>;
