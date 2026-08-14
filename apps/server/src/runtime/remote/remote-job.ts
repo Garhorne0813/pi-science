@@ -1,0 +1,192 @@
+/** Remote job coordinator (reverse-cs-inspiration 4.5): a narrow, complete
+ *  SSH job loop — stage a script locally, launch it remotely with nohup,
+ *  persist the remote pid, probe status, cancel, and harvest declared output
+ *  globs back into the workspace where they are published as artifacts. */
+
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join, relative } from "node:path";
+import { readJson, withFileWriteLock, workspaceFile, writeJsonAtomic } from "../../storage/persistence.js";
+import { resolveWorkspaceFile } from "../../security/workspace-security.js";
+import type { ComputeMachine, SshExecutor } from "./ssh-executor.js";
+
+export type RemoteJobStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled" | "unknown";
+
+export interface RemoteJobRecord {
+  job_id: string;
+  machine_label: string;
+  host: string;
+  user: string | null;
+  status: RemoteJobStatus;
+  remote_pid: string | null;
+  script: string;
+  script_sha256: string;
+  output_glob: string;
+  created_at: string;
+  started_at: string | null;
+  ended_at: string | null;
+  exit_code: number | null;
+  artifact_ids: string[];
+}
+
+export interface RemoteJobSubmitInput {
+  machine_label: string;
+  command: string[];
+  output_glob?: string;
+}
+
+const REMOTE_DIR = (jobId: string) => `~/.pi-jobs/${jobId}`;
+
+function jobsPath(cwd: string, jobId: string): string {
+  return workspaceFile(cwd, `jobs/remote-${jobId}.json`);
+}
+
+function jobDir(cwd: string, jobId: string): string {
+  return join(cwd, ".pi-science", "staging", jobId);
+}
+
+function normalizeStatusLine(line: string): RemoteJobStatus {
+  const text = line.trim().toLowerCase();
+  if (text.includes("running")) return "running";
+  if (text.includes("exited")) return "succeeded";
+  if (text.startsWith("failed")) return "failed";
+  return "unknown";
+}
+
+/** Remote job lifecycle without a daemon: each probe is a fresh SSH round trip.
+ *  `executor` is injectable so tests run without a host. */
+export class RemoteJobCoordinator {
+  constructor(
+    private readonly executor: SshExecutor,
+    private readonly publishArtifact: (cwd: string, relativePath: string, content: Buffer, tool: string, sessionId?: string) => Promise<{ artifact_id: string }>,
+  ) {}
+
+  async submit(cwd: string, input: RemoteJobSubmitInput): Promise<RemoteJobRecord | { error: string; code?: string }> {
+    const command = input.command.filter((part) => typeof part === "string" && part);
+    if (command.length === 0) return { error: "command is required" };
+    const machines = await readJson<{ machines?: ComputeMachine[] }>(workspaceFile(cwd, "compute.json"), {});
+    const machine = (machines.machines ?? []).find((item) => item.label === input.machine_label);
+    if (!machine) return { error: `Compute machine not found: ${input.machine_label}`, code: "machine_not_found" };
+    const jobId = randomUUID().replaceAll("-", "").slice(0, 16);
+    const script = ["#!/bin/sh", "set +e", "cd ~", ...command, "echo $? > exit.code", "echo done"].join("\n") + "\n";
+    const scriptSha = createHash("sha256").update(script).digest("hex").slice(0, 16);
+    const record: RemoteJobRecord = {
+      job_id: jobId, machine_label: machine.label, host: machine.host, user: machine.user ?? null,
+      status: "pending", remote_pid: null, script, script_sha256: scriptSha,
+      output_glob: String(input.output_glob ?? "*"), created_at: new Date().toISOString(),
+      started_at: null, ended_at: null, exit_code: null, artifact_ids: [],
+    };
+    // Local staging (rollback-safe: the record is only written after launch).
+    await mkdir(jobDir(cwd, jobId), { recursive: true });
+    await writeFile(join(jobDir(cwd, jobId), "run.sh"), script, "utf8");
+    // Remote launch: stream the script over stdin, start it detached, print the pid.
+    const remoteDir = REMOTE_DIR(jobId);
+    const launch = `mkdir -p ${remoteDir} && cat > ${remoteDir}/run.sh && (nohup sh ${remoteDir}/run.sh > ${remoteDir}/output.log 2>&1 & echo $! > ${remoteDir}/pid) && cat ${remoteDir}/pid`;
+    const result = await this.executor.run(machine, launch, script, 30_000);
+    if (!result.success) {
+      record.status = "failed";
+      record.ended_at = new Date().toISOString();
+      await writeJsonAtomic(jobsPath(cwd, jobId), record);
+      return { error: `Remote launch failed: ${result.stderr.trim() || "unknown error"}`, code: "launch_failed" };
+    }
+    const pid = result.stdout.trim().split(/\s+/).pop() ?? null;
+    record.remote_pid = pid;
+    record.status = "running";
+    record.started_at = new Date().toISOString();
+    await writeJsonAtomic(jobsPath(cwd, jobId), record);
+    return record;
+  }
+
+  async list(cwd: string): Promise<RemoteJobRecord[]> {
+    const { readdir } = await import("node:fs/promises");
+    const dir = join(cwd, ".pi-science", "jobs");
+    let names: string[] = [];
+    try { names = await readdir(dir); } catch { return []; }
+    const records: RemoteJobRecord[] = [];
+    for (const name of names.filter((entry) => entry.startsWith("remote-") && entry.endsWith(".json"))) {
+      try { const record = await readJson<RemoteJobRecord | null>(join(dir, name), null); if (record) records.push(record); } catch { /* torn write: skip */ }
+    }
+    return records.sort((left, right) => right.created_at.localeCompare(left.created_at));
+  }
+
+  async get(cwd: string, jobId: string): Promise<RemoteJobRecord | null> {
+    try { return await readJson<RemoteJobRecord | null>(jobsPath(cwd, jobId), null); } catch { return null; }
+  }
+
+  /** Probe the remote process and reconcile the persisted status. */
+  async refresh(cwd: string, jobId: string): Promise<RemoteJobRecord | null> {
+    const record = await this.get(cwd, jobId);
+    if (!record || !record.remote_pid || record.status === "succeeded" || record.status === "failed" || record.status === "cancelled") return record;
+    const machines = await readJson<{ machines?: ComputeMachine[] }>(workspaceFile(cwd, "compute.json"), {});
+    const machine = (machines.machines ?? []).find((item) => item.label === record.machine_label);
+    if (!machine) return record;
+    const probe = `if kill -0 ${record.remote_pid} 2>/dev/null; then echo running; elif [ -f ${REMOTE_DIR(record.job_id)}/exit.code ]; then echo exited; else echo missing; fi`;
+    const result = await this.executor.run(machine, probe, undefined, 15_000);
+    const status = result.success ? normalizeStatusLine(result.stdout) : "unknown";
+    const updated: RemoteJobRecord = { ...record, status };
+    if (status === "succeeded" || status === "failed") updated.ended_at = new Date().toISOString();
+    if (status === "succeeded") {
+      const codeResult = await this.executor.run(machine, `cat ${REMOTE_DIR(record.job_id)}/exit.code`, undefined, 15_000);
+      updated.exit_code = codeResult.success ? Number(codeResult.stdout.trim()) : null;
+    }
+    await withFileWriteLock(jobsPath(cwd, jobId), async () => writeJsonAtomic(jobsPath(cwd, jobId), updated));
+    return updated;
+  }
+
+  async cancel(cwd: string, jobId: string): Promise<RemoteJobRecord | null> {
+    const record = await this.get(cwd, jobId);
+    if (!record) return null;
+    if (record.status === "succeeded" || record.status === "failed" || record.status === "cancelled") return record;
+    const machines = await readJson<{ machines?: ComputeMachine[] }>(workspaceFile(cwd, "compute.json"), {});
+    const machine = (machines.machines ?? []).find((item) => item.label === record.machine_label);
+    let updated = { ...record, status: "cancelled" as RemoteJobStatus, ended_at: new Date().toISOString() };
+    if (machine && record.remote_pid) {
+      await this.executor.run(machine, `kill ${record.remote_pid} 2>/dev/null; rm -rf ${REMOTE_DIR(record.job_id)}`, undefined, 15_000);
+    }
+    await withFileWriteLock(jobsPath(cwd, jobId), async () => writeJsonAtomic(jobsPath(cwd, jobId), updated));
+    return updated;
+  }
+
+  /** Pull declared output globs back into the workspace and publish them as
+   *  artifacts. Text-ish files (<= 8 MB) are transferred as base64. */
+  async harvest(cwd: string, jobId: string, sessionId?: string): Promise<{ artifact_ids: string[]; files: string[]; error?: string }> {
+    const record = await this.refresh(cwd, jobId);
+    if (!record) return { artifact_ids: [], files: [], error: "Job not found" };
+    if (record.status !== "succeeded" && record.status !== "failed") return { artifact_ids: [], files: [], error: `Job is not finished (${record.status})` };
+    const machines = await readJson<{ machines?: ComputeMachine[] }>(workspaceFile(cwd, "compute.json"), {});
+    const machine = (machines.machines ?? []).find((item) => item.label === record.machine_label);
+    if (!machine) return { artifact_ids: [], files: [], error: "Compute machine not found" };
+    const remoteDir = REMOTE_DIR(jobId);
+    // List matching files with sizes; skip output.log and exit.code.
+    const listCmd = `cd ${remoteDir} && for f in ${record.output_glob}; do [ -f "$f" ] && [ "$f" != "output.log" ] && [ "$f" != "exit.code" ] && echo "$f \$(wc -c < "$f")"; done`;
+    const list = await this.executor.run(machine, listCmd, undefined, 15_000);
+    if (!list.success) return { artifact_ids: [], files: [], error: `Failed to list remote outputs: ${list.stderr.trim()}` };
+    const artifactIds: string[] = [];
+    const files: string[] = [];
+    for (const line of list.stdout.trim().split("\n").filter(Boolean)) {
+      const [name, sizeText] = line.split(/\s+/);
+      const size = Number(sizeText ?? 0);
+      if (!name || !Number.isFinite(size) || size > 8 * 1024 * 1024) continue;
+      const fetched = await this.executor.run(machine, `base64 ${remoteDir}/${name}`, undefined, 30_000);
+      if (!fetched.success) continue;
+      const content = Buffer.from(fetched.stdout.replace(/\s+/g, ""), "base64");
+      if (content.length !== size) continue;
+      const target = relative(process.cwd(), join(cwd, name));
+      const safe = target.startsWith("..") ? name.replace(/^\/+/, "") : target;
+      try { await resolveWorkspaceFile(cwd, safe); } catch { continue; }
+      await mkdir(join(cwd, safe).slice(0, Math.max(0, join(cwd, safe).lastIndexOf("/"))), { recursive: true }).catch(() => undefined);
+      await writeFile(join(cwd, safe), content);
+      const published = await this.publishArtifact(cwd, safe.replaceAll("\\", "/"), content, "remote_job", sessionId);
+      artifactIds.push(published.artifact_id);
+      files.push(safe);
+    }
+    const updated = await this.get(cwd, jobId);
+    if (updated) {
+      const withArtifacts = { ...updated, artifact_ids: [...new Set([...updated.artifact_ids, ...artifactIds])] };
+      await withFileWriteLock(jobsPath(cwd, jobId), async () => writeJsonAtomic(jobsPath(cwd, jobId), withArtifacts));
+    }
+    return { artifact_ids: artifactIds, files };
+  }
+}
+
+export type { ComputeMachine };

@@ -12,6 +12,7 @@ import { catalog as skillCatalog, getSkillContent, getSkillInfo, validateDirecto
 import { probeRequirements } from "../../catalog/skill-requirements.js";
 import type { JobCoordinator } from "../../runtime/jobs/job-coordinator.js";
 import type { ResearchLoopCoordinator } from "../../research-loop/coordinator.js";
+import type { RemoteJobCoordinator } from "../../runtime/remote/remote-job.js";
 import { findExecutable, pathIsInside, userHome } from "../../support/platform-utils.js";
 import { defaultPythonExecutable } from "../../runtime/workspace/workspace-environment.js";
 import { ensureProject, updateProject } from "../../project/project-registry.js";
@@ -204,7 +205,7 @@ const DEMOS: Record<string, { source: string; workspace: string }> = {
   climate: { source: "demos/climate-trends", workspace: "Climate Trends" },
 };
 
-export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinator, research?: ResearchLoopCoordinator): void {
+export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinator, research?: ResearchLoopCoordinator, remoteJobs?: RemoteJobCoordinator): void {
   // ── Skills (delegated to skill-catalog service) ──
   app.get("/api/skills", async (request, reply) => {
     const root = await ws(request, reply);
@@ -403,7 +404,21 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
   app.post("/api/compute/machines", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const machine = (request.body ?? {}) as Record<string, unknown>; if (!machine.host) return reply.code(400).send({ error: "host is required" }); const port = Number(machine.port ?? 22); if (!Number.isInteger(port) || port < 1 || port > 65535) return reply.code(400).send({ error: "port must be between 1 and 65535" }); const path = join(root, ".pi-science", "compute.json"); const current = await readJson<{ machines?: Record<string, unknown>[] }>(path, {}); const machines = Array.isArray(current.machines) ? current.machines : []; const { password: _password, ...safeMachine } = machine; const item = { ...safeMachine, port, identity_file: String(machine.identity_file ?? "~/.ssh/id_rsa"), auth_method: machine.auth_method === "password" ? "password" : "key", label: String(machine.label ?? machine.host) }; const next = [...machines.filter((row) => row.label !== item.label), item]; await writeJsonAtomic(path, { machines: next }); return { ok: true, machines: next }; });
   app.delete<{ Params: { label: string } }>("/api/compute/machines/:label", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const path = join(root, ".pi-science", "compute.json"); const current = await readJson<{ machines?: Record<string, unknown>[] }>(path, {}); await writeJsonAtomic(path, { machines: (current.machines ?? []).filter((row) => row.label !== request.params.label) }); return { ok: true }; });
   app.post("/api/compute/probe", async (request, reply) => { const root = await ws(request, reply); if (!root) return; return probeComputeMachine((request.body ?? {}) as ComputeProbeInput); });
-  app.post("/api/compute/run", async () => ({ ok: false, error: "Remote dispatch requires a configured executor" }));
+  app.post("/api/compute/run", async (request, reply) => {
+    const cwd = await ws(request, reply);
+    if (!cwd) return;
+    if (!remoteJobs) return reply.code(503).send({ error: "Remote dispatch is not configured" });
+    const body = (request.body ?? {}) as { machine_label?: string; command?: unknown; output_glob?: string };
+    if (!body.machine_label) return reply.code(422).send({ error: "machine_label is required" });
+    if (!Array.isArray(body.command) || body.command.length === 0) return reply.code(422).send({ error: "command must be a non-empty array" });
+    const result = await remoteJobs.submit(cwd, { machine_label: String(body.machine_label), command: body.command.map(String), output_glob: body.output_glob === undefined ? undefined : String(body.output_glob) });
+    if ("error" in result) return reply.code(result.code === "machine_not_found" ? 404 : 502).send({ error: result.error });
+    return { ok: true, job: result };
+  });
+  app.get("/api/compute/jobs", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; if (!remoteJobs) return reply.code(503).send({ error: "Remote dispatch is not configured" }); return { jobs: await remoteJobs.list(cwd) }; });
+  app.get<{ Params: { job_id: string } }>("/api/compute/jobs/:job_id", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; if (!remoteJobs) return reply.code(503).send({ error: "Remote dispatch is not configured" }); const job = await remoteJobs.refresh(cwd, request.params.job_id); return job ?? reply.code(404).send({ error: "Remote job not found" }); });
+  app.post<{ Params: { job_id: string } }>("/api/compute/jobs/:job_id/cancel", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; if (!remoteJobs) return reply.code(503).send({ error: "Remote dispatch is not configured" }); const job = await remoteJobs.cancel(cwd, request.params.job_id); return job ?? reply.code(404).send({ error: "Remote job not found" }); });
+  app.post<{ Params: { job_id: string } }>("/api/compute/jobs/:job_id/harvest", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; if (!remoteJobs) return reply.code(503).send({ error: "Remote dispatch is not configured" }); const sessionId = String((request.query as { session_id?: unknown }).session_id ?? ""); const result = await remoteJobs.harvest(cwd, request.params.job_id, sessionId || undefined); return result.error ? reply.code(409).send({ error: result.error }) : result; });
 
   // ── Citations ──
   app.post("/api/citations/normalize", async (request) => { const identifiers = Array.isArray(((request.body ?? {}) as { identifiers?: unknown }).identifiers) ? ((request.body as { identifiers: unknown[] }).identifiers) : []; const citations = identifiers.map((value) => { const text = String(value).trim(); const doi = text.replace(/^https?:\/\/doi\.org\//i, ""); return { identifier: text, doi: doi.toLowerCase().startsWith("10.") ? doi : null, title: null, authors: [], year: null, source: text.includes("10.") ? "doi" : "unknown" }; }); return { citations, errors: [] }; });
