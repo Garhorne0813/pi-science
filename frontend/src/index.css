@@ -222,6 +222,30 @@
     border-color: color-mix(in srgb, var(--border-strong) 72%, var(--accent-border));
   }
 
+  /* Runs uses explicit layout classes because Tailwind's dev scanner does not
+     reliably add newly introduced arbitrary grid templates during Vite HMR. */
+  .runs-ledger-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .runs-ledger-columns {
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+  }
+
+  .runs-detail-fields {
+    grid-template-columns: 110px minmax(0, 1fr);
+  }
+
+  .runs-ledger-row-selected {
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+
+  @media (min-width: 1024px) {
+    .runs-ledger-layout {
+      grid-template-columns: minmax(340px, 0.9fr) minmax(420px, 1.1fr);
+    }
+  }
+
 }
 
 html, body, #root { height: 100%; }
