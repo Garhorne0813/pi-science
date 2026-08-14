@@ -276,7 +276,11 @@
     display: none;
   }
 
-  .runs-ledger-layout[data-compact-detail="true"] .runs-detail-pane,
+  .runs-ledger-layout[data-compact-detail="true"] .runs-detail-pane {
+    display: block;
+    width: 100%;
+  }
+
   .runs-detail-back {
     display: flex;
   }

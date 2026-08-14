@@ -168,7 +168,7 @@ function ExecutionDetails({ run, tab, onTabChange, onBack, log, loadingLog }: { 
   const { t } = useTranslation();
   const tabs: DetailTab[] = ["summary", "input", "output", "files", "runtime", "timing"];
   return (
-    <div className="flex h-full min-h-[540px] flex-col">
+    <div className="flex h-full min-h-[540px] w-full flex-col">
       <div className="runs-detail-header border-b border-border px-4 py-4">
         <button type="button" onClick={onBack} className="runs-detail-back mb-3 items-center gap-1.5 text-[11px] text-muted hover:text-text">
           <ArrowLeft size={13} />{t("runs.backToLedger")}
