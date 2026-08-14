@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { lazy, Suspense, useState, useEffect, useRef, useMemo } from "react";
-import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical, type LucideIcon } from "lucide-react";
+import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, GitBranch, FolderOpen, ArrowLeft, Puzzle, FileText, BookOpen, Play, Inbox, FlaskConical, type LucideIcon } from "lucide-react";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { InspectorTabs } from "../../components/inspector/InspectorTabs";
@@ -121,6 +121,7 @@ export function ProjectsLayout() {
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} icon={BookOpen} label={t("nav.notebooks")} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/runs`} icon={Play} label={t("nav.runs")} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/knowledge`} icon={Inbox} label={t("nav.knowledge")} />
+              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/artifacts`} icon={GitBranch} label={t("nav.artifacts")} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/research`} icon={FlaskConical} label={t("nav.research")} />
             </>
           )}
@@ -163,6 +164,7 @@ export function ProjectsLayout() {
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/research`} label={t("nav.research")} icon={FlaskConical} active={location.pathname.endsWith("/research")} />
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} label={t("nav.notebooks")} icon={BookOpen} active={location.pathname.endsWith("/notebooks")} />
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/runs`} label={t("nav.runs")} icon={Play} active={location.pathname.endsWith("/runs")} />
+                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/artifacts`} label={t("nav.artifacts")} icon={GitBranch} active={location.pathname.endsWith("/artifacts")} />
                 </>
               )}
             </nav>
@@ -367,11 +369,12 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
     <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
       <div className="mb-1 flex h-tool items-center justify-between px-2">
         <span className="text-ui-caption font-medium uppercase tracking-wider text-muted">{t("conversation.sessions")}</span>
-        {(attentionCounts.needs_you > 0 || attentionCounts.running > 0 || attentionCounts.unread > 0) && (
+        {(attentionCounts.needs_you > 0 || attentionCounts.running > 0 || attentionCounts.unread > 0 || attentionCounts.plan_ready > 0) && (
           <span className="flex items-center gap-1 text-ui-micro text-muted" aria-label={t("conversation.attentionSummary")}>
             {attentionCounts.needs_you > 0 && <span className="rounded-full bg-warn/15 px-1.5 py-px text-[9px] text-warn">{attentionCounts.needs_you} {t("conversation.attentionNeedsYou")}</span>}
             {attentionCounts.running > 0 && <span className="rounded-full bg-accent/15 px-1.5 py-px text-[9px] text-accent">{attentionCounts.running} {t("conversation.attentionRunning")}</span>}
             {attentionCounts.unread > 0 && <span className="rounded-full bg-ok/15 px-1.5 py-px text-[9px] text-ok">{attentionCounts.unread} {t("conversation.attentionNew")}</span>}
+            {attentionCounts.plan_ready > 0 && <span className="rounded-full bg-info/15 px-1.5 py-px text-[9px] text-info">{attentionCounts.plan_ready} {t("conversation.attentionPlanReady")}</span>}
           </span>
         )}
         <IconButton

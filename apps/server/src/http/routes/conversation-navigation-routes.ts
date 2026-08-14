@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { conversationBookmarkCreateSchema, conversationBookmarkUpdateSchema, conversationReadStateUpdateSchema } from "@pi-science/contracts";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { ConversationNavigationRepository, NavigationError } from "../../conversation-navigation/repository.js";
+import { proposeCandidates } from "../../conversation-navigation/heuristics.js";
 import type { SessionRepository } from "../../runtime/node/session-repository.js";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import type { ConversationEventHub } from "../../runtime/events/conversation-event-hub.js";
@@ -27,34 +28,13 @@ function navigationErrorCode(error: NavigationError): number {
   }
 }
 
-/** Keyword heuristic used by the legacy bookmark generator. Proposals only —
- *  nothing produced here is auto-accepted.
- *
- *  CJK keywords are matched as substrings: ASCII `\b` never fires between CJK
- *  characters, so a word-boundary regex can never match Chinese text. English
- *  keywords keep `\b` bounds so "resulted" / "saved-data" do not over-match.
- *  Deterministic: no randomness, and the last two matching messages win. */
-const ENGLISH_BOOKMARK_TERMS = /\b(result|conclusion|finding|decision|saved|created|verified|completed)\b/i;
-const CHINESE_BOOKMARK_TERMS = ["结果", "结论", "决定", "已保存", "已生成"];
-
-function proposeCandidates(messages: Array<{ id: string; content: Array<{ type?: string; text?: string }> }>): string[] {
-  return messages
-    .filter((message) => message.content.some((part) => {
-      const text = part.text;
-      if (typeof text !== "string") return false;
-      if (ENGLISH_BOOKMARK_TERMS.test(text)) return true;
-      return CHINESE_BOOKMARK_TERMS.some((term) => text.includes(term));
-    }))
-    .slice(-2)
-    .map((message) => message.id);
-}
-
 export function registerConversationNavigationRoutes(
   app: FastifyInstance,
   navigation: ConversationNavigationRepository,
   sessionRepository: SessionRepository,
   nodeSessionService: NodeSessionService,
   events: ConversationEventHub,
+  planReadyCount?: (root: string) => Promise<number>,
 ): void {
   const ws = async (request: { query: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): Promise<string | null> => {
     try { return await validateWorkspaceCwd(queryCwd(request)); }
@@ -220,6 +200,7 @@ export function registerConversationNavigationRoutes(
       needs_you: items.filter((item) => item.status === "needs_you").length,
       running: items.filter((item) => item.status === "running").length,
       unread: items.filter((item) => item.status === "unread").length,
+      plan_ready: planReadyCount ? await planReadyCount(root) : 0,
     };
     return { items: top, counts, truncated };
   });

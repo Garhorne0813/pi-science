@@ -255,7 +255,7 @@ describe("conversation navigation routes", () => {
     const response = await app.inject({ method: "GET", url: `/api/attention?cwd=${encodeURIComponent(cwd)}` });
     expect(response.statusCode).toBe(200);
     expect(response.json().items).toEqual([{ session_id: "s1", status: "idle", updated_at: expect.any(String) }]);
-    expect(response.json().counts).toEqual({ needs_you: 0, running: 0, unread: 0 });
+    expect(response.json().counts).toEqual({ needs_you: 0, running: 0, unread: 0, plan_ready: 0 });
   });
 
   it("marks a read session as unread when a new snapshot arrives", async () => {

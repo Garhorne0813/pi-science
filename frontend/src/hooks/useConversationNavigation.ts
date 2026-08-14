@@ -228,9 +228,9 @@ export function useConversationAttention(cwd: string | null) {
   const query = useQuery({
     queryKey: conversationAttentionKey(cwd ?? ""),
     queryFn: async () => {
-      if (!cwd) return { items: [], counts: { needs_you: 0, running: 0, unread: 0 }, truncated: false };
+      if (!cwd) return { items: [], counts: { needs_you: 0, running: 0, unread: 0, plan_ready: 0 }, truncated: false };
       try { return await navigationApi.getAttention(BASE_URL, cwd, 100); }
-      catch { return { items: [], counts: { needs_you: 0, running: 0, unread: 0 }, truncated: false }; }
+      catch { return { items: [], counts: { needs_you: 0, running: 0, unread: 0, plan_ready: 0 }, truncated: false }; }
     },
     enabled: Boolean(cwd),
     staleTime: 15_000,
@@ -239,7 +239,7 @@ export function useConversationAttention(cwd: string | null) {
 
   return useMemo(() => ({
     items: query.data?.items ?? [],
-    counts: query.data?.counts ?? { needs_you: 0, running: 0, unread: 0 },
+    counts: query.data?.counts ?? { needs_you: 0, running: 0, unread: 0, plan_ready: 0 },
     truncated: query.data?.truncated ?? false,
   }), [query.data]);
 }

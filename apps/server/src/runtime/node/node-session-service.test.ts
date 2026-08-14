@@ -4,6 +4,7 @@ import { delimiter, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConversationEventHub, conversationEventHub } from "../events/conversation-event-hub.js";
 import type { SseEventRecord } from "../events/event-store.js";
+import type { ConversationBookmark } from "../../conversation-navigation/repository.js";
 import { NodeSessionService } from "./node-session-service.js";
 import { loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
 import { readJsonLines } from "../../storage/persistence.js";
@@ -1120,4 +1121,35 @@ describe("Event-stream watchdog", () => {
     expect(connecting.reconnectEventStream).not.toHaveBeenCalled();
     await service.shutdownAll();
   });
+
+describe("automatic bookmark proposals", () => {
+  it("proposes bookmarks after a settled turn when messages match keywords", async () => {
+    const cwd = await workspaceWithConversation("bookmark-session");
+    // The conversation already has "because it warms above 20C"; append a
+    // message that carries a bookmark keyword so the heuristic has a candidate.
+    await writeFile(join(cwd, ".pi-science", "sessions", "bookmark-session.jsonl"), JSON.stringify({ type: "message", id: "message-2", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "Conclusion: the buffer drift is thermal." }] } }) + "\n", { flag: "a" });
+
+    const proposeImpl = vi.fn(async (_cwd: string, _sessionId: string, messageIds: string[]): Promise<{ bookmarks: Array<{ bookmark_id: string; message_id: string; status: string }>; skipped: number }> => ({ bookmarks: messageIds.map((id) => ({ bookmark_id: "b-" + id, message_id: id, status: "proposed" })), skipped: 0 }));
+    const propose = proposeImpl as unknown as (cwd: string, sessionId: string, messageIds: string[]) => Promise<{ bookmarks: ConversationBookmark[]; skipped: number }>;
+    const service = new NodeSessionService(undefined, undefined, undefined, passthroughEnvironments, undefined, { proposeBookmarks: propose });
+    process.env.FAKE_PI_MODE = "turn-artifacts";
+    await expect(service.resume("bookmark-session", cwd)).resolves.toEqual({ success: true });
+    await expect(service.command("bookmark-session", cwd, "prompt", { message: "continue" })).resolves.toMatchObject({ success: true });
+    await waitFor(() => proposeImpl.mock.calls.length > 0);
+    expect(propose).toHaveBeenCalledWith(expect.any(String), "bookmark-session", expect.arrayContaining(["message-2"]));
+    await service.shutdownAll();
+  });
+
+  it("does not propose when no message matches keywords", async () => {
+    const cwd = await workspaceWithConversation("bookmark-session-2");
+    const propose = vi.fn(async () => ({ bookmarks: [], skipped: 0 }));
+    const service = new NodeSessionService(undefined, undefined, undefined, passthroughEnvironments, undefined, { proposeBookmarks: propose });
+    process.env.FAKE_PI_MODE = "turn-artifacts";
+    await expect(service.resume("bookmark-session-2", cwd)).resolves.toEqual({ success: true });
+    await expect(service.command("bookmark-session-2", cwd, "prompt", { message: "continue" })).resolves.toMatchObject({ success: true });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(propose).not.toHaveBeenCalled();
+    await service.shutdownAll();
+  });
+});
 });
