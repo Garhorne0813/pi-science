@@ -91,7 +91,7 @@
 | **可恢复 checkpoint** | ❌ | ❌ | ❌ | ❌ |
 | **人工确认点** | ❌ | ❌ | ❌ | ❌ |
 | 科学有效性条件 | ⚠️ "必须 retrieved/fail-open" | ❌ | ⚠️ "只验证 traceability 非正确性" | ⚠️ 门禁覆盖范围 |
-| 常见失败模式 | ⚠️ 含 provider 失败处理 | ❌ | ⚠️ 含 offline/不 resolve | ⚠️ | 
+| 常见失败模式 | ⚠️ 含 provider 失败处理 | ❌ | ⚠️ 含 offline/不 resolve | ⚠️ |
 | **收敛与停止条件** | ❌ | ❌ | ❌ | ❌（门禁类天然无收敛） |
 | characterization/eval 测试 | ⚠️ 7 tests（含 workflow-fixtures） | ❌ 无 | ❌ 无 | ❌ 无 |
 
