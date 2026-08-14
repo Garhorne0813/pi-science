@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildLineage, collapseManifests, normalizeManifest, validateVersionedRelations } from "./artifact-manifest.js";
+import { buildLineage, chainLatestVersion, collapseManifests, logicalChain, normalizeManifest, validateVersionedRelations } from "./artifact-manifest.js";
 
 function v1(overrides: Record<string, unknown> = {}) {
   return {
@@ -59,41 +59,41 @@ describe("artifact manifest normalizer", () => {
   it("caps the COMBINED count of string and versioned inputs at write time", () => {
     const manifests = collapseManifests([v2({ artifact_id: "a1", version: 1, path: "in.csv" })]);
     const strings = Array.from({ length: 100 }, (_, i) => `legacy/${i}.csv`);
-    const overCombined = validateVersionedRelations(manifests, "a9", 9, [...strings, { artifact_id: "a1", version: 1 }], null);
+    const overCombined = validateVersionedRelations(manifests, "a9", 9, [...strings, { artifact_id: "a1", version: 1 }], null, null);
     expect(overCombined.ok).toBe(false);
     if (overCombined.ok === false) expect(overCombined.error).toContain("combined");
 
-    const atCap = validateVersionedRelations(manifests, "a9", 9, [...strings.slice(0, 99), { artifact_id: "a1", version: 1 }], null);
-    expect(atCap).toEqual({ ok: true, inputs: [{ artifact_id: "a1", version: 1 }], supersedes: null });
+    const atCap = validateVersionedRelations(manifests, "a9", 9, [...strings.slice(0, 99), { artifact_id: "a1", version: 1 }], null, null);
+    expect(atCap).toEqual({ ok: true, derivedFrom: [], inputs: [{ artifact_id: "a1", version: 1 }], supersedes: null });
 
-    const overByStringsOnly = validateVersionedRelations(manifests, "a9", 9, Array.from({ length: 101 }, (_, i) => `legacy/${i}.csv`), null);
+    const overByStringsOnly = validateVersionedRelations(manifests, "a9", 9, Array.from({ length: 101 }, (_, i) => `legacy/${i}.csv`), null, null);
     expect(overByStringsOnly.ok).toBe(false);
     if (overByStringsOnly.ok === false) expect(overByStringsOnly.error).toContain("combined");
   });
 
   it("validates exact input refs against existing manifests", () => {
     const manifests = collapseManifests([v2({ artifact_id: "a1", version: 1, path: "in.csv" }), v2({ artifact_id: "a2", version: 2 }), v1({ artifact_id: "a3", version: 3, path: "old.csv" })]);
-    const ok = validateVersionedRelations(manifests, "a9", 9, [{ artifact_id: "a1", version: 1 }], { artifact_id: "a3", version: 3 });
-    expect(ok).toEqual({ ok: true, inputs: [{ artifact_id: "a1", version: 1 }], supersedes: { artifact_id: "a3", version: 3 } });
+    const ok = validateVersionedRelations(manifests, "a9", 9, [{ artifact_id: "a1", version: 1 }], null, { artifact_id: "a3", version: 3 });
+    expect(ok).toEqual({ ok: true, derivedFrom: [], inputs: [{ artifact_id: "a1", version: 1 }], supersedes: { artifact_id: "a3", version: 3 } });
 
     // Missing target, self-version-being-created, duplicate ref, and over-limit inputs.
-    const missing = validateVersionedRelations(manifests, "a9", 9, [{ artifact_id: "ghost", version: 1 }], null);
+    const missing = validateVersionedRelations(manifests, "a9", 9, [{ artifact_id: "ghost", version: 1 }], null, null);
     expect(missing.ok).toBe(false);
     if (!missing.ok) expect(missing.error).toContain("does not exist");
-    const self = validateVersionedRelations(manifests, "a1", 2, [{ artifact_id: "a1", version: 2 }], null);
+    const self = validateVersionedRelations(manifests, "a1", 2, [{ artifact_id: "a1", version: 2 }], null, null);
     expect(self.ok).toBe(false);
     if (self.ok === false) expect(self.error).toContain("version being created");
-    const duplicate = validateVersionedRelations(manifests, "a9", 9, [{ artifact_id: "a1", version: 1 }, { artifact_id: "a1", version: 1 }], null);
+    const duplicate = validateVersionedRelations(manifests, "a9", 9, [{ artifact_id: "a1", version: 1 }, { artifact_id: "a1", version: 1 }], null, null);
     expect(duplicate.ok).toBe(false);
     if (duplicate.ok === false) expect(duplicate.error).toBe("duplicate input reference");
-    const tooMany = validateVersionedRelations(manifests, "a9", 9, Array.from({ length: 101 }, (_, i) => ({ artifact_id: `unique-${i}`, version: 1 })), null);
+    const tooMany = validateVersionedRelations(manifests, "a9", 9, Array.from({ length: 101 }, (_, i) => ({ artifact_id: `unique-${i}`, version: 1 })), null, null);
     expect(tooMany.ok).toBe(false);
     if (tooMany.ok === false) expect(tooMany.error).toContain("at most 100");
-    const badSupersedes = validateVersionedRelations(manifests, "a9", 9, [], { artifact_id: "ghost", version: 1 });
+    const badSupersedes = validateVersionedRelations(manifests, "a9", 9, [], null, { artifact_id: "ghost", version: 1 });
     expect(badSupersedes.ok).toBe(false);
     // Superseding an OLDER version of the same artifact is the normal flow.
-    const supersedeSelfOlder = validateVersionedRelations(manifests, "a2", 3, [], { artifact_id: "a2", version: 2 });
-    expect(supersedeSelfOlder).toEqual({ ok: true, inputs: [], supersedes: { artifact_id: "a2", version: 2 } });
+    const supersedeSelfOlder = validateVersionedRelations(manifests, "a2", 3, [], null, { artifact_id: "a2", version: 2 });
+    expect(supersedeSelfOlder).toEqual({ ok: true, derivedFrom: [], inputs: [], supersedes: { artifact_id: "a2", version: 2 } });
   });
 
   it("builds upstream/downstream lineage including supersession", () => {
@@ -137,7 +137,35 @@ describe("artifact manifest normalizer", () => {
     // A ref to an artifact that only exists in another workspace's JSONL is
     // indistinguishable from a missing ref here: validation rejects it.
     const manifests = collapseManifests([v2({ artifact_id: "a1", version: 1 })]);
-    const result = validateVersionedRelations(manifests, "a9", 9, [{ artifact_id: "other-workspace-id", version: 1 }], null);
+    const result = validateVersionedRelations(manifests, "a9", 9, [{ artifact_id: "other-workspace-id", version: 1 }], null, null);
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("logical artifact identity helpers", () => {
+  it("parses logical_id from rows and omits it when absent", () => {
+    const withId = normalizeManifest(v2({ logical_id: "logical-x" }));
+    expect(withId?.logical_id).toBe("logical-x");
+    const withoutId = normalizeManifest(v2());
+    expect(withoutId).not.toHaveProperty("logical_id");
+    // Non-string logical ids are dropped.
+    const bogus = normalizeManifest(v2({ logical_id: 42 }));
+    expect(bogus).not.toHaveProperty("logical_id");
+  });
+
+  it("groups chains by logical_id and computes the chain latest version", () => {
+    const manifests = collapseManifests([
+      v2({ artifact_id: "p1", logical_id: "L1", version: 1, path: "old.csv" }),
+      v2({ artifact_id: "p2", logical_id: "L1", version: 2, path: "new.csv" }),
+      v2({ artifact_id: "other", logical_id: "L2", version: 5 }),
+      v2({ artifact_id: "legacy", version: 3 }),
+    ]);
+    const chain = logicalChain(manifests, "L1");
+    expect(chain.map((m) => m.path)).toEqual(["new.csv", "old.csv"]);
+    expect(chainLatestVersion(chain)).toBe(2);
+    expect(logicalChain(manifests, "ghost")).toEqual([]);
+    expect(chainLatestVersion([])).toBe(0);
+    // Legacy rows without a logical id do not join any logical chain.
+    expect(logicalChain(manifests, "legacy")).toEqual([]);
   });
 });

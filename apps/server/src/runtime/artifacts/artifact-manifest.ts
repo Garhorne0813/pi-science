@@ -47,9 +47,23 @@ export function normalizeManifest(row: unknown): ArtifactManifestV2 | null {
     ? row.classification
     : "unspecified";
   const supersedes = isArtifactVersionRef(row.supersedes) ? { artifact_id: row.supersedes.artifact_id, version: row.supersedes.version } : null;
+  const reviews = Array.isArray(row.reviews)
+    ? row.reviews.filter((entry): entry is { review_id: string; actor: string; status: "passed" | "failed" | "needs_work"; at: string } => {
+        if (!entry || typeof entry !== "object") return false;
+        const record = entry as Record<string, unknown>;
+        return typeof record.review_id === "string" && typeof record.actor === "string"
+          && (record.status === "passed" || record.status === "failed" || record.status === "needs_work")
+          && typeof record.at === "string";
+      })
+    : [];
+  const derivedFrom = Array.isArray(row.derived_from)
+    ? row.derived_from.map((entry) => isArtifactVersionRef(entry) ? { artifact_id: entry.artifact_id, version: entry.version } as ArtifactVersionRef : null).filter((entry): entry is ArtifactVersionRef => entry !== null)
+    : [];
+  const logicalId = typeof row.logical_id === "string" && row.logical_id ? row.logical_id : undefined;
   return {
     schema_version: 2,
     artifact_id: row.artifact_id,
+    ...(logicalId === undefined ? {} : { logical_id: logicalId }),
     version,
     path: row.path,
     kind: typeof row.kind === "string" ? row.kind : "file",
@@ -58,6 +72,8 @@ export function normalizeManifest(row: unknown): ArtifactManifestV2 | null {
     sha256: row.sha256,
     published_at: typeof row.published_at === "string" ? row.published_at : new Date(0).toISOString(),
     inputs,
+    ...(derivedFrom.length ? { derived_from: derivedFrom } : {}),
+    ...(reviews.length ? { reviews } : {}),
     supersedes,
     classification,
     ...(isRecord(row.producer) ? { producer: row.producer } : {}),
@@ -81,10 +97,24 @@ export function collapseManifests(rows: readonly unknown[]): ArtifactManifestV2[
   return [...byKey.values()];
 }
 
+/** The logical chain of one artifact: every manifest sharing `logical_id`,
+ *  newest version first. Manifests without a logical id form singleton chains
+ *  keyed by their path-derived artifact_id. */
+export function logicalChain(manifests: readonly ArtifactManifestV2[], logicalId: string): ArtifactManifestV2[] {
+  return manifests
+    .filter((manifest) => manifest.logical_id === logicalId)
+    .sort((left, right) => right.version - left.version);
+}
+
+/** Latest version number across a logical chain (0 when the chain is empty). */
+export function chainLatestVersion(chain: readonly ArtifactManifestV2[]): number {
+  return chain.reduce((max, manifest) => Math.max(max, manifest.version), 0);
+}
+
 export interface ArtifactLineage {
   artifact: ArtifactManifestV2;
-  upstream: Array<{ kind: "consumes" | "supersedes"; artifact: ArtifactManifestV2 }>;
-  downstream: Array<{ kind: "consumed_by" | "superseded_by"; artifact: ArtifactManifestV2 }>;
+  upstream: Array<{ kind: "consumes" | "supersedes" | "derived_from"; artifact: ArtifactManifestV2 }>;
+  downstream: Array<{ kind: "consumed_by" | "superseded_by" | "derived"; artifact: ArtifactManifestV2 }>;
   unresolved_inputs: string[];
 }
 
@@ -104,6 +134,10 @@ export function buildLineage(manifests: readonly ArtifactManifestV2[], artifactI
     const ref = byKey.get(manifestKey(input));
     if (ref) upstream.push({ kind: "consumes", artifact: ref });
   }
+  for (const ref of target.derived_from ?? []) {
+    const derived = byKey.get(manifestKey(ref));
+    if (derived) upstream.push({ kind: "derived_from", artifact: derived });
+  }
   if (target.supersedes) {
     const replaced = byKey.get(manifestKey(target.supersedes));
     if (replaced) upstream.push({ kind: "supersedes", artifact: replaced });
@@ -119,6 +153,10 @@ export function buildLineage(manifests: readonly ArtifactManifestV2[], artifactI
     }
     if (manifest.supersedes && manifest.supersedes.artifact_id === target.artifact_id && manifest.supersedes.version === target.version) {
       downstream.push({ kind: "superseded_by", artifact: manifest });
+      continue;
+    }
+    if ((manifest.derived_from ?? []).some((ref) => ref.artifact_id === target.artifact_id && ref.version === target.version)) {
+      downstream.push({ kind: "derived", artifact: manifest });
     }
   }
 
@@ -128,6 +166,7 @@ export function buildLineage(manifests: readonly ArtifactManifestV2[], artifactI
 export interface VersionedRelationValidation {
   ok: true;
   inputs: ArtifactVersionRef[];
+  derivedFrom: ArtifactVersionRef[];
   supersedes: ArtifactVersionRef | null;
 }
 
@@ -148,6 +187,7 @@ export function validateVersionedRelations(
   selfId: string,
   newVersion: number,
   rawInputs: unknown,
+  rawDerivedFrom: unknown,
   rawSupersedes: unknown,
 ): VersionedRelationValidation | VersionedRelationError {
   const byKey = new Map(manifests.map((manifest) => [manifestKey(manifest), manifest]));
@@ -180,7 +220,19 @@ export function validateVersionedRelations(
     if (!byKey.has(manifestKey(rawSupersedes))) return { ok: false, error: `superseded artifact ${rawSupersedes.artifact_id} v${rawSupersedes.version} does not exist in this workspace` };
     supersedes = rawSupersedes;
   }
-  return { ok: true, inputs, supersedes };
+  const derivedFrom: ArtifactVersionRef[] = [];
+  const derivedSeen = new Set<string>();
+  for (const entry of Array.isArray(rawDerivedFrom) ? rawDerivedFrom : []) {
+    if (!isArtifactVersionRef(entry)) return { ok: false, error: "derived_from must contain exact { artifact_id, version } references" };
+    if (entry.artifact_id === selfId && entry.version === newVersion) return { ok: false, error: "an artifact cannot be derived from the version being created" };
+    const key = manifestKey(entry);
+    if (derivedSeen.has(key)) return { ok: false, error: "duplicate derived_from reference" };
+    derivedSeen.add(key);
+    if (derivedFrom.length >= MAX_VERSIONED_INPUTS) return { ok: false, error: `at most ${MAX_VERSIONED_INPUTS} derived_from references are allowed` };
+    if (!byKey.has(key)) return { ok: false, error: `derived artifact ${entry.artifact_id} v${entry.version} does not exist in this workspace` };
+    derivedFrom.push(entry);
+  }
+  return { ok: true, inputs, derivedFrom, supersedes };
 }
 
 export type { ArtifactManifestV2, ArtifactVersionRef, ArtifactClassification };

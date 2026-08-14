@@ -169,9 +169,22 @@ export const artifactClassificationSchema = z.enum(["intermediate", "deliverable
 /** Manifest v2: adds versioned input references, supersession and a
  *  classification. Legacy v1 rows (no schema_version) are interpreted as
  *  `unspecified` in-memory; files are never rewritten. */
+/** One human/automated review verdict on an artifact version. */
+export const artifactReviewRecordSchema = z.object({
+  review_id: z.string().min(1),
+  actor: z.string().min(1),
+  status: z.enum(["passed", "failed", "needs_work"]),
+  at: z.string(),
+}).passthrough();
+
 export const artifactManifestV2Schema = z.object({
   schema_version: z.literal(2),
   artifact_id: z.string().min(1),
+  /** Stable logical identity, independent of path. Present on manifests
+   *  published after the logical-id feature; legacy rows omit it. Version
+   *  chains aggregate by `logical_id` when it is present, so a file that is
+   *  renamed or moved keeps one lineage across paths. */
+  logical_id: z.string().min(1).optional(),
   version: z.number().int().positive(),
   path: z.string().min(1),
   kind: z.string().min(1),
@@ -180,6 +193,11 @@ export const artifactManifestV2Schema = z.object({
   sha256: z.string().min(16).max(64),
   published_at: z.string(),
   inputs: z.array(z.union([artifactVersionRefSchema, z.string().min(1)])).max(100).default([]),
+  /** Semantic derivation relations (research lineage), distinct from the
+   *  mechanical `inputs` consumed list. */
+  derived_from: z.array(artifactVersionRefSchema).max(100).optional(),
+  /** Review verdicts attached to this version. */
+  reviews: z.array(artifactReviewRecordSchema).max(50).optional(),
   supersedes: artifactVersionRefSchema.nullable().default(null),
   classification: artifactClassificationSchema.default("unspecified"),
 }).passthrough();
@@ -195,6 +213,19 @@ export const artifactLineageResponseSchema = z.object({
     artifact: artifactManifestV2Schema,
   })).default([]),
   unresolved_inputs: z.array(z.string()).default([]),
+});
+
+/** Narrow-privilege role profile enforced by the Node control plane
+ *  (reverse-cs-inspiration 4.4): a role fixes what a runtime may read, write
+ *  and command, independent of any prompt text. */
+export const agentRoleProfileSchema = z.object({
+  role: z.string().min(1),
+  read_scope: z.array(z.string().min(1)).default([]),
+  write_scope: z.array(z.string().min(1)).default([]),
+  /** Command types the runtime may issue; absent means unrestricted. */
+  allowed_commands: z.array(z.string().min(1)).optional(),
+  /** False = trace-only: the runtime must never recompute analyses. */
+  computational: z.boolean().default(true),
 });
 
 export const provenanceRecordSchema = z.object({
@@ -216,6 +247,7 @@ export const gatewayHealthSchema = scientificRuntimeHealthSchema.extend({
   scientific_runtime: z.enum(["idle", "starting", "ready", "stopping", "failed", "external"]),
 });
 
+export type AgentRoleProfile = z.infer<typeof agentRoleProfileSchema>;
 export type GatewayHealth = z.infer<typeof gatewayHealthSchema>;
 export type PiConfig = z.infer<typeof piConfigSchema>;
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
@@ -324,6 +356,11 @@ export const conversationAttentionResponseSchema = z.object({
     needs_you: z.number().int().nonnegative(),
     running: z.number().int().nonnegative(),
     unread: z.number().int().nonnegative(),
+    /** Workspace-level: research loops whose plan passed preflight and are
+     *  waiting for the user to start them. Loop->session association does not
+     *  exist yet, so this is aggregated at the workspace level rather than
+     *  attributed to a specific session. */
+    plan_ready: z.number().int().nonnegative().default(0),
   }),
   truncated: z.boolean(),
 });
