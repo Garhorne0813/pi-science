@@ -142,9 +142,20 @@ export class PiProcess extends EventEmitter {
 
   static async attachWeb(host: PiOrbitHost, options: PiProcessOptions): Promise<PiProcess> {
     if (!options.web) throw new Error("Pi Orbit runtime options are required");
-    const descriptor = await host.createRuntime(options.web.runtime, options.requestTimeoutMs);
+    const desiredPolicy = options.web.runtime.skillPolicy ?? { mode: "inherit" };
+    // Named policies may contain skills that only exist in other workspaces.
+    // Create first with a universally valid policy, then intersect the global
+    // preference with this runtime's own discovered catalog below.
+    const initialPolicy = desiredPolicy.mode === "allowlist" || desiredPolicy.mode === "denylist"
+      ? { mode: "inherit" as const }
+      : desiredPolicy;
+    const descriptor = await host.createRuntime({ ...options.web.runtime, skillPolicy: initialPolicy }, options.requestTimeoutMs);
     const process = new PiProcess(options, host, descriptor);
     try {
+      if (desiredPolicy !== initialPolicy) {
+        const applied = await process.setRuntimeSkillPolicy(desiredPolicy);
+        if (!applied.success) throw Object.assign(new Error(String(applied.error ?? "Unable to apply runtime skill policy")), { code: applied.code });
+      }
       await process.startEventStream();
       return process;
     } catch (error) {
@@ -198,7 +209,15 @@ export class PiProcess extends EventEmitter {
 
   async setRuntimeSkillPolicy(policy: RuntimeSkillPolicy): Promise<PiResult> {
     if (!this.webHost) return { success: false, code: "runtime_skill_control_unavailable", error: "Runtime skill control requires Pi Orbit Web Mode" };
-    return this.webRequest("PUT", `${this.runtimePath()}/skills`, policy);
+    let effective = policy;
+    if (policy.mode === "allowlist" || policy.mode === "denylist") {
+      const state = await this.runtimeSkills();
+      if (!state.success || !state.data || typeof state.data !== "object") return state;
+      const skills = (state.data as Partial<RuntimeSkillsState>).skills;
+      const discovered = new Set(Array.isArray(skills) ? skills.map((skill) => skill.name) : []);
+      effective = { mode: policy.mode, skills: policy.skills.filter((name) => discovered.has(name)) };
+    }
+    return this.webRequest("PUT", `${this.runtimePath()}/skills`, effective);
   }
 
   async refreshRuntimeSkills(): Promise<PiResult> {

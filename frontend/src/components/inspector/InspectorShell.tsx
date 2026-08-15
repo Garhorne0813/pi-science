@@ -13,6 +13,7 @@ export function InspectorShell({
   leadingControls,
   controls,
   cwd: cwdOverride,
+  sessionId,
   compactHeader = false,
   contentZoom = 1,
 }: {
@@ -21,6 +22,7 @@ export function InspectorShell({
   leadingControls?: React.ReactNode;
   controls?: React.ReactNode;
   cwd?: string;
+  sessionId?: string;
   compactHeader?: boolean;
   contentZoom?: number;
 }) {
@@ -44,7 +46,7 @@ export function InspectorShell({
         />
       )}
       {inspector.variant === "notebook-panel" && (
-        <NotebookPanel onClose={onClose} cwd={cwd} />
+        <NotebookPanel onClose={onClose} cwd={cwd} sessionId={sessionId} />
       )}
       {inspector.variant === "artifact" && (
         <ArtifactInspector data={inspector} onClose={onClose} controls={controls} />
@@ -53,13 +55,14 @@ export function InspectorShell({
         <PdfInspector data={inspector} onClose={onClose} controls={controls} cwd={cwd} />
       )}
       {inspector.variant === "notebook" && (
-        <NotebookPanel onClose={onClose} cwd={cwd} notebookId={inspector.notebookId} />
+        <NotebookPanel onClose={onClose} cwd={cwd} notebookId={inspector.notebookId} sessionId={sessionId} />
       )}
       {inspector.variant === "notebook-file" && (
         <NotebookEditor
           path={inspector.path}
           root={inspector.root}
           cwd={inspector.cwd || cwd}
+          sessionId={sessionId}
           onClose={onClose}
           controls={controls}
         />

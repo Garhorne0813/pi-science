@@ -8,7 +8,6 @@ import { useTranslation } from "react-i18next";
 const ProjectsPage = lazy(() => import("./routes/ProjectsPage").then((m) => ({ default: m.ProjectsPage })));
 const LiveSessionPage = lazy(() => import("./routes/LiveSessionPage").then((m) => ({ default: m.LiveSessionPage })));
 const SettingsPage = lazy(() => import("./routes/SettingsPage").then((m) => ({ default: m.SettingsPage })));
-const SkillsPage = lazy(() => import("./routes/SkillsPage").then((m) => ({ default: m.SkillsPage })));
 const FilesPage = lazy(() => import("./routes/FilesPage").then((m) => ({ default: m.FilesPage })));
 const NotebooksPage = lazy(() => import("./routes/NotebooksPage").then((m) => ({ default: m.NotebooksPage })));
 const RunsPage = lazy(() => import("./routes/RunsPage").then((m) => ({ default: m.RunsPage })));
@@ -28,10 +27,8 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: wrap(<ProjectsPage />) },
       { path: "settings", element: wrap(<SettingsPage />) },
-      { path: "skills", element: wrap(<SkillsPage />) },
       { path: "workspace/:cwd", element: wrap(<LiveSessionPage />) },
       { path: "workspace/:cwd/session/:sessionId", element: wrap(<LiveSessionPage />) },
-      { path: "workspace/:cwd/skills", element: wrap(<SkillsPage />) },
       { path: "workspace/:cwd/files", element: wrap(<FilesPage />) },
       { path: "workspace/:cwd/notebooks", element: wrap(<NotebooksPage />) },
       { path: "workspace/:cwd/runs", element: wrap(<RunsPage />) },

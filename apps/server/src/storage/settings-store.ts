@@ -14,6 +14,8 @@ export type SettingsData = {
   mcp_servers?: string[];
   skills_configured?: boolean;
   skill_paths?: string[];
+  skill_policy?: RuntimeSkillPolicy;
+  /** Legacy workspace-scoped policies from the initial 0.2.0 integration. */
   skill_policies?: Record<string, RuntimeSkillPolicy>;
   model_endpoints?: unknown[];
   [key: string]: unknown;

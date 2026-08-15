@@ -7,7 +7,7 @@ import { appendJsonLine, appendJsonLineUnlocked, metadataRoot, readJsonLines, wi
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/workspace-security.js";
 
 interface Artifact { artifact_id: string; version: number; path: string; kind: string; mime: string; size: number; sha256: string; published_at: string; producer?: Record<string, unknown>; inputs?: unknown[]; environment?: Record<string, unknown>; verification?: Record<string, unknown> }
-interface Provenance { path: string; version: number; ts: number; tool: string; toolCallId?: string; sessionId: string; model?: string; contentHash?: string; content?: string; diff?: string; runId?: string }
+interface Provenance { path: string; version: number; ts: number; tool: string; toolCallId?: string; sessionId: string; model?: string; contentHash?: string; content?: string; diff?: string; executionId?: string }
 const MAX_PUBLISH_BYTES = 2 * 1024 * 1024 * 1024;
 
 async function hashFile(path: string): Promise<{ sha256: string; size: number }> {
@@ -23,7 +23,7 @@ function kind(path: string, contentType: string): string { if (contentType.start
 
 export async function recordProvenance(cwd: string, body: Record<string, unknown>): Promise<Provenance> {
   const path = String(body.path ?? "");
-  return withFileWriteLock(workspaceFile(cwd, "provenance.jsonl"), async () => { const records = await readJsonLines<Provenance>(workspaceFile(cwd, "provenance.jsonl")); const version = records.filter((record) => record.path === path).reduce((max, record) => Math.max(max, record.version), 0) + 1; const content = typeof body.content === "string" ? body.content : undefined; const record: Provenance = { path, version, ts: Date.now() / 1000, tool: String(body.tool ?? "unknown"), sessionId: String(body.session_id ?? body.sessionId ?? ""), ...(body.tool_call_id ? { toolCallId: String(body.tool_call_id) } : {}), ...(body.model ? { model: String(body.model) } : {}), ...(content !== undefined ? { contentHash: createHash("sha256").update(content).digest("hex").slice(0, 16), content: content.slice(0, 100_000) } : {}), ...(body.diff ? { diff: String(body.diff) } : {}), ...(body.run_id ? { runId: String(body.run_id) } : {}) }; await appendJsonLineUnlocked(workspaceFile(cwd, "provenance.jsonl"), record); return record; });
+  return withFileWriteLock(workspaceFile(cwd, "provenance.jsonl"), async () => { const records = await readJsonLines<Provenance>(workspaceFile(cwd, "provenance.jsonl")); const version = records.filter((record) => record.path === path).reduce((max, record) => Math.max(max, record.version), 0) + 1; const content = typeof body.content === "string" ? body.content : undefined; const record: Provenance = { path, version, ts: Date.now() / 1000, tool: String(body.tool ?? "unknown"), sessionId: String(body.session_id ?? body.sessionId ?? ""), ...(body.tool_call_id ? { toolCallId: String(body.tool_call_id) } : {}), ...(body.model ? { model: String(body.model) } : {}), ...(content !== undefined ? { contentHash: createHash("sha256").update(content).digest("hex").slice(0, 16), content: content.slice(0, 100_000) } : {}), ...(body.diff ? { diff: String(body.diff) } : {}), ...(body.execution_id ? { executionId: String(body.execution_id) } : {}) }; await appendJsonLineUnlocked(workspaceFile(cwd, "provenance.jsonl"), record); return record; });
 }
 
 export function registerArtifactRoutes(app: FastifyInstance): void {

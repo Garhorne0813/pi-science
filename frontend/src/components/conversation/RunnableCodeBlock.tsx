@@ -25,7 +25,7 @@ export function RunnableCodeBlock({ code, cwd, sessionId, preClassName, children
     setRunning(true);
     setResult(null);
     try {
-      setResult(await notebookRuntime.execute(notebookId, cwd, "python", code));
+      setResult(await notebookRuntime.execute(notebookId, cwd, "python", code, sessionId));
     } catch (cause) {
       setResult({ ok: false, stdout: "", result: null, error: cause instanceof Error ? cause.message : String(cause) });
     } finally {

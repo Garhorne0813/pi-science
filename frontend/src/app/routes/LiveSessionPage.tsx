@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, ReactNode, Ref } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, Loader2, Square, Plus, Sparkles, X, File, FolderOpen } from "lucide-react";
 import type { VirtuosoHandle, VirtuosoProps } from "react-virtuoso";
@@ -21,6 +21,7 @@ import { MentionComposer } from "../../components/conversation/MentionComposer";
 import { QuestionnairePrompt } from "../../components/conversation/QuestionnairePrompt";
 import { groupBlocks, renderBlockGroup } from "../../components/conversation/ConversationBlocks";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
+import { SessionExecutionButton } from "../../components/conversation/SessionExecutionButton";
 import { visibleUserMessage } from "../../lib/files";
 import { useTranslation } from "react-i18next";
 import { ResearchLoopDraftCard, ResearchLoopStatusCard, ResearchModePicker } from "../../components/conversation/ResearchLoopControls";
@@ -40,6 +41,7 @@ const LazyVirtuoso = lazy(() => import("react-virtuoso").then(({ Virtuoso }) => 
   default: Virtuoso as unknown as ComponentType<ConversationVirtuosoProps>,
 })));
 const ComposerTodo = lazy(() => import("../../components/todo/ComposerTodo").then((m) => ({ default: m.ComposerTodo })));
+const SessionRunsPage = lazy(() => import("./RunsPage").then((m) => ({ default: m.RunsPage })));
 
 /**
  * Keep the virtual-list footer component type stable. Defining Footer inline
@@ -82,6 +84,9 @@ export function LiveSessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const workspaceCwd = useRequiredWorkspaceCwd();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const showRuns = searchParams.get("view") === "runs";
+  const focusedBlockId = searchParams.get("focus");
   // Field-level selectors, not a whole-store subscription: a streamed token only
   // touches `thread`/`working`, so nothing that reads the other fields re-renders.
   const status = useRuntimeStore((s) => s.status);
@@ -120,6 +125,7 @@ export function LiveSessionPage() {
   // the next session's page. sessionRef guards against cross-session staleness.
   const scrollTimersRef = useRef<number[]>([]);
   const sessionRef = useRef(sessionId);
+  const locatedFocusRef = useRef<string | null>(null);
   useEffect(() => {
     sessionRef.current = sessionId;
   }, [sessionId]);
@@ -258,9 +264,21 @@ export function LiveSessionPage() {
     for (const handle of scrollTimersRef.current) window.clearTimeout(handle);
     scrollTimersRef.current = [];
   };
-  const scrollToLoadedTarget = (id: string) => {
+  const threadBlockElement = (id: string) => {
+    const userMessage = document.getElementById(`user-msg-${id}`);
+    if (userMessage) return userMessage;
+    return Array.from(document.querySelectorAll<HTMLElement>("[data-thread-block-ids]"))
+      .find((element) => element.dataset.threadBlockIds?.split(" ").includes(id)) ?? null;
+  };
+  const highlightThreadBlock = (id: string) => {
+    const target = threadBlockElement(id);
+    if (!target) return;
+    target.classList.add("execution-focus-highlight");
+    scheduleSessionScoped(() => target.classList.remove("execution-focus-highlight"), 2_400);
+  };
+  const scrollToLoadedTarget = (id: string, highlight = false) => {
     const scrollToExact = () => {
-      const target = document.getElementById(`user-msg-${id}`);
+      const target = threadBlockElement(id);
       if (!target) return false;
       // Instant positioning (behavior "auto"): a smooth animation would race
       // the getBoundingClientRect offset check below.
@@ -275,12 +293,15 @@ export function LiveSessionPage() {
     const scrollerNow = scrollRef.current;
     const beforeTop = scrollerNow?.scrollTop ?? -1;
     if (scrollToExact() && scrollerNow) {
-      const target = document.getElementById(`user-msg-${id}`);
+      const target = threadBlockElement(id);
       if (target) {
         const r = target.getBoundingClientRect();
         const vr = scrollerNow.getBoundingClientRect();
         const offset = r.top - vr.top;
-        if (offset >= -20 && offset < 300) return;
+        if (offset >= -20 && offset < 300) {
+          if (highlight) highlightThreadBlock(id);
+          return;
+        }
       }
       scrollerNow.scrollTop = beforeTop;
     }
@@ -297,9 +318,12 @@ export function LiveSessionPage() {
       // After Virtuoso mounts the group, scroll again so the target lands at
       // the top of the viewport exactly (height estimation is inexact).
       scheduleSessionScoped(() => { if (!scrollToExact()) scheduleSessionScoped(scrollToExact, 250); }, 120);
-      scheduleSessionScoped(scrollToExact, 350);
+      scheduleSessionScoped(() => {
+        scrollToExact();
+        if (highlight) highlightThreadBlock(id);
+      }, 350);
     } else {
-      scrollToExact();
+      if (scrollToExact() && highlight) highlightThreadBlock(id);
     }
   };
   const handleNavSelect = (id: string) => {
@@ -317,6 +341,39 @@ export function LiveSessionPage() {
     }
     scrollToLoadedTarget(id);
   };
+
+  useEffect(() => {
+    if (!focusedBlockId) {
+      locatedFocusRef.current = null;
+      return;
+    }
+    if (showRuns || !activeSessionId) return;
+    const focusKey = `${activeSessionId}:${focusedBlockId}`;
+    if (locatedFocusRef.current === focusKey) return;
+    let cancelled = false;
+
+    const locate = async () => {
+      followOutputRef.current = false;
+      cancelPendingScrollTimers();
+      let previousGroupCount = groupBlocks(useRuntimeStore.getState().thread.blocks).length;
+      let state = useRuntimeStore.getState();
+      while (!state.thread.blocks.some((block) => block.id === focusedBlockId) && state.historyHasMore) {
+        const loadedMessages = await state.loadOlderMessages();
+        if (cancelled || loadedMessages === 0) return;
+        const nextGroupCount = groupBlocks(useRuntimeStore.getState().thread.blocks).length;
+        const addedGroups = Math.max(0, nextGroupCount - previousGroupCount);
+        if (addedGroups > 0) setVirtualFirstItemIndex((current) => current - addedGroups);
+        previousGroupCount = nextGroupCount;
+        state = useRuntimeStore.getState();
+      }
+      if (cancelled || !state.thread.blocks.some((block) => block.id === focusedBlockId)) return;
+      locatedFocusRef.current = focusKey;
+      scheduleSessionScoped(() => scrollToLoadedTarget(focusedBlockId, true), 0);
+    };
+
+    void locate();
+    return () => { cancelled = true; };
+  }, [activeSessionId, focusedBlockId, showRuns, thread.blocks]);
   const scrollToBottom = () => {
     followOutputRef.current = true;
     const scroller = scrollRef.current;
@@ -447,15 +504,37 @@ export function LiveSessionPage() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <header className="flex h-9 shrink-0 items-center justify-between border-b border-faint px-6 pr-24">
+      <header className="flex h-9 shrink-0 items-center border-b border-faint px-6 pr-24">
         <div className="flex items-center gap-2.5 min-w-0">
           <span className={cn("h-2 w-2 rounded-full shrink-0",
             status === "ready" ? "bg-ok" : status === "connecting" ? "bg-warn animate-pulse" : status === "error" ? "bg-error" : "bg-muted"
           )} title={status} />
           <h1 className="min-w-0 truncate text-[13px] font-medium text-text">{title}</h1>
+          <SessionExecutionButton
+            cwd={workspaceCwd}
+            sessionId={sessionId ?? activeSessionId ?? undefined}
+            active={showRuns}
+            onToggle={() => {
+              const next = new URLSearchParams(searchParams);
+              if (showRuns) {
+                next.delete("view");
+                next.delete("execution");
+              } else {
+                next.delete("focus");
+                next.set("view", "runs");
+              }
+              setSearchParams(next);
+            }}
+          />
         </div>
       </header>
 
+      {showRuns ? (
+        <Suspense fallback={<div className="flex min-h-0 flex-1 items-center justify-center"><Loader2 size={18} className="animate-spin text-muted" /></div>}>
+          <SessionRunsPage sessionId={sessionId ?? activeSessionId ?? undefined} />
+        </Suspense>
+      ) : (
+      <>
       {/* Welcome layout: this top region and the spacer below the composer both
           grow equally, so the composer card lands on the vertical centre while
           the welcome copy hangs off its bottom edge. */}
@@ -688,6 +767,8 @@ export function LiveSessionPage() {
 
         {showWelcome && <div className="flex-1" aria-hidden />}
       </div>
+      </>
+      )}
     </div>
   );
 }

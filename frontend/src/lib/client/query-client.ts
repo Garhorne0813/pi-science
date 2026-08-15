@@ -19,7 +19,7 @@ import { ApiError } from "./api";
  *   ["settings", "config", cwd | null]                   ["settings", "skills"]
  *   ["skills", "list", cwd]                              ["skills", "tools"]
  *   ["workspace-files", cwd, subdir]                     entries + breadcrumbs
- *   ["runs", cwd]                                        ["runs", cwd, runId, "log"]
+ *   ["runs", cwd]                                        ["runs", cwd, executionId, "log"]
  *   ["provenance", cwd, "versions" | "env", path | hash]
  *   ["slash-commands", cwd, sessionId]
  *   ["pdf-search", cwd, path, query]                     ["compute", "machines"]

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { INSPECTOR_MAX, INSPECTOR_MIN, useUiStore } from "@/lib/ui";
 import { cn } from "@/lib/ui";
@@ -124,11 +124,11 @@ export function RightPane({
     <div
       ref={paneRef}
       className={cn(
-        "relative hidden h-full shrink-0 lg:block",
+        "fixed inset-0 z-50 block h-full w-full bg-surface lg:relative lg:inset-auto lg:z-auto lg:w-[var(--inspector-width)] lg:shrink-0",
         side === "left" && "order-1",
         dragging && "will-change-[width] select-none",
       )}
-      style={{ width: inspectorWidth }}
+      style={{ "--inspector-width": `${inspectorWidth}px` } as CSSProperties}
     >
       <div className={cn("h-full", dragging && "pointer-events-none")}>{children}</div>
       {/* Drag divider: resize within [INSPECTOR_MIN, INSPECTOR_MAX]; dragging
@@ -147,7 +147,7 @@ export function RightPane({
         onPointerCancel={onDividerPointerUp}
         onKeyDown={onDividerKeyDown}
         className={cn(
-          "group absolute inset-y-0 z-10 w-2 cursor-col-resize touch-none select-none",
+          "group absolute inset-y-0 z-10 hidden w-2 cursor-col-resize touch-none select-none lg:block",
           side === "right" ? "left-0" : "right-0",
         )}
       >

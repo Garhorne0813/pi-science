@@ -104,9 +104,8 @@ export const settingsApi = {
   },
 
   /** Skill enablement lives under settings but was never cached; keep it uncached. */
-  skills<T>(cwd?: string | null): Promise<T> {
-    const suffix = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
-    return queryClient.fetchQuery({ queryKey: settingsKey("skills", cwd ?? null), queryFn: () => apiRequest<T>(`/api/settings/skills${suffix}`), staleTime: 0 });
+  skills<T>(): Promise<T> {
+    return queryClient.fetchQuery({ queryKey: settingsKey("skills"), queryFn: () => apiRequest<T>("/api/settings/skills"), staleTime: 0 });
   },
 
   async saveApiKey(provider: string, apiKey: string): Promise<void> {

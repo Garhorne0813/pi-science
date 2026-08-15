@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { artifactManifestSchema, createResearchLoopSchema, createSessionRequestSchema, gatewayHealthSchema, jobRecordSchema, piRpcCommandSchema, researchLoopSchema, sessionEventSchema, skillContentSchema } from "./index.js";
+import { artifactManifestSchema, createResearchLoopSchema, createSessionRequestSchema, executionEventSchema, executionRecordSchema, gatewayHealthSchema, jobRecordSchema, piRpcCommandSchema, researchLoopSchema, sessionEventSchema, skillContentSchema } from "./index.js";
 
 describe("gateway contracts", () => {
   it("accepts a healthy Node gateway response", () => {
@@ -13,6 +13,31 @@ describe("gateway contracts", () => {
         scientific_runtime: "idle",
       }),
     ).toMatchObject({ service: "pi-science-server", control_plane: "node" });
+  });
+
+  it("validates durable execution events and reduced records", () => {
+    expect(executionEventSchema.parse({
+      schema_version: 1,
+      event_id: "event-1",
+      execution_id: "exec-1",
+      sequence: 1,
+      event_type: "execution.started",
+      kind: "job",
+      surface: "local",
+      workspace_id: "/tmp/project",
+      created_at: "now",
+      producer: "test",
+    })).toMatchObject({ payload: {}, sequence: 1 });
+    expect(executionRecordSchema.parse({
+      schema_version: 1,
+      execution_id: "exec-1",
+      kind: "job",
+      surface: "local",
+      status: "running",
+      workspace_id: "/tmp/project",
+      created_at: "now",
+      producer: "test",
+    })).toMatchObject({ correlation: {}, files: { read: [], written: [] }, artifacts: [] });
   });
 
   it("validates session requests and preserves event extensions", () => {

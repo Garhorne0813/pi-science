@@ -9,13 +9,15 @@ import { ExtensionsTab } from "./ExtensionsTab";
 import { GeneralTab } from "./GeneralTab";
 import { LLMTab } from "./LLMTab";
 import { MCPTab } from "./MCPTab";
+import { SkillsTab } from "./SkillsTab";
 import { Icon, IconButton } from "../ui/Icon";
 
-type Tab = "general" | "llm" | "extensions" | "mcp" | "compute";
+type Tab = "general" | "llm" | "skills" | "extensions" | "mcp" | "compute";
 
 const TABS: { id: Tab; labelKey: string; titleKey: string; icon: LucideIcon }[] = [
   { id: "general", labelKey: "settings.general", titleKey: "settings.general", icon: Languages },
   { id: "llm", labelKey: "settings.llm", titleKey: "settings.model.pageTitle", icon: Cpu },
+  { id: "skills", labelKey: "skills.title", titleKey: "skills.title", icon: Puzzle },
   { id: "extensions", labelKey: "settings.extensions", titleKey: "settings.extensions", icon: Puzzle },
   { id: "mcp", labelKey: "settings.mcp", titleKey: "settings.mcpPage.title", icon: FlaskConical },
   { id: "compute", labelKey: "settings.compute", titleKey: "settings.computePage.title", icon: Server },
@@ -192,6 +194,7 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
                 {error && <p role="alert" className="mb-card rounded-input bg-error/10 px-panel py-2 text-ui-caption text-error">{error}</p>}
                 {tab === "general" && <GeneralTab />}
                 {tab === "llm" && <LLMTab config={config} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} saveModel={saveModel} saveCompaction={saveCompaction} onConfigReload={loadConfig} />}
+                {tab === "skills" && <SkillsTab />}
                 {tab === "extensions" && <ExtensionsTab workspaceCwd={scope} />}
                 {tab === "mcp" && <MCPTab workspaceCwd={scope} />}
                 {tab === "compute" && <ComputeSettings workspaceCwd={scope} />}
