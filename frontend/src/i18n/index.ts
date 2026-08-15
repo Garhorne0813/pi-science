@@ -1,16 +1,22 @@
-import i18next from "i18next";
+import i18next, { type BackendModule } from "i18next";
 import { initReactI18next } from "react-i18next";
 import { detectInitialLocale } from "./config";
-import en from "./locales/en.json";
-import zhHans from "./locales/zh-Hans.json";
 
-export const resources = {
-  en: { translation: en },
-  "zh-Hans": { translation: zhHans },
-} as const;
+const localeLoaders: Record<string, () => Promise<{ default: Record<string, string> }>> = {
+  en: () => import("./locales/en.json"),
+  "zh-Hans": () => import("./locales/zh-Hans.json"),
+};
 
-i18next.use(initReactI18next).init({
-  resources,
+const localeBackend: BackendModule = {
+  type: "backend",
+  init: () => undefined,
+  read(language, _namespace, callback) {
+    const loader = localeLoaders[language] ?? localeLoaders.en;
+    void loader().then((module) => callback(null, module.default)).catch((error: unknown) => callback(error instanceof Error ? error : new Error(String(error)), false));
+  },
+};
+
+export const i18nReady = i18next.use(localeBackend).use(initReactI18next).init({
   lng: detectInitialLocale(),
   fallbackLng: "en",
   interpolation: { escapeValue: false },

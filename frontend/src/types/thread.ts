@@ -267,7 +267,7 @@ export interface ProvenanceRecord {
   content?: string;
   diff?: string;
   log?: string;
-  runId?: string;
+  executionId?: string;
   env?: ProvenanceEnvironment;
 }
 
@@ -282,16 +282,31 @@ export interface ProvenanceEnvironment {
   [key: string]: unknown;
 }
 
-export interface RunRecord {
-  runId: string;
-  sessionId?: string;
-  command?: string;
-  surface: "local" | "hpc" | "ssh";
-  status: "ok" | "failed" | "running";
-  host?: string;
-  startedAt?: string;
-  endedAt?: string;
-  outputs?: { path: string; hash?: string; size?: number }[];
-  code?: string[];
-  envFile?: string;
+export interface ExecutionRecord {
+  schema_version: 1;
+  execution_id: string;
+  kind: "tool" | "kernel_cell" | "job" | "research_agent" | "research_evaluation";
+  surface: "pi" | "python" | "r" | "local" | "ssh" | "hpc" | "research";
+  status: "pending" | "running" | "succeeded" | "failed" | "cancelled" | "timed_out" | "interrupted" | "lost";
+  workspace_id: string;
+  created_at: string;
+  started_at?: string;
+  ended_at?: string;
+  producer: string;
+  correlation: {
+    session_id?: string;
+    tool_call_id?: string;
+    job_id?: string;
+    run_id?: string;
+    operation_id?: string;
+    [key: string]: string | undefined;
+  };
+  request: { tool?: string; command?: string[]; [key: string]: unknown };
+  runtime: Record<string, unknown>;
+  result: { stdout_preview?: string; stderr_preview?: string; output_preview?: string; error?: string; exit_code?: number | null; [key: string]: unknown };
+  files: {
+    read: Array<{ path: string; detection: string }>;
+    written: Array<{ path: string; detection: string }>;
+  };
+  artifacts: Array<{ artifact_id: string; version: number; relation: "input" | "output" }>;
 }

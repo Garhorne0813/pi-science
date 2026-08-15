@@ -10,7 +10,7 @@ interface Cell {
   running: boolean;
 }
 
-export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId }: { onClose: () => void; cwd?: string; notebookId?: string }) {
+export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, sessionId }: { onClose: () => void; cwd?: string; notebookId?: string; sessionId?: string }) {
   const { t } = useTranslation();
   const [notebookId] = useState(() => requestedNotebookId || `nb-${Date.now()}`);
   const [cells, setCells] = useState<Cell[]>([]);
@@ -48,7 +48,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId }:
     if (!cell) return;
 
     try {
-      const data = await notebookRuntime.execute(notebookId, cwd || ".", cell.language, cell.code);
+      const data = await notebookRuntime.execute(notebookId, cwd || ".", cell.language, cell.code, sessionId);
       setCells((prev) =>
         prev.map((c) => (c.id === cellId ? { ...c, running: false, result: data } : c))
       );
@@ -62,7 +62,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId }:
         )
       );
     }
-  }, [cells, notebookId, cwd]);
+  }, [cells, notebookId, cwd, sessionId]);
 
   const updateCellCode = useCallback((cellId: string, code: string) => {
     setCells((prev) =>

@@ -83,7 +83,7 @@ function ToolGroup({ blocks }: { blocks: ToolCallBlock[] }) {
   const doneCount = blocks.filter((block) => block.status === "done").length;
   const tools = [...new Set(blocks.map((block) => block.tool))].join(", ");
   return (
-    <div className="ui-card-flat animate-fadeIn overflow-hidden rounded-input">
+    <div data-thread-block-ids={blocks.map((block) => block.id).join(" ")} className="ui-card-flat animate-fadeIn overflow-hidden rounded-input scroll-mt-4">
       <button
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-2 w-full px-3 py-2 text-left text-[12.5px] text-muted hover:bg-surface-2"
@@ -185,8 +185,8 @@ function ToolCard({ block }: { block: ToolCallBlock }) {
   );
 
   return (
-    <div className={cn(
-      "rounded-input px-3 py-2",
+    <div id={`thread-block-${block.id}`} data-thread-block-ids={block.id} className={cn(
+      "rounded-input px-3 py-2 scroll-mt-4",
       status === "error" ? "border border-error/30 bg-error/5" : "ui-card-inset",
     )}>
       <button

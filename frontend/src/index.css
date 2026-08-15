@@ -176,6 +176,13 @@
     border: 1px solid var(--border);
   }
 
+  .execution-focus-highlight {
+    outline: 2px solid color-mix(in srgb, var(--accent) 72%, transparent);
+    outline-offset: 4px;
+    background-color: color-mix(in srgb, var(--accent-soft) 70%, transparent);
+    transition: outline-color 180ms ease, background-color 180ms ease;
+  }
+
   .ui-card { background: var(--surface-raised); }
 
   .ui-card-flat { background: var(--surface); }
@@ -220,6 +227,95 @@
   .ui-user-message {
     background: var(--surface-selected);
     border-color: color-mix(in srgb, var(--border-strong) 72%, var(--accent-border));
+  }
+
+  /* Runs uses explicit layout classes because Tailwind's dev scanner does not
+     reliably add newly introduced arbitrary grid templates during Vite HMR. */
+  .runs-workbench-container {
+    container: runs-workbench / inline-size;
+  }
+
+  .runs-ledger-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .runs-toolbar {
+    background: linear-gradient(135deg, color-mix(in srgb, var(--surface-raised) 94%, var(--accent-soft)), var(--surface) 72%);
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 4%, transparent);
+  }
+
+  .runs-workbench {
+    background: linear-gradient(145deg, var(--surface-raised), var(--surface) 64%);
+    border-color: color-mix(in srgb, var(--border-strong) 62%, var(--border));
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 5%, transparent), 0 16px 42px color-mix(in srgb, var(--text) 5%, transparent);
+  }
+
+  .runs-ledger-columns {
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+  }
+
+  .runs-detail-fields {
+    grid-template-columns: 110px minmax(0, 1fr);
+  }
+
+  .runs-ledger-row-selected {
+    background: linear-gradient(90deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 32%, transparent));
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+
+  .runs-ledger-row:hover {
+    background-color: color-mix(in srgb, var(--surface-2) 74%, transparent);
+  }
+
+  .runs-ledger-row-selected:hover {
+    background: linear-gradient(90deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 42%, transparent));
+  }
+
+  .runs-detail-header {
+    background: linear-gradient(135deg, color-mix(in srgb, var(--surface-raised) 90%, var(--accent-soft)), color-mix(in srgb, var(--surface) 96%, transparent));
+  }
+
+  .runs-ledger-pane {
+    display: block;
+    border-bottom: 1px solid var(--border);
+    border-right: 0;
+  }
+
+  .runs-detail-pane {
+    display: none;
+  }
+
+  .runs-ledger-layout[data-compact-detail="true"] .runs-ledger-pane {
+    display: none;
+  }
+
+  .runs-ledger-layout[data-compact-detail="true"] .runs-detail-pane {
+    display: block;
+    width: 100%;
+  }
+
+  .runs-detail-back {
+    display: flex;
+  }
+
+  @container runs-workbench (min-width: 840px) {
+    .runs-ledger-layout {
+      grid-template-columns: minmax(340px, 0.9fr) minmax(420px, 1.1fr);
+    }
+
+    .runs-ledger-pane,
+    .runs-detail-pane {
+      display: block !important;
+    }
+
+    .runs-ledger-pane {
+      border-bottom: 0;
+      border-right: 1px solid var(--border);
+    }
+
+    .runs-detail-back {
+      display: none;
+    }
   }
 
 }

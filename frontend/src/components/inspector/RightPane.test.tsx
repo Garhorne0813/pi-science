@@ -70,6 +70,18 @@ describe("RightPane resizing", () => {
     expect(useUiStore.getState().inspectorWidth).toBe(324);
   });
 
+  it("uses a full-screen overlay on narrow viewports and a sized split pane on desktop", () => {
+    const { container } = render(
+      <RightPane onMinimize={vi.fn()}>
+        <div>Preview</div>
+      </RightPane>,
+    );
+
+    expect(container.firstElementChild).toHaveClass("fixed", "inset-0", "w-full", "lg:relative", "lg:w-[var(--inspector-width)]");
+    expect(container.firstElementChild).toHaveStyle({ "--inspector-width": "420px" });
+    expect(screen.getByRole("separator", { name: "Resize preview panel" })).toHaveClass("hidden", "lg:block");
+  });
+
   it("coalesces repeated pointer moves into one animation-frame width update", () => {
     const frames: FrameRequestCallback[] = [];
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
@@ -89,7 +101,7 @@ describe("RightPane resizing", () => {
     fireEvent.pointerMove(divider, { pointerId: 1, clientX: 680 });
 
     expect(frames).toHaveLength(1);
-    expect(pane).toHaveStyle({ width: "420px" });
+    expect(pane).toHaveStyle({ "--inspector-width": "420px" });
     frames[0](0);
     expect(pane).toHaveStyle({ width: "344px" });
     expect(useUiStore.getState().inspectorWidth).toBe(420);

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, ChevronDown, Pin, PinOff, Pencil, Trash2, X, Dna, Earth } from "lucide-react";
+import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, ChevronDown, Pin, PinOff, Pencil, Trash2, X, Dna, Earth, Activity } from "lucide-react";
 import { cn } from "../../lib/ui";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { useTranslation } from "react-i18next";
@@ -394,8 +394,8 @@ function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingName, edit
         isPinned && "ring-1 ring-accent/30",
       )}
     >
-      {/* Hover action buttons — bottom-right of card */}
-      <div className="ui-popover absolute right-2 bottom-2 z-10 hidden items-center gap-0.5 rounded-input p-0.5 group-hover:flex"
+      {/* Secondary workspace actions — revealed on hover or keyboard focus. */}
+      <div className="ui-popover absolute right-2 top-2 z-10 hidden items-center gap-0.5 rounded-input p-0.5 group-hover:flex group-focus-within:flex"
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -444,8 +444,22 @@ function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingName, edit
         <h3 className="text-sm font-medium text-text truncate">{w.name}</h3>
       )}
 
-      <div className="mt-2 flex items-center gap-compact text-ui-caption text-muted">
-        <MessageSquare size={12} /> <span>{t("projects.sessionCount", { count: w.session_count })}</span>
+      <div className="mt-2 flex items-center justify-between gap-compact text-ui-caption text-muted">
+        <span className="flex min-w-0 items-center gap-compact">
+          <MessageSquare size={12} /> <span>{t("projects.sessionCount", { count: w.session_count })}</span>
+        </span>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            navigate(`/workspace/${encodeURIComponent(w.path)}/runs`);
+          }}
+          aria-label={t("runs.viewAll")}
+          title={t("runs.viewAll")}
+          className="-m-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted/70 transition-colors hover:bg-surface-2 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        >
+          <Activity size={13} />
+        </button>
       </div>
     </div>
   );
