@@ -76,7 +76,7 @@ export function FilesTab({
 
       {settingsOpen && policy && (
         <section className="ui-card-flat rounded-card p-5">
-          <h2 className="flex items-center gap-2 font-serif text-lg text-text"><Lock size={16} className="text-accent" /> {t("knowledge.organizationPolicy")}</h2>
+          <h2 className="flex items-center gap-2 text-lg font-semibold text-text"><Lock size={16} className="text-accent" /> {t("knowledge.organizationPolicy")}</h2>
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <label className="text-xs font-medium text-muted">
               {t("knowledge.lockedPaths")}

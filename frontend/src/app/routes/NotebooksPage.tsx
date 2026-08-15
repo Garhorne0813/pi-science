@@ -150,7 +150,7 @@ export function NotebooksPage() {
           }
         />
 
-        <div className="ui-card-flat mt-6 flex items-center justify-between rounded-card px-4 py-3">
+        <div className="ui-card-flat mt-6 flex flex-wrap items-center justify-between gap-2 rounded-card px-4 py-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-medium text-text">
               {environment?.ready && <CheckCircle2 size={14} className="text-ok" />}
@@ -170,7 +170,7 @@ export function NotebooksPage() {
 
         {/* Jupyter Server */}
         <div className={cn("mb-6 mt-3 rounded-card border p-4", jupyter.running && jupyter.matches_workspace ? "border-ok/40 bg-ok/5" : "ui-card-flat")}>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="text-sm font-medium text-text">{t("notebooks.jupyterLab")}</h2>
               <p className="text-xs text-muted mt-0.5">

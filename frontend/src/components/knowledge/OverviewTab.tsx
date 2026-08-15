@@ -13,11 +13,11 @@ export function OverviewTab({ document, summary, memorySummary }: { document: st
     .replace(/\n{3,}/g, "\n\n");
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_240px]">
-      <article className="overflow-hidden rounded-card border border-border bg-white">
-        <div className="flex items-center justify-between border-b border-[#eee7dc] px-5 py-3">
+      <article className="overflow-hidden rounded-card border border-border bg-surface">
+        <div className="flex items-center justify-between border-b border-faint px-5 py-3">
           <div>
-            <p className="text-sm font-medium text-[#2b2620]">{t("knowledge.projectDocument")}</p>
-            <p className="text-xs text-[#8c8174]">{t("knowledge.reviewedSource")}</p>
+            <p className="text-sm font-medium text-text">{t("knowledge.projectDocument")}</p>
+            <p className="text-xs text-muted">{t("knowledge.reviewedSource")}</p>
           </div>
         </div>
         <div className="px-5 py-7 sm:px-8">

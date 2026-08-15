@@ -115,7 +115,7 @@ export function FilesPage() {
       <WorkspacePageHeader
         title={t("nav.files")}
         description={
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center gap-1">
               <button onClick={() => setSubdir("")} className="hover:text-text">{t("files.workspace")}</button>
               {breadcrumbs.map((bc) => (
                 <span key={bc.path} className="flex items-center gap-1">

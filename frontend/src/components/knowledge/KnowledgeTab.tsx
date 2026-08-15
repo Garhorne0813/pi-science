@@ -13,7 +13,7 @@ export function KnowledgeTab({ items }: { items: KnowledgeItem[] }) {
       {Object.entries(groups).map(([type, rows]) => (
         <section key={type} className="ui-card-flat rounded-card p-4">
           <div className="flex items-center justify-between border-b border-faint pb-3">
-            <h2 className="font-serif text-lg text-text">{KNOWLEDGE_LABELS[type as keyof typeof KNOWLEDGE_LABELS]}</h2>
+            <h2 className="text-lg font-semibold text-text">{KNOWLEDGE_LABELS[type as keyof typeof KNOWLEDGE_LABELS]}</h2>
             <span className="font-mono text-xs text-muted">{rows.length}</span>
           </div>
           <div className="divide-y divide-faint">

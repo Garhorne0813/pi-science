@@ -290,7 +290,7 @@ function StoredOutputs({ outputs }: { outputs: NotebookOutput[] }) {
               <img
                 src={`data:image/png;base64,${image}`}
                 alt={t("notebook.output", { index: index + 1 })}
-                className="mt-2 max-h-80 max-w-full rounded-input bg-white object-contain"
+                className="mt-2 max-h-80 max-w-full rounded-input bg-surface-2 object-contain"
               />
             )}
           </div>
