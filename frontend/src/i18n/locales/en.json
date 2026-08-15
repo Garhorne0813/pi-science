@@ -787,6 +787,7 @@
   "runs.liveHint": "Executions refresh automatically",
   "runs.reproduce": "Reproduce",
   "runs.openSession": "Open session",
+  "runs.locateExecution": "Locate in conversation",
   "runs.copyId": "Copy ID",
   "runs.copyCommand": "Copy command",
   "runs.idCopied": "Execution ID copied",

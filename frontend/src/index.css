@@ -176,6 +176,13 @@
     border: 1px solid var(--border);
   }
 
+  .execution-focus-highlight {
+    outline: 2px solid color-mix(in srgb, var(--accent) 72%, transparent);
+    outline-offset: 4px;
+    background-color: color-mix(in srgb, var(--accent-soft) 70%, transparent);
+    transition: outline-color 180ms ease, background-color 180ms ease;
+  }
+
   .ui-card { background: var(--surface-raised); }
 
   .ui-card-flat { background: var(--surface); }

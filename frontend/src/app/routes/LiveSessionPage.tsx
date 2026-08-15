@@ -86,6 +86,7 @@ export function LiveSessionPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const showRuns = searchParams.get("view") === "runs";
+  const focusedBlockId = searchParams.get("focus");
   // Field-level selectors, not a whole-store subscription: a streamed token only
   // touches `thread`/`working`, so nothing that reads the other fields re-renders.
   const status = useRuntimeStore((s) => s.status);
@@ -124,6 +125,7 @@ export function LiveSessionPage() {
   // the next session's page. sessionRef guards against cross-session staleness.
   const scrollTimersRef = useRef<number[]>([]);
   const sessionRef = useRef(sessionId);
+  const locatedFocusRef = useRef<string | null>(null);
   useEffect(() => {
     sessionRef.current = sessionId;
   }, [sessionId]);
@@ -262,9 +264,21 @@ export function LiveSessionPage() {
     for (const handle of scrollTimersRef.current) window.clearTimeout(handle);
     scrollTimersRef.current = [];
   };
-  const scrollToLoadedTarget = (id: string) => {
+  const threadBlockElement = (id: string) => {
+    const userMessage = document.getElementById(`user-msg-${id}`);
+    if (userMessage) return userMessage;
+    return Array.from(document.querySelectorAll<HTMLElement>("[data-thread-block-ids]"))
+      .find((element) => element.dataset.threadBlockIds?.split(" ").includes(id)) ?? null;
+  };
+  const highlightThreadBlock = (id: string) => {
+    const target = threadBlockElement(id);
+    if (!target) return;
+    target.classList.add("execution-focus-highlight");
+    scheduleSessionScoped(() => target.classList.remove("execution-focus-highlight"), 2_400);
+  };
+  const scrollToLoadedTarget = (id: string, highlight = false) => {
     const scrollToExact = () => {
-      const target = document.getElementById(`user-msg-${id}`);
+      const target = threadBlockElement(id);
       if (!target) return false;
       // Instant positioning (behavior "auto"): a smooth animation would race
       // the getBoundingClientRect offset check below.
@@ -279,12 +293,15 @@ export function LiveSessionPage() {
     const scrollerNow = scrollRef.current;
     const beforeTop = scrollerNow?.scrollTop ?? -1;
     if (scrollToExact() && scrollerNow) {
-      const target = document.getElementById(`user-msg-${id}`);
+      const target = threadBlockElement(id);
       if (target) {
         const r = target.getBoundingClientRect();
         const vr = scrollerNow.getBoundingClientRect();
         const offset = r.top - vr.top;
-        if (offset >= -20 && offset < 300) return;
+        if (offset >= -20 && offset < 300) {
+          if (highlight) highlightThreadBlock(id);
+          return;
+        }
       }
       scrollerNow.scrollTop = beforeTop;
     }
@@ -301,9 +318,12 @@ export function LiveSessionPage() {
       // After Virtuoso mounts the group, scroll again so the target lands at
       // the top of the viewport exactly (height estimation is inexact).
       scheduleSessionScoped(() => { if (!scrollToExact()) scheduleSessionScoped(scrollToExact, 250); }, 120);
-      scheduleSessionScoped(scrollToExact, 350);
+      scheduleSessionScoped(() => {
+        scrollToExact();
+        if (highlight) highlightThreadBlock(id);
+      }, 350);
     } else {
-      scrollToExact();
+      if (scrollToExact() && highlight) highlightThreadBlock(id);
     }
   };
   const handleNavSelect = (id: string) => {
@@ -321,6 +341,39 @@ export function LiveSessionPage() {
     }
     scrollToLoadedTarget(id);
   };
+
+  useEffect(() => {
+    if (!focusedBlockId) {
+      locatedFocusRef.current = null;
+      return;
+    }
+    if (showRuns || !activeSessionId) return;
+    const focusKey = `${activeSessionId}:${focusedBlockId}`;
+    if (locatedFocusRef.current === focusKey) return;
+    let cancelled = false;
+
+    const locate = async () => {
+      followOutputRef.current = false;
+      cancelPendingScrollTimers();
+      let previousGroupCount = groupBlocks(useRuntimeStore.getState().thread.blocks).length;
+      let state = useRuntimeStore.getState();
+      while (!state.thread.blocks.some((block) => block.id === focusedBlockId) && state.historyHasMore) {
+        const loadedMessages = await state.loadOlderMessages();
+        if (cancelled || loadedMessages === 0) return;
+        const nextGroupCount = groupBlocks(useRuntimeStore.getState().thread.blocks).length;
+        const addedGroups = Math.max(0, nextGroupCount - previousGroupCount);
+        if (addedGroups > 0) setVirtualFirstItemIndex((current) => current - addedGroups);
+        previousGroupCount = nextGroupCount;
+        state = useRuntimeStore.getState();
+      }
+      if (cancelled || !state.thread.blocks.some((block) => block.id === focusedBlockId)) return;
+      locatedFocusRef.current = focusKey;
+      scheduleSessionScoped(() => scrollToLoadedTarget(focusedBlockId, true), 0);
+    };
+
+    void locate();
+    return () => { cancelled = true; };
+  }, [activeSessionId, focusedBlockId, showRuns, thread.blocks]);
   const scrollToBottom = () => {
     followOutputRef.current = true;
     const scroller = scrollRef.current;
@@ -467,6 +520,7 @@ export function LiveSessionPage() {
                 next.delete("view");
                 next.delete("execution");
               } else {
+                next.delete("focus");
                 next.set("view", "runs");
               }
               setSearchParams(next);

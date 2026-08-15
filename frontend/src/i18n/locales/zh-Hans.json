@@ -787,6 +787,7 @@
   "runs.liveHint": "执行记录会自动刷新",
   "runs.reproduce": "复现执行",
   "runs.openSession": "打开会话",
+  "runs.locateExecution": "定位到执行位置",
   "runs.copyId": "复制 ID",
   "runs.copyCommand": "复制命令",
   "runs.idCopied": "执行 ID 已复制",

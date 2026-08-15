@@ -127,6 +127,10 @@ function userBlock(id: string, text: string): ThreadBlock {
   return { kind: "user", id, text, timestamp: new Date().toISOString() };
 }
 
+function toolBlock(callId: string): ThreadBlock {
+  return { kind: "tool", id: `tool-${callId}`, callId, tool: "bash", status: "done", output: "ok" };
+}
+
 function publishedArtifactBlock(path: string): ThreadBlock {
   return {
     kind: "status-line",
@@ -161,10 +165,10 @@ function sendButton(): HTMLElement {
   return screen.getByLabelText("Send message");
 }
 
-function renderPage() {
+function renderPage(search = "") {
   return render(
     <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
-      <MemoryRouter initialEntries={[`/workspace/${CWD}/session/${SESSION_ID}`]}>
+      <MemoryRouter initialEntries={[`/workspace/${CWD}/session/${SESSION_ID}${search}`]}>
         <Routes>
           {/* The app mounts WorkspaceProvider around the route tree (app/router.tsx). */}
           <Route path="/workspace/:cwd/session/:sessionId" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
@@ -998,6 +1002,22 @@ describe("header settings entry", () => {
 });
 
 describe("scroll and nav behavior (docs/markdown.md §3.16 a/b/d)", () => {
+  it("positions and highlights an execution target from the URL", async () => {
+    useRuntimeStore.setState({
+      thread: { blocks: [userBlock("u1", "Run a command"), toolBlock("call-1")], index: { u1: 0, "tool-call-1": 1 }, loaded: true },
+    });
+
+    renderPage("?focus=tool-call-1");
+
+    const target = await waitFor(() => {
+      const element = document.getElementById("thread-block-tool-call-1");
+      expect(element).not.toBeNull();
+      expect(element).toHaveClass("execution-focus-highlight");
+      return element!;
+    });
+    expect(target.scrollIntoView).toHaveBeenCalled();
+  });
+
   it("snaps to the bottom when a new turn starts (working false→true)", async () => {
     useRuntimeStore.setState({
       thread: { blocks: [userBlock("u1", "First question"), agentBlock("a1", "first reply")], index: { u1: 0, a1: 1 }, loaded: true },

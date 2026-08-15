@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
 import i18n from "../../i18n";
 import { queryClient } from "../../lib/client/query-client";
 import type { ExecutionRecord } from "../../types/thread";
@@ -118,6 +118,11 @@ function LocationProbe() {
   return <output aria-label="location">{location.pathname}{location.search}</output>;
 }
 
+function SessionRunsHarness() {
+  const [params] = useSearchParams();
+  return <>{params.get("view") === "runs" && <RunsPage sessionId="session-1" />}<LocationProbe /></>;
+}
+
 function renderPage(initial = "/workspace/project/runs") {
   return render(
     <QueryClientProvider client={queryClient}>
@@ -126,6 +131,18 @@ function renderPage(initial = "/workspace/project/runs") {
           <Route path="/workspace/:cwd/runs" element={<><RunsPage /><LocationProbe /></>} />
           <Route path="/workspace/:cwd" element={<LocationProbe />} />
           <Route path="/workspace/:cwd/session/:sessionId" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+function renderSessionPage(initial = "/workspace/project/session/session-1?view=runs&execution=exec_tool") {
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={[initial]}>
+        <Routes>
+          <Route path="/workspace/:cwd/session/:sessionId" element={<SessionRunsHarness />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -238,6 +255,21 @@ describe("RunsPage execution ledger", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reproduce" }));
     expect(setDraftMock).toHaveBeenCalledWith(expect.stringContaining("exec_tool"));
     expect(screen.getByLabelText("location")).toHaveTextContent("/workspace/%2Fworkspace/session/session-1");
+  });
+
+  it("locates correlated tool executions instead of offering a redundant session link", async () => {
+    renderSessionPage();
+    await screen.findByText("node-pi-event-observer");
+
+    expect(screen.queryByRole("button", { name: "Open session" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Locate in conversation" }));
+
+    await waitFor(() => {
+      const location = screen.getByLabelText("location");
+      expect(location).toHaveTextContent("focus=tool-call-1");
+      expect(location).not.toHaveTextContent("view=runs");
+      expect(location).not.toHaveTextContent("execution=");
+    });
   });
 
   it("surfaces failure evidence without requiring the output tab", async () => {

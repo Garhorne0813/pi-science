@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle, ArrowLeft, ArrowUpRight, Ban, Check, Circle, CircleDashed, Clock3,
-  Copy, FileOutput, FileSearch, Loader2, MessageSquare, Play, RotateCcw, Search, X,
+  Copy, Crosshair, FileOutput, FileSearch, Loader2, MessageSquare, Play, RotateCcw, Search, X,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { ExecutionRecord } from "../../types/thread";
@@ -131,6 +131,16 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
     navigate(run.correlation.session_id ? `${root}/session/${encodeURIComponent(run.correlation.session_id)}` : root);
   };
 
+  const locateExecution = (run: ExecutionRecord) => {
+    const toolCallId = run.correlation.tool_call_id;
+    if (!toolCallId) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete("view");
+    next.delete("execution");
+    next.set("focus", `tool-${toolCallId}`);
+    setSearchParams(next);
+  };
+
   const reproduce = (run: ExecutionRecord) => {
     setComposerDraft(reproduceRunPrompt(run));
     openSession(run);
@@ -197,7 +207,8 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
                 onCopy={(text, message) => void copyText(text, message)}
                 onOpenFile={openFile}
                 onOpenArtifact={(artifact) => void openArtifact(artifact)}
-                onOpenSession={() => openSession(selected)}
+                onOpenSession={!sessionId && selected.correlation.session_id ? () => openSession(selected) : undefined}
+                onLocate={sessionId && selected.correlation.tool_call_id ? () => locateExecution(selected) : undefined}
                 onReproduce={() => reproduce(selected)}
                 log={logs[selected.execution_id]}
                 loadingLog={Boolean(loadingLogs[selected.execution_id])}
@@ -228,7 +239,7 @@ function ExecutionRow({ run, index, selected, onClick }: { run: ExecutionRecord;
   );
 }
 
-function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpenFile, onOpenArtifact, onOpenSession, onReproduce, log, loadingLog }: {
+function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpenFile, onOpenArtifact, onOpenSession, onLocate, onReproduce, log, loadingLog }: {
   run: ExecutionRecord;
   tab: DetailTab;
   onTabChange: (tab: DetailTab) => void;
@@ -236,7 +247,8 @@ function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpenFile, o
   onCopy: (text: string, message: string) => void;
   onOpenFile: (path: string) => void;
   onOpenArtifact: (artifact: ExecutionRecord["artifacts"][number]) => void;
-  onOpenSession: () => void;
+  onOpenSession?: () => void;
+  onLocate?: () => void;
   onReproduce: () => void;
   log?: DisplayLog;
   loadingLog: boolean;
@@ -265,7 +277,8 @@ function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpenFile, o
         <div className="mt-3 break-all font-mono text-[10px] text-muted">{run.execution_id}</div>
         <div className="mt-3 flex flex-wrap gap-1.5">
           <DetailAction icon={<RotateCcw size={12} />} label={t("runs.reproduce")} onClick={onReproduce} primary />
-          {run.correlation.session_id && <DetailAction icon={<MessageSquare size={12} />} label={t("runs.openSession")} onClick={onOpenSession} />}
+          {onLocate && <DetailAction icon={<Crosshair size={12} />} label={t("runs.locateExecution")} onClick={onLocate} />}
+          {onOpenSession && <DetailAction icon={<MessageSquare size={12} />} label={t("runs.openSession")} onClick={onOpenSession} />}
           <DetailAction icon={<Copy size={12} />} label={t("runs.copyId")} onClick={() => onCopy(run.execution_id, t("runs.idCopied"))} />
           {executionCommandText(run) && <DetailAction icon={<Copy size={12} />} label={t("runs.copyCommand")} onClick={() => onCopy(executionCommandText(run), t("runs.commandCopied"))} />}
         </div>
