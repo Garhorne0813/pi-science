@@ -44,7 +44,7 @@ export function ModelEndpointSection() {
         <div className="grid gap-2 sm:grid-cols-[1fr_1.5fr_auto]">
           <input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("settings.endpoints.name")} className="min-h-10 rounded-input border border-border bg-bg px-3 py-2 text-xs text-text outline-none focus:border-accent" />
           <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://host/v1" className="min-h-10 rounded-input border border-border bg-bg px-3 py-2 font-mono text-xs text-text outline-none focus:border-accent" />
-          <button type="button" onClick={() => void add()} className="min-h-10 rounded-input bg-accent px-3 py-2 text-xs font-medium text-accent-fg disabled:opacity-40" disabled={!name.trim() || !baseUrl.trim()}>
+          <button type="button" onClick={() => void add()} className="min-h-10 rounded-input bg-accent-fill px-3 py-2 text-xs font-medium text-accent-fg disabled:opacity-40" disabled={!name.trim() || !baseUrl.trim()}>
             {t("settings.endpoints.register")}
           </button>
         </div>

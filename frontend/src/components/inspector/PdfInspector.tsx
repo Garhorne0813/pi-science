@@ -51,7 +51,7 @@ export function PdfInspector({
         </button>
       </header>
 
-      {data.path && <div className="flex gap-2 border-b border-border bg-surface px-4 py-2"><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") search(); }} placeholder="Search pages" className="min-w-0 flex-1 rounded-input border border-border bg-surface-2 px-2 py-1 text-xs text-text outline-none" /><button type="button" onClick={() => search()} disabled={searching || !query.trim()} className="rounded-input bg-accent px-2 py-1 text-xs text-accent-fg disabled:opacity-40"><Search size={13} /></button></div>}
+      {data.path && <div className="flex gap-2 border-b border-border bg-surface px-4 py-2"><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") search(); }} placeholder="Search pages" className="min-w-0 flex-1 rounded-input border border-border bg-surface-2 px-2 py-1 text-xs text-text outline-none" /><button type="button" onClick={() => search()} disabled={searching || !query.trim()} className="rounded-input bg-accent-fill px-2 py-1 text-xs text-accent-fg disabled:opacity-40"><Search size={13} /></button></div>}
       {results.length > 0 && <div className="max-h-36 overflow-y-auto border-b border-border bg-surface-2 px-4 py-2">{results.map((result) => <button type="button" key={`${result.page}-${result.snippet}`} onClick={() => setPage(result.page)} className="block w-full truncate py-1 text-left text-[11px] text-muted hover:text-text"><span className="mr-2 font-mono text-accent">p.{result.page}</span>{result.snippet}</button>)}</div>}
 
       {url ? (

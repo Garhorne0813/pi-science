@@ -106,7 +106,7 @@ export function ArtifactInspector({
         {tab === "code" && (
           <div className="space-y-3">
             <button
-              className="flex items-center gap-2 rounded-input bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg hover:opacity-90"
+              className="flex items-center gap-2 rounded-input bg-accent-fill px-3 py-1.5 text-sm font-medium text-accent-fg hover:opacity-90"
               onClick={() => void saveTextWithFeedback(scriptName, content.code)}
             >
               <Download size={15} /> {"Download script"}

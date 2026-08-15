@@ -9,7 +9,7 @@ const modes: ResearchStarter[] = ["research_loop", "optimize", "compare", "evalu
 
 export function ResearchModePicker({ selected, disabled, onSelect, className }: { selected: ResearchStarter | null; disabled?: boolean; onSelect: (mode: ResearchStarter, prompt: string) => void; className?: string }) {
   const { t } = useTranslation();
-  return <div className={cn("flex flex-wrap gap-2 px-1 pb-1", className)} aria-label={t("research.conversationMode")}>{modes.map((mode) => <button key={mode} type="button" disabled={disabled} aria-pressed={selected === mode} onClick={() => onSelect(mode, t(`research.mode.${mode}.prompt`))} className={cn("flex h-7 min-h-0 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors disabled:opacity-50", selected === mode ? "border-accent bg-accent text-accent-fg" : "border-border bg-surface text-muted hover:text-text")}><FlaskConical size={13} /> {t(`research.mode.${mode}.label`)}</button>)}</div>;
+  return <div className={cn("flex flex-wrap gap-2 px-1 pb-1", className)} aria-label={t("research.conversationMode")}>{modes.map((mode) => <button key={mode} type="button" disabled={disabled} aria-pressed={selected === mode} onClick={() => onSelect(mode, t(`research.mode.${mode}.prompt`))} className={cn("flex h-7 min-h-0 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors disabled:opacity-50", selected === mode ? "border-accent bg-accent-fill text-accent-fg" : "border-border bg-surface text-muted hover:text-text")}><FlaskConical size={13} /> {t(`research.mode.${mode}.label`)}</button>)}</div>;
 }
 
 export interface ResearchLoopDraft { taskType: Extract<ResearchTaskType, "research_loop" | "optimize">; title: string; objective: string; successCriterion: string; planSteps: string[]; metric: string; direction: "maximize" | "minimize"; maxCandidates: number; maxWallSeconds: number }
@@ -30,7 +30,7 @@ export function ResearchLoopDraftCard({ draft, busy, onCancel, onConfirm }: { dr
       <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">{t("research.autoPlan")}</div>
       <ol className="mt-2 space-y-2">{draft.planSteps.map((step, index) => <li key={`${index}-${step}`} className="flex gap-2 text-xs leading-5 text-muted"><span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/10 font-mono text-[10px] text-accent">{index + 1}</span><span>{step}</span></li>)}</ol>
     </div>
-    <div className="mt-4 flex justify-end gap-2"><button type="button" onClick={onCancel} disabled={busy} className="min-h-9 rounded-input border border-border px-3 text-xs text-muted">{t("common.cancel")}</button><button type="button" onClick={onConfirm} disabled={busy} className="flex min-h-9 items-center gap-1.5 rounded-input bg-accent px-3 text-xs font-medium text-accent-fg disabled:opacity-50">{busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} {t("research.createStart")}</button></div>
+    <div className="mt-4 flex justify-end gap-2"><button type="button" onClick={onCancel} disabled={busy} className="min-h-9 rounded-input border border-border px-3 text-xs text-muted">{t("common.cancel")}</button><button type="button" onClick={onConfirm} disabled={busy} className="flex min-h-9 items-center gap-1.5 rounded-input bg-accent-fill px-3 text-xs font-medium text-accent-fg disabled:opacity-50">{busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} {t("research.createStart")}</button></div>
   </section>;
 }
 

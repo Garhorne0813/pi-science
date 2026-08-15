@@ -61,13 +61,11 @@ Covered:
   artifact strip, no horizontal overflow at 375px.
 - Inspector: file preview opened from the sidebar, with the composer present.
 - axe (critical/serious only) on projects, landing, conversation and the
-  settings dialog. Two rules are currently exempted as documented
-  pre-existing debt and must be removed by the owning milestones:
-  `color-contrast` (foundation palette below WCAG AA for accent/muted text;
-  design-token milestone) and `scrollable-region-focusable` (markdown code
-  block <pre> overflow scroll container without keyboard access at narrow
-  viewports; Markdown/code-block milestone). Any other critical/serious
-  violation fails the run.
+  settings dialog. No rule ids are exempted: the palette ships WCAG AA
+  accent (light #3964fe, dark accent-fill #3a6de0 for white-on-fill text,
+  dark text accent #679efe) and muted text, and the markdown code block
+  scroller is keyboard-focusable. Any critical/serious violation fails the
+  run.
 
 Intentionally not covered yet (streaming/tool-state visuals belong to the
 conversation UI milestone; the SSE fixture is ready to push scripted

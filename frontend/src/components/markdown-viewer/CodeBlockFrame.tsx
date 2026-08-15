@@ -53,7 +53,13 @@ export function CodeBlockFrame({
           </button>
         </div>
       </div>
-      <pre className={cn("overflow-x-auto rounded-b-card p-3 font-mono [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-text", preClassName)}>
+      {/* tabIndex makes the horizontal scroller keyboard-reachable (axe
+          scrollable-region-focusable); the focus ring is visible for
+          keyboard users. */}
+      <pre
+        tabIndex={0}
+        className={cn("overflow-x-auto rounded-b-card p-3 font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/60 [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-text", preClassName)}
+      >
         {children}
       </pre>
     </div>

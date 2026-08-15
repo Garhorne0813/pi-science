@@ -19,6 +19,7 @@ export default {
         text: "rgb(var(--text-rgb) / <alpha-value>)",
         muted: "rgb(var(--muted-rgb) / <alpha-value>)",
         accent: "rgb(var(--accent-rgb) / <alpha-value>)",
+        "accent-fill": "rgb(var(--accent-fill-rgb) / <alpha-value>)",
         "accent-fg": "rgb(var(--accent-fg-rgb) / <alpha-value>)",
         "accent-soft": "rgb(var(--accent-soft-rgb) / <alpha-value>)",
         "accent-border": "rgb(var(--accent-border-rgb) / <alpha-value>)",

@@ -240,7 +240,7 @@ export function FilePreviewInspector({
         {editing ? (
           <>
             <button
-              className="flex items-center gap-1 rounded-input bg-accent px-2.5 py-1 text-xs text-accent-fg hover:opacity-90 disabled:opacity-50"
+              className="flex items-center gap-1 rounded-input bg-accent-fill px-2.5 py-1 text-xs text-accent-fg hover:opacity-90 disabled:opacity-50"
               aria-label={t("filePreview.save")}
               onClick={() => void saveEdit()}
               disabled={!canSave}

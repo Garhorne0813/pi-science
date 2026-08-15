@@ -28,7 +28,7 @@ export function KnowledgePageHeader({
         <button type="button" onClick={onToggleAutoReview} aria-pressed={policy?.auto_review ?? false} className={cn("min-h-11 rounded-input border px-3 py-2 text-sm font-medium transition-colors", policy?.auto_review ? "border-ok/40 bg-ok/10 text-ok" : "border-border bg-surface text-muted hover:text-text")}>
           {policy?.auto_review ? t("knowledge.autoReviewOn") : t("knowledge.autoReviewOff")}
         </button>
-        <button type="button" onClick={onReview} disabled={reviewing} className="flex min-h-11 items-center gap-1.5 rounded-input bg-accent px-3 py-2 text-sm font-medium text-accent-fg transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60">
+        <button type="button" onClick={onReview} disabled={reviewing} className="flex min-h-11 items-center gap-1.5 rounded-input bg-accent-fill px-3 py-2 text-sm font-medium text-accent-fg transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60">
           {reviewing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
           {reviewing ? t("knowledge.reviewing") : t("knowledge.reviewNow")}
         </button>
@@ -64,7 +64,7 @@ function TabButton({ active, onClick, icon, label, badge }: { active: boolean; o
   return (
     <button type="button" role="tab" aria-selected={active} onClick={onClick} className={cn("relative flex min-h-11 shrink-0 items-center gap-2 px-3 text-sm font-medium transition-colors", active ? "text-text" : "text-muted hover:text-text", active && "after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-accent")}>
       {icon}{label}
-      {!!badge && <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] leading-none text-accent-fg">{badge}</span>}
+      {!!badge && <span className="rounded-full bg-accent-fill px-1.5 py-0.5 text-[10px] leading-none text-accent-fg">{badge}</span>}
     </button>
   );
 }

@@ -29,7 +29,7 @@ export function InteractionPrompt({
 
       {interaction.method === "confirm" ? (
         <div className="mt-3 flex gap-2">
-          <button onClick={() => onRespond({ confirmed: true })} className="rounded-input bg-accent px-3 py-1.5 text-xs text-accent-fg">{t("common.confirm")}</button>
+          <button onClick={() => onRespond({ confirmed: true })} className="rounded-input bg-accent-fill px-3 py-1.5 text-xs text-accent-fg">{t("common.confirm")}</button>
           <button onClick={() => onRespond({ confirmed: false })} className="rounded-input border border-border px-3 py-1.5 text-xs text-text hover:bg-surface-2">{t("interaction.decline")}</button>
         </div>
       ) : interaction.method === "select" ? (
@@ -57,7 +57,7 @@ export function InteractionPrompt({
           <button
             onClick={() => onRespond({ value })}
             disabled={!value.trim()}
-            className="rounded-input bg-accent px-3 py-2 text-xs text-accent-fg disabled:cursor-default disabled:opacity-50"
+            className="rounded-input bg-accent-fill px-3 py-2 text-xs text-accent-fg disabled:cursor-default disabled:opacity-50"
           >
             {t("common.submit")}
           </button>

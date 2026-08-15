@@ -100,7 +100,7 @@ export function ProjectsLayout() {
 
   return (
     <div className="flex h-dvh w-screen overflow-hidden bg-bg text-text">
-      <a href="#main-content" className="fixed left-3 top-3 z-[200] -translate-y-20 rounded-input bg-accent px-3 py-2 text-sm text-accent-fg transition-transform focus:translate-y-0">
+      <a href="#main-content" className="fixed left-3 top-3 z-[200] -translate-y-20 rounded-input bg-accent-fill px-3 py-2 text-sm text-accent-fg transition-transform focus:translate-y-0">
         {t("common.skipToContent", { defaultValue: "Skip to content" })}
       </a>
       {/* Sidebar */}
@@ -396,7 +396,7 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
                 <Icon icon={MessageSquare} size="sm" className="shrink-0 text-muted" />
                 <span className="truncate flex-1">{s.name === "New Session" ? t("conversation.newSession") : s.name || s.id.slice(0, 8)}</span>
                 {(s.updated_at || s.created_at) && (
-                  <span className="mr-1 shrink-0 text-ui-micro text-muted/60 group-hover:hidden group-focus-within:hidden">
+                  <span className="mr-1 shrink-0 text-ui-micro text-muted group-hover:hidden group-focus-within:hidden">
                     {relativeTime(s.updated_at || s.created_at!)}
                   </span>
                 )}
@@ -475,7 +475,7 @@ function SidebarNavItem({ to, label, icon, active, badge }: { to: string; label:
     >
       {icon && <Icon icon={icon} size="md" className="shrink-0 text-muted" />}
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {!!badge && <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] leading-none text-accent-fg">{badge}</span>}
+      {!!badge && <span className="rounded-full bg-accent-fill px-1.5 py-0.5 text-[10px] leading-none text-accent-fg">{badge}</span>}
     </button>
   );
 }

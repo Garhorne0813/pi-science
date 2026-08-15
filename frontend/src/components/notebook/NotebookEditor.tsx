@@ -228,7 +228,7 @@ function NotebookCellView({
           onClick={onRun}
           disabled={!runnable || cell.running || !cell.code.trim()}
           aria-label={t("notebook.runCell", { index: index + 1 })}
-          className="flex min-h-9 items-center gap-1.5 rounded-input bg-accent px-3 text-xs font-medium text-accent-fg hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex min-h-9 items-center gap-1.5 rounded-input bg-accent-fill px-3 text-xs font-medium text-accent-fg hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {cell.running ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
           {cell.running ? t("common.running") : t("common.run")}

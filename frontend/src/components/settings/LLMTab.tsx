@@ -188,7 +188,7 @@ export function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKe
                             {showKey[p.id] ? <EyeOff size={13} /> : <Eye size={13} />}
                           </button>
                         </div>
-                        <button onClick={() => saveKey(p.id)} disabled={!apiKeyInput[p.id]?.trim() || saving === p.id} className="flex min-h-10 items-center justify-center gap-1 rounded-input bg-accent px-3 text-xs font-medium text-accent-fg disabled:opacity-40">
+                        <button onClick={() => saveKey(p.id)} disabled={!apiKeyInput[p.id]?.trim() || saving === p.id} className="flex min-h-10 items-center justify-center gap-1 rounded-input bg-accent-fill px-3 text-xs font-medium text-accent-fg disabled:opacity-40">
                           {saving === p.id ? <Loader2 size={12} className="animate-spin" /> : <Key size={12} />} {t("settings.actions.save")}
                         </button>
                       </div>

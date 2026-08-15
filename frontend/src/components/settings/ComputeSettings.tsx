@@ -282,7 +282,7 @@ export function ComputeSettings({ workspaceCwd }: ComputeSettingsProps) {
             {draftProbe === true ? <Loader2 size={14} className="animate-spin" /> : <Cpu size={14} />}
             {draftProbe === true ? t("settings.computePage.testing") : t("settings.computePage.testConnection")}
           </button>
-          <button type="button" onClick={() => void handleAdd()} disabled={!form.host.trim() || adding} className="min-h-10 rounded-input bg-accent px-3 text-xs font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-40">
+          <button type="button" onClick={() => void handleAdd()} disabled={!form.host.trim() || adding} className="min-h-10 rounded-input bg-accent-fill px-3 text-xs font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-40">
             {adding ? t("settings.computePage.adding") : t("settings.computePage.add")}
           </button>
         </div>

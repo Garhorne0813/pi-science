@@ -93,7 +93,7 @@ export function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, on
             <p className="text-sm font-medium text-text">{t("settings.custom.title")}</p>
             <p className="text-[11px] text-muted">{t("settings.custom.description")}</p>
           </div>
-          <button type="button" onClick={onOpen} className="min-h-9 rounded-input bg-accent px-3 text-[11px] font-medium text-accent-fg">
+          <button type="button" onClick={onOpen} className="min-h-9 rounded-input bg-accent-fill px-3 text-[11px] font-medium text-accent-fg">
             + {t("settings.custom.add")}
           </button>
         </div>
@@ -131,7 +131,7 @@ export function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, on
           </div>
           <div className="flex gap-2">
             <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={t("settings.web.apiKey")} className="min-w-0 flex-1 rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] font-mono text-text outline-none" />
-            <button onClick={discover} disabled={!baseUrl.trim() || busy !== null} className="rounded-input bg-accent px-3 py-2 text-[12px] font-medium text-accent-fg disabled:opacity-40">
+            <button onClick={discover} disabled={!baseUrl.trim() || busy !== null} className="rounded-input bg-accent-fill px-3 py-2 text-[12px] font-medium text-accent-fg disabled:opacity-40">
               {busy === "discover" ? t("settings.custom.discovering") : t("settings.custom.discover")}
             </button>
           </div>
@@ -139,7 +139,7 @@ export function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, on
             <div className="rounded-input border border-accent/30 bg-accent/5 px-3 py-3">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-medium text-text">{discovered.name}</span>
-                <button onClick={save} disabled={busy !== null} className="rounded-input bg-accent px-2.5 py-1 text-[11px] font-medium text-accent-fg disabled:opacity-40">
+                <button onClick={save} disabled={busy !== null} className="rounded-input bg-accent-fill px-2.5 py-1 text-[11px] font-medium text-accent-fg disabled:opacity-40">
                   {busy === "save" ? t("settings.custom.saving") : t("settings.custom.save")}
                 </button>
               </div>

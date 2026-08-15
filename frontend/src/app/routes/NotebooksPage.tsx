@@ -161,7 +161,7 @@ export function NotebooksPage() {
             </p>
           </div>
           {!environment?.ready && (
-            <button type="button" onClick={() => void provisionWorkspaceEnvironment()} disabled={provisioningEnvironment} className="ml-3 flex shrink-0 items-center gap-1 rounded-input bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40">
+            <button type="button" onClick={() => void provisionWorkspaceEnvironment()} disabled={provisioningEnvironment} className="ml-3 flex shrink-0 items-center gap-1 rounded-input bg-accent-fill px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40">
               {provisioningEnvironment && <RefreshCw size={12} className="animate-spin" />}
               {t("notebooks.initialize")}
             </button>
@@ -194,12 +194,12 @@ export function NotebooksPage() {
                 </>
               ) : jupyter.env_ready ? (
                 <button onClick={startJupyter} disabled={starting}
-                  className="rounded-input bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40 flex items-center gap-1">
+                  className="rounded-input bg-accent-fill px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40 flex items-center gap-1">
                   {starting ? <RefreshCw size={12} className="animate-spin" /> : <Play size={12} />} {t("common.start")}
                 </button>
               ) : (
                 <button onClick={setupJupyterEnv} disabled={settingUp}
-                  className="rounded-input bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40 flex items-center gap-1">
+                  className="rounded-input bg-accent-fill px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40 flex items-center gap-1">
                   {settingUp ? <RefreshCw size={12} className="animate-spin" /> : "⚡"} {t("notebooks.setupJupyter")}
                 </button>
               )}

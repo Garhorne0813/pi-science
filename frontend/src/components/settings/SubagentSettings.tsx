@@ -248,7 +248,7 @@ export function SubagentSettings({ workspaceCwd }: { workspaceCwd: string | null
                 <button type="button" onClick={() => setDraft(null)} className="min-h-10 rounded-input px-3 text-[12px] text-muted hover:bg-surface-2">
                   {t("common.cancel")}
                 </button>
-                <button type="button" onClick={() => void save()} disabled={busy || !draft.name.trim() || !draft.prompt.trim()} className="flex min-h-10 items-center gap-1 rounded-input bg-accent px-3 text-[12px] font-medium text-accent-fg disabled:opacity-40">
+                <button type="button" onClick={() => void save()} disabled={busy || !draft.name.trim() || !draft.prompt.trim()} className="flex min-h-10 items-center gap-1 rounded-input bg-accent-fill px-3 text-[12px] font-medium text-accent-fg disabled:opacity-40">
                   {busy ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} {t("settings.subagents.save")}
                 </button>
               </div>

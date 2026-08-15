@@ -105,16 +105,23 @@
   --text-rgb: 15 17 21;
   --muted: #61666b;
   --muted-rgb: 97 102 107;
-  --accent: #4176e6;
-  --accent-rgb: 65 118 230;
+  /* Accent roles: --accent stays the interactive/text/tint blue; --accent-fill
+     is the solid fill that must carry white text (WCAG AA ≥ 4.5:1). Both are
+     the DeepSeek reference blue in light mode; dark mode splits them because
+     the reference dark blue #679efe only passes AA as text on dark surfaces
+     (white on it is 2.65:1). */
+  --accent: #3964fe;
+  --accent-rgb: 57 100 254;
+  --accent-fill: #3964fe;
+  --accent-fill-rgb: 57 100 254;
   --accent-fg: #ffffff;
   --accent-fg-rgb: 255 255 255;
   --accent-soft: #e4edfd;
   --accent-soft-rgb: 228 237 253;
   --accent-border: #b7c8fe;
   --accent-border-rgb: 183 200 254;
-  --link: #4176e6;
-  --link-rgb: 65 118 230;
+  --link: #3964fe;
+  --link-rgb: 57 100 254;
   --warn: #f59e0b;
   --warn-rgb: 245 158 11;
   --ok: #22c55e;
@@ -200,6 +207,8 @@
   --muted-rgb: 207 211 214;
   --accent: #679efe;
   --accent-rgb: 103 158 254;
+  --accent-fill: #3a6de0;
+  --accent-fill-rgb: 58 109 224;
   --accent-fg: #ffffff;
   --accent-fg-rgb: 255 255 255;
   --accent-soft: #34415b;

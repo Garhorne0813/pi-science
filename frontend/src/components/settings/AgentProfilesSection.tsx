@@ -44,7 +44,7 @@ export function AgentProfilesSection() {
       <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
         <input value={name} onChange={(event) => setName(event.target.value)} placeholder="PROFILE_NAME" className="rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] font-mono text-text outline-none" />
         <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder={t("settings.profiles.displayName")} className="rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] text-text outline-none" />
-        <button type="button" onClick={() => void create()} className="rounded-input bg-accent px-3 py-2 text-[12px] font-medium text-accent-fg disabled:opacity-40" disabled={!name.trim() || !displayName.trim()}>
+        <button type="button" onClick={() => void create()} className="rounded-input bg-accent-fill px-3 py-2 text-[12px] font-medium text-accent-fg disabled:opacity-40" disabled={!name.trim() || !displayName.trim()}>
           {t("settings.profiles.create")}
         </button>
       </div>

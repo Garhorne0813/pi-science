@@ -176,7 +176,7 @@ export function ProposalCard({
           <button type="button" disabled={busy !== null} onClick={() => void decide("reject")} className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-input border border-border px-4 py-2 text-sm text-muted hover:border-error/40 hover:text-error disabled:opacity-50 sm:flex-none">
             {busy === "reject" ? <Loader2 size={14} className="animate-spin" /> : <X size={14} />} {t("knowledge.reject")}
           </button>
-          <button type="button" disabled={busy !== null} onClick={() => void decide("accept")} className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-input bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:opacity-90 disabled:opacity-50 sm:flex-none">
+          <button type="button" disabled={busy !== null} onClick={() => void decide("accept")} className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-input bg-accent-fill px-4 py-2 text-sm font-medium text-accent-fg hover:opacity-90 disabled:opacity-50 sm:flex-none">
             {busy === "accept" ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} {t("knowledge.accept")}
           </button>
         </div>
