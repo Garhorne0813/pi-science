@@ -65,9 +65,10 @@ describe("i18n resource coverage", () => {
     expect(source).toContain('./locales/zh-Hans.json');
   });
 
-  it("translates every literal UI key in English and Simplified Chinese", () => {
+  it("translates every literal UI key in English and Simplified Chinese", async () => {
     const missing: string[] = [];
     for (const language of ["en", "zh-Hans"]) {
+      await i18n.changeLanguage(language);
       for (const key of literalTranslationKeys()) {
         const translated = i18n.t(key, {
           lng: language,
