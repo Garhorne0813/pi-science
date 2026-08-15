@@ -14,6 +14,10 @@ vi.mock("../../components/conversation/ModelControlMenu", () => ({
   ModelControlMenu: () => <div data-testid="model-control" />,
 }));
 
+vi.mock("../../components/conversation/SessionExecutionButton", () => ({
+  SessionExecutionButton: () => <button type="button" aria-label="Session executions" />,
+}));
+
 import { LiveSessionPage } from "./LiveSessionPage";
 import { WorkspaceProvider } from "../../lib/workspace";
 import { FeedbackContext } from "../../components/feedback/feedback-context";

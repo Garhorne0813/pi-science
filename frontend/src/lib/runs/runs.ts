@@ -4,6 +4,9 @@ import { queryClient } from "../client/query-client";
 
 export const runsKey = (...selector: string[]) => ["runs", ...selector];
 
+const refreshInterval = (query: { state: { data?: ExecutionRecord[] } }) =>
+  query.state.data?.some((run) => run.status === "pending" || run.status === "running") ? 5_000 : 30_000;
+
 // Runs are appended while the agent works, so this was never cached and stays uncached.
 export const runsQuery = (cwd: string) => ({
   queryKey: runsKey(cwd),
@@ -12,8 +15,20 @@ export const runsQuery = (cwd: string) => ({
     return data.executions ?? [];
   },
   staleTime: 0,
-  refetchInterval: (query: { state: { data?: ExecutionRecord[] } }) =>
-    query.state.data?.some((run) => run.status === "pending" || run.status === "running") ? 5_000 : 30_000,
+  refetchInterval: refreshInterval,
+  refetchIntervalInBackground: false,
+  refetchOnWindowFocus: true,
+});
+
+export const sessionRunsQuery = (cwd: string, sessionId: string) => ({
+  queryKey: runsKey(cwd, "session", sessionId),
+  queryFn: async () => {
+    const params = new URLSearchParams({ cwd, session_id: sessionId });
+    const data = await apiRequest<{ executions?: ExecutionRecord[] }>(`/api/executions?${params}`);
+    return data.executions ?? [];
+  },
+  staleTime: 0,
+  refetchInterval: refreshInterval,
   refetchIntervalInBackground: false,
   refetchOnWindowFocus: true,
 });

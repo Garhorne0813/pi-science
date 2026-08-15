@@ -21,6 +21,7 @@ import { MentionComposer } from "../../components/conversation/MentionComposer";
 import { QuestionnairePrompt } from "../../components/conversation/QuestionnairePrompt";
 import { groupBlocks, renderBlockGroup } from "../../components/conversation/ConversationBlocks";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
+import { SessionExecutionButton } from "../../components/conversation/SessionExecutionButton";
 import { visibleUserMessage } from "../../lib/files";
 import { useTranslation } from "react-i18next";
 import { ResearchLoopDraftCard, ResearchLoopStatusCard, ResearchModePicker } from "../../components/conversation/ResearchLoopControls";
@@ -454,6 +455,7 @@ export function LiveSessionPage() {
           )} title={status} />
           <h1 className="min-w-0 truncate text-[13px] font-medium text-text">{title}</h1>
         </div>
+        <SessionExecutionButton cwd={workspaceCwd} sessionId={sessionId ?? activeSessionId ?? undefined} />
       </header>
 
       {/* Welcome layout: this top region and the spacer below the composer both

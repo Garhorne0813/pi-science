@@ -72,6 +72,8 @@ export function inspectorTabId(data: Inspector): string {
       return JSON.stringify([data.variant, data.notebookId]);
     case "notebook-panel":
       return data.variant;
+    case "executions":
+      return JSON.stringify([data.variant, data.cwd, data.sessionId]);
   }
 }
 

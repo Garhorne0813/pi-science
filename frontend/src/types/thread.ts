@@ -181,7 +181,14 @@ export type Inspector =
   | PdfInspector
   | FilePreviewInspector
   | NotebookFileInspector
-  | NotebookPanelInspector;
+  | NotebookPanelInspector
+  | ExecutionsInspector;
+
+export interface ExecutionsInspector {
+  variant: "executions";
+  cwd: string;
+  sessionId: string;
+}
 
 export interface NotebookPanelInspector {
   variant: "notebook-panel";
