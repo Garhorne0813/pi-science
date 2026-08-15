@@ -209,6 +209,7 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
       <div className="overflow-hidden text-[10px] leading-snug text-muted">
         <MarkdownViewer
           variant="chat"
+          codeChrome={false}
           resourceContext={cwd ? { cwd, documentPath: item.path } : undefined}
           className="text-[10px] leading-snug [&_p]:my-1 [&_h1]:mb-1 [&_h1]:mt-0 [&_h2]:mb-1 [&_h2]:mt-0 [&_h3]:mb-1 [&_h3]:mt-0 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_pre]:my-1 [&_table]:my-1 [&_code]:text-[9px]"
         >

@@ -117,4 +117,22 @@ describe("MentionComposer", () => {
       delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
     }
   });
+
+  it("wires the textarea to the listbox as a combobox (aria-controls/activedescendant)", async () => {
+    render(<Harness />);
+    await typeAt("@");
+    const listbox = await screen.findByRole("listbox", { name: "Subagents" });
+
+    expect(input()).toHaveAttribute("role", "combobox");
+    expect(input()).toHaveAttribute("aria-label", "Message");
+    expect(input()).toHaveAttribute("aria-expanded", "true");
+    expect(input().getAttribute("aria-controls")).toBe(listbox.id);
+    // Active descendant points at the first option (activeIndex resets to 0).
+    const activeId = input().getAttribute("aria-activedescendant");
+    expect(activeId).toBe(`${listbox.id}-option-0`);
+    expect(listbox.querySelector<HTMLElement>(`#${activeId}`)).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.keyDown(input(), { key: "ArrowDown" });
+    expect(input().getAttribute("aria-activedescendant")).toBe(`${listbox.id}-option-1`);
+  });
 });

@@ -48,7 +48,7 @@ export function ComposerTodo() {
   const activeLabel = vm.activeTask.activeForm || vm.activeTask.subject;
 
   return (
-    <div className="relative z-40 mx-auto flex max-w-[760px] justify-center pb-2">
+    <div className="relative z-40 mx-auto flex max-w-[var(--conversation-composer-width)] justify-center pb-2">
       <div
         className="relative"
         onMouseEnter={() => setPreviewOpen(true)}

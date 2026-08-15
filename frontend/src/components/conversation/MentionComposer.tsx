@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from "react";
 import type { SubagentMention } from "../../lib/conversation";
 import { queryClient } from "../../lib/client/query-client";
@@ -78,6 +78,7 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const mirrorRef = useRef<HTMLDivElement>(null);
   const selectionDirectionRef = useRef<"forward" | "backward" | "none">("none");
+  const listboxId = useId();
 
   useEffect(() => {
     let cancelled = false;
@@ -228,13 +229,14 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
   return (
     <>
       {choices.length > 0 && (
-        <div ref={menuRef} role="listbox" aria-label="Subagents" className="ui-popover absolute bottom-full left-0 right-0 z-50 mb-1 max-h-56 overflow-y-auto rounded-card p-1">
+        <div ref={menuRef} id={listboxId} role="listbox" aria-label="Subagents" className="ui-popover absolute bottom-full left-0 right-0 z-50 mb-1 max-h-56 overflow-y-auto rounded-card p-1">
           {choices.map((agent, index) => (
             <button
               key={`${agent.source ?? "agent"}-${agent.name}`}
               ref={(element) => { optionRefs.current[index] = element; }}
               type="button"
               role="option"
+              id={`${listboxId}-option-${index}`}
               aria-selected={index === activeIndex}
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => selectAgent(agent)}
@@ -259,6 +261,12 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
         <textarea
           ref={inputRef}
           value={value}
+          role="combobox"
+          aria-label="Message"
+          aria-expanded={choices.length > 0}
+          aria-controls={choices.length > 0 ? listboxId : undefined}
+          aria-activedescendant={choices.length > 0 ? `${listboxId}-option-${activeIndex}` : undefined}
+          aria-autocomplete="list"
           onChange={(event) => handleChange(event.target.value)}
           onSelect={(event) => handleSelect(event.currentTarget)}
           onKeyDown={handleKey}

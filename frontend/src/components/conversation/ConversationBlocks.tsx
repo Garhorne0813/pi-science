@@ -109,9 +109,9 @@ function UserMessage({ id, text, timestamp }: { id: string; text: string; timest
   const references = referencesFromMessage(text);
   const copyText = visibleText || references.map((reference) => reference.path).join("\n");
   return (
-    <div id={`user-msg-${id}`} className="group/message ml-auto flex max-w-[85%] scroll-mt-4 flex-col items-end gap-1">
+    <div id={`user-msg-${id}`} className="group/message ml-auto flex max-w-[min(var(--user-message-width),82%)] scroll-mt-4 flex-col items-end gap-1">
       {visibleText && (
-        <div className="ui-user-message rounded-card px-3 py-2 text-sm leading-relaxed text-text whitespace-pre-wrap">
+        <div className="ui-user-message rounded-bubble px-4 py-2.5 text-sm leading-relaxed text-text whitespace-pre-wrap">
           {visibleText}
         </div>
       )}

@@ -56,7 +56,7 @@ export function ConversationFooter() {
   const respondToInteraction = useRuntimeStore((s) => s.respondToInteraction);
 
   return (
-    <div className="mx-auto flex w-full max-w-[824px] flex-col gap-4 px-8 pb-6 pt-2">
+    <div className="mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-6 pt-2">
       {pendingQuestionnaire && pendingInteraction?.questionnaire ? (
         <QuestionnairePrompt
           questionnaire={pendingQuestionnaire}
@@ -480,7 +480,7 @@ export function LiveSessionPage() {
   // one drops the suggestion into the composer (the user may tweak or append
   // to it) instead of sending it directly. Not shown on the blank welcome page.
   const suggestionChips = suggestions.length > 0 && !working && !research.draft && !research.activeLoop && !input.trim() ? (
-    <div className="mx-auto flex max-w-[760px] flex-wrap gap-2 px-1 pb-2" aria-label={t("conversation.suggestions")}>
+    <div className="mx-auto flex max-w-[var(--conversation-composer-width)] flex-wrap gap-2 px-1 pb-2" aria-label={t("conversation.suggestions")}>
       {suggestions.map((suggestion) => (
         <button
           key={suggestion}
@@ -548,7 +548,7 @@ export function LiveSessionPage() {
             thread.blocks.length > 0
               ? "h-full w-full"
               : cn(
-                "mx-auto flex w-full max-w-[824px] flex-col px-8",
+                "mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col px-8",
                 showWelcome ? "gap-3 pb-3 pt-6" : "gap-4 py-6",
               ),
           )}>
@@ -574,7 +574,7 @@ export function LiveSessionPage() {
                   context={{ renderInteractionPrompt, working, pendingInteraction }}
                   components={{
                     Header: () => (
-                      <div className="mx-auto flex w-full max-w-[824px] flex-col gap-4 px-8 pb-2 pt-6">
+                      <div className="mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-2 pt-6">
                         {historyLoading && (
                           <div className="flex items-center gap-2 text-xs text-muted" role="status">
                             <Loader2 size={13} className="animate-spin text-accent" />
@@ -589,7 +589,7 @@ export function LiveSessionPage() {
                     Footer: ConversationFooter,
                   }}
                   itemContent={(_index, group) => (
-                    <div className="mx-auto w-full max-w-[824px] px-8 pb-3">
+                    <div className="mx-auto w-full max-w-[calc(var(--conversation-content-width)+4rem)] px-8 pb-3">
                       {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock)}
                     </div>
                   )}
@@ -620,7 +620,7 @@ export function LiveSessionPage() {
         {/* Composer */}
         <div className={cn("px-8 shrink-0", showWelcome ? "py-0" : "pb-5 pt-2")}>
           {!showWelcome && (
-            <div className="relative mx-auto max-w-[760px]">
+            <div className="relative mx-auto max-w-[var(--conversation-composer-width)]">
               {suggestionChips}
               {modePicker}
               {showScrollDown && (
@@ -638,15 +638,24 @@ export function LiveSessionPage() {
           <Suspense fallback={null}>
             <ComposerTodo />
           </Suspense>
-          <div
-            className={cn(
-              "ui-card relative mx-auto max-w-[760px] rounded-card transition-colors",
-              composer.dragOver && "border-accent bg-accent/5",
-            )}
-            onDragOver={(e) => { e.preventDefault(); composer.setDragOver(true); }}
-            onDragLeave={() => composer.setDragOver(false)}
-            onDrop={composer.handleDrop}
-          >
+          <div className="relative mx-auto max-w-[var(--conversation-composer-width)]">
+            {/* Fixed 36px fade band above the composer card (reference:
+                ConversationRoot composer seat gradient). The card sits at the
+                bottom of the column, so the band softens the transcript edge
+                scrolling into it. */}
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-x-0 bottom-full h-[var(--composer-fade-height)] bg-gradient-to-t from-[var(--bg)] to-transparent"
+            />
+            <div
+              className={cn(
+                "ui-card relative mx-auto max-w-[var(--conversation-composer-width)] rounded-composer shadow-composer transition-colors",
+                composer.dragOver && "border-accent bg-accent/5",
+              )}
+              onDragOver={(e) => { e.preventDefault(); composer.setDragOver(true); }}
+              onDragLeave={() => composer.setDragOver(false)}
+              onDrop={composer.handleDrop}
+            >
             {workspaceReferences.length > 0 && (
               <div className="border-b border-faint px-3 py-2">
                 <div className="flex flex-wrap gap-1.5">
@@ -695,7 +704,7 @@ export function LiveSessionPage() {
                   onClick={() => composer.fileInputRef.current?.click()}
                   aria-label={t("conversation.attach")}
                   title={t("conversation.attach")}
-                  className="flex h-7 w-7 items-center justify-center rounded-full border border-border text-muted hover:text-text hover:bg-surface-2"
+                  className="flex h-7 w-7 items-center justify-center rounded-full bg-surface-2 text-muted transition-colors hover:bg-surface-hover hover:text-text"
                 >
                   <Plus size={15} />
                 </button>
@@ -744,7 +753,7 @@ export function LiveSessionPage() {
                   />
                 )}
                 {working ? (
-                  <button aria-label="Stop generation" onClick={() => void abort().catch(() => undefined)} className="h-7 w-7 rounded-input bg-accent text-accent-fg flex items-center justify-center hover:bg-error transition-colors">
+                  <button aria-label="Stop generation" onClick={() => void abort().catch(() => undefined)} className="flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full bg-accent text-accent-fg transition-colors hover:bg-error">
                     <Square size={14} fill="currentColor" />
                   </button>
                 ) : (
@@ -753,15 +762,16 @@ export function LiveSessionPage() {
                     onClick={composer.handleSend}
                     disabled={working || interactionPending || (!model.selectedModel && !research.mode) || reviewingProject || research.busy || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
                     className={cn(
-                      "h-7 w-7 rounded-input flex items-center justify-center",
+                      "flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full",
                       ((model.selectedModel || research.mode) && !interactionPending && !reviewingProject && !research.busy && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted cursor-default",
                     )}
                   >
-                    <ArrowUp size={15} />
+                    <ArrowUp size={16} />
                   </button>
                 )}
               </div>
             </div>
+          </div>
           </div>
         </div>
 

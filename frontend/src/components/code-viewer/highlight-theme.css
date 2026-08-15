@@ -1,0 +1,102 @@
+/* Syntax highlighting for CodeViewer — token colors ride the app theme
+   variables instead of a fixed light stylesheet, so the same component reads
+   correctly in light and dark mode. Kept intentionally small: only the token
+   classes highlight.js emits for the common languages. */
+:root,
+[data-theme="light"] {
+  --hl-keyword: #4176e6;
+  --hl-string: #0e8a5f;
+  --hl-number: #b4549a;
+  --hl-comment: #81858c;
+  --hl-title: #b35e14;
+  --hl-type: #7a3ee6;
+  --hl-meta: #81858c;
+  --hl-literal: #c2410c;
+  --hl-symbol: #0f766e;
+}
+
+[data-theme="dark"] {
+  --hl-keyword: #679efe;
+  --hl-string: #4ed17e;
+  --hl-number: #e87ba4;
+  --hl-comment: #81858c;
+  --hl-title: #f7ad31;
+  --hl-type: #a78bfa;
+  --hl-meta: #adb2b8;
+  --hl-literal: #f97316;
+  --hl-symbol: #2dd4bf;
+}
+
+.hljs {
+  color: var(--text);
+  background: transparent;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-selector-class,
+.hljs-selector-id,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-template-tag,
+.hljs-deletion {
+  color: var(--hl-keyword);
+}
+
+.hljs-string,
+.hljs-attribute,
+.hljs-template-variable,
+.hljs-addition {
+  color: var(--hl-string);
+}
+
+.hljs-number,
+.hljs-literal {
+  color: var(--hl-number);
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-section {
+  color: var(--hl-title);
+}
+
+.hljs-type,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: var(--hl-type);
+}
+
+.hljs-meta,
+.hljs-meta .hljs-keyword,
+.hljs-doctag {
+  color: var(--hl-meta);
+}
+
+.hljs-attr,
+.hljs-variable,
+.hljs-variable.constant_,
+.hljs-variable.language_,
+.hljs-params,
+.hljs-property,
+.hljs-operator,
+.hljs-punctuation {
+  color: var(--text);
+}
+
+.hljs-strong {
+  font-weight: 600;
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}

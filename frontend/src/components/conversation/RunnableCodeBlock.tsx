@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { Loader2, Play, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { cn } from "../../lib/ui";
 import { notebookRuntime, type CellResult } from "../../lib/notebook";
+import { CodeBlockFrame } from "../markdown-viewer/CodeBlockFrame";
 
-/** Chat code block with a Claude analysis-tool style "Run" affordance: executes
- *  python on the workspace kernel bridge and shows stdout/result/error inline. */
-export function RunnableCodeBlock({ code, cwd, sessionId, preClassName, children }: {
+/** Chat code block with a Run affordance in the code banner: executes python
+ *  on the workspace kernel bridge and shows stdout/result/error inline. */
+export function RunnableCodeBlock({ code, language, cwd, sessionId, preClassName, children }: {
   code: string;
+  language?: string | null;
   cwd: string;
   sessionId: string;
   preClassName?: string;
@@ -35,17 +36,25 @@ export function RunnableCodeBlock({ code, cwd, sessionId, preClassName, children
 
   return (
     <div className="relative">
-      <pre className={cn(preClassName, result && "mb-1.5")}>{children}</pre>
-      <button
-        type="button"
-        onClick={() => void run()}
-        disabled={running}
-        aria-label={t("conversation.runCode")}
-        className="ui-popover absolute right-1.5 top-1.5 flex items-center gap-1 rounded-input px-1.5 py-0.5 font-sans text-[11px] text-muted transition-colors hover:text-text disabled:cursor-wait"
+      <CodeBlockFrame
+        language={language}
+        code={code}
+        preClassName={preClassName}
+        bannerExtra={
+          <button
+            type="button"
+            onClick={() => void run()}
+            disabled={running}
+            aria-label={running ? t("conversation.runningCode") : t("conversation.runCode")}
+            className="flex h-6 items-center gap-1 rounded px-1.5 font-sans text-[11px] text-muted transition-colors hover:bg-surface-raised hover:text-text disabled:cursor-wait"
+          >
+            {running ? <Loader2 size={11} className="animate-spin text-accent" /> : <Play size={11} />}
+            {running ? t("conversation.runningCode") : t("conversation.runCode")}
+          </button>
+        }
       >
-        {running ? <Loader2 size={11} className="animate-spin text-accent" /> : <Play size={11} />}
-        {running ? t("conversation.runningCode") : t("conversation.runCode")}
-      </button>
+        {children}
+      </CodeBlockFrame>
       {result && (
         <div className="mb-3 rounded-input bg-surface-2 font-mono text-[12px]">
           <div className="flex items-center justify-between gap-2 border-b border-faint px-3 py-1.5 font-sans text-[10px] uppercase tracking-wider text-muted">
