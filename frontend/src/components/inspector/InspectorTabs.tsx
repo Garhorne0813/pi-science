@@ -31,11 +31,13 @@ export function InspectorTabs({
   tabs,
   activeTabId,
   cwd,
+  sessionId,
   reserveControls = false,
 }: {
   tabs: InspectorTab[];
   activeTabId: string;
   cwd?: string;
+  sessionId?: string;
   /** Keep the fixed preview layout controls from covering the scroll viewport. */
   reserveControls?: boolean;
 }) {
@@ -240,6 +242,7 @@ export function InspectorTabs({
                   inspector={tab.data}
                   onClose={() => closeTab(tab.id)}
                   cwd={cwd}
+                  sessionId={sessionId}
                   compactHeader
                   contentZoom={expanded ? zoom : 1}
                   leadingControls={tab.data.variant === "file" && expanded ? (

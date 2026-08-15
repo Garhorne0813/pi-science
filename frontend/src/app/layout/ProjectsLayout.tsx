@@ -17,6 +17,7 @@ import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { workspacePathLeaf } from "../../lib/workspace";
 import { Icon, IconButton } from "../../components/ui/Icon";
+import { conversationSessionId } from "../../lib/conversation/session-route";
 
 const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 420;
@@ -42,6 +43,7 @@ export function ProjectsLayout() {
   const activeCwd = useWorkspaceCwd();
   const isWorkspace = !!activeCwd;
   const workspaceRoot = activeCwd ? `/workspace/${encodeURIComponent(activeCwd)}` : "";
+  const activeConversationSessionId = conversationSessionId(location.pathname);
   const isConversationRoute = isWorkspace && (
     location.pathname === workspaceRoot || location.pathname.startsWith(`${workspaceRoot}/session/`)
   );
@@ -226,6 +228,7 @@ export function ProjectsLayout() {
             tabs={inspectorTabs}
             activeTabId={activeInspectorTabId}
             cwd={activeCwd || undefined}
+            sessionId={activeConversationSessionId}
             reserveControls={isConversationRoute}
           />
         </RightPane>

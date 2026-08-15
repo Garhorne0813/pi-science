@@ -27,12 +27,14 @@ export function NotebookEditor({
   path,
   root,
   cwd,
+  sessionId,
   onClose,
   controls,
 }: {
   path: string;
   root?: FileRoot;
   cwd: string;
+  sessionId?: string;
   onClose: () => void;
   controls?: React.ReactNode;
 }) {
@@ -97,7 +99,7 @@ export function NotebookEditor({
       candidate.id === cellId ? { ...candidate, running: true, liveResult: null } : candidate
     )));
     try {
-      const payload = await notebookRuntime.execute(notebookId, cwd, language, cell.code);
+      const payload = await notebookRuntime.execute(notebookId, cwd, language, cell.code, sessionId);
       setCells((current) => current.map((candidate) => (
         candidate.id === cellId
           ? { ...candidate, running: false, liveResult: payload }
