@@ -16,7 +16,7 @@ function clampZoom(value: number): number {
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(value * 100) / 100));
 }
 
-function tabTitle(data: Inspector, executionsTitle: string): string {
+function tabTitle(data: Inspector): string {
   switch (data.variant) {
     case "file": return data.filename;
     case "notebook-file": return data.path.split(/[\\/]/).pop() || data.path;
@@ -24,7 +24,6 @@ function tabTitle(data: Inspector, executionsTitle: string): string {
     case "artifact": return data.filename || data.title;
     case "notebook": return data.notebookId;
     case "notebook-panel": return "Notebook";
-    case "executions": return executionsTitle;
   }
 }
 
@@ -148,7 +147,7 @@ export function InspectorTabs({
           >
             {tabs.map((tab, index) => {
             const active = tab.id === activeTabId;
-            const title = tabTitle(tab.data, t("runs.sessionTitle"));
+            const title = tabTitle(tab.data);
             return (
               <div
                 key={tab.id}
@@ -219,7 +218,7 @@ export function InspectorTabs({
         {tabs.map((tab, index) => {
           const active = tab.id === activeTabId;
           const expanded = tab.id === expandedTabId;
-          const title = tabTitle(tab.data, t("runs.sessionTitle"));
+          const title = tabTitle(tab.data);
           const zoom = zoomByTab[tab.id] ?? 1;
           return (
             <div

@@ -13,7 +13,7 @@ import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "
 import { useTranslation } from "react-i18next";
 import { timeAgo } from "../../lib/shared";
 import { queryClient } from "../../lib/client/query-client";
-import { reproduceRunPrompt, runLogQuery, runsQuery } from "../../lib/runs";
+import { reproduceRunPrompt, runLogQuery, runsQuery, sessionRunsQuery } from "../../lib/runs";
 import { subscribeExecutionInvalidation } from "../../lib/runs/execution-events";
 import { apiRequest } from "../../lib/client/api";
 import { useFeedback } from "../../components/feedback/feedback-context";
@@ -28,7 +28,7 @@ const KINDS: ExecutionRecord["kind"][] = ["tool", "kernel_cell", "job", "researc
 const STATUSES: ExecutionRecord["status"][] = ["pending", "running", "succeeded", "failed", "timed_out", "cancelled", "interrupted", "lost"];
 const EMPTY_RUNS: ExecutionRecord[] = [];
 
-export function RunsPage() {
+export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
   const { t } = useTranslation();
   const { toast } = useFeedback();
   const navigate = useNavigate();
@@ -45,7 +45,7 @@ export function RunsPage() {
   const [loadingLogs, setLoadingLogs] = useState<Record<string, boolean>>({});
   const [liveConnected, setLiveConnected] = useState(false);
 
-  const runsResult = useQuery(runsQuery(workspaceCwd));
+  const runsResult = useQuery(sessionId ? sessionRunsQuery(workspaceCwd, sessionId) : runsQuery(workspaceCwd));
   const runs = runsResult.data ?? EMPTY_RUNS;
   const loading = runsResult.isFetching;
   const selectedId = searchParams.get("execution");

@@ -1,9 +1,8 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "../../i18n";
 import { queryClient } from "../../lib/client/query-client";
-import { useUiStore } from "../../lib/ui";
 import { SessionExecutionButton } from "./SessionExecutionButton";
 
 vi.mock("../../lib/runs/execution-events", () => ({
@@ -16,12 +15,6 @@ beforeAll(async () => {
 
 beforeEach(() => {
   queryClient.clear();
-  useUiStore.setState({
-    inspectorOpen: false,
-    inspectorData: null,
-    inspectorTabs: [],
-    activeInspectorTabId: null,
-  });
 });
 
 afterEach(() => {
@@ -30,7 +23,8 @@ afterEach(() => {
 });
 
 describe("SessionExecutionButton", () => {
-  it("shows the session execution count and opens its inspector", async () => {
+  it("shows the session execution count and exposes its selected state", async () => {
+    const onToggle = vi.fn();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
       executions: [{
         schema_version: 1,
@@ -53,18 +47,14 @@ describe("SessionExecutionButton", () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <SessionExecutionButton cwd="/workspace" sessionId="session-1" />
+        <SessionExecutionButton cwd="/workspace" sessionId="session-1" active onToggle={onToggle} />
       </QueryClientProvider>,
     );
 
     const button = await screen.findByRole("button", { name: "1 execution in this session" });
     expect(button).toHaveTextContent("1");
+    expect(button).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(button);
-
-    await waitFor(() => expect(useUiStore.getState().inspectorData).toEqual({
-      variant: "executions",
-      cwd: "/workspace",
-      sessionId: "session-1",
-    }));
+    expect(onToggle).toHaveBeenCalledOnce();
   });
 });

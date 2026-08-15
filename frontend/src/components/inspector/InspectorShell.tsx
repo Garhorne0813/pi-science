@@ -5,7 +5,6 @@ import { PdfInspector } from "./PdfInspector";
 import { NotebookPanel } from "./NotebookPanel";
 import { NotebookEditor } from "../notebook/NotebookEditor";
 import { useRuntimeStore } from "../../lib/agent-runtime";
-import { ExecutionInspector } from "./ExecutionInspector";
 
 /** Right pane. Renders the correct inspector variant. */
 export function InspectorShell({
@@ -65,10 +64,7 @@ export function InspectorShell({
           controls={controls}
         />
       )}
-      {inspector.variant === "executions" && (
-        <ExecutionInspector data={inspector} onClose={onClose} />
-      )}
-      {!["file", "artifact", "pdf", "notebook", "notebook-file", "notebook-panel", "executions"].includes(inspector.variant) && (
+      {!["file", "artifact", "pdf", "notebook", "notebook-file", "notebook-panel"].includes(inspector.variant) && (
         <div className="flex items-center justify-center h-full text-muted text-sm">
           Unknown inspector type: {inspector.variant}
         </div>
