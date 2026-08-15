@@ -147,7 +147,6 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
             label={t("common.close")}
             size="touch"
             onClick={onClose}
-            className="bg-surface-2/70"
           />
         </div>
         <div className="sr-only">{scope ? t("settings.scope.workspace") : t("settings.scope.global")}</div>
@@ -164,12 +163,12 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
               onClick={() => changeTab(item.id)}
               title={t(item.labelKey)}
               className={cn(
-                "relative flex h-nav min-h-0 w-full items-center justify-center gap-1.5 rounded-input px-2 text-left text-ui-label font-medium transition-colors md:justify-start",
+                "relative flex h-nav min-h-0 w-full items-center justify-center gap-1.5 rounded-input px-2 text-left font-medium transition-colors md:justify-start",
                 tab === item.id ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2 hover:text-text",
               )}
             >
               <Icon icon={item.icon} size="md" className="shrink-0" />
-              <span className="hidden min-w-0 truncate md:inline">{t(item.labelKey)}</span>
+              <span className="hidden min-w-0 truncate text-ui-label md:inline">{t(item.labelKey)}</span>
             </button>
           ))}
         </nav>

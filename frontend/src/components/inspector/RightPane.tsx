@@ -52,6 +52,32 @@ export function RightPane({
       Math.min(w, INSPECTOR_MAX, Math.round(window.innerWidth * MAX_FRACTION)),
     );
 
+  // A persisted width is only valid for the viewport it was saved in: shrinking
+  // the window re-clamps the stored width so the pane can never squeeze the
+  // conversation out on a smaller screen.
+  useEffect(() => {
+    const onResize = () => {
+      const current = useUiStore.getState().inspectorWidth;
+      const next = clamp(current);
+      if (next !== current) setInspectorWidth(next);
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [setInspectorWidth]);
+
+  // On small screens the pane is a full-screen overlay, so it must present
+  // dialog semantics; the desktop split pane stays a plain region.
+  const [mobileOverlay, setMobileOverlay] = useState(() =>
+    window.matchMedia("(max-width: 1023.98px)").matches,
+  );
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 1023.98px)");
+    const update = () => setMobileOverlay(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
   const onDividerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -123,6 +149,9 @@ export function RightPane({
   return (
     <div
       ref={paneRef}
+      role={mobileOverlay ? "dialog" : undefined}
+      aria-modal={mobileOverlay || undefined}
+      aria-label={mobileOverlay ? t("filePreview.openFiles") : undefined}
       className={cn(
         "fixed inset-0 z-50 block h-full w-full bg-surface lg:relative lg:inset-auto lg:z-auto lg:w-[var(--inspector-width)] lg:shrink-0",
         side === "left" && "order-1",

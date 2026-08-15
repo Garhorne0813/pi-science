@@ -41,7 +41,7 @@ export function McpRow({ server, onToggle }: { server: McpServer; onToggle: (id:
             </div>
           )}
         </div>
-        <button onClick={() => onToggle(server.id, !server.enabled)} className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors", server.enabled ? "bg-ok text-white" : "bg-surface-2 text-muted hover:bg-surface hover:text-text")}>
+        <button onClick={() => onToggle(server.id, !server.enabled)} className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors", server.enabled ? "bg-ok text-accent-fg" : "bg-surface-2 text-muted hover:bg-surface hover:text-text")}>
           {server.enabled ? t("settings.actions.on") : t("settings.actions.off")}
         </button>
       </div>

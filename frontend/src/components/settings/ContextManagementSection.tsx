@@ -69,7 +69,7 @@ export function ContextManagementSection({ config, saving, onSave }: { config: S
           <span>{t("settings.context.autoCompact")}</span>
           <span className="relative inline-flex h-5 w-9 shrink-0 rounded-full bg-surface-2 transition-colors has-[:checked]:bg-accent">
             <input type="checkbox" checked={enabled} disabled={saving} onChange={(event) => updateEnabled(event.target.checked)} className="peer sr-only" />
-            <span className="pointer-events-none absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform peer-checked:translate-x-4" />
+            <span className="pointer-events-none absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-accent-fg shadow-sm transition-transform peer-checked:translate-x-4" />
           </span>
         </label>
       </div>
@@ -78,7 +78,7 @@ export function ContextManagementSection({ config, saving, onSave }: { config: S
           <label htmlFor="compaction-threshold" className="text-[12px] font-medium text-text">{t("settings.context.threshold")}</label>
           <output className="font-mono text-[11px] text-text">{threshold}%</output>
         </div>
-        <input id="compaction-threshold" type="range" min={50} max={95} step={1} value={threshold} disabled={!enabled || saving} onChange={(event) => updateThreshold(Number(event.target.value))} onPointerUp={flushThresholdSave} onKeyUp={flushThresholdSave} onBlur={flushThresholdSave} className="mt-2 h-8 w-full cursor-pointer accent-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-50" />
+        <input id="compaction-threshold" type="range" min={50} max={95} step={1} value={threshold} disabled={!enabled || saving} onChange={(event) => updateThreshold(Number(event.target.value))} onPointerUp={flushThresholdSave} onKeyUp={flushThresholdSave} onBlur={flushThresholdSave} className="mt-2 h-8 w-full cursor-pointer accent-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50" />
         <p className="mt-1 text-[10px] leading-relaxed text-muted">
           {t("settings.context.thresholdHelp", { threshold, tokens: thresholdTokens ? thresholdTokens.toLocaleString() : "—", window: contextWindow ? contextWindow.toLocaleString() : "—" })}
         </p>

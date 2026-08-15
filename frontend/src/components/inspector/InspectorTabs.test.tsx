@@ -71,6 +71,7 @@ describe("InspectorTabs", () => {
     expect(tablist.firstElementChild).toHaveClass("h-control", "w-max", "min-w-full", "pr-14");
     const activeTabContainer = screen.getByRole("tab", { name: "two.txt" }).parentElement;
     expect(activeTabContainer).toHaveClass("h-full");
+    expect(screen.getByRole("tab", { name: "two.txt" })).toHaveClass("text-ui-label");
     expect(activeTabContainer).not.toHaveClass("focus-within:ring-2", "focus-within:ring-accent");
   });
 
@@ -113,12 +114,52 @@ describe("InspectorTabs", () => {
 
     const dialog = screen.getByRole("dialog", { name: "two.txt" });
     expect(dialog).toHaveStyle({ width: "92vw", height: "92vh", left: "4vw", top: "4vh" });
-    expect(dialog.previousElementSibling).toHaveClass("backdrop-blur-sm");
+    expect(dialog.previousElementSibling).toHaveClass("bg-black/50");
+    expect(dialog.previousElementSibling).not.toHaveClass("backdrop-blur-sm");
     expect(screen.getByRole("button", { name: "Restore panel" })).toHaveAttribute("aria-pressed", "true");
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "two.txt" })).toBeNull();
     expect(screen.getByRole("tabpanel")).toBeInTheDocument();
+  });
+
+  it("moves focus into the expanded dialog and restores it on close", () => {
+    useUiStore.getState().openInspector(file("two.txt"));
+    render(<Harness />);
+    const maximize = screen.getByRole("button", { name: "Maximize panel" });
+    // jsdom does not move focus during fireEvent.click; a real click focuses
+    // the trigger, which is exactly what the restore path relies on.
+    maximize.focus();
+    fireEvent.click(maximize);
+
+    const dialog = screen.getByRole("dialog", { name: "two.txt" });
+    expect(dialog).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "two.txt" })).toBeNull();
+    expect(document.activeElement).toBe(maximize);
+  });
+
+  it("traps Tab inside the expanded dialog", () => {
+    useUiStore.getState().openInspector(file("two.txt"));
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "Maximize panel" }));
+
+    const dialog = screen.getByRole("dialog", { name: "two.txt" });
+    const focusables = Array.from(dialog.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    ));
+    expect(focusables.length).toBeGreaterThan(0);
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+
+    last.focus();
+    fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(document.activeElement).toBe(first);
+
+    first.focus();
+    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(last);
   });
 
   it("zooms expanded preview content with controls and Ctrl+wheel", () => {

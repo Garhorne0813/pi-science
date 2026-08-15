@@ -48,6 +48,8 @@ export function InspectorTabs({
   const [zoomByTab, setZoomByTab] = useState<Record<string, number>>({});
   const expandedPanelRef = useRef<HTMLDivElement | null>(null);
   const tabScrollRef = useRef<HTMLDivElement | null>(null);
+  // Focus origin of the expanded dialog, restored when it closes.
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
   const [tabScrollIndicator, setTabScrollIndicator] = useState({ visible: false, left: 0, width: 100 });
 
   const setTabZoom = (tabId: string, update: (current: number) => number) => {
@@ -66,11 +68,18 @@ export function InspectorTabs({
 
   useEffect(() => {
     if (!expandedTabId) return;
+    // Remember where focus came from and move it into the expanded dialog.
+    lastFocusedRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    expandedPanelRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setExpandedTabId(null);
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      lastFocusedRef.current?.focus();
+      lastFocusedRef.current = null;
+    };
   }, [expandedTabId]);
 
   useEffect(() => {
@@ -122,6 +131,25 @@ export function InspectorTabs({
     };
   }, [tabs.length]);
 
+  // Keep Tab inside the expanded dialog so keyboard users cannot reach the
+  // background while it is open.
+  const handleExpandedPanelKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Tab" || !expandedPanelRef.current) return;
+    const focusables = expandedPanelRef.current.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    );
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   const focusSibling = (currentId: string, direction: -1 | 1) => {
     const index = tabs.findIndex((tab) => tab.id === currentId);
     if (index === -1) return;
@@ -155,8 +183,8 @@ export function InspectorTabs({
                 key={tab.id}
                 title={title}
                 className={cn(
-                  "group relative flex h-full min-w-28 max-w-48 shrink-0 cursor-default items-center gap-1.5 border-r border-border px-2 text-ui-caption outline-none",
-                  active ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2/60 hover:text-text",
+                  "group relative flex h-full min-w-28 max-w-48 shrink-0 cursor-default items-center gap-1.5 px-2 outline-none",
+                  active ? "text-text" : "text-muted hover:bg-surface-2/60 hover:text-text",
                 )}
               >
                 {active && <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />}
@@ -167,7 +195,7 @@ export function InspectorTabs({
                   data-tab-index={index}
                   aria-selected={active}
                   aria-controls={`inspector-panel-${index}`}
-                  className="min-w-0 flex-1 truncate text-left outline-none"
+                  className="min-w-0 flex-1 truncate text-left text-ui-label outline-none"
                   onClick={() => activateTab(tab.id)}
                   onAuxClick={(event) => {
                     if (event.button === 1) closeTab(tab.id);
@@ -213,7 +241,7 @@ export function InspectorTabs({
         {expandedTabId && (
           <div
             aria-hidden="true"
-            className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
+            className="fixed inset-0 z-40 bg-black/50"
             onClick={() => setExpandedTabId(null)}
           />
         )}
@@ -230,8 +258,10 @@ export function InspectorTabs({
               role={expanded ? "dialog" : "tabpanel"}
               aria-modal={expanded || undefined}
               aria-label={expanded ? title : undefined}
+              tabIndex={expanded ? -1 : undefined}
               hidden={!active}
               style={expanded ? { width: "92vw", height: "92vh", left: "4vw", top: "4vh" } : undefined}
+              onKeyDown={expanded ? handleExpandedPanelKeyDown : undefined}
               className={cn(
                 "h-full",
                 expanded && "fixed z-50 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl",

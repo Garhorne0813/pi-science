@@ -10,8 +10,8 @@ import { IconButton } from "../ui/Icon";
  *  loads once the dialog is first opened. */
 const SettingsContent = lazy(() => import("./SettingsContent").then((m) => ({ default: m.SettingsContent })));
 
-/** Popover settings dialog (Claude-style): one instance mounted at the layout
- *  root, driven entirely by the UI store, floating above every page. */
+/** Floating settings dialog: one instance mounted at the layout root,
+ *  driven entirely by the UI store, floating above every page. */
 export function SettingsDialog() {
   const { t } = useTranslation();
   const settingsOpen = useUiStore((s) => s.settingsOpen);
@@ -63,7 +63,7 @@ export function SettingsDialog() {
 
   return (
     <div
-      className="fixed inset-0 z-[95] flex items-center justify-center bg-black/65 p-0 backdrop-blur-[2px] sm:p-2 md:p-4"
+      className="fixed inset-0 z-[95] flex items-center justify-center bg-black/60 p-0 sm:p-2 md:p-4"
       role="presentation"
       onMouseDown={(event) => { if (event.target === event.currentTarget) closeSettings(); }}
       onKeyDown={(event) => { if (event.key === "Escape") closeSettings(); }}
@@ -77,7 +77,7 @@ export function SettingsDialog() {
         onKeyDown={handlePanelKeyDown}
         className={cn(
           "ui-dialog flex h-full w-full overflow-hidden outline-none",
-          "rounded-none border-0 shadow-none md:h-[min(80vh,820px)] md:w-[min(760px,calc(100vw-32px))] md:rounded-[16px] md:border md:shadow-pop",
+          "rounded-none border-0 shadow-none md:h-[min(80vh,820px)] md:w-[min(760px,calc(100vw-32px))] md:rounded-large",
         )}
       >
         <Suspense fallback={(
@@ -88,7 +88,6 @@ export function SettingsDialog() {
                 label={t("common.close")}
                 size="touch"
                 onClick={closeSettings}
-                className="bg-surface-2/70"
               />
             </div>
             <div className="flex flex-1 items-center justify-center text-sm text-muted">{t("common.loading")}</div>

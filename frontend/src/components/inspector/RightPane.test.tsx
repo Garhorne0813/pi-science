@@ -175,4 +175,41 @@ describe("RightPane resizing", () => {
       inspectorTabs: [{ data: preview }],
     });
   });
+
+  it("re-clamps a persisted width when the viewport shrinks", () => {
+    useUiStore.setState({ inspectorWidth: 800 });
+    render(
+      <RightPane onMinimize={vi.fn()}>
+        <div>Preview</div>
+      </RightPane>,
+    );
+
+    expect(useUiStore.getState().inspectorWidth).toBe(800);
+    fireEvent(window, new Event("resize"));
+    // 0.7 * jsdom viewport width (1024) = 717; the saved 800px no longer fits.
+    expect(useUiStore.getState().inspectorWidth).toBe(717);
+  });
+
+  it("presents the full-screen overlay as a dialog on mobile", () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(max-width: 1023.98px)",
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    const { container } = render(
+      <RightPane onMinimize={vi.fn()}>
+        <div>Preview</div>
+      </RightPane>,
+    );
+
+    const pane = container.firstElementChild;
+    expect(pane).toHaveAttribute("role", "dialog");
+    expect(pane).toHaveAttribute("aria-modal", "true");
+    expect(pane).toHaveAttribute("aria-label", "Open file previews");
+  });
 });
