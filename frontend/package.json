@@ -13,6 +13,9 @@
     "test:uat:knowledge": "node scripts/uat-project-knowledge.mjs",
     "test:uat:notebook": "node scripts/uat-notebook.mjs",
     "test:uat:office": "node scripts/uat-office-preview.mjs",
+    "test:visual": "pnpm build && playwright test --config playwright.visual.config.ts",
+    "test:visual:update": "pnpm build && playwright test --config playwright.visual.config.ts --update-snapshots",
+    "test:accessibility": "pnpm build && playwright test --config playwright.visual.config.ts --grep @accessibility",
     "lint": "oxlint",
     "preview": "vite preview"
   },
@@ -55,6 +58,8 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.62.1",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
