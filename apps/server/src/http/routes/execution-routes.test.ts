@@ -45,7 +45,31 @@ describe("execution routes", () => {
     const detail = await app.inject({ method: "GET", url: `/api/executions/exec-route?cwd=${encodeURIComponent(cwd)}` });
     expect(detail.json()).toMatchObject({ correlation: { tool_call_id: "call-route" } });
     const logs = await app.inject({ method: "GET", url: `/api/executions/exec-route/logs?cwd=${encodeURIComponent(cwd)}` });
-    expect(logs.json()).toMatchObject({ stdout: "output", stderr: "diagnostic" });
+    expect(logs.json()).toMatchObject({ stdout: "output", stderr: "diagnostic", source: "preview", complete: false });
+  });
+
+  it("uses the job store for the best available execution log", async () => {
+    const cwd = await workspace();
+    await executionRepository.start(cwd, {
+      execution_id: "exec-job-route",
+      kind: "job",
+      surface: "local",
+      producer: "test",
+      correlation: { job_id: "job_1234567890abcdef" },
+    });
+    const app = Fastify();
+    registerExecutionRoutes(app, {
+      logs: async () => ({
+        job_id: "job_1234567890abcdef",
+        stdout: "complete output",
+        stderr: "",
+        stdout_truncated: false,
+        stderr_truncated: false,
+      }),
+    });
+
+    const response = await app.inject({ method: "GET", url: `/api/executions/exec-job-route/logs?cwd=${encodeURIComponent(cwd)}` });
+    expect(response.json()).toMatchObject({ stdout: "complete output", source: "job", complete: true });
   });
 
   it("rejects invalid filters and unknown executions", async () => {

@@ -766,6 +766,7 @@
   "runs.outputs": "Outputs",
   "runs.noLog": "(no log)",
   "runs.logLoadFailed": "(error loading log)",
+  "runs.logPreview": "Stored preview — earlier output may have been truncated.",
   "runs.filteredCount": "{{visible}} of {{total}} executions",
   "runs.search": "Search executions",
   "runs.searchPlaceholder": "Search commands, tools, files, or IDs",

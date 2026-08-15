@@ -13,7 +13,7 @@ export type JobProcessIdentity = { kind: "linux-proc-start-ticks"; value: string
 export type JobOwnerProcessIdentity = { kind: "linux-proc-start-ticks" | "ps-lstart-utc"; platform: NodeJS.Platform; value: string };
 export interface JobChildIdentity { pid: number; process_identity: JobProcessIdentity | null; process_group: boolean; platform: NodeJS.Platform; ownership_generation: number; ownership_token: string }
 export interface JobOwnership { instance_id: string; pid: number; process_started_at: string; process_identity?: JobOwnerProcessIdentity; generation: number; token: string; heartbeat_at: string; lease_expires_at: string; child?: JobChildIdentity }
-export interface JobRecord { job_id: string; execution_id?: string; command: string[]; cwd: string; execution_cwd?: string; surface: string; status: JobStatus; created_at: string; started_at?: string; ended_at?: string; return_code?: number | null; stdout: string; stderr: string; artifact_ids: string[]; environment: Record<string, unknown>; requirement: JobRequirement; ownership?: JobOwnership }
+export interface JobRecord { job_id: string; execution_id?: string; command: string[]; cwd: string; execution_cwd?: string; surface: string; status: JobStatus; created_at: string; started_at?: string; ended_at?: string; return_code?: number | null; stdout: string; stderr: string; stdout_truncated?: boolean; stderr_truncated?: boolean; artifact_ids: string[]; environment: Record<string, unknown>; requirement: JobRequirement; ownership?: JobOwnership }
 export type PublicJobRecord = Omit<JobRecord, "ownership">;
 export function publicJobRecord(record: JobRecord): PublicJobRecord { const { ownership: _ownership, ...publicRecord } = record; return publicRecord; }
 
@@ -121,7 +121,7 @@ export class JobCoordinator {
   }
 
   async get(cwd: string, id: string): Promise<JobRecord | null> { const record = await readJson<JobRecord | null>(this.jobPath(cwd, id), null); return record ? this.healOrphan(record) : null; }
-  async logs(cwd: string, id: string) { const record = await this.get(cwd, id); return record ? { job_id: record.job_id, stdout: record.stdout, stderr: record.stderr } : null; }
+  async logs(cwd: string, id: string) { const record = await this.get(cwd, id); return record ? { job_id: record.job_id, stdout: record.stdout, stderr: record.stderr, stdout_truncated: record.stdout_truncated === true, stderr_truncated: record.stderr_truncated === true } : null; }
   async cancel(cwd: string, id: string): Promise<JobRecord | null> {
     this.cancelled.add(id);
     const child = this.children.get(id);
@@ -233,8 +233,12 @@ export class JobCoordinator {
     }); } catch (error) { LIVE_JOB_OWNERS.delete(record.ownership?.token ?? ""); throw error; }
     if (!enteredRunning) { LIVE_JOB_OWNERS.delete(record.ownership?.token ?? ""); return; }
     this.startHeartbeat(record);
-    let child: ChildProcess | undefined; let stdout = Buffer.alloc(0); let stderr = Buffer.alloc(0); let timedOut = false; let childResult: Promise<{ code: number | null }> | undefined;
-    const appendTail = (current: Buffer, chunk: Buffer) => Buffer.concat([current, chunk]).subarray(-100_000);
+    let child: ChildProcess | undefined; let stdout = Buffer.alloc(0); let stderr = Buffer.alloc(0); let stdoutTruncated = false; let stderrTruncated = false; let timedOut = false; let childResult: Promise<{ code: number | null }> | undefined;
+    const appendTail = (current: Buffer, chunk: Buffer, markTruncated: () => void) => {
+      const combined = Buffer.concat([current, chunk]);
+      if (combined.length > 100_000) markTruncated();
+      return combined.subarray(-100_000);
+    };
     try {
       await this.hooks.beforeSpawn?.(record);
       if (this.cancelled.has(record.job_id)) { record.status = "cancelled"; return; }
@@ -249,8 +253,8 @@ export class JobCoordinator {
         // critical section; another coordinator cannot cancel between them.
         child = spawn(record.command[0]!, record.command.slice(1), { cwd: record.execution_cwd ?? record.cwd, env: environment, stdio: ["ignore", "pipe", "pipe"], detached: POSIX });
         this.children.set(record.job_id, child);
-        child.stdout?.on("data", (chunk: Buffer) => { stdout = appendTail(stdout, chunk); });
-        child.stderr?.on("data", (chunk: Buffer) => { stderr = appendTail(stderr, chunk); });
+        child.stdout?.on("data", (chunk: Buffer) => { stdout = appendTail(stdout, chunk, () => { stdoutTruncated = true; }); });
+        child.stderr?.on("data", (chunk: Buffer) => { stderr = appendTail(stderr, chunk, () => { stderrTruncated = true; }); });
         const timeout = Math.max(1, Number(record.requirement.timeout_seconds ?? 3600)) * 1000;
         childResult = new Promise<{ code: number | null }>((done) => {
           let timeoutTimer: NodeJS.Timeout | undefined; let closeFailsafe: NodeJS.Timeout | undefined; let settled = false;
@@ -269,7 +273,7 @@ export class JobCoordinator {
       if (!spawned || !child || !childResult) return;
       if (this.cancelled.has(record.job_id)) terminate(child);
       const result = await childResult;
-      record.stdout = stdout.toString("utf8"); record.stderr = stderr.toString("utf8"); record.return_code = result.code;
+      record.stdout = stdout.toString("utf8"); record.stderr = stderr.toString("utf8"); record.stdout_truncated = stdoutTruncated; record.stderr_truncated = stderrTruncated; record.return_code = result.code;
       record.status = this.cancelled.has(record.job_id) ? "cancelled" : timedOut ? "timed_out" : result.code === 0 ? "succeeded" : "failed";
     } catch (error) { if (child) terminate(child); if (!this.cancelled.has(record.job_id)) { record.status = "failed"; record.stderr = String(error).slice(-100_000); } }
     finally {

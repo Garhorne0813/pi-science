@@ -22,6 +22,10 @@ vi.mock("../../lib/agent-runtime", () => ({
   useRuntimeStore: (selector: (state: { setDraft: typeof setDraftMock }) => unknown) => selector({ setDraft: setDraftMock }),
 }));
 
+vi.mock("../../lib/runs/execution-events", () => ({
+  subscribeExecutionInvalidation: () => () => undefined,
+}));
+
 vi.mock("../../lib/workspace", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/workspace")>();
   return { ...actual, useRequiredWorkspaceCwd: () => "/workspace" };
@@ -102,9 +106,9 @@ function jsonResponse(body: unknown, status = 200): Response {
 const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
   const url = String(input);
   if (url.startsWith("/api/executions?") || url.includes("/api/executions?")) return jsonResponse({ executions });
-  if (url.includes("/api/executions/exec_kernel/logs")) return jsonResponse({ stdout: "kernel stdout", stderr: "" });
-  if (url.includes("/api/executions/exec_job/logs")) return jsonResponse({ stdout: "", stderr: "job stderr" });
-  if (url.includes("/api/executions/exec_tool/logs")) return jsonResponse({ stdout: "tool output", stderr: "" });
+  if (url.includes("/api/executions/exec_kernel/logs")) return jsonResponse({ stdout: "kernel stdout", stderr: "", source: "preview", complete: false });
+  if (url.includes("/api/executions/exec_job/logs")) return jsonResponse({ stdout: "", stderr: "job stderr", source: "job", complete: true });
+  if (url.includes("/api/executions/exec_tool/logs")) return jsonResponse({ stdout: "tool output", stderr: "", source: "preview", complete: false });
   if (url.includes("/api/artifacts/artifact-result")) return jsonResponse({ path: "outputs/result.csv" });
   return jsonResponse({ error: `unhandled ${url}` }, 404);
 });
@@ -205,6 +209,7 @@ describe("RunsPage execution ledger", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "Output" }));
     expect(await screen.findByText("kernel stdout")).toBeInTheDocument();
+    expect(screen.getByText(/earlier output may have been truncated/i)).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/executions/exec_kernel/logs"), expect.anything());
   });
 

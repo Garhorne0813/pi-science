@@ -13,14 +13,14 @@ export const runsQuery = (cwd: string) => ({
   },
   staleTime: 0,
   refetchInterval: (query: { state: { data?: ExecutionRecord[] } }) =>
-    query.state.data?.some((run) => run.status === "pending" || run.status === "running") ? 1_000 : 5_000,
+    query.state.data?.some((run) => run.status === "pending" || run.status === "running") ? 5_000 : 30_000,
   refetchIntervalInBackground: false,
   refetchOnWindowFocus: true,
 });
 
 export const runLogQuery = (cwd: string, executionId: string) => ({
   queryKey: runsKey(cwd, executionId, "log"),
-  queryFn: () => apiRequest<{ stdout?: string; stderr?: string }>(`/api/executions/${executionId}/logs?cwd=${encodeURIComponent(cwd)}`),
+  queryFn: () => apiRequest<{ stdout?: string; stderr?: string; source?: "job" | "preview"; complete?: boolean }>(`/api/executions/${executionId}/logs?cwd=${encodeURIComponent(cwd)}`),
   staleTime: 0,
 });
 

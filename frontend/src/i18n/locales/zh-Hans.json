@@ -766,6 +766,7 @@
   "runs.outputs": "输出",
   "runs.noLog": "（无日志）",
   "runs.logLoadFailed": "（日志加载失败）",
+  "runs.logPreview": "当前显示存储的输出预览，较早内容可能已被截断。",
   "runs.filteredCount": "显示 {{visible}} / {{total}} 条执行记录",
   "runs.search": "搜索执行记录",
   "runs.searchPlaceholder": "搜索命令、工具、文件或 ID",

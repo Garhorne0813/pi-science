@@ -24,8 +24,8 @@ function record(status: ExecutionRecord["status"]): ExecutionRecord {
 describe("runsQuery", () => {
   it("refreshes active executions quickly and idle ledgers quietly", () => {
     const interval = runsQuery("/workspace").refetchInterval;
-    expect(interval({ state: { data: [record("running")] } })).toBe(1_000);
-    expect(interval({ state: { data: [record("succeeded")] } })).toBe(5_000);
-    expect(interval({ state: {} })).toBe(5_000);
+    expect(interval({ state: { data: [record("running")] } })).toBe(5_000);
+    expect(interval({ state: { data: [record("succeeded")] } })).toBe(30_000);
+    expect(interval({ state: {} })).toBe(30_000);
   });
 });

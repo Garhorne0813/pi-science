@@ -14,6 +14,7 @@ import { useTranslation } from "react-i18next";
 import { timeAgo } from "../../lib/shared";
 import { queryClient } from "../../lib/client/query-client";
 import { reproduceRunPrompt, runLogQuery, runsQuery } from "../../lib/runs";
+import { subscribeExecutionInvalidation } from "../../lib/runs/execution-events";
 import { apiRequest } from "../../lib/client/api";
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { useRequiredWorkspaceCwd } from "../../lib/workspace";
@@ -21,6 +22,7 @@ import { useRequiredWorkspaceCwd } from "../../lib/workspace";
 type DetailTab = "summary" | "input" | "output" | "files" | "runtime" | "timing";
 type KindFilter = "all" | ExecutionRecord["kind"];
 type StatusFilter = "all" | ExecutionRecord["status"];
+interface DisplayLog { text: string; complete: boolean }
 
 const KINDS: ExecutionRecord["kind"][] = ["tool", "kernel_cell", "job", "research_agent", "research_evaluation"];
 const STATUSES: ExecutionRecord["status"][] = ["pending", "running", "succeeded", "failed", "timed_out", "cancelled", "interrupted", "lost"];
@@ -39,13 +41,16 @@ export function RunsPage() {
   const [status, setStatus] = useState<StatusFilter>("all");
   const [detailTab, setDetailTab] = useState<DetailTab>("summary");
   const [compactDetailOpen, setCompactDetailOpen] = useState(() => searchParams.has("execution"));
-  const [logs, setLogs] = useState<Record<string, string>>({});
+  const [logs, setLogs] = useState<Record<string, DisplayLog>>({});
   const [loadingLogs, setLoadingLogs] = useState<Record<string, boolean>>({});
+  const [liveConnected, setLiveConnected] = useState(false);
 
   const runsResult = useQuery(runsQuery(workspaceCwd));
   const runs = runsResult.data ?? EMPTY_RUNS;
   const loading = runsResult.isFetching;
   const selectedId = searchParams.get("execution");
+
+  useEffect(() => subscribeExecutionInvalidation(workspaceCwd, { onConnectionChange: setLiveConnected }), [workspaceCwd]);
 
   const filteredRuns = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase();
@@ -77,9 +82,9 @@ export function RunsPage() {
     setLoadingLogs((current) => ({ ...current, [executionId]: true }));
     void queryClient.fetchQuery(runLogQuery(workspaceCwd, executionId)).then((data) => {
       const log = [data.stdout, data.stderr].filter(Boolean).join("\n");
-      setLogs((current) => ({ ...current, [executionId]: log || t("runs.noLog") }));
+      setLogs((current) => ({ ...current, [executionId]: { text: log || t("runs.noLog"), complete: data.complete === true } }));
     }).catch((error: unknown) => {
-      setLogs((current) => ({ ...current, [executionId]: t("runs.logLoadFailed") }));
+      setLogs((current) => ({ ...current, [executionId]: { text: t("runs.logLoadFailed"), complete: false } }));
       toast(error instanceof Error ? error.message : t("runs.logError"), "error");
     }).finally(() => {
       setLoadingLogs((current) => ({ ...current, [executionId]: false }));
@@ -161,7 +166,7 @@ export function RunsPage() {
           {STATUSES.map((item) => <option key={item} value={item}>{t(`runs.status.${item}`)}</option>)}
         </select>
         <span className="flex items-center gap-1.5 px-1.5 text-[10px] font-medium text-muted" title={t("runs.liveHint")}>
-          <span className={cn("h-1.5 w-1.5 rounded-full", runs.some(isActiveExecution) ? "animate-pulse bg-accent" : "bg-ok")} />
+          <span className={cn("h-1.5 w-1.5 rounded-full", liveConnected ? (runs.some(isActiveExecution) ? "animate-pulse bg-accent" : "bg-ok") : "animate-pulse bg-muted")} />
           {t("runs.live")}
         </span>
       </div>
@@ -233,7 +238,7 @@ function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpenFile, o
   onOpenArtifact: (artifact: ExecutionRecord["artifacts"][number]) => void;
   onOpenSession: () => void;
   onReproduce: () => void;
-  log?: string;
+  log?: DisplayLog;
   loadingLog: boolean;
 }) {
   const { t } = useTranslation();
@@ -277,7 +282,7 @@ function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpenFile, o
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {tab === "summary" && <SummaryDetails run={run} />}
         {tab === "input" && <JsonBlock value={run.request} empty={t("runs.noInput")} />}
-        {tab === "output" && <div className="space-y-4"><DetailSection title={t("runs.result")}><JsonBlock value={run.result} empty={t("runs.noResult")} /></DetailSection><DetailSection title={t("runs.log")}>{loadingLog ? <div className="flex items-center gap-2 text-xs text-muted"><Loader2 size={13} className="animate-spin" />{t("common.loading")}</div> : <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-input border border-border bg-surface-2 p-3 font-mono text-[11px] leading-relaxed text-text">{log ?? t("runs.noLog")}</pre>}</DetailSection></div>}
+        {tab === "output" && <div className="space-y-4"><DetailSection title={t("runs.result")}><JsonBlock value={run.result} empty={t("runs.noResult")} /></DetailSection><DetailSection title={t("runs.log")}>{loadingLog ? <div className="flex items-center gap-2 text-xs text-muted"><Loader2 size={13} className="animate-spin" />{t("common.loading")}</div> : <div>{log && !log.complete && <p className="mb-2 text-[10px] text-muted">{t("runs.logPreview")}</p>}<pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-input border border-border bg-surface-2 p-3 font-mono text-[11px] leading-relaxed text-text">{log?.text ?? t("runs.noLog")}</pre></div>}</DetailSection></div>}
         {tab === "files" && <FileDetails run={run} onOpenFile={onOpenFile} onOpenArtifact={onOpenArtifact} />}
         {tab === "runtime" && <JsonBlock value={run.runtime} empty={t("runs.noRuntime")} />}
         {tab === "timing" && <TimingDetails run={run} />}

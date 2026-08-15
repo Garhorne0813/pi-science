@@ -14,6 +14,7 @@ import {
   type ExecutionSurface,
 } from "@pi-science/contracts";
 import { appendJsonLineUnlocked, readJsonLines, withFileWriteLock, workspaceFile } from "../../storage/persistence.js";
+import { emitExecutionEvent } from "./execution-events.js";
 
 const EXECUTION_LOG = "execution-events-v1.jsonl";
 const TERMINAL_STATUSES = new Set<ExecutionStatus>(["succeeded", "failed", "cancelled", "timed_out", "interrupted", "lost"]);
@@ -112,16 +113,16 @@ export class ExecutionRepository {
     payload: Record<string, unknown>,
   ): Promise<void> {
     const path = this.path(cwd);
-    await withFileWriteLock(path, async () => {
+    const appended = await withFileWriteLock(path, async () => {
       const rows = await readJsonLines<unknown>(path);
       const events = rows.flatMap((row) => {
         const parsed = executionEventSchema.safeParse(row);
         return parsed.success ? [parsed.data] : [];
       });
-      if (eventType === "execution.started" && events.some((event) => event.execution_id === executionId && event.event_type === eventType)) return;
+      if (eventType === "execution.started" && events.some((event) => event.execution_id === executionId && event.event_type === eventType)) return null;
       if (eventType !== "execution.started" && events.some((event) => event.execution_id === executionId && [
         "execution.completed", "execution.failed", "execution.cancelled", "execution.interrupted",
-      ].includes(event.event_type))) return;
+      ].includes(event.event_type))) return null;
       const sequence = events.filter((event) => event.execution_id === executionId).reduce((maximum, event) => Math.max(maximum, event.sequence), 0) + 1;
       const event = executionEventSchema.parse({
         schema_version: 1,
@@ -137,7 +138,9 @@ export class ExecutionRepository {
         payload,
       });
       await appendJsonLineUnlocked(path, event);
+      return event;
     });
+    if (appended) emitExecutionEvent(cwd, appended);
   }
 }
 

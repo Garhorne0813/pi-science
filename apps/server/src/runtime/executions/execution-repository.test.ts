@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ExecutionRepository, executionIdFor } from "./execution-repository.js";
+import { subscribeExecutionEvents } from "./execution-events.js";
 
 const workspaces: string[] = [];
 
@@ -62,5 +63,21 @@ describe("ExecutionRepository", () => {
   it("derives stable ids from source identities", () => {
     expect(executionIdFor("tool", "session", "call")).toBe(executionIdFor("tool", "session", "call"));
     expect(executionIdFor("tool", "session", "call")).not.toBe(executionIdFor("tool", "session", "other"));
+  });
+
+  it("notifies workspace subscribers only after a new event is persisted", async () => {
+    const cwd = await workspace();
+    const repository = new ExecutionRepository();
+    const received: string[] = [];
+    const unsubscribe = subscribeExecutionEvents(cwd, (event) => received.push(event.event_type));
+
+    const input = { execution_id: "exec-live", kind: "tool" as const, surface: "pi" as const, producer: "test" };
+    await repository.start(cwd, input);
+    await repository.start(cwd, input);
+    await repository.finish(cwd, input.execution_id, { status: "succeeded", producer: "test" });
+    await repository.finish(cwd, input.execution_id, { status: "failed", producer: "test" });
+
+    expect(received).toEqual(["execution.started", "execution.completed"]);
+    unsubscribe();
   });
 });
