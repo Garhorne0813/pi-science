@@ -451,6 +451,7 @@
   "files.copyPath": "复制路径",
   "files.copyName": "复制名称",
   "files.copied": "已复制到剪贴板",
+  "files.refresh": "刷新文件",
   "files.loadError": "无法加载文件",
   "files.deleteFileTitle": "删除文件？",
   "files.deleteFolderTitle": "删除文件夹？",

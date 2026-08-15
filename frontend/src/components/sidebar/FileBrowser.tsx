@@ -218,17 +218,24 @@ export function FileBrowser({ cwd }: { cwd: string }) {
 
   return (
     <div className="border-t border-faint mt-2 pt-2">
-      <div
-        onClick={() => { setExpanded(!expanded); if (!expanded) void loadFiles(); }}
-        className="flex h-tool w-full cursor-pointer items-center justify-between px-2 text-ui-caption font-medium uppercase tracking-wider text-muted hover:text-text"
-      >
-        <span className="flex items-center gap-1.5">
+      <div className="flex items-center">
+        <button
+          type="button"
+          onClick={() => { setExpanded(!expanded); if (!expanded) void loadFiles(); }}
+          className="flex h-tool min-w-0 flex-1 items-center gap-1.5 px-2 text-ui-caption font-medium uppercase tracking-wider text-muted hover:text-text"
+        >
           <Icon icon={expanded ? ChevronDown : ChevronRight} size="xs" />
-          {t("nav.files")}
-        </span>
-        <span onClick={(e) => { e.stopPropagation(); refreshFiles(); }} className="hover:text-text cursor-pointer">
+          <span className="truncate">{t("nav.files")}</span>
+        </button>
+        <button
+          type="button"
+          aria-label={t("files.refresh", { defaultValue: "Refresh files" })}
+          title={t("files.refresh", { defaultValue: "Refresh files" })}
+          onClick={refreshFiles}
+          className="flex h-tool w-tool shrink-0 items-center justify-center rounded-input text-muted transition-colors hover:bg-surface-hover hover:text-text"
+        >
           <Icon icon={RefreshCw} size="xs" className={loading ? "animate-spin" : ""} />
-        </span>
+        </button>
       </div>
       {expanded && (
         <div className="mt-1 flex flex-col gap-0.5 max-h-72 overflow-y-auto">
@@ -246,7 +253,7 @@ export function FileBrowser({ cwd }: { cwd: string }) {
                   <button
                     onClick={() => handleClick(e)}
                     onContextMenu={(ev) => handleContextMenu(ev, e)}
-                    className="flex h-icon w-full items-center gap-2 truncate rounded px-2 text-left text-ui-caption text-text/80 hover:bg-surface-2"
+                    className="flex h-icon w-full items-center gap-2 truncate rounded px-2 text-left text-ui-caption text-text/80 hover:bg-surface-hover"
                     title={e.path}
                     style={{ paddingLeft: `${8 + e.depth * 12}px` }}
                   >

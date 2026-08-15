@@ -56,5 +56,5 @@ export function FileContextMenu({ entry, point, onClose, onReference, onCopy, on
 }
 
 function MenuButton({ icon, label, onClick, danger = false }: { icon: React.ReactNode; label: string; onClick: () => void; danger?: boolean }) {
-  return <button type="button" role="menuitem" onClick={onClick} className={`flex w-full items-center gap-2 rounded-input px-3 py-1.5 text-left text-[12px] ${danger ? "text-error hover:bg-error/10" : "text-text hover:bg-surface-2"}`}><span className={danger ? "" : "text-muted"}>{icon}</span>{label}</button>;
+  return <button type="button" role="menuitem" onClick={onClick} className={`flex w-full items-center gap-2 rounded-input px-3 py-1.5 text-left text-[12px] ${danger ? "text-error hover:bg-error/10" : "text-text hover:bg-surface-hover"}`}><span className={danger ? "" : "text-muted"}>{icon}</span>{label}</button>;
 }

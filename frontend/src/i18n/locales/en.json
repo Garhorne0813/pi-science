@@ -451,6 +451,7 @@
   "files.copyPath": "Copy path",
   "files.copyName": "Copy name",
   "files.copied": "Copied to clipboard",
+  "files.refresh": "Refresh files",
   "files.loadError": "Unable to load files",
   "files.deleteFileTitle": "Delete file?",
   "files.deleteFolderTitle": "Delete folder?",

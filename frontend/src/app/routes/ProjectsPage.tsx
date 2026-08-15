@@ -260,7 +260,7 @@ export function ProjectsPage() {
         {/* Header */}
         <div className="mb-page flex items-center justify-between">
           <div>
-            <h1 className="font-serif text-xl text-text">{t("nav.projects")}</h1>
+            <h1 className="text-xl font-medium tracking-tight text-text">{t("nav.projects")}</h1>
             <p className="mt-1 text-sm text-muted">{t("projects.workspaceCount", { count: workspaces.length })}</p>
           </div>
           <div className="relative">

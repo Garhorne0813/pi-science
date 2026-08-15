@@ -1,8 +1,6 @@
 @import "@fontsource/inter/latin-400.css";
 @import "@fontsource/inter/latin-500.css";
 @import "@fontsource/inter/latin-600.css";
-@import "@fontsource/source-serif-4/latin-400.css";
-@import "@fontsource/source-serif-4/latin-600.css";
 @import "@fontsource/jetbrains-mono/latin-400.css";
 @import "@fontsource/jetbrains-mono/latin-500.css";
 
@@ -77,27 +75,52 @@
 
 :root,
 [data-theme="light"] {
-  --bg: #f7f6f2;
-  --surface: #fdfcf9;
-  --surface-2: #efede7;
+  /* DeepSeek Harness-inspired palette (see docs/ui/deepseek-harness-reference.md):
+     neutral-bluish scale + deepseek blue accent. RGB channel twins power
+     Tailwind <alpha-value> utilities (bg-accent/5, border-error/30, …). */
+  --bg: #ffffff;
+  --bg-rgb: 255 255 255;
+  --surface: #f9fafb;
+  --surface-rgb: 249 250 251;
+  --surface-2: #f5f6f7;
+  --surface-2-rgb: 245 246 247;
   --surface-raised: #ffffff;
-  --surface-inset: #f3f1eb;
-  --surface-hover: #ebe8df;
-  --surface-selected: #e8e2d8;
-  --sidebar: #fbfaf7;
-  --border: #dedbd2;
-  --border-faint: #ebe8e0;
-  --border-strong: #c9c4b8;
-  --text: #24231f;
-  --muted: #716d63;
-  --accent: #c45f3d;
+  --surface-raised-rgb: 255 255 255;
+  --surface-inset: #f1f3f5;
+  --surface-inset-rgb: 241 243 245;
+  --surface-hover: #f1f3f5;
+  --surface-hover-rgb: 241 243 245;
+  --surface-selected: #ebeff2;
+  --surface-selected-rgb: 235 239 242;
+  --sidebar: #f9fafb;
+  --sidebar-rgb: 249 250 251;
+  --bubble: #edf3fe;
+  --border: rgba(0, 0, 0, 0.1);
+  --border-rgb: 0 0 0;
+  --border-faint: rgba(0, 0, 0, 0.04);
+  --border-faint-rgb: 0 0 0;
+  --border-strong: rgba(0, 0, 0, 0.16);
+  --border-strong-rgb: 0 0 0;
+  --text: #0f1115;
+  --text-rgb: 15 17 21;
+  --muted: #61666b;
+  --muted-rgb: 97 102 107;
+  --accent: #4176e6;
+  --accent-rgb: 65 118 230;
   --accent-fg: #ffffff;
-  --accent-soft: #f8ebe5;
-  --accent-border: #e7b9a8;
-  --link: #2a6fdb;
-  --warn: #c98a2b;
-  --ok: #4b8b5b;
-  --error: #c0564b;
+  --accent-fg-rgb: 255 255 255;
+  --accent-soft: #e4edfd;
+  --accent-soft-rgb: 228 237 253;
+  --accent-border: #b7c8fe;
+  --accent-border-rgb: 183 200 254;
+  --link: #4176e6;
+  --link-rgb: 65 118 230;
+  --warn: #f59e0b;
+  --warn-rgb: 245 158 11;
+  --ok: #22c55e;
+  --ok-rgb: 34 197 94;
+  --error: #ec1313;
+  --error-rgb: 236 19 19;
   --series-1: #2a78d6;
   --series-2: #1baf7a;
   --series-3: #eda100;
@@ -106,11 +129,11 @@
   --series-6: #e34948;
   --series-7: #e87ba4;
   --series-8: #eb6834;
-  --chart-grid: #e5e2d7;
-  --chart-axis: #c9c5b8;
-  --shadow-card: 0 1px 2px rgb(52 46 38 / 5%), 0 6px 20px rgb(52 46 38 / 5%);
-  --shadow-card-hover: 0 2px 4px rgb(52 46 38 / 7%), 0 12px 28px rgb(52 46 38 / 9%);
-  --shadow-pop: 0 14px 42px rgb(42 37 31 / 16%), 0 2px 8px rgb(42 37 31 / 8%);
+  --chart-grid: #e1e5ee;
+  --chart-axis: #adb2b8;
+  --shadow-card: 0 1px 2px rgb(15 17 21 / 4%), 0 6px 20px rgb(15 17 21 / 5%);
+  --shadow-card-hover: 0 2px 4px rgb(15 17 21 / 6%), 0 12px 28px rgb(15 17 21 / 8%);
+  --shadow-pop: 0 14px 42px rgb(15 17 21 / 14%), 0 2px 8px rgb(15 17 21 / 7%);
   /* Shared density scale. Components should use the semantic Tailwind aliases
      instead of introducing adjacent one-off heights and spacing values. */
   --density-icon: 1.5rem;
@@ -124,30 +147,73 @@
   --space-card: 1rem;
   --space-section: 1.25rem;
   --space-page: 1.5rem;
+  /* Structure geometry (reference-confirmed values; see reference doc). */
+  --conversation-content-width: 748px;
+  --conversation-composer-width: 780px;
+  --user-message-width: 525px;
+  --sidebar-collapsed-width: 56px;
+  --composer-fade-height: 36px;
+  --send-button-size: 34px;
+  --new-session-height: 38px;
+  /* Radius scale. --radius-bubble/--radius-composer land with the chat phase. */
+  --radius-small: 8px;
+  --radius-control: 10px;
+  --radius-card: 12px;
+  --radius-large: 16px;
+  --radius-bubble: 22px;
+  --radius-composer: 22px;
+  --radius-round: 999px;
+  /* Motion scale (upstream base.css curve and durations). */
+  --motion-fast: 100ms;
+  --motion-normal: 200ms;
+  --motion-slow: 300ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 [data-theme="dark"] {
-  --bg: #20211f;
-  --surface: #282925;
-  --surface-2: #32332e;
-  --surface-raised: #2d2e2a;
-  --surface-inset: #242521;
-  --surface-hover: #383932;
-  --surface-selected: #423a31;
-  --sidebar: #272824;
-  --border: #41423b;
-  --border-faint: #33342f;
-  --border-strong: #595a51;
-  --text: #f0eee6;
-  --muted: #a6a092;
-  --accent: #d97757;
-  --accent-fg: #211f1c;
-  --accent-soft: #3c2d27;
-  --accent-border: #704735;
-  --link: #7aa5f0;
-  --warn: #d7a24a;
-  --ok: #6bb07d;
-  --error: #d47a70;
+  --bg: #151517;
+  --bg-rgb: 21 21 23;
+  --surface: #1b1b1c;
+  --surface-rgb: 27 27 28;
+  --surface-2: #232324;
+  --surface-2-rgb: 35 35 36;
+  --surface-raised: #2c2c2e;
+  --surface-raised-rgb: 44 44 46;
+  --surface-inset: #1b1b1c;
+  --surface-inset-rgb: 27 27 28;
+  --surface-hover: #353638;
+  --surface-hover-rgb: 53 54 56;
+  --surface-selected: #43454a;
+  --surface-selected-rgb: 67 69 74;
+  --sidebar: #1b1b1c;
+  --sidebar-rgb: 27 27 28;
+  --bubble: #2c2c2e;
+  --border: rgba(255, 255, 255, 0.12);
+  --border-rgb: 255 255 255;
+  --border-faint: rgba(255, 255, 255, 0.06);
+  --border-faint-rgb: 255 255 255;
+  --border-strong: rgba(255, 255, 255, 0.2);
+  --border-strong-rgb: 255 255 255;
+  --text: #f9fafb;
+  --text-rgb: 249 250 251;
+  --muted: #cfd3d6;
+  --muted-rgb: 207 211 214;
+  --accent: #679efe;
+  --accent-rgb: 103 158 254;
+  --accent-fg: #ffffff;
+  --accent-fg-rgb: 255 255 255;
+  --accent-soft: #34415b;
+  --accent-soft-rgb: 52 65 91;
+  --accent-border: #4868b2;
+  --accent-border-rgb: 72 104 178;
+  --link: #679efe;
+  --link-rgb: 103 158 254;
+  --warn: #f7ad31;
+  --warn-rgb: 247 173 49;
+  --ok: #4ed17e;
+  --ok-rgb: 78 209 126;
+  --error: #f25a5a;
+  --error-rgb: 242 90 90;
   --series-1: #3987e5;
   --series-2: #199e70;
   --series-3: #c98500;
@@ -156,8 +222,8 @@
   --series-6: #e66767;
   --series-7: #d55181;
   --series-8: #d95926;
-  --chart-grid: #45443f;
-  --chart-axis: #5c5a53;
+  --chart-grid: #2c2c2e;
+  --chart-axis: #61666b;
   --shadow-card: 0 1px 2px rgb(0 0 0 / 22%), 0 8px 24px rgb(0 0 0 / 13%);
   --shadow-card-hover: 0 2px 5px rgb(0 0 0 / 28%), 0 14px 32px rgb(0 0 0 / 20%);
   --shadow-pop: 0 18px 48px rgb(0 0 0 / 38%), 0 3px 10px rgb(0 0 0 / 24%);
@@ -225,7 +291,7 @@
   .app-sidebar { background: var(--sidebar); }
 
   .ui-user-message {
-    background: var(--surface-selected);
+    background: var(--bubble);
     border-color: color-mix(in srgb, var(--border-strong) 72%, var(--accent-border));
   }
 
@@ -366,7 +432,7 @@ button:disabled {
   border: 1px solid var(--border);
   border-radius: 0.5rem;
   background-color: var(--surface);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238c877d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2381858c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-position: right 0.75rem center;
   background-repeat: no-repeat;
   background-size: 0.875rem;
@@ -420,6 +486,39 @@ button:disabled {
    scrollbar consumes layout width on the right side of the scroller. */
 .conversation-scroller {
   scrollbar-gutter: stable both-edges;
+}
+
+/* Sidebar expand/collapse motion (reference: 150-200ms ease-in-out). The
+   expanded panel slides and fades in; the collapsed rail fades its controls
+   in from the rail edge, mirroring the upstream collapse choreography. */
+@keyframes sidebar-in {
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes rail-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to { opacity: 1; transform: none; }
+}
+.sidebar-enter {
+  animation: sidebar-in var(--motion-normal) var(--ease-standard);
+}
+.rail-enter {
+  animation: rail-in var(--motion-fast) var(--ease-standard);
+}
+
+/* Coarse pointers (touch) expand the hit area of icon-only buttons to at
+   least 44px without changing the visual layout: 28px control + 2x8px ring.
+   The pseudo-element is part of the button, so taps land on the button. */
+@media (pointer: coarse) {
+  .icon-btn-hit {
+    position: relative;
+  }
+  .icon-btn-hit::after {
+    content: "";
+    position: absolute;
+    inset: -8px;
+    border-radius: inherit;
+  }
 }
 
 @keyframes fade-in {
