@@ -26,12 +26,17 @@ export const notebookRuntime = {
   },
 
   /** Cell execution is a mutation with side effects in the kernel — never cached. */
-  async execute(notebookId: string, cwd: string, language: "python" | "r", code: string): Promise<CellResult> {
+  async execute(notebookId: string, cwd: string, language: "python" | "r", code: string, sessionId?: string): Promise<CellResult> {
     const query = new URLSearchParams({ cwd });
     return apiRequest<CellResult>(`/api/kernels/execute?${query}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ language, code, notebook_id: notebookId }),
+      body: JSON.stringify({
+        language,
+        code,
+        notebook_id: notebookId,
+        ...(sessionId ? { session_id: sessionId } : {}),
+      }),
       errorFallback: "Cell execution failed",
     });
   },

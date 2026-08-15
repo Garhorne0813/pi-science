@@ -13,6 +13,7 @@ const executeCellRequestSchema = z.object({
   language: z.enum(["python", "r"]),
   code: z.string(),
   notebook_id: z.string().optional().nullable(),
+  session_id: z.string().min(1).optional().nullable(),
   timeout_seconds: z.number().min(1).max(600).optional(),
 });
 
@@ -47,7 +48,10 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
       kind: "kernel_cell",
       surface: body.language,
       producer: "node-kernel-gateway",
-      correlation: { request_id: request.id },
+      correlation: {
+        request_id: request.id,
+        ...(body.session_id ? { session_id: body.session_id } : {}),
+      },
       request: {
         language: body.language,
         notebook_id: body.notebook_id ?? "default",
@@ -72,7 +76,12 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
           "x-request-id": request.id,
           ...(config.internalToken ? { "x-pi-science-internal-token": config.internalToken } : {}),
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          language: body.language,
+          code: body.code,
+          notebook_id: body.notebook_id,
+          timeout_seconds: body.timeout_seconds,
+        }),
         signal: AbortSignal.timeout(kernelTimeoutMs),
       });
       const responseBody = await parseResponseBody(upstream);

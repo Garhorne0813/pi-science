@@ -121,7 +121,7 @@ describe("Node control plane", () => {
     const response = await app.inject({
       method: "POST",
       url: `/api/kernels/execute?cwd=${encodeURIComponent(workspace)}`,
-      payload: { language: "r", code: "write-output", notebook_id: "analysis" },
+      payload: { language: "r", code: "write-output", notebook_id: "analysis", session_id: "session-notebook" },
     });
     const executionId = response.json().execution_id;
     const execution = await app.inject({ method: "GET", url: `/api/executions/${executionId}?cwd=${encodeURIComponent(workspace)}` });
@@ -132,6 +132,7 @@ describe("Node control plane", () => {
       surface: "r",
       status: "succeeded",
       request: { notebook_id: "analysis", code: "write-output" },
+      correlation: { session_id: "session-notebook" },
       files: { written: [{ path: "cell-output.csv", detection: "snapshot" }] },
     });
     await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
