@@ -12,6 +12,10 @@ export const runsQuery = (cwd: string) => ({
     return data.executions ?? [];
   },
   staleTime: 0,
+  refetchInterval: (query: { state: { data?: ExecutionRecord[] } }) =>
+    query.state.data?.some((run) => run.status === "pending" || run.status === "running") ? 1_000 : 5_000,
+  refetchIntervalInBackground: false,
+  refetchOnWindowFocus: true,
 });
 
 export const runLogQuery = (cwd: string, executionId: string) => ({

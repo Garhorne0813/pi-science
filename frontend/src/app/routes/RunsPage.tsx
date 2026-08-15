@@ -1,17 +1,20 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  AlertTriangle, ArrowLeft, Ban, Check, Circle, CircleDashed, Clock3, FileOutput,
-  FileSearch, Loader2, Play, Search, X,
+  AlertTriangle, ArrowLeft, ArrowUpRight, Ban, Check, Circle, CircleDashed, Clock3,
+  Copy, FileOutput, FileSearch, Loader2, MessageSquare, Play, RotateCcw, Search, X,
 } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import type { ExecutionRecord } from "../../types/thread";
-import { cn } from "../../lib/ui";
+import { cn, useUiStore } from "../../lib/ui";
+import { useRuntimeStore } from "../../lib/agent-runtime";
+import { fileInspectorForPath } from "../../lib/artifacts";
 import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "../../components/layout/WorkspacePage";
 import { useTranslation } from "react-i18next";
 import { timeAgo } from "../../lib/shared";
 import { queryClient } from "../../lib/client/query-client";
-import { runLogQuery, runsQuery } from "../../lib/runs";
+import { reproduceRunPrompt, runLogQuery, runsQuery } from "../../lib/runs";
+import { apiRequest } from "../../lib/client/api";
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { useRequiredWorkspaceCwd } from "../../lib/workspace";
 
@@ -26,7 +29,10 @@ const EMPTY_RUNS: ExecutionRecord[] = [];
 export function RunsPage() {
   const { t } = useTranslation();
   const { toast } = useFeedback();
+  const navigate = useNavigate();
   const workspaceCwd = useRequiredWorkspaceCwd();
+  const openInspector = useUiStore((state) => state.openInspector);
+  const setComposerDraft = useRuntimeStore((state) => state.setDraft);
   const [searchParams, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState<KindFilter>("all");
@@ -88,6 +94,43 @@ export function RunsPage() {
     setCompactDetailOpen(true);
   };
 
+  const copyText = async (text: string, message: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast(message, "success");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : t("runs.copyError"), "error");
+    }
+  };
+
+  const openFile = (path: string) => {
+    const relative = workspaceRelativePath(path, workspaceCwd);
+    if (!relative) {
+      toast(t("runs.fileOutsideWorkspace"), "error");
+      return;
+    }
+    openInspector(fileInspectorForPath(relative, fileName(relative), "workspace", workspaceCwd));
+  };
+
+  const openArtifact = async (artifact: ExecutionRecord["artifacts"][number]) => {
+    try {
+      const manifest = await apiRequest<{ path: string }>(`/api/artifacts/${encodeURIComponent(artifact.artifact_id)}?${new URLSearchParams({ cwd: workspaceCwd, version: String(artifact.version) })}`);
+      openFile(manifest.path);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : t("runs.artifactLoadError"), "error");
+    }
+  };
+
+  const openSession = (run: ExecutionRecord) => {
+    const root = `/workspace/${encodeURIComponent(workspaceCwd)}`;
+    navigate(run.correlation.session_id ? `${root}/session/${encodeURIComponent(run.correlation.session_id)}` : root);
+  };
+
+  const reproduce = (run: ExecutionRecord) => {
+    setComposerDraft(reproduceRunPrompt(run));
+    openSession(run);
+  };
+
   return (
     <WorkspacePage>
       <WorkspacePageHeader
@@ -117,6 +160,10 @@ export function RunsPage() {
           <option value="all">{t("runs.allStatuses")}</option>
           {STATUSES.map((item) => <option key={item} value={item}>{t(`runs.status.${item}`)}</option>)}
         </select>
+        <span className="flex items-center gap-1.5 px-1.5 text-[10px] font-medium text-muted" title={t("runs.liveHint")}>
+          <span className={cn("h-1.5 w-1.5 rounded-full", runs.some(isActiveExecution) ? "animate-pulse bg-accent" : "bg-ok")} />
+          {t("runs.live")}
+        </span>
       </div>
 
       <div className="mt-4">
@@ -137,7 +184,19 @@ export function RunsPage() {
               </div>
             </section>
             <section aria-label={t("runs.details")} className="runs-detail-pane min-w-0 bg-bg/40">
-              {selected && <ExecutionDetails run={selected} tab={detailTab} onTabChange={setDetailTab} onBack={() => setCompactDetailOpen(false)} log={logs[selected.execution_id]} loadingLog={Boolean(loadingLogs[selected.execution_id])} />}
+              {selected && <ExecutionDetails
+                run={selected}
+                tab={detailTab}
+                onTabChange={setDetailTab}
+                onBack={() => setCompactDetailOpen(false)}
+                onCopy={(text, message) => void copyText(text, message)}
+                onOpenFile={openFile}
+                onOpenArtifact={(artifact) => void openArtifact(artifact)}
+                onOpenSession={() => openSession(selected)}
+                onReproduce={() => reproduce(selected)}
+                log={logs[selected.execution_id]}
+                loadingLog={Boolean(loadingLogs[selected.execution_id])}
+              />}
             </section>
           </div>
         )}
@@ -164,9 +223,23 @@ function ExecutionRow({ run, index, selected, onClick }: { run: ExecutionRecord;
   );
 }
 
-function ExecutionDetails({ run, tab, onTabChange, onBack, log, loadingLog }: { run: ExecutionRecord; tab: DetailTab; onTabChange: (tab: DetailTab) => void; onBack: () => void; log?: string; loadingLog: boolean }) {
+function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpenFile, onOpenArtifact, onOpenSession, onReproduce, log, loadingLog }: {
+  run: ExecutionRecord;
+  tab: DetailTab;
+  onTabChange: (tab: DetailTab) => void;
+  onBack: () => void;
+  onCopy: (text: string, message: string) => void;
+  onOpenFile: (path: string) => void;
+  onOpenArtifact: (artifact: ExecutionRecord["artifacts"][number]) => void;
+  onOpenSession: () => void;
+  onReproduce: () => void;
+  log?: string;
+  loadingLog: boolean;
+}) {
   const { t } = useTranslation();
   const tabs: DetailTab[] = ["summary", "input", "output", "files", "runtime", "timing"];
+  const problem = isProblemExecution(run) ? executionError(run) : "";
+  const exitCode = typeof run.result.exit_code === "number" ? run.result.exit_code : undefined;
   return (
     <div className="flex h-full min-h-[540px] w-full flex-col">
       <div className="runs-detail-header border-b border-border px-4 py-4">
@@ -185,6 +258,18 @@ function ExecutionDetails({ run, tab, onTabChange, onBack, log, loadingLog }: { 
           <span className="shrink-0 font-mono text-[10px] text-muted">{executionDuration(run, t("runs.running"))}</span>
         </div>
         <div className="mt-3 break-all font-mono text-[10px] text-muted">{run.execution_id}</div>
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          <DetailAction icon={<RotateCcw size={12} />} label={t("runs.reproduce")} onClick={onReproduce} primary />
+          {run.correlation.session_id && <DetailAction icon={<MessageSquare size={12} />} label={t("runs.openSession")} onClick={onOpenSession} />}
+          <DetailAction icon={<Copy size={12} />} label={t("runs.copyId")} onClick={() => onCopy(run.execution_id, t("runs.idCopied"))} />
+          {executionCommandText(run) && <DetailAction icon={<Copy size={12} />} label={t("runs.copyCommand")} onClick={() => onCopy(executionCommandText(run), t("runs.commandCopied"))} />}
+        </div>
+        {isProblemExecution(run) && (problem || exitCode !== undefined) && (
+          <div className="mt-3 rounded-input border border-error/25 bg-error/5 px-3 py-2 text-[11px] text-error">
+            <div className="flex items-center gap-1.5 font-semibold"><AlertTriangle size={12} />{t("runs.errorSummary")}{exitCode !== undefined && <span className="font-normal text-muted">· {t("runs.exitCode", { code: exitCode })}</span>}</div>
+            {problem && <div className="mt-1 whitespace-pre-wrap font-mono leading-relaxed">{problem}</div>}
+          </div>
+        )}
       </div>
       <div className="flex overflow-x-auto border-b border-border px-2" role="tablist" aria-label={t("runs.detailTabs")}>
         {tabs.map((item) => <button key={item} type="button" role="tab" aria-selected={tab === item} onClick={() => onTabChange(item)} className={cn("shrink-0 border-b-2 px-3 py-2.5 text-[11px] transition-colors", tab === item ? "border-accent text-text" : "border-transparent text-muted hover:text-text")}>{t(`runs.tab.${item}`)}</button>)}
@@ -193,7 +278,7 @@ function ExecutionDetails({ run, tab, onTabChange, onBack, log, loadingLog }: { 
         {tab === "summary" && <SummaryDetails run={run} />}
         {tab === "input" && <JsonBlock value={run.request} empty={t("runs.noInput")} />}
         {tab === "output" && <div className="space-y-4"><DetailSection title={t("runs.result")}><JsonBlock value={run.result} empty={t("runs.noResult")} /></DetailSection><DetailSection title={t("runs.log")}>{loadingLog ? <div className="flex items-center gap-2 text-xs text-muted"><Loader2 size={13} className="animate-spin" />{t("common.loading")}</div> : <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-input border border-border bg-surface-2 p-3 font-mono text-[11px] leading-relaxed text-text">{log ?? t("runs.noLog")}</pre>}</DetailSection></div>}
-        {tab === "files" && <FileDetails run={run} />}
+        {tab === "files" && <FileDetails run={run} onOpenFile={onOpenFile} onOpenArtifact={onOpenArtifact} />}
         {tab === "runtime" && <JsonBlock value={run.runtime} empty={t("runs.noRuntime")} />}
         {tab === "timing" && <TimingDetails run={run} />}
       </div>
@@ -206,13 +291,13 @@ function SummaryDetails({ run }: { run: ExecutionRecord }) {
   return <div className="space-y-5"><dl className="runs-detail-fields grid gap-x-3 gap-y-2 text-xs"><DetailTerm>{t("runs.field.status")}</DetailTerm><DetailValue>{t(`runs.status.${run.status}`)}</DetailValue><DetailTerm>{t("runs.field.kind")}</DetailTerm><DetailValue>{t(`runs.kind.${run.kind}`)}</DetailValue><DetailTerm>{t("runs.field.surface")}</DetailTerm><DetailValue>{run.surface}</DetailValue><DetailTerm>{t("runs.field.producer")}</DetailTerm><DetailValue>{run.producer}</DetailValue><DetailTerm>{t("runs.field.workspace")}</DetailTerm><DetailValue mono>{run.workspace_id}</DetailValue><DetailTerm>{t("runs.duration")}</DetailTerm><DetailValue>{executionDuration(run, t("runs.running"))}</DetailValue></dl><DetailSection title={t("runs.correlation")}><JsonBlock value={run.correlation} empty={t("runs.noCorrelation")} /></DetailSection></div>;
 }
 
-function FileDetails({ run }: { run: ExecutionRecord }) {
+function FileDetails({ run, onOpenFile, onOpenArtifact }: { run: ExecutionRecord; onOpenFile: (path: string) => void; onOpenArtifact: (artifact: ExecutionRecord["artifacts"][number]) => void }) {
   const { t } = useTranslation();
-  return <div className="space-y-5"><FileList title={t("runs.filesRead")} icon={<FileSearch size={13} />} files={run.files.read} empty={t("runs.noFilesRead")} /><FileList title={t("runs.filesWritten")} icon={<FileOutput size={13} />} files={run.files.written} empty={t("runs.noFilesWritten")} /><DetailSection title={t("runs.artifacts")}>{run.artifacts.length === 0 ? <p className="text-xs text-muted">{t("runs.noArtifacts")}</p> : <div className="space-y-2">{run.artifacts.map((artifact) => <div key={`${artifact.artifact_id}:${artifact.version}:${artifact.relation}`} className="rounded-input border border-border bg-surface-2 px-3 py-2"><div className="font-mono text-[11px] text-text">{artifact.artifact_id}</div><div className="mt-1 text-[10px] text-muted">{artifact.relation} · v{artifact.version}</div></div>)}</div>}</DetailSection></div>;
+  return <div className="space-y-5"><FileList title={t("runs.filesRead")} icon={<FileSearch size={13} />} files={run.files.read} empty={t("runs.noFilesRead")} onOpen={onOpenFile} /><FileList title={t("runs.filesWritten")} icon={<FileOutput size={13} />} files={run.files.written} empty={t("runs.noFilesWritten")} onOpen={onOpenFile} /><DetailSection title={t("runs.artifacts")}>{run.artifacts.length === 0 ? <p className="text-xs text-muted">{t("runs.noArtifacts")}</p> : <div className="space-y-2">{run.artifacts.map((artifact) => <button type="button" onClick={() => onOpenArtifact(artifact)} key={`${artifact.artifact_id}:${artifact.version}:${artifact.relation}`} className="group flex w-full items-center gap-3 rounded-input border border-border bg-surface-2 px-3 py-2 text-left hover:border-accent-border hover:bg-accent-soft"><span className="min-w-0 flex-1"><span className="block truncate font-mono text-[11px] text-text">{artifact.artifact_id}</span><span className="mt-1 block text-[10px] text-muted">{artifact.relation} · v{artifact.version}</span></span><ArrowUpRight size={13} className="shrink-0 text-muted group-hover:text-accent" /></button>)}</div>}</DetailSection></div>;
 }
 
-function FileList({ title, icon, files, empty }: { title: string; icon: ReactNode; files: ExecutionRecord["files"]["read"]; empty: string }) {
-  return <DetailSection title={title} icon={icon}>{files.length === 0 ? <p className="text-xs text-muted">{empty}</p> : <div className="space-y-2">{files.map((file, index) => <div key={`${file.path}:${index}`} className="rounded-input border border-border bg-surface-2 px-3 py-2"><div className="break-all font-mono text-[11px] text-text">{file.path}</div><div className="mt-1 text-[10px] text-muted">{file.detection}</div></div>)}</div>}</DetailSection>;
+function FileList({ title, icon, files, empty, onOpen }: { title: string; icon: ReactNode; files: ExecutionRecord["files"]["read"]; empty: string; onOpen: (path: string) => void }) {
+  return <DetailSection title={title} icon={icon}>{files.length === 0 ? <p className="text-xs text-muted">{empty}</p> : <div className="space-y-2">{files.map((file, index) => <button type="button" onClick={() => onOpen(file.path)} key={`${file.path}:${index}`} className="group flex w-full items-center gap-3 rounded-input border border-border bg-surface-2 px-3 py-2 text-left hover:border-accent-border hover:bg-accent-soft"><span className="min-w-0 flex-1"><span className="block break-all font-mono text-[11px] text-text">{file.path}</span><span className="mt-1 block text-[10px] text-muted">{file.detection}</span></span><ArrowUpRight size={13} className="shrink-0 text-muted group-hover:text-accent" /></button>)}</div>}</DetailSection>;
 }
 
 function TimingDetails({ run }: { run: ExecutionRecord }) {
@@ -221,6 +306,7 @@ function TimingDetails({ run }: { run: ExecutionRecord }) {
 }
 
 function DetailSection({ title, icon, children }: { title: string; icon?: ReactNode; children: ReactNode }) { return <section><h3 className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">{icon}{title}</h3>{children}</section>; }
+function DetailAction({ icon, label, onClick, primary = false }: { icon: ReactNode; label: string; onClick: () => void; primary?: boolean }) { return <button type="button" onClick={onClick} className={cn("flex min-h-7 items-center gap-1.5 rounded-input border px-2.5 text-[10px] transition-colors", primary ? "border-accent-border bg-accent-soft text-accent hover:bg-accent/10" : "border-border bg-surface text-muted hover:border-border-strong hover:text-text")}>{icon}{label}</button>; }
 function DetailTerm({ children }: { children: ReactNode }) { return <dt className="text-muted">{children}</dt>; }
 function DetailValue({ children, mono = false }: { children: ReactNode; mono?: boolean }) { return <dd className={cn("min-w-0 break-all text-text", mono && "font-mono text-[11px]")}>{children}</dd>; }
 function JsonBlock({ value, empty }: { value: Record<string, unknown>; empty: string }) { return Object.keys(value).length === 0 ? <p className="text-xs text-muted">{empty}</p> : <pre className="max-h-[440px] overflow-auto whitespace-pre-wrap rounded-input border border-border bg-surface-2 p-3 font-mono text-[11px] leading-relaxed text-text">{JSON.stringify(value, null, 2)}</pre>; }
@@ -248,6 +334,19 @@ function executionLabel(run: ExecutionRecord): string {
 
 function executionSearchText(run: ExecutionRecord): string { return [run.execution_id, run.kind, run.surface, run.status, run.producer, executionLabel(run), ...run.files.read.map((file) => file.path), ...run.files.written.map((file) => file.path)].join("\n"); }
 function outputCount(run: ExecutionRecord): number { return Math.max(run.files.written.length, run.artifacts.filter((artifact) => artifact.relation === "output").length); }
+function isActiveExecution(run: ExecutionRecord): boolean { return run.status === "pending" || run.status === "running"; }
+function isProblemExecution(run: ExecutionRecord): boolean { return !["pending", "running", "succeeded"].includes(run.status); }
+function executionCommandText(run: ExecutionRecord): string { return run.request.command?.join(" ") || String(run.request.tool || ""); }
+function executionError(run: ExecutionRecord): string { return String(run.result.error || run.result.stderr_preview || "").trim(); }
+
+function workspaceRelativePath(path: string, cwd: string): string | null {
+  const normalized = path.replaceAll("\\", "/");
+  const workspace = cwd.replaceAll("\\", "/").replace(/\/+$/, "");
+  if (!normalized.startsWith("/")) return normalized.replace(/^\.\//, "");
+  return normalized.startsWith(`${workspace}/`) ? normalized.slice(workspace.length + 1) : null;
+}
+
+function fileName(path: string): string { return path.split("/").pop() || path; }
 
 function executionDuration(run: ExecutionRecord, runningLabel: string): string {
   if (!run.ended_at && ["pending", "running"].includes(run.status)) return runningLabel;

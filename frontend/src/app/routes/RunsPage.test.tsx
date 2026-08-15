@@ -7,13 +7,28 @@ import { queryClient } from "../../lib/client/query-client";
 import type { ExecutionRecord } from "../../types/thread";
 import { RunsPage } from "./RunsPage";
 
+const { toastMock, openInspectorMock, setDraftMock } = vi.hoisted(() => ({
+  toastMock: vi.fn(),
+  openInspectorMock: vi.fn(),
+  setDraftMock: vi.fn(),
+}));
+
+vi.mock("../../lib/ui", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/ui")>();
+  return { ...actual, useUiStore: (selector: (state: { openInspector: typeof openInspectorMock }) => unknown) => selector({ openInspector: openInspectorMock }) };
+});
+
+vi.mock("../../lib/agent-runtime", () => ({
+  useRuntimeStore: (selector: (state: { setDraft: typeof setDraftMock }) => unknown) => selector({ setDraft: setDraftMock }),
+}));
+
 vi.mock("../../lib/workspace", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/workspace")>();
   return { ...actual, useRequiredWorkspaceCwd: () => "/workspace" };
 });
 
 vi.mock("../../components/feedback/feedback-context", () => ({
-  useFeedback: () => ({ toast: vi.fn() }),
+  useFeedback: () => ({ toast: toastMock }),
 }));
 
 vi.mock("../../components/layout/WorkspacePage", () => ({
@@ -90,12 +105,13 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
   if (url.includes("/api/executions/exec_kernel/logs")) return jsonResponse({ stdout: "kernel stdout", stderr: "" });
   if (url.includes("/api/executions/exec_job/logs")) return jsonResponse({ stdout: "", stderr: "job stderr" });
   if (url.includes("/api/executions/exec_tool/logs")) return jsonResponse({ stdout: "tool output", stderr: "" });
+  if (url.includes("/api/artifacts/artifact-result")) return jsonResponse({ path: "outputs/result.csv" });
   return jsonResponse({ error: `unhandled ${url}` }, 404);
 });
 
 function LocationProbe() {
   const location = useLocation();
-  return <output aria-label="location">{location.search}</output>;
+  return <output aria-label="location">{location.pathname}{location.search}</output>;
 }
 
 function renderPage(initial = "/workspace/project/runs") {
@@ -104,6 +120,8 @@ function renderPage(initial = "/workspace/project/runs") {
       <MemoryRouter initialEntries={[initial]}>
         <Routes>
           <Route path="/workspace/:cwd/runs" element={<><RunsPage /><LocationProbe /></>} />
+          <Route path="/workspace/:cwd" element={<LocationProbe />} />
+          <Route path="/workspace/:cwd/session/:sessionId" element={<LocationProbe />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -117,7 +135,11 @@ beforeAll(async () => {
 beforeEach(() => {
   queryClient.clear();
   fetchMock.mockClear();
+  toastMock.mockClear();
+  openInspectorMock.mockClear();
+  setDraftMock.mockClear();
   vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
 });
 
 afterEach(() => {
@@ -184,5 +206,39 @@ describe("RunsPage execution ledger", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Output" }));
     expect(await screen.findByText("kernel stdout")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/executions/exec_kernel/logs"), expect.anything());
+  });
+
+  it("opens recorded files and resolves artifacts to their workspace file", async () => {
+    renderPage("/workspace/project/runs?execution=exec_kernel");
+    await screen.findByText("node-kernel-gateway");
+    fireEvent.click(screen.getByRole("tab", { name: "Files" }));
+
+    fireEvent.click(screen.getByRole("button", { name: /outputs\/result\.csv/ }));
+    expect(openInspectorMock).toHaveBeenCalledWith(expect.objectContaining({ variant: "file", path: "outputs/result.csv", cwd: "/workspace" }));
+
+    fireEvent.click(screen.getByRole("button", { name: /artifact-result/ }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/artifacts/artifact-result"), expect.anything()));
+    expect(openInspectorMock).toHaveBeenLastCalledWith(expect.objectContaining({ path: "outputs/result.csv" }));
+  });
+
+  it("copies execution evidence and drafts a reproduction in the originating session", async () => {
+    renderPage("/workspace/project/runs?execution=exec_tool");
+    await screen.findByText("node-pi-event-observer");
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy ID" }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith("exec_tool"));
+    fireEvent.click(screen.getByRole("button", { name: "Copy command" }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith("write"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Reproduce" }));
+    expect(setDraftMock).toHaveBeenCalledWith(expect.stringContaining("exec_tool"));
+    expect(screen.getByLabelText("location")).toHaveTextContent("/workspace/%2Fworkspace/session/session-1");
+  });
+
+  it("surfaces failure evidence without requiring the output tab", async () => {
+    renderPage("/workspace/project/runs?execution=exec_job");
+    expect(await screen.findByText("Execution problem")).toBeInTheDocument();
+    expect(screen.getByText("training failed")).toBeInTheDocument();
+    expect(screen.getByText(/exit code 1/)).toBeInTheDocument();
   });
 });
