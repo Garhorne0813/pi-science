@@ -181,7 +181,7 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
         </span>
       </div>
 
-      <div className="mt-4">
+      <div className="runs-workbench-container mt-4">
         {loading && runs.length === 0 ? (
           <div className="py-10 text-center text-sm text-muted"><Loader2 size={18} className="mx-auto mb-2 animate-spin" />{t("common.loading")}</div>
         ) : runs.length === 0 ? (
@@ -190,7 +190,7 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
           <EmptyState icon={<FileSearch size={36} />} title={t("runs.noMatches")} hint={t("runs.noMatchesHint")} />
         ) : (
           <div data-testid="runs-workbench" data-compact-detail={compactDetailOpen ? "true" : "false"} className="runs-ledger-layout runs-workbench grid min-h-[540px] overflow-hidden rounded-card border border-border bg-surface">
-            <section aria-label={t("runs.ledger")} className="runs-ledger-pane min-w-0 border-b border-border lg:border-b-0 lg:border-r">
+            <section aria-label={t("runs.ledger")} className="runs-ledger-pane min-w-0">
               <div className="runs-ledger-columns grid items-center gap-2 border-b border-border bg-surface-2/60 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
                 <span>#</span><span>{t("runs.execution")}</span><span>{t("runs.duration")}</span>
               </div>

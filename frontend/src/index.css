@@ -231,6 +231,10 @@
 
   /* Runs uses explicit layout classes because Tailwind's dev scanner does not
      reliably add newly introduced arbitrary grid templates during Vite HMR. */
+  .runs-workbench-container {
+    container: runs-workbench / inline-size;
+  }
+
   .runs-ledger-layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -273,6 +277,8 @@
 
   .runs-ledger-pane {
     display: block;
+    border-bottom: 1px solid var(--border);
+    border-right: 0;
   }
 
   .runs-detail-pane {
@@ -292,7 +298,7 @@
     display: flex;
   }
 
-  @media (min-width: 1024px) {
+  @container runs-workbench (min-width: 840px) {
     .runs-ledger-layout {
       grid-template-columns: minmax(340px, 0.9fr) minmax(420px, 1.1fr);
     }
@@ -300,6 +306,11 @@
     .runs-ledger-pane,
     .runs-detail-pane {
       display: block !important;
+    }
+
+    .runs-ledger-pane {
+      border-bottom: 0;
+      border-right: 1px solid var(--border);
     }
 
     .runs-detail-back {

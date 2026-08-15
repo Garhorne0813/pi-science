@@ -175,6 +175,7 @@ describe("RunsPage execution ledger", () => {
     await screen.findAllByText("write");
     await waitFor(() => expect(screen.getByLabelText("location")).toHaveTextContent("execution=exec_tool"));
     expect(screen.getByTestId("runs-workbench")).toHaveAttribute("data-compact-detail", "false");
+    expect(screen.getByTestId("runs-workbench").parentElement).toHaveClass("runs-workbench-container");
     expect(screen.getByText("node-pi-event-observer")).toBeInTheDocument();
     expect(screen.getAllByText("Running", { selector: "dd" }).length).toBeGreaterThan(0);
   });
