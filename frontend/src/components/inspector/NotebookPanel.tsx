@@ -86,7 +86,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
           <span style={{ fontSize: "14px", fontWeight: 600 }}>{t("notebook.title")}</span>
           <span style={{
             fontSize: "11px", marginLeft: "8px", padding: "2px 8px", borderRadius: "8px",
-            backgroundColor: interpreters === null ? "var(--warn)" : interpreters.python || interpreters.r ? "var(--ok)" : "var(--error)",
+            backgroundColor: interpreters === null ? "var(--warn-fill)" : interpreters.python || interpreters.r ? "var(--ok-fill)" : "var(--error-fill)",
             color: "#fff",
           }}>
             {interpreters === null
@@ -97,8 +97,8 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
           </span>
         </div>
         <div style={{ display: "flex", gap: "6px" }}>
-          <button disabled={!interpreters?.python} onClick={() => addCell("python")} style={{ ...btnStyle("var(--accent)"), opacity: interpreters?.python ? 1 : 0.4 }}>+ Python</button>
-          <button disabled={!interpreters?.r} onClick={() => addCell("r")} style={{ ...btnStyle("var(--ok)"), opacity: interpreters?.r ? 1 : 0.4 }}>+ R</button>
+          <button disabled={!interpreters?.python} onClick={() => addCell("python")} style={{ ...btnStyle("var(--accent-fill)"), opacity: interpreters?.python ? 1 : 0.4 }}>+ Python</button>
+          <button disabled={!interpreters?.r} onClick={() => addCell("r")} style={{ ...btnStyle("var(--ok-fill)"), opacity: interpreters?.r ? 1 : 0.4 }}>+ R</button>
           <button onClick={onClose} style={{ ...btnStyle("var(--muted)"), fontSize: "16px" }}>✕</button>
         </div>
       </div>
@@ -196,7 +196,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
                 {cell.result.error && (
                   <pre style={{
                     margin: 0, fontSize: "12px", fontFamily: "var(--font-mono)",
-                    color: "var(--error)", whiteSpace: "pre-wrap",
+                    color: "var(--error-text)", whiteSpace: "pre-wrap",
                     padding: "8px", backgroundColor: "#fef2f2",
                     borderRadius: "4px",
                   }}>

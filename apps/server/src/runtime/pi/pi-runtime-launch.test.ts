@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -57,11 +57,94 @@ describe("Pi runtime custom provider materialization", () => {
     buildPiProcessOptions(cwd);
 
     const catalog = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "models.json"), "utf8"));
+    expect(catalog.providers["custom-deepseek"].api).toBe("openai-completions");
     expect(catalog.providers["custom-deepseek"].models[0]).toMatchObject({
       id: "deepseek-v4-flash",
       reasoning: true,
       thinkingLevelMap: expect.objectContaining({ low: "low", high: "high", xhigh: "xhigh" }),
     });
+  });
+
+  it("materializes openai-responses and anthropic-messages providers with per-model hints", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-three-api-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), `${JSON.stringify({
+      custom_providers: [
+        { id: "responses", name: "Responses API", base_url: "https://responses.example.com/v1", api: "openai-responses", models: ["resp-model"], reasoning: false, context_window: 64000, model_hints: { "resp-model": { context_window: 262144, reasoning: true, thinking_levels: ["off", "medium", "high"] } } },
+        { id: "claude", name: "Claude Gateway", base_url: "https://claude.example.com/v1", api: "anthropic-messages", models: ["claude-model"], model_hints: { "claude-model": { context_window: 200000, reasoning: true, thinking_levels: ["off", "high"] } } },
+      ],
+    })}\n`, "utf8");
+
+    buildPiProcessOptions(cwd);
+
+    const catalog = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "models.json"), "utf8"));
+    // The API format is passed through exactly for every protocol.
+    expect(catalog.providers["custom-responses"].api).toBe("openai-responses");
+    expect(catalog.providers["custom-claude"].api).toBe("anthropic-messages");
+    // Per-model hints win over the provider-level reasoning default (false)
+    // and map into contextWindow / reasoning / thinkingLevelMap.
+    expect(catalog.providers["custom-responses"].models[0]).toMatchObject({
+      id: "resp-model", reasoning: true, contextWindow: 262144,
+      thinkingLevelMap: { off: "off", medium: "medium", high: "high" },
+    });
+    expect(catalog.providers["custom-claude"].models[0]).toMatchObject({
+      id: "claude-model", reasoning: true, contextWindow: 200000,
+      thinkingLevelMap: { off: "off", high: "high" },
+    });
+  });
+
+  it("writes stored API keys for any pi-ai provider (OpenCode Go) into auth.json with 0600 permissions", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-auth-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), `${JSON.stringify({ api_keys: { "opencode-go": "oc-go-secret" } })}\n`, "utf8");
+
+    buildPiProcessOptions(cwd);
+
+    const auth = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "auth.json"), "utf8"));
+    expect(auth["opencode-go"]).toEqual({ type: "api_key", key: "oc-go-secret" });
+    const mode = (await stat(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "auth.json"))).mode & 0o777;
+    // Windows has no POSIX mode bits (chmod is best-effort there); the content
+    // assertions above still validate the materialization on every platform.
+    if (process.platform !== "win32") expect(mode).toBe(0o600);
+  });
+
+  it("preserves non-api-key auth entries, merges Pi-Science keys, and drops stale managed keys", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-auth-merge-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    const agentDir = join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host");
+    await mkdir(agentDir, { recursive: true });
+    // Direct pi usage left an OAuth entry; a stale Pi-Science api_key remains.
+    await writeFile(join(agentDir, "auth.json"), `${JSON.stringify({ anthropic: { type: "oauth", token: "t" }, openai: { type: "api_key", key: "old-openai" } })}\n`, "utf8");
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), `${JSON.stringify({ api_keys: { "opencode-go": "oc-go-secret" } })}\n`, "utf8");
+
+    buildPiProcessOptions(cwd);
+
+    const auth = JSON.parse(await readFile(join(agentDir, "auth.json"), "utf8"));
+    expect(auth.anthropic).toEqual({ type: "oauth", token: "t" });
+    expect(auth["opencode-go"]).toEqual({ type: "api_key", key: "oc-go-secret" });
+    // Settings is the authority for api_key entries: the stale key is removed.
+    expect(auth.openai).toBeUndefined();
+  });
+
+  it("removes auth.json when no API keys remain", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-auth-clear-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    const agentDir = join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(join(agentDir, "auth.json"), `${JSON.stringify({ openai: { type: "api_key", key: "old-openai" } })}\n`, "utf8");
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), `${JSON.stringify({ api_keys: {} })}\n`, "utf8");
+
+    buildPiProcessOptions(cwd);
+
+    await expect(readFile(join(agentDir, "auth.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("materializes custom reasoning metadata and percentage-based compaction settings", async () => {
@@ -143,6 +226,127 @@ describe("Pi runtime custom provider materialization", () => {
     const options = buildPiProcessOptions(cwd, undefined, undefined, isolated)!;
 
     expect(options.env).toMatchObject(isolated);
+  });
+
+  it("keeps outer Pi session variables out of the host and agent runtime env", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-env-isolation-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    const previous = {
+      model: process.env.PI_MODEL,
+      provider: process.env.PI_PROVIDER,
+      reasoning: process.env.PI_REASONING_LEVEL,
+      session: process.env.PI_SESSION_ID,
+      sessionFile: process.env.PI_SESSION_FILE,
+    };
+    process.env.PI_MODEL = "outer/model";
+    process.env.PI_PROVIDER = "outer";
+    process.env.PI_REASONING_LEVEL = "low";
+    process.env.PI_SESSION_ID = "outer-session";
+    process.env.PI_SESSION_FILE = "/tmp/outer-session.jsonl";
+    try {
+      const options = buildPiProcessOptions(cwd, { model: "openrouter/openai/gpt-5.1", thinking: "high", skills: [], extensions: [] })!;
+
+      // The host env keeps the auth token but must not carry the outer Pi
+      // session variables (they would shadow the workspace configuration).
+      expect(options.env?.PI_ORBIT_AUTH_TOKEN).toBe(options.web?.authToken);
+      expect(options.env?.PI_MODEL).toBeUndefined();
+      expect(options.env?.PI_PROVIDER).toBeUndefined();
+      expect(options.env?.PI_REASONING_LEVEL).toBeUndefined();
+      expect(options.env?.PI_SESSION_ID).toBeUndefined();
+      expect(options.env?.PI_SESSION_FILE).toBeUndefined();
+      // The runtime env explicitly removes (null) the host token and the
+      // per-session identity at the runtime boundary, and replaces the outer
+      // model variables with the authoritative workspace configuration so the
+      // agent's bash tool can identify the real model.
+      const runtimeEnv = options.web?.runtime.runtimeEnv;
+      expect(runtimeEnv).toBeDefined();
+      expect(runtimeEnv?.PI_ORBIT_AUTH_TOKEN).toBeNull();
+      expect(runtimeEnv?.PI_SESSION_ID).toBeNull();
+      expect(runtimeEnv?.PI_SESSION_FILE).toBeNull();
+      expect(runtimeEnv?.PI_PROVIDER).toBe("openrouter");
+      expect(runtimeEnv?.PI_MODEL).toBe("openai/gpt-5.1");
+      expect(runtimeEnv?.PI_REASONING_LEVEL).toBe("high");
+      expect(options.web?.runtime.model).toBe("openrouter/openai/gpt-5.1");
+      expect(options.web?.runtime.thinking).toBe("high");
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        const name = { model: "PI_MODEL", provider: "PI_PROVIDER", reasoning: "PI_REASONING_LEVEL", session: "PI_SESSION_ID", sessionFile: "PI_SESSION_FILE" }[key as keyof typeof previous]!;
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
+  it("strips outer Pi session variables injected through the workspace environment too", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-env-isolation-workspace-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    process.env.PI_MODEL = "outer/model";
+    try {
+      const options = buildPiProcessOptions(cwd, undefined, undefined, {
+        PATH: join(cwd, ".venv", "bin"),
+        PI_MODEL: "workspace/model",
+        PI_SESSION_ID: "workspace-session",
+      })!;
+
+      expect(options.env?.PI_MODEL).toBeUndefined();
+      expect(options.env?.PI_SESSION_ID).toBeUndefined();
+      // Legitimate workspace environment values still reach the runtime.
+      expect(options.env?.PATH).toBe(join(cwd, ".venv", "bin"));
+      const runtimeEnv = options.web?.runtime.runtimeEnv;
+      // Without a workspace model there is nothing to expose: the outer and
+      // workspace-injected PI_MODEL are stripped, and the per-session
+      // identity stays removed at the boundary.
+      expect(runtimeEnv?.PI_MODEL).toBeNull();
+      expect(runtimeEnv?.PI_PROVIDER).toBeNull();
+      expect(runtimeEnv?.PI_REASONING_LEVEL).toBeNull();
+      expect(runtimeEnv?.PI_SESSION_ID).toBeNull();
+      expect(runtimeEnv?.PATH).toBe(join(cwd, ".venv", "bin"));
+    } finally {
+      delete process.env.PI_MODEL;
+    }
+  });
+
+  it("exposes the effective workspace model/provider/thinking to the agent bash env", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-session-env-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    const previous = process.env.PI_MODEL;
+    process.env.PI_MODEL = "outer/model";
+    try {
+      const options = buildPiProcessOptions(cwd, { model: "custom-custom-api/minimax-m2.5", thinking: "high", skills: [], extensions: [] })!;
+
+      const runtimeEnv = options.web?.runtime.runtimeEnv;
+      expect(runtimeEnv).toBeDefined();
+      // The agent's bash tool sees the real session model identity, not the
+      // outer shell value and not null.
+      expect(runtimeEnv?.PI_PROVIDER).toBe("custom-custom-api");
+      expect(runtimeEnv?.PI_MODEL).toBe("minimax-m2.5");
+      expect(runtimeEnv?.PI_REASONING_LEVEL).toBe("high");
+      expect(runtimeEnv?.PI_MODEL).not.toBe("outer/model");
+      // The runtime descriptor carries the same identity for the control plane.
+      expect(options.web?.runtime.model).toBe("custom-custom-api/minimax-m2.5");
+      expect(options.web?.runtime.thinking).toBe("high");
+    } finally {
+      if (previous === undefined) delete process.env.PI_MODEL;
+      else process.env.PI_MODEL = previous;
+    }
+  });
+
+  it("falls back to the workspace settings model when no config is passed", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-session-env-settings-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), `${JSON.stringify({ model: "deepseek/deepseek-chat", thinking: "off" })}\n`, "utf8");
+
+    const options = buildPiProcessOptions(cwd)!;
+
+    const runtimeEnv = options.web?.runtime.runtimeEnv;
+    expect(runtimeEnv?.PI_PROVIDER).toBe("deepseek");
+    expect(runtimeEnv?.PI_MODEL).toBe("deepseek-chat");
+    expect(runtimeEnv?.PI_REASONING_LEVEL).toBe("off");
   });
 
   it("passes a manifest-discovered runtime extension exactly once", async () => {

@@ -39,6 +39,41 @@ describe("MarkdownViewer mathematics", () => {
   });
 });
 
+describe("MarkdownViewer code blocks", () => {
+  it("renders a sticky banner with the fence language and a copy button in chat", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    const { container } = render(<MarkdownViewer>{`\`\`\`python
+print(1)
+\`\`\``}</MarkdownViewer>);
+    const banner = container.querySelector(".sticky")!;
+    expect(banner).not.toBeNull();
+    expect(banner.textContent).toContain("python");
+    const copyButton = screen.getByRole("button", { name: "Copy" });
+    fireEvent.click(copyButton);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("print(1)\n"));
+  });
+
+  it("keeps a plain pre in the document variant", () => {
+    const { container } = render(<MarkdownViewer variant="document">{"```py\nprint(2)\n```"}</MarkdownViewer>);
+    expect(container.querySelector(".sticky")).toBeNull();
+    expect(container.querySelector("pre")).not.toBeNull();
+    expect(container.querySelector("button")).toBeNull();
+  });
+
+  it("lets compact previews opt out of code chrome", () => {
+    const { container } = render(
+      <MarkdownViewer codeChrome={false}>{"```py\nprint(3)\n```"}</MarkdownViewer>,
+    );
+    expect(container.querySelector(".sticky")).toBeNull();
+    expect(container.querySelector("button")).toBeNull();
+  });
+});
+
 describe("MarkdownViewer images", () => {
   const CWD = "/Users/cyq/pi-science-workspaces/test";
 

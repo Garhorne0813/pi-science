@@ -224,6 +224,25 @@ describe("WorkspaceSessionList", () => {
     expect(useUiStore.getState().suppressAutoSessionNav).toBe(false);
   });
 
+  it("renders New Session as a labeled full-width bar with the target geometry", () => {
+    useRuntimeStore.setState({ sessions: [session("s1", "Session A")], activeSessionId: "s1" });
+    renderList();
+
+    const button = screen.getByRole("button", { name: "New conversation" });
+    expect(button).toHaveClass("h-new-session", "rounded-card");
+    expect(button.textContent).toContain("New conversation");
+  });
+
+  it("reveals session actions when the row receives keyboard focus", () => {
+    useRuntimeStore.setState({ sessions: [session("s1", "Session A")], activeSessionId: "s1" });
+    renderList();
+
+    const row = rowFor("Session A");
+    expect(row.className).toContain("focus-within:bg-surface-hover");
+    const deleteButton = deleteButtonOf("Session A");
+    expect(deleteButton.className).toContain("group-focus-within:!inline-flex");
+  });
+
   it("does not let a repeated New Session click at root suppress the next normal root entry", async () => {
     const loadSessions = vi.fn(async () => []);
     useRuntimeStore.setState({

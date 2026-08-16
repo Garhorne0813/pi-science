@@ -26,11 +26,11 @@ export function ResearchTab({ cwd, onError }: { cwd: string; onError: (message: 
     <div className="space-y-4">
       <section className="ui-card-flat flex flex-col gap-4 rounded-card p-5 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="font-serif text-lg text-text">{t("knowledge.researchTitle")}</h2>
+          <h2 className="text-lg font-semibold text-text">{t("knowledge.researchTitle")}</h2>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">{t("knowledge.researchConversationDescription")}</p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
-          <button type="button" onClick={openConversation} className="flex min-h-10 items-center gap-2 rounded-input bg-accent px-4 text-sm font-medium text-accent-fg">
+          <button type="button" onClick={openConversation} className="flex min-h-10 items-center gap-2 rounded-input bg-accent-fill px-4 text-sm font-medium text-accent-fg">
             <MessageSquareText size={15} /> {t("research.startFromConversation")}
           </button>
           <button type="button" onClick={openResearch} className="flex min-h-10 items-center gap-2 rounded-input border border-border px-4 text-sm text-muted hover:text-text">

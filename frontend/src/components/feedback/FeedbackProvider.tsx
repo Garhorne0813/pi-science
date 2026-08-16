@@ -64,7 +64,7 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
         {toasts.map((item) => {
           const Icon = item.tone === "success" ? CheckCircle2 : item.tone === "error" ? XCircle : Info;
           return (
-            <div key={item.id} className={cn("ui-popover pointer-events-auto flex items-start gap-2 rounded-input px-3 py-2.5 text-sm", item.tone === "error" ? "border-error/30 text-error" : item.tone === "success" ? "border-ok/30 text-ok" : "text-text")}>
+            <div key={item.id} className={cn("ui-popover pointer-events-auto flex items-start gap-2 rounded-input px-3 py-2.5 text-sm", item.tone === "error" ? "border-error/30 text-error-text" : item.tone === "success" ? "border-ok/30 text-ok-text" : "text-text")}>
               <Icon size={16} className="mt-0.5 shrink-0" />
               <span className="min-w-0 flex-1 leading-5">{item.message}</span>
               <button type="button" aria-label={t("common.close")} onClick={() => setToasts((current) => current.filter((toastItem) => toastItem.id !== item.id))} className="text-muted hover:text-text"><X size={14} /></button>
@@ -76,7 +76,7 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/45 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) finishConfirmation(false); }}>
           <div role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-description" className="ui-dialog w-full max-w-sm rounded-card p-5">
             <div className="flex items-start gap-3">
-              <AlertTriangle size={20} className={cn("mt-0.5 shrink-0", confirmation.destructive ? "text-error" : "text-warn")} />
+              <AlertTriangle size={20} className={cn("mt-0.5 shrink-0", confirmation.destructive ? "text-error-text" : "text-warn-text")} />
               <div>
                 <h2 id="confirm-title" className="font-medium text-text">{confirmation.title}</h2>
                 <p id="confirm-description" className="mt-1.5 text-sm leading-6 text-muted">{confirmation.message}</p>
@@ -84,7 +84,7 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
             </div>
             <div className="mt-5 flex justify-end gap-2">
               <button type="button" autoFocus onClick={() => finishConfirmation(false)} className="h-9 rounded-input border border-border px-3 text-sm text-muted hover:text-text">{t("common.cancel")}</button>
-              <button type="button" onClick={() => finishConfirmation(true)} className={cn("h-9 rounded-input px-3 text-sm font-medium", confirmation.destructive ? "bg-error text-white" : "bg-accent text-accent-fg")}>{confirmation.confirmLabel || t("common.ok")}</button>
+              <button type="button" onClick={() => finishConfirmation(true)} className={cn("h-9 rounded-input px-3 text-sm font-medium", confirmation.destructive ? "bg-error-fill text-accent-fg" : "bg-accent-fill text-accent-fg")}>{confirmation.confirmLabel || t("common.ok")}</button>
             </div>
           </div>
         </div>

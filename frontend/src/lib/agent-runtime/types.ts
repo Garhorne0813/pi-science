@@ -1,6 +1,6 @@
 /** Public state shape of the agent runtime store. */
 
-import type { PiScienceClient, SessionInfo } from "../client/pi-science-client";
+import type { PiScienceClient, SessionInfo, SessionStats } from "../client/pi-science-client";
 import type { Thread } from "./event-fold";
 
 export interface PendingInteraction {
@@ -79,6 +79,9 @@ export interface RuntimeState {
   contextPercent: number | null;
   compactionEnabled: boolean;
   compactionThresholdPercent: number | null;
+  /** Whole-session cumulative stats (turns, tool calls, tokens, timing);
+   *  refreshed via `session.stats` SSE events and the stats REST endpoint. */
+  sessionStats: SessionStats | null;
   pendingInteraction: PendingInteraction | null;
   pendingQuestionnaire: PendingQuestionnaire | null;
   /** Increments after a turn settles so workspace file views can reload. */

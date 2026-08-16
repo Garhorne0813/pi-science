@@ -150,10 +150,10 @@ export function NotebooksPage() {
           }
         />
 
-        <div className="ui-card-flat mt-6 flex items-center justify-between rounded-card px-4 py-3">
+        <div className="ui-card-flat mt-6 flex flex-wrap items-center justify-between gap-2 rounded-card px-4 py-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-medium text-text">
-              {environment?.ready && <CheckCircle2 size={14} className="text-ok" />}
+              {environment?.ready && <CheckCircle2 size={14} className="text-ok-text" />}
               {t("notebooks.workspacePython")}
             </div>
             <p className="mt-0.5 truncate font-mono text-[11px] text-muted">
@@ -161,7 +161,7 @@ export function NotebooksPage() {
             </p>
           </div>
           {!environment?.ready && (
-            <button type="button" onClick={() => void provisionWorkspaceEnvironment()} disabled={provisioningEnvironment} className="ml-3 flex shrink-0 items-center gap-1 rounded-input bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40">
+            <button type="button" onClick={() => void provisionWorkspaceEnvironment()} disabled={provisioningEnvironment} className="ml-3 flex shrink-0 items-center gap-1 rounded-input bg-accent-fill px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40">
               {provisioningEnvironment && <RefreshCw size={12} className="animate-spin" />}
               {t("notebooks.initialize")}
             </button>
@@ -170,7 +170,7 @@ export function NotebooksPage() {
 
         {/* Jupyter Server */}
         <div className={cn("mb-6 mt-3 rounded-card border p-4", jupyter.running && jupyter.matches_workspace ? "border-ok/40 bg-ok/5" : "ui-card-flat")}>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="text-sm font-medium text-text">{t("notebooks.jupyterLab")}</h2>
               <p className="text-xs text-muted mt-0.5">
@@ -180,7 +180,7 @@ export function NotebooksPage() {
                     : t("notebooks.runningElsewhere", { cwd: jupyter.cwd })
                   : jupyter.env_ready ? t("notebooks.environmentReadyShort") : t("notebooks.environmentNotSetUp")}
               </p>
-              {jupyterError && <p role="alert" className="mt-1 text-xs text-error">{jupyterError}</p>}
+              {jupyterError && <p role="alert" className="mt-1 text-xs text-error-text">{jupyterError}</p>}
             </div>
             <div className="flex items-center gap-2">
               {jupyter.running && jupyter.matches_workspace ? (
@@ -188,18 +188,18 @@ export function NotebooksPage() {
                   <a href={jupyter.url!} target="_blank" className="rounded-input px-3 py-1.5 text-xs text-link hover:bg-surface-2 flex items-center gap-1">
                     <ExternalLink size={12} /> {t("common.open")}
                   </a>
-                  <button onClick={stopJupyter} className="rounded-input px-3 py-1.5 text-xs text-error hover:bg-error/10 flex items-center gap-1">
+                  <button onClick={stopJupyter} className="rounded-input px-3 py-1.5 text-xs text-error-text hover:bg-error/10 flex items-center gap-1">
                     <Square size={12} /> {t("common.stop")}
                   </button>
                 </>
               ) : jupyter.env_ready ? (
                 <button onClick={startJupyter} disabled={starting}
-                  className="rounded-input bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40 flex items-center gap-1">
+                  className="rounded-input bg-accent-fill px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40 flex items-center gap-1">
                   {starting ? <RefreshCw size={12} className="animate-spin" /> : <Play size={12} />} {t("common.start")}
                 </button>
               ) : (
                 <button onClick={setupJupyterEnv} disabled={settingUp}
-                  className="rounded-input bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40 flex items-center gap-1">
+                  className="rounded-input bg-accent-fill px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40 flex items-center gap-1">
                   {settingUp ? <RefreshCw size={12} className="animate-spin" /> : "⚡"} {t("notebooks.setupJupyter")}
                 </button>
               )}

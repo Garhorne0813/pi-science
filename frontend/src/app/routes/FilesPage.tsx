@@ -115,7 +115,7 @@ export function FilesPage() {
       <WorkspacePageHeader
         title={t("nav.files")}
         description={
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center gap-1">
               <button onClick={() => setSubdir("")} className="hover:text-text">{t("files.workspace")}</button>
               {breadcrumbs.map((bc) => (
                 <span key={bc.path} className="flex items-center gap-1">
@@ -157,7 +157,7 @@ export function FilesPage() {
                   <span className="text-xs text-muted shrink-0 ml-auto">{e.isDir ? "—" : workspaceFiles.formatSize(e.size)}</span>
                 </button>
                 <button onClick={(ev) => { ev.stopPropagation(); handleDelete(e); }}
-                  className="shrink-0 rounded p-1 text-muted hover:text-error hover:bg-error/10 opacity-0 group-hover:opacity-100 transition-opacity">
+                  className="shrink-0 rounded p-1 text-muted hover:text-error-text hover:bg-error/10 opacity-0 group-hover:opacity-100 transition-opacity">
                   <Trash2 size={14} /><span className="sr-only">{t("common.delete")}</span>
                 </button>
               </div>

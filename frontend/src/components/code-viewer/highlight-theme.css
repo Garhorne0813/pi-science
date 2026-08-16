@@ -1,0 +1,104 @@
+/* Syntax highlighting for CodeViewer — token colors ride the app theme
+   variables instead of a fixed light stylesheet, so the same component reads
+   correctly in light and dark mode. Kept intentionally small: only the token
+   classes highlight.js emits for the common languages. */
+:root,
+[data-theme="light"] {
+  /* Light token colors are chosen against the CodeViewer surface (#f9fafb):
+     every token keeps WCAG AA >= 4.5:1 for normal text. */
+  --hl-keyword: #2f5fd6;
+  --hl-string: #0e7a52;
+  --hl-number: #a43e8e;
+  --hl-comment: #667085;
+  --hl-title: #9a4d0e;
+  --hl-type: #7a3ee6;
+  --hl-meta: #667085;
+  --hl-literal: #c2410c;
+  --hl-symbol: #0f766e;
+}
+
+[data-theme="dark"] {
+  --hl-keyword: #679efe;
+  --hl-string: #4ed17e;
+  --hl-number: #e87ba4;
+  --hl-comment: #8b9098;
+  --hl-title: #f7ad31;
+  --hl-type: #a78bfa;
+  --hl-meta: #adb2b8;
+  --hl-literal: #f97316;
+  --hl-symbol: #2dd4bf;
+}
+
+.hljs {
+  color: var(--text);
+  background: transparent;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-selector-class,
+.hljs-selector-id,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-template-tag,
+.hljs-deletion {
+  color: var(--hl-keyword);
+}
+
+.hljs-string,
+.hljs-attribute,
+.hljs-template-variable,
+.hljs-addition {
+  color: var(--hl-string);
+}
+
+.hljs-number,
+.hljs-literal {
+  color: var(--hl-number);
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-section {
+  color: var(--hl-title);
+}
+
+.hljs-type,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: var(--hl-type);
+}
+
+.hljs-meta,
+.hljs-meta .hljs-keyword,
+.hljs-doctag {
+  color: var(--hl-meta);
+}
+
+.hljs-attr,
+.hljs-variable,
+.hljs-variable.constant_,
+.hljs-variable.language_,
+.hljs-params,
+.hljs-property,
+.hljs-operator,
+.hljs-punctuation {
+  color: var(--text);
+}
+
+.hljs-strong {
+  font-weight: 600;
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}

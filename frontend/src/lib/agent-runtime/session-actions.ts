@@ -63,6 +63,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           contextPercent: null,
           compactionEnabled: true,
           compactionThresholdPercent: null,
+          sessionStats: null,
           pendingInteraction: null,
           pendingQuestionnaire: null,
         });

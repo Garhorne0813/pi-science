@@ -4,12 +4,14 @@
 import { create } from "zustand";
 import type { Inspector } from "../../types/thread";
 import i18n from "../../i18n";
-import { detectInitialLocale, resolveLocale } from "../../i18n/config";
+import { detectInitialLocale, detectSystemLocale, resolveLocale } from "../../i18n/config";
 import type { WorkspaceReference } from "../files";
 
+export type ThemeChoice = "light" | "dark" | "system";
+
 interface UiState {
-  theme: "light" | "dark";
-  setTheme: (t: "light" | "dark") => void;
+  theme: ThemeChoice;
+  setTheme: (t: ThemeChoice) => void;
   locale: string;
   setLocale: (l: string) => void;
   sidebarCollapsed: boolean;
@@ -75,6 +77,55 @@ export function inspectorTabId(data: Inspector): string {
   }
 }
 
+/** The concrete scheme the OS currently reports; light when the API is
+ *  unavailable (jsdom, old browsers). */
+export function resolveSystemTheme(): "light" | "dark" {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return "light";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+// Attached once per app lifetime; the handler re-checks the store's current
+// theme, so switching away from "system" silently stops the follow behavior.
+let themeMedia: MediaQueryList | null = null;
+function attachThemeListener() {
+  if (themeMedia || typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+  const media = window.matchMedia("(prefers-color-scheme: dark)");
+  if (!media) return;
+  themeMedia = media;
+  const onChange = () => {
+    if (useUiStore.getState().theme === "system") {
+      document.documentElement.setAttribute("data-theme", resolveSystemTheme());
+    }
+  };
+  // Modern engines use addEventListener; older Safari uses addListener.
+  if (typeof media.addEventListener === "function") media.addEventListener("change", onChange);
+  else if (typeof media.addListener === "function") media.addListener(onChange);
+}
+
+/** Apply a theme choice to the document. "system" tracks the OS scheme
+ *  (including live updates); light/dark are applied verbatim. */
+export function applyTheme(theme: ThemeChoice) {
+  if (theme === "system") {
+    attachThemeListener();
+    document.documentElement.setAttribute("data-theme", resolveSystemTheme());
+  } else {
+    document.documentElement.setAttribute("data-theme", theme);
+  }
+}
+
+// Attached once per app lifetime; no-ops unless the store is in system mode.
+let localeListenerAttached = false;
+function attachLocaleListener() {
+  if (localeListenerAttached || typeof window === "undefined") return;
+  localeListenerAttached = true;
+  window.addEventListener("languagechange", () => {
+    if (useUiStore.getState().locale !== "system") return;
+    const locale = detectSystemLocale();
+    void i18n.changeLanguage(locale);
+    if (typeof document !== "undefined") document.documentElement.lang = locale;
+  });
+}
+
 function loadFromStorage<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
   try {
@@ -95,15 +146,24 @@ function saveToStorage(key: string, value: unknown) {
 }
 
 export const useUiStore = create<UiState>((set) => ({
-  theme: loadFromStorage<"light" | "dark">("theme", "light"),
+  theme: loadFromStorage<ThemeChoice>("theme", "light"),
   setTheme: (t) => {
     saveToStorage("theme", t);
-    document.documentElement.setAttribute("data-theme", t);
+    applyTheme(t);
     set({ theme: t });
   },
 
-  locale: detectInitialLocale(),
+  locale: loadFromStorage<string | null>("locale", null) ?? detectInitialLocale(),
   setLocale: (l) => {
+    if (l === "system") {
+      saveToStorage("locale", "system");
+      attachLocaleListener();
+      const locale = detectSystemLocale();
+      void i18n.changeLanguage(locale);
+      if (typeof document !== "undefined") document.documentElement.lang = locale;
+      set({ locale: "system" });
+      return;
+    }
     const locale = resolveLocale(l);
     saveToStorage("locale", locale);
     void i18n.changeLanguage(locale);

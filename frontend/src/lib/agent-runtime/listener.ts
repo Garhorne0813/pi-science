@@ -1,7 +1,7 @@
 /** Single SSE subscription that drives the store: connection status, turn
  *  lifecycle, interaction prompts and thread folding. */
 
-import type { PiScienceClient } from "../client/pi-science-client";
+import type { PiScienceClient, SessionStats } from "../client/pi-science-client";
 import { aiTitleAttemptedAt, hasAiTitle, markAiTitleAttempted } from "../client/pi-science-client";
 import { appendRuntimeError, isMissingSessionError } from "./errors";
 import { markWorkspaceFilesChanged } from "./file-revision";
@@ -305,6 +305,15 @@ export function registerEventListener(client: PiScienceClient) {
         maybeGenerateAiTitle(state.activeSessionId, state.cwd);
       }
       void loadSessionsInternal();
+    } else if (event.type === "session.stats") {
+      ++generations.activity;
+      const stats = event.stats as SessionStats | undefined;
+      // Only the active session may write the stats line. Events without a
+      // session id or for a session the user already left (late arrival) must
+      // not overwrite the current session's numbers.
+      if (stats && typeof stats === "object" && state.activeSessionId && event.sessionId === state.activeSessionId) {
+        useRuntimeStore.setState({ sessionStats: stats });
+      }
     } else if (event.type === "error") {
       ++generations.activity;
       if (event.recoverable === true) {

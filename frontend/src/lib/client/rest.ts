@@ -3,7 +3,7 @@
 
 import { request, responseError } from "./http";
 import { cacheMessages } from "./message-cache";
-import type { HistoryMessage, InteractionResponse, SessionInfo, SessionMessagePage, SessionState, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
+import type { HistoryMessage, InteractionResponse, SessionInfo, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
 
 export async function createSession(baseUrl: string, cwd: string, model?: string): Promise<{ id: string; cwd?: string; project_id?: string }> {
   const config = model ? { model } : {};
@@ -108,6 +108,16 @@ export async function getSessionState(baseUrl: string, sessionId: string, cwd: s
     throw new Error(responseError(data, `Read session state failed: ${res.statusText}`));
   }
   return data as SessionState;
+}
+
+export async function getSessionStats(baseUrl: string, sessionId: string, cwd: string): Promise<SessionStats> {
+  const params = new URLSearchParams({ cwd });
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/stats?${params}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    throw new Error(responseError(data, `Read session stats failed: ${res.statusText}`));
+  }
+  return data.stats as SessionStats;
 }
 
 export async function forkSession(baseUrl: string, sessionId: string, cwd: string, entryId?: string): Promise<{ id: string }> {

@@ -132,7 +132,7 @@ export function NotebookEditor({
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-text">{filename}</span>
         <span className={cn(
           "rounded-full px-2 py-0.5 text-[11px] ring-1",
-          runnable ? "bg-ok/10 text-ok ring-ok/20" : "bg-warn/10 text-warn ring-warn/20",
+          runnable ? "bg-ok/10 text-ok-text ring-ok/20" : "bg-warn/10 text-warn-text ring-warn/20",
         )}>
           {languageLabel}
         </span>
@@ -154,7 +154,7 @@ export function NotebookEditor({
           </div>
         )}
         {!loading && error && (
-          <div role="alert" className="flex items-start gap-2 rounded-card border border-error/30 bg-error/5 p-4 text-sm text-error">
+          <div role="alert" className="flex items-start gap-2 rounded-card border border-error/30 bg-error/5 p-4 text-sm text-error-text">
             <AlertCircle size={16} className="mt-0.5 shrink-0" />
             <span>{error}</span>
           </div>
@@ -165,7 +165,7 @@ export function NotebookEditor({
           </div>
         )}
         {!loading && !error && !runnable && (
-          <div role="status" className="mb-3 rounded-input border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-warn">
+          <div role="status" className="mb-3 rounded-input border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-warn-text">
             {t("notebook.unsupportedKernel")}
           </div>
         )}
@@ -228,7 +228,7 @@ function NotebookCellView({
           onClick={onRun}
           disabled={!runnable || cell.running || !cell.code.trim()}
           aria-label={t("notebook.runCell", { index: index + 1 })}
-          className="flex min-h-9 items-center gap-1.5 rounded-input bg-accent px-3 text-xs font-medium text-accent-fg hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex min-h-9 items-center gap-1.5 rounded-input bg-accent-fill px-3 text-xs font-medium text-accent-fg hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {cell.running ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
           {cell.running ? t("common.running") : t("common.run")}
@@ -263,7 +263,7 @@ function LiveResult({ result }: { result: CellResult }) {
     <div className="space-y-2 border-t border-faint px-4 py-3 font-mono text-xs leading-5">
       {result.stdout && <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-text">{result.stdout}</pre>}
       {result.result && <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-accent">{result.result}</pre>}
-      {result.error && <pre role="alert" className="max-h-64 overflow-auto whitespace-pre-wrap text-error">{result.error}</pre>}
+      {result.error && <pre role="alert" className="max-h-64 overflow-auto whitespace-pre-wrap text-error-text">{result.error}</pre>}
     </div>
   );
 }
@@ -281,7 +281,7 @@ function StoredOutputs({ outputs }: { outputs: NotebookOutput[] }) {
             {text && (
               <pre className={cn(
                 "max-h-64 overflow-auto whitespace-pre-wrap",
-                output.output_type === "error" ? "text-error" : "text-text",
+                output.output_type === "error" ? "text-error-text" : "text-text",
               )}>
                 {text}
               </pre>
@@ -290,7 +290,7 @@ function StoredOutputs({ outputs }: { outputs: NotebookOutput[] }) {
               <img
                 src={`data:image/png;base64,${image}`}
                 alt={t("notebook.output", { index: index + 1 })}
-                className="mt-2 max-h-80 max-w-full rounded-input bg-white object-contain"
+                className="mt-2 max-h-80 max-w-full rounded-input bg-surface-2 object-contain"
               />
             )}
           </div>

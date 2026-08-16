@@ -428,4 +428,42 @@ describe("runtime event subscription", () => {
     source.emit("turn.artifacts", { type: "turn.artifacts", sessionId: "session-a", turnId: "t1", artifacts: [] });
     await vi.waitFor(() => expect(mark).toHaveBeenCalledTimes(1));
   });
+
+  it("ignores session.stats events from non-active sessions and applies active ones", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-b"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-b");
+    const source = FakeEventSource.instances[0];
+    source.open();
+
+    const baseline = {
+      userMessages: 4,
+      assistantMessages: 5,
+      toolCalls: 9,
+      toolResults: 8,
+      totalMessages: 18,
+      tokens: { input: 50000, output: 10000, cacheRead: 40000, cacheWrite: 5000, total: 105000 },
+    };
+    useRuntimeStore.setState({ sessionStats: baseline });
+
+    // A late stats event from a session the user already left must not
+    // overwrite the active session's numbers.
+    source.emit("session.stats", {
+      type: "session.stats",
+      sessionId: "session-a",
+      stats: { ...baseline, userMessages: 99 },
+    });
+    expect(useRuntimeStore.getState().sessionStats).toEqual(baseline);
+
+    // The active session's stats event replaces the baseline.
+    const next = { ...baseline, userMessages: 5, toolCalls: 11, tokens: { ...baseline.tokens, output: 12000 } };
+    source.emit("session.stats", { type: "session.stats", sessionId: "session-b", stats: next });
+    expect(useRuntimeStore.getState().sessionStats).toEqual(next);
+  });
 });

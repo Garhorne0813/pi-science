@@ -19,13 +19,13 @@ export function SkillReadinessBadge({ readiness, loading, error }: { readiness?:
   if (!readiness || readiness.requirements.length === 0) return null;
   if (readiness.ready) {
     return (
-      <span title={t("skills.readinessReady")} className="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] text-ok ring-1 ring-border" style={{ backgroundColor: "color-mix(in srgb, var(--ok) 10%, transparent)" }}>
+      <span title={t("skills.readinessReady")} className="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] text-ok-text ring-1 ring-border" style={{ backgroundColor: "color-mix(in srgb, var(--ok) 10%, transparent)" }}>
         <Check size={10} /> {t("skills.ready")}
       </span>
     );
   }
   return (
-    <span title={t("skills.readinessBlocked")} className="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] text-error ring-1 ring-border" style={{ backgroundColor: "color-mix(in srgb, var(--error) 10%, transparent)" }}>
+    <span title={t("skills.readinessBlocked")} className="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] text-error-text ring-1 ring-border" style={{ backgroundColor: "color-mix(in srgb, var(--error) 10%, transparent)" }}>
       <AlertTriangle size={10} /> {t("skills.needsDeps")}
     </span>
   );
@@ -69,18 +69,18 @@ export function RequirementStatusList({ readiness }: { readiness: SkillReadiness
       <div>
         <span className="font-medium text-text">{t("skills.dependencyStatus")}:</span>
         {readiness.ready ? (
-          <span className="ml-2 text-ok">{t("skills.dependencyAllReady")}</span>
+          <span className="ml-2 text-ok-text">{t("skills.dependencyAllReady")}</span>
         ) : (
-          <span className="ml-2 text-error">{t("skills.dependencyBlocked")}</span>
+          <span className="ml-2 text-error-text">{t("skills.dependencyBlocked")}</span>
         )}
       </div>
       <ul className="space-y-1.5">
         {readiness.requirements.map((requirement) => (
           <li key={`${requirement.name}:${requirement.kind}`} className="flex items-start gap-2">
             {requirement.status === "ready" ? (
-              <Check size={13} className="mt-0.5 shrink-0 text-ok" />
+              <Check size={13} className="mt-0.5 shrink-0 text-ok-text" />
             ) : requirement.status === "missing" ? (
-              <AlertTriangle size={13} className="mt-0.5 shrink-0 text-error" />
+              <AlertTriangle size={13} className="mt-0.5 shrink-0 text-error-text" />
             ) : (
               <Wrench size={13} className="mt-0.5 shrink-0 text-muted" />
             )}
@@ -97,7 +97,7 @@ export function RequirementStatusList({ readiness }: { readiness: SkillReadiness
                   onClick={() => void copyHint(requirement.hint!)}
                   className="mt-1 flex items-center gap-1 rounded-input bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-muted ring-1 ring-border hover:text-text"
                 >
-                  {copyState?.hint === requirement.hint ? (copyState.ok ? <Check size={10} className="text-ok" /> : <AlertTriangle size={10} className="text-error" />) : <Copy size={10} />}
+                  {copyState?.hint === requirement.hint ? (copyState.ok ? <Check size={10} className="text-ok-text" /> : <AlertTriangle size={10} className="text-error-text" />) : <Copy size={10} />}
                   <span className="max-w-full truncate">{requirement.hint}</span>
                 </button>
               ) : null}

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { settingsApi } from "../../lib/settings";
 import type { CustomProvider } from "../../lib/settings";
+import { SettingsSelectMenu } from "./SettingsSelectMenu";
 
 export function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, onClose }: { providers: CustomProvider[]; onConfigReload: () => Promise<void>; isOpen: boolean; onOpen: () => void; onClose: () => void }) {
   const { t } = useTranslation();
@@ -93,13 +94,13 @@ export function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, on
             <p className="text-sm font-medium text-text">{t("settings.custom.title")}</p>
             <p className="text-[11px] text-muted">{t("settings.custom.description")}</p>
           </div>
-          <button type="button" onClick={onOpen} className="min-h-9 rounded-input bg-accent px-3 text-[11px] font-medium text-accent-fg">
+          <button type="button" onClick={onOpen} className="min-h-9 rounded-input bg-accent-fill px-3 text-[11px] font-medium text-accent-fg">
             + {t("settings.custom.add")}
           </button>
         </div>
       )}
       {isOpen && (
-        <div className="space-y-3 border-y border-faint py-3">
+        <div className="space-y-3 rounded-card border border-faint bg-surface-2/40 px-4 py-3">
           <div className="flex items-center justify-between gap-2">
             <p className="text-sm font-medium text-text">{t("settings.custom.add")}</p>
             <button type="button" onClick={closeForm} className="min-h-9 rounded-input px-3 text-[11px] text-muted hover:bg-surface-2 hover:text-text">
@@ -109,19 +110,25 @@ export function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, on
           <p className="text-[11px] text-muted">
             {t("settings.custom.formPrefix")} <code className="font-mono">/models</code> {t("settings.custom.formSuffix")}
           </p>
-          {error && <p className="rounded-input bg-error/10 px-3 py-2 text-[11px] text-error">{error}</p>}
+          {error && <p className="rounded-input bg-error/10 px-3 py-2 text-[11px] text-error-text">{error}</p>}
           <div className="grid gap-2 sm:grid-cols-2">
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("settings.custom.name")} className="rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] text-text outline-none" />
-            <select value={api} onChange={(e) => setApi(e.target.value)} className="rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] text-text outline-none">
-              <option value="openai-completions">{t("settings.custom.api.openaiCompletions")}</option>
-              <option value="openai-responses">{t("settings.custom.api.openaiResponses")}</option>
-              <option value="anthropic-messages">{t("settings.custom.api.anthropicMessages")}</option>
-            </select>
+            <SettingsSelectMenu
+              variant="field"
+              ariaLabel={t("settings.custom.api.protocolLabel")}
+              value={api}
+              options={[
+                { value: "openai-completions", label: t("settings.custom.api.openaiCompletions") },
+                { value: "openai-responses", label: t("settings.custom.api.openaiResponses") },
+                { value: "anthropic-messages", label: t("settings.custom.api.anthropicMessages") },
+              ]}
+              onSelect={(next) => setApi(next)}
+            />
           </div>
           <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" className="w-full rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] font-mono text-text outline-none" />
           <div className="grid gap-2 sm:grid-cols-2">
             <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-input border border-border bg-surface-2 px-3 text-xs text-text">
-              <input type="checkbox" checked={reasoning} onChange={(event) => setReasoning(event.target.checked)} className="h-4 w-4 accent-[var(--color-accent)]" />
+              <input type="checkbox" checked={reasoning} onChange={(event) => setReasoning(event.target.checked)} className="h-4 w-4 accent-[var(--accent)]" />
               {t("settings.custom.reasoning")}
             </label>
             <label className="flex min-h-11 items-center gap-2 rounded-input border border-border bg-surface-2 px-3">
@@ -131,7 +138,7 @@ export function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, on
           </div>
           <div className="flex gap-2">
             <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={t("settings.web.apiKey")} className="min-w-0 flex-1 rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] font-mono text-text outline-none" />
-            <button onClick={discover} disabled={!baseUrl.trim() || busy !== null} className="rounded-input bg-accent px-3 py-2 text-[12px] font-medium text-accent-fg disabled:opacity-40">
+            <button onClick={discover} disabled={!baseUrl.trim() || busy !== null} className="rounded-input bg-accent-fill px-3 py-2 text-[12px] font-medium text-accent-fg disabled:opacity-40">
               {busy === "discover" ? t("settings.custom.discovering") : t("settings.custom.discover")}
             </button>
           </div>
@@ -139,7 +146,7 @@ export function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, on
             <div className="rounded-input border border-accent/30 bg-accent/5 px-3 py-3">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-medium text-text">{discovered.name}</span>
-                <button onClick={save} disabled={busy !== null} className="rounded-input bg-accent px-2.5 py-1 text-[11px] font-medium text-accent-fg disabled:opacity-40">
+                <button onClick={save} disabled={busy !== null} className="rounded-input bg-accent-fill px-2.5 py-1 text-[11px] font-medium text-accent-fg disabled:opacity-40">
                   {busy === "save" ? t("settings.custom.saving") : t("settings.custom.save")}
                 </button>
               </div>
@@ -160,18 +167,18 @@ export function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, on
         </div>
       )}
       {providers.length > 0 && (
-        <div className="mt-3 divide-y divide-faint border-y border-faint">
+        <div className="mt-4 divide-y divide-faint overflow-hidden rounded-card border border-faint bg-surface-2/40">
           {providers.map((provider) => (
-            <div key={provider.id} className="flex min-h-14 items-start justify-between gap-3 py-2">
+            <div key={provider.id} className="flex min-h-14 items-start justify-between gap-3 px-4 py-2">
               <div className="min-w-0">
                 <div className="flex items-center gap-2 text-xs font-medium text-text">
                   <span className="truncate">{provider.name}</span>
-                  {provider.has_key && <span className="text-[10px] text-ok">{t("settings.web.keySaved")}</span>}
+                  {provider.has_key && <span className="text-[10px] text-ok-text">{t("settings.web.keySaved")}</span>}
                 </div>
                 <p className="truncate font-mono text-[10px] text-muted">{provider.base_url}</p>
                 <p className="mt-1 text-[10px] text-muted">{provider.models.join(", ")}</p>
               </div>
-              <button type="button" onClick={() => remove(provider.id)} className="min-h-9 shrink-0 rounded-input px-2 py-1 text-[11px] text-error hover:bg-error/10">
+              <button type="button" onClick={() => remove(provider.id)} className="min-h-9 shrink-0 rounded-input px-2 py-1 text-[11px] text-error-text hover:bg-error/10">
                 {t("common.delete")}
               </button>
             </div>

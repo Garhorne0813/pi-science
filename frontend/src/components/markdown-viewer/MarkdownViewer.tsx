@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/ui";
 import { fenceLanguage, runnableLanguage } from "@/lib/conversation";
 import { RunnableCodeBlock } from "../conversation/RunnableCodeBlock";
+import { CodeBlockFrame } from "./CodeBlockFrame";
 import { fileInspectorForPath } from "@/lib/artifacts";
 import { resolveMarkdownResource, type MarkdownResourceContext } from "@/lib/files/markdown-resources";
 import { useUiStore } from "@/lib/ui";
@@ -20,13 +21,15 @@ type Variant = "chat" | "document";
 
 const STYLES: Record<Variant, Record<string, string>> = {
   chat: {
-    // Assistant prose reads in a serif (Claude-style response typography);
-    // UI chrome and code stay sans/mono. CJK falls back to system serif.
-    root: "text-[15px] leading-[1.65] text-text [font-family:'Source_Serif_4','Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
-    p: "my-1.5 first:mt-0 last:mb-0",
+    // Assistant prose reads in the app sans stack (reference: DeepSeek
+    // Harness uses a system UI font for messages); code stays mono.
+    root: "text-[15px] leading-[1.65] text-text",
+    p: "my-2 first:mt-0 last:mb-0",
     a: "text-link underline underline-offset-2",
-    code: "rounded bg-surface-2 px-1 py-0.5 font-mono text-[13px] text-link",
-    pre: "my-3 overflow-x-auto rounded-input bg-surface-2 p-3 font-mono text-[13px] leading-5 [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-text",
+    code: "rounded bg-surface-selected px-1 py-0.5 font-mono text-[13px] text-text",
+    // Radius/background live on the CodeBlockFrame shell; this class only
+    // styles the <pre> content inside it (chat), or the plain pre (document).
+    pre: "overflow-x-auto p-3 font-mono text-[13px] leading-5 [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-text",
     ul: "my-2 ml-5 list-disc space-y-1",
     ol: "my-2 ml-5 list-decimal space-y-1",
     h1: "mb-3 mt-5 text-2xl font-semibold first:mt-0",
@@ -39,14 +42,11 @@ const STYLES: Record<Variant, Record<string, string>> = {
     th: "border border-border bg-surface-2 px-3 py-1.5 text-left font-semibold",
     td: "border border-border px-3 py-1.5",
   },
-  // Editorial-blog paper: warm ink on white, serif headings, terracotta accent
-  // (#c15f3c — the app's brand). Theme-independent by design: a document reads
-  // the same in light or dark mode, so colors are fixed, not tokens.
-  //
-  // Two font stacks, both explicit so the paper never inherits the app's UI
-  // font. Body: a comfortable reading sans (SF/Segoe + PingFang for Chinese).
-  // Headings: the finest reading serifs that actually ship on macOS/Windows
-  // (Iowan/Charter → Georgia), CJK falling back to Songti.
+  // Document "paper": a fixed, theme-independent reading surface (warm ink
+  // on near-white, serif display headings) so long-form previews read like a
+  // document rather than app UI. The colors are deliberate paper constants,
+  // not app-brand colors — the app brand is the DeepSeek-inspired accent blue
+  // and does not leak into document bodies.
   document: {
     root: "text-[16px] leading-[1.8] text-[#2b2620] antialiased [font-feature-settings:'liga','kern'] [font-family:-apple-system,'SF_Pro_Text','Segoe_UI','PingFang_SC','Microsoft_YaHei',sans-serif] selection:bg-[#f2d9cd]",
     p: "my-4 tracking-[0.006em] [text-wrap:pretty] first:mt-0 last:mb-0",
@@ -261,6 +261,7 @@ export function MarkdownViewer({
   variant = "chat",
   codeRunner,
   resourceContext,
+  codeChrome,
 }: {
   children: string;
   className?: string;
@@ -270,6 +271,10 @@ export function MarkdownViewer({
   /** Document/workspace context for resolving relative image and file links.
    *  Chat mode derives it from codeRunner.cwd when omitted. */
   resourceContext?: MarkdownResourceContext;
+  /** Chat code blocks get the sticky banner shell (language/copy/run).
+   *  Defaults to true for the chat variant; compact previews (artifact
+   *  cards) opt out to keep their tiny surface. */
+  codeChrome?: boolean;
 }) {
   const s = STYLES[variant];
   const cwd = codeRunner?.cwd;
@@ -346,19 +351,35 @@ export function MarkdownViewer({
               </span>
             );
           },
-          // Block code: the plain wrapper — its inner <code> is restyled via [&_code].
-          // In chat with a codeRunner, python fences become executable blocks.
+          // Block code: chat gets the sticky banner shell (language/copy and,
+          // with a codeRunner, Run for python fences); document keeps the
+          // plain editorial pre. Without chrome (artifact previews) the chat
+          // pre keeps its own card shell — background, border and margins —
+          // so fenced code never collapses onto the surrounding text.
           pre: ({ children }) => {
             const codeEl = Array.isArray(children) ? children[0] : children;
-            if (codeRunner && variant === "chat" && isValidElement(codeEl)) {
-              const codeProps = codeEl.props as { className?: string; children?: React.ReactNode };
-              if (runnableLanguage(fenceLanguage(codeProps.className))) {
+            const codeProps = isValidElement(codeEl) ? (codeEl.props as { className?: string; children?: React.ReactNode }) : null;
+            const language = codeProps ? fenceLanguage(codeProps.className) : null;
+            const code = codeProps ? reactText(codeProps.children) : "";
+            const chrome = variant === "chat" && (codeChrome ?? true);
+            if (chrome && codeProps) {
+              if (codeRunner && runnableLanguage(language)) {
                 return (
-                  <RunnableCodeBlock code={reactText(codeProps.children)} cwd={codeRunner.cwd} sessionId={codeRunner.sessionId} preClassName={s.pre}>
+                  <RunnableCodeBlock code={code} language={language} cwd={codeRunner.cwd} sessionId={codeRunner.sessionId} preClassName={s.pre}>
                     {children}
                   </RunnableCodeBlock>
                 );
               }
+              return (
+                <CodeBlockFrame language={language} code={code} preClassName={s.pre}>
+                  {children}
+                </CodeBlockFrame>
+              );
+            }
+            if (variant === "chat") {
+              return (
+                <pre className={cn(s.pre, "my-2 rounded-input border border-border bg-surface-2")}>{children}</pre>
+              );
             }
             return <pre className={s.pre}>{children}</pre>;
           },

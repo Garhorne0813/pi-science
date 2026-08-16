@@ -128,6 +128,11 @@ export function registerNodeSessionRoutes(
     return "error" in result ? sendFailure(reply, result) : { ok: true, ...result };
   });
 
+  app.get<{ Params: { session_id: string } }>("/api/sessions/:session_id/stats", async (request, reply) => {
+    const result = await nodeSessionService.stats(request.params.session_id, cwd(request));
+    return "error" in result ? sendFailure(reply, result) : { ok: true, ...result };
+  });
+
   app.post<{ Params: { session_id: string } }>("/api/sessions/:session_id/model", async (request, reply) => {
     const body = request.body as { model?: unknown; thinking?: unknown };
     if (typeof body?.model !== "string" || !body.model.includes("/")) return reply.code(400).send({ ok: false, code: "invalid_request", error: "Model must use provider/model notation" });

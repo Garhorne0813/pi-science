@@ -14,18 +14,18 @@ export function McpRow({ server, onToggle }: { server: McpServer; onToggle: (id:
           </div>
           <p className="mt-0.5 text-ui-caption text-muted">{server.description || server.id}</p>
           <div className="mt-1 flex items-center gap-2">
-            <span className={cn("text-[10px]", server.health === "ready" ? "text-ok" : server.health === "error" ? "text-error" : "text-muted")}>
+            <span className={cn("text-[10px]", server.health === "ready" ? "text-ok-text" : server.health === "error" ? "text-error-text" : "text-muted")}>
               {t("settings.mcpPage.health")}: {server.health}
             </span>
-            <span className={cn("text-[10px]", server.auth === "missing" ? "text-warn" : "text-muted")}>
+            <span className={cn("text-[10px]", server.auth === "missing" ? "text-warn-text" : "text-muted")}>
               {t("settings.mcpPage.auth")}: {server.auth}
             </span>
-            <span className={cn("text-[10px]", server.data_egress === "remote" ? "text-warn" : "text-muted")}>
+            <span className={cn("text-[10px]", server.data_egress === "remote" ? "text-warn-text" : "text-muted")}>
               {t("settings.mcpPage.data")}: {server.data_egress}
             </span>
             <span className="text-[10px] text-muted">{t("settings.mcpPage.toolCount", { count: server.tools.length })}</span>
           </div>
-          {server.error && <p className="mt-1 text-[10px] text-error">{server.error}</p>}
+          {server.error && <p className="mt-1 text-[10px] text-error-text">{server.error}</p>}
           {(server.terms_url || server.privacy_url) && (
             <div className="mt-1 flex gap-2 text-[10px]">
               {server.terms_url && (
@@ -41,7 +41,7 @@ export function McpRow({ server, onToggle }: { server: McpServer; onToggle: (id:
             </div>
           )}
         </div>
-        <button onClick={() => onToggle(server.id, !server.enabled)} className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors", server.enabled ? "bg-ok text-white" : "bg-surface-2 text-muted hover:bg-surface hover:text-text")}>
+        <button onClick={() => onToggle(server.id, !server.enabled)} className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors", server.enabled ? "bg-ok-fill text-accent-fg" : "bg-surface-2 text-muted hover:bg-surface hover:text-text")}>
           {server.enabled ? t("settings.actions.on") : t("settings.actions.off")}
         </button>
       </div>

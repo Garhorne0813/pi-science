@@ -142,6 +142,7 @@ import { writeFileSync } from "node:fs";
 import http from "node:http";
 writeFileSync(new URL("../../../../../control.cwd", import.meta.url), process.cwd());
 writeFileSync(new URL("../../../../../control.pid", import.meta.url), String(process.pid));
+writeFileSync(new URL("../../../../../control.argv", import.meta.url), JSON.stringify(process.argv.slice(2)));
 const child = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
 writeFileSync(new URL("../../../../../control.child.pid", import.meta.url), String(child.pid));
 const server = http.createServer((req, res) => { res.writeHead(req.url === "/api/health" ? 200 : 404); res.end("ok"); });
@@ -178,6 +179,9 @@ wait_url "http://127.0.0.1:$FRONTEND_PORT" || { cat "$LOG" >&2; fail "frontend d
 FIXTURE_CANONICAL="$(cd "$FIXTURE" && pwd -P)"
 [ "$(cat "$FIXTURE/control.cwd")" = "$FIXTURE_CANONICAL/apps/server" ] || fail "control plane CWD changed"
 [ "$(cat "$FIXTURE/frontend.cwd")" = "$FIXTURE_CANONICAL/frontend" ] || fail "frontend CWD changed"
+[ "$(cat "$FIXTURE/control.argv")" = '["src/app/main.ts"]' ] || fail "default control plane argv is not direct mode: $(cat "$FIXTURE/control.argv")"
+assert_contains "$LOG" 'control plane mode: stable'
+assert_not_contains "$LOG" 'control plane mode: watch'
 CONTROL_PID="$(cat "$FIXTURE/control.pid")"; CONTROL_CHILD_PID="$(cat "$FIXTURE/control.child.pid")"; FRONTEND_PID="$(cat "$FIXTURE/frontend.pid")"
 kill -TERM "$START_PID"
 wait "$START_PID" 2>/dev/null || true
@@ -221,6 +225,14 @@ if PI_SCIENCE_CONTROL_PLANE_PORT="$INVALID_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT
 assert_contains "$TEMP_ROOT/invalid-timeout.log" 'must be a positive integer'
 [ ! -e "$FIXTURE/control.pid" ] || fail "invalid timeout spawned the control plane"
 [ ! -e "$FIXTURE/.runtime/pi-science/run.state" ] || fail "invalid timeout left run.state"
+
+# Invalid PI_SCIENCE_SERVER_WATCH values fail before any service is spawned.
+rm -f "$FIXTURE/control.pid" "$FIXTURE/.runtime/pi-science/run.state"
+INVALID_WATCH_PORT="$(free_port)"
+if PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_SERVER_WATCH=yes PI_SCIENCE_CONTROL_PLANE_PORT="$INVALID_WATCH_PORT" PI_SCIENCE_RUNTIME_PORT="$(free_port)" PI_SCIENCE_FRONTEND_PORT="$(free_port)" bash "$FIXTURE/scripts/start.sh" >"$TEMP_ROOT/invalid-watch.log" 2>&1; then fail "invalid PI_SCIENCE_SERVER_WATCH returned success"; fi
+assert_contains "$TEMP_ROOT/invalid-watch.log" 'PI_SCIENCE_SERVER_WATCH must be 0 or 1'
+[ ! -e "$FIXTURE/control.pid" ] || fail "invalid watch value spawned the control plane"
+wait_port_available "$INVALID_WATCH_PORT" || fail "invalid watch value left the control-plane port occupied"
 
 # A live checkout-local launch lock refuses a simultaneous detached contender
 # before it can commit supervisor state.
@@ -394,6 +406,25 @@ wait_port_available "$NEVER_FRONTEND_PORT" || fail "timed-out detached start lef
 wait_pid_gone "$NEVER_CONTROL_PID" || fail "deadline rollback left control plane alive"
 wait_pid_gone "$NEVER_CONTROL_CHILD_PID" || fail "deadline rollback left TERM-ignoring descendant alive"
 wait_pid_gone "$NEVER_FRONTEND_PID" || fail "deadline rollback left frontend alive"
+
+# The watch opt-in passes the watch argument to tsx and logs the mode; default
+# stays direct so detached supervisors never see a tsx watch restart loop.
+WATCH_CONTROL_PORT="$(free_port)"; WATCH_RUNTIME_PORT="$(free_port)"; WATCH_FRONTEND_PORT="$(free_port)"
+rm -f "$FIXTURE/control.pid"
+PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_SERVER_WATCH=1 PI_SCIENCE_CONTROL_PLANE_PORT="$WATCH_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$WATCH_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$WATCH_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=10 bash "$FIXTURE/scripts/start.sh" >"$TEMP_ROOT/watch.log" 2>&1 &
+WATCH_START_PID=$!
+wait_url "http://127.0.0.1:$WATCH_CONTROL_PORT/api/health" || { cat "$TEMP_ROOT/watch.log" >&2; fail "watch control plane did not become ready"; }
+wait_url "http://127.0.0.1:$WATCH_FRONTEND_PORT" || { cat "$TEMP_ROOT/watch.log" >&2; fail "watch frontend did not become ready"; }
+[ "$(cat "$FIXTURE/control.argv")" = '["watch","src/app/main.ts"]' ] || fail "watch opt-in argv is not watch mode: $(cat "$FIXTURE/control.argv")"
+assert_contains "$TEMP_ROOT/watch.log" 'control plane mode: watch'
+WATCH_CONTROL_PID="$(cat "$FIXTURE/control.pid")"; WATCH_FRONTEND_PID="$(cat "$FIXTURE/frontend.pid")"
+kill -TERM "$WATCH_START_PID"
+wait "$WATCH_START_PID" 2>/dev/null || true
+WATCH_START_PID=""
+wait_port_available "$WATCH_CONTROL_PORT" || fail "watch control-plane port was not released"
+wait_port_available "$WATCH_FRONTEND_PORT" || fail "watch frontend port was not released"
+wait_pid_gone "$WATCH_CONTROL_PID" || fail "watch control plane survived cleanup"
+wait_pid_gone "$WATCH_FRONTEND_PID" || fail "watch frontend survived cleanup"
 
 # SIGINT delivery from a foreground parent models terminal Ctrl+C without the
 # signal-ignore semantics Bash applies to its own asynchronous children.

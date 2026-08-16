@@ -6,6 +6,7 @@ import { cn } from "@/lib/ui";
 import { CodeViewer } from "@/components/code-viewer/CodeViewer";
 import { resolveArtifactContent } from "@/lib/artifacts";
 import { saveTextWithFeedback } from "@/lib/shared/download";
+import { IconButton } from "@/components/ui/Icon";
 
 const TABS: Array<{ id: ArtifactTab; label: string }> = [
   { id: "code", label: "Code" },
@@ -53,36 +54,34 @@ export function ArtifactInspector({
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
         <span className="truncate text-sm font-medium text-text">{data.title}</span>
         <div className="ml-2 flex items-center gap-1 text-text">
-          <button
-            className="disabled:opacity-30 hover:opacity-60"
-            aria-label="Previous version"
-            onClick={() => step(-1)}
+          <IconButton
+            icon={ChevronLeft}
+            label="Previous version"
+            size="compact"
+            className="text-text"
             disabled={versionIdx === 0}
-          >
-            <ChevronLeft size={14} strokeWidth={1.5} />
-          </button>
+            onClick={() => step(-1)}
+          />
           <span className="rounded bg-surface-2 px-1.5 text-xs text-muted">{activeLabel}</span>
-          <button
-            className="disabled:opacity-30 hover:opacity-60"
-            aria-label="Next version"
-            onClick={() => step(1)}
+          <IconButton
+            icon={ChevronRight}
+            label="Next version"
+            size="compact"
+            className="text-text"
             disabled={versionIdx >= data.versions.length - 1}
-          >
-            <ChevronRight size={14} strokeWidth={1.5} />
-          </button>
+            onClick={() => step(1)}
+          />
         </div>
         <div className="flex-1" />
-        <button
-          className="text-text hover:opacity-60"
-          aria-label="Download"
+        <IconButton
+          icon={Download}
+          label="Download"
+          size="compact"
+          className="text-text"
           onClick={() => void saveTextWithFeedback(scriptName, content.code)}
-        >
-          <Download size={14} strokeWidth={1.5} />
-        </button>
+        />
         {controls}
-        <button className="text-text hover:opacity-60" aria-label="Close" onClick={onClose}>
-          <X size={14} strokeWidth={1.5} />
-        </button>
+        <IconButton icon={X} label="Close" size="compact" className="text-text" onClick={onClose} />
       </header>
 
       <nav className="flex items-center gap-4 border-b border-border px-4">
@@ -91,14 +90,14 @@ export function ArtifactInspector({
             key={id}
             onClick={() => setTab(id)}
             className={cn(
-              "flex items-center gap-1 border-b-2 py-2.5 text-sm",
+              "flex items-center gap-1 border-b-2 py-2.5",
               tab === id
                 ? "border-accent text-text"
                 : "border-transparent text-muted hover:text-text",
             )}
           >
-            {label}
-            {id === "review" && content.reviewPassed && <Check size={13} className="text-ok" />}
+            <span className="text-ui-label">{label}</span>
+            {id === "review" && content.reviewPassed && <Check size={13} className="text-ok-text" />}
           </button>
         ))}
       </nav>
@@ -107,7 +106,7 @@ export function ArtifactInspector({
         {tab === "code" && (
           <div className="space-y-3">
             <button
-              className="flex items-center gap-2 rounded-input bg-link px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
+              className="flex items-center gap-2 rounded-input bg-accent-fill px-3 py-1.5 text-sm font-medium text-accent-fg hover:opacity-90"
               onClick={() => void saveTextWithFeedback(scriptName, content.code)}
             >
               <Download size={15} /> {"Download script"}
@@ -144,7 +143,7 @@ export function ArtifactInspector({
         {tab === "environment" && <Pre text={content.environment ?? "No environment info"} />}
         {tab === "review" &&
           (content.reviewPassed ? (
-            <div className="flex items-center gap-2 text-sm text-ok">
+            <div className="flex items-center gap-2 text-sm text-ok-text">
               <Check size={16} /> {`Review passed (${activeLabel})`}
             </div>
           ) : (

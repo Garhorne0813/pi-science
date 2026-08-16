@@ -38,7 +38,7 @@ export function QCodeView({ filename, text }: { filename: string; text: string }
     return (
       <div className="flex h-full items-center justify-center p-6">
         <div className="ui-card-flat flex max-w-sm items-start gap-2 rounded-card p-4 text-sm text-muted">
-          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warn" />
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warn-text" />
           <span>{t("qcode.readError", { error: parsed.error ?? t("qcode.unknownFormat") })}</span>
         </div>
       </div>
@@ -53,7 +53,7 @@ export function QCodeView({ filename, text }: { filename: string; text: string }
           {filename} · {t("qcode.sourceCount", { count: doc.sources.length })} ·{" "}
           {t("qcode.codeCount", { count: doc.codes.length })}
         </span>
-        <span className="inline-flex items-center gap-1 text-[11px] text-ok" title={t("qcode.exactSpansTitle")}>
+        <span className="inline-flex items-center gap-1 text-[11px] text-ok-text" title={t("qcode.exactSpansTitle")}>
           <ShieldCheck size={13} /> {t("qcode.exactSpansBadge")}
         </span>
       </div>
@@ -100,7 +100,7 @@ export function QCodeView({ filename, text }: { filename: string; text: string }
         <div className="min-w-0 flex-1 overflow-y-auto p-4">
           {doc.warnings.length > 0 && (
             <div className="mb-3 flex items-start gap-2 rounded-card border border-warn/30 bg-warn/10 p-2 text-[12px] text-muted">
-              <AlertTriangle size={13} className="mt-0.5 shrink-0 text-warn" />
+              <AlertTriangle size={13} className="mt-0.5 shrink-0 text-warn-text" />
               <div>
                 {t("qcode.warningsCount", { count: doc.warnings.length })}
                 <ul className="mt-1 list-inside list-disc">

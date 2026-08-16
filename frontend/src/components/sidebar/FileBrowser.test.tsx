@@ -40,7 +40,7 @@ vi.mock("../../components/feedback/feedback-context", () => {
   return { useFeedback: () => ({ toast, confirm }) };
 });
 
-let files: ReturnType<typeof vi.mocked> & { sidebar: ReturnType<typeof vi.fn>; directory: ReturnType<typeof vi.fn> };
+let files: ReturnType<typeof vi.mocked> & { sidebar: ReturnType<typeof vi.fn>; directory: ReturnType<typeof vi.fn>; invalidate: ReturnType<typeof vi.fn> };
 
 beforeAll(async () => {
   await i18n.changeLanguage("en");
@@ -67,6 +67,19 @@ describe("FileBrowser", () => {
     await screen.findByText("data.csv");
     expect(files.sidebar.mock.calls.some((call) => call[0] === "proj")).toBe(true);
     expect(files.directory.mock.calls.some((call) => call[0] === "proj" && call[1] === "work")).toBe(true);
+  });
+
+  it("exposes the expand toggle and refresh as real buttons", async () => {
+    render(<FileBrowser cwd="proj" />);
+    const expand = screen.getByRole("button", { name: "Files" });
+    fireEvent.click(expand);
+    await screen.findByText("data.csv");
+
+    const refresh = screen.getByRole("button", { name: "Refresh files" });
+    const callsBefore = files.sidebar.mock.calls.length;
+    fireEvent.click(refresh);
+    expect(files.invalidate).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(files.sidebar.mock.calls.length).toBeGreaterThan(callsBefore));
   });
 
   it("re-reads every expanded folder when the file revision bumps", async () => {

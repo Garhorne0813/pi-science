@@ -2,7 +2,7 @@ import { createHash, randomInt, randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import type { PiConfig } from "@pi-science/contracts";
 import type { PiProcessOptions, RuntimeSkillPolicy } from "./pi-process.js";
 import { configRoot } from "../../storage/persistence.js";
@@ -16,6 +16,12 @@ let sharedWebPort: number | null = null;
 let sharedWebToken: string | null = null;
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
 const PI_SCIENCE_SYSTEM_PROMPT = join(PROJECT_ROOT, "harness", "AGENTS.md");
+/** Outer Pi session variables that describe a Pi process this control plane
+ *  does not own (typically the shell that launched the server). They must
+ *  never leak into the managed host or its agent runtimes: Pi Orbit resolves
+ *  its own per-session values internally, and a leftover value would shadow
+ *  the workspace configuration. */
+const OUTER_SESSION_ENV_KEYS = ["PI_MODEL", "PI_PROVIDER", "PI_REASONING_LEVEL", "PI_SESSION_ID", "PI_SESSION_FILE"] as const;
 const BROWSER_QUESTIONNAIRE_ADAPTER = join(
   PROJECT_ROOT,
   "apps",
@@ -55,6 +61,17 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
   const skillPolicy = globalSkillPolicy(settings);
   const effectiveModel = config.model || (typeof settings.model === "string" ? settings.model : "");
   const effectiveThinking = config.thinking || (typeof settings.thinking === "string" ? settings.thinking : "high");
+  // The workspace model identity the agent can observe through the bash tool
+  // environment (PI_PROVIDER/PI_MODEL), derived from the same effectiveModel
+  // that is passed via --model. A value without a provider separator is kept
+  // as the model id alone; an unset model yields nulls so no stale value can
+  // reach the agent.
+  const effectiveModelSeparator = effectiveModel.indexOf("/");
+  const sessionModelEnv = effectiveModel
+    ? effectiveModelSeparator > 0
+      ? { PI_PROVIDER: effectiveModel.slice(0, effectiveModelSeparator), PI_MODEL: effectiveModel.slice(effectiveModelSeparator + 1) }
+      : { PI_PROVIDER: null, PI_MODEL: effectiveModel }
+    : { PI_PROVIDER: null, PI_MODEL: null };
   const args: string[] = [];
   let command = nodePath;
   const useRpcMode = process.env.PI_SCIENCE_PI_MODE === "rpc";
@@ -112,13 +129,16 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
     } : {}),
     ...(config.provider ? { PI_DEFAULT_PROVIDER: config.provider } : {}),
   };
-  if (storedKeys && typeof storedKeys === "object") {
-    for (const [provider, key] of Object.entries(storedKeys)) {
-      if (typeof key !== "string" || !key) continue;
-      const envName = providerEnv(provider);
-      if (envName) env[envName] = key;
-    }
-  }
+  // The Pi Orbit host and every runtime child inherit this env, so a leftover
+  // outer PI_MODEL/PI_PROVIDER/PI_REASONING_LEVEL/PI_SESSION_ID/PI_SESSION_FILE
+  // would shadow the workspace configuration passed via CLI args and the
+  // runtime descriptor — and the runtime would report the stale outer values
+  // to the agent (e.g. "what model are you?"). Remove them from the host env;
+  // the runtime boundary below replaces the model variables with the
+  // authoritative workspace values and removes the per-session identity that
+  // is only known once the runtime exists.
+  for (const key of OUTER_SESSION_ENV_KEYS) delete env[key];
+  if (storedKeys && typeof storedKeys === "object") materializeApiKeysAuth(agentDir, storedKeys as Record<string, unknown>);
   materializeCustomProviders(agentDir, settings.custom_providers, env);
   materializeRuntimeSettings(agentDir, settings, config);
   materializeFollowUpGuidance(agentDir);
@@ -143,7 +163,27 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
           ...(sessionPath ? { sessionPath } : {}),
           ...(effectiveModel ? { model: effectiveModel } : {}),
           ...(effectiveModel && effectiveThinking ? { thinking: effectiveThinking } : {}),
-          runtimeEnv: Object.fromEntries(Object.entries(env).map(([key, value]) => [key, value ?? null])),
+          runtimeEnv: {
+            ...Object.fromEntries(Object.entries(env).map(([key, value]) => [key, value ?? null])),
+            // The runtime child inherits the host env, so the host's own auth
+            // token must never reach the agent: remove it (null) at the
+            // runtime boundary. PI_SESSION_ID/PI_SESSION_FILE only exist once
+            // the runtime is live, so they are removed here as well instead of
+            // leaking the outer session's values.
+            PI_ORBIT_AUTH_TOKEN: null,
+            PI_SESSION_ID: null,
+            PI_SESSION_FILE: null,
+            // The workspace model configuration is the session identity the
+            // agent can observe. Pi Orbit resolves per-command
+            // PI_PROVIDER/PI_MODEL/PI_REASONING_LEVEL from its own tool
+            // context only when that context is wired; in web mode it is not,
+            // and a nulled (or outer) value left agents misidentifying the
+            // model from unrelated shell variables such as FAST_LLM/SMART_LLM.
+            // Publish the effective workspace values instead: they match the
+            // --model/--thinking CLI args and the runtime descriptor.
+            ...sessionModelEnv,
+            ...(effectiveModel ? { PI_REASONING_LEVEL: effectiveThinking } : { PI_REASONING_LEVEL: null }),
+          },
           skillPolicy,
         },
       },
@@ -427,14 +467,36 @@ function readSettings(dataRoot: string): Record<string, any> {
   catch { return {}; }
 }
 
-function providerEnv(provider: string): string | null {
-  const names: Record<string, string> = {
-    anthropic: "ANTHROPIC_API_KEY", openai: "OPENAI_API_KEY", google: "GEMINI_API_KEY",
-    deepseek: "DEEPSEEK_API_KEY", groq: "GROQ_API_KEY", openrouter: "OPENROUTER_API_KEY",
-    mistral: "MISTRAL_API_KEY", xai: "XAI_API_KEY", zai: "ZAI_API_KEY", fireworks: "FIREWORKS_API_KEY",
-    together: "TOGETHER_API_KEY",
-  };
-  return names[provider] ?? null;
+/** Write Pi-Science API keys into the managed Pi agent dir's auth.json so
+ *  EVERY pi-ai provider (including OpenCode Go, Kimi, Qwen, ...) reads them.
+ *  The managed dir is Pi-Science-owned, but an existing auth.json may carry
+ *  OAuth/other entries from direct pi usage: non-api_key entries are
+ *  preserved untouched; api_key entries are Pi-Science-managed, so settings
+ *  is the authority and stale removed keys are dropped. File mode 0600. */
+function materializeApiKeysAuth(agentDir: string, storedKeys: Record<string, unknown>): void {
+  const path = join(agentDir, "auth.json");
+  let current: Record<string, unknown> = {};
+  try { current = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>; }
+  catch { /* fresh auth file */ }
+  const next: Record<string, unknown> = {};
+  for (const [provider, entry] of Object.entries(current)) {
+    if (!entry || typeof entry !== "object") continue;
+    const kind = (entry as Record<string, unknown>).type;
+    if (kind !== "api_key") { next[provider] = entry; continue; }
+    const stillConfigured = typeof storedKeys[provider] === "string" && storedKeys[provider] !== "";
+    if (stillConfigured) next[provider] = entry;
+  }
+  for (const [provider, key] of Object.entries(storedKeys)) {
+    if (typeof key !== "string" || !key) continue;
+    next[provider] = { type: "api_key", key };
+  }
+  if (Object.keys(next).length === 0) {
+    try { unlinkSync(path); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    return;
+  }
+  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  try { chmodSync(path, 0o600); } catch { /* permissions are best-effort (e.g. Windows) */ }
 }
 
 function materializeCustomProviders(agentDir: string, raw: unknown, env: NodeJS.ProcessEnv): void {

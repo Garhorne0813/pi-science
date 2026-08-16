@@ -8,7 +8,7 @@ function StatusIcon({ status, compact }: { status: TodoStatus; compact: boolean 
   const size = compact ? "xs" : "sm";
   switch (status) {
     case "in_progress": return <Icon icon={Loader2} size={size} className="shrink-0 animate-spin text-accent" />;
-    case "completed": return <Icon icon={CheckCircle2} size={size} className="shrink-0 text-ok" />;
+    case "completed": return <Icon icon={CheckCircle2} size={size} className="shrink-0 text-ok-text" />;
     case "pending": return <Icon icon={Circle} size={size} className="shrink-0 text-muted" />;
     case "deleted": return <Icon icon={Circle} size={size} className="shrink-0 text-muted" />;
   }
@@ -43,7 +43,7 @@ export function TodoTaskRow({ task, blocked, compact = false, t }: { task: TodoT
             "shrink-0 text-ui-micro",
             compact ? "sr-only" : "rounded-full border px-1.5 py-px",
             task.status === "in_progress" ? cn("text-accent", !compact && "border-accent")
-              : task.status === "completed" ? cn("text-ok", !compact && "border-faint")
+              : task.status === "completed" ? cn("text-ok-text", !compact && "border-faint")
                 : cn("text-muted", !compact && "border-faint"),
           )}>
             {statusLabel(task.status, t)}
@@ -52,7 +52,7 @@ export function TodoTaskRow({ task, blocked, compact = false, t }: { task: TodoT
         {!compact && (task.description || (task.blockedBy?.length ?? 0) > 0 || task.owner) && (
           <div className={cn("flex flex-wrap gap-y-0.5 text-muted", compact ? "mt-px gap-x-2 text-ui-micro" : "mt-0.5 gap-x-3 text-ui-meta")}>
             {task.description && <span className="min-w-0 truncate" title={task.description}>{task.description}</span>}
-            {blocked && <span className="text-warn">{t("todo.blocked")}</span>}
+            {blocked && <span className="text-warn-text">{t("todo.blocked")}</span>}
             {(task.blockedBy?.length ?? 0) > 0 && (
               <span className="text-muted">{t("todo.blockedBy", { ids: task.blockedBy!.map((id) => `#${id}`).join(", ") })}</span>
             )}
