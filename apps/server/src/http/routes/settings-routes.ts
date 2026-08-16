@@ -9,6 +9,16 @@ import { SettingsStore, type SettingsData as Settings } from "../../storage/sett
 import { loadPiAiCatalog } from "../../config/model-catalog-fallback.js";
 import { hasEnvApiKey, loadPiAiProviderCatalog } from "../../config/pi-ai-provider-catalog.js";
 import { catalog as skillCatalog } from "../../catalog/skill-catalog.js";
+import {
+  createProjectSkill,
+  deleteProjectSkill,
+  importGithubSkills,
+  importSkillBundle,
+  MAX_UPLOAD_BYTES,
+  previewGithubSkills,
+  previewSkillUpload,
+  updateProjectSkill,
+} from "../../catalog/project-skill-service.js";
 import { knownWorkspacePaths } from "./catalog-routes.js";
 import type { RuntimeSkillPolicy } from "../../runtime/pi/pi-process.js";
 const BUILTIN_SUBAGENTS = [
@@ -686,6 +696,137 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       delete config.skill_paths;
     });
     return { ok: true, policy, configured: false, message: "Skills reset to auto-discover mode" };
+  });
+  app.post("/api/settings/skills", async (request, reply) => {
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(query(request, "cwd")); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const input = {
+      name: String(body.name ?? ""),
+      description: String(body.description ?? ""),
+      body: typeof body.body === "string" ? body.body : "",
+      ...(typeof body.version === "string" ? { version: body.version } : {}),
+      ...(typeof body.license === "string" ? { license: body.license } : {}),
+      ...(typeof body.category === "string" ? { category: body.category } : {}),
+      ...(Array.isArray(body.requirements) ? { requirements: body.requirements as Array<{ name: string; kind?: string; optional?: boolean; version?: string | null }> } : {}),
+    };
+    try {
+      const skill = await createProjectSkill(cwd, input.name, input);
+      try { await nodeSessionService.refreshAllRuntimeSkills(); }
+      catch (error) { return runtimeSkillFailure(reply, error); }
+      return { ok: true, skill };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/already exists/i.test(message)) return reply.code(409).send({ ok: false, error: message });
+      if (/not found/i.test(message)) return reply.code(404).send({ ok: false, error: message });
+      return reply.code(400).send({ ok: false, error: message });
+    }
+  });
+  app.put<{ Params: { skill_id: string } }>("/api/settings/skills/:skill_id", async (request, reply) => {
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(query(request, "cwd")); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const input = {
+      name: request.params.skill_id,
+      description: String(body.description ?? ""),
+      body: typeof body.body === "string" ? body.body : "",
+      ...(typeof body.version === "string" ? { version: body.version } : {}),
+      ...(typeof body.license === "string" ? { license: body.license } : {}),
+      ...(typeof body.category === "string" ? { category: body.category } : {}),
+      ...(Array.isArray(body.requirements) ? { requirements: body.requirements as Array<{ name: string; kind?: string; optional?: boolean; version?: string | null }> } : {}),
+    };
+    try {
+      const skill = await updateProjectSkill(cwd, request.params.skill_id, input);
+      try { await nodeSessionService.refreshAllRuntimeSkills(); }
+      catch (error) { return runtimeSkillFailure(reply, error); }
+      return { ok: true, skill };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/not found/i.test(message)) return reply.code(404).send({ ok: false, error: message });
+      return reply.code(400).send({ ok: false, error: message });
+    }
+  });
+  app.delete<{ Params: { skill_id: string } }>("/api/settings/skills/:skill_id", async (request, reply) => {
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(query(request, "cwd")); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+    try {
+      const result = await deleteProjectSkill(cwd, request.params.skill_id);
+      try { await nodeSessionService.refreshAllRuntimeSkills(); }
+      catch (error) { return runtimeSkillFailure(reply, error); }
+      return { ok: true, ...result };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/not found/i.test(message)) return reply.code(404).send({ ok: false, error: message });
+      return reply.code(400).send({ ok: false, error: message });
+    }
+  });
+  app.post("/api/settings/skills/upload/preview", async (request, reply) => {
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(query(request, "cwd")); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+    const body = (request.body ?? {}) as { filename?: unknown; content_base64?: unknown };
+    const filename = String(body.filename ?? "");
+    const content = Buffer.from(String(body.content_base64 ?? ""), "base64");
+    if (!filename || content.length === 0) return reply.code(400).send({ ok: false, error: "filename and content_base64 are required" });
+    if (content.length > MAX_UPLOAD_BYTES) return reply.code(413).send({ ok: false, error: "Skill upload exceeds the size limit" });
+    try {
+      const candidates = await previewSkillUpload(filename, content);
+      return { ok: true, candidates };
+    } catch (error) {
+      return reply.code(400).send({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+  app.post("/api/settings/skills/upload/import", async (request, reply) => {
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(query(request, "cwd")); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+    const body = (request.body ?? {}) as { filename?: unknown; content_base64?: unknown; root_path?: unknown };
+    const filename = String(body.filename ?? "");
+    const content = Buffer.from(String(body.content_base64 ?? ""), "base64");
+    const rootPath = String(body.root_path ?? ".");
+    if (!filename || content.length === 0) return reply.code(400).send({ ok: false, error: "filename and content_base64 are required" });
+    if (content.length > MAX_UPLOAD_BYTES) return reply.code(413).send({ ok: false, error: "Skill upload exceeds the size limit" });
+    try {
+      const skill = await importSkillBundle(cwd, filename, content, rootPath);
+      try { await nodeSessionService.refreshAllRuntimeSkills(); }
+      catch (error) { return runtimeSkillFailure(reply, error); }
+      return { ok: true, skill };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/already exists/i.test(message)) return reply.code(409).send({ ok: false, error: message });
+      return reply.code(400).send({ ok: false, error: message });
+    }
+  });
+  app.post("/api/settings/skills/import-github/preview", async (request, reply) => {
+    const body = (request.body ?? {}) as { repo?: unknown };
+    const repo = String(body.repo ?? "");
+    if (!repo) return reply.code(400).send({ ok: false, error: "GitHub repository is required" });
+    try {
+      const candidates = await previewGithubSkills(repo);
+      return { ok: true, candidates };
+    } catch (error) {
+      return reply.code(400).send({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+  app.post("/api/settings/skills/import-github/import", async (request, reply) => {
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(query(request, "cwd")); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+    const body = (request.body ?? {}) as { repo?: unknown; selected?: unknown };
+    const repo = String(body.repo ?? "");
+    const selected = Array.isArray(body.selected) ? body.selected.map(String).filter(Boolean) : [];
+    if (!repo || selected.length === 0) return reply.code(400).send({ ok: false, error: "repo and selected skills are required" });
+    try {
+      const result = await importGithubSkills(cwd, repo, selected);
+      try { await nodeSessionService.refreshAllRuntimeSkills(); }
+      catch (error) { return runtimeSkillFailure(reply, error); }
+      return { ok: true, ...result };
+    } catch (error) {
+      return reply.code(400).send({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
   });
   app.get("/api/settings/extensions", async () => ({ extensions: runtimeExtensionStatus() }));
   app.get("/api/settings/subagents/discovery", async (request, reply) => {
