@@ -88,27 +88,48 @@ afterEach(() => {
 });
 
 describe("useModelConfig", () => {
-  it("tracks the shared settings config cache so dialog saves refresh the composer", async () => {
+  it("keeps the session model while the dialog save updates the workspace default", async () => {
+    useRuntimeStore.setState({ activeSessionId: "s1", cwd: "proj", model: "deepseek/deepseek-v4-flash", thinking: "high" });
     const { result } = renderHook(() => useModelConfig("proj", "s1"), { wrapper });
     await waitFor(() => expect(result.current.selectedModel).toBe("deepseek/deepseek-v4-flash"));
 
     // Simulate the settings dialog save flow: PUT succeeds, then the dialog
     // reloads the config (loadConfig), which updates the shared cache that the
-    // composer now subscribes to while it stays mounted under the modal.
+    // composer now subscribes to while it stays mounted under the modal. The
+    // session model stays authoritative for the composer display.
     await act(async () => {
       await settingsApi.saveModel("deepseek/deepseek-v4-pro", "high", "proj");
       await settingsApi.config("proj");
     });
-    await waitFor(() => expect(result.current.selectedModel).toBe("deepseek/deepseek-v4-pro"));
+    expect(result.current.selectedModel).toBe("deepseek/deepseek-v4-flash");
     const putCall = fetchMock.mock.calls.find(([url, _init]) => String(url).startsWith("/api/settings/model"));
     expect(putCall).toBeDefined();
     expect(JSON.parse(String(putCall?.[1]?.body))).toMatchObject({ model: "deepseek/deepseek-v4-pro", thinking: "high" });
   });
 
-  it("reflects the workspace-scoped config from the shared cache", async () => {
+  it("reflects the session model from the synced store while the model list comes from the config cache", async () => {
+    useRuntimeStore.setState({ activeSessionId: "s1", cwd: "proj", model: "deepseek/deepseek-v4-flash", thinking: "high" });
     const { result } = renderHook(() => useModelConfig("proj", "s1"), { wrapper });
     await waitFor(() => expect(result.current.selectedModel).toBe("deepseek/deepseek-v4-flash"));
+    await waitFor(() => {
+      expect(result.current.models.some((model) => model.id === "deepseek/deepseek-v4-mini")).toBe(true);
+    });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/settings/config?cwd=proj"), expect.anything());
+  });
+
+  it("does not paint workspace defaults while the store is still syncing", async () => {
+    // Race window: the route shows a session and connect() has already
+    // reset the store, but the session-state read has not returned yet.
+    useRuntimeStore.setState({ activeSessionId: "s1", cwd: "proj", model: null, thinking: null });
+    const { result } = renderHook(() => useModelConfig("proj", "s1"), { wrapper });
+    await waitFor(() => {
+      expect(result.current.models.some((model) => model.id === "deepseek/deepseek-v4-mini")).toBe(true);
+    });
+    // The workspace defaults (deepseek/deepseek-v4-flash / high from the
+    // config cache) must not overwrite the composer while the store syncs.
+    expect(result.current.selectedModel).toBe("");
+    expect(result.current.thinking).toBe("high");
+    expect(result.current.models.length).toBe(3);
   });
 
   it("changes thinking for the active session through the runtime store only", async () => {

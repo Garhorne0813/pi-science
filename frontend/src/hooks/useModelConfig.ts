@@ -50,6 +50,19 @@ export function useModelConfig(cwd: string, sessionId: string | undefined) {
       const allAvailableModels: AvailableModel[] = Array.isArray(data.available_models) ? data.available_models : [];
       const availableModels = conversationModelOptions(allAvailableModels);
       setModels(availableModels);
+      // Race guard: while a session context exists but the store has not yet
+      // synced (connect() resets model/thinking to null and the session-state
+      // read is still in flight), never paint workspace defaults into the
+      // composer — a model switch inside that window would submit the defaults
+      // instead of the session's real configuration. The store sync effect
+      // ([runtimeModel, runtimeThinking]) applies the real values afterwards.
+      const hasSessionContext = Boolean(sessionIdRef.current || runtime.activeSessionId);
+      if (hasSessionContext && (runtime.model === null || runtime.thinking === null)) {
+        setModelError(availableModels.length === 0
+          ? t("conversation.configureProvider")
+          : null);
+        return;
+      }
       const nextModel = runtime.model || data.model || "";
       const nextModelInfo = availableModels.find((model: AvailableModel) => model.id === nextModel);
       const supported = nextModelInfo?.thinking_levels || [];
