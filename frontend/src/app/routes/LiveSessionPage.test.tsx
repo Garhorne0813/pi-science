@@ -645,10 +645,12 @@ describe("stable Virtuoso footer", () => {
 });
 
 describe("model change optimistic rollback", () => {
-  it("rolls back both model and thinking when the session model save fails", async () => {
+  it("rolls back both model and thinking when the settings save fails", async () => {
     let rejectSave: (error: Error) => void = () => undefined;
-    const savePending = new Promise<never>((_resolve, reject) => { rejectSave = reject; });
-    useRuntimeStore.setState({ setModel: vi.fn(() => savePending) });
+    const savePending = new Promise<Response>((_resolve, reject) => { rejectSave = reject; });
+    overrides.push((url, init) => (
+      (init.method || "GET").toUpperCase() === "PUT" && url.startsWith("/api/settings/model") ? savePending : null
+    ));
     await renderReady();
 
     const control = screen.getByTestId("model-control");
@@ -662,17 +664,21 @@ describe("model change optimistic rollback", () => {
     expect(screen.getByTestId("model-control")).toHaveAttribute("data-thinking", "medium");
 
     await act(async () => {
-      rejectSave(new Error("runtime unavailable"));
+      rejectSave(new Error("settings unavailable"));
       await savePending.catch(() => undefined);
     });
 
     await waitFor(() => expect(screen.getByTestId("model-control")).toHaveAttribute("data-model", "prov/m1"));
     expect(screen.getByTestId("model-control")).toHaveAttribute("data-thinking", "high");
-    expect(screen.getByTitle("runtime unavailable")).toBeInTheDocument();
+    expect(screen.getByTitle("settings unavailable")).toBeInTheDocument();
   });
 
   it("rolls back a failed thinking-level change", async () => {
-    useRuntimeStore.setState({ setModel: vi.fn(async () => { throw new Error("thinking rejected"); }) });
+    overrides.push((url, init) => (
+      (init.method || "GET").toUpperCase() === "PUT" && url.startsWith("/api/settings/model")
+        ? Promise.resolve(jsonResponse({ error: "thinking rejected" }, 500))
+        : null
+    ));
     await renderReady();
 
     fireEvent.click(screen.getByRole("button", { name: "pick thinking low" }));
