@@ -32,7 +32,7 @@ export function NotebookCodePreview({
 
   return (
     <div className={cn("notebook-code-preview group/code relative flex min-w-0 overflow-auto", className)}>
-      <div aria-hidden className="sticky left-0 z-[1] shrink-0 select-none border-r border-faint px-3 py-3 text-right font-mono text-[11px] leading-[1.65] text-muted/55">
+      <div aria-hidden className="sticky left-0 z-[1] shrink-0 select-none border-r border-faint px-3 py-3 text-right font-mono text-[12.5px] leading-[1.65] text-muted/55">
         {Array.from({ length: lines }, (_, index) => <div key={index}>{index + 1}</div>)}
       </div>
       <pre className="min-w-max flex-1 px-4 py-3 font-mono text-[12.5px] leading-[1.65] text-text">
