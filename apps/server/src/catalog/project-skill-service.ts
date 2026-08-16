@@ -6,11 +6,13 @@
  * The service deliberately refuses to touch user or builtin skill roots.
  */
 
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { lstat, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, join, resolve, relative } from "node:path";
 import JSZip from "jszip";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { skillMetadataSchema, type SkillInfo } from "@pi-science/contracts";
+import { recordEgress, egressAuditEnabled } from "../security/egress-audit.js";
+import { safeConnectorFetch } from "../security/outbound-security.js";
 import { pathIsInside } from "../support/platform-utils.js";
 import { catalog, discover, parseSkill, type DiscoveredSkill } from "./skill-catalog.js";
 
@@ -18,6 +20,8 @@ export const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 export const MAX_SKILL_FILE_BYTES = 2 * 1024 * 1024;
 export const MAX_SKILL_TREE_BYTES = 50 * 1024 * 1024;
+export const MAX_ZIP_ENTRIES = 5_000;
+export const MAX_ZIP_DEPTH = 32;
 
 export interface ProjectSkillInput {
   name: string;
@@ -85,6 +89,42 @@ function assertInsideProjectSkills(cwd: string, target: string): void {
   }
 }
 
+/** Guard writes against symlink escapes: every existing ancestor of `target`
+ *  must resolve to a real directory still inside the project `.pi/skills`
+ *  root, and no traversal component may itself be a symbolic link. */
+async function assertSafeProjectPath(cwd: string, target: string): Promise<void> {
+  const root = projectSkillRoot(cwd);
+  await mkdir(root, { recursive: true });
+  const rootReal = await realpath(root);
+  assertInsideProjectSkills(cwd, target);
+  const rel = relative(root, target);
+  if (rel.startsWith("..") || rel === "") {
+    throw new Error("Skill path must remain inside the project .pi/skills directory");
+  }
+  let current = root;
+  for (const part of rel.split(/[\\/]/).filter(Boolean)) {
+    current = join(current, part);
+    const info = await lstat(current).catch(() => null);
+    if (info?.isSymbolicLink()) {
+      throw new Error("Skill path must not traverse symlinks");
+    }
+    if (info) {
+      const currentReal = await realpath(current);
+      if (!pathIsInside(rootReal, currentReal, true)) {
+        throw new Error("Skill path escapes the project skills directory");
+      }
+    } else {
+      break;
+    }
+  }
+  const finalReal = await realpath(target).catch(() => null);
+  if (finalReal && !pathIsInside(rootReal, finalReal, true)) {
+    throw new Error("Skill path escapes the project skills directory");
+  }
+}
+
+
+
 function yamlFrontMatter(input: ProjectSkillInput, name: string): string {
   const metadata = {
     name,
@@ -94,7 +134,12 @@ function yamlFrontMatter(input: ProjectSkillInput, name: string): string {
     category: input.category ?? "general",
     ...(input.requirements?.length ? { requirements: input.requirements } : {}),
   };
-  return stringifyYaml(metadata).trimEnd();
+  const parsed = skillMetadataSchema.safeParse(metadata);
+  if (!parsed.success) {
+    const detail = parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
+    throw new Error(`Invalid skill metadata: ${detail || "validation failed"}`);
+  }
+  return stringifyYaml(parsed.data).trimEnd();
 }
 
 export function buildSkillMarkdown(input: ProjectSkillInput, name: string): string {
@@ -105,24 +150,26 @@ export function buildSkillMarkdown(input: ProjectSkillInput, name: string): stri
 async function writeSkillTree(cwd: string, files: UploadedSkillFile[]): Promise<DiscoveredSkill> {
   const skillFile = files.find((file) => file.path === "SKILL.md");
   if (!skillFile) throw new Error("Bundle must contain SKILL.md at the skill root");
-  const front = await parseYaml(skillFile.content.toString("utf8").replace(/\r\n/g, "\n").match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/)?.[1] ?? "");
-  const rawName = front && typeof front === "object" && "name" in front ? String((front as Record<string, unknown>).name ?? "") : "";
-  const nameError = validateSkillName(rawName);
-  if (nameError) throw new Error(`SKILL.md front matter must declare a valid name: ${nameError || "missing name"}`);
-  const name = rawName;
+  const front = parseYaml(skillFile.content.toString("utf8").replace(/\r\n/g, "\n").match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/)?.[1] ?? "") as Record<string, unknown> | null;
+  const metadataResult = skillMetadataSchema.safeParse(front ?? {});
+  if (!metadataResult.success) {
+    const detail = metadataResult.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
+    throw new Error(`Invalid SKILL.md front matter: ${detail || "validation failed"}`);
+  }
+  const name = metadataResult.data.name;
   const dir = projectSkillDir(cwd, name);
+  await assertSafeProjectPath(cwd, dir);
   const info = await stat(dir).catch(() => null);
   if (info?.isDirectory()) {
     const existing = join(dir, "SKILL.md");
     const exists = await stat(existing).catch(() => null);
     if (exists) throw new Error(`Skill '${name}' already exists in this project`);
   }
-  assertInsideProjectSkills(cwd, dir);
   await mkdir(dir, { recursive: true });
   try {
     for (const file of files) {
       const target = resolve(dir, ...file.path.split("/"));
-      assertInsideProjectSkills(cwd, target);
+      await assertSafeProjectPath(cwd, target);
       if (file.path === "SKILL.md") {
         await writeFile(target, file.content, { flag: "wx" });
       } else {
@@ -148,12 +195,13 @@ async function writeProjectSkill(cwd: string, name: string, input: ProjectSkillI
   if (nameError) throw new Error(nameError);
   if (!input.description?.trim()) throw new Error("description is required");
   const dir = projectSkillDir(cwd, name);
-  assertInsideProjectSkills(cwd, dir);
-  const existing = await stat(join(dir, "SKILL.md")).catch(() => null);
+  const fileTarget = join(dir, "SKILL.md");
+  await assertSafeProjectPath(cwd, fileTarget);
+  const existing = await stat(fileTarget).catch(() => null);
   if (existing) throw new Error(`Skill '${name}' already exists in this project`);
   const content = Buffer.from(buildSkillMarkdown(input, name), "utf8");
   await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, "SKILL.md"), content, { flag: "wx" });
+  await writeFile(fileTarget, content, { flag: "wx" });
   return toProjectSkillInfo(cwd, name);
 }
 
@@ -175,10 +223,16 @@ async function updateProjectSkill(cwd: string, skillIdOrName: string, input: Pro
     ...(input.category ? { category: input.category } : {}),
     ...(input.requirements ? { requirements: input.requirements } : {}),
   };
+  const parsed = skillMetadataSchema.safeParse(merged);
+  if (!parsed.success) {
+    const detail = parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
+    throw new Error(`Invalid skill metadata: ${detail || "validation failed"}`);
+  }
   const body = input.body ?? existing.replace(/^---\s*\n[\s\S]*?\n---\s*(?:\n|$)/, "").replace(/^\n/, "");
-  const markdown = `---\n${stringifyYaml(merged).trimEnd()}\n---\n\n${body.trim()}\n`;
-  assertInsideProjectSkills(cwd, dir);
-  await writeFile(join(dir, "SKILL.md"), Buffer.from(markdown, "utf8"));
+  const markdown = `---\n${stringifyYaml(parsed.data).trimEnd()}\n---\n\n${body.trim()}\n`;
+  const fileTarget = join(dir, "SKILL.md");
+  await assertSafeProjectPath(cwd, fileTarget);
+  await writeFile(fileTarget, Buffer.from(markdown, "utf8"));
   return toProjectSkillInfo(cwd, name);
 }
 
@@ -187,7 +241,7 @@ async function deleteProjectSkill(cwd: string, skillIdOrName: string): Promise<{
   const record = records.find((skill) => (skill.skillId === skillIdOrName || skill.metadata.name === skillIdOrName) && skill.source === "project");
   if (!record) throw new Error("Project skill not found");
   const dir = dirname(record.sourcePath);
-  assertInsideProjectSkills(cwd, dir);
+  await assertSafeProjectPath(cwd, dir);
   await rm(dir, { recursive: true, force: true });
   return { name: record.metadata.name };
 }
@@ -205,15 +259,18 @@ export function normalizeZipPath(path: string): string {
 export async function previewSkillUpload(filename: string, content: Buffer): Promise<SkillUploadCandidate[]> {
   const lower = filename.toLowerCase();
   if (lower.endsWith(".md")) {
+    if (content.length > MAX_SKILL_FILE_BYTES) throw new Error("SKILL.md exceeds the file size limit");
     const text = content.toString("utf8");
     const match = text.match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/);
     if (!match) throw new Error("SKILL.md must start with YAML front matter");
     const parsed = parseYaml(match[1] ?? "") as Record<string, unknown> | null;
-    const name = parsed && typeof parsed.name === "string" ? parsed.name : "";
-    if (!name || validateSkillName(name)) throw new Error("SKILL.md front matter must declare a valid lowercase name");
-    const description = parsed && typeof parsed.description === "string" ? parsed.description : "";
-    if (!description?.trim()) throw new Error("SKILL.md front matter must declare a description");
-    return [{ name, root_path: ".", description, files: [{ path: "SKILL.md", size: content.length }] }];
+    const metadataResult = skillMetadataSchema.safeParse(parsed ?? {});
+    if (!metadataResult.success) {
+      const detail = metadataResult.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
+      throw new Error(`Invalid SKILL.md front matter: ${detail || "validation failed"}`);
+    }
+    const metadata = metadataResult.data;
+    return [{ name: metadata.name, root_path: ".", description: metadata.description, files: [{ path: "SKILL.md", size: content.length }] }];
   }
   if (!lower.endsWith(".zip") && !lower.endsWith(".skill")) {
     throw new Error("Unsupported skill upload: expected .md, .zip or .skill");
@@ -222,9 +279,12 @@ export async function previewSkillUpload(filename: string, content: Buffer): Pro
   const entries: Array<{ path: string; dir: boolean }> = [];
   zip.forEach((path, entry) => {
     const safe = normalizeZipPath(path);
+    if (safe.split("/").length > MAX_ZIP_DEPTH) throw new Error(`Bundle path is too deep: ${path}`);
     entries.push({ path: safe, dir: entry.dir });
   });
+  if (entries.length > MAX_ZIP_ENTRIES) throw new Error("Bundle contains too many entries");
   const skills = new Map<string, SkillUploadCandidate>();
+  let totalBytes = 0;
   for (const entry of entries) {
     if (entry.dir || !entry.path.endsWith("SKILL.md")) continue;
     const rootPath = entry.path.slice(0, -"SKILL.md".length).replace(/\/$/, "") || ".";
@@ -234,10 +294,13 @@ export async function previewSkillUpload(filename: string, content: Buffer): Pro
     const match = text.match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/);
     if (!match) continue;
     const parsed = parseYaml(match[1] ?? "") as Record<string, unknown> | null;
-    const name = parsed && typeof parsed.name === "string" ? parsed.name : "";
-    if (!name || validateSkillName(name)) continue;
-    const description = parsed && typeof parsed.description === "string" ? parsed.description : "";
+    const metadataResult = skillMetadataSchema.safeParse(parsed ?? {});
+    if (!metadataResult.success) continue;
+    const metadata = metadataResult.data;
+    const name = metadata.name;
+    const description = metadata.description;
     const files: Array<{ path: string; size: number }> = [];
+    let skillBytes = 0;
     for (const item of entries) {
       if (item.dir) continue;
       const inRoot = rootPath === "." ? item.path !== "SKILL.md" : (item.path === rootPath || item.path.startsWith(`${rootPath}/`)) && item.path !== entry.path;
@@ -246,12 +309,17 @@ export async function previewSkillUpload(filename: string, content: Buffer): Pro
       if (!itemFile) continue;
       const buffer = await itemFile.async("nodebuffer");
       if (buffer.length > MAX_SKILL_FILE_BYTES) throw new Error(`Bundled file is too large: ${item.path}`);
+      skillBytes += buffer.length;
+      if (skillBytes > MAX_SKILL_TREE_BYTES || totalBytes + skillBytes > MAX_SKILL_TREE_BYTES) throw new Error("Bundle exceeds the total size limit");
       files.push({ path: rootPath === "." ? item.path : item.path.slice(rootPath.length + 1), size: buffer.length });
     }
+    skillBytes += text.length;
+    if (skillBytes > MAX_SKILL_TREE_BYTES || totalBytes + skillBytes > MAX_SKILL_TREE_BYTES) throw new Error("Bundle exceeds the total size limit");
     files.push({ path: "SKILL.md", size: text.length });
+    totalBytes += skillBytes;
     skills.set(rootPath, { name, root_path: rootPath, description, files });
   }
-  if (skills.size === 0) throw new Error("No valid skill found in bundle (expected SKILL.md with name and description)");
+  if (skills.size === 0) throw new Error("No valid skill found in bundle (expected SKILL.md with valid name and description)");
   return [...skills.values()];
 }
 
@@ -290,7 +358,7 @@ export async function importSkillBundle(cwd: string, filename: string, content: 
 export async function parseGithubRepo(input: string): Promise<{ owner: string; repo: string; ref: string | null }> {
   let value = input.trim();
   if (!value) throw new Error("GitHub repository is required");
-  const urlMatch = value.match(/^https:\/\/github\.com\/([^/]+)\/([^/?#]+)(?:\/(?:tree|blob)\/([^/]+)(?:\/(.*))?)?/i);
+  const urlMatch = value.match(/^https:\/\/github\.com\/([^/]+)\/([^/?#]+)(?:\/(?:tree|blob)\/([^/]+)(?:\/.*)?)?/i);
   if (urlMatch) {
     return {
       owner: urlMatch[1]!,
@@ -298,7 +366,7 @@ export async function parseGithubRepo(input: string): Promise<{ owner: string; r
       ref: urlMatch[3] ?? null,
     };
   }
-  const shorthand = value.match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?:@([A-Za-z0-9_.-]+))?$/);
+  const shorthand = value.match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:@(.+))?$/);
   if (!shorthand) throw new Error("Expected owner/repo, owner/repo@ref, or a github.com URL");
   return { owner: shorthand[1]!, repo: shorthand[2]!.replace(/\.git$/i, ""), ref: shorthand[3] ?? null };
 }
@@ -311,14 +379,39 @@ function githubRawBase(): string {
   return process.env.PI_SCIENCE_GITHUB_RAW_BASE ?? "https://raw.githubusercontent.com";
 }
 
+async function recordGithubEgress(url: string): Promise<void> {
+  if (await egressAuditEnabled()) {
+    await recordEgress({ connector_type: "connector", connector_id: "github-skills-import", target_domain: url, approved: true });
+  }
+}
+
 async function fetchJson(url: string): Promise<{ tree: Array<{ path?: string; type?: string; size?: number }> }> {
-  const response = await fetch(url, {
+  await recordGithubEgress(url);
+  const response = await safeConnectorFetch(url, {
+    timeoutMs: 15_000,
+    maxResponseBytes: 10 * 1024 * 1024,
+    allowPrivate: false,
+    allowedContentTypes: ["application/json"],
     headers: { accept: "application/vnd.github+json", "user-agent": "pi-science" },
   });
   if (!response.ok) {
     throw new Error(`GitHub API request failed: ${response.status} ${response.statusText}`);
   }
   return response.json() as Promise<{ tree: Array<{ path?: string; type?: string; size?: number }> }>;
+}
+
+async function fetchRaw(url: string, maxBytes = MAX_SKILL_FILE_BYTES): Promise<Buffer> {
+  await recordGithubEgress(url);
+  const response = await safeConnectorFetch(url, {
+    timeoutMs: 15_000,
+    maxResponseBytes: maxBytes,
+    allowPrivate: false,
+    headers: { "user-agent": "pi-science" },
+  });
+  if (!response.ok) {
+    throw new Error(`GitHub raw request failed: ${response.status} ${response.statusText}`);
+  }
+  return Buffer.from(await response.arrayBuffer());
 }
 
 export async function previewGithubSkills(repoInput: string): Promise<GithubSkillCandidate[]> {
@@ -345,6 +438,16 @@ export async function previewGithubSkills(repoInput: string): Promise<GithubSkil
     }
   }
   for (const [root, candidate] of byRoot) {
+    const skillMdPath = `${root}/SKILL.md`;
+    const rawPath = skillMdPath.split("/").map(encodeURIComponent).join("/");
+    const rawUrl = `${githubRawBase()}/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(ref ?? "HEAD")}/${rawPath}`;
+    try {
+      const buffer = await fetchRaw(rawUrl);
+      const text = buffer.toString("utf8");
+      const match = text.match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/);
+      const parsed = match ? parseYaml(match[1] ?? "") as Record<string, unknown> | null : null;
+      if (parsed && typeof parsed.description === "string") candidate.description = parsed.description;
+    } catch { /* keep empty description when metadata cannot be fetched */ }
     candidates.push({ name: candidate.name || slugifySkillName(root), root_path: root, description: candidate.description, files: candidate.files });
   }
   return candidates.sort((a, b) => a.root_path.localeCompare(b.root_path));
@@ -374,9 +477,8 @@ export async function importGithubSkills(cwd: string, repoInput: string, selecte
         if (total > MAX_SKILL_TREE_BYTES) throw new Error("Imported skill exceeds the total size limit");
         const rawPath = `${root}/${file.path}`.split("/").map(encodeURIComponent).join("/");
         const url = `${githubRawBase()}/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(ref ?? "HEAD")}/${rawPath}`;
-        const response = await fetch(url, { headers: { "user-agent": "pi-science" } });
-        if (!response.ok) throw new Error(`Failed to download ${file.path}: ${response.status}`);
-        loaded.push({ path: file.path, content: Buffer.from(await response.arrayBuffer()), size: file.size });
+        const buffer = await fetchRaw(url);
+        loaded.push({ path: file.path, content: buffer, size: buffer.length });
       }
       const record = await writeSkillTree(cwd, loaded);
       imported.push(await toProjectSkillInfo(cwd, record.metadata.name));

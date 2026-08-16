@@ -28,7 +28,7 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
     if (url.includes("fail")) return Promise.resolve(jsonResponse({ ok: false, error: "boom" }, 500));
     return Promise.resolve(jsonResponse({ ok: true, model: "deepseek/deepseek-v4-flash", thinking: "high" }));
   }
-  if (url === "/api/settings/skills") {
+  if (url === "/api/settings/skills" || url.startsWith("/api/settings/skills?cwd=")) {
     return Promise.resolve(jsonResponse({
       skills: [{ skill_id: "alpha", name: "alpha", description: "Analyze alpha data", enabled: true, validation: { valid: true } }],
       configured: false,

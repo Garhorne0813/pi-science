@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -53,6 +53,18 @@ describe("project skill service", () => {
   it("rejects invalid skill names", async () => {
     await expect(createProjectSkill(cwd(), "../escape", { name: "../escape", description: "bad", body: "x" })).rejects.toThrow(/Skill name must start/i);
     await expect(createProjectSkill(cwd(), "UPPER", { name: "UPPER", description: "bad", body: "x" })).rejects.toThrow(/Skill name must start/i);
+  });
+
+  it.skipIf(process.platform === "win32")("rejects symlink escape in project skill dir", async () => {
+    const outside = join(cwd(), "outside");
+    await mkdir(outside);
+    await mkdir(join(cwd(), ".pi", "skills"), { recursive: true });
+    await symlink(outside, join(cwd(), ".pi", "skills", "evil-link"));
+    await expect(createProjectSkill(cwd(), "evil-link", { name: "evil-link", description: "bad", body: "x" })).rejects.toThrow(/symlink/i);
+  });
+
+  it("rejects invalid frontmatter metadata on create", async () => {
+    await expect(createProjectSkill(cwd(), "bad-meta", { name: "bad-meta", description: "x".repeat(5000), body: "x" })).rejects.toThrow(/Invalid skill metadata/i);
   });
 
   it("updates an existing project skill body and metadata", async () => {

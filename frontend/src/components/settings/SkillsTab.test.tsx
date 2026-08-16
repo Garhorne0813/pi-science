@@ -14,7 +14,7 @@ const calls: Array<{ url: string; method: string; body?: unknown }> = [];
 function defaultFetch(url: string, init: RequestInit): Promise<Response> {
   const method = (init.method || "GET").toUpperCase();
   calls.push({ url, method, body: init.body ? JSON.parse(String(init.body)) : undefined });
-  if (url === "/api/settings/skills") {
+  if (url === "/api/settings/skills" || url.startsWith("/api/settings/skills?cwd=")) {
     return Promise.resolve(jsonResponse({
       skills: [
         { skill_id: "builtin-1", name: "alpha", description: "Builtin alpha", source: "builtin", enabled: true, validation: { valid: true } },

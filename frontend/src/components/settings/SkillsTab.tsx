@@ -46,7 +46,7 @@ export function SkillsTab({ workspaceCwd }: { workspaceCwd: string | null }) {
 
   useEffect(() => {
     let cancelled = false;
-    settingsApi.skills<SkillsResponse>().then((response) => {
+    settingsApi.skills<SkillsResponse>(workspaceCwd).then((response) => {
       if (cancelled) return;
       setSkills(response.skills ?? []);
       setConfigured(response.configured === true);
@@ -56,7 +56,18 @@ export function SkillsTab({ workspaceCwd }: { workspaceCwd: string | null }) {
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [workspaceCwd]);
+
+  const reload = async () => {
+    try {
+      const response = await settingsApi.skills<SkillsResponse>(workspaceCwd);
+      setSkills(response.skills ?? []);
+      setConfigured(response.configured === true);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
 
   const toggle = async (skill: Skill, enabled: boolean) => {
     setSaving(skill.name);
@@ -98,7 +109,8 @@ export function SkillsTab({ workspaceCwd }: { workspaceCwd: string | null }) {
     setError(null);
     try {
       const response = await apiRequest<{ content: string }>(`/api/skills/${encodeURIComponent(skill.skill_id)}/content?cwd=${encodeURIComponent(workspaceCwd)}`);
-      setEditing({ name: skill.name, description: skill.description, body: response.content });
+      const body = response.content.replace(/^---\s*\n[\s\S]*?\n---\s*(?:\n|$)/, "").replace(/^\n/, "");
+      setEditing({ name: skill.name, description: skill.description, body });
       setEditorOpen(true);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -112,7 +124,7 @@ export function SkillsTab({ workspaceCwd }: { workspaceCwd: string | null }) {
     try {
       await apiRequest(`/api/settings/skills/${encodeURIComponent(skill.skill_id)}?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "DELETE" });
       invalidateSkills();
-      setSkills((current) => current.filter((item) => item.skill_id !== skill.skill_id));
+      await reload();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -212,9 +224,9 @@ export function SkillsTab({ workspaceCwd }: { workspaceCwd: string | null }) {
         </div>
       )}
 
-      <SkillEditorDialog open={editorOpen} cwd={workspaceCwd ?? ""} initial={editing} onClose={() => setEditorOpen(false)} />
-      <SkillUploadDialog open={uploadOpen} cwd={workspaceCwd ?? ""} onClose={() => setUploadOpen(false)} />
-      <SkillGithubDialog open={githubOpen} cwd={workspaceCwd ?? ""} onClose={() => setGithubOpen(false)} />
+      <SkillEditorDialog open={editorOpen} cwd={workspaceCwd ?? ""} initial={editing} onClose={() => { setEditorOpen(false); void reload(); }} />
+      <SkillUploadDialog open={uploadOpen} cwd={workspaceCwd ?? ""} onClose={() => { setUploadOpen(false); void reload(); }} />
+      <SkillGithubDialog open={githubOpen} cwd={workspaceCwd ?? ""} onClose={() => { setGithubOpen(false); void reload(); }} />
       <SkillChatDialog open={chatOpen} onClose={() => setChatOpen(false)} />
     </div>
   );
