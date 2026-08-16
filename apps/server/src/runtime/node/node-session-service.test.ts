@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConversationEventHub, conversationEventHub } from "../events/conversation-event-hub.js";
 import type { SseEventRecord } from "../events/event-store.js";
 import { NodeSessionService } from "./node-session-service.js";
+import { PiManager } from "../pi/pi-manager.js";
+import { PiOrbitRequestError } from "../pi/pi-orbit-host.js";
 import { loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
 import { readJsonLines } from "../../storage/persistence.js";
 import { ProjectReviewService } from "../../project-review/service.js";
@@ -257,6 +259,24 @@ describe("Node session lifecycle", () => {
     expect(first).toHaveProperty("id");
     expect(second).toHaveProperty("id");
     expect("id" in first && "id" in second ? second.id : "").not.toBe("id" in first ? first.id : "");
+    await service.shutdownAll();
+  });
+
+  it("surfaces the actionable diagnostic when Pi Orbit runtime initialization fails", async () => {
+    const manager = new PiManager();
+    vi.spyOn(manager, "start").mockRejectedValue(new PiOrbitRequestError(422, {
+      error: "Runtime initialization failed",
+      code: "runtime_initialization_failed",
+      diagnostics: [{ type: "error", message: "broken skill" }],
+    }));
+    const service = new NodeSessionService(undefined, manager, undefined, passthroughEnvironments);
+    const cwd = await workspaceWithSessions();
+    const result = await service.create({ cwd, config: { skills: [], extensions: [] } });
+    expect("error" in result && "code" in result).toBe(true);
+    const failureResult = result as { error: string; code: string; diagnostics: unknown };
+    expect(failureResult.error).toBe("unable to start Pi Orbit runtime: Runtime initialization failed: broken skill");
+    expect(failureResult.code).toBe("runtime_initialization_failed");
+    expect(failureResult.diagnostics).toEqual([{ type: "error", message: "broken skill" }]);
     await service.shutdownAll();
   });
 

@@ -156,6 +156,19 @@ function effectiveConfig(requested?: Partial<PiConfig>): PiConfig {
   };
 }
 
+/** First error-level diagnostic from a failed runtime init: the actionable
+ *  cause (broken skill, model catalog failure ...) that the generic
+ *  "Runtime initialization failed" message hides from the user. */
+function firstErrorDiagnostic(diagnostics: unknown): string | null {
+  if (!Array.isArray(diagnostics)) return null;
+  for (const item of diagnostics) {
+    if (item && typeof item === "object" && (item as { type?: unknown }).type === "error" && typeof (item as { message?: unknown }).message === "string") {
+      return (item as { message: string }).message;
+    }
+  }
+  return null;
+}
+
 export class NodeSessionService {
   private readonly runtimes = new Map<string, RuntimeRecord>();
   private readonly locks = new Map<string, Promise<void>>();
@@ -740,8 +753,11 @@ export class NodeSessionService {
     try { process = await this.manager.start(managerKey, options); }
     catch (error) {
       if (error instanceof PiOrbitRequestError) {
+        const detail = firstErrorDiagnostic(error.payload.diagnostics);
         return {
-          error: `unable to start Pi Orbit runtime: ${error.message}`,
+          error: detail
+            ? `unable to start Pi Orbit runtime: ${error.message}: ${detail}`
+            : `unable to start Pi Orbit runtime: ${error.message}`,
           code: error.code,
           ...(error.payload.diagnostics === undefined ? {} : { diagnostics: error.payload.diagnostics }),
         };
