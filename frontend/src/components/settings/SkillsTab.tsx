@@ -134,12 +134,12 @@ export function SkillsTab({ workspaceCwd }: { workspaceCwd: string | null }) {
 
   return (
     <div className="space-y-card pt-card">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="max-w-2xl">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 max-w-2xl">
           <p className="text-ui-body text-muted">{t("skills.settingsDescription")}</p>
           <p className="mt-1 text-ui-caption text-muted">{t("skills.selectionHint")}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           {configured && (
             <button type="button" onClick={() => void reset()} disabled={saving !== null} className="flex min-h-9 items-center gap-1.5 rounded-input border border-border px-3 text-ui-caption text-muted hover:bg-surface-2 hover:text-text disabled:opacity-50">
               {saving === "reset" ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
