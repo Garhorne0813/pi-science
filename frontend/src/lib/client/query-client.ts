@@ -21,6 +21,7 @@ import { ApiError } from "./api";
  *   ["workspace-files", cwd, subdir]                     entries + breadcrumbs
  *   ["runs", cwd]                                        ["runs", cwd, executionId, "log"]
  *   ["provenance", cwd, "versions" | "env", path | hash]
+ *   ["artifact-file", cwd, root, path, maxBytes]
  *   ["slash-commands", cwd, sessionId]
  *   ["pdf-search", cwd, path, query]                     ["compute", "machines"]
  *   ["notebooks", cwd] / ["notebooks", "jupyter", cwd] / ["environments", cwd]

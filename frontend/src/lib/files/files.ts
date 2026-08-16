@@ -3,10 +3,46 @@
 
 import type { FileRoot } from "../../types/thread";
 import { apiRequest } from "../client/api";
+import { queryClient } from "../client/query-client";
 
 export type { FileRoot };
 
 const API = "/api";
+
+/**
+ * File previews are rendered by more than one surface: a turn artifact card,
+ * the inspector, and sometimes several cards for the same path. Keep the
+ * response in the shared query cache briefly so those surfaces share both
+ * in-flight and immediately-following reads instead of opening one request
+ * per mounted component.
+ */
+const ARTIFACT_FILE_STALE_MS = 5_000;
+const ARTIFACT_FILE_GC_MS = 30_000;
+
+export const artifactFileKey = (
+  cwd: string,
+  path: string,
+  root: FileRoot | undefined,
+  maxBytes?: number,
+) => ["artifact-file", cwd, root ?? null, path, maxBytes ?? null] as const;
+
+function artifactFileQuery(
+  path: string,
+  root: FileRoot | undefined,
+  cwd: string,
+  maxBytes?: number,
+) {
+  const params = new URLSearchParams({ cwd });
+  if (root) params.set("root", root);
+  if (maxBytes !== undefined) params.set("maxBytes", String(maxBytes));
+  return {
+    queryKey: artifactFileKey(cwd, path, root, maxBytes),
+    queryFn: () => apiRequest<ArtifactFile>(`${API}/files/${encodeWorkspacePath(path)}?${params}`),
+    staleTime: ARTIFACT_FILE_STALE_MS,
+    gcTime: ARTIFACT_FILE_GC_MS,
+    retry: false,
+  };
+}
 
 /** Encode a workspace path without hiding separators inside %2F. This keeps
  * wildcard routes and browser/proxy path handling consistent across files. */
@@ -33,10 +69,7 @@ export async function readArtifact(
   maxBytes?: number,
 ): Promise<ArtifactFile | null> {
   try {
-    const params = new URLSearchParams({ cwd });
-    if (root) params.set("root", root);
-    if (maxBytes !== undefined) params.set("maxBytes", String(maxBytes));
-    return await apiRequest<ArtifactFile>(`${API}/files/${encodeWorkspacePath(path)}?${params}`);
+    return await queryClient.fetchQuery(artifactFileQuery(path, root, cwd, maxBytes));
   } catch {
     return null;
   }
@@ -51,11 +84,15 @@ export async function writeArtifact(
 ): Promise<{ ok: boolean; path: string; size: number }> {
   const params = new URLSearchParams({ cwd });
   if (root) params.set("root", root);
-  return apiRequest<{ ok: boolean; path: string; size: number }>(`${API}/files/content?${params}`, {
+  const result = await apiRequest<{ ok: boolean; path: string; size: number }>(`${API}/files/content?${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path, content }),
   });
+  // A write changes every preview-size variant of this file. Invalidate the
+  // path prefix rather than only the exact maxBytes used by the editor.
+  await queryClient.invalidateQueries({ queryKey: ["artifact-file", cwd, root ?? null, path] });
+  return result;
 }
 
 /** URL for browser-native preview (PDF, images, HTML, video).
