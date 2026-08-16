@@ -869,6 +869,7 @@
   "notebook.outputLabel": "Output",
   "notebook.wroteFiles": "Wrote {{files}}",
   "notebook.errorStatus": "error",
+  "notebook.interruptedStatus": "interrupted",
   "notebook.removeCell": "Remove cell",
   "molecule.style.stick": "Stick",
   "molecule.style.sphere": "Sphere",

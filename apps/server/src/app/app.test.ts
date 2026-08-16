@@ -27,8 +27,18 @@ async function startUpstream() {
     const body = request.body as { code?: string };
     if (body.code === "write-output") await writeFile(join(cwd, "cell-output.csv"), "value\n42\n", "utf8");
     if (body.code === "kernel-error") return { ok: false, stdout: "before failure\n", result: null, error: "cell failed" };
+    if (body.code === "kernel-interrupted") return { ok: false, stdout: "partial\n", result: null, error: "KeyboardInterrupt", interrupted: true };
     try { await access(join(cwd, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python")); return { isolated: true }; }
     catch { return { isolated: false }; }
+  });
+  upstream.post("/api/kernels/execute-stream", async (request, reply) => {
+    const body = request.body as { code?: string };
+    const interrupted = body.code === "stream-interrupted";
+    return reply.type("application/x-ndjson").send([
+      JSON.stringify({ type: "stream", stream: "stdout", text: "first\n" }),
+      JSON.stringify({ type: "stream", stream: "stdout", text: "second\n" }),
+      JSON.stringify({ type: "result", ok: !interrupted, stdout: "first\nsecond\n", result: interrupted ? null : "42", error: interrupted ? "KeyboardInterrupt" : null, interrupted, mime: interrupted ? {} : { "application/json": "42" } }),
+    ].join("\n") + "\n");
   });
   await upstream.listen({ host: "127.0.0.1", port: 0 });
   openApps.push(upstream);
@@ -160,6 +170,38 @@ describe("Node control plane", () => {
       status: "failed",
       result: { error: "cell failed", stdout_preview: "before failure\n" },
     });
+    await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }, 30_000);
+
+  it("records an intentional kernel interruption separately from failure", async () => {
+    const workspace = join(tmpdir(), `pi-science-kernel-interrupted-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    const app = buildApp(config(await startUpstream()));
+    openApps.push(app);
+
+    const response = await app.inject({ method: "POST", url: `/api/kernels/execute?cwd=${encodeURIComponent(workspace)}`, payload: { language: "python", code: "kernel-interrupted" } });
+    const execution = await app.inject({ method: "GET", url: `/api/executions/${response.json().execution_id}?cwd=${encodeURIComponent(workspace)}` });
+
+    expect(response.json()).toMatchObject({ ok: false, interrupted: true, error: "KeyboardInterrupt" });
+    expect(execution.json()).toMatchObject({ status: "interrupted", result: { error: "KeyboardInterrupt", stdout_preview: "partial\n" } });
+    await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }, 30_000);
+
+  it("forwards streaming kernel chunks and records the final result", async () => {
+    const workspace = join(tmpdir(), `pi-science-kernel-stream-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    const app = buildApp(config(await startUpstream()));
+    openApps.push(app);
+
+    const response = await app.inject({ method: "POST", url: `/api/kernels/execute-stream?cwd=${encodeURIComponent(workspace)}`, payload: { language: "python", code: "stream-output", notebook_id: "stream-test", session_id: "session-1" } });
+    const events = response.body.trim().split("\n").map((line) => JSON.parse(line));
+    const executionId = events.find((event) => event.type === "started").execution_id;
+    const execution = await app.inject({ method: "GET", url: `/api/executions/${executionId}?cwd=${encodeURIComponent(workspace)}` });
+
+    expect(response.headers["content-type"]).toContain("application/x-ndjson");
+    expect(events.filter((event) => event.type === "stream").map((event) => event.text)).toEqual(["first\n", "second\n"]);
+    expect(events.at(-1)).toMatchObject({ type: "result", ok: true, result: "42", execution_id: executionId });
+    expect(execution.json()).toMatchObject({ status: "succeeded", result: { stdout_preview: "first\nsecond\n", mime: { "application/json": "42" } } });
     await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }, 30_000);
 

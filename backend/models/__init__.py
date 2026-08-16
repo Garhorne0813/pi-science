@@ -1,6 +1,6 @@
 """Pydantic models for the pi-science scientific runtime API."""
 
-from typing import Literal, Optional
+from typing import Dict, Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -22,6 +22,8 @@ class CellResult(BaseModel):
     stdout: str = ""
     result: Optional[str] = None
     error: Optional[str] = None
+    interrupted: bool = False
+    mime: Dict[str, str] = Field(default_factory=dict)
 
 
 __all__ = ["ExecuteCellRequest", "CellResult"]

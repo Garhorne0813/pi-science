@@ -869,6 +869,7 @@
   "notebook.outputLabel": "输出",
   "notebook.wroteFiles": "已写入 {{files}}",
   "notebook.errorStatus": "错误",
+  "notebook.interruptedStatus": "已中断",
   "notebook.removeCell": "移除单元格",
   "molecule.style.stick": "棍状",
   "molecule.style.sphere": "球状",

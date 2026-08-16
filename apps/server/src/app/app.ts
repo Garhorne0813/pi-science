@@ -51,6 +51,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
       || pathname === "/openapi.json";
     const needsWorkspaceEnvironment = request.method === "POST" && (
       pathname === "/api/kernels/execute"
+      || pathname === "/api/kernels/execute-stream"
       || pathname === "/api/notebooks/jupyter/start"
     );
     if (needsWorkspaceEnvironment) {

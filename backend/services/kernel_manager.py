@@ -43,7 +43,7 @@ class KernelSession:
     pending: dict = field(default_factory=dict)
     _execution_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
-    async def execute(self, code: str) -> CellResult:
+    async def execute(self, code: str, on_event=None) -> CellResult:
         """Execute code in the kernel and return the result."""
         async with self._execution_lock:
             if not self.is_alive:
@@ -59,16 +59,24 @@ class KernelSession:
                 try:
                     self.process.stdin.write(req)
                     self.process.stdin.flush()
-                    line = self.process.stdout.readline()
-                    if not line:
-                        return {
-                            "id": req_id,
-                            "ok": False,
-                            "stdout": "",
-                            "result": None,
-                            "error": "Kernel process died",
-                        }
-                    return json.loads(line)
+                    while True:
+                        line = self.process.stdout.readline()
+                        if not line:
+                            return {
+                                "id": req_id,
+                                "ok": False,
+                                "stdout": "",
+                                "result": None,
+                                "error": "Kernel process died",
+                            }
+                        message = json.loads(line)
+                        if message.get("id") != req_id:
+                            continue
+                        if message.get("type") == "stream":
+                            if on_event is not None:
+                                on_event({"type": "stream", "stream": message.get("stream", "stdout"), "text": message.get("text", "")})
+                            continue
+                        return message
                 except (BrokenPipeError, OSError, json.JSONDecodeError) as exc:
                     return {
                         "id": req_id,
@@ -84,6 +92,8 @@ class KernelSession:
                 stdout=resp.get("stdout", ""),
                 result=resp.get("result"),
                 error=resp.get("error"),
+                interrupted=resp.get("interrupted", False),
+                mime=resp.get("mime") or {},
             )
 
     @property
@@ -292,6 +302,7 @@ class KernelManager:
         environment_prefix: Optional[str] = None,
         kernel_instance_id: Optional[str] = None,
         timeout_seconds: float = 120,
+        on_event=None,
     ) -> CellResult:
         """Execute code in a kernel session."""
         resolved_cwd = str(Path(cwd).resolve())
@@ -302,7 +313,7 @@ class KernelManager:
             environment_revision_id=environment_revision_id,
             environment_prefix=environment_prefix, kernel_instance_id=kernel_instance_id,
         )
-        execution = asyncio.create_task(session.execute(code))
+        execution = asyncio.create_task(session.execute(code) if on_event is None else session.execute(code, on_event=on_event))
         try:
             return await asyncio.wait_for(asyncio.shield(execution), timeout=timeout_seconds)
         except TimeoutError:

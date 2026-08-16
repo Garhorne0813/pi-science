@@ -7,6 +7,7 @@ import { subscribeExecutionInvalidation } from "../../lib/runs/execution-events"
 import { apiRequest } from "../../lib/client/api";
 import { Braces, ChevronDown, Loader2, Pencil, Play, Square, TerminalSquare, Trash2, X } from "lucide-react";
 import { NotebookCodePreview } from "../notebook/NotebookCodePreview";
+import { NotebookMimeOutput } from "../notebook/NotebookMimeOutput";
 import { cn } from "../../lib/ui";
 
 interface Cell {
@@ -65,11 +66,18 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
 
   const executeCell = useCallback(async (cellId: string, code: string, language: "python" | "r") => {
     setCells((prev) =>
-      prev.map((c) => (c.id === cellId ? { ...c, running: true, result: null } : c))
+      prev.map((c) => (c.id === cellId ? { ...c, running: true, result: { ok: true, stdout: "", stderr: "", result: null, error: null } } : c))
     );
 
     try {
-      const data = await notebookRuntime.execute(notebookId, cwd || ".", language, code, sessionId, { source: "session_notebook", cellId });
+      const data = await notebookRuntime.executeStreaming(notebookId, cwd || ".", language, code, sessionId, { source: "session_notebook", cellId }, (event) => {
+        if (event.type !== "stream") return;
+        setCells((current) => current.map((cell) => {
+          if (cell.id !== cellId) return cell;
+          const result = cell.result ?? { ok: true, stdout: "", stderr: "", result: null, error: null };
+          return { ...cell, result: { ...result, [event.stream]: `${result[event.stream] || ""}${event.text}` } };
+        }));
+      });
       setCells((prev) =>
         prev.map((c) => (c.id === cellId ? { ...c, running: false, result: data, editing: false } : c))
       );
@@ -159,8 +167,10 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
 
         <div className="divide-y divide-faint">
           {historicalCells.map((run, index) => {
-            const output = `${String(run.result.stdout_preview || "")}${String(run.result.output_preview || "")}${String(run.result.error || "")}`;
-            const failed = run.status === "failed" || Boolean(run.result.error);
+            const interrupted = run.status === "interrupted";
+            const failed = run.status === "failed" || (!interrupted && Boolean(run.result.error));
+            const mime = mimeBundle(run.result.mime);
+            const output = `${String(run.result.stdout_preview || "")}${Object.keys(mime).length > 0 ? "" : String(run.result.output_preview || "")}${String(run.result.error || "")}`;
             return (
               <section key={run.execution_id} className="px-4 py-4 transition-colors hover:bg-[color-mix(in_srgb,var(--surface-2)_28%,transparent)]">
                 <div className="mb-2 flex items-center justify-between gap-3 text-[11px] text-muted">
@@ -169,6 +179,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
                     <span className="rounded-md bg-surface-2 px-1.5 py-0.5 uppercase">{String(run.surface)}</span>
                     <span className={cn("rounded-md px-1.5 py-0.5", run.request.source === "session_notebook" ? "bg-accent/10 text-accent" : "bg-surface-2 text-muted")}>{run.request.source === "session_notebook" ? t("notebook.you") : t("notebook.agent")}</span>
                     {failed && <span className="rounded-md bg-error/10 px-1.5 py-0.5 text-error">{t("notebook.errorStatus")}</span>}
+                    {interrupted && <span className="rounded-md bg-surface-2 px-1.5 py-0.5 text-muted">{t("notebook.interruptedStatus")}</span>}
                   </div>
                   <span className={cn("flex items-center gap-1.5", run.status === "running" && "text-ok")}>
                     {run.status === "running" && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-ok" />}{run.status}
@@ -178,9 +189,10 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
                 {output && (
                   <details className="mt-2" open={failed || run.request.source === "session_notebook"}>
                     <summary className="flex cursor-pointer list-none items-center gap-1 text-[11px] text-muted hover:text-text"><ChevronDown size={11} /> {t("notebook.outputLabel")}</summary>
-                    <pre className={cn("mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap rounded-lg border-l-2 bg-[var(--surface-inset)] px-3 py-2 font-mono text-xs leading-5", failed ? "border-error text-error" : "border-border text-text")}>{output}</pre>
+                    <pre className={cn("mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap rounded-lg border-l-2 bg-[var(--surface-inset)] px-3 py-2 font-mono text-xs leading-5", failed ? "border-error text-error" : interrupted ? "border-border text-muted" : "border-border text-text")}>{output}</pre>
                   </details>
                 )}
+                {Object.keys(mime).length > 0 && <div className="mt-2"><NotebookMimeOutput mime={mime} label={t("notebook.output", { index: historicalCells.length - index })} /></div>}
                 {run.files.written.length > 0 && <div className="mt-2 text-[11px] text-muted">{t("notebook.wroteFiles", { files: run.files.written.map((file) => file.path.split("/").pop()).join(", ") })}</div>}
               </section>
             );
@@ -221,13 +233,15 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
                 />
               ) : <NotebookCodePreview code={cell.code} language={cell.language} className="rounded-lg border border-faint" />}
 
-              {cell.result && (cell.result.stdout || cell.result.result || cell.result.error) && (
-                <div className={cn("mt-2 max-h-56 overflow-auto rounded-lg border-l-2 bg-[var(--surface-inset)] px-3 py-2 font-mono text-xs leading-5", cell.result.error ? "border-error text-error" : "border-border text-text")}>
+              {cell.result && (cell.result.stdout || cell.result.stderr || cell.result.result || cell.result.error) && (
+                <div className={cn("mt-2 max-h-56 overflow-auto rounded-lg border-l-2 bg-[var(--surface-inset)] px-3 py-2 font-mono text-xs leading-5", cell.result.error && !cell.result.interrupted ? "border-error text-error" : cell.result.interrupted ? "border-border text-muted" : "border-border text-text")}>
                   {cell.result.stdout && <pre className="whitespace-pre-wrap">{cell.result.stdout}</pre>}
-                  {cell.result.result && <pre className="whitespace-pre-wrap text-accent">{cell.result.result}</pre>}
+                  {cell.result.stderr && <pre className="whitespace-pre-wrap text-warn">{cell.result.stderr}</pre>}
+                  {cell.result.result && Object.keys(cell.result.mime || {}).length === 0 && <pre className="whitespace-pre-wrap text-accent">{cell.result.result}</pre>}
                   {cell.result.error && <pre className="whitespace-pre-wrap">{cell.result.error}</pre>}
                 </div>
               )}
+              {cell.result?.mime && Object.keys(cell.result.mime).length > 0 && <div className="mt-2"><NotebookMimeOutput mime={cell.result.mime} label={t("notebook.output", { index: index + 1 })} /></div>}
             </section>
           ))}
         </div>
@@ -264,4 +278,9 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
       </footer>
     </div>
   );
+}
+
+function mimeBundle(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 }
