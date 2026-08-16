@@ -42,7 +42,13 @@ export async function loadPiAiProviderCatalog(): Promise<PiAiProviderCatalogEntr
       const auth = candidate.auth;
       const apiKeySupported = Boolean(auth?.apiKey);
       const oauthSupported = Boolean(auth?.oauth);
-      const subscription = Boolean(auth?.oauth && (auth.oauth as { isSubscription?: unknown }).isSubscription === true);
+      // Older pi-ai releases exposed `isSubscription`; newer lazy OAuth
+      // descriptors omit it. An OAuth-only provider is still a subscription
+      // login surface when the runtime does not expose the optional flag.
+      const subscription = Boolean(
+        auth?.oauth
+        && ((auth.oauth as { isSubscription?: unknown }).isSubscription === true || !apiKeySupported),
+      );
       let modelIds: string[] = [];
       try {
         const models = typeof candidate.getModels === "function" ? candidate.getModels() : [];

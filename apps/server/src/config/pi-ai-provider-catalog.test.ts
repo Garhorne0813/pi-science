@@ -8,11 +8,13 @@ const catalog = await loadPiAiProviderCatalog();
 const catalogAvailable = catalog.length > 0;
 
 describe.skipIf(!catalogAvailable)("pi-ai provider catalog adapter", () => {
-  it("loads the real runtime catalog including OpenCode Go with API-key auth and models", async () => {
+  it("loads the real runtime catalog including the OpenCode Go provider with API-key auth and models", async () => {
     const catalog = await loadPiAiProviderCatalog();
     const opencodeGo = catalog.find((provider) => provider.id === "opencode-go");
     expect(opencodeGo).toBeDefined();
-    expect(opencodeGo?.name).toBe("OpenCode Go");
+    // The upstream display name changed to "OpenCode Zen Go" without
+    // changing the provider id or authentication contract.
+    expect(opencodeGo?.name).toMatch(/^OpenCode (?:Zen )?Go$/);
     expect(opencodeGo?.apiKeySupported).toBe(true);
     expect(opencodeGo?.oauthSupported).toBe(false);
     expect(opencodeGo?.modelIds.length).toBeGreaterThan(0);
