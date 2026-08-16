@@ -5,9 +5,12 @@ import { defaultStyleMode, isSmilesFile, looksLikeMacromolecule, moleculeFormatF
 const LYSOZYME = "../demos/molecular-playground/data/1LYS.pdb";
 
 describe("molecule helpers", () => {
-  it("maps molecule extensions to 3Dmol formats", () => {
+  it("maps molecule extensions to Mol* formats", () => {
     expect(moleculeFormatFor("aspirin.xyz")).toBe("xyz");
-    expect(moleculeFormatFor("ligand.MOL")).toBe("sdf");
+    expect(moleculeFormatFor("ligand.MOL")).toBe("mol");
+    expect(moleculeFormatFor("protein.cif", "_atom_site.label_asym_id")).toBe("mmcif");
+    expect(moleculeFormatFor("crystal.cif", "_atom_site_fract_x 0.1")).toBe("cifCore");
+    expect(moleculeFormatFor("charges.pqr")).toBe("pqr");
     expect(moleculeFormatFor("notes.txt")).toBeNull();
     expect(isSmilesFile("library.smiles")).toBe(true);
   });

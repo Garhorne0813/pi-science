@@ -25,7 +25,6 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes("node_modules/echarts") || id.includes("node_modules/zrender")) return "vendor-echarts";
-          if (id.includes("node_modules/3dmol") || id.includes("3Dmol")) return "vendor-3dmol";
           if (id.includes("node_modules/openchemlib")) return "vendor-openchemlib";
           if (id.includes("node_modules/three")) return "vendor-three";
           if (id.includes("node_modules/docx-preview")) return "vendor-docx";
@@ -43,7 +42,11 @@ export default defineConfig({
             id.includes("node_modules/remark-gfm") ||
             id.includes("node_modules/highlight.js")
           ) return "vendor-markdown";
-          if (id.includes("node_modules")) return "vendor-common";
+          // Keep Mol* and its parser/runtime dependencies in the molecule-only
+          // dynamic graph. Everything else can share the existing common vendor
+          // chunk without pulling the molecular viewer into the initial bundle.
+          const isMolecularViewerDependency = /[\\/]node_modules[\\/](?:molstar|immutable|rxjs|mutative|fp-ts|io-ts|h264-mp4-encoder)[\\/]/.test(id);
+          if (id.includes("node_modules") && !isMolecularViewerDependency) return "vendor-common";
           return undefined;
         },
       },
