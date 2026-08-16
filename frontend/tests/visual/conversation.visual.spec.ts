@@ -2,25 +2,17 @@
  *  a bash tool card, assistant markdown (headings, lists, tables, inline code,
  *  blockquote) and a code block with its toolbar. */
 
-import { expect, screenshot, test, workspaceRoute } from "./fixtures/app.fixture";
+import { expect, screenshot, test, waitForConversationSettled, workspaceRoute } from "./fixtures/app.fixture";
 import { VISUAL_CWD, VISUAL_SESSION } from "./fixtures/data.mjs";
 
 const SESSION_ROUTE = workspaceRoute(VISUAL_CWD, `/session/${VISUAL_SESSION}`);
 
 async function openSettledConversation(page: import("@playwright/test").Page) {
   await page.goto(SESSION_ROUTE);
-  // The settled thread renders the assistant markdown heading…
-  await expect(page.getByRole("heading", { name: "Shikimate pathway analysis" })).toBeVisible();
-  // …the bash tool card (its output is collapsed until the card is opened)…
-  await expect(page.getByRole("button", { name: /bash/i })).toBeVisible();
-  // …the markdown table…
-  await expect(page.getByRole("table")).toBeVisible();
-  // …the code block with a toolbar…
-  await expect(page.locator("pre code").first()).toBeVisible();
-  // …the artifact strip for the turn…
-  await expect(page.getByRole("button", { name: /report\.md/ }).first()).toBeVisible();
-  // …and the composer settles out of the "settling" phase.
-  await expect(page.getByPlaceholder(/Ask anything/)).toBeVisible();
+  // The settled thread renders every fixture block: the assistant markdown
+  // heading, the bash tool card, the table, the code block, the artifact
+  // strip and the composer out of the "settling" phase.
+  await waitForConversationSettled(page);
 }
 
 test("settled conversation with markdown, table, tool card and code block", async ({ page }) => {

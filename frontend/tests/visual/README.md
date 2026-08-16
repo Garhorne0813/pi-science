@@ -25,7 +25,9 @@ pnpm --filter frontend test:accessibility       # axe gate only (@accessibility 
 The Playwright `webServer` block starts the fixture mock server
 (`tests/visual/fixtures/mock-server.mjs`) for the duration of the run and
 serves a fixed `/api/*` surface from `tests/visual/fixtures/data.mjs`
-(including a keep-alive SSE stream). It never runs outside `test:visual`.
+(including a keep-alive SSE stream). The same `playwright.visual.config.ts`
+backs both `test:visual` and `test:accessibility`, so the server also runs
+for the axe gate — it never runs persistently outside these two commands.
 The mock server is hardened: malformed requests get 400, handler failures get
 500, and it never crashes the run; SIGTERM/SIGINT shut it down cleanly so no
 zombie process keeps port 4173.

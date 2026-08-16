@@ -42,6 +42,24 @@ export async function screenshot(page: import("@playwright/test").Page, name: st
   await expect(page).toHaveScreenshot(name);
 }
 
+/** Wait until the settled conversation thread of the populated demo
+ *  workspace has fully rendered: the fixture user message, the bash tool
+ *  card, the assistant markdown (heading, table, code block), the artifact
+ *  strip and the composer out of the "settling" phase.
+ *
+ *  Workspace-root routes auto-navigate into the most recent session, so the
+ *  sidebar/inspector specs would otherwise race the message load and capture
+ *  a half-empty thread. Only used on the populated VISUAL_CWD; the landing
+ *  cwd is session-free and must never wait for a session here. */
+export async function waitForConversationSettled(page: import("@playwright/test").Page) {
+  await expect(page.getByRole("heading", { name: "Shikimate pathway analysis" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /bash/i })).toBeVisible();
+  await expect(page.getByRole("table")).toBeVisible();
+  await expect(page.locator("pre code").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: /report\.md/ }).first()).toBeVisible();
+  await expect(page.getByPlaceholder(/Ask anything/)).toBeVisible();
+}
+
 /** Workspace route helper — the cwd is always URL-encoded in the path. */
 export function workspaceRoute(cwd: string, suffix = ""): string {
   return `/workspace/${encodeURIComponent(cwd)}${suffix}`;

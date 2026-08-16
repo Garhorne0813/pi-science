@@ -84,7 +84,7 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
             </div>
             <div className="mt-5 flex justify-end gap-2">
               <button type="button" autoFocus onClick={() => finishConfirmation(false)} className="h-9 rounded-input border border-border px-3 text-sm text-muted hover:text-text">{t("common.cancel")}</button>
-              <button type="button" onClick={() => finishConfirmation(true)} className={cn("h-9 rounded-input px-3 text-sm font-medium", confirmation.destructive ? "bg-error text-white" : "bg-accent-fill text-accent-fg")}>{confirmation.confirmLabel || t("common.ok")}</button>
+              <button type="button" onClick={() => finishConfirmation(true)} className={cn("h-9 rounded-input px-3 text-sm font-medium", confirmation.destructive ? "bg-error-fill text-accent-fg" : "bg-accent-fill text-accent-fg")}>{confirmation.confirmLabel || t("common.ok")}</button>
             </div>
           </div>
         </div>

@@ -38,6 +38,15 @@ pnpm --filter frontend test:uat:conversation   # UAT scripts (also :knowledge :n
 Current green baseline, known build warnings, and the characterization-test inventory are recorded
 in `docs/refactoring-baseline.md`. The batch plan is `docs/refactoring-plan.md`.
 
+## 子任务测试分工
+- 并行 worker 只运行自己改动范围的验证（相关 vitest 文件、typecheck、focused Playwright
+  用例），不并行运行完整测试套件。
+- 视觉回归套件（`pnpm --filter frontend test:visual`、`test:accessibility`）由视觉 worker
+  独占；`frontend/tests/visual/**` 的截图 baselines 只由该 worker 删除和重建。
+- 完整验证（`pnpm typecheck`、`pnpm test`、`pnpm build`、`test:bundle`、UAT）只在集成阶段
+  由集成 worker 串行运行；发现失败先修复再进入下一步。
+- commit 只由集成 worker 创建；并行 worker 交付改动和证据，不自行提交。
+
 ## Refactoring rules
 - Preserve externally observable behavior unless the task explicitly requests a behavior change.
 - Do not mix refactoring, dependency upgrades, formatting changes, and feature work in one change.

@@ -1,7 +1,7 @@
 /** App-shell visual baselines: projects page, workspace landing and the
  *  collapsible sidebar across the fixed viewport matrix. */
 
-import { expect, screenshot, test, workspaceRoute } from "./fixtures/app.fixture";
+import { expect, screenshot, test, waitForConversationSettled, workspaceRoute } from "./fixtures/app.fixture";
 import { VISUAL_CWD, VISUAL_LANDING_CWD } from "./fixtures/data.mjs";
 
 test("projects page renders workspace cards", async ({ page }) => {
@@ -31,7 +31,9 @@ test("collapsed sidebar leaves a stable icon rail", async ({ page }, testInfo) =
   // the "Close sidebar" affordance does not exist there.
   test.skip(testInfo.project.name === "mobile", "mobile starts with the rail already collapsed");
   await page.goto(workspaceRoute(VISUAL_CWD));
-  await expect(page.getByPlaceholder(/Ask anything/)).toBeVisible();
+  // The workspace root auto-navigates into the most recent session; wait for
+  // the settled thread so the rail screenshot is not racing the message load.
+  await waitForConversationSettled(page);
   await page.getByRole("button", { name: "Close sidebar" }).click();
   await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
   await screenshot(page, "sidebar-collapsed.png");
