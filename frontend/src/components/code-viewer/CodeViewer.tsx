@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import hljs from "highlight.js/lib/common";
-import "highlight.js/styles/github.css";
+import "./highlight-theme.css";
 
 interface Props {
   code: string;

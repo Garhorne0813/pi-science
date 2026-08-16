@@ -1,8 +1,6 @@
 @import "@fontsource/inter/latin-400.css";
 @import "@fontsource/inter/latin-500.css";
 @import "@fontsource/inter/latin-600.css";
-@import "@fontsource/source-serif-4/latin-400.css";
-@import "@fontsource/source-serif-4/latin-600.css";
 @import "@fontsource/jetbrains-mono/latin-400.css";
 @import "@fontsource/jetbrains-mono/latin-500.css";
 
@@ -77,27 +75,75 @@
 
 :root,
 [data-theme="light"] {
-  --bg: #f7f6f2;
-  --surface: #fdfcf9;
-  --surface-2: #efede7;
+  /* DeepSeek Harness-inspired palette (see docs/ui/deepseek-harness-reference.md):
+     neutral-bluish scale + deepseek blue accent. RGB channel twins power
+     Tailwind <alpha-value> utilities (bg-accent/5, border-error/30, …). */
+  --bg: #ffffff;
+  --bg-rgb: 255 255 255;
+  --surface: #f9fafb;
+  --surface-rgb: 249 250 251;
+  --surface-2: #f5f6f7;
+  --surface-2-rgb: 245 246 247;
   --surface-raised: #ffffff;
-  --surface-inset: #f3f1eb;
-  --surface-hover: #ebe8df;
-  --surface-selected: #e8e2d8;
-  --sidebar: #fbfaf7;
-  --border: #dedbd2;
-  --border-faint: #ebe8e0;
-  --border-strong: #c9c4b8;
-  --text: #24231f;
-  --muted: #716d63;
-  --accent: #c45f3d;
+  --surface-raised-rgb: 255 255 255;
+  --surface-inset: #f1f3f5;
+  --surface-inset-rgb: 241 243 245;
+  --surface-hover: #f1f3f5;
+  --surface-hover-rgb: 241 243 245;
+  --surface-selected: #ebeff2;
+  --surface-selected-rgb: 235 239 242;
+  --sidebar: #f9fafb;
+  --sidebar-rgb: 249 250 251;
+  --bubble: #edf3fe;
+  --border: rgba(0, 0, 0, 0.1);
+  --border-faint: rgba(0, 0, 0, 0.04);
+  --border-strong: rgba(0, 0, 0, 0.16);
+  --text: #0f1115;
+  --text-rgb: 15 17 21;
+  --muted: #61666b;
+  --muted-rgb: 97 102 107;
+  /* Accent roles: --accent stays the interactive/text/tint blue; --accent-fill
+     is the solid fill that must carry white text (WCAG AA ≥ 4.5:1). Both are
+     the DeepSeek reference blue in light mode; dark mode splits them because
+     the reference dark blue #679efe only passes AA as text on dark surfaces
+     (white on it is 2.65:1). */
+  --accent: #3964fe;
+  --accent-rgb: 57 100 254;
+  --accent-fill: #3964fe;
+  --accent-fill-rgb: 57 100 254;
   --accent-fg: #ffffff;
-  --accent-soft: #f8ebe5;
-  --accent-border: #e7b9a8;
-  --link: #2a6fdb;
-  --warn: #c98a2b;
-  --ok: #4b8b5b;
-  --error: #c0564b;
+  --accent-fg-rgb: 255 255 255;
+  --accent-soft: #e4edfd;
+  --accent-soft-rgb: 228 237 253;
+  --accent-border: #b7c8fe;
+  --accent-border-rgb: 183 200 254;
+  --link: #3964fe;
+  --link-rgb: 57 100 254;
+  --warn: #f59e0b;
+  --warn-rgb: 245 158 11;
+  --ok: #22c55e;
+  --ok-rgb: 34 197 94;
+  --error: #ec1313;
+  --error-rgb: 236 19 19;
+  /* Status text/fill roles: the saturated --ok/--warn/--error values only
+     pass AA as tint/border accents, not as text on light surfaces or as
+     white-text fills. These roles exist for those two jobs:
+     - *-text: small text on light surfaces (>= 4.5:1 on --bg/--surface).
+     - *-fill: solid fills that must carry white text (>= 4.5:1 with #fff).
+     Dark mode keeps the bright variants for text (they pass on dark
+     surfaces) but still needs the darker fills for white text. */
+  --ok-text: #15803d;
+  --ok-text-rgb: 21 128 61;
+  --warn-text: #b45309;
+  --warn-text-rgb: 180 83 9;
+  --error-text: #d61010;
+  --error-text-rgb: 214 16 16;
+  --ok-fill: #15803d;
+  --ok-fill-rgb: 21 128 61;
+  --warn-fill: #b45309;
+  --warn-fill-rgb: 180 83 9;
+  --error-fill: #d61010;
+  --error-fill-rgb: 214 16 16;
   --series-1: #2a78d6;
   --series-2: #1baf7a;
   --series-3: #eda100;
@@ -106,11 +152,11 @@
   --series-6: #e34948;
   --series-7: #e87ba4;
   --series-8: #eb6834;
-  --chart-grid: #e5e2d7;
-  --chart-axis: #c9c5b8;
-  --shadow-card: 0 1px 2px rgb(52 46 38 / 5%), 0 6px 20px rgb(52 46 38 / 5%);
-  --shadow-card-hover: 0 2px 4px rgb(52 46 38 / 7%), 0 12px 28px rgb(52 46 38 / 9%);
-  --shadow-pop: 0 14px 42px rgb(42 37 31 / 16%), 0 2px 8px rgb(42 37 31 / 8%);
+  --chart-grid: #e1e5ee;
+  --chart-axis: #adb2b8;
+  --shadow-card: 0 1px 2px rgb(15 17 21 / 4%), 0 6px 20px rgb(15 17 21 / 5%);
+  --shadow-card-hover: 0 2px 4px rgb(15 17 21 / 6%), 0 12px 28px rgb(15 17 21 / 8%);
+  --shadow-pop: 0 14px 42px rgb(15 17 21 / 14%), 0 2px 8px rgb(15 17 21 / 7%);
   /* Shared density scale. Components should use the semantic Tailwind aliases
      instead of introducing adjacent one-off heights and spacing values. */
   --density-icon: 1.5rem;
@@ -124,30 +170,83 @@
   --space-card: 1rem;
   --space-section: 1.25rem;
   --space-page: 1.5rem;
+  /* Structure geometry (reference-confirmed values; see reference doc). */
+  --conversation-content-width: 748px;
+  --conversation-composer-width: 780px;
+  --user-message-width: 525px;
+  --sidebar-collapsed-width: 56px;
+  --composer-fade-height: 36px;
+  --send-button-size: 34px;
+  --new-session-height: 38px;
+  /* Radius scale. --radius-bubble/--radius-composer land with the chat phase. */
+  --radius-small: 8px;
+  --radius-control: 10px;
+  --radius-card: 12px;
+  --radius-large: 16px;
+  --radius-bubble: 22px;
+  --radius-composer: 22px;
+  /* Motion scale (upstream base.css curve and durations). */
+  --motion-fast: 100ms;
+  --motion-normal: 200ms;
+  --motion-slow: 300ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 [data-theme="dark"] {
-  --bg: #20211f;
-  --surface: #282925;
-  --surface-2: #32332e;
-  --surface-raised: #2d2e2a;
-  --surface-inset: #242521;
-  --surface-hover: #383932;
-  --surface-selected: #423a31;
-  --sidebar: #272824;
-  --border: #41423b;
-  --border-faint: #33342f;
-  --border-strong: #595a51;
-  --text: #f0eee6;
-  --muted: #a6a092;
-  --accent: #d97757;
-  --accent-fg: #211f1c;
-  --accent-soft: #3c2d27;
-  --accent-border: #704735;
-  --link: #7aa5f0;
-  --warn: #d7a24a;
-  --ok: #6bb07d;
-  --error: #d47a70;
+  --bg: #151517;
+  --bg-rgb: 21 21 23;
+  --surface: #1b1b1c;
+  --surface-rgb: 27 27 28;
+  --surface-2: #232324;
+  --surface-2-rgb: 35 35 36;
+  --surface-raised: #2c2c2e;
+  --surface-raised-rgb: 44 44 46;
+  --surface-inset: #1b1b1c;
+  --surface-inset-rgb: 27 27 28;
+  --surface-hover: #353638;
+  --surface-hover-rgb: 53 54 56;
+  --surface-selected: #43454a;
+  --surface-selected-rgb: 67 69 74;
+  --sidebar: #1b1b1c;
+  --sidebar-rgb: 27 27 28;
+  --bubble: #2c2c2e;
+  --border: rgba(255, 255, 255, 0.12);
+  --border-faint: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.2);
+  --text: #f9fafb;
+  --text-rgb: 249 250 251;
+  --muted: #cfd3d6;
+  --muted-rgb: 207 211 214;
+  --accent: #679efe;
+  --accent-rgb: 103 158 254;
+  --accent-fill: #3a6de0;
+  --accent-fill-rgb: 58 109 224;
+  --accent-fg: #ffffff;
+  --accent-fg-rgb: 255 255 255;
+  --accent-soft: #34415b;
+  --accent-soft-rgb: 52 65 91;
+  --accent-border: #4868b2;
+  --accent-border-rgb: 72 104 178;
+  --link: #679efe;
+  --link-rgb: 103 158 254;
+  --warn: #f7ad31;
+  --warn-rgb: 247 173 49;
+  --ok: #4ed17e;
+  --ok-rgb: 78 209 126;
+  --error: #f25a5a;
+  --error-rgb: 242 90 90;
+  --ok-text: var(--ok);
+  --ok-text-rgb: var(--ok-rgb);
+  --warn-text: var(--warn);
+  --warn-text-rgb: var(--warn-rgb);
+  --error-text: var(--error);
+  --error-text-rgb: var(--error-rgb);
+  --ok-fill: #15803d;
+  --ok-fill-rgb: 21 128 61;
+  --warn-fill: #b45309;
+  --warn-fill-rgb: 180 83 9;
+  --error-fill: #d61010;
+  --error-fill-rgb: 214 16 16;
   --series-1: #3987e5;
   --series-2: #199e70;
   --series-3: #c98500;
@@ -156,8 +255,8 @@
   --series-6: #e66767;
   --series-7: #d55181;
   --series-8: #d95926;
-  --chart-grid: #45443f;
-  --chart-axis: #5c5a53;
+  --chart-grid: #2c2c2e;
+  --chart-axis: #61666b;
   --shadow-card: 0 1px 2px rgb(0 0 0 / 22%), 0 8px 24px rgb(0 0 0 / 13%);
   --shadow-card-hover: 0 2px 5px rgb(0 0 0 / 28%), 0 14px 32px rgb(0 0 0 / 20%);
   --shadow-pop: 0 18px 48px rgb(0 0 0 / 38%), 0 3px 10px rgb(0 0 0 / 24%);
@@ -211,8 +310,7 @@
   .ui-card-inset,
   .ui-card-accent,
   .ui-popover,
-  .ui-dialog,
-  .ui-user-message {
+  .ui-dialog {
     border: 1px solid var(--border);
   }
 
@@ -265,8 +363,7 @@
   .app-sidebar { background: var(--sidebar); }
 
   .ui-user-message {
-    background: var(--surface-selected);
-    border-color: color-mix(in srgb, var(--border-strong) 72%, var(--accent-border));
+    background: var(--bubble);
   }
 
   /* Runs uses explicit layout classes because Tailwind's dev scanner does not
@@ -398,50 +495,16 @@ button:disabled {
   cursor: not-allowed;
 }
 
-/* Settings controls share one compact visual language regardless of the
-   utility classes used by their individual forms. */
-.settings-page select {
-  min-height: var(--density-control) !important;
-  appearance: none;
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  background-color: var(--surface);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238c877d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  background-position: right 0.75rem center;
-  background-repeat: no-repeat;
-  background-size: 0.875rem;
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 4%, transparent);
-  color: var(--text);
-  font-family: Inter, system-ui, sans-serif !important;
-  font-size: 0.8125rem !important;
-  font-weight: 500;
-  line-height: 1rem;
-  padding: 0.5rem 2.25rem 0.5rem 0.75rem;
-  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+/* Model / thinking row menus (LLM tab) open/close motion, driven by Radix
+   data-state attributes on the dropdown content (tokens: --ease-standard,
+   --motion-fast/normal). */
+@keyframes settings-menu-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: none; }
 }
-
-.settings-page select:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--muted) 55%, var(--border));
-}
-
-.settings-page select:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 65%, var(--border));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
-  outline: none;
-}
-
-.settings-page select:disabled {
-  background-color: var(--surface-2);
-  box-shadow: none;
-  color: var(--muted);
-  cursor: not-allowed;
-  opacity: 0.7;
-}
-
-.settings-page select option {
-  background-color: var(--surface);
-  color: var(--text);
-  font-family: Inter, system-ui, sans-serif;
+@keyframes settings-menu-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(-4px) scale(0.98); }
 }
 
 * {
@@ -460,6 +523,24 @@ button:disabled {
    scrollbar consumes layout width on the right side of the scroller. */
 .conversation-scroller {
   scrollbar-gutter: stable both-edges;
+}
+
+/* Sidebar expand/collapse motion (reference: 150-200ms ease-in-out). The
+   expanded panel slides and fades in; the collapsed rail fades its controls
+   in from the rail edge, mirroring the upstream collapse choreography. */
+@keyframes sidebar-in {
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes rail-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to { opacity: 1; transform: none; }
+}
+.sidebar-enter {
+  animation: sidebar-in var(--motion-normal) var(--ease-standard);
+}
+.rail-enter {
+  animation: rail-in var(--motion-fast) var(--ease-standard);
 }
 
 @keyframes fade-in {

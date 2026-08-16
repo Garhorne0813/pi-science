@@ -116,6 +116,14 @@ describe("renderBlocks", () => {
 });
 
 describe("renderBlockGroup", () => {
+  it("renders the user message with the reference bubble geometry", () => {
+    render(<>{renderBlocks([user("u1", "hello")], codeRunner)}</>);
+    const bubble = document.getElementById("user-msg-u1")!;
+    expect(bubble).toHaveClass("max-w-[min(var(--user-message-width),82%)]");
+    const bubbleBody = bubble.querySelector(".ui-user-message")!;
+    expect(bubbleBody).toHaveClass("rounded-bubble", "px-4", "py-2.5");
+  });
+
   it("prefers the whole-thread action map over a per-group computation", () => {
     const wholeThread = new Map([["a2", "final only"]]);
     render(<>{renderBlockGroup([agent("a1", "narration")], codeRunner, wholeThread)}</>);

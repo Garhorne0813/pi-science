@@ -126,7 +126,7 @@ Pi-Science renders common research formats directly in the browser.
 
 | Domain | Formats | Viewer |
 |---|---|---|
-| Chemistry | CIF, PDB, SDF, MOL, SMILES, XYZ | Interactive 3Dmol.js viewer |
+| Chemistry | CIF, PDB, PQR, SDF, MOL, MOL2, SMILES, XYZ, CUBE | Interactive Mol* viewer with structure-linked sequences |
 | Astronomy | FITS | Canvas rendering with scientific color maps |
 | 3D / CAD | STL, OBJ, PLY, glTF, GLB | Three.js scene viewer |
 | Solid-state physics | EIGENVAL, DOSCAR | Band-structure and density-of-states charts |

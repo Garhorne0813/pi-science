@@ -29,7 +29,7 @@ export class ErrorBoundary extends Component<Props, State> {
     return (
       this.props.fallback ?? (
         <div className="rounded-card border border-error/30 bg-error/5 p-4 text-sm text-text">
-          <p className="font-medium text-error">{i18n.t("errors.somethingWentWrong")}</p>
+          <p className="font-medium text-error-text">{i18n.t("errors.somethingWentWrong")}</p>
           <p className="mt-1 text-muted">{this.state.error.message}</p>
           <button
             type="button"

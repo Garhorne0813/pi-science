@@ -6,13 +6,14 @@ import "./index.css";
 import i18n, { i18nReady } from "./i18n";
 import { router } from "./app/router";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { useUiStore } from "./lib/ui";
+import { useUiStore, applyTheme } from "./lib/ui";
 import { queryClient } from "./lib/client/query-client";
 import { FeedbackProvider } from "./components/feedback/FeedbackProvider";
+import { resolveEffectiveLocale } from "./i18n/config";
 
 const initialUi = useUiStore.getState();
-document.documentElement.setAttribute("data-theme", initialUi.theme);
-document.documentElement.lang = initialUi.locale;
+applyTheme(initialUi.theme);
+document.documentElement.lang = resolveEffectiveLocale(initialUi.locale);
 
 void i18nReady.then(() => {
   createRoot(document.getElementById("root")!).render(

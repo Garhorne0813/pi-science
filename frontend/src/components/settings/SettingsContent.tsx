@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Boxes, Cpu, FlaskConical, Languages, Loader2, Puzzle, Server, X, type LucideIcon } from "lucide-react";
+import { Blocks, Boxes, BrainCircuit, Loader2, ServerCog, Settings2, Unplug, WandSparkles, X, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/ui";
 import { settingsApi } from "../../lib/settings";
@@ -16,13 +16,13 @@ import { EnvironmentSettings } from "./EnvironmentSettings";
 type Tab = "general" | "llm" | "skills" | "extensions" | "mcp" | "compute" | "environments";
 
 const TABS: { id: Tab; labelKey: string; titleKey: string; icon: LucideIcon }[] = [
-  { id: "general", labelKey: "settings.general", titleKey: "settings.general", icon: Languages },
-  { id: "llm", labelKey: "settings.llm", titleKey: "settings.model.pageTitle", icon: Cpu },
-  { id: "skills", labelKey: "skills.title", titleKey: "skills.title", icon: Puzzle },
+  { id: "general", labelKey: "settings.general", titleKey: "settings.general", icon: Settings2 },
+  { id: "llm", labelKey: "settings.llm", titleKey: "settings.model.pageTitle", icon: BrainCircuit },
+  { id: "skills", labelKey: "skills.title", titleKey: "skills.title", icon: WandSparkles },
   { id: "environments", labelKey: "settings.environments", titleKey: "settings.environments", icon: Boxes },
-  { id: "extensions", labelKey: "settings.extensions", titleKey: "settings.extensions", icon: Puzzle },
-  { id: "mcp", labelKey: "settings.mcp", titleKey: "settings.mcpPage.title", icon: FlaskConical },
-  { id: "compute", labelKey: "settings.compute", titleKey: "settings.computePage.title", icon: Server },
+  { id: "extensions", labelKey: "settings.extensions", titleKey: "settings.extensions", icon: Blocks },
+  { id: "mcp", labelKey: "settings.mcp", titleKey: "settings.mcpPage.title", icon: Unplug },
+  { id: "compute", labelKey: "settings.compute", titleKey: "settings.computePage.title", icon: ServerCog },
 ];
 
 /** Settings page content: vertical navigation on the left, active tab on the
@@ -117,7 +117,11 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
     setSaving("model");
     setError(null);
     try {
-      await settingsApi.saveModel(model, thinking || config?.thinking || "high", scope);
+      const result = await settingsApi.saveModel<{ thinking?: string }>(model, thinking || config?.thinking || "high", scope);
+      // The server clamps the saved thinking to the model's supported levels;
+      // apply the effective value before the reload so the UI never shows a
+      // stale level even while the config refetch is in flight.
+      if (config && typeof result?.thinking === "string") setConfig({ ...config, thinking: result.thinking });
       await loadConfig();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -141,19 +145,13 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
-      {/* Settings navigation */}
-      <aside className="flex w-16 shrink-0 flex-col border-r border-faint bg-surface-2/20 px-2 py-panel md:w-44 md:px-3 md:py-4">
-        <div className="flex shrink-0 items-center">
-          <IconButton
-            icon={X}
-            label={t("common.close")}
-            size="touch"
-            onClick={onClose}
-            className="bg-surface-2/70"
-          />
-        </div>
+      {/* Settings navigation: a light rail on mobile (56px icon column) and a
+          quiet 188px column with a title on desktop, mirroring the DeepSeek
+          harness SettingsRoot geometry (22px/12px padding, 4px list gap). */}
+      <aside className="flex w-14 shrink-0 flex-col border-r border-faint bg-sidebar px-2.5 pt-panel pb-panel md:w-[188px] md:px-3 md:pt-[22px] md:pb-0">
         <div className="sr-only">{scope ? t("settings.scope.workspace") : t("settings.scope.global")}</div>
-        <nav role="tablist" aria-orientation="vertical" aria-label={t("nav.settings")} onKeyDown={handleNavKeyDown} className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pt-4 md:pt-3">
+        <h2 className="hidden px-3 pb-2 text-base font-medium text-text md:block">{t("nav.settings")}</h2>
+        <nav role="tablist" aria-orientation="vertical" aria-label={t("nav.settings")} onKeyDown={handleNavKeyDown} className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
           {TABS.map((item) => (
             <button
               key={item.id}
@@ -166,26 +164,35 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
               onClick={() => changeTab(item.id)}
               title={t(item.labelKey)}
               className={cn(
-                "relative flex h-nav min-h-0 w-full items-center justify-center gap-1.5 rounded-input px-2 text-left text-ui-label font-medium transition-colors md:justify-start",
-                tab === item.id ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2 hover:text-text",
+                "relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-normal outline-none transition-colors md:h-10 md:w-full md:justify-start md:gap-2 md:rounded-card md:px-3 md:leading-[22px]",
+                tab === item.id ? "bg-surface-selected text-text" : "text-muted hover:bg-surface-hover hover:text-text",
               )}
             >
-              <Icon icon={item.icon} size="md" className="shrink-0" />
+              <Icon icon={item.icon} size={18} className="h-[18px] w-[18px] shrink-0 md:h-4 md:w-4" />
               <span className="hidden min-w-0 truncate md:inline">{t(item.labelKey)}</span>
             </button>
           ))}
         </nav>
       </aside>
 
-      {/* Active tab */}
+      {/* Active tab. The header stays pinned at the top of the scroll area so
+          the close control is always reachable on mobile; it lives in the
+          content header (not the sidebar) like the DeepSeek settings panel. */}
       <div ref={scrollRef} id="settings-tabpanel" role="tabpanel" aria-labelledby={`settings-tab-${tab}`} className="settings-page min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex min-h-full w-full max-w-[1080px] flex-col px-card py-card md:px-5 md:py-5 lg:px-6">
-          <header className="flex shrink-0 items-end justify-between gap-card border-b border-faint pb-panel md:pb-4">
+        <div className="mx-auto flex min-h-full w-full max-w-[820px] flex-col md:px-6">
+          <header className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-card border-b border-faint bg-surface-raised px-card py-panel md:px-0 md:py-4">
             <h1 id="settings-panel-title" className="text-ui-title font-medium tracking-tight text-text">
               {t(activeTab.titleKey)}
             </h1>
+            <IconButton
+              icon={X}
+              label={t("common.close")}
+              size="standard"
+              className="h-7 w-7 rounded-full hover:bg-surface-hover"
+              onClick={onClose}
+            />
           </header>
-          <div className="min-h-0 flex-1">
+          <div className="min-h-0 flex-1 px-card py-card md:px-6 md:py-6">
             {loading ? (
               <div className="flex min-h-[240px] items-center justify-center text-sm text-muted">
                 <Icon icon={Loader2} size={18} className="mr-2 animate-spin" />
@@ -193,7 +200,7 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
               </div>
             ) : (
               <>
-                {error && <p role="alert" className="mb-card rounded-input bg-error/10 px-panel py-2 text-ui-caption text-error">{error}</p>}
+                {error && <p role="alert" className="mb-card rounded-input bg-error/10 px-panel py-2 text-ui-caption text-error-text">{error}</p>}
                 {tab === "general" && <GeneralTab />}
                 {tab === "llm" && <LLMTab config={config} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} saveModel={saveModel} saveCompaction={saveCompaction} onConfigReload={loadConfig} />}
                 {tab === "skills" && <SkillsTab />}

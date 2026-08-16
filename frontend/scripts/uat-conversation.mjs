@@ -57,40 +57,54 @@ async function run() {
   try {
     const route = `/workspace/${encodeURIComponent(workspace)}`;
     await page.goto(`${frontend}${route}`, { waitUntil: "domcontentloaded" });
-    // A fresh workspace intentionally opens with a blank composer. Create the
-    // first persisted session explicitly before asserting the session route.
-    if (!/\/session\//.test(page.url())) {
-      await page.getByTitle("New conversation").click();
+
+    // Session creation is LAZY: a fresh workspace landing never carries a
+    // /session/ URL. The first prompt creates the server-side session and
+    // replaces the URL. Clicking "New conversation" only returns to this
+    // landing; it must not create a session by itself.
+    if (/\/session\//.test(page.url())) {
+      throw new Error("A fresh workspace landing must not open a session route");
     }
-    await page.waitForURL(/\/session\//, { timeout: 20_000 });
-    const firstSession = sessionIdFromUrl(page.url());
-    if (!firstSession) throw new Error(`No session ID after connect: ${page.url()}`);
-    createdSessions.push(firstSession);
+    const composer = page.getByPlaceholder(/Ask anything/);
+    await composer.waitFor({ timeout: 20_000 });
 
-    const modelSelect = page.getByLabel("Select model");
-    const hasConfiguredModel = typeof config.model === "string" && config.model.length > 0;
+    // The composer model control is a Radix dropdown, not a native <select>.
+    // The trigger keeps one stable accessible name; the selected model shows
+    // its display name inside the open Model submenu next to a check icon.
+    const modelTrigger = page.getByRole("button", { name: "Select model and thinking level and view context" });
+    const configuredModel = Array.isArray(config.available_models)
+      ? config.available_models.find((item) => item.id === config.model)
+      : null;
+    const expectedModelLabel = configuredModel?.model ?? config.model;
+    const hasConfiguredModel = typeof config.model === "string" && config.model.length > 0 && configuredModel !== null;
+
+    let firstSession = null;
     if (hasConfiguredModel) {
-      await modelSelect.waitFor({ timeout: 20_000 });
-      await page.waitForFunction(() => {
-        const select = document.querySelector('select[aria-label="Select model"]');
-        return select instanceof HTMLSelectElement && !select.disabled;
-      }, undefined, { timeout: 20_000 });
-      if (await modelSelect.inputValue() !== config.model) {
-        throw new Error(`Composer selected ${await modelSelect.inputValue()} instead of ${config.model}`);
+      await modelTrigger.waitFor({ timeout: 20_000 });
+      await modelTrigger.click();
+      await page.getByRole("menuitem", { name: /^Model/ }).click();
+      const modelItems = page.getByRole("menuitem");
+      const checkedModel = modelItems.filter({ has: page.locator(".lucide-check") });
+      await checkedModel.first().waitFor({ timeout: 10_000 });
+      const selectedLabel = (await checkedModel.first().textContent())?.trim();
+      if (selectedLabel !== expectedModelLabel) {
+        throw new Error(`Composer selected ${JSON.stringify(selectedLabel)} instead of ${JSON.stringify(expectedModelLabel)}`);
       }
-      const options = await modelSelect.locator("option").evaluateAll((nodes) => nodes.map((node) => node.value));
-      if (!options.includes(config.model)) throw new Error(`Configured custom model is not selectable: ${config.model}`);
+      await page.keyboard.press("Escape");
 
-      const composer = page.getByPlaceholder(/Ask anything/);
       await composer.fill("请先使用 bash 工具执行 sleep 2，然后只回复 CHAT_BROWSER_UAT_OK");
       await page.getByRole("button", { name: "Send message" }).click();
+      // The first prompt lazily creates the session and lands on /session/:id.
+      await page.waitForURL(/\/session\//, { timeout: 30_000 });
+      firstSession = sessionIdFromUrl(page.url());
+      if (!firstSession) throw new Error(`No session ID after the first prompt: ${page.url()}`);
+      createdSessions.push(firstSession);
       await page.getByRole("button", { name: "Stop generation" }).waitFor({ timeout: 10_000 });
-      await page.getByText("Working…", { exact: true }).waitFor({ timeout: 10_000 });
+      await page.getByText("Working…", { exact: true }).first().waitFor({ timeout: 10_000 });
       await page.getByText("CHAT_BROWSER_UAT_OK", { exact: true }).waitFor({ timeout: 120_000 });
       await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 20_000 });
     } else {
-      if (await modelSelect.count()) throw new Error("Model selector should be hidden when no models are available");
-      const composer = page.getByPlaceholder(/Ask anything/);
+      if (await modelTrigger.count()) throw new Error("Model selector should be hidden when no models are available");
       await composer.fill("model configuration required");
       if (!(await page.getByRole("button", { name: "Send message" }).isDisabled())) {
         throw new Error("Send should be disabled when no provider/model is configured");
@@ -98,51 +112,62 @@ async function run() {
       await composer.fill("");
     }
 
+    // New conversation returns to the blank landing. With lazy creation there
+    // is no session in the URL until the next prompt is sent.
     await page.getByTitle("New conversation").click();
-    await page.waitForFunction((previous) => !window.location.pathname.endsWith(`/session/${previous}`), firstSession);
-    const secondSession = sessionIdFromUrl(page.url());
-    if (!secondSession || secondSession === firstSession) {
-      throw new Error(`New conversation reused the old ID: ${firstSession}`);
-    }
-    createdSessions.push(secondSession);
-    if (hasConfiguredModel) {
-      await page.waitForFunction(() => {
-        const select = document.querySelector('select[aria-label="Select model"]');
-        return select instanceof HTMLSelectElement && !select.disabled;
-      }, undefined, { timeout: 20_000 });
-      if (await modelSelect.inputValue() !== config.model) {
-        throw new Error("New conversation did not inherit the configured model");
-      }
+    await page.waitForFunction(() => !/\/session\//.test(window.location.pathname), undefined, { timeout: 20_000 });
+    if (sessionIdFromUrl(page.url())) {
+      throw new Error("New conversation should land on the blank landing, not a session route");
     }
     await page.screenshot({ path: screenshot, fullPage: true });
 
+    let secondSession = null;
+    if (hasConfiguredModel) {
+      await modelTrigger.waitFor({ timeout: 20_000 });
+      await composer.fill("second lazy session prompt");
+      await page.getByRole("button", { name: "Send message" }).click();
+      await page.waitForURL(/\/session\//, { timeout: 30_000 });
+      secondSession = sessionIdFromUrl(page.url());
+      if (!secondSession || secondSession === firstSession) {
+        throw new Error(`New conversation reused the old ID: ${firstSession}`);
+      }
+      createdSessions.push(secondSession);
+    } else {
+      console.log("SKIP second-session ID check: creating a session requires a configured model");
+    }
+
     const observedSessions = await Promise.all(sessionRuntimeChecks);
-    if (!observedSessions.length) throw new Error("Browser did not make any session API requests");
-    const wrongOwner = observedSessions.find((item) => item.runtime !== "node-control-plane");
-    if (wrongOwner) throw new Error(`Session request escaped Node ownership: ${JSON.stringify(wrongOwner)}`);
-    if (!observedSessions.some((item) => item.method === "POST" && item.path === "/api/sessions")) {
-      throw new Error("Browser did not create a session through the Node API");
-    }
-    if (hasConfiguredModel && !observedSessions.some((item) => item.method === "POST" && item.path.endsWith("/prompt"))) {
-      throw new Error("Browser did not send its prompt through the Node API");
-    }
-    const eventStream = observedSessions.find((item) => item.path.endsWith("/events"));
-    if (!eventStream) throw new Error("Browser did not connect to the session SSE endpoint");
-    if (eventStream.sse !== "node-native") {
-      throw new Error(`Expected node-native SSE, got ${eventStream.sse || "missing header"}`);
+    if (hasConfiguredModel) {
+      if (!observedSessions.length) throw new Error("Browser did not make any session API requests");
+      const wrongOwner = observedSessions.find((item) => item.runtime !== "node-control-plane");
+      if (wrongOwner) throw new Error(`Session request escaped Node ownership: ${JSON.stringify(wrongOwner)}`);
+      if (!observedSessions.some((item) => item.method === "POST" && item.path === "/api/sessions")) {
+        throw new Error("Browser did not create a session through the Node API");
+      }
+      if (!observedSessions.some((item) => item.method === "POST" && item.path.endsWith("/prompt"))) {
+        throw new Error("Browser did not send its prompt through the Node API");
+      }
+      const eventStream = observedSessions.find((item) => item.path.endsWith("/events"));
+      if (!eventStream) throw new Error("Browser did not connect to the session SSE endpoint");
+      if (eventStream.sse !== "node-native") {
+        throw new Error(`Expected node-native SSE, got ${eventStream.sse || "missing header"}`);
+      }
+    } else {
+      console.log("SKIP session ownership checks: no session is created without a configured model");
     }
     if (runtimeErrors.length) throw new Error(`Browser runtime errors:\n${runtimeErrors.join("\n")}`);
     console.log("PASS workspace marker accepted by Node workspace security");
-    console.log("PASS browser session create/prompt/SSE responses were owned by node-control-plane");
-    console.log("PASS browser SSE response reported node-native");
     if (hasConfiguredModel) {
       console.log(`PASS composer selected configured model ${config.model}`);
+      console.log("PASS first prompt lazily created the session and the URL moved to /session/:id");
       console.log("PASS send immediately showed stop/working state and settled with streamed text");
+      console.log("PASS browser session create/prompt/SSE responses were owned by node-control-plane");
+      console.log("PASS browser SSE response reported node-native");
+      console.log(`PASS new conversation changed ID ${firstSession} -> ${secondSession}`);
     } else {
       console.log("PASS composer clearly disabled sending because no provider/model is configured");
       console.log("SKIP browser prompt: configure a model to run the streamed-text branch (covered by smoke:real-pi)");
     }
-    console.log(`PASS new conversation changed ID ${firstSession} -> ${secondSession}`);
     console.log(`SCREENSHOT ${screenshot}`);
   } finally {
     await browser.close();

@@ -74,6 +74,16 @@ describe("SettingsDialog", () => {
     expect(await screen.findByText("Workspace settings")).toBeInTheDocument();
   });
 
+  it("opens with the DeepSeek-sized desktop panel above a lighter overlay", async () => {
+    renderDialog();
+    openSettings(null);
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveClass("md:h-[min(86vh,860px)]", "md:w-[min(920px,calc(100vw-32px))]", "md:rounded-large", "md:border");
+    const overlay = dialog.parentElement;
+    if (!overlay) throw new Error("overlay not found");
+    expect(overlay).toHaveClass("z-[95]", "bg-black/40");
+  });
+
   it("closes on Escape", async () => {
     renderDialog();
     openSettings(null);
@@ -166,28 +176,48 @@ describe("SettingsDialog", () => {
     expect(document.activeElement).toBe(dialog);
   });
 
-  it("wraps Tab from the last control back to the first", async () => {
+  it("wraps Tab from the last control back to the first (sidebar General tab)", async () => {
     renderDialog();
     openSettings(null);
     await screen.findByRole("dialog");
-    // The panel-order select is the last focusable element in the default tab.
-    const panelOrder = await screen.findByLabelText("Conversation and preview layout");
+    // The close button now lives in the content header, so the first focusable
+    // is the sidebar's General tab and the panel-order select stays last.
+    const panelOrder = await screen.findByLabelText(/Conversation and preview layout/);
     panelOrder.focus();
     fireEvent.keyDown(panelOrder, { key: "Tab" });
-    expect(document.activeElement).toBe(screen.getByLabelText("Close"));
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "General" }));
   });
 
   it("wraps Shift+Tab from the first control (or the panel) to the last", async () => {
     renderDialog();
     openSettings(null);
     const dialog = await screen.findByRole("dialog");
-    const close = screen.getByLabelText("Close");
-    close.focus();
-    fireEvent.keyDown(close, { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(screen.getByLabelText("Conversation and preview layout"));
+    // The sidebar's General tab is the first focusable control now.
+    const general = screen.getByRole("tab", { name: "General" });
+    general.focus();
+    fireEvent.keyDown(general, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(screen.getByLabelText(/Conversation and preview layout/));
     // Right after opening, focus sits on the panel itself: Shift+Tab wraps too.
     dialog.focus();
     fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(screen.getByLabelText("Conversation and preview layout"));
+    expect(document.activeElement).toBe(screen.getByLabelText(/Conversation and preview layout/));
+  });
+
+  it("keeps the close button in the panel's normal tab order", async () => {
+    renderDialog();
+    openSettings(null);
+    const dialog = await screen.findByRole("dialog");
+    // The close control sits between the sidebar tabs and the content
+    // controls, so it must stay part of the focusable sequence.
+    const focusables = Array.from(dialog.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    ));
+    const labels = focusables.map((el) => el.getAttribute("aria-label") ?? el.textContent ?? "");
+    const generalIndex = labels.indexOf("General");
+    const closeIndex = labels.indexOf("Close");
+    const panelOrderIndex = labels.findIndex((label) => label.includes("Conversation and preview layout"));
+    expect(generalIndex).toBeGreaterThanOrEqual(0);
+    expect(closeIndex).toBeGreaterThan(generalIndex);
+    expect(panelOrderIndex).toBeGreaterThan(closeIndex);
   });
 });

@@ -5,22 +5,74 @@ export default {
   theme: {
     extend: {
       colors: {
-        bg: "var(--bg)",
-        surface: "var(--surface)",
-        "surface-2": "var(--surface-2)",
-        border: "var(--border)",
-        faint: "var(--border-faint)",
-        text: "var(--text)",
-        muted: "var(--muted)",
-        accent: "var(--accent)",
-        "accent-fg": "var(--accent-fg)",
-        link: "var(--link)",
-        warn: "var(--warn)",
-        ok: "var(--ok)",
-        error: "var(--error)",
+        bg: "rgb(var(--bg-rgb) / <alpha-value>)",
+        surface: "rgb(var(--surface-rgb) / <alpha-value>)",
+        "surface-2": "rgb(var(--surface-2-rgb) / <alpha-value>)",
+        "surface-raised": "rgb(var(--surface-raised-rgb) / <alpha-value>)",
+        "surface-inset": "rgb(var(--surface-inset-rgb) / <alpha-value>)",
+        "surface-hover": "rgb(var(--surface-hover-rgb) / <alpha-value>)",
+        "surface-selected": "rgb(var(--surface-selected-rgb) / <alpha-value>)",
+        sidebar: "rgb(var(--sidebar-rgb) / <alpha-value>)",
+        // Border colors embed their own base alpha (e.g. rgba(0,0,0,.1)), so
+        // the rgb-var + <alpha-value> form would either drop the alpha (base
+        // turns opaque) or double it (modifier appends a second slash). The
+        // function form fixes both: without a slash modifier it resolves to
+        // the translucent var; with one, Tailwind passes the numeric opacity
+        // and the color scales the base alpha through color-mix.
+        border: ({ opacityValue }) => {
+          const alpha = opacityValue === undefined ? Number.NaN : Number.parseFloat(opacityValue);
+          if (Number.isFinite(alpha)) {
+            return `color-mix(in srgb, var(--border) ${Math.round(alpha * 100)}%, transparent)`;
+          }
+          return "var(--border)";
+        },
+        faint: ({ opacityValue }) => {
+          const alpha = opacityValue === undefined ? Number.NaN : Number.parseFloat(opacityValue);
+          if (Number.isFinite(alpha)) {
+            return `color-mix(in srgb, var(--border-faint) ${Math.round(alpha * 100)}%, transparent)`;
+          }
+          return "var(--border-faint)";
+        },
+        strong: ({ opacityValue }) => {
+          const alpha = opacityValue === undefined ? Number.NaN : Number.parseFloat(opacityValue);
+          if (Number.isFinite(alpha)) {
+            return `color-mix(in srgb, var(--border-strong) ${Math.round(alpha * 100)}%, transparent)`;
+          }
+          return "var(--border-strong)";
+        },
+        text: "rgb(var(--text-rgb) / <alpha-value>)",
+        muted: "rgb(var(--muted-rgb) / <alpha-value>)",
+        accent: "rgb(var(--accent-rgb) / <alpha-value>)",
+        "accent-fill": "rgb(var(--accent-fill-rgb) / <alpha-value>)",
+        "accent-fg": "rgb(var(--accent-fg-rgb) / <alpha-value>)",
+        "accent-soft": "rgb(var(--accent-soft-rgb) / <alpha-value>)",
+        "accent-border": "rgb(var(--accent-border-rgb) / <alpha-value>)",
+        link: "rgb(var(--link-rgb) / <alpha-value>)",
+        warn: "rgb(var(--warn-rgb) / <alpha-value>)",
+        ok: "rgb(var(--ok-rgb) / <alpha-value>)",
+        error: "rgb(var(--error-rgb) / <alpha-value>)",
+        "ok-text": "rgb(var(--ok-text-rgb) / <alpha-value>)",
+        "warn-text": "rgb(var(--warn-text-rgb) / <alpha-value>)",
+        "error-text": "rgb(var(--error-text-rgb) / <alpha-value>)",
+        "ok-fill": "rgb(var(--ok-fill-rgb) / <alpha-value>)",
+        "warn-fill": "rgb(var(--warn-fill-rgb) / <alpha-value>)",
+        "error-fill": "rgb(var(--error-fill-rgb) / <alpha-value>)",
+        "series-1": "var(--series-1)",
+        "series-2": "var(--series-2)",
+        "series-3": "var(--series-3)",
+        "series-4": "var(--series-4)",
+        "series-5": "var(--series-5)",
+        "series-6": "var(--series-6)",
+        "series-7": "var(--series-7)",
+        "series-8": "var(--series-8)",
+        "chart-grid": "var(--chart-grid)",
+        "chart-axis": "var(--chart-axis)",
       },
       fontFamily: {
-        serif: ["'Source Serif 4'", "Georgia", "serif"],
+        // The chat/title serif era is over: titles and assistant prose read
+        // in the same sans stack now (see docs/ui/deepseek-harness-reference.md).
+        // The `serif` key stays so legacy classes resolve instead of dropping.
+        serif: ["Inter", "system-ui", "sans-serif"],
         sans: ["Inter", "system-ui", "sans-serif"],
         mono: ["'JetBrains Mono'", "ui-monospace", "monospace"],
       },
@@ -46,6 +98,8 @@ export default {
         control: "var(--density-control)",
         primary: "var(--density-primary)",
         header: "var(--density-header)",
+        send: "var(--send-button-size)",
+        "new-session": "var(--new-session-height)",
       },
       width: {
         icon: "var(--density-icon)",
@@ -54,6 +108,8 @@ export default {
         control: "var(--density-control)",
         primary: "var(--density-primary)",
         header: "var(--density-header)",
+        content: "var(--conversation-content-width)",
+        composer: "var(--conversation-composer-width)",
       },
       minHeight: {
         icon: "var(--density-icon)",
@@ -64,12 +120,26 @@ export default {
         header: "var(--density-header)",
       },
       borderRadius: {
-        card: "14px",
-        input: "10px",
+        small: "var(--radius-small)",
+        control: "var(--radius-control)",
+        input: "var(--radius-control)",
+        card: "var(--radius-card)",
+        large: "var(--radius-large)",
+        bubble: "var(--radius-bubble)",
+        composer: "var(--radius-composer)",
       },
       boxShadow: {
         card: "var(--shadow-card)",
         pop: "var(--shadow-pop)",
+        composer: "var(--shadow-card-hover)",
+      },
+      transitionDuration: {
+        fast: "var(--motion-fast)",
+        normal: "var(--motion-normal)",
+        slow: "var(--motion-slow)",
+      },
+      transitionTimingFunction: {
+        standard: "var(--ease-standard)",
       },
     },
   },

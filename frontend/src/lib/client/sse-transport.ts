@@ -26,7 +26,7 @@ export class SseTransport {
     "question.asked", "permission.asked", "compaction.updated", "artifact.published",
     "questionnaire.asked", "questionnaire.finished",
     "agent_start", "agent_end", "status.updated", "session.replaced", "stream.gap",
-    "turn.artifacts",
+    "turn.artifacts", "session.stats",
   ];
 
   constructor(baseUrl: string) {

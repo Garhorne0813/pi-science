@@ -2,11 +2,26 @@
  *  routes. `packages/contracts` is server-owned and carries no settings schema, so the
  *  shapes the settings UI reads live here once instead of once per component file. */
 
+export type ProviderAuthKind = "api_key" | "oauth" | "api_key_or_oauth";
+export type ProviderCredentialStatus = "configured" | "connected" | "needs_key" | "needs_login";
+
+export interface ProviderAuthInfo {
+  kind: ProviderAuthKind;
+  api_key_supported: boolean;
+  oauth_supported: boolean;
+  login_supported: boolean;
+}
+
 export interface Provider {
   id: string;
   name: string;
   models: string[];
   has_key: boolean;
+  /** Dynamic pi-ai provider metadata. Absent in legacy API responses, so the
+   *  UI falls back to the `has_key`-only behavior when it is missing. */
+  auth?: ProviderAuthInfo;
+  credential_status?: ProviderCredentialStatus;
+  enabled?: boolean;
 }
 
 export interface CustomProvider {

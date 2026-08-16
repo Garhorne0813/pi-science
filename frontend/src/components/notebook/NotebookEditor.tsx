@@ -95,6 +95,10 @@ export function NotebookEditor({
     };
   }, [cwd, path, root, t]);
 
+  useEffect(() => () => {
+    void notebookRuntime.release(notebookId, cwd).catch(() => undefined);
+  }, [cwd, notebookId]);
+
   const updateCode = (cellId: string, code: string) => {
     setDirty(true);
     setCells((current) => current.map((cell) => (
@@ -203,7 +207,7 @@ export function NotebookEditor({
         </div>
         <span className={cn(
           "rounded-full px-2 py-0.5 text-[11px] ring-1",
-          runnable ? "bg-ok/10 text-ok ring-ok/20" : "bg-warn/10 text-warn ring-warn/20",
+          runnable ? "bg-ok/10 text-ok-text ring-ok/20" : "bg-warn/10 text-warn-text ring-warn/20",
         )}>
           {languageLabel}
         </span>
@@ -232,7 +236,7 @@ export function NotebookEditor({
           </div>
         )}
         {!loading && error && (
-          <div role="alert" className="m-4 flex items-start gap-2 rounded-card border border-error/30 bg-error/5 p-4 text-sm text-error">
+          <div role="alert" className="m-4 flex items-start gap-2 rounded-card border border-error/30 bg-error/5 p-4 text-sm text-error-text">
             <AlertCircle size={16} className="mt-0.5 shrink-0" />
             <span>{error}</span>
           </div>
@@ -243,7 +247,7 @@ export function NotebookEditor({
           </div>
         )}
         {!loading && !error && !runnable && (
-          <div role="status" className="m-4 rounded-input border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-warn">
+          <div role="status" className="m-4 rounded-input border border-warn/30 bg-warn/5 px-3 py-2 text-xs text-warn-text">
             {t("notebook.unsupportedKernel")}
           </div>
         )}
@@ -425,7 +429,7 @@ function StoredOutputs({ outputs }: { outputs: NotebookOutput[] }) {
             {text && (
               <pre className={cn(
                 "max-h-64 overflow-auto whitespace-pre-wrap",
-                output.output_type === "error" ? "text-error" : "text-text",
+                output.output_type === "error" ? "text-error-text" : "text-text",
               )}>
                 {text}
               </pre>

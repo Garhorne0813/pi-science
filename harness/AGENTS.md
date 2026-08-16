@@ -154,6 +154,17 @@ Inspect state -> define result and evidence -> execute -> validate
 4. Check `.pi/skills/` descriptions for relevant domain or workflow guidance;
    load a skill only when its scope matches the task.
 
+## Session identity
+
+- When asked which model, provider, or reasoning level this session runs,
+  inspect the `PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL` environment
+  variables visible to the `bash` tool (for example
+  `printf '%s/%s\n' "$PI_PROVIDER" "$PI_MODEL"`) and report that value.
+- These variables carry the workspace-configured model identity of the active
+  runtime. Unrelated shell variables such as `FAST_LLM`, `SMART_LLM`, or
+  `OLLAMA_EMBEDDING_MODEL` describe the user's other tooling, not the Pi
+  model; do not use them to identify the active model.
+
 Current user instructions and current files take precedence over stale memory
 or summarized context. If the runtime injects newer workspace, permission,
 kernel, connector, reviewer, or artifact state, treat that state as current.

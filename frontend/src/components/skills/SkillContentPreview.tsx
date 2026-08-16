@@ -32,7 +32,7 @@ export function SkillContentPreview({ skillId, cwd }: { skillId: string; cwd?: s
   }
   if (query.isError) {
     return (
-      <div role="alert" className="mt-3 flex items-center gap-2 rounded-input px-3 py-2 text-xs text-error" style={{ background: "color-mix(in srgb, var(--error) 10%, transparent)" }}>
+      <div role="alert" className="mt-3 flex items-center gap-2 rounded-input px-3 py-2 text-xs text-error-text" style={{ background: "color-mix(in srgb, var(--error) 10%, transparent)" }}>
         <AlertTriangle size={13} className="shrink-0" />
         <span className="flex-1">{t("skills.previewError")}</span>
         <button

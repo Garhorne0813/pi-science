@@ -13,12 +13,12 @@ export function ExtCard({ name, pkg, desc, checked }: { name: string; pkg: strin
           <p className="mt-0.5 text-ui-caption text-muted">{desc}</p>
         </div>
         {checked ? (
-          <span className="ml-auto shrink-0 rounded-full bg-ok/15 px-2 py-0.5 text-[10px] font-medium text-ok ring-1 ring-ok/30">
+          <span className="ml-auto shrink-0 rounded-full bg-ok/15 px-2 py-0.5 text-[10px] font-medium text-ok-text ring-1 ring-ok/30">
             <Icon icon={Check} size="xs" className="mr-0.5 inline" />
             {t("settings.extensionsPage.installed")}
           </span>
         ) : (
-          <span className="ml-auto shrink-0 rounded-full bg-error/10 px-2 py-0.5 text-[10px] font-medium text-error ring-1 ring-error/20">{t("settings.extensionsPage.missing")}</span>
+          <span className="ml-auto shrink-0 rounded-full bg-error/10 px-2 py-0.5 text-[10px] font-medium text-error-text ring-1 ring-error/20">{t("settings.extensionsPage.missing")}</span>
         )}
       </div>
     </div>

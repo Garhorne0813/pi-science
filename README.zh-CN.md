@@ -122,7 +122,7 @@ Pi-Science 可以直接在浏览器中渲染常见科研格式。
 
 | 领域 | 格式 | 查看器 |
 |---|---|---|
-| 化学 | CIF、PDB、SDF、MOL、SMILES、XYZ | 3Dmol.js 交互式三维查看器 |
+| 化学 | CIF、PDB、PQR、SDF、MOL、MOL2、SMILES、XYZ、CUBE | 支持结构关联序列的 Mol* 交互式查看器 |
 | 天文 | FITS | Canvas 渲染和科学色图 |
 | 3D / CAD | STL、OBJ、PLY、glTF、GLB | Three.js 场景查看器 |
 | 固体物理 | EIGENVAL、DOSCAR | 能带和态密度图 |

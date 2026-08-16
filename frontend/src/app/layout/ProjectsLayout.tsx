@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { lazy, Suspense, useState, useEffect, useRef } from "react";
-import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, FileText, Inbox, FlaskConical, type LucideIcon } from "lucide-react";
+import { PanelLeft, Settings, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, FileText, Inbox, FlaskConical, type LucideIcon } from "lucide-react";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { InspectorTabs } from "../../components/inspector/InspectorTabs";
@@ -100,16 +100,17 @@ export function ProjectsLayout() {
 
   return (
     <div className="flex h-dvh w-screen overflow-hidden bg-bg text-text">
-      <a href="#main-content" className="fixed left-3 top-3 z-[200] -translate-y-20 rounded-input bg-accent px-3 py-2 text-sm text-accent-fg transition-transform focus:translate-y-0">
+      <a href="#main-content" className="fixed left-3 top-3 z-[200] -translate-y-20 rounded-input bg-accent-fill px-3 py-2 text-sm text-accent-fg transition-transform focus:translate-y-0">
         {t("common.skipToContent", { defaultValue: "Skip to content" })}
       </a>
       {/* Sidebar */}
       {sidebarCollapsed ? (
-        <aside className="app-sidebar flex h-full w-12 shrink-0 flex-col items-center gap-2 overflow-hidden border-r border-border py-panel">
+        <aside className="app-sidebar rail-enter flex h-full w-[var(--sidebar-collapsed-width)] shrink-0 flex-col items-center gap-1.5 overflow-hidden border-r border-border px-1.5 py-[18px]">
           <IconButton
             icon={PanelLeft}
             label="Expand sidebar"
             size="standard"
+            className="h-11 w-11"
             onClick={() => setSidebarCollapsed(false)}
           />
           {/* Icon-only nav */}
@@ -127,11 +128,11 @@ export function ProjectsLayout() {
       ) : (
         <>
         <button type="button" aria-label="Close sidebar" onClick={() => setSidebarCollapsed(true)} className="fixed inset-0 z-20 bg-black/45 md:hidden" />
-        <aside className="app-sidebar absolute z-30 flex h-full shrink-0 flex-col overflow-hidden border-r border-border md:relative" style={{ width: sidebarDragWidth ?? sidebarWidth, maxWidth: "86vw" }}>
+        <aside className="app-sidebar sidebar-enter absolute z-30 flex h-full shrink-0 flex-col overflow-hidden border-r border-border md:relative" style={{ width: sidebarDragWidth ?? sidebarWidth, maxWidth: "86vw" }}>
           <div className="flex h-full flex-col px-panel py-card">
             {/* Header */}
             <div className="mb-card flex items-center justify-between px-2">
-              <h1 className="font-serif text-ui-title font-semibold tracking-tight text-text">
+              <h1 className="text-ui-title font-semibold tracking-tight text-text">
                 Pi-Science
               </h1>
               <IconButton
@@ -356,21 +357,24 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
 
   return (
     <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
-      <div className="mb-1 flex h-tool items-center justify-between px-2">
+      <div className="mb-1 px-2">
         <span className="text-ui-caption font-medium uppercase tracking-wider text-muted">{t("conversation.sessions")}</span>
-        <IconButton
-          icon={Plus}
-          label={t("conversation.newSession")}
-          size="compact"
-          onClick={handleNew}
-        />
       </div>
+      <button
+        type="button"
+        onClick={handleNew}
+        title={t("conversation.newSession")}
+        className="mb-1 flex h-new-session w-full items-center gap-1.5 rounded-card border border-border bg-surface-raised px-3 text-left text-ui-label font-medium text-text transition-colors hover:bg-surface-hover"
+      >
+        <Icon icon={Plus} size="md" className="shrink-0 text-muted" />
+        <span className="min-w-0 flex-1 truncate">{t("conversation.newSession")}</span>
+      </button>
       <div className="flex flex-col gap-0.5 overflow-y-auto">
         {sessions.length === 0 ? (
           <p className="px-2 text-ui-meta italic text-muted/60">{t("conversation.noSessions")}</p>
         ) : (
           sessions.slice(0, 30).map((s) => (
-            <div key={s.id} className="group relative flex items-center rounded-input hover:bg-surface-2">
+            <div key={s.id} className="group relative flex items-center rounded-input hover:bg-surface-hover focus-within:bg-surface-hover">
               {/* Current-conversation indicator: a dot on the left edge; other
                   sessions keep an invisible dot so the list does not jump. */}
               <span
@@ -387,10 +391,9 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
                   activeSessionId === s.id ? "text-text font-medium" : "text-text/90",
                 )}
               >
-                <Icon icon={MessageSquare} size="sm" className="shrink-0 text-muted" />
                 <span className="truncate flex-1">{s.name === "New Session" ? t("conversation.newSession") : s.name || s.id.slice(0, 8)}</span>
                 {(s.updated_at || s.created_at) && (
-                  <span className="mr-1 shrink-0 text-ui-micro text-muted/60 group-hover:hidden">
+                  <span className="mr-1 shrink-0 text-ui-micro text-muted group-hover:hidden group-focus-within:hidden">
                     {relativeTime(s.updated_at || s.created_at!)}
                   </span>
                 )}
@@ -403,7 +406,7 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
                 onClick={(e) => handleFork(e, s.id)}
                 className={cn(
                   "hover:bg-accent/10 hover:text-accent",
-                  "hidden group-hover:!inline-flex", forking === s.id && "!inline-flex",
+                  "hidden group-hover:!inline-flex group-focus-within:!inline-flex", forking === s.id && "!inline-flex",
                 )}
               />
               <IconButton
@@ -413,8 +416,8 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
                 size="compact"
                 onClick={(e) => handleDelete(e, s.id)}
                 className={cn(
-                  "mr-0.5 hover:bg-error/10 hover:text-error",
-                  "hidden group-hover:!inline-flex", deleting === s.id && "!inline-flex",
+                  "mr-0.5 hover:bg-error/10 hover:text-error-text",
+                  "hidden group-hover:!inline-flex group-focus-within:!inline-flex", deleting === s.id && "!inline-flex",
                 )}
               />
             </div>
@@ -448,9 +451,7 @@ function CollapsedNavItem({ to, icon, label }: { to: string; icon: LucideIcon; l
       label={label}
       size="standard"
       onClick={() => navigate(to)}
-      className={cn(
-        active && "text-accent",
-      )}
+      className={cn("h-11 w-11", active && "bg-surface-selected text-accent")}
     />
   );
 }
@@ -465,13 +466,13 @@ function SidebarNavItem({ to, label, icon, active, badge }: { to: string; label:
         if (window.innerWidth < 768) setSidebarCollapsed(true);
       }}
       className={cn(
-        "flex h-nav min-h-0 w-full items-center gap-1.5 rounded-input px-2 text-left text-ui-label",
-        active ? "bg-surface-2 text-text font-medium" : "text-text/90 hover:bg-surface-2 hover:text-text",
+        "flex h-nav min-h-0 w-full items-center gap-1.5 rounded-input px-2 text-left text-ui-label transition-colors",
+        active ? "bg-surface-selected font-medium text-text" : "text-text/90 hover:bg-surface-hover hover:text-text",
       )}
     >
       {icon && <Icon icon={icon} size="md" className="shrink-0 text-muted" />}
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {!!badge && <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] leading-none text-accent-fg">{badge}</span>}
+      {!!badge && <span className="rounded-full bg-accent-fill px-1.5 py-0.5 text-[10px] leading-none text-accent-fg">{badge}</span>}
     </button>
   );
 }
@@ -487,11 +488,11 @@ export function SettingsNavItem({ cwd, collapsed = false }: { cwd: string | null
 
   if (collapsed) {
     return (
-      <IconButton icon={Settings} label={t("nav.settings")} size="standard" onClick={handleClick} className={cn(settingsOpen && "text-accent")} />
+      <IconButton icon={Settings} label={t("nav.settings")} size="standard" onClick={handleClick} className={cn("h-11 w-11", settingsOpen && "bg-surface-selected text-accent")} />
     );
   }
   return (
-    <button onClick={handleClick} className={cn("flex h-nav min-h-0 w-full items-center gap-1.5 rounded-input px-2 text-left text-ui-label", settingsOpen ? "bg-surface-2 font-medium text-text" : "text-text/90 hover:bg-surface-2 hover:text-text")}>
+    <button onClick={handleClick} className={cn("flex h-nav min-h-0 w-full items-center gap-1.5 rounded-input px-2 text-left text-ui-label transition-colors", settingsOpen ? "bg-surface-selected font-medium text-text" : "text-text/90 hover:bg-surface-hover hover:text-text")}>
       <Icon icon={Settings} size="md" className="shrink-0 text-muted" />
       <span className="min-w-0 flex-1 truncate">{t("nav.settings")}</span>
     </button>

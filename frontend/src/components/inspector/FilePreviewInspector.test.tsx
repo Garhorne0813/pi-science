@@ -16,6 +16,8 @@ function jsonResponse(body: unknown, status = 200): Response {
 let writeCalls: Array<{ path: string; content: string }> = [];
 let writeError: Error | null = null;
 let missingPath: string | null = null;
+let truncatedPath: string | null = null;
+let fullMarkdownLoaded = false;
 
 const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
   const url = String(input);
@@ -27,6 +29,11 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {})
     const body = JSON.parse(String(init.body)) as { path: string; content: string };
     writeCalls.push({ path: body.path, content: body.content });
     return jsonResponse({ ok: true, path: body.path, size: body.content.length });
+  }
+  if (truncatedPath && url.includes(`/api/files/${truncatedPath}`)) {
+    return fullMarkdownLoaded
+      ? jsonResponse({ path: truncatedPath, encoding: "utf8", data: "# Full file\n\nComplete content", size: 29 })
+      : jsonResponse({ path: truncatedPath, encoding: "utf8", data: "# Partial preview", size: 2 * 1024 * 1024, truncated: true });
   }
   if (missingPath && url.includes(`/api/files/${missingPath}`)) return jsonResponse({ error: "File not found" }, 404);
   if (url.includes("/api/files/")) return jsonResponse({ path: "x.txt", encoding: "utf8", data: "line1\nline2\n", size: 12 });
@@ -54,6 +61,8 @@ beforeEach(async () => {
   writeCalls = [];
   writeError = null;
   missingPath = null;
+  truncatedPath = null;
+  fullMarkdownLoaded = false;
   fetchMock.mockClear();
   vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
@@ -117,6 +126,20 @@ describe("FilePreviewInspector edit capability", () => {
     expect(plot.getAttribute("src")).toContain("/api/files/serve/reports/images/a.png?cwd=proj");
     const wide = screen.getByRole("img", { name: "wide" });
     expect(wide.getAttribute("src")).toContain("/api/files/serve/shared/b.png?cwd=proj");
+  });
+
+  it("caps large markdown previews and loads the full file on demand", async () => {
+    truncatedPath = "large.md";
+    renderInspector(truncatedPath, truncatedPath, "text");
+
+    expect(await screen.findByText("Only the first 2 MB are shown to keep the preview responsive.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Edit file")).toBeNull();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("maxBytes=2097152"))).toBe(true);
+
+    fullMarkdownLoaded = true;
+    fireEvent.click(screen.getByRole("button", { name: "Load full file" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Full file" })).toBeInTheDocument());
+    expect(screen.getByLabelText("Edit file")).toBeInTheDocument();
   });
 
   it("cancel discards the draft", async () => {

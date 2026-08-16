@@ -21,6 +21,7 @@ import { MentionComposer } from "../../components/conversation/MentionComposer";
 import { QuestionnairePrompt } from "../../components/conversation/QuestionnairePrompt";
 import { groupBlocks, renderBlockGroup } from "../../components/conversation/ConversationBlocks";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
+import { ConversationStatsLine } from "../../components/conversation/ConversationStatsLine";
 import { SessionExecutionButton } from "../../components/conversation/SessionExecutionButton";
 import { visibleUserMessage } from "../../lib/files";
 import { useTranslation } from "react-i18next";
@@ -56,7 +57,7 @@ export function ConversationFooter() {
   const respondToInteraction = useRuntimeStore((s) => s.respondToInteraction);
 
   return (
-    <div className="mx-auto flex w-full max-w-[824px] flex-col gap-4 px-8 pb-6 pt-2">
+    <div className="mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-6 pt-2">
       {pendingQuestionnaire && pendingInteraction?.questionnaire ? (
         <QuestionnairePrompt
           questionnaire={pendingQuestionnaire}
@@ -90,6 +91,7 @@ export function LiveSessionPage() {
   // Field-level selectors, not a whole-store subscription: a streamed token only
   // touches `thread`/`working`, so nothing that reads the other fields re-renders.
   const status = useRuntimeStore((s) => s.status);
+  const sessionStats = useRuntimeStore((s) => s.sessionStats);
   const rawThread = useRuntimeStore((s) => s.thread);
   // Defensive: transient store states (mid-recovery / mid-delete) must never
   // crash rendering with "blocks is not iterable" — normalize to a safe shape.
@@ -385,6 +387,22 @@ export function LiveSessionPage() {
   };
   const model = useModelConfig(workspaceCwd, sessionId);
 
+  // Whole-session stats: the SSE `session.stats` event keeps the store fresh
+  // after every settled turn; a REST read covers refresh/mount before the
+  // first turn of the current page load.
+  useEffect(() => {
+    if (!activeSessionId) {
+      useRuntimeStore.setState({ sessionStats: null });
+      return;
+    }
+    let cancelled = false;
+    void getClient()
+      .getSessionStats(activeSessionId, workspaceCwd)
+      .then((stats) => { if (!cancelled) useRuntimeStore.setState({ sessionStats: stats }); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [activeSessionId, workspaceCwd]);
+
   useEffect(() => {
     if (activeSessionId) {
       void fetchDynamicCommands(activeSessionId, workspaceCwd);
@@ -480,7 +498,7 @@ export function LiveSessionPage() {
   // one drops the suggestion into the composer (the user may tweak or append
   // to it) instead of sending it directly. Not shown on the blank welcome page.
   const suggestionChips = suggestions.length > 0 && !working && !research.draft && !research.activeLoop && !input.trim() ? (
-    <div className="mx-auto flex max-w-[760px] flex-wrap gap-2 px-1 pb-2" aria-label={t("conversation.suggestions")}>
+    <div className="mx-auto flex max-w-[var(--conversation-composer-width)] flex-wrap gap-2 px-1 pb-2" aria-label={t("conversation.suggestions")}>
       {suggestions.map((suggestion) => (
         <button
           key={suggestion}
@@ -548,7 +566,7 @@ export function LiveSessionPage() {
             thread.blocks.length > 0
               ? "h-full w-full"
               : cn(
-                "mx-auto flex w-full max-w-[824px] flex-col px-8",
+                "mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col px-8",
                 showWelcome ? "gap-3 pb-3 pt-6" : "gap-4 py-6",
               ),
           )}>
@@ -574,7 +592,7 @@ export function LiveSessionPage() {
                   context={{ renderInteractionPrompt, working, pendingInteraction }}
                   components={{
                     Header: () => (
-                      <div className="mx-auto flex w-full max-w-[824px] flex-col gap-4 px-8 pb-2 pt-6">
+                      <div className="mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-2 pt-6">
                         {historyLoading && (
                           <div className="flex items-center gap-2 text-xs text-muted" role="status">
                             <Loader2 size={13} className="animate-spin text-accent" />
@@ -583,13 +601,13 @@ export function LiveSessionPage() {
                         )}
                         {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
                         {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
-                        {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error">{research.error}</div>}
+                        {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{research.error}</div>}
                       </div>
                     ),
                     Footer: ConversationFooter,
                   }}
                   itemContent={(_index, group) => (
-                    <div className="mx-auto w-full max-w-[824px] px-8 pb-3">
+                    <div className="mx-auto w-full max-w-[calc(var(--conversation-content-width)+4rem)] px-8 pb-3">
                       {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock)}
                     </div>
                   )}
@@ -599,7 +617,7 @@ export function LiveSessionPage() {
               <>
                 {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
                 {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
-                {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error">{research.error}</div>}
+                {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{research.error}</div>}
                 {renderInteractionPrompt()}
                 {working && !pendingInteraction && (
                   <div className="flex items-center gap-2 py-4 text-sm text-muted">
@@ -620,7 +638,7 @@ export function LiveSessionPage() {
         {/* Composer */}
         <div className={cn("px-8 shrink-0", showWelcome ? "py-0" : "pb-5 pt-2")}>
           {!showWelcome && (
-            <div className="relative mx-auto max-w-[760px]">
+            <div className="relative mx-auto max-w-[var(--conversation-composer-width)]">
               {suggestionChips}
               {modePicker}
               {showScrollDown && (
@@ -638,15 +656,24 @@ export function LiveSessionPage() {
           <Suspense fallback={null}>
             <ComposerTodo />
           </Suspense>
-          <div
-            className={cn(
-              "ui-card relative mx-auto max-w-[760px] rounded-card transition-colors",
-              composer.dragOver && "border-accent bg-accent/5",
-            )}
-            onDragOver={(e) => { e.preventDefault(); composer.setDragOver(true); }}
-            onDragLeave={() => composer.setDragOver(false)}
-            onDrop={composer.handleDrop}
-          >
+          <div className="relative mx-auto max-w-[var(--conversation-composer-width)]">
+            {/* Fixed 36px fade band above the composer card (reference:
+                ConversationRoot composer seat gradient). The card sits at the
+                bottom of the column, so the band softens the transcript edge
+                scrolling into it. */}
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-x-0 bottom-full h-[var(--composer-fade-height)] bg-gradient-to-t from-[var(--bg)] to-transparent"
+            />
+            <div
+              className={cn(
+                "ui-card relative mx-auto max-w-[var(--conversation-composer-width)] rounded-composer shadow-composer transition-colors",
+                composer.dragOver && "border-accent bg-accent/5",
+              )}
+              onDragOver={(e) => { e.preventDefault(); composer.setDragOver(true); }}
+              onDragLeave={() => composer.setDragOver(false)}
+              onDrop={composer.handleDrop}
+            >
             {workspaceReferences.length > 0 && (
               <div className="border-b border-faint px-3 py-2">
                 <div className="flex flex-wrap gap-1.5">
@@ -654,7 +681,7 @@ export function LiveSessionPage() {
                     <span key={reference.path} className="flex max-w-full items-center gap-1 rounded-input bg-accent/5 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-accent/20 cursor-pointer hover:bg-accent/10" title={`${t("conversation.clickToInsert")} ${reference.path}`} onClick={() => { const current = input; setInput(current ? `${current} ${reference.path}` : reference.path); }}>
                       {reference.isDir ? <FolderOpen size={11} className="shrink-0 text-accent" /> : <File size={11} className="shrink-0 text-accent" />}
                       <span className="truncate">{reference.path}</span>
-                      <button type="button" aria-label={`Remove reference ${reference.name}`} onClick={(e) => { e.stopPropagation(); removeWorkspaceReference(workspaceCwd, reference.path); }} className="shrink-0 text-muted hover:text-error">
+                      <button type="button" aria-label={`Remove reference ${reference.name}`} onClick={(e) => { e.stopPropagation(); removeWorkspaceReference(workspaceCwd, reference.path); }} className="shrink-0 text-muted hover:text-error-text">
                         <X size={11} />
                       </button>
                     </span>
@@ -667,7 +694,7 @@ export function LiveSessionPage() {
                 {files.map((f, i) => (
                   <span key={i} className="flex items-center gap-1 rounded-input bg-surface-2 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-border">
                     {f.name}
-                    <button onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))} className="text-muted hover:text-error">
+                    <button onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))} className="text-muted hover:text-error-text">
                       <X size={11} />
                     </button>
                   </span>
@@ -695,7 +722,7 @@ export function LiveSessionPage() {
                   onClick={() => composer.fileInputRef.current?.click()}
                   aria-label={t("conversation.attach")}
                   title={t("conversation.attach")}
-                  className="flex h-7 w-7 items-center justify-center rounded-full border border-border text-muted hover:text-text hover:bg-surface-2"
+                  className="flex h-7 w-7 items-center justify-center rounded-full bg-surface-2 text-muted transition-colors hover:bg-surface-hover hover:text-text"
                 >
                   <Plus size={15} />
                 </button>
@@ -703,7 +730,7 @@ export function LiveSessionPage() {
                   <button
                     type="button"
                     onClick={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/knowledge`)}
-                    className="flex min-h-7 items-center gap-1 rounded-input border border-ok/40 bg-ok/10 px-2 py-1 text-xs text-ok hover:bg-ok/15"
+                    className="flex min-h-7 items-center gap-1 rounded-input border border-ok/40 bg-ok/10 px-2 py-1 text-xs text-ok-text hover:bg-ok/15"
                     title={t("conversation.autoReviewOnTitle")}
                   >
                     <Sparkles size={13} />
@@ -722,7 +749,7 @@ export function LiveSessionPage() {
                     <span className="composer-review-label">Review</span>
                   </button>
                 )}
-                {model.modelError && <span className="max-w-[180px] truncate text-[10px] text-error" title={model.modelError}>{model.modelError}</span>}
+                {model.modelError && <span className="max-w-[180px] truncate text-[10px] text-error-text" title={model.modelError}>{model.modelError}</span>}
                 {reviewNotice && <span className="max-w-[220px] truncate text-[10px] text-muted" title={reviewNotice}>{reviewNotice}</span>}
               </div>
               <input ref={composer.fileInputRef} type="file" multiple className="hidden" onChange={composer.handleFilePick} />
@@ -744,7 +771,7 @@ export function LiveSessionPage() {
                   />
                 )}
                 {working ? (
-                  <button aria-label="Stop generation" onClick={() => void abort().catch(() => undefined)} className="h-7 w-7 rounded-input bg-accent text-accent-fg flex items-center justify-center hover:bg-error transition-colors">
+                  <button aria-label="Stop generation" onClick={() => void abort().catch(() => undefined)} className="flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full bg-accent-fill text-accent-fg transition-colors hover:bg-error-fill">
                     <Square size={14} fill="currentColor" />
                   </button>
                 ) : (
@@ -753,16 +780,18 @@ export function LiveSessionPage() {
                     onClick={composer.handleSend}
                     disabled={working || interactionPending || (!model.selectedModel && !research.mode) || reviewingProject || research.busy || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
                     className={cn(
-                      "h-7 w-7 rounded-input flex items-center justify-center",
-                      ((model.selectedModel || research.mode) && !interactionPending && !reviewingProject && !research.busy && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted cursor-default",
+                      "flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full",
+                      ((model.selectedModel || research.mode) && !interactionPending && !reviewingProject && !research.busy && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent-fill text-accent-fg" : "bg-surface-2 text-muted cursor-default",
                     )}
                   >
-                    <ArrowUp size={15} />
+                    <ArrowUp size={16} />
                   </button>
                 )}
               </div>
             </div>
           </div>
+          </div>
+          {!showWelcome && <ConversationStatsLine stats={sessionStats} />}
         </div>
 
         {showWelcome && <div className="flex-1" aria-hidden />}

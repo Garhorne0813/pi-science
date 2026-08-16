@@ -15,7 +15,7 @@ const ResearchPage = lazy(() => import("./routes/ResearchPage").then((m) => ({ d
 
 function LoadingFallback() {
   const { t } = useTranslation();
-  return <div style={{ padding: "2rem", color: "#888" }}>{t("common.loading")}</div>;
+  return <div style={{ padding: "2rem", color: "var(--muted)" }}>{t("common.loading")}</div>;
 }
 const wrap = (element: ReactElement) => <Suspense fallback={<LoadingFallback />}>{element}</Suspense>;
 

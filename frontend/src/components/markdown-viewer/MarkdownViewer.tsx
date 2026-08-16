@@ -1,4 +1,4 @@
-import { isValidElement, useCallback, useState } from "react";
+import { isValidElement, useCallback, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -9,64 +9,68 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/ui";
 import { fenceLanguage, runnableLanguage } from "@/lib/conversation";
 import { RunnableCodeBlock } from "../conversation/RunnableCodeBlock";
+import { CodeBlockFrame } from "./CodeBlockFrame";
 import { fileInspectorForPath } from "@/lib/artifacts";
 import { resolveMarkdownResource, type MarkdownResourceContext } from "@/lib/files/markdown-resources";
 import { useUiStore } from "@/lib/ui";
 
 /** Two contexts render markdown: chat bubbles (theme colors, compact) and the
- *  file-preview "paper" (document-neutral black-on-white, editorial scale —
- *  like the Office previews, a document keeps its own colors in dark mode). */
+ *  file-preview "paper" (document-neutral black-on-white, editorial colors with
+ *  compact chat-like typography — a document keeps its own colors in dark mode). */
 type Variant = "chat" | "document";
 
 const STYLES: Record<Variant, Record<string, string>> = {
   chat: {
-    // Assistant prose reads in a serif (Claude-style response typography);
-    // UI chrome and code stay sans/mono. CJK falls back to system serif.
-    root: "text-[15px] leading-[1.65] text-text [font-family:'Source_Serif_4','Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
-    p: "my-1.5 first:mt-0 last:mb-0",
-    a: "text-link underline underline-offset-2",
-    code: "rounded bg-surface-2 px-1 py-0.5 font-mono text-[13px] text-link",
-    pre: "my-3 overflow-x-auto rounded-input bg-surface-2 p-3 font-mono text-[13px] leading-5 [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-text",
+    // Assistant prose reads in the app sans stack (reference: DeepSeek
+    // Harness uses a system UI font for messages); code stays mono.
+    root: "text-[15px] leading-[1.65] text-text",
+    p: "my-2 first:mt-0 last:mb-0",
+    a: "text-link underline underline-offset-2 [overflow-wrap:anywhere]",
+    code: "rounded bg-surface-selected px-1 py-0.5 font-mono text-[13px] text-text [overflow-wrap:anywhere]",
+    // Radius/background live on the CodeBlockFrame shell; this class only
+    // styles the <pre> content inside it (chat), or the plain pre (document).
+    pre: "overflow-x-auto p-3 font-mono text-[13px] leading-5 [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-text",
     ul: "my-2 ml-5 list-disc space-y-1",
     ol: "my-2 ml-5 list-decimal space-y-1",
     h1: "mb-3 mt-5 text-2xl font-semibold first:mt-0",
     h2: "mb-2 mt-5 text-xl font-semibold first:mt-0",
     h3: "mb-2 mt-4 text-lg font-semibold first:mt-0",
     h4: "mb-1.5 mt-3 text-base font-semibold first:mt-0",
+    h5: "mb-1 mt-3 text-sm font-semibold first:mt-0",
+    h6: "mb-1 mt-3 text-xs font-semibold uppercase tracking-wide first:mt-0",
     blockquote: "my-2 border-l-2 border-border pl-3 text-muted",
     hr: "my-4 border-border",
     table: "border-collapse text-sm",
     th: "border border-border bg-surface-2 px-3 py-1.5 text-left font-semibold",
     td: "border border-border px-3 py-1.5",
   },
-  // Editorial-blog paper: warm ink on white, serif headings, terracotta accent
-  // (#c15f3c — the app's brand). Theme-independent by design: a document reads
-  // the same in light or dark mode, so colors are fixed, not tokens.
-  //
-  // Two font stacks, both explicit so the paper never inherits the app's UI
-  // font. Body: a comfortable reading sans (SF/Segoe + PingFang for Chinese).
-  // Headings: the finest reading serifs that actually ship on macOS/Windows
-  // (Iowan/Charter → Georgia), CJK falling back to Songti.
+  // Document "paper": a fixed, theme-independent reading surface (warm ink
+  // on near-white, serif display headings) so long-form previews read like a
+  // document rather than app UI. The colors are deliberate paper constants,
+  // not app-brand colors — the app brand is the DeepSeek-inspired accent blue
+  // and does not leak into document bodies.
   document: {
-    root: "text-[16px] leading-[1.8] text-[#2b2620] antialiased [font-feature-settings:'liga','kern'] [font-family:-apple-system,'SF_Pro_Text','Segoe_UI','PingFang_SC','Microsoft_YaHei',sans-serif] selection:bg-[#f2d9cd]",
-    p: "my-4 tracking-[0.006em] [text-wrap:pretty] first:mt-0 last:mb-0",
-    a: "font-medium text-[#bf5a34] underline decoration-[#e2bdac] decoration-1 underline-offset-[3px] transition-colors hover:decoration-[#bf5a34]",
-    code: "rounded-[4px] bg-[#f7f0ea] px-1.5 py-0.5 font-mono text-[13px] text-[#a94e2c] ring-1 ring-[#eee0d6]",
-    pre: "my-5 overflow-x-auto rounded-lg bg-[#faf6f2] p-4 font-mono text-[13px] leading-6 ring-1 ring-[#ece2d9] [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-[#4b433a] [&_code]:ring-0",
-    ul: "my-4 ml-[1.15em] list-disc space-y-2 marker:text-[#c98a6b]",
-    ol: "my-4 ml-[1.15em] list-decimal space-y-2 marker:text-[13px] marker:font-medium marker:text-[#c98a6b]",
+    root: "text-[15px] leading-[1.65] text-[#2b2620] antialiased [font-feature-settings:'liga','kern'] [font-family:-apple-system,'SF_Pro_Text','Segoe_UI','PingFang_SC','Microsoft_YaHei',sans-serif] selection:bg-[#f2d9cd]",
+    p: "my-1.5 tracking-[0.006em] [text-wrap:pretty] first:mt-0 last:mb-0",
+    a: "font-medium text-[#bf5a34] underline decoration-[#e2bdac] decoration-1 underline-offset-[3px] transition-colors hover:decoration-[#bf5a34] [overflow-wrap:anywhere]",
+    code: "rounded-[4px] bg-[#f7f0ea] px-1.5 py-0.5 font-mono text-[13px] text-[#a94e2c] ring-1 ring-[#eee0d6] [overflow-wrap:anywhere]",
+    pre: "my-3 overflow-x-auto rounded-lg bg-[#faf6f2] p-3 font-mono text-[13px] leading-5 ring-1 ring-[#ece2d9] [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-[#4b433a] [&_code]:ring-0",
+    ul: "my-2 ml-5 list-disc space-y-1 marker:text-[#c98a6b]",
+    ol: "my-2 ml-5 list-decimal space-y-1 marker:text-[13px] marker:font-medium marker:text-[#c98a6b]",
     // Serif display headings give the editorial/blog feel; the stack falls back
     // to system CJK serif so Chinese posts read as editorial too. Tracking stays
     // near-zero — negative tracking crams CJK glyphs.
-    h1: "mb-3 mt-10 text-[33px] font-bold leading-[1.25] tracking-[-0.01em] text-[#1c1915] [text-wrap:balance] first:mt-0 [font-family:'Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
-    h2: "mb-4 mt-11 flex items-baseline gap-2.5 text-[23px] font-semibold leading-snug tracking-[-0.005em] text-[#1c1915] [text-wrap:balance] before:relative before:top-[0.14em] before:h-[0.82em] before:w-[3px] before:shrink-0 before:rounded-full before:bg-[#c15f3c] before:content-[''] first:mt-0 [font-family:'Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
-    h3: "mb-2 mt-8 text-[18.5px] font-semibold leading-snug text-[#2b2620] first:mt-0 [font-family:'Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
-    h4: "mb-2 mt-6 text-[12.5px] font-semibold uppercase tracking-[0.08em] text-[#9a8d7c] first:mt-0",
-    blockquote: "my-5 rounded-r-md border-l-[3px] border-[#d98c6a] bg-[#faf6f2] py-1.5 pl-5 pr-4 text-[#6b6155] [&_p]:my-1.5",
-    hr: "mx-auto my-10 w-12 border-t-2 border-[#e6ddd2]",
-    table: "border-collapse text-[14px] tabular-nums",
-    th: "border-b-2 border-[#e2d5c8] px-4 py-2.5 text-left font-semibold text-[#1c1915]",
-    td: "border-b border-[#efe8df] px-4 py-2.5",
+    h1: "mb-3 mt-5 text-2xl font-bold leading-[1.25] tracking-[-0.01em] text-[#1c1915] [text-wrap:balance] first:mt-0 [font-family:'Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
+    h2: "mb-2 mt-5 flex items-baseline gap-2 text-xl font-semibold leading-snug tracking-[-0.005em] text-[#1c1915] [text-wrap:balance] before:relative before:top-[0.14em] before:h-[0.82em] before:w-[3px] before:shrink-0 before:rounded-full before:bg-[#c15f3c] before:content-[''] first:mt-0 [font-family:'Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
+    h3: "mb-2 mt-4 text-lg font-semibold leading-snug text-[#2b2620] first:mt-0 [font-family:'Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
+    h4: "mb-1.5 mt-3 text-base font-semibold uppercase tracking-[0.08em] text-[#9a8d7c] first:mt-0",
+    h5: "mb-1 mt-3 text-sm font-semibold leading-snug text-[#2b2620] first:mt-0 [font-family:'Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
+    h6: "mb-1 mt-3 text-xs font-semibold uppercase tracking-[0.08em] text-[#9a8d7c] first:mt-0",
+    blockquote: "my-2 rounded-r-md border-l-[3px] border-[#d98c6a] bg-[#faf6f2] py-1.5 pl-3 pr-4 text-[#6b6155] [&_p]:my-1.5",
+    hr: "mx-auto my-4 w-12 border-t-2 border-[#e6ddd2]",
+    table: "border-collapse text-sm tabular-nums",
+    th: "border-b-2 border-[#e2d5c8] px-3 py-1.5 text-left font-semibold text-[#1c1915]",
+    td: "border-b border-[#efe8df] px-3 py-1.5",
   },
 };
 
@@ -261,6 +265,7 @@ export function MarkdownViewer({
   variant = "chat",
   codeRunner,
   resourceContext,
+  codeChrome,
 }: {
   children: string;
   className?: string;
@@ -270,6 +275,10 @@ export function MarkdownViewer({
   /** Document/workspace context for resolving relative image and file links.
    *  Chat mode derives it from codeRunner.cwd when omitted. */
   resourceContext?: MarkdownResourceContext;
+  /** Chat code blocks get the sticky banner shell (language/copy/run).
+   *  Defaults to true for the chat variant; compact previews (artifact
+   *  cards) opt out to keep their tiny surface. */
+  codeChrome?: boolean;
 }) {
   const s = STYLES[variant];
   const cwd = codeRunner?.cwd;
@@ -277,7 +286,10 @@ export function MarkdownViewer({
   const { t } = useTranslation();
   // Chat bubbles resolve workspace-relative references against the workspace
   // root; document previews carry their own file context.
-  const context: MarkdownResourceContext | undefined = resourceContext ?? (cwd ? { cwd, documentPath: undefined } : undefined);
+  const context = useMemo<MarkdownResourceContext | undefined>(
+    () => resourceContext ?? (cwd ? { cwd, documentPath: undefined } : undefined),
+    [cwd, resourceContext],
+  );
   const handleFileLink = useCallback((href: string) => {
     if (!context) return;
     const resolved = resolveMarkdownResource(href, context);
@@ -290,6 +302,10 @@ export function MarkdownViewer({
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[[rehypeKatex, { throwOnError: false }]]}
+        // Markdown files use HTML comments for internal metadata. Raw HTML is
+        // not part of the supported preview surface, so omit it rather than
+        // showing comments/tags as literal document text.
+        skipHtml
         components={{
           p: ({ children }) => <p className={s.p}>{children}</p>,
           img: ({ src, alt }) => {
@@ -346,19 +362,35 @@ export function MarkdownViewer({
               </span>
             );
           },
-          // Block code: the plain wrapper — its inner <code> is restyled via [&_code].
-          // In chat with a codeRunner, python fences become executable blocks.
+          // Block code: chat gets the sticky banner shell (language/copy and,
+          // with a codeRunner, Run for python fences); document keeps the
+          // plain editorial pre. Without chrome (artifact previews) the chat
+          // pre keeps its own card shell — background, border and margins —
+          // so fenced code never collapses onto the surrounding text.
           pre: ({ children }) => {
             const codeEl = Array.isArray(children) ? children[0] : children;
-            if (codeRunner && variant === "chat" && isValidElement(codeEl)) {
-              const codeProps = codeEl.props as { className?: string; children?: React.ReactNode };
-              if (runnableLanguage(fenceLanguage(codeProps.className))) {
+            const codeProps = isValidElement(codeEl) ? (codeEl.props as { className?: string; children?: React.ReactNode }) : null;
+            const language = codeProps ? fenceLanguage(codeProps.className) : null;
+            const code = codeProps ? reactText(codeProps.children) : "";
+            const chrome = variant === "chat" && (codeChrome ?? true);
+            if (chrome && codeProps) {
+              if (codeRunner && runnableLanguage(language)) {
                 return (
-                  <RunnableCodeBlock code={reactText(codeProps.children)} cwd={codeRunner.cwd} sessionId={codeRunner.sessionId} preClassName={s.pre}>
+                  <RunnableCodeBlock code={code} language={language} cwd={codeRunner.cwd} sessionId={codeRunner.sessionId} preClassName={s.pre}>
                     {children}
                   </RunnableCodeBlock>
                 );
               }
+              return (
+                <CodeBlockFrame language={language} code={code} preClassName={s.pre}>
+                  {children}
+                </CodeBlockFrame>
+              );
+            }
+            if (variant === "chat") {
+              return (
+                <pre className={cn(s.pre, "my-2 rounded-input border border-border bg-surface-2")}>{children}</pre>
+              );
             }
             return <pre className={s.pre}>{children}</pre>;
           },
@@ -371,6 +403,8 @@ export function MarkdownViewer({
           h2: ({ children }) => <h2 className={s.h2}>{children}</h2>,
           h3: ({ children }) => <h3 className={s.h3}>{children}</h3>,
           h4: ({ children }) => <h4 className={s.h4}>{children}</h4>,
+          h5: ({ children }) => <h5 className={s.h5}>{children}</h5>,
+          h6: ({ children }) => <h6 className={s.h6}>{children}</h6>,
           blockquote: ({ children }) => <blockquote className={s.blockquote}>{children}</blockquote>,
           hr: () => <hr className={s.hr} />,
           table: ({ children }) => (
@@ -378,8 +412,12 @@ export function MarkdownViewer({
               <table className={s.table}>{children}</table>
             </div>
           ),
-          th: ({ children }) => <th className={s.th}>{children}</th>,
-          td: ({ children }) => <td className={s.td}>{children}</td>,
+          // remark-gfm maps the pipe alignment row to an inline textAlign
+          // style. Preserve it: the class intentionally supplies the default
+          // left alignment, while an inline style must win for right/center
+          // aligned scientific columns.
+          th: ({ children, style }) => <th className={s.th} style={style}>{children}</th>,
+          td: ({ children, style }) => <td className={s.td} style={style}>{children}</td>,
         }}
       >
         {normalizeMathInput(children)}

@@ -260,7 +260,7 @@ export function ProjectsPage() {
         {/* Header */}
         <div className="mb-page flex items-center justify-between">
           <div>
-            <h1 className="font-serif text-xl text-text">{t("nav.projects")}</h1>
+            <h1 className="text-xl font-medium tracking-tight text-text">{t("nav.projects")}</h1>
             <p className="mt-1 text-sm text-muted">{t("projects.workspaceCount", { count: workspaces.length })}</p>
           </div>
           <div className="relative">
@@ -274,7 +274,7 @@ export function ProjectsPage() {
             />
             <button
               onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="flex h-primary items-center gap-compact rounded-input bg-accent px-panel text-ui-body font-medium text-accent-fg hover:opacity-90"
+              className="flex h-primary items-center gap-compact rounded-input bg-accent-fill px-panel text-ui-body font-medium text-accent-fg hover:opacity-90"
             >
               {t("projects.newWorkspace")} <ChevronDown size={14} />
             </button>
@@ -335,7 +335,7 @@ export function ProjectsPage() {
                 <div className="mb-panel flex h-nav items-center gap-2">
                   <Pin size={13} className="text-accent" />
                   <span className="text-ui-caption font-medium uppercase tracking-wider text-muted">{t("projects.pinned")}</span>
-                  <span className="text-[10px] text-muted/60 ml-1">{pinnedWs.length}</span>
+                  <span className="text-[10px] text-muted ml-1">{pinnedWs.length}</span>
                 </div>
                 <div className="mb-page grid grid-cols-1 gap-card sm:grid-cols-2 lg:grid-cols-4">
                   {pinnedWs.map(w => <WorkspaceCard key={w.path} w={w} {...{ pinned, togglePin, editingName, setEditingName, editValue, setEditValue, handleRename, handleDelete, nameInputRef, navigate, timeAgo }} />)}
@@ -414,7 +414,7 @@ function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingName, edit
         </button>
         <button
           onClick={() => handleDelete(w.path)}
-          className="rounded p-1.5 text-muted hover:bg-error/10 hover:text-error"
+          className="rounded p-1.5 text-muted hover:bg-error/10 hover:text-error-text"
           title={t("projects.deleteTitle")}
         >
           <Trash2 size={13} />
@@ -423,7 +423,7 @@ function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingName, edit
 
       <div className="mb-panel flex items-start justify-between">
         <FolderOpen size={22} className="text-accent/60" />
-        <span className="text-ui-caption text-muted/75">{timeAgo(w.last_modified)}</span>
+        <span className="text-ui-caption text-muted">{timeAgo(w.last_modified)}</span>
       </div>
 
       {editingName === w.path ? (

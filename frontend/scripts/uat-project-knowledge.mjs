@@ -129,7 +129,13 @@ async function run() {
     await fileHistory.getByRole("button", { name: "Undo" }).click();
     await waitForPath(path.join(workspace, "result.csv"), true);
 
-    await page.getByTitle("Toggle theme").click();
+    // Theme switching moved into the Settings dialog: the sidebar no longer
+    // has a "Toggle theme" button. Open Settings, switch the Appearance
+    // select to dark, then close the dialog with Escape.
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByLabel("Appearance").waitFor({ timeout: 10_000 });
+    await page.getByLabel("Appearance").selectOption("dark");
+    await page.keyboard.press("Escape");
     if (await page.locator("html").getAttribute("data-theme") !== "dark") {
       throw new Error("Dark theme did not activate");
     }

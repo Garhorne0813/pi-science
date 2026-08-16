@@ -6,6 +6,7 @@ import { settingsApi, subagentsQuery } from "../../lib/settings";
 import type { ProjectSubagent } from "../../lib/settings";
 import { useFeedback } from "../feedback/feedback-context";
 import { Section } from "./Section";
+import { SettingsSelectMenu } from "./SettingsSelectMenu";
 
 const EMPTY_SUBAGENT: ProjectSubagent = {
   name: "",
@@ -89,11 +90,11 @@ export function SubagentSettings({ workspaceCwd }: { workspaceCwd: string | null
       ) : (
         <>
           {error && (
-            <p role="alert" className="mb-3 rounded-input bg-error/10 px-3 py-2 text-[11px] text-error">
+            <p role="alert" className="mb-3 rounded-input bg-error/10 px-3 py-2 text-[11px] text-error-text">
               {error}
             </p>
           )}
-          {notice && <p className="mb-3 rounded-input bg-ok/10 px-3 py-2 text-[11px] text-ok">{notice}</p>}
+          {notice && <p className="mb-3 rounded-input bg-ok/10 px-3 py-2 text-[11px] text-ok-text">{notice}</p>}
           <div className="divide-y divide-faint border-y border-faint">
             {agents.map((agent) => (
               <div key={agent.name} className="flex min-h-14 items-start gap-3 py-2">
@@ -114,7 +115,7 @@ export function SubagentSettings({ workspaceCwd }: { workspaceCwd: string | null
                 >
                   {t("settings.actions.edit")}
                 </button>
-                <button type="button" onClick={() => void remove(agent)} className="min-h-9 rounded-input px-2 text-error hover:bg-error/10">
+                <button type="button" onClick={() => void remove(agent)} className="min-h-9 rounded-input px-2 text-error-text hover:bg-error/10">
                   <Trash2 size={12} />
                 </button>
               </div>
@@ -164,17 +165,19 @@ export function SubagentSettings({ workspaceCwd }: { workspaceCwd: string | null
                   <span className="mb-1 block text-[11px] text-muted">{t("settings.subagents.modelOverride")}</span>
                   <input value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })} placeholder={t("settings.subagents.inheritModel")} className="min-h-10 w-full rounded-input border border-border bg-surface-2 px-3 font-mono text-[12px] text-text outline-none" />
                 </label>
-                <label>
+                <div>
                   <span className="mb-1 block text-[11px] text-muted">{t("settings.model.thinking")}</span>
-                  <select value={draft.thinking} onChange={(event) => setDraft({ ...draft, thinking: event.target.value })} className="min-h-10 w-full rounded-input border border-border bg-surface-2 px-3 text-[12px] text-text outline-none">
-                    <option value="">{t("settings.subagents.inherit")}</option>
-                    {["off", "low", "medium", "high", "xhigh", "max"].map((level) => (
-                      <option key={level} value={level}>
-                        {level}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                  <SettingsSelectMenu
+                    variant="field"
+                    ariaLabel={t("settings.model.thinking")}
+                    value={draft.thinking}
+                    options={[
+                      { value: "", label: t("settings.subagents.inherit") },
+                      ...["off", "low", "medium", "high", "xhigh", "max"].map((level) => ({ value: level, label: level })),
+                    ]}
+                    onSelect={(next) => setDraft({ ...draft, thinking: next })}
+                  />
+                </div>
               </div>
               <label className="mt-3 block">
                 <span className="mb-1 block text-[11px] text-muted">{t("settings.subagents.builtinTools")}</span>
@@ -211,44 +214,40 @@ export function SubagentSettings({ workspaceCwd }: { workspaceCwd: string | null
                   />{" "}
                   {t("settings.subagents.inheritSkills")}
                 </label>
-                <label className="flex items-center gap-2 text-[11px] text-muted">
-                  {t("settings.subagents.promptMode")}{" "}
-                  <select
+                <div className="flex items-center gap-2 text-[11px] text-muted">
+                  <span>{t("settings.subagents.promptMode")}</span>
+                  <SettingsSelectMenu
+                    variant="compact"
+                    ariaLabel={t("settings.subagents.promptMode")}
                     value={draft.system_prompt_mode}
-                    onChange={(event) =>
-                      setDraft({
-                        ...draft,
-                        system_prompt_mode: event.target.value as "replace" | "append",
-                      })
-                    }
-                    className="rounded-input border border-border bg-surface-2 px-2 py-1"
-                  >
-                    <option value="replace">{t("settings.subagents.replace")}</option>
-                    <option value="append">{t("settings.subagents.append")}</option>
-                  </select>
-                </label>
-                <label className="flex items-center gap-2 text-[11px] text-muted">
-                  {t("settings.subagents.context")}{" "}
-                  <select
+                    options={[
+                      { value: "replace", label: t("settings.subagents.replace") },
+                      { value: "append", label: t("settings.subagents.append") },
+                    ]}
+                    contentClassName="min-w-[7rem]"
+                    onSelect={(next) => setDraft({ ...draft, system_prompt_mode: next as "replace" | "append" })}
+                  />
+                </div>
+                <div className="flex items-center gap-2 text-[11px] text-muted">
+                  <span>{t("settings.subagents.context")}</span>
+                  <SettingsSelectMenu
+                    variant="compact"
+                    ariaLabel={t("settings.subagents.context")}
                     value={draft.default_context}
-                    onChange={(event) =>
-                      setDraft({
-                        ...draft,
-                        default_context: event.target.value as "fresh" | "fork",
-                      })
-                    }
-                    className="rounded-input border border-border bg-surface-2 px-2 py-1"
-                  >
-                    <option value="fresh">{t("settings.subagents.fresh")}</option>
-                    <option value="fork">{t("settings.subagents.fork")}</option>
-                  </select>
-                </label>
+                    options={[
+                      { value: "fresh", label: t("settings.subagents.fresh") },
+                      { value: "fork", label: t("settings.subagents.fork") },
+                    ]}
+                    contentClassName="min-w-[7rem]"
+                    onSelect={(next) => setDraft({ ...draft, default_context: next as "fresh" | "fork" })}
+                  />
+                </div>
               </div>
               <div className="mt-4 flex justify-end gap-2">
                 <button type="button" onClick={() => setDraft(null)} className="min-h-10 rounded-input px-3 text-[12px] text-muted hover:bg-surface-2">
                   {t("common.cancel")}
                 </button>
-                <button type="button" onClick={() => void save()} disabled={busy || !draft.name.trim() || !draft.prompt.trim()} className="flex min-h-10 items-center gap-1 rounded-input bg-accent px-3 text-[12px] font-medium text-accent-fg disabled:opacity-40">
+                <button type="button" onClick={() => void save()} disabled={busy || !draft.name.trim() || !draft.prompt.trim()} className="flex min-h-10 items-center gap-1 rounded-input bg-accent-fill px-3 text-[12px] font-medium text-accent-fg disabled:opacity-40">
                   {busy ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} {t("settings.subagents.save")}
                 </button>
               </div>

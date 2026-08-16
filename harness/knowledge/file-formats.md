@@ -20,7 +20,7 @@
 
 ## Chemistry and structural biology
 - **CIF**: Crystallographic Information File. Use `gemmi` or `pymatgen`.
-- **PDB**: Protein Data Bank. Use `biopython.Bio.PDB` or 3Dmol.js for
+- **PDB**: Protein Data Bank. Use `biopython.Bio.PDB` or Mol* for
   visualization. Check for alternate conformations and missing residues.
 - **SDF / MOL**: Chemical structure files. Use RDKit (`Chem.SDMolSupplier`,
   `Chem.MolFromMolFile`) for parsing. Verify bond orders and stereochemistry.

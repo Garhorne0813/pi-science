@@ -312,7 +312,7 @@ export function MeshView({ filename, bytes }: { filename: string; bytes: ArrayBu
 
       {notice && !rendering && !error && (
         <div className="ui-popover pointer-events-none absolute left-1/2 top-1/2 max-w-[80%] -translate-x-1/2 -translate-y-1/2 rounded-input border-warn/40 bg-surface/95 px-4 py-3 text-center text-sm text-text backdrop-blur">
-          <div className="mb-1 flex items-center justify-center gap-1.5 font-medium text-warn">
+          <div className="mb-1 flex items-center justify-center gap-1.5 font-medium text-warn-text">
             <AlertTriangle size={14} /> {"File problem"}
           </div>
           {notice}

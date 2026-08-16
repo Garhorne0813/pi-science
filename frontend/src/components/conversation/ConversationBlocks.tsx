@@ -109,9 +109,9 @@ function UserMessage({ id, text, timestamp }: { id: string; text: string; timest
   const references = referencesFromMessage(text);
   const copyText = visibleText || references.map((reference) => reference.path).join("\n");
   return (
-    <div id={`user-msg-${id}`} className="group/message ml-auto flex max-w-[85%] scroll-mt-4 flex-col items-end gap-1">
+    <div id={`user-msg-${id}`} className="group/message ml-auto flex max-w-[min(var(--user-message-width),82%)] scroll-mt-4 flex-col items-end gap-1">
       {visibleText && (
-        <div className="ui-user-message rounded-card px-3 py-2 text-sm leading-relaxed text-text whitespace-pre-wrap">
+        <div className="ui-user-message rounded-bubble px-4 py-2.5 text-sm leading-relaxed text-text whitespace-pre-wrap">
           {visibleText}
         </div>
       )}
@@ -177,9 +177,9 @@ function ToolCard({ block }: { block: ToolCallBlock }) {
   const statusIcon = status === "running" ? (
     <Loader2 size={13} className="animate-spin text-accent" />
   ) : status === "error" ? (
-    <span className="text-error text-xs">✕</span>
+    <span className="text-error-text text-xs">✕</span>
   ) : status === "done" ? (
-    <span className="text-ok text-xs">✓</span>
+    <span className="text-ok-text text-xs">✓</span>
   ) : (
     <span className="text-muted text-xs">○</span>
   );
@@ -209,7 +209,7 @@ function ToolCard({ block }: { block: ToolCallBlock }) {
 function StatusLine({ block }: { block: { kind: "status-line"; text: string; level: string; artifactId?: string; path?: string } }) {
   const openInspector = useUiStore((s) => s.openInspector);
   const cwd = useRuntimeStore((s) => s.cwd);
-  const tone = block.level === "error" ? "text-error" : block.level === "done" ? "text-ok" : "text-muted";
+  const tone = block.level === "error" ? "text-error-text" : block.level === "done" ? "text-ok-text" : "text-muted";
   if (block.path) {
     const artifact = refToArtifactBlock(block.path);
     return (

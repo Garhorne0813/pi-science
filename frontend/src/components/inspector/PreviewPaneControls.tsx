@@ -1,6 +1,7 @@
 import { Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn, useUiStore } from "@/lib/ui";
+import { notifyInspectorLayoutChange } from "@/lib/ui/inspector-layout";
 import { IconButton } from "../ui/Icon";
 
 export function PreviewPaneControls({ embedded = false }: { embedded?: boolean }) {
@@ -27,7 +28,10 @@ export function PreviewPaneControls({ embedded = false }: { embedded?: boolean }
           size="compact"
           className="text-text"
           aria-pressed={inspectorMaximized}
-          onClick={() => setInspectorMaximized(!inspectorMaximized)}
+          onClick={() => {
+            setInspectorMaximized(!inspectorMaximized);
+            notifyInspectorLayoutChange();
+          }}
         />
       )}
       <IconButton

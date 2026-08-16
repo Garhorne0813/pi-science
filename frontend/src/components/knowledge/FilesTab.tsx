@@ -76,7 +76,7 @@ export function FilesTab({
 
       {settingsOpen && policy && (
         <section className="ui-card-flat rounded-card p-5">
-          <h2 className="flex items-center gap-2 font-serif text-lg text-text"><Lock size={16} className="text-accent" /> {t("knowledge.organizationPolicy")}</h2>
+          <h2 className="flex items-center gap-2 text-lg font-semibold text-text"><Lock size={16} className="text-accent" /> {t("knowledge.organizationPolicy")}</h2>
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <label className="text-xs font-medium text-muted">
               {t("knowledge.lockedPaths")}
@@ -89,7 +89,7 @@ export function FilesTab({
             </label>
           </div>
           <div className="mt-4 flex justify-end">
-            <button type="button" disabled={saving} onClick={() => void savePolicy()} className="flex min-h-11 items-center gap-2 rounded-input bg-accent px-4 py-2 text-sm font-medium text-accent-fg disabled:opacity-50">{saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} {t("knowledge.savePolicy")}</button>
+            <button type="button" disabled={saving} onClick={() => void savePolicy()} className="flex min-h-11 items-center gap-2 rounded-input bg-accent-fill px-4 py-2 text-sm font-medium text-accent-fg disabled:opacity-50">{saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} {t("knowledge.savePolicy")}</button>
           </div>
         </section>
       )}

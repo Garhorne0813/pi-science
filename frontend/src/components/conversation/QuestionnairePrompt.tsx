@@ -229,7 +229,7 @@ export function QuestionnairePrompt({
     <section data-request-id={interaction.requestId} className="ui-card-flat animate-fadeIn overflow-hidden rounded-card border-accent/35" aria-label={t("questionnaire.title")}>
       <header className="border-b border-faint bg-accent/5 px-4 py-2 sm:px-5">
         <div className="flex items-center gap-2">
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent text-accent-fg">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent-fill text-accent-fg">
             <Sparkles size={13} />
           </span>
           <div className="min-w-0 text-sm font-semibold text-text">{t("questionnaire.title")}</div>
@@ -263,7 +263,7 @@ export function QuestionnairePrompt({
                 onClick={() => openQuestion(questionIndex)}
                 className="flex w-full items-start gap-2.5 px-2.5 py-1.5 text-left transition-colors hover:bg-accent/5 sm:px-3"
               >
-                <span className={cn("mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold", answered ? "bg-ok/10 text-ok" : "bg-accent/10 text-accent")}>
+                <span className={cn("mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold", answered ? "bg-ok/10 text-ok-text" : "bg-accent/10 text-accent")}>
                   {answered ? <Check size={13} /> : questionIndex + 1}
                 </span>
                 <span className="min-w-0 flex-1">
@@ -310,7 +310,7 @@ export function QuestionnairePrompt({
                             <span className={cn(
                               "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center border text-[10px]",
                               question.multiSelect ? "rounded" : "rounded-full",
-                              selected ? "border-accent bg-accent text-accent-fg" : "border-border bg-surface-2 text-muted group-hover:border-accent/50",
+                              selected ? "border-accent bg-accent-fill text-accent-fg" : "border-border bg-surface-2 text-muted group-hover:border-accent/50",
                             )}>
                               {question.multiSelect
                                 ? selected && <Check size={11} />
@@ -372,7 +372,7 @@ export function QuestionnairePrompt({
                       />
                       <div className="mt-1.5 flex justify-end gap-1.5">
                         <button type="button" onClick={() => cancelCustomAnswer(questionIndex)} className="rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2">{t("common.cancel")}</button>
-                        <button type="button" onClick={() => saveCustomAnswer(questionIndex)} className="rounded-input bg-accent px-2.5 py-1 text-xs text-accent-fg">{t("questionnaire.saveAnswer")}</button>
+                        <button type="button" onClick={() => saveCustomAnswer(questionIndex)} className="rounded-input bg-accent-fill px-2.5 py-1 text-xs text-accent-fg">{t("questionnaire.saveAnswer")}</button>
                       </div>
                     </div>
                   )}
@@ -442,7 +442,7 @@ export function QuestionnairePrompt({
                     <span className="block truncate text-xs text-text">{question.question}</span>
                     <span className="block truncate text-xs text-muted">{answer ? answerLabel(answer, noneLabel, customLabel) : t("questionnaire.unanswered")}</span>
                   </span>
-                  {answer ? <Check size={13} className="mt-0.5 shrink-0 text-ok" /> : <span className="mt-0.5 shrink-0 text-[11px] text-warn">—</span>}
+                  {answer ? <Check size={13} className="mt-0.5 shrink-0 text-ok-text" /> : <span className="mt-0.5 shrink-0 text-[11px] text-warn-text">—</span>}
                 </button>
               );
             })}
@@ -462,7 +462,7 @@ export function QuestionnairePrompt({
             <button type="button" onClick={() => onRespond({ cancelled: true })} className="inline-flex items-center rounded-input border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:bg-surface-2 hover:text-text">
               {t("common.cancel")}
             </button>
-            <button type="button" onClick={submit} disabled={!canSubmit} className="inline-flex items-center gap-1.5 rounded-input bg-accent px-3 py-1 text-xs text-accent-fg disabled:opacity-50">
+            <button type="button" onClick={submit} disabled={!canSubmit} className="inline-flex items-center gap-1.5 rounded-input bg-accent-fill px-3 py-1 text-xs text-accent-fg disabled:opacity-50">
               {submitting ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
               {submitting ? t("questionnaire.submitting") : t("questionnaire.submit")}
             </button>

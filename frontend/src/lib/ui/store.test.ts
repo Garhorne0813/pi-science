@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FilePreviewInspector } from "../../types/thread";
 import { inspectorTabId, useUiStore } from "./store";
 
@@ -111,5 +111,89 @@ describe("inspector tabs", () => {
 
     useUiStore.getState().setInspectorVisible(true);
     expect(useUiStore.getState()).toMatchObject({ inspectorOpen: true, inspectorData: preview });
+  });
+});
+
+describe("theme system mode", () => {
+  // jsdom has no matchMedia; install a single controllable fake for the whole
+  // block. The store attaches its OS-scheme listener once per module load, so
+  // the fake must stay reachable across tests (drive state through the
+  // dispatch helper instead of re-stubbing).
+  const controller: { currentDark: boolean; listener: (() => void) | null } = { currentDark: false, listener: null };
+  let media: MediaQueryList;
+
+  beforeAll(() => {
+    media = {
+      get matches() { return controller.currentDark; },
+      media: "(prefers-color-scheme: dark)",
+      onchange: null,
+      addEventListener: (_type: string, cb: () => void) => { controller.listener = cb; },
+      removeEventListener: () => { controller.listener = null; },
+      addListener: (cb: () => void) => { controller.listener = cb; },
+      removeListener: () => { controller.listener = null; },
+      dispatchEvent: () => false,
+    } as unknown as MediaQueryList;
+    vi.stubGlobal("matchMedia", () => media);
+  });
+
+  function switchOsScheme(dark: boolean) {
+    controller.currentDark = dark;
+    controller.listener?.();
+  }
+
+  it("follows the OS scheme while in system mode", () => {
+    controller.currentDark = false;
+    useUiStore.getState().setTheme("system");
+
+    expect(useUiStore.getState().theme).toBe("system");
+    expect(JSON.parse(localStorage.getItem("pi-science.theme") ?? "")).toBe("system");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+
+    switchOsScheme(true);
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    expect(useUiStore.getState().theme).toBe("system");
+  });
+
+  it("stops following the OS scheme after switching to a fixed theme", () => {
+    controller.currentDark = true;
+    useUiStore.getState().setTheme("system");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+
+    useUiStore.getState().setTheme("light");
+    expect(useUiStore.getState().theme).toBe("light");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+
+    // An OS change after leaving system mode must not repaint the document.
+    switchOsScheme(false);
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+  });
+});
+
+describe("locale system mode", () => {
+  afterEach(() => {
+    Object.defineProperty(navigator, "language", { value: "en-US", configurable: true });
+  });
+
+  it("resolves the browser language and keeps following languagechange", () => {
+    Object.defineProperty(navigator, "language", { value: "zh-CN", configurable: true });
+    useUiStore.getState().setLocale("system");
+
+    expect(useUiStore.getState().locale).toBe("system");
+    expect(JSON.parse(localStorage.getItem("pi-science.locale") ?? "")).toBe("system");
+    expect(document.documentElement.lang).toBe("zh-Hans");
+
+    // The browser language changes at runtime; the app must re-resolve.
+    Object.defineProperty(navigator, "language", { value: "en-US", configurable: true });
+    window.dispatchEvent(new Event("languagechange"));
+    expect(document.documentElement.lang).toBe("en");
+  });
+
+  it("still applies a concrete locale after using system mode", () => {
+    useUiStore.getState().setLocale("system");
+    useUiStore.getState().setLocale("zh-Hans");
+
+    expect(useUiStore.getState().locale).toBe("zh-Hans");
+    expect(JSON.parse(localStorage.getItem("pi-science.locale") ?? "")).toBe("zh-Hans");
+    expect(document.documentElement.lang).toBe("zh-Hans");
   });
 });

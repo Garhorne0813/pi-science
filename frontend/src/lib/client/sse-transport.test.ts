@@ -34,6 +34,24 @@ describe("PiScienceClient conversation transport", () => {
     expect(client.connectedSessionId).toBe("session-b");
   });
 
+  it("forwards the named session.stats event to listeners", () => {
+    const client = new PiScienceClient();
+    const stats: unknown[] = [];
+    client.onEvent((event) => { if (event.type === "session.stats") stats.push(event); });
+
+    client.connect("session-a", "/workspace");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    source.emit("session.stats", {
+      type: "session.stats",
+      sessionId: "session-a",
+      stats: { userMessages: 3, toolCalls: 7, tokens: { input: 10, output: 20 } },
+    });
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toEqual(expect.objectContaining({ type: "session.stats", sessionId: "session-a" }));
+  });
+
   it("does not relabel an existing SSE transport before the new session connects", async () => {
     const client = new PiScienceClient();
     client.connect("session-a", "/workspace");

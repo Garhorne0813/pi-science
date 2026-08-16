@@ -38,6 +38,10 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
       .catch(() => setInterpreters({ python: false, r: false }));
   }, []);
 
+  useEffect(() => () => {
+    void notebookRuntime.release(notebookId, cwd || ".").catch(() => undefined);
+  }, [cwd, notebookId]);
+
   const { data: executions = [] } = useQuery({
     ...sessionRunsQuery(cwd || ".", sessionId || ""),
     enabled: Boolean(sessionId && cwd),

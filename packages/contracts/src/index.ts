@@ -118,11 +118,50 @@ const sessionErrorEventSchema = z.object({
   terminal: z.boolean().optional(),
 });
 
+/** Whole-session cumulative stats, mirroring the durable whole-log projection
+ *  served by the Pi runtime's `get_session_stats` plus control-plane wall-clock
+ *  timing (LLM/decode/TTFT/tool durations) tracked from the event stream.
+ *  Counters are the runtime's authoritative full-log fold (turns = user
+ *  messages, tool calls deduped by call id); timing is persisted per session
+ *  so it survives refresh even when the runtime is idle. */
+export const sessionStatsSchema = z.object({
+  userMessages: z.number().int().nonnegative(),
+  assistantMessages: z.number().int().nonnegative(),
+  toolCalls: z.number().int().nonnegative(),
+  toolResults: z.number().int().nonnegative(),
+  totalMessages: z.number().int().nonnegative(),
+  tokens: z.object({
+    input: z.number().nonnegative(),
+    output: z.number().nonnegative(),
+    cacheRead: z.number().nonnegative(),
+    cacheWrite: z.number().nonnegative(),
+    total: z.number().nonnegative(),
+  }),
+  cost: z.number().nonnegative().optional(),
+  /** Accumulated assistant-message wall time: message start → message end. */
+  llmMs: z.number().nonnegative().optional(),
+  /** Accumulated tool wall time: tool_execution_start → tool_execution_end. */
+  toolMs: z.number().nonnegative().optional(),
+  /** Time-to-first-token total and step count (message start → first non-empty
+   *  text delta). decodeMs is first delta → message end; token/s is derived
+   *  client-side as output tokens / decode seconds. */
+  ttftMs: z.number().nonnegative().optional(),
+  ttftSteps: z.number().int().nonnegative().optional(),
+  decodeMs: z.number().nonnegative().optional(),
+}).passthrough();
+
+const sessionStatsEventSchema = z.object({
+  type: z.literal("session.stats"),
+  sessionId: z.string(),
+  stats: sessionStatsSchema,
+});
+
 export const sessionEventSchema = z.discriminatedUnion("type", [
   textUpdatedEventSchema,
   toolUpdatedEventSchema,
   sessionIdleEventSchema,
   sessionErrorEventSchema,
+  sessionStatsEventSchema,
 ]).and(z.looseObject({}));
 
 export const piRpcCommandSchema = z.object({
@@ -291,6 +330,7 @@ export type SessionMessagePage = z.infer<typeof sessionMessagePageSchema>;
 export type WorkspaceInfo = z.infer<typeof workspaceInfoSchema>;
 export type FileListEntry = z.infer<typeof fileListEntrySchema>;
 export type SessionEvent = z.infer<typeof sessionEventSchema>;
+export type SessionStats = z.infer<typeof sessionStatsSchema>;
 export type PiRpcCommand = z.infer<typeof piRpcCommandSchema>;
 export type PiRpcResponse = z.infer<typeof piRpcResponseSchema>;
 export type PiRuntimeEvent = z.infer<typeof piRuntimeEventSchema>;
