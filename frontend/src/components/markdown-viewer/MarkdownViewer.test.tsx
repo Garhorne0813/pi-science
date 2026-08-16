@@ -147,3 +147,52 @@ describe("MarkdownViewer images", () => {
     expect(state.inspectorData).toMatchObject({ path: "data/raw.csv" });
   });
 });
+
+describe("MarkdownViewer document structure", () => {
+  it("hides raw HTML comments used for document metadata", () => {
+    const { container } = render(
+      <MarkdownViewer variant="document">{"# Visible\n\n<!-- internal metadata -->\n\nVisible text"}</MarkdownViewer>,
+    );
+    expect(container.textContent).toContain("Visible text");
+    expect(container.textContent).not.toContain("internal metadata");
+  });
+
+  it("preserves GFM table alignment styles", () => {
+    const { container } = render(
+      <MarkdownViewer variant="document">
+        {"| Label | Value |\n| :--- | ---: |\n| pH | 7.4 |"}
+      </MarkdownViewer>,
+    );
+    const cells = Array.from(container.querySelectorAll("th, td"));
+    expect(cells[0]).toHaveStyle({ textAlign: "left" });
+    expect(cells[1]).toHaveStyle({ textAlign: "right" });
+    expect(cells[3]).toHaveStyle({ textAlign: "right" });
+  });
+
+  it("keeps level-five and level-six headings styled", () => {
+    const { container } = render(
+      <MarkdownViewer variant="document">{"##### Subsection\n\n###### Detail"}</MarkdownViewer>,
+    );
+    expect(container.querySelector("h5")).toHaveClass("font-semibold");
+    expect(container.querySelector("h6")).toHaveClass("font-semibold");
+  });
+
+  it("uses compact chat-like typography in document previews", () => {
+    const { container } = render(
+      <MarkdownViewer variant="document">{"# Heading\n\nBody text"}</MarkdownViewer>,
+    );
+    expect(container.firstElementChild).toHaveClass("text-[15px]", "leading-[1.65]");
+    expect(container.querySelector("h1")).toHaveClass("text-2xl", "mt-5");
+    expect(container.querySelector("p")).toHaveClass("my-1.5");
+  });
+
+  it("wraps long links and inline code inside narrow previews", () => {
+    const { container } = render(
+      <MarkdownViewer variant="document">
+        {"[polymer entity](https://data.rcsb.org/rest/v1/core/polymer_entity/{id}/1)\n\n`data.rcsb.org/rest/v1/core/polymer_entity/{id}/1`"}
+      </MarkdownViewer>,
+    );
+    expect(container.querySelector("a")).toHaveClass("[overflow-wrap:anywhere]");
+    expect(container.querySelector("code")).toHaveClass("[overflow-wrap:anywhere]");
+  });
+});

@@ -37,6 +37,10 @@ import { useScrollMemory } from "@/lib/ui";
 import { cn } from "@/lib/ui";
 import { previewPolicy } from "@/lib/artifacts/preview-policy";
 
+/** Keep the Markdown DOM bounded. Full text is fetched only when requested. */
+const MARKDOWN_PREVIEW_BYTES = 2 * 1024 * 1024;
+const MARKDOWN_PREVIEW_SIZE_LABEL = "2 MB";
+
 /**
  * Right-pane preview for any workspace file. Strategy (no format conversion):
  * pdf / image / html — served from the local file server (http://127.0.0.1)
@@ -82,6 +86,7 @@ export function FilePreviewInspector({
 
   const [url, setUrl] = useState<string | null>(null);
   const [text, setText] = useState<string | null>(data.content ?? null);
+  const [textTruncated, setTextTruncated] = useState(false);
   const [bytes, setBytes] = useState<ArrayBuffer | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +97,9 @@ export function FilePreviewInspector({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
+  const [fullTextLoading, setFullTextLoading] = useState(false);
+  const [fullTextError, setFullTextError] = useState<string | null>(null);
+  const fullTextLoadPathRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -102,6 +110,7 @@ export function FilePreviewInspector({
     // what the NEW file needs — without this, the previous file's text/url/bytes
     // would linger and bleed into the new preview.
     setText(data.content ?? null);
+    setTextTruncated(false);
     setUrl(null);
     setBytes(null);
     setEditing(false);
@@ -109,6 +118,9 @@ export function FilePreviewInspector({
     setDraft(null);
     setSaveError(null);
     setSaveNotice(null);
+    setFullTextLoading(false);
+    setFullTextError(null);
+    fullTextLoadPathRef.current = null;
     (async () => {
       try {
         if (needsUrl) {
@@ -121,9 +133,17 @@ export function FilePreviewInspector({
           }
         }
         if (needsText && data.content === undefined) {
-          const f = await readArtifact(data.path, data.root, cwd);
+          const f = await readArtifact(
+            data.path,
+            data.root,
+            cwd,
+            kind === "markdown" ? MARKDOWN_PREVIEW_BYTES : undefined,
+          );
           if (cancelled) return;
-          if (f && f.encoding === "utf8") setText(f.data);
+          if (f && f.encoding === "utf8") {
+            setText(f.data);
+            setTextTruncated(Boolean(f.truncated));
+          }
           else if (f) setError(t("filePreview.binaryTextUnsupported"));
           else setError(t("filePreview.fileUnavailable"));
         }
@@ -148,11 +168,44 @@ export function FilePreviewInspector({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cwd, data.path, data.content, data.root, kind, needsUrl, needsText, needsBytes]);
 
+  const loadFullText = async () => {
+    if (!textTruncated || fullTextLoading) return;
+    const targetPath = data.path;
+    fullTextLoadPathRef.current = targetPath;
+    setFullTextLoading(true);
+    setFullTextError(null);
+    try {
+      const f = await readArtifact(targetPath, data.root, cwd);
+      if (fullTextLoadPathRef.current !== targetPath) return;
+      if (f && f.encoding === "utf8") {
+        setText(f.data);
+        setTextTruncated(false);
+      } else if (f) {
+        setFullTextError(t("filePreview.binaryTextUnsupported"));
+      } else {
+        setFullTextError(t("filePreview.fileUnavailable"));
+      }
+    } catch (cause) {
+      if (fullTextLoadPathRef.current === targetPath) {
+        setFullTextError(cause instanceof Error ? cause.message : String(cause));
+      }
+    } finally {
+      if (fullTextLoadPathRef.current === targetPath) {
+        fullTextLoadPathRef.current = null;
+        setFullTextLoading(false);
+      }
+    }
+  };
+
   const canToggle = policy.supportsCode;
 
   // Editable text files: plain code/text, markdown, csv and html (html stays
   // read-only in its browser preview tab — editing happens on the code tab).
-  const editable = (kind === "text" || kind === "markdown" || kind === "table" || kind === "html") && !loading && !error && text !== null;
+  const editable = (kind === "text" || kind === "markdown" || kind === "table" || kind === "html")
+    && !loading
+    && !error
+    && !textTruncated
+    && text !== null;
   const canSave = editing && draft !== null && !saving;
 
   // The inspector instance is reused across files (the same component stays
@@ -335,6 +388,10 @@ export function FilePreviewInspector({
               url={url}
               text={text}
               bytes={bytes}
+              textTruncated={textTruncated}
+              fullTextLoading={fullTextLoading}
+              fullTextError={fullTextError}
+              onLoadFullText={() => void loadFullText()}
               showCode={tab === "code"}
               filename={data.filename}
               path={data.path}
@@ -355,6 +412,10 @@ function Body({
   url,
   text,
   bytes,
+  textTruncated,
+  fullTextLoading,
+  fullTextError,
+  onLoadFullText,
   showCode,
   filename,
   path,
@@ -366,6 +427,10 @@ function Body({
   url: string | null;
   text: string | null;
   bytes: ArrayBuffer | null;
+  textTruncated: boolean;
+  fullTextLoading: boolean;
+  fullTextError: string | null;
+  onLoadFullText: () => void;
   showCode: boolean;
   filename: string;
   path: string;
@@ -469,9 +534,17 @@ function Body({
   if (kind === "markdown") {
     if (showCode) {
       return text !== null ? (
-        <div className="p-3">
-          <CodeViewer code={text} language="markdown" />
-        </div>
+        <>
+          <MarkdownPreviewNotice
+            truncated={textTruncated}
+            loading={fullTextLoading}
+            error={fullTextError}
+            onLoadFullText={onLoadFullText}
+          />
+          <div className="p-3">
+            <CodeViewer code={text} language="markdown" />
+          </div>
+        </>
       ) : (
         <Note text={t("filePreview.openInDesktop")} />
       );
@@ -480,7 +553,19 @@ function Body({
     // theme — the same document-neutral canvas the Office previews use.
     return text !== null ? (
       <div className="min-h-full px-2 py-2">
-        <div className="mx-auto max-w-[760px] rounded-sm bg-white px-12 py-11 shadow-[0_1px_4px_rgba(0,0,0,.25)] max-sm:px-6 max-sm:py-7">
+        <MarkdownPreviewNotice
+          truncated={textTruncated}
+          loading={fullTextLoading}
+          error={fullTextError}
+          onLoadFullText={onLoadFullText}
+        />
+        <div
+          className="mx-auto max-w-[760px] rounded-sm bg-white shadow-[0_1px_4px_rgba(0,0,0,.25)]"
+          style={{
+            paddingInline: "1rem",
+            paddingBlock: "1.25rem",
+          }}
+        >
           <MarkdownViewer variant="document" resourceContext={{ cwd: cwd ?? "", root, documentPath: path }}>{text}</MarkdownViewer>
         </div>
       </div>
@@ -575,6 +660,39 @@ function Body({
 
 function Note({ text }: { text: string }) {
   return <div className="p-4 text-sm text-muted">{text}</div>;
+}
+
+function MarkdownPreviewNotice({
+  truncated,
+  loading,
+  error,
+  onLoadFullText,
+}: {
+  truncated: boolean;
+  loading: boolean;
+  error: string | null;
+  onLoadFullText: () => void;
+}) {
+  const { t } = useTranslation();
+  if (!truncated && !error) return null;
+  return (
+    <div
+      role={error ? "alert" : "status"}
+      className="mx-auto mb-2 flex max-w-[760px] flex-wrap items-center gap-2 rounded-input border border-accent/25 bg-accent/5 px-3 py-2 text-xs text-muted"
+    >
+      <span>{error ?? t("filePreview.markdownPreviewTruncated", { size: MARKDOWN_PREVIEW_SIZE_LABEL })}</span>
+      {truncated && (
+        <button
+          type="button"
+          className="rounded-input border border-border bg-surface px-2 py-1 text-text hover:bg-surface-2 disabled:cursor-wait disabled:opacity-60"
+          onClick={onLoadFullText}
+          disabled={loading}
+        >
+          {loading ? t("filePreview.loadingFullMarkdown") : t("filePreview.loadFullMarkdown")}
+        </button>
+      )}
+    </div>
+  );
 }
 
 /** Tabular file preview with a Table ↔ Chart toggle. The Chart tab appears only

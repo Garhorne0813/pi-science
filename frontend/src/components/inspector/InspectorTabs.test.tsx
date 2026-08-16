@@ -56,6 +56,20 @@ describe("InspectorTabs", () => {
     expect(useUiStore.getState().activeInspectorTabId).toBe(inspectorTabId(second));
   });
 
+  it("does not mount an inactive preview until its tab is selected", () => {
+    const first = file("one.txt");
+    const second = file("two.txt");
+    useUiStore.getState().openInspector(first);
+    useUiStore.getState().openInspector(second);
+    render(<Harness />);
+
+    expect(screen.queryByText("one.txt content")).toBeNull();
+    expect(screen.getByText("two.txt content")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "one.txt" }));
+    expect(screen.getByText("one.txt content")).toBeInTheDocument();
+  });
+
   it("reserves fixed control space and keeps tab content at a stable height", () => {
     const first = file("one.txt");
     const second = file("two.txt");

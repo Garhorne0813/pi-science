@@ -265,7 +265,21 @@ async function readFileChunk(path: string, maxBytes: number): Promise<Buffer> {
   try {
     const buffer = Buffer.alloc(maxBytes);
     const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
-    return buffer.subarray(0, bytesRead);
+    const chunk = buffer.subarray(0, bytesRead);
+    if (bytesRead < maxBytes || isUtf8(chunk)) return chunk;
+
+    // A byte cap can land in the middle of a multi-byte UTF-8 character. Read
+    // a few bytes beyond the cap so text previews remain decodable instead of
+    // being misclassified as binary. The returned window may exceed maxBytes
+    // by at most three bytes; binary data still falls back to the original
+    // invalid chunk and is encoded as base64 by the caller.
+    const extra = Buffer.alloc(4);
+    const { bytesRead: extraBytes } = await handle.read(extra, 0, extra.length, bytesRead);
+    for (let length = 1; length <= extraBytes; length += 1) {
+      const candidate = Buffer.concat([chunk, extra.subarray(0, length)]);
+      if (isUtf8(candidate)) return candidate;
+    }
+    return chunk;
   } finally {
     await handle.close();
   }

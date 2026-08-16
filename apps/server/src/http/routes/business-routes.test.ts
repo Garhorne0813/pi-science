@@ -346,7 +346,7 @@ describe("native control-plane business routes", () => {
     expect(model).toMatchObject({ reasoning: true, thinking_levels: ["off", "high", "xhigh"] });
   });
 
-  // Requires the real pi-ai catalog (OpenCode Go); skipped when the runtime
+  // Requires the real pi-ai catalog (OpenCode Go provider); skipped when the runtime
   // is not installed (CI).
   it.skipIf(!piAiCatalogAvailable)("lists OpenCode Go from the pi-ai catalog: needs_key without credentials, configured after saving a key", async () => {
     const cwd = await workspace();
@@ -357,7 +357,7 @@ describe("native control-plane business routes", () => {
     const before = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
     const go = before.providers.find((provider: { id: string }) => provider.id === "opencode-go");
     expect(go).toMatchObject({
-      name: "OpenCode Go",
+      name: expect.stringMatching(/^OpenCode (?:Zen )?Go$/),
       credential_status: "needs_key",
       has_key: false,
       enabled: false,
@@ -788,6 +788,14 @@ describe("native control-plane business routes", () => {
     const capped = await app.inject({ method: "GET", url: `/api/files/snippet.txt?cwd=${encodeURIComponent(cwd)}&maxBytes=10` });
     expect(capped.statusCode).toBe(200);
     expect(capped.json()).toMatchObject({ path: "snippet.txt", data: "abcdefghij", size: 10, truncated: true });
+
+    // Keep a capped UTF-8 preview valid when the byte limit lands inside a
+    // multi-byte CJK character; otherwise the frontend would mistake it for
+    // binary text and refuse to render the Markdown preview.
+    await writeFile(join(cwd, "unicode.txt"), "你好世界", "utf8");
+    const unicode = await app.inject({ method: "GET", url: `/api/files/unicode.txt?cwd=${encodeURIComponent(cwd)}&maxBytes=4` });
+    expect(unicode.statusCode).toBe(200);
+    expect(unicode.json()).toMatchObject({ data: "你好", truncated: true });
 
     const full = await app.inject({ method: "GET", url: `/api/files/snippet.txt?cwd=${encodeURIComponent(cwd)}` });
     expect(full.statusCode).toBe(200);

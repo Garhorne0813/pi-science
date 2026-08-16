@@ -47,6 +47,11 @@ export function InspectorTabs({
   const closeTab = useUiStore((state) => state.closeInspectorTab);
   const [expandedTabId, setExpandedTabId] = useState<string | null>(null);
   const [zoomByTab, setZoomByTab] = useState<Record<string, number>>({});
+  // Keep visited tabs mounted so drafts and per-file view state survive tab
+  // switches, but do not parse/load every unopened preview on first render.
+  const [mountedTabIds, setMountedTabIds] = useState<Set<string>>(
+    () => (activeTabId ? new Set([activeTabId]) : new Set()),
+  );
   const expandedPanelRef = useRef<HTMLDivElement | null>(null);
   const tabScrollRef = useRef<HTMLDivElement | null>(null);
   // Focus origin of the expanded dialog, restored when it closes.
@@ -59,6 +64,16 @@ export function InspectorTabs({
       [tabId]: clampZoom(update(current[tabId] ?? 1)),
     }));
   };
+
+  useEffect(() => {
+    const validIds = new Set(tabs.map((tab) => tab.id));
+    setMountedTabIds((current) => {
+      const next = new Set([...current].filter((id) => validIds.has(id)));
+      if (activeTabId) next.add(activeTabId);
+      if (next.size === current.size && [...next].every((id) => current.has(id))) return current;
+      return next;
+    });
+  }, [activeTabId, tabs]);
 
   useEffect(() => {
     if (!expandedTabId) return;
@@ -251,6 +266,7 @@ export function InspectorTabs({
           const expanded = tab.id === expandedTabId;
           const title = tabTitle(tab.data);
           const zoom = zoomByTab[tab.id] ?? 1;
+          const mounted = active || mountedTabIds.has(tab.id);
           return (
             <div
               ref={expanded ? expandedPanelRef : undefined}
@@ -268,58 +284,60 @@ export function InspectorTabs({
                 expanded && "fixed z-50 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl",
               )}
             >
-              <ErrorBoundary>
-                <InspectorShell
-                  inspector={tab.data}
-                  onClose={() => closeTab(tab.id)}
-                  cwd={cwd}
-                  sessionId={sessionId}
-                  compactHeader
-                  contentZoom={expanded ? zoom : 1}
-                  leadingControls={tab.data.variant === "file" && expanded ? (
-                    <div className="flex items-center rounded-input bg-surface-2 p-0.5">
+              {mounted && (
+                <ErrorBoundary>
+                  <InspectorShell
+                    inspector={tab.data}
+                    onClose={() => closeTab(tab.id)}
+                    cwd={cwd}
+                    sessionId={sessionId}
+                    compactHeader
+                    contentZoom={expanded ? zoom : 1}
+                    leadingControls={tab.data.variant === "file" && expanded ? (
+                      <div className="flex items-center rounded-input bg-surface-2 p-0.5">
+                        <IconButton
+                          icon={Minus}
+                          label={t("filePreview.zoomOut")}
+                          size="compact"
+                          className="hover:bg-surface"
+                          disabled={zoom <= MIN_ZOOM}
+                          onClick={() => setTabZoom(tab.id, (current) => current - ZOOM_STEP)}
+                        />
+                        <button
+                          type="button"
+                          className="min-w-12 rounded px-1 py-0.5 text-ui-caption tabular-nums text-muted hover:bg-surface hover:text-text"
+                          aria-label={t("filePreview.resetZoom")}
+                          title={t("filePreview.resetZoom")}
+                          onClick={() => setTabZoom(tab.id, () => 1)}
+                        >
+                          {Math.round(zoom * 100)}%
+                        </button>
+                        <IconButton
+                          icon={Plus}
+                          label={t("filePreview.zoomIn")}
+                          size="compact"
+                          className="hover:bg-surface"
+                          disabled={zoom >= MAX_ZOOM}
+                          onClick={() => setTabZoom(tab.id, (current) => current + ZOOM_STEP)}
+                        />
+                      </div>
+                    ) : undefined}
+                    controls={tab.data.variant === "file" ? (
                       <IconButton
-                        icon={Minus}
-                        label={t("filePreview.zoomOut")}
+                        icon={expanded ? Minimize2 : Maximize2}
+                        label={t(expanded ? "shell.restorePanel" : "shell.maximizePanel")}
                         size="compact"
-                        className="hover:bg-surface"
-                        disabled={zoom <= MIN_ZOOM}
-                        onClick={() => setTabZoom(tab.id, (current) => current - ZOOM_STEP)}
+                        className="text-text"
+                        aria-pressed={expanded}
+                        onClick={() => {
+                          setExpandedTabId(expanded ? null : tab.id);
+                          notifyInspectorLayoutChange();
+                        }}
                       />
-                      <button
-                        type="button"
-                        className="min-w-12 rounded px-1 py-0.5 text-ui-caption tabular-nums text-muted hover:bg-surface hover:text-text"
-                        aria-label={t("filePreview.resetZoom")}
-                        title={t("filePreview.resetZoom")}
-                        onClick={() => setTabZoom(tab.id, () => 1)}
-                      >
-                        {Math.round(zoom * 100)}%
-                      </button>
-                      <IconButton
-                        icon={Plus}
-                        label={t("filePreview.zoomIn")}
-                        size="compact"
-                        className="hover:bg-surface"
-                        disabled={zoom >= MAX_ZOOM}
-                        onClick={() => setTabZoom(tab.id, (current) => current + ZOOM_STEP)}
-                      />
-                    </div>
-                  ) : undefined}
-                  controls={tab.data.variant === "file" ? (
-                    <IconButton
-                      icon={expanded ? Minimize2 : Maximize2}
-                      label={t(expanded ? "shell.restorePanel" : "shell.maximizePanel")}
-                      size="compact"
-                      className="text-text"
-                      aria-pressed={expanded}
-                      onClick={() => {
-                        setExpandedTabId(expanded ? null : tab.id);
-                        notifyInspectorLayoutChange();
-                      }}
-                    />
-                  ) : undefined}
-                />
-              </ErrorBoundary>
+                    ) : undefined}
+                  />
+                </ErrorBoundary>
+              )}
             </div>
           );
         })}
