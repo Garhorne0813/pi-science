@@ -11,7 +11,7 @@ import { ProjectReviewService } from "../../project-review/service.js";
 import { parseReviewResult, type ReviewRunRequest, type ReviewRunResult, type ReviewSubagentRunner } from "../../project-review/types.js";
 
 const cleanup: string[] = [];
-const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE, piMode: process.env.PI_SCIENCE_PI_MODE, argsLog: process.env.FAKE_PI_ARGS_LOG, stateDelay: process.env.FAKE_PI_STATE_DELAY, activeProbe: process.env.FAKE_PI_ACTIVE_PROBE, agentStartDelay: process.env.FAKE_PI_AGENT_START_DELAY, watchdog: process.env.PI_SCIENCE_EVENT_WATCHDOG_MS, sessionFile: process.env.FAKE_PI_SESSION_FILE };
+const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE, piMode: process.env.PI_SCIENCE_PI_MODE, argsLog: process.env.FAKE_PI_ARGS_LOG, stateDelay: process.env.FAKE_PI_STATE_DELAY, activeProbe: process.env.FAKE_PI_ACTIVE_PROBE, agentStartDelay: process.env.FAKE_PI_AGENT_START_DELAY, watchdog: process.env.PI_SCIENCE_EVENT_WATCHDOG_MS, sessionFile: process.env.FAKE_PI_SESSION_FILE, rejectModel: process.env.FAKE_PI_REJECT_MODEL, modelBusy: process.env.FAKE_PI_MODEL_BUSY_ATTEMPTS, recoveryRetries: process.env.PI_SCIENCE_RECOVERY_BUSY_RETRIES, recoveryRetryDelay: process.env.PI_SCIENCE_RECOVERY_BUSY_RETRY_DELAY_MS };
 
 /** Restore a captured env value: undefined means the variable was absent, so
  *  delete it (assigning undefined would store the literal string "undefined"). */
@@ -57,7 +57,7 @@ beforeEach(async () => {
     '  if (request.type === "get_state" && process.env.FAKE_PI_MODE === "idle-active-idle") { stateRequests++; const probe = promptAccepted ? reconciliationProbes++ : -1; const activeProbe = Number(process.env.FAKE_PI_ACTIVE_PROBE || 4); const active = promptAccepted && probe >= 0 && probe % (activeProbe + 1) === activeProbe; if (log) fs.appendFileSync(log, JSON.stringify({ type: "state_probe", phase: promptAccepted ? "reconciliation" : "preflight", probe, active }) + "\\n"); return respond(request, { data: { sessionId, busy: active, isStreaming: active, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }',
     '  if (request.type === "get_state" && process.env.FAKE_PI_MODE === "late-agent-start" && promptAccepted) { stateRequests++; setTimeout(() => { if (!agentStartNotified) { agentStartNotified = true; busy = true; process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); } respond(request, { data: { sessionId, busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }, Number(process.env.FAKE_PI_AGENT_START_DELAY || 10)); return; }',
     '  if (request.type === "get_state") { stateRequests++; if (process.env.FAKE_PI_MODE === "restart-fail-once" && startNumber === 2) return; if (process.env.FAKE_PI_MODE === "new-session-state-fails" && sessionId.startsWith("generated-")) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (Number(process.env.FAKE_PI_FAIL_STATE_AFTER || 0) > 0 && stateRequests > Number(process.env.FAKE_PI_FAIL_STATE_AFTER)) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (process.env.FAKE_PI_MODE === "never-starts") return respond(request, { data: { sessionId, busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); if (process.env.FAKE_PI_MODE === "delayed-agent-start") { if (stateRequests > Number(process.env.FAKE_PI_STATE_DELAY || 3)) { if (!agentStartNotified) { agentStartNotified = true; process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); } return respond(request, { data: { sessionId, busy: true, isStreaming: true, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); } return respond(request, { data: { sessionId, busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); } const orbitBusyOnly = process.env.FAKE_PI_MODE === "orbit-busy-without-agent-start"; return respond(request, { data: { sessionId, busy, isStreaming: orbitBusyOnly ? false : busy, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }',
-    '  if (request.type === "switch_session") { sessionId = JSON.parse(fs.readFileSync(request.sessionPath, "utf8").split("\\n")[0]).id; return respond(request); }',
+    '  if (request.type === "switch_session") { const sessionLines = fs.readFileSync(request.sessionPath, "utf8").split("\\n").filter(Boolean); sessionId = JSON.parse(sessionLines[0]).id; for (const line of sessionLines) { const entry = JSON.parse(line); if (entry.type === "model_change") { modelProvider = entry.provider; modelId = entry.modelId; } else if (entry.type === "thinking_level_change") { thinking = entry.thinkingLevel; } } return respond(request); }',
     '  if (request.type === "new_session" || request.type === "clone" || request.type === "fork") { sessionId = `generated-${++counter}-${process.pid}`; return respond(request); }',
     '  if (request.type === "prompt") { if (process.env.FAKE_PI_MODE === "prompt-timeout") return; if (process.env.FAKE_PI_MODE === "runs-without-events") { busy = true; respond(request); setTimeout(() => { if (process.env.FAKE_PI_SESSION_FILE) { fs.appendFileSync(process.env.FAKE_PI_SESSION_FILE, JSON.stringify({ type: "message", id: `msg-rwe-${counter++}`, parentId: null, timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "recovered reply" }] } }) + "\\n"); } if (process.env.FAKE_PI_WRITE_FILE) { fs.mkdirSync(path.dirname(process.env.FAKE_PI_WRITE_FILE), { recursive: true }); fs.writeFileSync(process.env.FAKE_PI_WRITE_FILE, "recovered artifact\\n"); } busy = false; }, 50); return; } if (process.env.FAKE_PI_MODE === "idle-active-idle" || process.env.FAKE_PI_MODE === "late-agent-start") promptAccepted = true; busy = true; respond(request); if (process.env.FAKE_PI_MODE === "turn-artifacts") { process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); setTimeout(() => { if (process.env.FAKE_PI_WRITE_FILE) { fs.mkdirSync(path.dirname(process.env.FAKE_PI_WRITE_FILE), { recursive: true }); fs.writeFileSync(process.env.FAKE_PI_WRITE_FILE, "turn artifact data\\n"); } busy = false; process.stdout.write(JSON.stringify({ type: "agent_settled", messageId: "msg-turn-1" }) + "\\n"); }, Number(process.env.FAKE_PI_SETTLE_DELAY || 50)); return; } if (process.env.FAKE_PI_MODE === "turn-artifacts-partid") { process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); setTimeout(() => { if (process.env.FAKE_PI_WRITE_FILE) { fs.mkdirSync(path.dirname(process.env.FAKE_PI_WRITE_FILE), { recursive: true }); fs.writeFileSync(process.env.FAKE_PI_WRITE_FILE, "turn artifact data\\n"); } process.stdout.write(JSON.stringify({ type: "message_update", message: { id: "msg-early" }, assistantMessageEvent: { type: "text_delta", text: "hel", contentIndex: "0" } }) + "\\n"); process.stdout.write(JSON.stringify({ type: "message_update", message: { id: "part-turn-1" }, assistantMessageEvent: { type: "text_end", text: "hello", contentIndex: "0" } }) + "\\n"); busy = false; process.stdout.write(JSON.stringify({ type: "agent_settled" }) + "\\n"); }, 50); return; } if (process.env.FAKE_PI_MODE === "stats-events") { busy = true; respond(request); process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); setTimeout(() => { process.stdout.write(JSON.stringify({ type: "message_start", message: { id: "msg-stats-1" } }) + "\\n"); process.stdout.write(JSON.stringify({ type: "message_update", message: { id: "msg-stats-1" }, assistantMessageEvent: { type: "text_delta", text: "hi" } }) + "\\n"); process.stdout.write(JSON.stringify({ type: "message_end", message: { id: "msg-stats-1" } }) + "\\n"); process.stdout.write(JSON.stringify({ type: "tool_execution_start", toolCallId: "tool-stats-1" }) + "\\n"); process.stdout.write(JSON.stringify({ type: "tool_execution_end", toolCallId: "tool-stats-1" }) + "\\n"); busy = false; process.stdout.write(JSON.stringify({ type: "agent_settled" }) + "\\n"); }, 50); return; } if (process.env.FAKE_PI_MODE !== "orbit-busy-without-agent-start" && process.env.FAKE_PI_MODE !== "never-starts" && process.env.FAKE_PI_MODE !== "delayed-agent-start" && process.env.FAKE_PI_MODE !== "idle-active-idle" && process.env.FAKE_PI_MODE !== "late-agent-start") process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); return; }',
     '  if (request.type === "compact") { if (process.env.FAKE_PI_MODE === "compact-timeout") return; return respond(request); }',
@@ -66,7 +66,7 @@ beforeEach(async () => {
     '  if (request.type === "get_available_models") return respond(request, { data: { models: [{ provider: "openrouter", id: "openai/gpt-5.1", name: "GPT-5.1", reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: null } }] } });',
     '  if (request.type === "get_available_thinking_levels") return respond(request, { data: { levels: ["off", "low", "high"] } });',
     '  if (request.type === "get_session_stats") return respond(request, { data: { contextUsage: { tokens: 32000, contextWindow: 128000, percent: 25 }, userMessages: 4, assistantMessages: 5, toolCalls: 9, toolResults: 8, totalMessages: 18, tokens: { input: 50000, output: 10000, cacheRead: 40000, cacheWrite: 5000, total: 105000 }, cost: 0.45 } });',
-    '  if (request.type === "set_model") { modelProvider = request.provider; modelId = request.modelId; return respond(request); }',
+    '  if (request.type === "set_model") { if (process.env.FAKE_PI_REJECT_MODEL === request.provider + "/" + request.modelId) return respond(request, { success: false, code: "invalid_model", error: "unknown model" }); const busyLeft = Number(process.env.FAKE_PI_MODEL_BUSY_ATTEMPTS || 0); if (busyLeft > 0) { process.env.FAKE_PI_MODEL_BUSY_ATTEMPTS = String(busyLeft - 1); return respond(request, { success: false, code: "runtime_busy", error: "Runtime is busy" }); } modelProvider = request.provider; modelId = request.modelId; return respond(request); }',
     '  if (request.type === "set_thinking_level") { if (request.level === "ultra") return process.stdout.write(JSON.stringify({ id: request.id, success: false, code: "invalid_thinking", error: "unsupported thinking" }) + "\\n"); thinking = request.level; return respond(request); }',
     '  respond(request);',
     '});',
@@ -111,6 +111,14 @@ afterEach(async () => {
   else process.env.PI_SCIENCE_PI_MODE = original.piMode;
   if (original.watchdog === undefined) delete process.env.PI_SCIENCE_EVENT_WATCHDOG_MS;
   else process.env.PI_SCIENCE_EVENT_WATCHDOG_MS = original.watchdog;
+  if (original.rejectModel === undefined) delete process.env.FAKE_PI_REJECT_MODEL;
+  else process.env.FAKE_PI_REJECT_MODEL = original.rejectModel;
+  if (original.modelBusy === undefined) delete process.env.FAKE_PI_MODEL_BUSY_ATTEMPTS;
+  else process.env.FAKE_PI_MODEL_BUSY_ATTEMPTS = original.modelBusy;
+  if (original.recoveryRetries === undefined) delete process.env.PI_SCIENCE_RECOVERY_BUSY_RETRIES;
+  else process.env.PI_SCIENCE_RECOVERY_BUSY_RETRIES = original.recoveryRetries;
+  if (original.recoveryRetryDelay === undefined) delete process.env.PI_SCIENCE_RECOVERY_BUSY_RETRY_DELAY_MS;
+  else process.env.PI_SCIENCE_RECOVERY_BUSY_RETRY_DELAY_MS = original.recoveryRetryDelay;
   delete process.env.FAKE_PI_LOG;
   delete process.env.FAKE_PI_ARGS_LOG;
   delete process.env.FAKE_PI_STARTS;
@@ -130,6 +138,21 @@ async function workspaceWithSessions(...ids: string[]): Promise<string> {
   await mkdir(directory, { recursive: true });
   for (const id of ids) await writeFile(join(directory, `${id}.jsonl`), `${JSON.stringify({ type: "session", id, cwd, timestamp: new Date().toISOString() })}\n`, "utf8");
   return realpath(cwd);
+}
+
+/** Record a session-local model/thinking switch in the session jsonl. The
+ *  real Pi Orbit restores these on switch_session (getSessionContextSettings),
+ *  shadowing the workspace configuration until it is re-applied — so tests
+ *  that verify the replay must seed the jsonl like this. */
+async function writeSessionWithLocalModel(cwd: string, id: string, provider: string, model: string, thinkingLevel: string): Promise<void> {
+  const sessionFile = join(cwd, ".pi-science", "sessions", `${id}.jsonl`);
+  const header = JSON.parse((await readFile(sessionFile, "utf8")).split("\n")[0]!) as { id: string; cwd: string };
+  const now = new Date().toISOString();
+  await writeFile(sessionFile, [
+    JSON.stringify({ type: "session", id: header.id, cwd: header.cwd, timestamp: now }),
+    JSON.stringify({ type: "model_change", id: `${id}-mc`, parentId: null, timestamp: now, provider, modelId: model }),
+    JSON.stringify({ type: "thinking_level_change", id: `${id}-tl`, parentId: `${id}-mc`, timestamp: now, thinkingLevel }),
+  ].join("\n") + "\n", "utf8");
 }
 
 const passthroughEnvironments = {
@@ -887,9 +910,95 @@ describe("Node session lifecycle", () => {
     await blankService.shutdownAll();
   });
 
+  it("re-applies the workspace model and thinking when resuming a persisted session", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-resume-config");
+    // The session jsonl records a session-local model switch; the fake Pi
+    // restores it on switch_session like the real runtime, so the workspace
+    // config must be re-applied after the switch to win over the stale record.
+    await writeSessionWithLocalModel(cwd, "session-resume-config", "deepseek", "deepseek-v4-flash", "low");
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), JSON.stringify({ model: "openrouter/openai/gpt-5.1", thinking: "high" }), "utf8");
+
+    await service.resume("session-resume-config", cwd);
+
+    const rpcLog = await readFile(process.env.FAKE_PI_LOG!, "utf8");
+    const requests = rpcLog.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { type: string; provider?: string; modelId?: string; level?: string });
+    // The workspace config is re-applied after the session switch and before
+    // the state read that confirms the resume.
+    const switchIndex = requests.findIndex((request) => request.type === "switch_session");
+    const setModelIndex = requests.findIndex((request) => request.type === "set_model");
+    const setThinkingIndex = requests.findIndex((request) => request.type === "set_thinking_level");
+    const stateIndex = requests.findIndex((request) => request.type === "get_state");
+    expect(switchIndex).toBeGreaterThanOrEqual(0);
+    expect(setModelIndex).toBeGreaterThan(switchIndex);
+    expect(setThinkingIndex).toBeGreaterThan(setModelIndex);
+    expect(stateIndex).toBeGreaterThan(setThinkingIndex);
+    expect(requests[setModelIndex]).toMatchObject({ provider: "openrouter", modelId: "openai/gpt-5.1" });
+    expect(requests[setThinkingIndex]).toMatchObject({ level: "high" });
+    // The runtime reports the workspace configuration, not the stale
+    // session-local record the fake restored on switch.
+    await expect(service.state("session-resume-config", cwd)).resolves.toMatchObject({ model: "openrouter/openai/gpt-5.1", thinking: "high" });
+    await service.shutdownAll();
+  });
+
+  it("fails loudly when the persisted workspace model is rejected on resume", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-rejected-model");
+    // The session carries its own model; the workspace config (which the
+    // runtime rejects) must still win — or activation must fail rather than
+    // silently continue on the session-local model.
+    await writeSessionWithLocalModel(cwd, "session-rejected-model", "deepseek", "deepseek-v4-flash", "low");
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), JSON.stringify({ model: "openrouter/does-not-exist", thinking: "high" }), "utf8");
+    process.env.FAKE_PI_REJECT_MODEL = "openrouter/does-not-exist";
+
+    await expect(service.resume("session-rejected-model", cwd)).resolves.toMatchObject({ success: false, code: "invalid_model" });
+    // The rejected runtime is cleaned up — no half-resumed session lingers.
+    expect(service.activeCount).toBe(0);
+    expect(service.processCount).toBe(0);
+    // A later resume attempt fails the same way instead of silently continuing
+    // with the session-local model.
+    await expect(service.resume("session-rejected-model", cwd)).resolves.toMatchObject({ success: false, code: "invalid_model" });
+    expect(service.activeCount).toBe(0);
+    expect(service.processCount).toBe(0);
+    await service.shutdownAll();
+  });
+
+  it("retries transient runtime_busy responses while re-applying the config on resume", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-busy-replay");
+    await writeSessionWithLocalModel(cwd, "session-busy-replay", "deepseek", "deepseek-v4-flash", "low");
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), JSON.stringify({ model: "openrouter/openai/gpt-5.1", thinking: "high" }), "utf8");
+    // Pi Orbit may still be settling right after switch_session and reject the
+    // first config commands with runtime_busy; the recovery path must retry.
+    process.env.FAKE_PI_MODEL_BUSY_ATTEMPTS = "2";
+    process.env.PI_SCIENCE_RECOVERY_BUSY_RETRIES = "4";
+    process.env.PI_SCIENCE_RECOVERY_BUSY_RETRY_DELAY_MS = "20";
+
+    await service.resume("session-busy-replay", cwd);
+
+    const rpcLog = await readFile(process.env.FAKE_PI_LOG!, "utf8");
+    const setModelCalls = rpcLog.split("\n").filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string })
+      .filter((request) => request.type === "set_model");
+    // Two transient busy rejections, then the replay succeeds.
+    expect(setModelCalls).toHaveLength(3);
+    // The replay eventually applied the workspace config over the stale
+    // session-local model, and the runtime stayed up.
+    await expect(service.state("session-busy-replay", cwd)).resolves.toMatchObject({ model: "openrouter/openai/gpt-5.1", thinking: "high" });
+    expect(service.activeCount).toBe(1);
+    await service.shutdownAll();
+  });
+
   it("re-applies the workspace model and thinking after a restart restores a session", async () => {
     const service = testService();
     const cwd = await workspaceWithSessions("session-replay-config");
+    // The session jsonl records a session-local model switch; the fake Pi
+    // restores it on every switch_session, so each recovery (resume AND the
+    // reload restart) must re-apply the workspace config to win over it.
+    await writeSessionWithLocalModel(cwd, "session-replay-config", "deepseek", "deepseek-v4-flash", "low");
     await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
     await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), JSON.stringify({ model: "openrouter/openai/gpt-5.1", thinking: "high" }), "utf8");
     await service.resume("session-replay-config", cwd);
@@ -898,18 +1007,21 @@ describe("Node session lifecycle", () => {
     await service.reloadConfiguration();
     const rpcLog = await readFile(process.env.FAKE_PI_LOG!, "utf8");
     const requests = rpcLog.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { type: string; provider?: string; modelId?: string; level?: string });
-    const setModel = requests.find((request) => request.type === "set_model");
+    // The resume and the reload both replay the workspace config, so scope the
+    // assertions to the reload segment (after the last session switch).
+    const switchIndex = requests.findLastIndex((request) => request.type === "switch_session");
+    expect(switchIndex).toBeGreaterThanOrEqual(0);
+    const segment = requests.slice(switchIndex);
+    const setModel = segment.find((request) => request.type === "set_model");
     expect(setModel).toMatchObject({ provider: "openrouter", modelId: "openai/gpt-5.1" });
-    const setThinking = requests.find((request) => request.type === "set_thinking_level");
+    const setThinking = segment.find((request) => request.type === "set_thinking_level");
     expect(setThinking).toMatchObject({ level: "high" });
     // Ordering: the replay happens after the restored session switch and
     // before the state read that confirms the runtime.
-    const switchIndex = requests.findLastIndex((request) => request.type === "switch_session");
-    const setModelIndex = requests.findIndex((request) => request.type === "set_model");
-    const setThinkingIndex = requests.findIndex((request) => request.type === "set_thinking_level");
-    const stateIndex = requests.findLastIndex((request) => request.type === "get_state");
-    expect(switchIndex).toBeGreaterThanOrEqual(0);
-    expect(setModelIndex).toBeGreaterThan(switchIndex);
+    const setModelIndex = segment.findIndex((request) => request.type === "set_model");
+    const setThinkingIndex = segment.findIndex((request) => request.type === "set_thinking_level");
+    const stateIndex = segment.findIndex((request) => request.type === "get_state");
+    expect(setModelIndex).toBeGreaterThan(0);
     expect(setThinkingIndex).toBeGreaterThan(setModelIndex);
     expect(stateIndex).toBeGreaterThan(setThinkingIndex);
     // The runtime reports the workspace configuration, not a stale session record.

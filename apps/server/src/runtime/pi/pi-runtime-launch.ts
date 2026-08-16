@@ -16,6 +16,12 @@ let sharedWebPort: number | null = null;
 let sharedWebToken: string | null = null;
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
 const PI_SCIENCE_SYSTEM_PROMPT = join(PROJECT_ROOT, "harness", "AGENTS.md");
+/** Outer Pi session variables that describe a Pi process this control plane
+ *  does not own (typically the shell that launched the server). They must
+ *  never leak into the managed host or its agent runtimes: Pi Orbit resolves
+ *  its own per-session values internally, and a leftover value would shadow
+ *  the workspace configuration. */
+const OUTER_SESSION_ENV_KEYS = ["PI_MODEL", "PI_PROVIDER", "PI_REASONING_LEVEL", "PI_SESSION_ID", "PI_SESSION_FILE"] as const;
 const BROWSER_QUESTIONNAIRE_ADAPTER = join(
   PROJECT_ROOT,
   "apps",
@@ -55,6 +61,17 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
   const skillPolicy = globalSkillPolicy(settings);
   const effectiveModel = config.model || (typeof settings.model === "string" ? settings.model : "");
   const effectiveThinking = config.thinking || (typeof settings.thinking === "string" ? settings.thinking : "high");
+  // The workspace model identity the agent can observe through the bash tool
+  // environment (PI_PROVIDER/PI_MODEL), derived from the same effectiveModel
+  // that is passed via --model. A value without a provider separator is kept
+  // as the model id alone; an unset model yields nulls so no stale value can
+  // reach the agent.
+  const effectiveModelSeparator = effectiveModel.indexOf("/");
+  const sessionModelEnv = effectiveModel
+    ? effectiveModelSeparator > 0
+      ? { PI_PROVIDER: effectiveModel.slice(0, effectiveModelSeparator), PI_MODEL: effectiveModel.slice(effectiveModelSeparator + 1) }
+      : { PI_PROVIDER: null, PI_MODEL: effectiveModel }
+    : { PI_PROVIDER: null, PI_MODEL: null };
   const args: string[] = [];
   let command = nodePath;
   const useRpcMode = process.env.PI_SCIENCE_PI_MODE === "rpc";
@@ -112,6 +129,15 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
     } : {}),
     ...(config.provider ? { PI_DEFAULT_PROVIDER: config.provider } : {}),
   };
+  // The Pi Orbit host and every runtime child inherit this env, so a leftover
+  // outer PI_MODEL/PI_PROVIDER/PI_REASONING_LEVEL/PI_SESSION_ID/PI_SESSION_FILE
+  // would shadow the workspace configuration passed via CLI args and the
+  // runtime descriptor — and the runtime would report the stale outer values
+  // to the agent (e.g. "what model are you?"). Remove them from the host env;
+  // the runtime boundary below replaces the model variables with the
+  // authoritative workspace values and removes the per-session identity that
+  // is only known once the runtime exists.
+  for (const key of OUTER_SESSION_ENV_KEYS) delete env[key];
   if (storedKeys && typeof storedKeys === "object") materializeApiKeysAuth(agentDir, storedKeys as Record<string, unknown>);
   materializeCustomProviders(agentDir, settings.custom_providers, env);
   materializeRuntimeSettings(agentDir, settings, config);
@@ -137,7 +163,27 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
           ...(sessionPath ? { sessionPath } : {}),
           ...(effectiveModel ? { model: effectiveModel } : {}),
           ...(effectiveModel && effectiveThinking ? { thinking: effectiveThinking } : {}),
-          runtimeEnv: Object.fromEntries(Object.entries(env).map(([key, value]) => [key, value ?? null])),
+          runtimeEnv: {
+            ...Object.fromEntries(Object.entries(env).map(([key, value]) => [key, value ?? null])),
+            // The runtime child inherits the host env, so the host's own auth
+            // token must never reach the agent: remove it (null) at the
+            // runtime boundary. PI_SESSION_ID/PI_SESSION_FILE only exist once
+            // the runtime is live, so they are removed here as well instead of
+            // leaking the outer session's values.
+            PI_ORBIT_AUTH_TOKEN: null,
+            PI_SESSION_ID: null,
+            PI_SESSION_FILE: null,
+            // The workspace model configuration is the session identity the
+            // agent can observe. Pi Orbit resolves per-command
+            // PI_PROVIDER/PI_MODEL/PI_REASONING_LEVEL from its own tool
+            // context only when that context is wired; in web mode it is not,
+            // and a nulled (or outer) value left agents misidentifying the
+            // model from unrelated shell variables such as FAST_LLM/SMART_LLM.
+            // Publish the effective workspace values instead: they match the
+            // --model/--thinking CLI args and the runtime descriptor.
+            ...sessionModelEnv,
+            ...(effectiveModel ? { PI_REASONING_LEVEL: effectiveThinking } : { PI_REASONING_LEVEL: null }),
+          },
           skillPolicy,
         },
       },

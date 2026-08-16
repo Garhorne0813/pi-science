@@ -102,6 +102,20 @@ function reconciliationDeadlineMs(): number {
   return value > 0 ? value : 120_000;
 }
 
+/** Bounded retry for recovery commands right after a session switch: the Pi
+ *  Orbit runtime may still be settling and reject config commands with
+ *  runtime_busy. Non-busy failures (unknown model, unreadable session) are
+ *  config errors and must surface immediately. */
+function recoveryBusyRetryAttempts(): number {
+  const value = Number(process.env.PI_SCIENCE_RECOVERY_BUSY_RETRIES ?? 0);
+  return value > 0 ? value : 3;
+}
+
+function recoveryBusyRetryDelayMs(): number {
+  const value = Number(process.env.PI_SCIENCE_RECOVERY_BUSY_RETRY_DELAY_MS ?? 0);
+  return value > 0 ? value : 250;
+}
+
 function idleRuntimeMs(): number {
   const configured = process.env.PI_SCIENCE_IDLE_RUNTIME_MS;
   if (configured === undefined || configured === "") return 30 * 60_000;
@@ -694,13 +708,16 @@ export class NodeSessionService {
     }
     const sessionPath = await this.repository.findPath(cwd, sessionId);
     if (!sessionPath) return { success: false, code: "not_found", error: "session not found in this workspace" };
-    const started = await this.startRuntime(cwd, effectiveConfig());
+    const config = effectiveConfig();
+    const started = await this.startRuntime(cwd, config);
     if ("error" in started) return { success: false, ...started };
     runtime = started;
-    const switched = await runtime.process.sendCommand("switch_session", { sessionPath });
-    if (!switched.success) { await this.cleanupRuntime(runtime); return failure(switched, "unable to resume session"); }
-    const state = await this.refreshState(runtime);
-    if (!state.success) { await this.cleanupRuntime(runtime); return failure(state, "unable to resume session"); }
+    // The restored session's jsonl may carry model_change events from
+    // session-local switching; the workspace configuration must win, so the
+    // model/thinking are re-applied after the switch and before the state
+    // read that confirms the resume.
+    const resumed = await this.resumeSessionWithConfig(runtime, sessionPath, config);
+    if (!resumed.success) { await this.cleanupRuntime(runtime); return failure(resumed, "unable to resume session"); }
     if (runtime.activeSessionId !== sessionId) { await this.cleanupRuntime(runtime); return { success: false, code: "session_mismatch", error: "runtime resumed a different session" }; }
     this.registerRuntime(runtime);
     return runtime;
@@ -1197,26 +1214,11 @@ export class NodeSessionService {
     }
     const started = await this.startRuntime(cwd, config, undefined, options);
     if (!("error" in started)) {
-      const switched = sessionPath
-        ? await started.process.sendCommand("switch_session", { sessionPath })
-        : { success: true };
       // The restored session's jsonl may carry model_change events from
       // session-local switching; the workspace configuration must win after a
-      // settings-driven reload, so re-apply model/thinking after the switch.
-      let replayed = switched;
-      if (switched.success && config.model && config.model.includes("/")) {
-        const separator = config.model.indexOf("/");
-        const modelResult = await started.process.sendCommand("set_model", {
-          provider: config.model.slice(0, separator),
-          modelId: config.model.slice(separator + 1),
-        });
-        replayed = modelResult.success ? replayed : modelResult;
-      }
-      if (replayed.success && config.thinking) {
-        const thinkingResult = await started.process.sendCommand("set_thinking_level", { level: config.thinking });
-        replayed = thinkingResult.success ? replayed : thinkingResult;
-      }
-      const state = replayed.success ? await this.refreshState(started) : replayed;
+      // settings-driven reload, so re-apply model/thinking after the switch
+      // and only then confirm the state.
+      const state = await this.resumeSessionWithConfig(started, sessionPath, config);
       if (state.success && started.activeSessionId) {
         started.restartPending = false;
         this.registerRuntime(started, oldId);
@@ -1233,15 +1235,8 @@ export class NodeSessionService {
   }
 
   private async applyConfig(runtime: RuntimeRecord, config: PiConfig): Promise<PiResult> {
-    if (config.model?.includes("/")) {
-      const separator = config.model.indexOf("/");
-      const result = await runtime.process.sendCommand("set_model", { provider: config.model.slice(0, separator), modelId: config.model.slice(separator + 1) });
-      if (!result.success) return result;
-    }
-    if (config.thinking) {
-      const result = await runtime.process.sendCommand("set_thinking_level", { level: config.thinking });
-      if (!result.success) return result;
-    }
+    const replayed = await this.replaySessionConfig(runtime.process, config);
+    if (!replayed.success) return replayed;
     const state = await this.refreshState(runtime);
     if (!state.success) return failure(state, "unable to confirm session configuration");
     if (!this.configMatches(runtime, config.model ?? undefined, config.thinking ?? undefined)) {
@@ -1249,6 +1244,56 @@ export class NodeSessionService {
     }
     runtime.config = { ...config };
     return { success: true };
+  }
+
+  /** Re-apply a workspace config's model + thinking on a live runtime. The
+   *  restored session jsonl may carry model_change events from session-local
+   *  switching; the workspace configuration must win on every recovery path.
+   *  Fails fast on the first rejected step (after transient busy retries) and
+   *  leaves the runtime untouched. */
+  private async replaySessionConfig(process: PiProcess, config: PiConfig): Promise<PiResult> {
+    if (config.model?.includes("/")) {
+      const separator = config.model.indexOf("/");
+      const result = await this.sendRecoveryCommand(process, "set_model", {
+        provider: config.model.slice(0, separator),
+        modelId: config.model.slice(separator + 1),
+      });
+      if (!result.success) return result;
+    }
+    if (config.thinking) {
+      const result = await this.sendRecoveryCommand(process, "set_thinking_level", { level: config.thinking });
+      if (!result.success) return result;
+    }
+    return { success: true };
+  }
+
+  /** Send one recovery command with a bounded retry on transient busy
+   *  responses. Right after switch_session the Pi Orbit runtime may still be
+   *  settling and reject config commands with runtime_busy; a short retry
+   *  absorbs that window. Any other failure (unknown model, unreadable
+   *  session) is a config/session error and fails fast — the recovery path
+   *  must never silently continue on a model the runtime rejected. */
+  private async sendRecoveryCommand(process: PiProcess, type: string, params: Record<string, unknown>): Promise<PiResult> {
+    for (let attempt = 0; ; attempt += 1) {
+      const result = await process.sendCommand(type, params);
+      if (result.success || (result.code !== "runtime_busy" && result.code !== "busy")) return result;
+      if (attempt >= recoveryBusyRetryAttempts()) return result;
+      await new Promise((resolve) => setTimeout(resolve, recoveryBusyRetryDelayMs()));
+    }
+  }
+
+  /** Switch a freshly started runtime to a persisted session, re-apply the
+   *  workspace configuration, and only then read state — the same recovery
+   *  sequence every resume/restart path uses so the workspace config is never
+   *  shadowed by session-local model records. */
+  private async resumeSessionWithConfig(runtime: RuntimeRecord, sessionPath: string | null, config: PiConfig): Promise<PiResult> {
+    const switched = sessionPath
+      ? await this.sendRecoveryCommand(runtime.process, "switch_session", { sessionPath })
+      : { success: true };
+    if (!switched.success) return switched;
+    const replayed = await this.replaySessionConfig(runtime.process, config);
+    if (!replayed.success) return replayed;
+    return this.refreshState(runtime);
   }
 
   /** Prompt-time event-stream health check (item 5). A KNOWN-dead stream
@@ -1356,10 +1401,9 @@ export class NodeSessionService {
     if (!options) return;
     const restored = await this.startRuntime(cwd, config, undefined, options);
     if ("error" in restored) return;
-    const switched = sessionPath
-      ? await restored.process.sendCommand("switch_session", { sessionPath })
-      : { success: true };
-    const state = switched.success ? await this.refreshState(restored) : switched;
+    // Restore the previous workspace configuration on the recovered runtime
+    // before confirming its state, same as every other recovery path.
+    const state = await this.resumeSessionWithConfig(restored, sessionPath, config);
     if (!state.success || !restored.activeSessionId) {
       await this.cleanupRuntime(restored);
       return;

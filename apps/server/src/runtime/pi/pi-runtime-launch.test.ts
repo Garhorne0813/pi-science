@@ -228,6 +228,127 @@ describe("Pi runtime custom provider materialization", () => {
     expect(options.env).toMatchObject(isolated);
   });
 
+  it("keeps outer Pi session variables out of the host and agent runtime env", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-env-isolation-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    const previous = {
+      model: process.env.PI_MODEL,
+      provider: process.env.PI_PROVIDER,
+      reasoning: process.env.PI_REASONING_LEVEL,
+      session: process.env.PI_SESSION_ID,
+      sessionFile: process.env.PI_SESSION_FILE,
+    };
+    process.env.PI_MODEL = "outer/model";
+    process.env.PI_PROVIDER = "outer";
+    process.env.PI_REASONING_LEVEL = "low";
+    process.env.PI_SESSION_ID = "outer-session";
+    process.env.PI_SESSION_FILE = "/tmp/outer-session.jsonl";
+    try {
+      const options = buildPiProcessOptions(cwd, { model: "openrouter/openai/gpt-5.1", thinking: "high", skills: [], extensions: [] })!;
+
+      // The host env keeps the auth token but must not carry the outer Pi
+      // session variables (they would shadow the workspace configuration).
+      expect(options.env?.PI_ORBIT_AUTH_TOKEN).toBe(options.web?.authToken);
+      expect(options.env?.PI_MODEL).toBeUndefined();
+      expect(options.env?.PI_PROVIDER).toBeUndefined();
+      expect(options.env?.PI_REASONING_LEVEL).toBeUndefined();
+      expect(options.env?.PI_SESSION_ID).toBeUndefined();
+      expect(options.env?.PI_SESSION_FILE).toBeUndefined();
+      // The runtime env explicitly removes (null) the host token and the
+      // per-session identity at the runtime boundary, and replaces the outer
+      // model variables with the authoritative workspace configuration so the
+      // agent's bash tool can identify the real model.
+      const runtimeEnv = options.web?.runtime.runtimeEnv;
+      expect(runtimeEnv).toBeDefined();
+      expect(runtimeEnv?.PI_ORBIT_AUTH_TOKEN).toBeNull();
+      expect(runtimeEnv?.PI_SESSION_ID).toBeNull();
+      expect(runtimeEnv?.PI_SESSION_FILE).toBeNull();
+      expect(runtimeEnv?.PI_PROVIDER).toBe("openrouter");
+      expect(runtimeEnv?.PI_MODEL).toBe("openai/gpt-5.1");
+      expect(runtimeEnv?.PI_REASONING_LEVEL).toBe("high");
+      expect(options.web?.runtime.model).toBe("openrouter/openai/gpt-5.1");
+      expect(options.web?.runtime.thinking).toBe("high");
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        const name = { model: "PI_MODEL", provider: "PI_PROVIDER", reasoning: "PI_REASONING_LEVEL", session: "PI_SESSION_ID", sessionFile: "PI_SESSION_FILE" }[key as keyof typeof previous]!;
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
+  it("strips outer Pi session variables injected through the workspace environment too", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-env-isolation-workspace-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    process.env.PI_MODEL = "outer/model";
+    try {
+      const options = buildPiProcessOptions(cwd, undefined, undefined, {
+        PATH: join(cwd, ".venv", "bin"),
+        PI_MODEL: "workspace/model",
+        PI_SESSION_ID: "workspace-session",
+      })!;
+
+      expect(options.env?.PI_MODEL).toBeUndefined();
+      expect(options.env?.PI_SESSION_ID).toBeUndefined();
+      // Legitimate workspace environment values still reach the runtime.
+      expect(options.env?.PATH).toBe(join(cwd, ".venv", "bin"));
+      const runtimeEnv = options.web?.runtime.runtimeEnv;
+      // Without a workspace model there is nothing to expose: the outer and
+      // workspace-injected PI_MODEL are stripped, and the per-session
+      // identity stays removed at the boundary.
+      expect(runtimeEnv?.PI_MODEL).toBeNull();
+      expect(runtimeEnv?.PI_PROVIDER).toBeNull();
+      expect(runtimeEnv?.PI_REASONING_LEVEL).toBeNull();
+      expect(runtimeEnv?.PI_SESSION_ID).toBeNull();
+      expect(runtimeEnv?.PATH).toBe(join(cwd, ".venv", "bin"));
+    } finally {
+      delete process.env.PI_MODEL;
+    }
+  });
+
+  it("exposes the effective workspace model/provider/thinking to the agent bash env", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-session-env-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    const previous = process.env.PI_MODEL;
+    process.env.PI_MODEL = "outer/model";
+    try {
+      const options = buildPiProcessOptions(cwd, { model: "custom-custom-api/minimax-m2.5", thinking: "high", skills: [], extensions: [] })!;
+
+      const runtimeEnv = options.web?.runtime.runtimeEnv;
+      expect(runtimeEnv).toBeDefined();
+      // The agent's bash tool sees the real session model identity, not the
+      // outer shell value and not null.
+      expect(runtimeEnv?.PI_PROVIDER).toBe("custom-custom-api");
+      expect(runtimeEnv?.PI_MODEL).toBe("minimax-m2.5");
+      expect(runtimeEnv?.PI_REASONING_LEVEL).toBe("high");
+      expect(runtimeEnv?.PI_MODEL).not.toBe("outer/model");
+      // The runtime descriptor carries the same identity for the control plane.
+      expect(options.web?.runtime.model).toBe("custom-custom-api/minimax-m2.5");
+      expect(options.web?.runtime.thinking).toBe("high");
+    } finally {
+      if (previous === undefined) delete process.env.PI_MODEL;
+      else process.env.PI_MODEL = previous;
+    }
+  });
+
+  it("falls back to the workspace settings model when no config is passed", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-session-env-settings-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), `${JSON.stringify({ model: "deepseek/deepseek-chat", thinking: "off" })}\n`, "utf8");
+
+    const options = buildPiProcessOptions(cwd)!;
+
+    const runtimeEnv = options.web?.runtime.runtimeEnv;
+    expect(runtimeEnv?.PI_PROVIDER).toBe("deepseek");
+    expect(runtimeEnv?.PI_MODEL).toBe("deepseek-chat");
+    expect(runtimeEnv?.PI_REASONING_LEVEL).toBe("off");
+  });
+
   it("passes a manifest-discovered runtime extension exactly once", async () => {
     const runtimeRoot = join(tmpdir(), `pi-runtime-manifest-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     const cwd = join(tmpdir(), `pi-runtime-extension-workspace-${Date.now()}-${Math.random().toString(16).slice(2)}`);
