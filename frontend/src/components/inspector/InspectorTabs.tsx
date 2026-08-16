@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { Inspector } from "../../types/thread";
 import { useUiStore, type InspectorTab } from "@/lib/ui";
 import { cn } from "@/lib/ui";
+import { notifyInspectorLayoutChange } from "@/lib/ui/inspector-layout";
 import { IconButton } from "../ui/Icon";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { InspectorShell } from "./InspectorShell";
@@ -311,7 +312,10 @@ export function InspectorTabs({
                       size="compact"
                       className="text-text"
                       aria-pressed={expanded}
-                      onClick={() => setExpandedTabId(expanded ? null : tab.id)}
+                      onClick={() => {
+                        setExpandedTabId(expanded ? null : tab.id);
+                        notifyInspectorLayoutChange();
+                      }}
                     />
                   ) : undefined}
                 />

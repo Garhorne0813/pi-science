@@ -1,248 +1,194 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { GLViewer } from "3dmol";
-import { Atom, RotateCcw } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Atom } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { moleculeFormatFor } from "@/lib/viewers/molecule";
+import { INSPECTOR_LAYOUT_CHANGE_EVENT } from "@/lib/ui/inspector-layout";
 import {
-  defaultStyleMode,
-  isSmilesFile,
-  looksLikeMacromolecule,
-  moleculeFormatFor,
-  smilesToMolblock,
-  type MoleculeStyleMode,
-} from "@/lib/viewers/molecule";
-import { cn } from "@/lib/ui";
+  createMolstarViewer,
+  type MolecularSummary,
+  type MoleculeStylePreset,
+  type MolstarViewerHandle,
+} from "@/lib/viewers/molstar";
 
-const STYLE_OPTIONS: Array<{ value: MoleculeStyleMode; key: string }> = [
-  { value: "stick", key: "molecule.style.stick" },
-  { value: "sphere", key: "molecule.style.sphere" },
-  { value: "cartoon", key: "molecule.style.cartoon" },
+const STYLE_PRESETS: Array<{ id: MoleculeStylePreset; labelKey: string }> = [
+  { id: "auto", labelKey: "molecule.style.auto" },
+  { id: "cartoon", labelKey: "molecule.style.cartoon" },
+  { id: "ball-and-stick", labelKey: "molecule.style.ballAndStick" },
+  { id: "spacefill", labelKey: "molecule.style.spacefill" },
+  { id: "surface", labelKey: "molecule.style.surface" },
 ];
 
 /**
- * Interactive 3D structure viewer (P1-3) for chemical files
- * (cif/pdb/mol/mol2/sdf/xyz/pqr/cube and SMILES). 3Dmol.js renders a rotatable,
- * zoomable model entirely locally via WebGL — no service. SMILES has no
- * coordinates, so it is converted to a molblock first. The scene sits on a
- * white stage (chemistry convention), consistent in light and dark themes.
+ * Local-first Mol* structure viewer. Embedded Mol* controls expose structure
+ * representations, coloring, selections, measurements, screenshots, settings
+ * and the sequence panel without sending the loaded file to a remote service.
  */
 export function MoleculeView({ filename, text }: { filename: string; text: string }) {
   const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const viewerRef = useRef<GLViewer | null>(null);
-  const dragRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
-
-  const format = useMemo(() => moleculeFormatFor(filename), [filename]);
-  const isMacromolecule = useMemo(() => looksLikeMacromolecule(text), [text]);
-  // Cartoon depicts a residue backbone — meaningless for small molecules, and
-  // 3Dmol crashes reading a missing atom.resn. Offer it only for macromolecules.
-  const styleOptions = useMemo(
-    () => STYLE_OPTIONS.filter((o) => o.value !== "cartoon" || isMacromolecule),
-    [isMacromolecule],
-  );
-
-  const [styleMode, setStyleMode] = useState<MoleculeStyleMode>(() =>
-    defaultStyleMode(filename, text),
-  );
-  const [isDragging, setIsDragging] = useState(false);
+  const viewerRef = useRef<MolstarViewerHandle | null>(null);
+  const generationRef = useRef(0);
+  const [summary, setSummary] = useState<MolecularSummary | null>(null);
   const [rendering, setRendering] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [atomCount, setAtomCount] = useState<number | null>(null);
+  const [stylePreset, setStylePreset] = useState<MoleculeStylePreset>("auto");
+  const [styleBusy, setStyleBusy] = useState(false);
+  const format = moleculeFormatFor(filename, text);
 
-  useEffect(() => {
-    setStyleMode(defaultStyleMode(filename, text));
-  }, [filename, text]);
-
-  const resetView = useCallback(() => {
-    const v = viewerRef.current;
-    if (!v) return;
-    v.zoomTo();
-    v.render();
-  }, []);
-
-  // Build (or rebuild) the scene whenever the file or style changes.
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !format) return;
-
-    let cancelled = false;
+    const generation = ++generationRef.current;
+    let disposed = false;
     setRendering(true);
     setError(null);
-    setAtomCount(null);
-    container.replaceChildren();
+    setSummary(null);
+    setStylePreset("auto");
+    setStyleBusy(false);
 
-    (async () => {
+    void (async () => {
       try {
-        // SMILES carries no coordinates — lay it out into a molblock first.
-        const model = isSmilesFile(filename) ? await smilesToMolblock(text) : text;
-        if (cancelled) return;
-        if (!model) {
-          setError(t("molecule.noStructures"));
+        const handle = await createMolstarViewer(container);
+        if (disposed || generation !== generationRef.current) {
+          handle.dispose();
           return;
         }
-
-        const $3Dmol = await import("3dmol");
-        if (cancelled || !containerRef.current) return;
-
-        const viewer = $3Dmol.createViewer(containerRef.current, { backgroundColor: "white" });
-        viewerRef.current = viewer;
-        viewer.setBackgroundColor(0xffffff, 0);
-        viewer.addModel(model, format);
-        const count = viewer.selectedAtoms({}).length;
-        if (count === 0) {
-          setError(t("molecule.loadFailed"));
-          return;
-        }
-        applyStyle(viewer, styleMode, isMacromolecule);
-        viewer.zoomTo();
-        viewer.render();
-        setAtomCount(count);
-        requestAnimationFrame(() => {
-          if (!cancelled) {
-            viewer.resize();
-            viewer.render();
-          }
-        });
-      } catch (e) {
-        if (!cancelled) setError(t("molecule.loadFailed"));
+        viewerRef.current = handle;
+        const next = await handle.load(filename, text);
+        if (disposed || generation !== generationRef.current) return;
+        setSummary(next);
+      } catch {
+        if (!disposed && generation === generationRef.current) setError(t("molecule.loadFailed"));
       } finally {
-        if (!cancelled) setRendering(false);
+        if (!disposed && generation === generationRef.current) setRendering(false);
       }
     })();
 
     return () => {
-      cancelled = true;
-      dragRef.current = null;
-      viewerRef.current?.clear();
+      disposed = true;
+      generationRef.current += 1;
+      const handle = viewerRef.current;
       viewerRef.current = null;
-      container.replaceChildren();
+      handle?.dispose();
     };
-  }, [filename, text, format, styleMode, isMacromolecule, t]);
+  }, [filename, text, format, t]);
 
-  // Keep the scene sized to its container.
   useEffect(() => {
     const container = containerRef.current;
     if (!container || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
-      const v = viewerRef.current;
-      if (!v) return;
-      v.resize();
-      v.render();
+    let previousWidth = container.clientWidth;
+    let previousHeight = container.clientHeight;
+    let resizeFrame: number | null = null;
+    let fitFrame: number | null = null;
+    let settleTimer: ReturnType<typeof setTimeout> | null = null;
+    let fitPending = false;
+    const resizeAndFit = () => {
+      viewerRef.current?.resize();
+      if (fitFrame !== null) cancelAnimationFrame(fitFrame);
+      fitFrame = requestAnimationFrame(() => {
+        fitFrame = null;
+        viewerRef.current?.fitToViewport();
+      });
+      // Mol* animates camera changes for 160ms. A second pass after it settles
+      // prevents a stale maximize animation from winning over a restore, and
+      // catches pane layouts whose final canvas size lands a frame later.
+      if (settleTimer !== null) clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => {
+        settleTimer = null;
+        viewerRef.current?.resize();
+        viewerRef.current?.fitToViewport();
+      }, 200);
+    };
+    const scheduleResize = (refit: boolean) => {
+      fitPending ||= refit;
+      if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = null;
+        if (!fitPending) {
+          viewerRef.current?.resize();
+          return;
+        }
+        fitPending = false;
+        resizeAndFit();
+      });
+    };
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries.at(-1)?.contentRect ?? container.getBoundingClientRect();
+      const width = rect.width;
+      const height = rect.height;
+      if (previousWidth > 0 && previousHeight > 0 && width > 0 && height > 0) {
+        if (Math.abs(width - previousWidth) > 1 || Math.abs(height - previousHeight) > 1) {
+          fitPending = true;
+        }
+      }
+      previousWidth = width;
+      previousHeight = height;
+      scheduleResize(fitPending);
     });
+    const handleInspectorLayoutChange = () => scheduleResize(true);
     observer.observe(container);
-    return () => observer.disconnect();
+    window.addEventListener(INSPECTOR_LAYOUT_CHANGE_EVENT, handleInspectorLayoutChange);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener(INSPECTOR_LAYOUT_CHANGE_EVENT, handleInspectorLayoutChange);
+      if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+      if (fitFrame !== null) cancelAnimationFrame(fitFrame);
+      if (settleTimer !== null) clearTimeout(settleTimer);
+    };
   }, []);
 
-  const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.target instanceof Element && e.target.closest('[data-molecule-controls="true"]')) return;
-    if (e.button !== 0 || !viewerRef.current) return;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    dragRef.current = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
-    setIsDragging(true);
-  }, []);
-
-  const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    const v = viewerRef.current;
-    if (!drag || !v || drag.pointerId !== e.pointerId) return;
-    const dx = e.clientX - drag.x;
-    const dy = e.clientY - drag.y;
-    dragRef.current = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
-    if (Math.abs(dx) > 0.1) v.rotate(dx * 0.45, "y");
-    if (Math.abs(dy) > 0.1) v.rotate(dy * 0.45, "x");
-    v.render();
-  }, []);
-
-  const endDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (dragRef.current?.pointerId !== e.pointerId) return;
-    dragRef.current = null;
-    setIsDragging(false);
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
-  }, []);
-
-  const onWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
-    const v = viewerRef.current;
-    if (!v) return;
-    v.zoom(e.deltaY > 0 ? 0.9 : 1.1);
-    v.render();
-  }, []);
+  const changeStyle = async (preset: MoleculeStylePreset) => {
+    const handle = viewerRef.current;
+    if (!handle || rendering || styleBusy) return;
+    setStyleBusy(true);
+    setError(null);
+    try {
+      await handle.applyStylePreset(preset);
+      setStylePreset(preset);
+    } catch {
+      setError(t("molecule.styleFailed"));
+    } finally {
+      setStyleBusy(false);
+    }
+  };
 
   if (!format) return <div className="p-4 text-sm text-muted">{t("molecule.notChemical")}</div>;
 
   return (
-    <div
-      className={cn(
-        "relative h-full min-h-[420px] w-full touch-none select-none overflow-hidden bg-white",
-        isDragging ? "cursor-grabbing" : "cursor-grab",
-      )}
-      data-molecule-viewer="true"
-      onPointerDownCapture={onPointerDown}
-      onPointerMoveCapture={onPointerMove}
-      onPointerUpCapture={endDrag}
-      onPointerCancelCapture={endDrag}
-      onWheel={onWheel}
-    >
-      <div ref={containerRef} className="absolute inset-0" aria-label={t("molecule.viewerLabel")} />
-
+    <div className="flex h-full min-h-[420px] w-full flex-col overflow-hidden bg-white" data-molecule-viewer="true">
       <div
-        className="ui-popover absolute left-3 top-3 flex items-center gap-2 rounded-input bg-surface/90 p-1 backdrop-blur"
-        data-molecule-controls="true"
+        className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-surface px-2 py-1.5"
+        role="toolbar"
+        aria-label={t("molecule.styleToolbar")}
       >
-        <div className="flex items-center gap-1 px-1.5 text-xs font-medium text-muted">
-          <Atom size={13} /> {"3D"}
-        </div>
-        <div className="flex rounded bg-surface-2 p-0.5">
-          {styleOptions.map((o) => (
-            <button
-              key={o.value}
-              type="button"
-              onClick={() => setStyleMode(o.value)}
-              className={cn(
-                "rounded px-2 py-1 text-xs font-medium transition-colors",
-                styleMode === o.value ? "bg-surface text-text shadow-sm" : "text-muted hover:text-text",
-              )}
-            >
-              {t(o.key)}
-            </button>
-          ))}
-        </div>
-        <button
-          type="button"
-          onClick={resetView}
-          aria-label={t("molecule.resetView")}
-          title={t("molecule.resetView")}
-          className="flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-text"
-        >
-          <RotateCcw size={13} />
-        </button>
+        {STYLE_PRESETS.map(({ id, labelKey }) => (
+          <button
+            key={id}
+            type="button"
+            aria-pressed={stylePreset === id}
+            disabled={rendering || styleBusy || !summary}
+            onClick={() => void changeStyle(id)}
+            className={`shrink-0 rounded-[5px] px-2 py-1 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+              stylePreset === id ? "bg-accent text-white" : "text-muted hover:bg-surface-2 hover:text-text"
+            }`}
+          >
+            {t(labelKey)}
+          </button>
+        ))}
       </div>
-
-      <div className="ui-popover pointer-events-none absolute bottom-3 right-3 rounded-input bg-surface/90 px-3 py-1.5 text-xs text-muted backdrop-blur">
-        <span className="font-medium text-text">{format.toUpperCase()}</span>
-        {atomCount !== null && <span className="ml-2">{t("molecule.atomCount", { count: atomCount })}</span>}
-      </div>
-
-      {(rendering || error) && (
-        <div className="ui-popover pointer-events-none absolute bottom-3 left-3 max-w-[70%] rounded-input bg-surface/95 px-3 py-1.5 text-xs text-muted backdrop-blur">
-          {rendering ? t("molecule.rendering") : error}
+      <div className="relative min-h-0 flex-1">
+        <div ref={containerRef} className="absolute inset-0" aria-label={t("molecule.viewerLabel")} />
+        <div className="ui-popover pointer-events-none absolute bottom-3 right-3 z-10 rounded-input bg-surface/90 px-3 py-1.5 text-xs text-muted backdrop-blur">
+          <span className="inline-flex items-center gap-1 font-medium text-text"><Atom size={12} /> Mol*</span>
+          <span className="ml-2">{(summary?.format ?? format).toUpperCase()}</span>
+          {summary && <span className="ml-2">{t("molecule.atomCount", { count: summary.atomCount })}</span>}
         </div>
-      )}
+        {(rendering || error) && (
+          <div className="ui-popover pointer-events-none absolute bottom-3 left-3 z-10 max-w-[70%] rounded-input bg-surface/95 px-3 py-1.5 text-xs text-muted backdrop-blur">
+            {rendering ? t("molecule.rendering") : error}
+          </div>
+        )}
+      </div>
     </div>
   );
-}
-
-/** Apply a render style, mirroring 3Dmol's Jmol color scheme conventions. */
-function applyStyle(viewer: GLViewer, mode: MoleculeStyleMode, isMacromolecule: boolean) {
-  if (mode === "sphere") {
-    viewer.setStyle({}, { sphere: { colorscheme: "Jmol", scale: 0.36 } });
-    return;
-  }
-  // Cartoon needs a residue backbone; on a small molecule 3Dmol dereferences a
-  // missing atom.resn and throws, so only draw it for macromolecules.
-  if (mode === "cartoon" && isMacromolecule) {
-    viewer.setStyle({}, { cartoon: { color: "spectrum" } });
-    // Ligands/hetero atoms have no secondary structure — show them as sticks.
-    viewer.setStyle({ hetflag: true }, { stick: { colorscheme: "Jmol", radius: 0.12 } });
-    return;
-  }
-  viewer.setStyle({}, { stick: { colorscheme: "Jmol", radius: 0.18 }, sphere: { colorscheme: "Jmol", scale: 0.26 } });
 }

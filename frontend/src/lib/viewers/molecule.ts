@@ -1,23 +1,26 @@
 // Chemical-structure helpers (P1-3). Pure and WebGL-free so they unit-test in
-// jsdom; the interactive 3D depiction happens in MoleculeView via 3Dmol.js.
+// jsdom; the interactive 3D depiction happens in MoleculeView via Mol*.
 
-/** 3Dmol.js render styles the viewer exposes. */
+/** Product-level render styles. Mol* exposes additional representations in its controls. */
 export type MoleculeStyleMode = "stick" | "sphere" | "cartoon";
 
-/** File extension → the format string 3Dmol.js expects in `addModel`. */
+/** Formats accepted by the local Mol* loader. */
+export type MoleculeFormat = "mmcif" | "cifCore" | "cube" | "mol" | "mol2" | "pdb" | "pqr" | "sdf" | "xyz";
+
+/** File extension → the Mol* parser used for local in-memory data. */
 const MOLECULE_FORMATS: Record<string, string> = {
-  cif: "cif",
+  cif: "mmcif",
   cube: "cube",
-  mcif: "cif",
-  mmcif: "cif",
-  mol: "sdf",
+  mcif: "mmcif",
+  mmcif: "mmcif",
+  mol: "mol",
   mol2: "mol2",
   pdb: "pdb",
   pqr: "pqr",
   sdf: "sdf",
   xyz: "xyz",
   // SMILES has no coordinates; it is converted to a molblock first (see
-  // smilesToMolblock) and then handed to 3Dmol as an "sdf" model.
+  // smilesToMolblock) and then handed to Mol* as an SDF model.
   smi: "sdf",
   smiles: "sdf",
 };
@@ -30,9 +33,13 @@ function extOf(filename: string): string {
   return dot >= 0 ? filename.slice(dot + 1).toLowerCase() : "";
 }
 
-/** The 3Dmol format for a file, or null when it is not a molecule file. */
-export function moleculeFormatFor(filename: string): string | null {
-  return MOLECULE_FORMATS[extOf(filename)] ?? null;
+/** The Mol* format for a file, or null when it is not a molecule file. */
+export function moleculeFormatFor(filename: string, content?: string): MoleculeFormat | null {
+  const ext = extOf(filename);
+  if (ext === "cif" && content && /_atom_site_(?:fract_[xyz]|type_symbol)/i.test(content) && !/_atom_site\.(?:label_asym_id|auth_asym_id)/i.test(content)) {
+    return "cifCore";
+  }
+  return (MOLECULE_FORMATS[ext] as MoleculeFormat | undefined) ?? null;
 }
 
 export function isSmilesFile(filename: string): boolean {
@@ -60,7 +67,7 @@ export function defaultStyleMode(filename: string, content: string): MoleculeSty
 /**
  * Convert a `.smi` / `.smiles` file (one `<SMILES> [name]` per line, `#`
  * comments skipped) into a single SDF string with 2D coordinates, so the same
- * 3D viewer can render it. Returns null if no line parses. openchemlib is
+ * Mol* can render it. Returns null if no line parses. openchemlib is
  * loaded lazily to keep it out of the main bundle.
  */
 export async function smilesToMolblock(text: string): Promise<string | null> {

@@ -564,7 +564,10 @@ describe("subagent research loop", () => {
     const cwd = await workspace();
     let complete = async () => {};
     const executionJobs = hookedJobCoordinator(async (surface) => { if (surface === "research-loop") await complete(); });
-    const coordinator = new ResearchLoopCoordinator(executionJobs, new SleepingRunner());
+    // This case exercises publication ordering, not descendant-process cleanup
+    // (covered below). Use one exec'd process so a Windows cancellation racing
+    // process startup cannot orphan a just-spawned grandchild with open pipes.
+    const coordinator = new ResearchLoopCoordinator(executionJobs, new SleepingRunner(`exec ${nodeSleep}\n`));
     coordinators.push(coordinator);
     const loop = await configuredLoop(coordinator, cwd);
     complete = async () => { await coordinator.action(cwd, loop.loop_id, "complete"); };

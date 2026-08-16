@@ -4,4 +4,5 @@ packages:
   - frontend
 
 allowBuilds:
+  '@scarf/scarf': false
   esbuild: true
