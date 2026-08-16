@@ -101,6 +101,21 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
   if (url.startsWith("/api/sessions/s1/messages/index")) {
     return Promise.resolve(jsonResponse({ messages: [], snapshot_version: "" }));
   }
+  if (url.startsWith("/api/sessions/s1/stats")) {
+    return Promise.resolve(jsonResponse({ ok: true, stats: {
+      userMessages: 2,
+      assistantMessages: 2,
+      toolCalls: 3,
+      toolResults: 3,
+      totalMessages: 7,
+      tokens: { input: 1000, output: 500, cacheRead: 800, cacheWrite: 0, total: 1500 },
+      llmMs: 3000,
+      toolMs: 1000,
+      ttftMs: 200,
+      ttftSteps: 2,
+      decodeMs: 2500,
+    } }));
+  }
   if (url.includes("/commands?")) return Promise.resolve(jsonResponse({ commands: [] }));
   if (url.startsWith("/api/project-memory/research-loops")) return Promise.resolve(jsonResponse({ loops: [] }));
   if (method === "PUT" && url.startsWith("/api/settings/model")) {
@@ -245,6 +260,7 @@ beforeEach(() => {
     contextPercent: null,
     compactionEnabled: true,
     compactionThresholdPercent: null,
+    sessionStats: null,
     pendingInteraction: null,
     pendingQuestionnaire: null,
     fileRevision: 0,
@@ -254,6 +270,13 @@ beforeEach(() => {
     sendPrompt: vi.fn(async (): Promise<string | null> => null),
     abort: vi.fn(async () => undefined),
     createNewSession: vi.fn(async () => "s2"),
+    // Session-local model changes go through the runtime store action; the
+    // default stub mirrors the real action's success path (apply model/thinking
+    // to the store, keep the session id) without needing a Pi client.
+    setModel: vi.fn(async (model: string, thinking?: string) => {
+      useRuntimeStore.setState({ model, thinking: thinking ?? null });
+      return SESSION_ID;
+    }),
   });
 });
 
@@ -622,12 +645,10 @@ describe("stable Virtuoso footer", () => {
 });
 
 describe("model change optimistic rollback", () => {
-  it("rolls back both model and thinking when the settings save fails", async () => {
+  it("rolls back both model and thinking when the session model save fails", async () => {
     let rejectSave: (error: Error) => void = () => undefined;
-    const savePending = new Promise<Response>((_resolve, reject) => { rejectSave = reject; });
-    overrides.push((url, init) => (
-      (init.method || "GET").toUpperCase() === "PUT" && url.startsWith("/api/settings/model") ? savePending : null
-    ));
+    const savePending = new Promise<never>((_resolve, reject) => { rejectSave = reject; });
+    useRuntimeStore.setState({ setModel: vi.fn(() => savePending) });
     await renderReady();
 
     const control = screen.getByTestId("model-control");
@@ -641,21 +662,17 @@ describe("model change optimistic rollback", () => {
     expect(screen.getByTestId("model-control")).toHaveAttribute("data-thinking", "medium");
 
     await act(async () => {
-      rejectSave(new Error("settings unavailable"));
+      rejectSave(new Error("runtime unavailable"));
       await savePending.catch(() => undefined);
     });
 
     await waitFor(() => expect(screen.getByTestId("model-control")).toHaveAttribute("data-model", "prov/m1"));
     expect(screen.getByTestId("model-control")).toHaveAttribute("data-thinking", "high");
-    expect(screen.getByTitle("settings unavailable")).toBeInTheDocument();
+    expect(screen.getByTitle("runtime unavailable")).toBeInTheDocument();
   });
 
   it("rolls back a failed thinking-level change", async () => {
-    overrides.push((url, init) => (
-      (init.method || "GET").toUpperCase() === "PUT" && url.startsWith("/api/settings/model")
-        ? Promise.resolve(jsonResponse({ error: "thinking rejected" }, 500))
-        : null
-    ));
+    useRuntimeStore.setState({ setModel: vi.fn(async () => { throw new Error("thinking rejected"); }) });
     await renderReady();
 
     fireEvent.click(screen.getByRole("button", { name: "pick thinking low" }));
@@ -1227,5 +1244,35 @@ describe("defensive thread shape and copy actions (docs/pr30markdown.md 3.4/3.5/
 
     const copyButtons = screen.getAllByRole("button", { name: "Copy" });
     expect(copyButtons).toHaveLength(1);
+  });
+});
+
+describe("session stats line", () => {
+  it("mounts below the composer and renders the whole-session cumulative stats", async () => {
+    useRuntimeStore.setState({
+      thread: { blocks: [userBlock("u1", "hello")], index: { u1: 0 }, loaded: true },
+    });
+    await renderReady();
+    const line = await screen.findByLabelText("Session stats");
+    expect(line.textContent).toContain("2 turns");
+    // Tool timing is rendered as a duration (DeepSeek-aligned format), not a count.
+    expect(line.textContent).toContain("Tool call 1.0s");
+    expect(line.textContent).toContain("500"); // output tokens
+  });
+
+  it("hides the stats line for a brand-new session with no turns", async () => {
+    overrides.push((url) => url.startsWith("/api/sessions/s1/stats")
+      ? Promise.resolve(jsonResponse({ ok: true, stats: {
+        userMessages: 0,
+        assistantMessages: 0,
+        toolCalls: 0,
+        toolResults: 0,
+        totalMessages: 0,
+        tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      } }))
+      : null);
+    useRuntimeStore.setState({ sessionStats: null });
+    await renderReady();
+    expect(screen.queryByLabelText("Session stats")).toBeNull();
   });
 });

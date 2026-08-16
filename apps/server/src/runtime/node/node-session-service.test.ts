@@ -13,6 +13,13 @@ import { parseReviewResult, type ReviewRunRequest, type ReviewRunResult, type Re
 const cleanup: string[] = [];
 const original = { home: process.env.PI_SCIENCE_HOME, cli: process.env.PI_CLI_PATH, node: process.env.PI_NODE_PATH, timeout: process.env.PI_SCIENCE_RPC_TIMEOUT_MS, delay: process.env.PI_SCIENCE_RECONCILE_DELAY_MS, deadline: process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS, idle: process.env.PI_SCIENCE_IDLE_RUNTIME_MS, mode: process.env.FAKE_PI_MODE, piMode: process.env.PI_SCIENCE_PI_MODE, argsLog: process.env.FAKE_PI_ARGS_LOG, stateDelay: process.env.FAKE_PI_STATE_DELAY, activeProbe: process.env.FAKE_PI_ACTIVE_PROBE, agentStartDelay: process.env.FAKE_PI_AGENT_START_DELAY, watchdog: process.env.PI_SCIENCE_EVENT_WATCHDOG_MS, sessionFile: process.env.FAKE_PI_SESSION_FILE };
 
+/** Restore a captured env value: undefined means the variable was absent, so
+ *  delete it (assigning undefined would store the literal string "undefined"). */
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
 beforeEach(async () => {
   const root = join(tmpdir(), `pi-science-node-service-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   cleanup.push(root);
@@ -52,12 +59,13 @@ beforeEach(async () => {
     '  if (request.type === "get_state") { stateRequests++; if (process.env.FAKE_PI_MODE === "restart-fail-once" && startNumber === 2) return; if (process.env.FAKE_PI_MODE === "new-session-state-fails" && sessionId.startsWith("generated-")) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (Number(process.env.FAKE_PI_FAIL_STATE_AFTER || 0) > 0 && stateRequests > Number(process.env.FAKE_PI_FAIL_STATE_AFTER)) return respond(request, { success: false, code: "state_failed", error: "state unavailable" }); if (process.env.FAKE_PI_MODE === "never-starts") return respond(request, { data: { sessionId, busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); if (process.env.FAKE_PI_MODE === "delayed-agent-start") { if (stateRequests > Number(process.env.FAKE_PI_STATE_DELAY || 3)) { if (!agentStartNotified) { agentStartNotified = true; process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); } return respond(request, { data: { sessionId, busy: true, isStreaming: true, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); } return respond(request, { data: { sessionId, busy: false, isStreaming: false, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); } const orbitBusyOnly = process.env.FAKE_PI_MODE === "orbit-busy-without-agent-start"; return respond(request, { data: { sessionId, busy, isStreaming: orbitBusyOnly ? false : busy, isCompacting: false, pendingMessageCount: 0, model: { provider: modelProvider, id: modelId }, thinkingLevel: thinking } }); }',
     '  if (request.type === "switch_session") { sessionId = JSON.parse(fs.readFileSync(request.sessionPath, "utf8").split("\\n")[0]).id; return respond(request); }',
     '  if (request.type === "new_session" || request.type === "clone" || request.type === "fork") { sessionId = `generated-${++counter}-${process.pid}`; return respond(request); }',
-    '  if (request.type === "prompt") { if (process.env.FAKE_PI_MODE === "prompt-timeout") return; if (process.env.FAKE_PI_MODE === "runs-without-events") { busy = true; respond(request); setTimeout(() => { if (process.env.FAKE_PI_SESSION_FILE) { fs.appendFileSync(process.env.FAKE_PI_SESSION_FILE, JSON.stringify({ type: "message", id: `msg-rwe-${counter++}`, parentId: null, timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "recovered reply" }] } }) + "\\n"); } if (process.env.FAKE_PI_WRITE_FILE) { fs.mkdirSync(path.dirname(process.env.FAKE_PI_WRITE_FILE), { recursive: true }); fs.writeFileSync(process.env.FAKE_PI_WRITE_FILE, "recovered artifact\\n"); } busy = false; }, 50); return; } if (process.env.FAKE_PI_MODE === "idle-active-idle" || process.env.FAKE_PI_MODE === "late-agent-start") promptAccepted = true; busy = true; respond(request); if (process.env.FAKE_PI_MODE === "turn-artifacts") { process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); setTimeout(() => { if (process.env.FAKE_PI_WRITE_FILE) { fs.mkdirSync(path.dirname(process.env.FAKE_PI_WRITE_FILE), { recursive: true }); fs.writeFileSync(process.env.FAKE_PI_WRITE_FILE, "turn artifact data\\n"); } busy = false; process.stdout.write(JSON.stringify({ type: "agent_settled", messageId: "msg-turn-1" }) + "\\n"); }, Number(process.env.FAKE_PI_SETTLE_DELAY || 50)); return; } if (process.env.FAKE_PI_MODE === "turn-artifacts-partid") { process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); setTimeout(() => { if (process.env.FAKE_PI_WRITE_FILE) { fs.mkdirSync(path.dirname(process.env.FAKE_PI_WRITE_FILE), { recursive: true }); fs.writeFileSync(process.env.FAKE_PI_WRITE_FILE, "turn artifact data\\n"); } process.stdout.write(JSON.stringify({ type: "message_update", message: { id: "msg-early" }, assistantMessageEvent: { type: "text_delta", text: "hel", contentIndex: "0" } }) + "\\n"); process.stdout.write(JSON.stringify({ type: "message_update", message: { id: "part-turn-1" }, assistantMessageEvent: { type: "text_end", text: "hello", contentIndex: "0" } }) + "\\n"); busy = false; process.stdout.write(JSON.stringify({ type: "agent_settled" }) + "\\n"); }, 50); return; } if (process.env.FAKE_PI_MODE !== "orbit-busy-without-agent-start" && process.env.FAKE_PI_MODE !== "never-starts" && process.env.FAKE_PI_MODE !== "delayed-agent-start" && process.env.FAKE_PI_MODE !== "idle-active-idle" && process.env.FAKE_PI_MODE !== "late-agent-start") process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); return; }',
+    '  if (request.type === "prompt") { if (process.env.FAKE_PI_MODE === "prompt-timeout") return; if (process.env.FAKE_PI_MODE === "runs-without-events") { busy = true; respond(request); setTimeout(() => { if (process.env.FAKE_PI_SESSION_FILE) { fs.appendFileSync(process.env.FAKE_PI_SESSION_FILE, JSON.stringify({ type: "message", id: `msg-rwe-${counter++}`, parentId: null, timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "recovered reply" }] } }) + "\\n"); } if (process.env.FAKE_PI_WRITE_FILE) { fs.mkdirSync(path.dirname(process.env.FAKE_PI_WRITE_FILE), { recursive: true }); fs.writeFileSync(process.env.FAKE_PI_WRITE_FILE, "recovered artifact\\n"); } busy = false; }, 50); return; } if (process.env.FAKE_PI_MODE === "idle-active-idle" || process.env.FAKE_PI_MODE === "late-agent-start") promptAccepted = true; busy = true; respond(request); if (process.env.FAKE_PI_MODE === "turn-artifacts") { process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); setTimeout(() => { if (process.env.FAKE_PI_WRITE_FILE) { fs.mkdirSync(path.dirname(process.env.FAKE_PI_WRITE_FILE), { recursive: true }); fs.writeFileSync(process.env.FAKE_PI_WRITE_FILE, "turn artifact data\\n"); } busy = false; process.stdout.write(JSON.stringify({ type: "agent_settled", messageId: "msg-turn-1" }) + "\\n"); }, Number(process.env.FAKE_PI_SETTLE_DELAY || 50)); return; } if (process.env.FAKE_PI_MODE === "turn-artifacts-partid") { process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); setTimeout(() => { if (process.env.FAKE_PI_WRITE_FILE) { fs.mkdirSync(path.dirname(process.env.FAKE_PI_WRITE_FILE), { recursive: true }); fs.writeFileSync(process.env.FAKE_PI_WRITE_FILE, "turn artifact data\\n"); } process.stdout.write(JSON.stringify({ type: "message_update", message: { id: "msg-early" }, assistantMessageEvent: { type: "text_delta", text: "hel", contentIndex: "0" } }) + "\\n"); process.stdout.write(JSON.stringify({ type: "message_update", message: { id: "part-turn-1" }, assistantMessageEvent: { type: "text_end", text: "hello", contentIndex: "0" } }) + "\\n"); busy = false; process.stdout.write(JSON.stringify({ type: "agent_settled" }) + "\\n"); }, 50); return; } if (process.env.FAKE_PI_MODE === "stats-events") { busy = true; respond(request); process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); setTimeout(() => { process.stdout.write(JSON.stringify({ type: "message_start", message: { id: "msg-stats-1" } }) + "\\n"); process.stdout.write(JSON.stringify({ type: "message_update", message: { id: "msg-stats-1" }, assistantMessageEvent: { type: "text_delta", text: "hi" } }) + "\\n"); process.stdout.write(JSON.stringify({ type: "message_end", message: { id: "msg-stats-1" } }) + "\\n"); process.stdout.write(JSON.stringify({ type: "tool_execution_start", toolCallId: "tool-stats-1" }) + "\\n"); process.stdout.write(JSON.stringify({ type: "tool_execution_end", toolCallId: "tool-stats-1" }) + "\\n"); busy = false; process.stdout.write(JSON.stringify({ type: "agent_settled" }) + "\\n"); }, 50); return; } if (process.env.FAKE_PI_MODE !== "orbit-busy-without-agent-start" && process.env.FAKE_PI_MODE !== "never-starts" && process.env.FAKE_PI_MODE !== "delayed-agent-start" && process.env.FAKE_PI_MODE !== "idle-active-idle" && process.env.FAKE_PI_MODE !== "late-agent-start") process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n"); return; }',
     '  if (request.type === "compact") { if (process.env.FAKE_PI_MODE === "compact-timeout") return; return respond(request); }',
     '  if (request.type === "abort") { busy = false; respond(request); process.stdout.write(JSON.stringify({ type: "agent_settled", handledWithoutTurn: true }) + "\\n"); return; }',
     '  if (request.type === "get_commands") return process.env.FAKE_PI_MODE === "cancel-commands" ? respond(request, { data: { cancelled: true } }) : respond(request, { data: { commands: [{ name: "review", source: "skill" }] } });',
     '  if (request.type === "get_available_models") return respond(request, { data: { models: [{ provider: "openrouter", id: "openai/gpt-5.1", name: "GPT-5.1", reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: null } }] } });',
-    '  if (request.type === "get_session_stats") return respond(request, { data: { contextUsage: { tokens: 32000, contextWindow: 128000, percent: 25 } } });',
+    '  if (request.type === "get_available_thinking_levels") return respond(request, { data: { levels: ["off", "low", "high"] } });',
+    '  if (request.type === "get_session_stats") return respond(request, { data: { contextUsage: { tokens: 32000, contextWindow: 128000, percent: 25 }, userMessages: 4, assistantMessages: 5, toolCalls: 9, toolResults: 8, totalMessages: 18, tokens: { input: 50000, output: 10000, cacheRead: 40000, cacheWrite: 5000, total: 105000 }, cost: 0.45 } });',
     '  if (request.type === "set_model") { modelProvider = request.provider; modelId = request.modelId; return respond(request); }',
     '  if (request.type === "set_thinking_level") { if (request.level === "ultra") return process.stdout.write(JSON.stringify({ id: request.id, success: false, code: "invalid_thinking", error: "unsupported thinking" }) + "\\n"); thinking = request.level; return respond(request); }',
     '  respond(request);',
@@ -83,14 +91,14 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  process.env.PI_SCIENCE_HOME = original.home;
-  process.env.PI_CLI_PATH = original.cli;
-  process.env.PI_NODE_PATH = original.node;
-  process.env.PI_SCIENCE_RPC_TIMEOUT_MS = original.timeout;
-  process.env.PI_SCIENCE_RECONCILE_DELAY_MS = original.delay;
-  process.env.PI_SCIENCE_RECONCILE_DEADLINE_MS = original.deadline;
-  process.env.PI_SCIENCE_IDLE_RUNTIME_MS = original.idle;
-  process.env.FAKE_PI_MODE = original.mode;
+  restoreEnv("PI_SCIENCE_HOME", original.home);
+  restoreEnv("PI_CLI_PATH", original.cli);
+  restoreEnv("PI_NODE_PATH", original.node);
+  restoreEnv("PI_SCIENCE_RPC_TIMEOUT_MS", original.timeout);
+  restoreEnv("PI_SCIENCE_RECONCILE_DELAY_MS", original.delay);
+  restoreEnv("PI_SCIENCE_RECONCILE_DEADLINE_MS", original.deadline);
+  restoreEnv("PI_SCIENCE_IDLE_RUNTIME_MS", original.idle);
+  restoreEnv("FAKE_PI_MODE", original.mode);
   if (original.stateDelay === undefined) delete process.env.FAKE_PI_STATE_DELAY;
   else process.env.FAKE_PI_STATE_DELAY = original.stateDelay;
   if (original.activeProbe === undefined) delete process.env.FAKE_PI_ACTIVE_PROBE;
@@ -333,6 +341,39 @@ describe("Node session lifecycle", () => {
     const log = await readFile(process.env.FAKE_PI_LOG!, "utf8");
     expect(log).toContain('"type":"set_model","provider":"openrouter","modelId":"openai/gpt-5.1"');
     expect(log).toContain('"type":"extension_ui_response","id":"question-1","confirmed":true');
+    await service.shutdownAll();
+  });
+
+  it("returns the live runtime's actual thinking levels with the verified model identity", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions("thinking-levels");
+    await service.resume("thinking-levels", cwd);
+    await expect(service.availableThinkingLevels(cwd)).resolves.toMatchObject({ data: { levels: ["off", "low", "high"], model: "openrouter/openai/gpt-5.1" } });
+    // Expected-model call matches the runtime's actual model.
+    await expect(service.availableThinkingLevels(cwd, "openrouter/openai/gpt-5.1")).resolves.toMatchObject({ data: { levels: ["off", "low", "high"], model: "openrouter/openai/gpt-5.1" } });
+    // Expected-model call for a different model refuses instead of reading
+    // the wrong runtime's levels.
+    await expect(service.availableThinkingLevels(cwd, "deepseek/deepseek-v4-flash")).resolves.toMatchObject({ success: false, code: "model_mismatch" });
+    await service.shutdownAll();
+  });
+
+  it("refuses thinking levels when the live state model differs from the expected model", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions("thinking-levels-mismatch");
+    await service.resume("thinking-levels-mismatch", cwd);
+    // Switch the runtime to a different model; refreshState will pick the new
+    // identity from get_state, so the old expected model no longer matches.
+    await expect(service.command("thinking-levels-mismatch", cwd, "set_model", { provider: "deepseek", modelId: "deepseek-v4-flash" })).resolves.toMatchObject({ success: true });
+    await expect(service.availableThinkingLevels(cwd, "openrouter/openai/gpt-5.1")).resolves.toMatchObject({ success: false, code: "model_mismatch" });
+    // The new actual model is accepted and returned with its levels.
+    await expect(service.availableThinkingLevels(cwd, "deepseek/deepseek-v4-flash")).resolves.toMatchObject({ data: { levels: ["off", "low", "high"], model: "deepseek/deepseek-v4-flash" } });
+    await service.shutdownAll();
+  });
+
+  it("returns not_found for thinking levels when no runtime is live", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions("thinking-levels-idle");
+    await expect(service.availableThinkingLevels(cwd)).resolves.toMatchObject({ success: false, code: "not_found" });
     await service.shutdownAll();
   });
 
@@ -725,6 +766,45 @@ describe("Node session lifecycle", () => {
     // agent_settled is authoritative and must invalidate that cached busy
     // snapshot immediately; otherwise a page refresh can resurrect Working.
     await expect(service.state("session-state-cache", cwd)).resolves.toMatchObject({ is_streaming: false });
+    publish.mockRestore();
+    await service.shutdownAll();
+  });
+
+  it("publishes session.stats at message_end and tool_execution_end, then at agent_settled", async () => {
+    process.env.FAKE_PI_MODE = "stats-events";
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-stats-events");
+    await service.resume("session-stats-events", cwd);
+    const publish = vi.spyOn(conversationEventHub, "publish");
+    publish.mockClear();
+
+    await expect(service.command("session-stats-events", cwd, "prompt", { message: "hi" })).resolves.toMatchObject({ success: true });
+    // The fake runtime emits message_start/text/message_end, tool start/end,
+    // then agent_settled. Each settled boundary must refresh and publish
+    // session.stats (message_end + tool_execution_end + agent_settled = 3).
+    await waitFor(() => {
+      const statsCalls = publish.mock.calls.filter(([, , payload]) => (payload as { type?: string }).type === "session.stats");
+      return statsCalls.length >= 3;
+    });
+    // Every published stats payload is a valid stats object carrying the fake
+    // runtime's whole-log counters through mergeSessionStats.
+    const statsCalls = publish.mock.calls.filter(([, , payload]) => (payload as { type?: string }).type === "session.stats");
+    for (const [, , payload] of statsCalls) {
+      expect(payload).toMatchObject({ type: "session.stats", sessionId: "session-stats-events", stats: expect.any(Object) });
+    }
+    const lastStats = statsCalls[statsCalls.length - 1]?.[2] as { stats?: { userMessages?: number; assistantMessages?: number; toolCalls?: number; toolResults?: number; totalMessages?: number; tokens?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number } } } | undefined;
+    expect(lastStats?.stats).toMatchObject({ userMessages: 4, assistantMessages: 5, toolCalls: 9, toolResults: 8, totalMessages: 18 });
+    expect(lastStats?.stats?.tokens).toMatchObject({ input: 50000, output: 10000, cacheRead: 40000, cacheWrite: 5000, total: 105000 });
+    // The checkpoint file is persisted (serialized under the runtime lock).
+    const checkpoint = join(cwd, ".pi-science", "sessions", "stats", "session-stats-events.json");
+    await waitFor(async () => {
+      try {
+        const parsed = JSON.parse(await readFile(checkpoint, "utf8")) as { userMessages?: unknown };
+        return typeof parsed.userMessages === "number" && parsed.userMessages >= 0;
+      } catch {
+        return false;
+      }
+    });
     publish.mockRestore();
     await service.shutdownAll();
   });

@@ -18,7 +18,7 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
     return Promise.resolve(jsonResponse({
       ok: true,
       providers: [{ id: "deepseek", name: "DeepSeek", has_key: true, models: [{ id: "deepseek/deepseek-v4-flash", name: "DeepSeek V4 Flash", provider: "deepseek" }] }],
-      available_models: [{ id: "deepseek/deepseek-v4-flash", name: "DeepSeek V4 Flash", provider: "deepseek", reasoning: true, thinking_levels: ["high", "max"] }],
+      available_models: [{ id: "deepseek/deepseek-v4-flash", name: "DeepSeek V4 Flash", model: "DeepSeek V4 Flash", label: "DeepSeek V4 Flash", provider: "deepseek", reasoning: true, thinking_levels: ["high", "max"] }],
       model: "",
       thinking: "high",
     }));
@@ -74,11 +74,59 @@ describe("SettingsContent", () => {
     expect(screen.getByRole("tabpanel", { name: "General" })).toHaveAttribute("aria-labelledby", "settings-tab-general");
   });
 
+  it("marks the active tab with the selected surface and the rest with hover surfaces", async () => {
+    renderContent(null);
+    const nav = await screen.findByRole("tablist", { name: "Settings" });
+    expect(nav).toHaveClass("gap-1");
+    const general = screen.getByRole("tab", { name: "General" });
+    const llm = screen.getByRole("tab", { name: "LLM" });
+    expect(general).toHaveClass("bg-surface-selected");
+    expect(llm).not.toHaveClass("bg-surface-selected");
+    expect(llm).toHaveClass("hover:bg-surface-hover");
+  });
+
+  it("renders the DeepSeek-style sidebar chrome with distinct outline icons", async () => {
+    renderContent(null);
+    const nav = await screen.findByRole("tablist", { name: "Settings" });
+    const aside = nav.closest("aside");
+    if (!aside) throw new Error("settings aside not found");
+    // Desktop column is exactly 188px with 12px side padding and 22px top
+    // padding; mobile stays a 56px icon rail with 10px side padding.
+    expect(aside).toHaveClass("w-14", "px-2.5", "md:w-[188px]", "md:px-3", "md:pt-[22px]", "md:pb-0");
+    // A settings heading sits above the list on desktop (hidden on mobile).
+    expect(screen.getByRole("heading", { name: "Settings" })).toHaveClass("hidden", "md:block", "text-base", "font-medium");
+    // Tabs: 36px circle centered on mobile; 40px full-width rounded row with
+    // an 8px icon gap on desktop; no separate icon tile background.
+    const general = screen.getByRole("tab", { name: "General" });
+    expect(general).toHaveClass("h-9", "w-9", "rounded-full", "md:h-10", "md:w-full", "md:rounded-card", "md:px-3", "md:gap-2");
+    expect(general).toHaveClass("bg-surface-selected", "text-text");
+    expect(screen.getByRole("tab", { name: "Extensions" })).toHaveClass("hover:bg-surface-hover");
+    // Every nav item uses a different outline icon (distinct svg content).
+    const icons = screen.getAllByRole("tab").map((tab) => tab.querySelector("svg")?.innerHTML ?? null);
+    expect(icons.every(Boolean)).toBe(true);
+    expect(new Set(icons).size).toBe(6);
+  });
+
+  it("moves the close control into the content header, outside the sidebar", async () => {
+    renderContent(null);
+    const close = await screen.findByLabelText("Close");
+    const header = close.closest("header");
+    if (!header) throw new Error("close button is not inside a header");
+    expect(header).toHaveClass("sticky", "top-0");
+    const aside = screen.getByRole("tablist", { name: "Settings" }).closest("aside");
+    expect(aside?.contains(close)).toBe(false);
+    // 28px circular close button with a hover overlay, matching the DeepSeek
+    // panel chrome (content header, not the sidebar).
+    expect(close).toHaveClass("h-7", "w-7", "rounded-full", "hover:bg-surface-hover");
+  });
+
   it("persists the selected conversation and preview order", async () => {
     renderContent(null);
-    const order = await screen.findByLabelText("Conversation and preview layout");
+    const order = await screen.findByLabelText(/Conversation and preview layout/);
 
-    fireEvent.change(order, { target: { value: "left" } });
+    fireEvent.pointerDown(order);
+    fireEvent.click(order);
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Preview · Conversation" }));
 
     expect(useUiStore.getState().previewPaneSide).toBe("left");
     expect(window.localStorage.getItem("pi-science.layout.previewPaneSide")).toBe('"left"');
@@ -126,9 +174,11 @@ describe("SettingsContent", () => {
     renderContent("proj");
     await screen.findByRole("tablist", { name: "Settings" });
     fireEvent.click(screen.getByRole("tab", { name: "LLM" }));
-    const select = await screen.findByLabelText("Default model");
+    const trigger = await screen.findByLabelText(/Default model/);
     const configCallsBefore = fetchMock.mock.calls.filter(([url]) => String(url).startsWith("/api/settings/config")).length;
-    fireEvent.change(select, { target: { value: "deepseek/deepseek-v4-flash" } });
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "DeepSeek V4 Flash" }));
     await waitFor(() => expect(putCalls.length).toBe(1));
     expect(putCalls[0].url).toContain("?cwd=proj");
     expect(putCalls[0].body).toMatchObject({ model: "deepseek/deepseek-v4-flash", thinking: "high" });
@@ -140,15 +190,17 @@ describe("SettingsContent", () => {
     renderContent("proj");
     await screen.findByRole("tablist", { name: "Settings" });
     fireEvent.click(screen.getByRole("tab", { name: "LLM" }));
-    const select = await screen.findByLabelText("Default model");
+    const trigger = await screen.findByLabelText(/Default model/);
     // Switch the fetch mock to failing mode for the PUT.
     vi.mocked(fetchMock).mockImplementationOnce(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
       return defaultFetch("/api/settings/model?fail=1", init);
     });
-    fireEvent.change(select, { target: { value: "deepseek/deepseek-v4-flash" } });
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "DeepSeek V4 Flash" }));
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("boom");
-    // The saving flag resets in finally, so the select is usable again.
-    await waitFor(() => expect(select).toBeEnabled());
+    // The saving flag resets in finally, so the trigger is usable again.
+    await waitFor(() => expect(screen.getByLabelText(/Default model/)).toBeEnabled());
   });
 });

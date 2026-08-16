@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { clampThinkingLevel, conversationModelOptions, type AvailableModel } from "../lib/client/pi-science-client";
-import { applySessionReplacements, useRuntimeStore, type SessionReplacement } from "../lib/agent-runtime";
+import { useRuntimeStore } from "../lib/agent-runtime";
 import { queryClient } from "../lib/client/query-client";
 import { settingsApi, settingsKey } from "../lib/settings";
 
@@ -24,6 +24,22 @@ export function useModelConfig(cwd: string, sessionId: string | undefined) {
   const [thinking, setThinking] = useState("high");
   const [modelError, setModelError] = useState<string | null>(null);
   const [configuringModel, setConfiguringModel] = useState(false);
+  // Guards against stale async completion: every operation bumps the ref, and
+  // the route session the operation started in is compared with the latest one
+  // before any local state is applied, so a slow save cannot overwrite the
+  // model/thinking of a session the user navigated to in the meantime.
+  const operationRef = useRef(0);
+  const sessionIdRef = useRef(sessionId);
+  useEffect(() => {
+    if (sessionIdRef.current !== sessionId) {
+      // The route changed while an operation was in flight: invalidate it so
+      // its completion/finally cannot touch state, and release the loading
+      // flag the skipped finally would otherwise leave stuck forever.
+      operationRef.current += 1;
+      setConfiguringModel(false);
+    }
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   useEffect(() => {
     const key = settingsKey("config", cwd ?? null);
@@ -74,46 +90,74 @@ export function useModelConfig(cwd: string, sessionId: string | undefined) {
   const applyModelConfig = async (model: string, nextThinking: string) => {
     const previousModel = selectedModel;
     const previousThinking = thinking;
+    const operation = ++operationRef.current;
+    const startedSession = sessionIdRef.current;
     setSelectedModel(model);
     setThinking(nextThinking);
     setModelError(null);
     setConfiguringModel(true);
     try {
-      const data = await settingsApi.saveModel<{
-        model?: string;
-        thinking?: string;
-        session_replacements?: SessionReplacement[];
-      }>(model, nextThinking, cwd);
-      const replacementId = applySessionReplacements(
-        Array.isArray(data.session_replacements) ? data.session_replacements as SessionReplacement[] : [],
+      const store = useRuntimeStore.getState();
+      // Session-local change requires the store to be actively tracking the
+      // exact session this route shows. Anything else is a route/store
+      // mismatch and must never touch the workspace default model.
+      const sessionMatches = Boolean(
+        startedSession && store.activeSessionId === startedSession && store.cwd === cwd,
       );
+      if (sessionMatches) {
+        // The store action talks to POST /api/sessions/:id/model, applies the
+        // new model/thinking to the runtime, and returns the (possibly
+        // replaced) session id. The workspace default model is deliberately
+        // left untouched.
+        const replacementId = await store.setModel(model, nextThinking);
+        const current = useRuntimeStore.getState();
+        if (operationRef.current !== operation || sessionIdRef.current !== startedSession) return;
+        setSelectedModel(current.model || model);
+        setThinking(current.thinking || nextThinking);
+        if (replacementId && replacementId !== startedSession) {
+          navigate(
+            `/workspace/${encodeURIComponent(cwd)}/session/${replacementId}`,
+            { replace: true },
+          );
+        }
+        return;
+      }
+      if (startedSession || store.activeSessionId) {
+        // Route and store disagree about which session is active (or the route
+        // lost its session while the store still has one). Changing the model
+        // could hit the wrong conversation, so refuse instead of silently
+        // writing the workspace default.
+        throw new Error(t("conversation.sessionUnavailable"));
+      }
+      // No route session and no active store session (blank page before the
+      // first conversation): keep the workspace-default fallback so the user
+      // can pick a model ahead of time.
+      const data = await settingsApi.saveModel<{ model?: string; thinking?: string }>(model, nextThinking, cwd);
+      if (operationRef.current !== operation || sessionIdRef.current !== startedSession) return;
       setSelectedModel(typeof data.model === "string" ? data.model : model);
       setThinking(typeof data.thinking === "string" ? data.thinking : nextThinking);
-      if (replacementId && replacementId !== sessionId) {
-        navigate(
-          `/workspace/${encodeURIComponent(cwd)}/session/${replacementId}`,
-          { replace: true },
-        );
-      }
     } catch (e) {
+      if (operationRef.current !== operation || sessionIdRef.current !== startedSession) return;
       setSelectedModel(previousModel);
       setThinking(previousThinking);
       const message = e instanceof Error ? e.message : t("conversation.modelSetError");
       setModelError(message);
     } finally {
-      setConfiguringModel(false);
+      if (operationRef.current === operation && sessionIdRef.current === startedSession) {
+        setConfiguringModel(false);
+      }
     }
   };
 
-  const handleModelChange = (model: string) => {
+  const handleModelChange = (model: string): Promise<void> => {
     const nextModelInfo = models.find((item) => item.id === model);
     const supported = nextModelInfo?.thinking_levels || [];
-    void applyModelConfig(model, clampThinkingLevel(thinking, supported));
+    return applyModelConfig(model, clampThinkingLevel(thinking, supported));
   };
 
-  const handleThinkingChange = (level: string) => {
-    if (!selectedModel) return;
-    void applyModelConfig(selectedModel, level);
+  const handleThinkingChange = (level: string): Promise<void> => {
+    if (!selectedModel) return Promise.resolve();
+    return applyModelConfig(selectedModel, level);
   };
 
   return { models, selectedModel, thinking, thinkingLevels, selectedModelInfo, modelError, configuringModel, handleModelChange, handleThinkingChange };

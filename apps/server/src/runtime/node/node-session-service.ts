@@ -1,9 +1,10 @@
-import type { CreateSessionRequest, PiConfig, SessionState } from "@pi-science/contracts";
+import type { CreateSessionRequest, PiConfig, SessionState, SessionStats } from "@pi-science/contracts";
 import { randomUUID } from "node:crypto";
 import { mkdir, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import nodeProcess from "node:process";
 import { ConversationEventHub, conversationEventHub } from "../events/conversation-event-hub.js";
+import { durableEventStore } from "../events/event-store.js";
 import { observeNodePiEvent } from "../events/node-event-observer.js";
 import { PiManager, piManager } from "../pi/pi-manager.js";
 import { PiOrbitRequestError } from "../pi/pi-orbit-host.js";
@@ -12,6 +13,8 @@ import { buildPiProcessOptions, loadDefaultPiConfig } from "../pi/pi-runtime-lau
 import type { ProjectReviewService } from "../../project-review/service.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { SessionRepository, invalidateSessionFileCache, sessionRepository } from "./session-repository.js";
+import { deleteSessionStats, foldSessionFileStats, loadSessionStats, saveSessionStats } from "./session-stats-repository.js";
+import { foldEventRecordsTiming, maxTiming, mergeSessionStats, SessionStatsProjector, timingFromStats, type SessionTiming } from "./session-stats-projector.js";
 import { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
 import { diffWorkspaceSnapshots, previewKind, previewMime, snapshotWorkspace, type WorkspaceSnapshotEntry } from "../artifacts/workspace-artifact-snapshot.js";
 import { turnArtifactRepository } from "../artifacts/turn-artifact-repository.js";
@@ -21,6 +24,11 @@ import { ensureProject } from "../../project/project-registry.js";
 type RuntimeFailure = { error: string; code: string; diagnostics?: unknown };
 type ServiceFailure = RuntimeFailure & { success: false };
 type PendingOperation = "prompt" | "compact";
+/** Minimal structural view of the durable event store: only the read side
+ *  needed to backfill whole-session timing from persisted SSE records. */
+type StatsEventStore = {
+  readAfter(cwd: string, sessionId: string, lastEventId?: string | null): Promise<Array<{ created_at: string; data: string }>>;
+};
 type RuntimeRecord = {
   cwd: string;
   managerKey: string;
@@ -138,6 +146,9 @@ export class NodeSessionService {
   private readonly runtimes = new Map<string, RuntimeRecord>();
   private readonly locks = new Map<string, Promise<void>>();
   private readonly autoReviews = new Set<string>();
+  /** Whole-session wall-clock timing (LLM/TTFT/decode/tool durations) folded
+   *  from the raw Pi event stream; persisted via the stats checkpoint. */
+  private readonly statsProjector = new SessionStatsProjector();
   private log: (level: "info" | "warn" | "error", message: string) => void = () => {};
 
   constructor(
@@ -146,6 +157,7 @@ export class NodeSessionService {
     private readonly repository: SessionRepository = sessionRepository,
     private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService(),
     private readonly projectReview: Pick<ProjectReviewService, "run"> | null = null,
+    private readonly statsEventStore: StatsEventStore = durableEventStore,
   ) {}
 
   configureLogging(log: (level: "info" | "warn" | "error", message: string) => void): void {
@@ -394,6 +406,44 @@ export class NodeSessionService {
     });
   }
 
+  async availableThinkingLevels(cwdValue: string, expectedModel?: string): Promise<PiResult> {
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(cwdValue); }
+    catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
+    // The levels a model supports are a property of that model, so the result
+    // must never come from a different runtime than the configured model.
+    // Without an expectation the first healthy runtime wins (legacy callers);
+    // with an expectation only a runtime whose config model matches is usable.
+    const candidates = [...this.runtimes.values()]
+      .filter((candidate) => candidate.cwd === cwd && !candidate.closing && candidate.activeSessionId)
+      .filter((candidate) => !expectedModel || candidate.config.model === expectedModel);
+    const runtime = candidates[0];
+    if (!runtime) {
+      return { success: false, code: expectedModel ? "model_mismatch" : "not_found", error: expectedModel ? "no runtime is using the requested model" : "pi process not found" };
+    }
+    const key = runtimeKey(cwd, runtime.activeSessionId);
+    return this.withLock(key, async () => {
+      if (this.runtimes.get(key) !== runtime || runtime.closing) {
+        return { success: false, code: "not_found", error: "pi process not found" };
+      }
+      // Refresh state inside the lock so the model identity we verify is the
+      // same one the runtime reports right now, not a stale config snapshot.
+      const state = await this.refreshState(runtime);
+      if (!state.success || !state.data || typeof state.data !== "object") return state;
+      const actualModel = runtime.config.model ?? null;
+      if (expectedModel && actualModel !== expectedModel) {
+        return { success: false, code: "model_mismatch", error: `runtime is using ${actualModel ?? "unknown"} instead of ${expectedModel}` };
+      }
+      this.scheduleIdleCleanup(runtime);
+      const result = await runtime.process.sendCommand("get_available_thinking_levels");
+      if (this.runtimes.get(key) !== runtime || runtime.closing) {
+        return { success: false, code: "not_found", error: "pi process not found" };
+      }
+      if (!result.success || !result.data || typeof result.data !== "object") return result;
+      return { success: true, data: { ...result.data, model: actualModel } };
+    });
+  }
+
   async exists(sessionId: string, cwdValue: string): Promise<boolean> {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
@@ -449,6 +499,89 @@ export class NodeSessionService {
     });
   }
 
+  /** Whole-session cumulative stats (turns, tool calls, tokens, wall time).
+   *  Live runtimes are read fresh from `get_session_stats`; idle sessions fall
+   *  back to the persisted checkpoint, then to a fold of the session JSONL.
+   *  The result is persisted so the next cold read is cheap and consistent. */
+  async stats(sessionId: string, cwdValue: string): Promise<{ stats: SessionStats } | RuntimeFailure> {
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(cwdValue); }
+    catch (error) { return { error: String(error), code: "workspace_invalid" }; }
+    return this.withLock(runtimeKey(cwd, sessionId), async () => {
+      const runtime = this.runtimes.get(runtimeKey(cwd, sessionId));
+      const stats = await this.collectStats(cwd, sessionId, runtime && runtime.activeSessionId === sessionId ? runtime : undefined);
+      if (!stats) return { error: "session not found in this workspace", code: "not_found" };
+      await saveSessionStats(cwd, sessionId, stats).catch(() => undefined);
+      return { stats };
+    });
+  }
+
+  private async collectStats(cwd: string, sessionId: string, runtime?: RuntimeRecord): Promise<SessionStats | null> {
+    const key = runtimeKey(cwd, sessionId);
+    const checkpoint = await loadSessionStats(cwd, sessionId).catch(() => null);
+    // Backfill wall-clock timing from the durable normalized SSE records when
+    // the raw-event projector had no timing to persist (id-less Pi Orbit web
+    // events, sessions that predate the projector). Element-wise max with the
+    // checkpoint keeps the checkpoint authoritative and never accumulates.
+    const backfillTiming = await this.backfillTiming(cwd, sessionId);
+    let runtimeData: Record<string, unknown> | undefined;
+    if (runtime) {
+      const result = await runtime.process.sendCommand("get_session_stats").catch(() => null);
+      if (result?.success && result.data && typeof result.data === "object") {
+        runtimeData = result.data as Record<string, unknown>;
+      }
+    }
+    if (runtimeData) {
+      // First `timingWithCheckpoint` call decides the checkpoint prefix for
+      // this runtime generation: a fresh session (null checkpoint) ignores
+      // its own later checkpoints; a rebuild generation folds the persisted
+      // base in exactly once and the live tracker covers the suffix only.
+      // The backfill is merged AFTER the tracker (never folded into it) so
+      // live suffix events are counted once regardless of which source wins.
+      const checkpointTiming = timingFromStats(checkpoint);
+      const live = this.statsProjector.timingWithCheckpoint(key, checkpointTiming);
+      return mergeSessionStats(runtimeData, maxTiming(live, backfillTiming));
+    }
+    if (checkpoint) {
+      return { ...checkpoint, ...maxTiming(timingFromStats(checkpoint), backfillTiming) };
+    }
+    const path = await this.repository.findPath(cwd, sessionId);
+    if (!path) return null;
+    const folded = await foldSessionFileStats(path).catch(() => null);
+    if (!folded) return null;
+    return { ...folded, ...maxTiming(null, backfillTiming) };
+  }
+
+  /** Recover whole-session timing by folding the durable normalized SSE
+   *  records for the session. Returns null when there is nothing to fold, so
+   *  `maxTiming` treats the backfill as absent. */
+  private async backfillTiming(cwd: string, sessionId: string): Promise<SessionTiming | null> {
+    try {
+      const records = await this.statsEventStore.readAfter(cwd, sessionId);
+      if (!records || records.length === 0) return null;
+      return foldEventRecordsTiming(records);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Refresh the whole-session counters from the runtime, persist the
+   *  checkpoint, and push the live stats to subscribers so the composer stats
+   *  line updates. Called at settled boundaries (message_end, tool end,
+   *  agent_settled) — the same moments the DeepSeek harness refreshes its
+   *  stats line — never per token. Runs under the runtime key lock so
+   *  concurrent boundaries cannot race on the same `.tmp` checkpoint file.
+   *  The lock is a promise chain: queued refreshes run in order, and the
+   *  final agent_settled refresh is authoritative. */
+  private refreshAndPublishStats(runtime: RuntimeRecord, sessionId: string): Promise<void> {
+    return this.withLock(runtimeKey(runtime.cwd, sessionId), async () => {
+      const stats = await this.collectStats(runtime.cwd, sessionId, runtime);
+      if (!stats) return;
+      await saveSessionStats(runtime.cwd, sessionId, stats).catch(() => undefined);
+      await this.eventHub.publish(runtime.cwd, sessionId, { type: "session.stats", sessionId, stats }).catch(() => undefined);
+    });
+  }
+
   async delete(sessionId: string, cwdValue: string): Promise<{ success: boolean; error?: string; code?: string }> {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
@@ -474,6 +607,7 @@ export class NodeSessionService {
       try { await unlink(path); }
       catch (error) { return { success: false, code: "delete_failed", error: String(error) }; }
       invalidateSessionFileCache(cwd);
+      await deleteSessionStats(cwd, sessionId);
       return { success: true };
     });
   }
@@ -631,6 +765,14 @@ export class NodeSessionService {
       },
       observe: async (event, sessionId) => {
         await observeNodePiEvent(cwd, runtime.config.model ?? null, event, sessionId, (payload) => this.eventHub.publish(cwd, sessionId, payload));
+        this.statsProjector.track(runtimeKey(cwd, sessionId), event, Date.now());
+        // DeepSeek refreshes its stats line at settled boundaries (assistant
+        // message done, tool/result done), not per token. Mirror that: refresh
+        // after each completed assistant message and completed tool execution;
+        // agent_settled below stays the final authoritative refresh.
+        if (event.type === "message_end" || event.type === "tool_execution_end") {
+          void this.refreshAndPublishStats(runtime, sessionId);
+        }
         if (event.type === "agent_start") {
           runtime.turnId = randomUUID();
           runtime.turnBaseline = snapshotWorkspace(cwd);
@@ -658,6 +800,7 @@ export class NodeSessionService {
         if (event.type === "agent_settled") {
           await this.finishTurnArtifacts(runtime, event, sessionId);
           this.scheduleAutoReview(cwd, sessionId);
+          void this.refreshAndPublishStats(runtime, sessionId);
         }
       },
     });
@@ -1187,6 +1330,7 @@ export class NodeSessionService {
       await runtime.process.shutdown();
     }
     for (const key of registeredKeys) this.runtimes.delete(key);
+    for (const key of registeredKeys) this.statsProjector.clear(key);
   }
 
   private async restoreRuntimeAfterFailedRestart(cwd: string, config: PiConfig, sessionPath: string | null, restartPending: boolean): Promise<void> {

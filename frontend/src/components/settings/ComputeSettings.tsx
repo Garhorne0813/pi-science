@@ -15,6 +15,7 @@ import { useTranslation } from "react-i18next";
 import { apiRequest } from "../../lib/client/api";
 import { cn } from "../../lib/ui";
 import { queryClient } from "../../lib/client/query-client";
+import { SettingsSelectMenu } from "./SettingsSelectMenu";
 
 type AuthMethod = "key" | "password";
 
@@ -203,47 +204,53 @@ export function ComputeSettings({ workspaceCwd }: ComputeSettingsProps) {
 
   return (
     <section className="space-y-0">
-      <div className="border-b border-faint pb-3">
-        <div className="flex min-h-14 items-center gap-2 border-b border-faint py-2">
+      <div className="overflow-hidden rounded-card border border-faint bg-surface-2/40 pb-3">
+        <div className="flex min-h-14 items-center gap-2 border-b border-faint px-4 py-2">
           <Server size={16} className="text-accent" />
           <h3 className="text-[13px] font-semibold text-text">{t("settings.computePage.connection")}</h3>
         </div>
 
         <div className="divide-y divide-faint">
-          <label className="flex min-h-14 items-center justify-between gap-3 py-2">
+          <label className="flex min-h-14 items-center justify-between gap-3 px-4 py-2">
             <span className="text-[13px] font-medium text-text">{t("settings.computePage.label")}</span>
             <span className="w-56 max-w-[62%] shrink-0">
               <input value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} placeholder={t("settings.computePage.labelPlaceholder")} className={fieldClass} />
             </span>
           </label>
-          <label className="flex min-h-14 items-center justify-between gap-3 py-2">
+          <label className="flex min-h-14 items-center justify-between gap-3 px-4 py-2">
             <span className="text-[13px] font-medium text-text">{t("settings.computePage.hostname")}</span>
             <span className="w-56 max-w-[62%] shrink-0">
               <input value={form.host} onChange={(event) => setForm({ ...form, host: event.target.value })} placeholder="compute.example.org" className={cn(fieldClass, "font-mono")} />
             </span>
           </label>
-          <label className="flex min-h-14 items-center justify-between gap-3 py-2">
+          <label className="flex min-h-14 items-center justify-between gap-3 px-4 py-2">
             <span className="text-[13px] font-medium text-text">{t("settings.computePage.user")}</span>
             <span className="w-56 max-w-[62%] shrink-0">
               <input value={form.user} onChange={(event) => setForm({ ...form, user: event.target.value })} placeholder={t("settings.computePage.userPlaceholder")} className={fieldClass} />
             </span>
           </label>
-          <label className="flex min-h-14 items-center justify-between gap-3 py-2">
+          <label className="flex min-h-14 items-center justify-between gap-3 px-4 py-2">
             <span className="text-[13px] font-medium text-text">{t("settings.computePage.port")}</span>
             <span className="w-56 max-w-[62%] shrink-0">
               <input type="number" min={1} max={65535} value={form.port} onChange={(event) => setForm({ ...form, port: Number(event.target.value) })} className={cn(fieldClass, "font-mono")} />
             </span>
           </label>
-          <label className="flex min-h-14 items-center justify-between gap-3 py-2">
+          <div className="flex min-h-14 items-center justify-between gap-3 px-4 py-2">
             <span className="text-[13px] font-medium text-text">{t("settings.computePage.scheduler")}</span>
             <span className="w-56 max-w-[62%] shrink-0">
-              <select value={form.scheduler} onChange={(event) => setForm({ ...form, scheduler: event.target.value })} className={fieldClass}>
-                <option value="">{t("settings.computePage.directSsh")}</option>
-                <option value="slurm">Slurm</option>
-              </select>
+              <SettingsSelectMenu
+                variant="field"
+                ariaLabel={t("settings.computePage.scheduler")}
+                value={form.scheduler}
+                options={[
+                  { value: "", label: t("settings.computePage.directSsh") },
+                  { value: "slurm", label: "Slurm" },
+                ]}
+                onSelect={(next) => setForm({ ...form, scheduler: next })}
+              />
             </span>
-          </label>
-          <div role="group" aria-label={t("settings.computePage.authMethod")} className="flex min-h-14 min-w-0 items-center justify-between gap-3 py-2">
+          </div>
+          <div role="group" aria-label={t("settings.computePage.authMethod")} className="flex min-h-14 min-w-0 items-center justify-between gap-3 px-4 py-2">
             <span className="shrink-0 text-[13px] font-medium text-text">{t("settings.computePage.authMethod")}</span>
             <div className="flex w-56 max-w-[62%] shrink-0 gap-1.5">
               {(["key", "password"] as const).map((method) => (
@@ -255,14 +262,14 @@ export function ComputeSettings({ workspaceCwd }: ComputeSettingsProps) {
             </div>
           </div>
           {form.auth_method === "key" ? (
-            <label className="flex min-h-14 items-center justify-between gap-3 py-2">
+            <label className="flex min-h-14 items-center justify-between gap-3 px-4 py-2">
               <span className="text-[13px] font-medium text-text">{t("settings.computePage.identityFile")}</span>
               <span className="w-56 max-w-[62%] shrink-0">
                 <input value={form.identity_file} onChange={(event) => setForm({ ...form, identity_file: event.target.value })} className={cn(fieldClass, "font-mono")} />
               </span>
             </label>
           ) : (
-            <label className="flex min-h-14 items-center justify-between gap-3 py-2">
+            <label className="flex min-h-14 items-center justify-between gap-3 px-4 py-2">
               <span className="text-[13px] font-medium text-text">{t("settings.computePage.password")}</span>
               <span className="w-56 max-w-[62%] shrink-0">
                 <span className="relative block">
@@ -277,7 +284,7 @@ export function ComputeSettings({ workspaceCwd }: ComputeSettingsProps) {
           )}
         </div>
 
-        <div className="mt-2 flex flex-wrap items-center justify-end gap-2 border-t border-faint pt-2">
+        <div className="mt-2 flex flex-wrap items-center justify-end gap-2 border-t border-faint px-4 pt-2">
           <button type="button" onClick={() => void handleDraftProbe()} disabled={!form.host.trim() || draftProbe === true || (form.auth_method === "password" && !form.password)} className="flex min-h-10 items-center gap-2 rounded-input border border-border bg-surface-2 px-3 text-xs font-medium text-text hover:border-accent disabled:cursor-not-allowed disabled:opacity-40">
             {draftProbe === true ? <Loader2 size={14} className="animate-spin" /> : <Cpu size={14} />}
             {draftProbe === true ? t("settings.computePage.testing") : t("settings.computePage.testConnection")}
@@ -286,8 +293,10 @@ export function ComputeSettings({ workspaceCwd }: ComputeSettingsProps) {
             {adding ? t("settings.computePage.adding") : t("settings.computePage.add")}
           </button>
         </div>
-        {draftProbe && draftProbe !== true && <ProbeDetails result={draftProbe} />}
-        {error && <p role="alert" className="mt-3 text-xs text-error-text">{error}</p>}
+        <div className="px-4">
+          {draftProbe && draftProbe !== true && <ProbeDetails result={draftProbe} />}
+          {error && <p role="alert" className="mt-3 text-xs text-error-text">{error}</p>}
+        </div>
       </div>
 
       {machines.length === 0 ? (

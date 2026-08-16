@@ -221,6 +221,36 @@ describe("native Node conversation routes", () => {
     await server.close();
   });
 
+  it("serves whole-session stats for an idle session by folding its JSONL", async () => {
+    const cwd = await workspaceWithSessions("session-a");
+    await writeFile(join(cwd, ".pi-science", "sessions", "session-a.jsonl"), [
+      JSON.stringify({ type: "session", id: "session-a", cwd, timestamp: "2026-07-23T00:00:00.000Z" }),
+      JSON.stringify({ type: "message", id: "u1", timestamp: "2026-07-23T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: "hello" }] } }),
+      JSON.stringify({ type: "message", id: "a1", timestamp: "2026-07-23T00:00:02.000Z", message: { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "read" }], usage: { input: 10, output: 2 } } }),
+      JSON.stringify({ type: "message", id: "r1", timestamp: "2026-07-23T00:00:03.000Z", message: { role: "toolResult", toolCallId: "t1", toolName: "read", content: [{ type: "text", text: "ok" }] } }),
+      JSON.stringify({ type: "message", id: "a2", timestamp: "2026-07-23T00:00:04.000Z", message: { role: "assistant", content: [{ type: "text", text: "answer" }], usage: { input: 5, output: 3 } } }),
+    ].join("\n") + "\n", "utf8");
+    const server = app();
+
+    const res = await server.inject({ method: "GET", url: `/api/sessions/session-a/stats?cwd=${encodeURIComponent(cwd)}` });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.ok).toBe(true);
+    expect(body.stats).toMatchObject({
+      userMessages: 1,
+      assistantMessages: 2,
+      toolCalls: 1,
+      toolResults: 1,
+      totalMessages: 4,
+      tokens: { input: 15, output: 5, cacheRead: 0, cacheWrite: 0, total: 20 },
+      llmMs: 0,
+    });
+
+    const missing = await server.inject({ method: "GET", url: `/api/sessions/no-such/stats?cwd=${encodeURIComponent(cwd)}` });
+    expect(missing.statusCode).toBe(404);
+    await server.close();
+  });
+
   it("does not re-add a hidden AI-title session merely because it was resumed", async () => {
     const cwd = await workspaceWithSessions();
     const sessionId = "legacy-title-runtime";

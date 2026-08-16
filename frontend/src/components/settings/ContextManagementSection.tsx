@@ -62,8 +62,8 @@ export function ContextManagementSection({ config, saving, onSave }: { config: S
   const thresholdTokens = contextWindow ? Math.round(contextWindow * threshold / 100) : null;
 
   return (
-    <section className="border-b border-faint">
-      <div className="flex min-h-14 items-center justify-between gap-3 border-b border-faint py-2">
+    <section className="overflow-hidden rounded-card border border-faint bg-surface-2/40">
+      <div className="flex min-h-14 items-center justify-between gap-3 border-b border-faint px-4 py-2">
         <h2 className="text-[13px] font-semibold text-text">{t("settings.context.title")}</h2>
         <label className="flex cursor-pointer items-center gap-2 text-[11px] text-text">
           <span>{t("settings.context.autoCompact")}</span>
@@ -73,7 +73,7 @@ export function ContextManagementSection({ config, saving, onSave }: { config: S
           </span>
         </label>
       </div>
-      <div className="py-3">
+      <div className="px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <label htmlFor="compaction-threshold" className="text-[12px] font-medium text-text">{t("settings.context.threshold")}</label>
           <output className="font-mono text-[11px] text-text">{threshold}%</output>

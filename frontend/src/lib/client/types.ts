@@ -94,6 +94,29 @@ export interface SessionState {
   compaction_threshold_percent?: number | null;
 }
 
+/** Whole-session cumulative stats served by `/api/sessions/:id/stats` and
+ *  pushed through `session.stats` SSE events. Mirrors the contracts DTO. */
+export interface SessionStats {
+  userMessages: number;
+  assistantMessages: number;
+  toolCalls: number;
+  toolResults: number;
+  totalMessages: number;
+  tokens: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+  cost?: number;
+  llmMs?: number;
+  toolMs?: number;
+  ttftMs?: number;
+  ttftSteps?: number;
+  decodeMs?: number;
+}
+
 export interface InteractionResponse {
   value?: string;
   confirmed?: boolean;

@@ -42,6 +42,15 @@ PIP_CACHE_DIR="${PIP_CACHE_DIR:-$PROJECT_DIR/.cache/pip}"
 case "$STARTUP_TIMEOUT_SECONDS" in ''|*[!0-9]*) echo "Error: PI_SCIENCE_STARTUP_TIMEOUT_SECONDS must be a positive integer." >&2; exit 1 ;; esac
 [ "$STARTUP_TIMEOUT_SECONDS" -gt 0 ] || { echo "Error: PI_SCIENCE_STARTUP_TIMEOUT_SECONDS must be a positive integer." >&2; exit 1; }
 STARTUP_DEADLINE=$(( $(date +%s) + STARTUP_TIMEOUT_SECONDS ))
+# The control plane runs directly (stable mode) by default. `tsx watch` under a
+# detached supervisor sends SIGTERM to its child shortly after startup and never
+# restarts it, so watch mode is an explicit development opt-in only.
+CONTROL_PLANE_MODE="stable"
+case "${PI_SCIENCE_SERVER_WATCH:-0}" in
+  0) ;;
+  1) CONTROL_PLANE_MODE="watch" ;;
+  *) echo "Error: PI_SCIENCE_SERVER_WATCH must be 0 or 1." >&2; exit 1 ;;
+esac
 
 process_start_identity() {
   if [ -n "${PI_SCIENCE_TEST_PROCESS_IDENTITY_DIR:-}" ] && [ -f "$PI_SCIENCE_TEST_PROCESS_IDENTITY_DIR/$1" ]; then cat "$PI_SCIENCE_TEST_PROCESS_IDENTITY_DIR/$1"; return; fi
@@ -143,7 +152,7 @@ if ! port_is_available "$CONTROL_PLANE_PORT"; then
   exit 1
 fi
 
-echo "==> Starting Node control plane on http://127.0.0.1:$CONTROL_PLANE_PORT"
+echo "==> Starting Node control plane on http://127.0.0.1:$CONTROL_PLANE_PORT (control plane mode: $CONTROL_PLANE_MODE)"
 cd "$PROJECT_DIR"
 export PI_SCIENCE_PYTHON_ORIGIN="http://127.0.0.1:${SCIENTIFIC_RUNTIME_PORT}"
 export PI_SCIENCE_MANAGE_SCIENTIFIC_RUNTIME="${PI_SCIENCE_MANAGE_SCIENTIFIC_RUNTIME:-1}"
@@ -157,7 +166,11 @@ export PI_SCIENCE_NODE_SSE="${PI_SCIENCE_NODE_SSE:-1}"
 export PI_SCIENCE_NODE_PI_MANAGER="${PI_SCIENCE_NODE_PI_MANAGER:-1}"
 (
   cd "$PROJECT_DIR/apps/server"
-  PI_SCIENCE_PORT="$CONTROL_PLANE_PORT" exec "$PI_NODE_PATH" "$CONTROL_PLANE_CLI" watch src/app/main.ts
+  if [ "$CONTROL_PLANE_MODE" = "watch" ]; then
+    PI_SCIENCE_PORT="$CONTROL_PLANE_PORT" exec "$PI_NODE_PATH" "$CONTROL_PLANE_CLI" watch src/app/main.ts
+  else
+    PI_SCIENCE_PORT="$CONTROL_PLANE_PORT" exec "$PI_NODE_PATH" "$CONTROL_PLANE_CLI" src/app/main.ts
+  fi
 ) &
 CONTROL_PLANE_PID=$!
 CONTROL_PLANE_STARTED="$(process_start_identity "$CONTROL_PLANE_PID")"

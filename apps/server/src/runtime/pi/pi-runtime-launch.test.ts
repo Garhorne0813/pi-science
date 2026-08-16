@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -57,11 +57,92 @@ describe("Pi runtime custom provider materialization", () => {
     buildPiProcessOptions(cwd);
 
     const catalog = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "models.json"), "utf8"));
+    expect(catalog.providers["custom-deepseek"].api).toBe("openai-completions");
     expect(catalog.providers["custom-deepseek"].models[0]).toMatchObject({
       id: "deepseek-v4-flash",
       reasoning: true,
       thinkingLevelMap: expect.objectContaining({ low: "low", high: "high", xhigh: "xhigh" }),
     });
+  });
+
+  it("materializes openai-responses and anthropic-messages providers with per-model hints", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-three-api-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), `${JSON.stringify({
+      custom_providers: [
+        { id: "responses", name: "Responses API", base_url: "https://responses.example.com/v1", api: "openai-responses", models: ["resp-model"], reasoning: false, context_window: 64000, model_hints: { "resp-model": { context_window: 262144, reasoning: true, thinking_levels: ["off", "medium", "high"] } } },
+        { id: "claude", name: "Claude Gateway", base_url: "https://claude.example.com/v1", api: "anthropic-messages", models: ["claude-model"], model_hints: { "claude-model": { context_window: 200000, reasoning: true, thinking_levels: ["off", "high"] } } },
+      ],
+    })}\n`, "utf8");
+
+    buildPiProcessOptions(cwd);
+
+    const catalog = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "models.json"), "utf8"));
+    // The API format is passed through exactly for every protocol.
+    expect(catalog.providers["custom-responses"].api).toBe("openai-responses");
+    expect(catalog.providers["custom-claude"].api).toBe("anthropic-messages");
+    // Per-model hints win over the provider-level reasoning default (false)
+    // and map into contextWindow / reasoning / thinkingLevelMap.
+    expect(catalog.providers["custom-responses"].models[0]).toMatchObject({
+      id: "resp-model", reasoning: true, contextWindow: 262144,
+      thinkingLevelMap: { off: "off", medium: "medium", high: "high" },
+    });
+    expect(catalog.providers["custom-claude"].models[0]).toMatchObject({
+      id: "claude-model", reasoning: true, contextWindow: 200000,
+      thinkingLevelMap: { off: "off", high: "high" },
+    });
+  });
+
+  it("writes stored API keys for any pi-ai provider (OpenCode Go) into auth.json with 0600 permissions", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-auth-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), `${JSON.stringify({ api_keys: { "opencode-go": "oc-go-secret" } })}\n`, "utf8");
+
+    buildPiProcessOptions(cwd);
+
+    const auth = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "auth.json"), "utf8"));
+    expect(auth["opencode-go"]).toEqual({ type: "api_key", key: "oc-go-secret" });
+    const mode = (await stat(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "auth.json"))).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  it("preserves non-api-key auth entries, merges Pi-Science keys, and drops stale managed keys", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-auth-merge-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    const agentDir = join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host");
+    await mkdir(agentDir, { recursive: true });
+    // Direct pi usage left an OAuth entry; a stale Pi-Science api_key remains.
+    await writeFile(join(agentDir, "auth.json"), `${JSON.stringify({ anthropic: { type: "oauth", token: "t" }, openai: { type: "api_key", key: "old-openai" } })}\n`, "utf8");
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), `${JSON.stringify({ api_keys: { "opencode-go": "oc-go-secret" } })}\n`, "utf8");
+
+    buildPiProcessOptions(cwd);
+
+    const auth = JSON.parse(await readFile(join(agentDir, "auth.json"), "utf8"));
+    expect(auth.anthropic).toEqual({ type: "oauth", token: "t" });
+    expect(auth["opencode-go"]).toEqual({ type: "api_key", key: "oc-go-secret" });
+    // Settings is the authority for api_key entries: the stale key is removed.
+    expect(auth.openai).toBeUndefined();
+  });
+
+  it("removes auth.json when no API keys remain", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-auth-clear-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    const agentDir = join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(join(agentDir, "auth.json"), `${JSON.stringify({ openai: { type: "api_key", key: "old-openai" } })}\n`, "utf8");
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), `${JSON.stringify({ api_keys: {} })}\n`, "utf8");
+
+    buildPiProcessOptions(cwd);
+
+    await expect(readFile(join(agentDir, "auth.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("materializes custom reasoning metadata and percentage-based compaction settings", async () => {

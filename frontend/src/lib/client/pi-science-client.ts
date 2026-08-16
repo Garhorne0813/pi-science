@@ -10,7 +10,7 @@ import { clearCachedMessages, readCachedMessages } from "./message-cache";
 import * as rest from "./rest";
 import { clearAiTitle, clearAiTitleAttempted, clearSessionName } from "./session-names";
 import { SseTransport } from "./sse-transport";
-import type { HistoryMessage, InteractionResponse, PiScienceEvent, SessionInfo, SessionMessagePage, SessionState, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
+import type { HistoryMessage, InteractionResponse, PiScienceEvent, SessionInfo, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
 
 export type {
   AvailableModel,
@@ -20,6 +20,7 @@ export type {
   SessionInfo,
   SessionMessagePage,
   SessionState,
+  SessionStats,
   SessionUserMessageIndex,
   TurnArtifactTurn,
 } from "./types";
@@ -98,6 +99,10 @@ export class PiScienceClient {
 
   async getSessionState(sessionId: string, cwd: string): Promise<SessionState> {
     return rest.getSessionState(this.baseUrl, sessionId, cwd);
+  }
+
+  async getSessionStats(sessionId: string, cwd: string): Promise<SessionStats> {
+    return rest.getSessionStats(this.baseUrl, sessionId, cwd);
   }
 
   async forkSession(sessionId: string, cwd: string, entryId?: string): Promise<{ id: string }> {

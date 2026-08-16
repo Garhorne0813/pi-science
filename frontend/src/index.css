@@ -457,50 +457,16 @@ button:disabled {
   cursor: not-allowed;
 }
 
-/* Settings controls share one compact visual language regardless of the
-   utility classes used by their individual forms. */
-.settings-page select {
-  min-height: var(--density-control) !important;
-  appearance: none;
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  background-color: var(--surface);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2381858c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  background-position: right 0.75rem center;
-  background-repeat: no-repeat;
-  background-size: 0.875rem;
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 4%, transparent);
-  color: var(--text);
-  font-family: Inter, system-ui, sans-serif !important;
-  font-size: 0.8125rem !important;
-  font-weight: 500;
-  line-height: 1rem;
-  padding: 0.5rem 2.25rem 0.5rem 0.75rem;
-  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+/* Model / thinking row menus (LLM tab) open/close motion, driven by Radix
+   data-state attributes on the dropdown content (tokens: --ease-standard,
+   --motion-fast/normal). */
+@keyframes settings-menu-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: none; }
 }
-
-.settings-page select:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--muted) 55%, var(--border));
-}
-
-.settings-page select:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 65%, var(--border));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
-  outline: none;
-}
-
-.settings-page select:disabled {
-  background-color: var(--surface-2);
-  box-shadow: none;
-  color: var(--muted);
-  cursor: not-allowed;
-  opacity: 0.7;
-}
-
-.settings-page select option {
-  background-color: var(--surface);
-  color: var(--text);
-  font-family: Inter, system-ui, sans-serif;
+@keyframes settings-menu-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(-4px) scale(0.98); }
 }
 
 * {

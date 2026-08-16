@@ -2,7 +2,7 @@ import { createHash, randomInt, randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import type { PiConfig } from "@pi-science/contracts";
 import type { PiProcessOptions, RuntimeSkillPolicy } from "./pi-process.js";
 import { configRoot } from "../../storage/persistence.js";
@@ -112,13 +112,7 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
     } : {}),
     ...(config.provider ? { PI_DEFAULT_PROVIDER: config.provider } : {}),
   };
-  if (storedKeys && typeof storedKeys === "object") {
-    for (const [provider, key] of Object.entries(storedKeys)) {
-      if (typeof key !== "string" || !key) continue;
-      const envName = providerEnv(provider);
-      if (envName) env[envName] = key;
-    }
-  }
+  if (storedKeys && typeof storedKeys === "object") materializeApiKeysAuth(agentDir, storedKeys as Record<string, unknown>);
   materializeCustomProviders(agentDir, settings.custom_providers, env);
   materializeRuntimeSettings(agentDir, settings, config);
   materializeFollowUpGuidance(agentDir);
@@ -427,14 +421,36 @@ function readSettings(dataRoot: string): Record<string, any> {
   catch { return {}; }
 }
 
-function providerEnv(provider: string): string | null {
-  const names: Record<string, string> = {
-    anthropic: "ANTHROPIC_API_KEY", openai: "OPENAI_API_KEY", google: "GEMINI_API_KEY",
-    deepseek: "DEEPSEEK_API_KEY", groq: "GROQ_API_KEY", openrouter: "OPENROUTER_API_KEY",
-    mistral: "MISTRAL_API_KEY", xai: "XAI_API_KEY", zai: "ZAI_API_KEY", fireworks: "FIREWORKS_API_KEY",
-    together: "TOGETHER_API_KEY",
-  };
-  return names[provider] ?? null;
+/** Write Pi-Science API keys into the managed Pi agent dir's auth.json so
+ *  EVERY pi-ai provider (including OpenCode Go, Kimi, Qwen, ...) reads them.
+ *  The managed dir is Pi-Science-owned, but an existing auth.json may carry
+ *  OAuth/other entries from direct pi usage: non-api_key entries are
+ *  preserved untouched; api_key entries are Pi-Science-managed, so settings
+ *  is the authority and stale removed keys are dropped. File mode 0600. */
+function materializeApiKeysAuth(agentDir: string, storedKeys: Record<string, unknown>): void {
+  const path = join(agentDir, "auth.json");
+  let current: Record<string, unknown> = {};
+  try { current = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>; }
+  catch { /* fresh auth file */ }
+  const next: Record<string, unknown> = {};
+  for (const [provider, entry] of Object.entries(current)) {
+    if (!entry || typeof entry !== "object") continue;
+    const kind = (entry as Record<string, unknown>).type;
+    if (kind !== "api_key") { next[provider] = entry; continue; }
+    const stillConfigured = typeof storedKeys[provider] === "string" && storedKeys[provider] !== "";
+    if (stillConfigured) next[provider] = entry;
+  }
+  for (const [provider, key] of Object.entries(storedKeys)) {
+    if (typeof key !== "string" || !key) continue;
+    next[provider] = { type: "api_key", key };
+  }
+  if (Object.keys(next).length === 0) {
+    try { unlinkSync(path); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    return;
+  }
+  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  try { chmodSync(path, 0o600); } catch { /* permissions are best-effort (e.g. Windows) */ }
 }
 
 function materializeCustomProviders(agentDir: string, raw: unknown, env: NodeJS.ProcessEnv): void {

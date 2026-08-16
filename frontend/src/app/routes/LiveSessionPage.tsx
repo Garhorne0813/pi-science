@@ -21,6 +21,7 @@ import { MentionComposer } from "../../components/conversation/MentionComposer";
 import { QuestionnairePrompt } from "../../components/conversation/QuestionnairePrompt";
 import { groupBlocks, renderBlockGroup } from "../../components/conversation/ConversationBlocks";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
+import { ConversationStatsLine } from "../../components/conversation/ConversationStatsLine";
 import { SessionExecutionButton } from "../../components/conversation/SessionExecutionButton";
 import { visibleUserMessage } from "../../lib/files";
 import { useTranslation } from "react-i18next";
@@ -90,6 +91,7 @@ export function LiveSessionPage() {
   // Field-level selectors, not a whole-store subscription: a streamed token only
   // touches `thread`/`working`, so nothing that reads the other fields re-renders.
   const status = useRuntimeStore((s) => s.status);
+  const sessionStats = useRuntimeStore((s) => s.sessionStats);
   const rawThread = useRuntimeStore((s) => s.thread);
   // Defensive: transient store states (mid-recovery / mid-delete) must never
   // crash rendering with "blocks is not iterable" — normalize to a safe shape.
@@ -384,6 +386,22 @@ export function LiveSessionPage() {
     virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: smoothScroll() ? "smooth" : "auto" });
   };
   const model = useModelConfig(workspaceCwd, sessionId);
+
+  // Whole-session stats: the SSE `session.stats` event keeps the store fresh
+  // after every settled turn; a REST read covers refresh/mount before the
+  // first turn of the current page load.
+  useEffect(() => {
+    if (!activeSessionId) {
+      useRuntimeStore.setState({ sessionStats: null });
+      return;
+    }
+    let cancelled = false;
+    void getClient()
+      .getSessionStats(activeSessionId, workspaceCwd)
+      .then((stats) => { if (!cancelled) useRuntimeStore.setState({ sessionStats: stats }); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [activeSessionId, workspaceCwd]);
 
   useEffect(() => {
     if (activeSessionId) {
@@ -773,6 +791,7 @@ export function LiveSessionPage() {
             </div>
           </div>
           </div>
+          {!showWelcome && <ConversationStatsLine stats={sessionStats} />}
         </div>
 
         {showWelcome && <div className="flex-1" aria-hidden />}

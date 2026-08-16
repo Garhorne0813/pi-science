@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { settingsApi } from "../../lib/settings";
 import type { CustomProvider } from "../../lib/settings";
+import { SettingsSelectMenu } from "./SettingsSelectMenu";
 
 export function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, onClose }: { providers: CustomProvider[]; onConfigReload: () => Promise<void>; isOpen: boolean; onOpen: () => void; onClose: () => void }) {
   const { t } = useTranslation();
@@ -99,7 +100,7 @@ export function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, on
         </div>
       )}
       {isOpen && (
-        <div className="space-y-3 border-y border-faint py-3">
+        <div className="space-y-3 rounded-card border border-faint bg-surface-2/40 px-4 py-3">
           <div className="flex items-center justify-between gap-2">
             <p className="text-sm font-medium text-text">{t("settings.custom.add")}</p>
             <button type="button" onClick={closeForm} className="min-h-9 rounded-input px-3 text-[11px] text-muted hover:bg-surface-2 hover:text-text">
@@ -112,11 +113,17 @@ export function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, on
           {error && <p className="rounded-input bg-error/10 px-3 py-2 text-[11px] text-error-text">{error}</p>}
           <div className="grid gap-2 sm:grid-cols-2">
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("settings.custom.name")} className="rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] text-text outline-none" />
-            <select value={api} onChange={(e) => setApi(e.target.value)} className="rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] text-text outline-none">
-              <option value="openai-completions">{t("settings.custom.api.openaiCompletions")}</option>
-              <option value="openai-responses">{t("settings.custom.api.openaiResponses")}</option>
-              <option value="anthropic-messages">{t("settings.custom.api.anthropicMessages")}</option>
-            </select>
+            <SettingsSelectMenu
+              variant="field"
+              ariaLabel={t("settings.custom.api.protocolLabel")}
+              value={api}
+              options={[
+                { value: "openai-completions", label: t("settings.custom.api.openaiCompletions") },
+                { value: "openai-responses", label: t("settings.custom.api.openaiResponses") },
+                { value: "anthropic-messages", label: t("settings.custom.api.anthropicMessages") },
+              ]}
+              onSelect={(next) => setApi(next)}
+            />
           </div>
           <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" className="w-full rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] font-mono text-text outline-none" />
           <div className="grid gap-2 sm:grid-cols-2">
@@ -160,9 +167,9 @@ export function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, on
         </div>
       )}
       {providers.length > 0 && (
-        <div className="mt-3 divide-y divide-faint border-y border-faint">
+        <div className="mt-4 divide-y divide-faint overflow-hidden rounded-card border border-faint bg-surface-2/40">
           {providers.map((provider) => (
-            <div key={provider.id} className="flex min-h-14 items-start justify-between gap-3 py-2">
+            <div key={provider.id} className="flex min-h-14 items-start justify-between gap-3 px-4 py-2">
               <div className="min-w-0">
                 <div className="flex items-center gap-2 text-xs font-medium text-text">
                   <span className="truncate">{provider.name}</span>

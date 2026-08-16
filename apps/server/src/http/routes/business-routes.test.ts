@@ -133,6 +133,300 @@ describe("native control-plane business routes", () => {
     });
   });
 
+  it("overrides the configured model's thinking levels with the live runtime's actual levels", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME, "config.json"), JSON.stringify({ model: "openrouter/openai/gpt-5.1", thinking: "max" }), "utf8");
+    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
+      success: true,
+      data: { models: [
+        { provider: "openrouter", id: "openai/gpt-5.1", name: "GPT-5.1", reasoning: true, contextWindow: 200000, thinkingLevelMap: { xhigh: "xhigh", max: null } },
+      ] },
+    });
+    // The runtime is the final authority for the CURRENT model: it reports
+    // only off/high even though the catalog hint claims more.
+    vi.spyOn(nodeSessionService, "availableThinkingLevels").mockResolvedValue({ success: true, data: { levels: ["off", "high"], model: "openrouter/openai/gpt-5.1" } });
+    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
+    const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
+    expect(settings.statusCode).toBe(200);
+    expect(settings.json()).toMatchObject({
+      model: "openrouter/openai/gpt-5.1",
+      // "max" is not supported by the actual levels; the returned value clamps down.
+      thinking: "high",
+      available_models: [
+        { id: "openrouter/openai/gpt-5.1", reasoning: true, thinking_levels: ["off", "high"], context_window: 200000 },
+      ],
+    });
+  });
+
+  it("keeps catalog levels when the live runtime reports a different model identity", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME, "config.json"), JSON.stringify({ model: "deepseek/deepseek-v4-flash", thinking: "max" }), "utf8");
+    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
+      success: true,
+      data: { models: [
+        { provider: "deepseek", id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", reasoning: true, contextWindow: 1_000_000, thinkingLevelMap: { high: "high", max: "max" } },
+      ] },
+    });
+    // The runtime is running a DIFFERENT model than the configured one: the
+    // route must not apply its levels or clamp with them.
+    vi.spyOn(nodeSessionService, "availableThinkingLevels").mockResolvedValue({ success: true, data: { levels: ["off", "low"], model: "custom-other/provider-2" } });
+    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
+    const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
+    expect(settings.statusCode).toBe(200);
+    expect(settings.json()).toMatchObject({
+      model: "deepseek/deepseek-v4-flash",
+      // Catalog levels stay authoritative; the unrelated runtime is ignored.
+      thinking: "max",
+      available_models: [
+        { id: "deepseek/deepseek-v4-flash", reasoning: true, thinking_levels: ["off", "minimal", "low", "medium", "high", "max"], context_window: 1000000 },
+      ],
+    });
+  });
+
+  it("clamps a saved thinking level to the selected model's supported levels", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
+    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
+      success: true,
+      data: { models: [
+        { provider: "deepseek", id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", reasoning: true, contextWindow: 1_000_000, thinkingLevelMap: { high: "high" } },
+      ] },
+    });
+    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
+    const saved = await app.inject({ method: "PUT", url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`, payload: { model: "deepseek/deepseek-v4-flash", thinking: "max" } });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({ ok: true, model: "deepseek/deepseek-v4-flash", thinking: "high" });
+    // The persisted value matches the response (never an unsupported level).
+    const stored = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"));
+    expect(stored).toMatchObject({ model: "deepseek/deepseek-v4-flash", thinking: "high" });
+  });
+
+  it("persists the runtime-clamped thinking level on GET config (self-heal)", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME, "config.json"), JSON.stringify({ model: "openrouter/openai/gpt-5.1", thinking: "max" }), "utf8");
+    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
+      success: true,
+      data: { models: [{ provider: "openrouter", id: "openai/gpt-5.1", name: "GPT-5.1", reasoning: true, contextWindow: 200000, thinkingLevelMap: { xhigh: "xhigh", max: null } }] },
+    });
+    vi.spyOn(nodeSessionService, "availableThinkingLevels").mockResolvedValue({ success: true, data: { levels: ["off", "high"], model: "openrouter/openai/gpt-5.1" } });
+    const reload = vi.spyOn(nodeSessionService, "reloadConfiguration");
+    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
+    const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
+    expect(settings.statusCode).toBe(200);
+    expect(settings.json()).toMatchObject({ model: "openrouter/openai/gpt-5.1", thinking: "high" });
+    // The corrected level is durable: a cold read (no live runtime) must see
+    // the same value, and the GET self-heal never triggers a runtime reload.
+    const stored = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"));
+    expect(stored).toMatchObject({ model: "openrouter/openai/gpt-5.1", thinking: "high" });
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("corrects and persists the context window from the live runtime catalog on GET config", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
+    // A stale persisted window; the live runtime reports the authoritative value.
+    await writeFile(join(process.env.PI_SCIENCE_HOME, "config.json"), JSON.stringify({ model: "openrouter/openai/gpt-5.1", thinking: "high", model_context_window: 128000 }), "utf8");
+    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
+      success: true,
+      data: { models: [{ provider: "openrouter", id: "openai/gpt-5.1", name: "GPT-5.1", reasoning: true, contextWindow: 200000, thinkingLevelMap: { xhigh: "xhigh", max: null } }] },
+    });
+    const reload = vi.spyOn(nodeSessionService, "reloadConfiguration");
+    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
+    const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
+    expect(settings.statusCode).toBe(200);
+    expect(settings.json()).toMatchObject({ model: "openrouter/openai/gpt-5.1", model_context_window: 200000 });
+    // The corrected window is durable; GET self-heal never reloads the runtime.
+    const stored = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"));
+    expect(stored).toMatchObject({ model: "openrouter/openai/gpt-5.1", model_context_window: 200000 });
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("persists runtime capabilities into custom provider model hints on GET config", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME, "config.json"), JSON.stringify({
+      model: "custom-local-provider/local-model",
+      thinking: "off",
+      model_context_window: 64000,
+      custom_providers: [{ id: "local-provider", name: "Local Provider", base_url: "http://127.0.0.1:11434/v1", api: "openai-completions", models: ["local-model"], reasoning: true, context_window: 64000, model_hints: { "local-model": { reasoning: false, context_window: 64000, source: "manual" } } }],
+    }), "utf8");
+    // The live runtime is the authority: it reports a larger window and the
+    // actual thinking levels for the running model.
+    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
+      success: true,
+      data: { models: [{ provider: "custom-local-provider", id: "local-model", name: "Local Model", reasoning: true, contextWindow: 262144, thinkingLevelMap: { off: "off", high: "high" } }] },
+    });
+    vi.spyOn(nodeSessionService, "availableThinkingLevels").mockResolvedValue({ success: true, data: { levels: ["off", "high"], model: "custom-local-provider/local-model" } });
+    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
+    const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
+    expect(settings.statusCode).toBe(200);
+    expect(settings.json()).toMatchObject({ model: "custom-local-provider/local-model", model_context_window: 262144 });
+    const model = settings.json().available_models.find((item: { id: string }) => item.id === "custom-local-provider/local-model");
+    expect(model).toMatchObject({ context_window: 262144, reasoning: true, thinking_levels: ["off", "high"] });
+    // The per-model hint is corrected in place: window always, reasoning and
+    // levels only when the runtime verified the configured model identity.
+    const stored = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"));
+    expect(stored).toMatchObject({ model: "custom-local-provider/local-model", model_context_window: 262144 });
+    expect(stored.custom_providers[0].model_hints["local-model"]).toMatchObject({ context_window: 262144, reasoning: true, thinking_levels: ["off", "high"], source: "pi-runtime" });
+  });
+
+  it("corrects the persisted thinking level to the runtime's actual levels after model PUT", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
+    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
+      success: true,
+      data: { models: [{ provider: "deepseek", id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", reasoning: true, contextWindow: 1_000_000, thinkingLevelMap: { off: "off", low: "low", minimal: null, medium: null, high: null } }] },
+    });
+    // The catalog only allows low, but the reloaded runtime reports high/max:
+    // the response AND the persisted config must both settle on high.
+    vi.spyOn(nodeSessionService, "availableThinkingLevels").mockResolvedValue({ success: true, data: { levels: ["high", "max"], model: "deepseek/deepseek-v4-flash" } });
+    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
+    const saved = await app.inject({ method: "PUT", url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`, payload: { model: "deepseek/deepseek-v4-flash", thinking: "high" } });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({ ok: true, model: "deepseek/deepseek-v4-flash", thinking: "high" });
+    const stored = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"));
+    expect(stored).toMatchObject({ model: "deepseek/deepseek-v4-flash", thinking: "high" });
+  });
+
+  it("keeps the catalog-clamped level when the reloaded runtime runs a different model", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
+    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
+      success: true,
+      data: { models: [{ provider: "deepseek", id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", reasoning: true, contextWindow: 1_000_000, thinkingLevelMap: { off: "off", low: "low", minimal: null, medium: null, high: null } }] },
+    });
+    // The reloaded runtime is running a DIFFERENT model: its levels must not
+    // be written back to the config or echoed in the response.
+    vi.spyOn(nodeSessionService, "availableThinkingLevels").mockResolvedValue({ success: true, data: { levels: ["high", "max"], model: "custom-other/provider-2" } });
+    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
+    const saved = await app.inject({ method: "PUT", url: `/api/settings/model?cwd=${encodeURIComponent(cwd)}`, payload: { model: "deepseek/deepseek-v4-flash", thinking: "high" } });
+    expect(saved.statusCode).toBe(200);
+    // Catalog clamp stands (high -> low); the foreign runtime is ignored.
+    expect(saved.json()).toMatchObject({ ok: true, model: "deepseek/deepseek-v4-flash", thinking: "low" });
+    const stored = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"));
+    expect(stored).toMatchObject({ model: "deepseek/deepseek-v4-flash", thinking: "low" });
+  });
+
+  it("keeps authoritative levels when the runtime omits capability metadata", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
+    // Custom provider with an explicit per-model hint (the authoritative set).
+    await writeFile(join(process.env.PI_SCIENCE_HOME, "config.json"), JSON.stringify({
+      model: "custom-local-provider/local-model",
+      custom_providers: [{ id: "local-provider", name: "Local Provider", base_url: "http://127.0.0.1:11434/v1", api: "openai-completions", models: ["local-model"], reasoning: true, context_window: 64000, model_hints: { "local-model": { reasoning: true, thinking_levels: ["off", "high", "xhigh"] } } }],
+    }), "utf8");
+    // The runtime lists the model with reasoning but WITHOUT a thinkingLevelMap
+    // (no capability metadata): it must not invent levels or erase the hint.
+    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
+      success: true,
+      data: { models: [{ provider: "custom-local-provider", id: "local-model", name: "Local Model", reasoning: true }] },
+    });
+    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService }); apps.push(app);
+    const settings = await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` });
+    const model = settings.json().available_models.find((item: { id: string }) => item.id === "custom-local-provider/local-model");
+    expect(model).toMatchObject({ reasoning: true, thinking_levels: ["off", "high", "xhigh"] });
+  });
+
+  it("lists OpenCode Go from the pi-ai catalog: needs_key without credentials, configured after saving a key", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    const app = buildApp(config());
+    apps.push(app);
+
+    const before = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
+    const go = before.providers.find((provider: { id: string }) => provider.id === "opencode-go");
+    expect(go).toMatchObject({
+      name: "OpenCode Go",
+      credential_status: "needs_key",
+      has_key: false,
+      enabled: false,
+      auth: { kind: "api_key", api_key_supported: true, oauth_supported: false, login_supported: false },
+    });
+    expect(go.models.length).toBeGreaterThan(0);
+    // No credentials -> no Go models in the selectable catalog.
+    expect(before.available_models.some((model: { provider: string }) => model.provider === "opencode-go")).toBe(false);
+
+    const saved = await app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "opencode-go", api_key: "oc-go-secret" } });
+    expect(saved.statusCode).toBe(200);
+    const after = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
+    expect(after.providers.find((provider: { id: string }) => provider.id === "opencode-go")).toMatchObject({ credential_status: "configured", has_key: true, enabled: true });
+    expect(after.api_keys).toMatchObject({ "opencode-go": true });
+    // Stored key + pi-ai fallback catalog -> Go models become selectable.
+    expect(after.available_models.some((model: { provider: string }) => model.provider === "opencode-go")).toBe(true);
+    expect(after.body ?? after).not.toContain("oc-go-secret");
+  });
+
+  it("rejects API keys for OAuth-only and unknown providers", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    const app = buildApp(config());
+    apps.push(app);
+
+    const oauthOnly = await app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "openai-codex", api_key: "nope" } });
+    expect(oauthOnly.statusCode).toBe(400);
+    expect(oauthOnly.json()).toMatchObject({ code: "provider_requires_login" });
+    expect(oauthOnly.body).not.toContain("nope");
+
+    const unknown = await app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "no-such-provider", api_key: "x" } });
+    expect(unknown.statusCode).toBe(400);
+    expect(unknown.json().error).toContain("Unknown provider");
+
+    // OAuth-only providers appear in the inventory without a has_key.
+    const settings = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
+    const codex = settings.providers.find((provider: { id: string }) => provider.id === "openai-codex");
+    expect(codex).toMatchObject({ auth: { kind: "oauth" }, has_key: false, credential_status: "needs_login" });
+  });
+
+  it("treats an empty Orbit model listing as authoritative (no fallback mixing)", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
+    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({ success: true, data: { models: [] } });
+    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService });
+    apps.push(app);
+    // A stored OpenAI key would make the pi-ai fallback list OpenAI models;
+    // an empty Orbit listing must still win.
+    await app.inject({ method: "PUT", url: "/api/settings/api-key", payload: { provider: "openai", api_key: "sk-test" } });
+    const settings = (await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` })).json();
+    expect(settings.model_catalog_source).toBe("pi");
+    expect(settings.available_models.filter((model: { custom: boolean }) => !model.custom)).toHaveLength(0);
+  });
+
+  it("keeps Orbit-listed providers (even unknown to pi-ai) in the inventory and catalog", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    await mkdir(process.env.PI_SCIENCE_HOME, { recursive: true });
+    vi.spyOn(nodeSessionService, "availableModels").mockResolvedValue({
+      success: true,
+      data: { models: [{ provider: "openai-codex", id: "gpt-5.1-codex", name: "GPT-5.1 Codex", reasoning: true }] },
+    });
+    const app = buildApp(config(), { ...createServerModules(), sessions: nodeSessionService });
+    apps.push(app);
+    const settings = (await app.inject({ method: "GET", url: `/api/settings/config?cwd=${encodeURIComponent(cwd)}` })).json();
+    // OAuth-only + present in the live Orbit listing -> connected, usable.
+    expect(settings.providers.find((provider: { id: string }) => provider.id === "openai-codex")).toMatchObject({
+      credential_status: "connected",
+      enabled: true,
+      has_key: false,
+      models: ["gpt-5.1-codex"],
+    });
+    expect(settings.available_models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "openai-codex/gpt-5.1-codex", reasoning: true }),
+    ]));
+  });
+
   it("exposes reasoning levels for DeepSeek V4 fallback models", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
@@ -682,8 +976,12 @@ describe("native control-plane business routes", () => {
     expect((await app.inject({ method: "PUT", url: "/api/settings/custom-providers/local-provider", payload })).statusCode).toBe(200);
     const settings = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
     expect(settings.available_models).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "custom-local-provider/local-model", reasoning: true, context_window: 64000, thinking_levels: expect.arrayContaining(["high", "xhigh"]) }),
+      expect.objectContaining({ id: "custom-local-provider/local-model", reasoning: true, context_window: 64000, thinking_levels: ["off", "minimal", "low", "medium", "high"] }),
     ]));
+    // Without explicit hints the fallback must never invent xhigh/max.
+    const fallbackLevels = settings.available_models.find((item: { id: string }) => item.id === "custom-local-provider/local-model").thinking_levels;
+    expect(fallbackLevels).not.toContain("xhigh");
+    expect(fallbackLevels).not.toContain("max");
     const compaction = await app.inject({ method: "PUT", url: "/api/settings/compaction", payload: { enabled: true, threshold_percent: 82 } });
     expect(compaction.statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/api/settings/config" })).json()).toMatchObject({ compaction_enabled: true, compaction_threshold_percent: 82 });
@@ -792,6 +1090,33 @@ describe("native control-plane business routes", () => {
     expect(anthropicList?.headers.has("authorization")).toBe(false);
     expect(anthropicProbe?.headers.get("x-api-key")).toBe("anthropic-key");
     expect(anthropicProbe?.headers.get("anthropic-version")).toBe("2023-06-01");
+  });
+
+  it("probes OpenAI Responses model capabilities with the responses protocol", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    const calls: Array<{ url: string; headers: Headers; body: Record<string, unknown> | null }> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : null;
+      calls.push({ url, headers: new Headers(init?.headers), body });
+      if (url.endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "responses-private" }] }), { status: 200, headers: { "content-type": "application/json" } });
+      if (url.includes("/models/")) return new Response(JSON.stringify({ error: "metadata unavailable" }), { status: 404, headers: { "content-type": "application/json" } });
+      if (url.endsWith("/responses")) return new Response(JSON.stringify({ error: { message: "Maximum context length is 196,608 tokens", supports_reasoning: true, thinking_levels: ["off", "low", "max"] } }), { status: 400, headers: { "content-type": "application/json" } });
+      throw new Error(`unexpected probe request: ${url}`);
+    });
+    const app = buildApp(config()); apps.push(app);
+
+    const responses = await app.inject({ method: "POST", url: "/api/settings/custom-providers/discover", payload: { name: "Responses API", base_url: "http://127.0.0.1/responses/v1", api_key: "responses-key", api: "openai-responses" } });
+    expect(responses.statusCode).toBe(200);
+    expect(responses.json().provider.model_hints["responses-private"]).toMatchObject({ context_window: 196_608, reasoning: true, thinking_levels: ["off", "low", "max"], source: "openai-responses-probe" });
+
+    const list = calls.find((call) => call.url.endsWith("/responses/v1/models"));
+    const probe = calls.find((call) => call.url.endsWith("/responses"));
+    expect(list?.headers.get("authorization")).toBe("Bearer responses-key");
+    expect(probe?.headers.get("authorization")).toBe("Bearer responses-key");
+    // The responses protocol uses input + max_output_tokens (not messages/max_tokens).
+    expect(probe?.body).toMatchObject({ model: "responses-private", input: "ping", max_output_tokens: 1_000_000_000 });
   });
 
   it("toggles compaction enabled without a threshold while keeping strict threshold validation", async () => {
