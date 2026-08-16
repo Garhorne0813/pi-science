@@ -78,6 +78,45 @@ export function RightPane({
     return () => media.removeEventListener("change", update);
   }, []);
 
+  // Full-screen dialog focus contract: move focus into the overlay when it
+  // appears, trap Tab inside it, close on Escape, and hand focus back to the
+  // element that opened it when it unmounts or resizes back to a split pane.
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!mobileOverlay) return;
+    restoreFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    paneRef.current?.focus();
+    return () => {
+      restoreFocusRef.current?.focus();
+      restoreFocusRef.current = null;
+    };
+  }, [mobileOverlay]);
+
+  const onOverlayKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      onMinimize();
+      return;
+    }
+    if (e.key !== "Tab") return;
+    const focusables = e.currentTarget.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    );
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
   const onDividerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -152,8 +191,10 @@ export function RightPane({
       role={mobileOverlay ? "dialog" : undefined}
       aria-modal={mobileOverlay || undefined}
       aria-label={mobileOverlay ? t("filePreview.openFiles") : undefined}
+      tabIndex={mobileOverlay ? -1 : undefined}
+      onKeyDown={mobileOverlay ? onOverlayKeyDown : undefined}
       className={cn(
-        "fixed inset-0 z-50 block h-full w-full bg-surface lg:relative lg:inset-auto lg:z-auto lg:w-[var(--inspector-width)] lg:shrink-0",
+        "fixed inset-0 z-50 block h-full w-full bg-surface outline-none lg:relative lg:inset-auto lg:z-auto lg:w-[var(--inspector-width)] lg:shrink-0",
         side === "left" && "order-1",
         dragging && "will-change-[width] select-none",
       )}
@@ -169,7 +210,7 @@ export function RightPane({
         aria-valuemin={INSPECTOR_MIN}
         aria-valuemax={INSPECTOR_MAX}
         aria-valuenow={inspectorWidth}
-        tabIndex={0}
+        tabIndex={mobileOverlay ? -1 : 0}
         onPointerDown={onDividerPointerDown}
         onPointerMove={onDividerPointerMove}
         onPointerUp={onDividerPointerUp}

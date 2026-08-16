@@ -109,7 +109,7 @@ export function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, on
           <p className="text-[11px] text-muted">
             {t("settings.custom.formPrefix")} <code className="font-mono">/models</code> {t("settings.custom.formSuffix")}
           </p>
-          {error && <p className="rounded-input bg-error/10 px-3 py-2 text-[11px] text-error">{error}</p>}
+          {error && <p className="rounded-input bg-error/10 px-3 py-2 text-[11px] text-error-text">{error}</p>}
           <div className="grid gap-2 sm:grid-cols-2">
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("settings.custom.name")} className="rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] text-text outline-none" />
             <select value={api} onChange={(e) => setApi(e.target.value)} className="rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] text-text outline-none">
@@ -121,7 +121,7 @@ export function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, on
           <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" className="w-full rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] font-mono text-text outline-none" />
           <div className="grid gap-2 sm:grid-cols-2">
             <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-input border border-border bg-surface-2 px-3 text-xs text-text">
-              <input type="checkbox" checked={reasoning} onChange={(event) => setReasoning(event.target.checked)} className="h-4 w-4 accent-[var(--color-accent)]" />
+              <input type="checkbox" checked={reasoning} onChange={(event) => setReasoning(event.target.checked)} className="h-4 w-4 accent-[var(--accent)]" />
               {t("settings.custom.reasoning")}
             </label>
             <label className="flex min-h-11 items-center gap-2 rounded-input border border-border bg-surface-2 px-3">
@@ -166,12 +166,12 @@ export function CustomApiSection({ providers, onConfigReload, isOpen, onOpen, on
               <div className="min-w-0">
                 <div className="flex items-center gap-2 text-xs font-medium text-text">
                   <span className="truncate">{provider.name}</span>
-                  {provider.has_key && <span className="text-[10px] text-ok">{t("settings.web.keySaved")}</span>}
+                  {provider.has_key && <span className="text-[10px] text-ok-text">{t("settings.web.keySaved")}</span>}
                 </div>
                 <p className="truncate font-mono text-[10px] text-muted">{provider.base_url}</p>
                 <p className="mt-1 text-[10px] text-muted">{provider.models.join(", ")}</p>
               </div>
-              <button type="button" onClick={() => remove(provider.id)} className="min-h-9 shrink-0 rounded-input px-2 py-1 text-[11px] text-error hover:bg-error/10">
+              <button type="button" onClick={() => remove(provider.id)} className="min-h-9 shrink-0 rounded-input px-2 py-1 text-[11px] text-error-text hover:bg-error/10">
                 {t("common.delete")}
               </button>
             </div>

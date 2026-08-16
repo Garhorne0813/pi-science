@@ -42,14 +42,11 @@ const STYLES: Record<Variant, Record<string, string>> = {
     th: "border border-border bg-surface-2 px-3 py-1.5 text-left font-semibold",
     td: "border border-border px-3 py-1.5",
   },
-  // Editorial-blog paper: warm ink on white, serif headings, terracotta accent
-  // (#c15f3c — the app's brand). Theme-independent by design: a document reads
-  // the same in light or dark mode, so colors are fixed, not tokens.
-  //
-  // Two font stacks, both explicit so the paper never inherits the app's UI
-  // font. Body: a comfortable reading sans (SF/Segoe + PingFang for Chinese).
-  // Headings: the finest reading serifs that actually ship on macOS/Windows
-  // (Iowan/Charter → Georgia), CJK falling back to Songti.
+  // Document "paper": a fixed, theme-independent reading surface (warm ink
+  // on near-white, serif display headings) so long-form previews read like a
+  // document rather than app UI. The colors are deliberate paper constants,
+  // not app-brand colors — the app brand is the DeepSeek-inspired accent blue
+  // and does not leak into document bodies.
   document: {
     root: "text-[16px] leading-[1.8] text-[#2b2620] antialiased [font-feature-settings:'liga','kern'] [font-family:-apple-system,'SF_Pro_Text','Segoe_UI','PingFang_SC','Microsoft_YaHei',sans-serif] selection:bg-[#f2d9cd]",
     p: "my-4 tracking-[0.006em] [text-wrap:pretty] first:mt-0 last:mb-0",
@@ -356,7 +353,9 @@ export function MarkdownViewer({
           },
           // Block code: chat gets the sticky banner shell (language/copy and,
           // with a codeRunner, Run for python fences); document keeps the
-          // plain editorial pre. The inner <code> is restyled via [&_code].
+          // plain editorial pre. Without chrome (artifact previews) the chat
+          // pre keeps its own card shell — background, border and margins —
+          // so fenced code never collapses onto the surrounding text.
           pre: ({ children }) => {
             const codeEl = Array.isArray(children) ? children[0] : children;
             const codeProps = isValidElement(codeEl) ? (codeEl.props as { className?: string; children?: React.ReactNode }) : null;
@@ -375,6 +374,11 @@ export function MarkdownViewer({
                 <CodeBlockFrame language={language} code={code} preClassName={s.pre}>
                   {children}
                 </CodeBlockFrame>
+              );
+            }
+            if (variant === "chat") {
+              return (
+                <pre className={cn(s.pre, "my-2 rounded-input border border-border bg-surface-2")}>{children}</pre>
               );
             }
             return <pre className={s.pre}>{children}</pre>;

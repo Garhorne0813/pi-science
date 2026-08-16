@@ -54,7 +54,7 @@ export function MCPTab({ workspaceCwd }: { workspaceCwd: string | null }) {
   return (
     <div className="space-y-card">
       <Section>
-        {error && <p className="mb-panel rounded-input bg-error/10 px-panel py-2 text-ui-caption text-error">{error}</p>}
+        {error && <p className="mb-panel rounded-input bg-error/10 px-panel py-2 text-ui-caption text-error-text">{error}</p>}
         {!workspaceCwd ? (
           <p className="rounded-input border border-dashed border-border p-panel text-ui-caption text-muted">{t("settings.mcpPage.workspaceRequired")}</p>
         ) : servers.length === 0 ? (

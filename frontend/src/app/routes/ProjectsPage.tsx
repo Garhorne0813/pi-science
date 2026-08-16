@@ -414,7 +414,7 @@ function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingName, edit
         </button>
         <button
           onClick={() => handleDelete(w.path)}
-          className="rounded p-1.5 text-muted hover:bg-error/10 hover:text-error"
+          className="rounded p-1.5 text-muted hover:bg-error/10 hover:text-error-text"
           title={t("projects.deleteTitle")}
         >
           <Trash2 size={13} />

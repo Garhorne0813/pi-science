@@ -69,7 +69,7 @@ export function InboxTab({
           {t("knowledge.selectAll")} ({selected.size}/{proposals.length})
         </label>
         <div className="flex gap-2">
-          <button type="button" disabled={selected.size === 0} onClick={() => void batch("reject")} className="min-h-11 rounded-input border border-border px-3 py-2 text-sm text-muted hover:border-error/40 hover:text-error disabled:cursor-not-allowed disabled:opacity-40">
+          <button type="button" disabled={selected.size === 0} onClick={() => void batch("reject")} className="min-h-11 rounded-input border border-border px-3 py-2 text-sm text-muted hover:border-error/40 hover:text-error-text disabled:cursor-not-allowed disabled:opacity-40">
             {t("knowledge.rejectSelected")}
           </button>
           <button type="button" disabled={selected.size === 0} onClick={() => void batch("accept")} className="min-h-11 rounded-input bg-accent-fill px-3 py-2 text-sm font-medium text-accent-fg hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">

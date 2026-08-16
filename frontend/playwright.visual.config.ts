@@ -44,9 +44,12 @@ if (!executablePath) {
 export default defineConfig({
   testDir: "./tests/visual",
   outputDir: "./tests/visual/.artifacts",
-  timeout: 60_000,
+  timeout: 90_000,
   expect: {
-    timeout: 15_000,
+    // The fixture app boots the full production bundle; slow machines take
+    // 18-26s to reach the first stable frame, so assertions must not fire
+    // before the app settles.
+    timeout: 30_000,
     toHaveScreenshot: {
       maxDiffPixelRatio: 0.005,
       animations: "disabled",
@@ -74,6 +77,7 @@ export default defineConfig({
   projects: [
     { name: "desktop-light", use: { viewport: { width: 1440, height: 1000 }, colorScheme: "light" } },
     { name: "desktop-dark", use: { viewport: { width: 1440, height: 1000 }, colorScheme: "dark" } },
+    { name: "desktop-lg", use: { viewport: { width: 1024, height: 768 }, colorScheme: "light" } },
     { name: "mobile", use: { viewport: { width: 375, height: 812 }, colorScheme: "light" } },
     { name: "tablet", use: { viewport: { width: 768, height: 1024 }, colorScheme: "light" } },
     { name: "wide", use: { viewport: { width: 1920, height: 1080 }, colorScheme: "light" } },

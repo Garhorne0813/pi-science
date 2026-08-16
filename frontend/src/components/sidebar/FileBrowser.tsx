@@ -262,7 +262,7 @@ export function FileBrowser({ cwd }: { cwd: string }) {
                     <span className="truncate">{e.name}</span>
                     {isLoading && <Icon icon={Loader2} size="xs" className="ml-auto shrink-0 animate-spin text-muted" />}
                   </button>
-                  {error && <p className="px-2 text-ui-micro italic text-error/80" style={{ paddingLeft: `${20 + e.depth * 12}px` }}>{error}</p>}
+                  {error && <p className="px-2 text-ui-micro italic text-error-text" style={{ paddingLeft: `${20 + e.depth * 12}px` }}>{error}</p>}
                 </div>
               );
             })

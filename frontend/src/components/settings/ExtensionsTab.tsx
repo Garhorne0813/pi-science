@@ -25,7 +25,7 @@ export function ExtensionsTab({ workspaceCwd }: { workspaceCwd: string | null })
     <div className="space-y-page pt-panel md:pt-4">
       <Section title={t("settings.extensionsPage.title")}>
         {error && (
-          <p role="alert" className="mb-panel text-ui-caption text-error">
+          <p role="alert" className="mb-panel text-ui-caption text-error-text">
             {error}
           </p>
         )}

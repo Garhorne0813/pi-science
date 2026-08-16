@@ -190,7 +190,7 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
               </div>
             ) : (
               <>
-                {error && <p role="alert" className="mb-card rounded-input bg-error/10 px-panel py-2 text-ui-caption text-error">{error}</p>}
+                {error && <p role="alert" className="mb-card rounded-input bg-error/10 px-panel py-2 text-ui-caption text-error-text">{error}</p>}
                 {tab === "general" && <GeneralTab />}
                 {tab === "llm" && <LLMTab config={config} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} saveModel={saveModel} saveCompaction={saveCompaction} onConfigReload={loadConfig} />}
                 {tab === "skills" && <SkillsTab />}

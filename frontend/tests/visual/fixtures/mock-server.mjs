@@ -9,13 +9,18 @@
  *  - Serve a fixed /api/* surface (REST + a real keep-alive SSE stream) from
  *    fixtures/data.mjs so screenshots are deterministic: same data, same
  *    times, same order, every run.
+ *
+ *  Hardiness contract: no request may crash the process. Malformed input
+ *  (bad URI syntax, bad percent-encoding) returns 400; handler failures
+ *  return 500; SIGTERM/SIGINT shut the server down cleanly so Playwright
+ *  never leaves a zombie listening on the port.
  */
 
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FIXTURES, VISUAL_CWD } from "./data.mjs";
+import { FIXTURES, VISUAL_CWD, VISUAL_LANDING_CWD } from "./data.mjs";
 
 const distRoot = resolve(fileURLToPath(new URL("../../../dist", import.meta.url)));
 const port = Number(process.env.PORT || 4173);
@@ -64,8 +69,9 @@ function sendSse(res, sessionId) {
   // so the UI shows the deterministic "ready" state instead of reconnecting.
   send("session.idle", { type: "session.idle", sessionId });
   const keepAlive = setInterval(() => res.write(": keep-alive\n\n"), 15_000);
-  res.on("close", () => clearInterval(keepAlive));
-  res.on("error", () => clearInterval(keepAlive));
+  const stop = () => clearInterval(keepAlive);
+  res.on("close", stop);
+  res.on("error", stop);
 }
 
 function handleApi(req, res, url) {
@@ -98,6 +104,11 @@ function handleApi(req, res, url) {
   // Session list + lazy creation.
   if (method === "GET" && pathname === "/api/sessions") {
     log();
+    // The landing fixture cwd must stay session-free so the workspace route
+    // renders the true landing hero and never auto-navigates into a session.
+    if (searchParams.get("cwd") === VISUAL_LANDING_CWD) {
+      return json(res, 200, []);
+    }
     return json(res, 200, FIXTURES.sessions);
   }
   if (method === "POST" && pathname === "/api/sessions") {
@@ -107,7 +118,12 @@ function handleApi(req, res, url) {
 
   const sessionMatch = /^\/api\/sessions\/([^/]+)(\/[^?]*)?$/.exec(pathname);
   if (sessionMatch) {
-    const sessionId = decodeURIComponent(sessionMatch[1]);
+    let sessionId;
+    try {
+      sessionId = decodeURIComponent(sessionMatch[1]);
+    } catch {
+      return json(res, 400, { error: "malformed percent-encoding in session id" });
+    }
     const sub = sessionMatch[2] || "";
 
     if (method === "GET" && sub === "/messages/index") {
@@ -156,7 +172,12 @@ function handleApi(req, res, url) {
   }
   if (method === "GET" && pathname.startsWith("/api/files/")) {
     log();
-    const filePath = decodeURIComponent(pathname.slice("/api/files/".length));
+    let filePath;
+    try {
+      filePath = decodeURIComponent(pathname.slice("/api/files/".length));
+    } catch {
+      return json(res, 400, { error: "malformed percent-encoding in file path" });
+    }
     if (filePath === "analysis/report.md") {
       return json(res, 200, { encoding: "utf8", data: FIXTURES.reportMarkdown });
     }
@@ -204,29 +225,70 @@ function handleApi(req, res, url) {
 }
 
 const server = createServer(async (req, res) => {
-  const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
-  if (url.pathname.startsWith("/api/")) {
-    return handleApi(req, res, url);
-  }
+  try {
+    let url;
+    try {
+      url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
+    } catch {
+      return json(res, 400, { error: "malformed request URI" });
+    }
 
-  let filePath = normalize(join(distRoot, decodeURIComponent(url.pathname)));
-  if (!filePath.startsWith(distRoot)) {
-    res.writeHead(403);
-    return res.end("forbidden");
-  }
-  try {
-    const info = await stat(filePath);
-    if (info.isFile()) return sendFile(res, filePath);
-  } catch {
-    // fall through to the SPA fallback
-  }
-  try {
-    await sendFile(res, join(distRoot, "index.html"));
-  } catch {
-    res.writeHead(500);
-    res.end("dist/index.html missing — run `pnpm --filter frontend build` before `test:visual`");
+    if (url.pathname.startsWith("/api/")) {
+      return handleApi(req, res, url);
+    }
+
+    let filePath;
+    try {
+      filePath = normalize(join(distRoot, decodeURIComponent(url.pathname)));
+    } catch {
+      return json(res, 400, { error: "malformed percent-encoding in path" });
+    }
+    if (!filePath.startsWith(distRoot)) {
+      res.writeHead(403);
+      return res.end("forbidden");
+    }
+    try {
+      const info = await stat(filePath);
+      if (info.isFile()) return sendFile(res, filePath);
+    } catch {
+      // fall through to the SPA fallback
+    }
+    try {
+      await sendFile(res, join(distRoot, "index.html"));
+    } catch {
+      res.writeHead(500);
+      res.end("dist/index.html missing — run `pnpm --filter frontend build` before `test:visual`");
+    }
+  } catch (error) {
+    console.error("[mock] request handler failed:", error);
+    try {
+      json(res, 500, { error: "mock server request handler failed" });
+    } catch {
+      // The response may already be half-sent; nothing more we can do.
+    }
   }
 });
+
+server.on("error", (error) => {
+  console.error(`[mock] server error: ${error.message}`);
+  process.exit(1);
+});
+
+// Playwright stops webServer processes with SIGTERM (then SIGKILL). Close the
+// listener and every open socket so SSE keep-alive handles never hold the
+// port hostage between runs.
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[mock] ${signal} received, shutting down`);
+  server.close(() => process.exit(0));
+  server.closeAllConnections?.();
+  // If close() cannot finish (e.g. a stuck socket), do not hang the run.
+  setTimeout(() => process.exit(0), 2000).unref();
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
 server.listen(port, "127.0.0.1", () => {
   console.log(`[mock] visual fixture server on http://127.0.0.1:${port} serving ${distRoot}`);

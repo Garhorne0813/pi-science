@@ -94,7 +94,7 @@ export function SkillsTab() {
           </button>
         )}
       </div>
-      {error && <p role="alert" className="rounded-input bg-error/10 px-3 py-2 text-ui-caption text-error">{error}</p>}
+      {error && <p role="alert" className="rounded-input bg-error/10 px-3 py-2 text-ui-caption text-error-text">{error}</p>}
       <section aria-label={t("skills.title")} className="ui-card-flat divide-y divide-border overflow-hidden rounded-card">
         {skills.length === 0 ? (
           <div className="px-4 py-8 text-center text-sm text-muted">{t("skills.empty")}</div>
@@ -106,7 +106,7 @@ export function SkillsTab() {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 text-sm font-medium text-text">
                   <span className="truncate">{skill.name}</span>
-                  {valid ? <ShieldCheck size={13} className="shrink-0 text-ok" /> : <AlertTriangle size={13} className="shrink-0 text-error" />}
+                  {valid ? <ShieldCheck size={13} className="shrink-0 text-ok-text" /> : <AlertTriangle size={13} className="shrink-0 text-error-text" />}
                 </div>
                 <p className="line-clamp-2 text-xs text-muted">{skill.description}</p>
                 {!!skill.requirements?.length && <p className="mt-1 text-[10px] text-muted">{t("skills.requirements")}: {skill.requirements.map((item) => `${item.name}${item.version ? ` ${item.version}` : ""}`).join(", ")}</p>}

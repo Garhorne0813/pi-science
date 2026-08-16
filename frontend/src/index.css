@@ -96,11 +96,8 @@
   --sidebar-rgb: 249 250 251;
   --bubble: #edf3fe;
   --border: rgba(0, 0, 0, 0.1);
-  --border-rgb: 0 0 0;
   --border-faint: rgba(0, 0, 0, 0.04);
-  --border-faint-rgb: 0 0 0;
   --border-strong: rgba(0, 0, 0, 0.16);
-  --border-strong-rgb: 0 0 0;
   --text: #0f1115;
   --text-rgb: 15 17 21;
   --muted: #61666b;
@@ -128,6 +125,25 @@
   --ok-rgb: 34 197 94;
   --error: #ec1313;
   --error-rgb: 236 19 19;
+  /* Status text/fill roles: the saturated --ok/--warn/--error values only
+     pass AA as tint/border accents, not as text on light surfaces or as
+     white-text fills. These roles exist for those two jobs:
+     - *-text: small text on light surfaces (>= 4.5:1 on --bg/--surface).
+     - *-fill: solid fills that must carry white text (>= 4.5:1 with #fff).
+     Dark mode keeps the bright variants for text (they pass on dark
+     surfaces) but still needs the darker fills for white text. */
+  --ok-text: #15803d;
+  --ok-text-rgb: 21 128 61;
+  --warn-text: #b45309;
+  --warn-text-rgb: 180 83 9;
+  --error-text: #d61010;
+  --error-text-rgb: 214 16 16;
+  --ok-fill: #15803d;
+  --ok-fill-rgb: 21 128 61;
+  --warn-fill: #b45309;
+  --warn-fill-rgb: 180 83 9;
+  --error-fill: #d61010;
+  --error-fill-rgb: 214 16 16;
   --series-1: #2a78d6;
   --series-2: #1baf7a;
   --series-3: #eda100;
@@ -169,7 +185,6 @@
   --radius-large: 16px;
   --radius-bubble: 22px;
   --radius-composer: 22px;
-  --radius-round: 999px;
   /* Motion scale (upstream base.css curve and durations). */
   --motion-fast: 100ms;
   --motion-normal: 200ms;
@@ -196,11 +211,8 @@
   --sidebar-rgb: 27 27 28;
   --bubble: #2c2c2e;
   --border: rgba(255, 255, 255, 0.12);
-  --border-rgb: 255 255 255;
   --border-faint: rgba(255, 255, 255, 0.06);
-  --border-faint-rgb: 255 255 255;
   --border-strong: rgba(255, 255, 255, 0.2);
-  --border-strong-rgb: 255 255 255;
   --text: #f9fafb;
   --text-rgb: 249 250 251;
   --muted: #cfd3d6;
@@ -223,6 +235,18 @@
   --ok-rgb: 78 209 126;
   --error: #f25a5a;
   --error-rgb: 242 90 90;
+  --ok-text: var(--ok);
+  --ok-text-rgb: var(--ok-rgb);
+  --warn-text: var(--warn);
+  --warn-text-rgb: var(--warn-rgb);
+  --error-text: var(--error);
+  --error-text-rgb: var(--error-rgb);
+  --ok-fill: #15803d;
+  --ok-fill-rgb: 21 128 61;
+  --warn-fill: #b45309;
+  --warn-fill-rgb: 180 83 9;
+  --error-fill: #d61010;
+  --error-fill-rgb: 214 16 16;
   --series-1: #3987e5;
   --series-2: #199e70;
   --series-3: #c98500;
@@ -513,21 +537,6 @@ button:disabled {
 }
 .rail-enter {
   animation: rail-in var(--motion-fast) var(--ease-standard);
-}
-
-/* Coarse pointers (touch) expand the hit area of icon-only buttons to at
-   least 44px without changing the visual layout: 28px control + 2x8px ring.
-   The pseudo-element is part of the button, so taps land on the button. */
-@media (pointer: coarse) {
-  .icon-btn-hit {
-    position: relative;
-  }
-  .icon-btn-hit::after {
-    content: "";
-    position: absolute;
-    inset: -8px;
-    border-radius: inherit;
-  }
 }
 
 @keyframes fade-in {

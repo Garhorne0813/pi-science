@@ -2,7 +2,7 @@
  *  collapsible sidebar across the fixed viewport matrix. */
 
 import { expect, screenshot, test, workspaceRoute } from "./fixtures/app.fixture";
-import { VISUAL_CWD } from "./fixtures/data.mjs";
+import { VISUAL_CWD, VISUAL_LANDING_CWD } from "./fixtures/data.mjs";
 
 test("projects page renders workspace cards", async ({ page }) => {
   await page.goto("/");
@@ -12,8 +12,17 @@ test("projects page renders workspace cards", async ({ page }) => {
 });
 
 test("workspace landing shows the hero composer", async ({ page }) => {
-  await page.goto(workspaceRoute(VISUAL_CWD));
+  // Dedicated session-free cwd: the mock server returns an empty session
+  // list here, so nothing can redirect the workspace route into a session
+  // and the page must render the true landing hero.
+  await page.goto(workspaceRoute(VISUAL_LANDING_CWD));
+  // Real landing hero: welcome copy plus the centered composer.
+  await expect(page.getByRole("heading", { name: "Pi-Science" })).toBeVisible();
+  await expect(page.getByText("Scientific AI Workbench", { exact: true })).toBeVisible();
   await expect(page.getByPlaceholder(/Ask anything/)).toBeVisible();
+  // No auto-navigation: the URL still points at the workspace root and the
+  // session list for this cwd is empty.
+  await expect(page).toHaveURL(new RegExp(`/workspace/${encodeURIComponent(VISUAL_LANDING_CWD).replace(/\//g, "\\/")}$`));
   await screenshot(page, "workspace-landing.png");
 });
 

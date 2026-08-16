@@ -97,7 +97,7 @@ export function ArtifactInspector({
             )}
           >
             <span className="text-ui-label">{label}</span>
-            {id === "review" && content.reviewPassed && <Check size={13} className="text-ok" />}
+            {id === "review" && content.reviewPassed && <Check size={13} className="text-ok-text" />}
           </button>
         ))}
       </nav>
@@ -143,7 +143,7 @@ export function ArtifactInspector({
         {tab === "environment" && <Pre text={content.environment ?? "No environment info"} />}
         {tab === "review" &&
           (content.reviewPassed ? (
-            <div className="flex items-center gap-2 text-sm text-ok">
+            <div className="flex items-center gap-2 text-sm text-ok-text">
               <Check size={16} /> {`Review passed (${activeLabel})`}
             </div>
           ) : (

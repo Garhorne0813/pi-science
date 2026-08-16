@@ -25,7 +25,7 @@ export function KnowledgePageHeader({
       description={t("knowledge.subtitle")}
       actions={
         <>
-        <button type="button" onClick={onToggleAutoReview} aria-pressed={policy?.auto_review ?? false} className={cn("min-h-11 rounded-input border px-3 py-2 text-sm font-medium transition-colors", policy?.auto_review ? "border-ok/40 bg-ok/10 text-ok" : "border-border bg-surface text-muted hover:text-text")}>
+        <button type="button" onClick={onToggleAutoReview} aria-pressed={policy?.auto_review ?? false} className={cn("min-h-11 rounded-input border px-3 py-2 text-sm font-medium transition-colors", policy?.auto_review ? "border-ok/40 bg-ok/10 text-ok-text" : "border-border bg-surface text-muted hover:text-text")}>
           {policy?.auto_review ? t("knowledge.autoReviewOn") : t("knowledge.autoReviewOff")}
         </button>
         <button type="button" onClick={onReview} disabled={reviewing} className="flex min-h-11 items-center gap-1.5 rounded-input bg-accent-fill px-3 py-2 text-sm font-medium text-accent-fg transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60">

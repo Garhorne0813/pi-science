@@ -89,11 +89,11 @@ export function SubagentSettings({ workspaceCwd }: { workspaceCwd: string | null
       ) : (
         <>
           {error && (
-            <p role="alert" className="mb-3 rounded-input bg-error/10 px-3 py-2 text-[11px] text-error">
+            <p role="alert" className="mb-3 rounded-input bg-error/10 px-3 py-2 text-[11px] text-error-text">
               {error}
             </p>
           )}
-          {notice && <p className="mb-3 rounded-input bg-ok/10 px-3 py-2 text-[11px] text-ok">{notice}</p>}
+          {notice && <p className="mb-3 rounded-input bg-ok/10 px-3 py-2 text-[11px] text-ok-text">{notice}</p>}
           <div className="divide-y divide-faint border-y border-faint">
             {agents.map((agent) => (
               <div key={agent.name} className="flex min-h-14 items-start gap-3 py-2">
@@ -114,7 +114,7 @@ export function SubagentSettings({ workspaceCwd }: { workspaceCwd: string | null
                 >
                   {t("settings.actions.edit")}
                 </button>
-                <button type="button" onClick={() => void remove(agent)} className="min-h-9 rounded-input px-2 text-error hover:bg-error/10">
+                <button type="button" onClick={() => void remove(agent)} className="min-h-9 rounded-input px-2 text-error-text hover:bg-error/10">
                   <Trash2 size={12} />
                 </button>
               </div>

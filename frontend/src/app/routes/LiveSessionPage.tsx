@@ -583,7 +583,7 @@ export function LiveSessionPage() {
                         )}
                         {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
                         {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
-                        {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error">{research.error}</div>}
+                        {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{research.error}</div>}
                       </div>
                     ),
                     Footer: ConversationFooter,
@@ -599,7 +599,7 @@ export function LiveSessionPage() {
               <>
                 {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
                 {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
-                {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error">{research.error}</div>}
+                {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{research.error}</div>}
                 {renderInteractionPrompt()}
                 {working && !pendingInteraction && (
                   <div className="flex items-center gap-2 py-4 text-sm text-muted">
@@ -663,7 +663,7 @@ export function LiveSessionPage() {
                     <span key={reference.path} className="flex max-w-full items-center gap-1 rounded-input bg-accent/5 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-accent/20 cursor-pointer hover:bg-accent/10" title={`${t("conversation.clickToInsert")} ${reference.path}`} onClick={() => { const current = input; setInput(current ? `${current} ${reference.path}` : reference.path); }}>
                       {reference.isDir ? <FolderOpen size={11} className="shrink-0 text-accent" /> : <File size={11} className="shrink-0 text-accent" />}
                       <span className="truncate">{reference.path}</span>
-                      <button type="button" aria-label={`Remove reference ${reference.name}`} onClick={(e) => { e.stopPropagation(); removeWorkspaceReference(workspaceCwd, reference.path); }} className="shrink-0 text-muted hover:text-error">
+                      <button type="button" aria-label={`Remove reference ${reference.name}`} onClick={(e) => { e.stopPropagation(); removeWorkspaceReference(workspaceCwd, reference.path); }} className="shrink-0 text-muted hover:text-error-text">
                         <X size={11} />
                       </button>
                     </span>
@@ -676,7 +676,7 @@ export function LiveSessionPage() {
                 {files.map((f, i) => (
                   <span key={i} className="flex items-center gap-1 rounded-input bg-surface-2 px-2 py-1 font-mono text-[11px] text-text ring-1 ring-border">
                     {f.name}
-                    <button onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))} className="text-muted hover:text-error">
+                    <button onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))} className="text-muted hover:text-error-text">
                       <X size={11} />
                     </button>
                   </span>
@@ -712,7 +712,7 @@ export function LiveSessionPage() {
                   <button
                     type="button"
                     onClick={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/knowledge`)}
-                    className="flex min-h-7 items-center gap-1 rounded-input border border-ok/40 bg-ok/10 px-2 py-1 text-xs text-ok hover:bg-ok/15"
+                    className="flex min-h-7 items-center gap-1 rounded-input border border-ok/40 bg-ok/10 px-2 py-1 text-xs text-ok-text hover:bg-ok/15"
                     title={t("conversation.autoReviewOnTitle")}
                   >
                     <Sparkles size={13} />
@@ -731,7 +731,7 @@ export function LiveSessionPage() {
                     <span className="composer-review-label">Review</span>
                   </button>
                 )}
-                {model.modelError && <span className="max-w-[180px] truncate text-[10px] text-error" title={model.modelError}>{model.modelError}</span>}
+                {model.modelError && <span className="max-w-[180px] truncate text-[10px] text-error-text" title={model.modelError}>{model.modelError}</span>}
                 {reviewNotice && <span className="max-w-[220px] truncate text-[10px] text-muted" title={reviewNotice}>{reviewNotice}</span>}
               </div>
               <input ref={composer.fileInputRef} type="file" multiple className="hidden" onChange={composer.handleFilePick} />
@@ -753,7 +753,7 @@ export function LiveSessionPage() {
                   />
                 )}
                 {working ? (
-                  <button aria-label="Stop generation" onClick={() => void abort().catch(() => undefined)} className="flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full bg-accent text-accent-fg transition-colors hover:bg-error">
+                  <button aria-label="Stop generation" onClick={() => void abort().catch(() => undefined)} className="flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full bg-accent-fill text-accent-fg transition-colors hover:bg-error-fill">
                     <Square size={14} fill="currentColor" />
                   </button>
                 ) : (
@@ -763,7 +763,7 @@ export function LiveSessionPage() {
                     disabled={working || interactionPending || (!model.selectedModel && !research.mode) || reviewingProject || research.busy || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
                     className={cn(
                       "flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full",
-                      ((model.selectedModel || research.mode) && !interactionPending && !reviewingProject && !research.busy && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted cursor-default",
+                      ((model.selectedModel || research.mode) && !interactionPending && !reviewingProject && !research.busy && (activeSessionId || status !== "connecting") && (input.trim() || files.length > 0 || workspaceReferences.length > 0)) ? "bg-accent-fill text-accent-fg" : "bg-surface-2 text-muted cursor-default",
                     )}
                   >
                     <ArrowUp size={16} />

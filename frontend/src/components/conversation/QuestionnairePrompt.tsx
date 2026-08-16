@@ -263,7 +263,7 @@ export function QuestionnairePrompt({
                 onClick={() => openQuestion(questionIndex)}
                 className="flex w-full items-start gap-2.5 px-2.5 py-1.5 text-left transition-colors hover:bg-accent/5 sm:px-3"
               >
-                <span className={cn("mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold", answered ? "bg-ok/10 text-ok" : "bg-accent/10 text-accent")}>
+                <span className={cn("mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold", answered ? "bg-ok/10 text-ok-text" : "bg-accent/10 text-accent")}>
                   {answered ? <Check size={13} /> : questionIndex + 1}
                 </span>
                 <span className="min-w-0 flex-1">
@@ -442,7 +442,7 @@ export function QuestionnairePrompt({
                     <span className="block truncate text-xs text-text">{question.question}</span>
                     <span className="block truncate text-xs text-muted">{answer ? answerLabel(answer, noneLabel, customLabel) : t("questionnaire.unanswered")}</span>
                   </span>
-                  {answer ? <Check size={13} className="mt-0.5 shrink-0 text-ok" /> : <span className="mt-0.5 shrink-0 text-[11px] text-warn">—</span>}
+                  {answer ? <Check size={13} className="mt-0.5 shrink-0 text-ok-text" /> : <span className="mt-0.5 shrink-0 text-[11px] text-warn-text">—</span>}
                 </button>
               );
             })}

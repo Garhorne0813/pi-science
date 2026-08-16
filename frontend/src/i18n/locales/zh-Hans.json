@@ -126,6 +126,8 @@
   "conversation.scrollToLatest": "回到最新",
   "conversation.threadNav": "对话",
   "conversation.attachment": "附件",
+  "conversation.messageInput": "消息",
+  "conversation.subagentList": "子代理",
   "conversation.uploadError": "上传失败",
   "conversation.reviewError": "项目审阅失败",
   "questionnaire.title": "请回答几个问题",

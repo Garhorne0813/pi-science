@@ -13,9 +13,33 @@ export default {
         "surface-hover": "rgb(var(--surface-hover-rgb) / <alpha-value>)",
         "surface-selected": "rgb(var(--surface-selected-rgb) / <alpha-value>)",
         sidebar: "rgb(var(--sidebar-rgb) / <alpha-value>)",
-        border: "rgb(var(--border-rgb) / <alpha-value>)",
-        faint: "rgb(var(--border-faint-rgb) / <alpha-value>)",
-        strong: "rgb(var(--border-strong-rgb) / <alpha-value>)",
+        // Border colors embed their own base alpha (e.g. rgba(0,0,0,.1)), so
+        // the rgb-var + <alpha-value> form would either drop the alpha (base
+        // turns opaque) or double it (modifier appends a second slash). The
+        // function form fixes both: without a slash modifier it resolves to
+        // the translucent var; with one, Tailwind passes the numeric opacity
+        // and the color scales the base alpha through color-mix.
+        border: ({ opacityValue }) => {
+          const alpha = opacityValue === undefined ? Number.NaN : Number.parseFloat(opacityValue);
+          if (Number.isFinite(alpha)) {
+            return `color-mix(in srgb, var(--border) ${Math.round(alpha * 100)}%, transparent)`;
+          }
+          return "var(--border)";
+        },
+        faint: ({ opacityValue }) => {
+          const alpha = opacityValue === undefined ? Number.NaN : Number.parseFloat(opacityValue);
+          if (Number.isFinite(alpha)) {
+            return `color-mix(in srgb, var(--border-faint) ${Math.round(alpha * 100)}%, transparent)`;
+          }
+          return "var(--border-faint)";
+        },
+        strong: ({ opacityValue }) => {
+          const alpha = opacityValue === undefined ? Number.NaN : Number.parseFloat(opacityValue);
+          if (Number.isFinite(alpha)) {
+            return `color-mix(in srgb, var(--border-strong) ${Math.round(alpha * 100)}%, transparent)`;
+          }
+          return "var(--border-strong)";
+        },
         text: "rgb(var(--text-rgb) / <alpha-value>)",
         muted: "rgb(var(--muted-rgb) / <alpha-value>)",
         accent: "rgb(var(--accent-rgb) / <alpha-value>)",
@@ -27,6 +51,12 @@ export default {
         warn: "rgb(var(--warn-rgb) / <alpha-value>)",
         ok: "rgb(var(--ok-rgb) / <alpha-value>)",
         error: "rgb(var(--error-rgb) / <alpha-value>)",
+        "ok-text": "rgb(var(--ok-text-rgb) / <alpha-value>)",
+        "warn-text": "rgb(var(--warn-text-rgb) / <alpha-value>)",
+        "error-text": "rgb(var(--error-text-rgb) / <alpha-value>)",
+        "ok-fill": "rgb(var(--ok-fill-rgb) / <alpha-value>)",
+        "warn-fill": "rgb(var(--warn-fill-rgb) / <alpha-value>)",
+        "error-fill": "rgb(var(--error-fill-rgb) / <alpha-value>)",
         "series-1": "var(--series-1)",
         "series-2": "var(--series-2)",
         "series-3": "var(--series-3)",

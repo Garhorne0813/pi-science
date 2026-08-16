@@ -236,7 +236,7 @@ export function FilePreviewInspector({
         )}
         <div className="flex-1" />
         {leadingControls}
-        {saveNotice && <span className="mr-1 text-xs text-ok">{saveNotice}</span>}
+        {saveNotice && <span className="mr-1 text-xs text-ok-text">{saveNotice}</span>}
         {editing ? (
           <>
             <button
@@ -310,7 +310,7 @@ export function FilePreviewInspector({
               className="min-h-0 flex-1 resize-none bg-surface p-4 font-mono text-[12.5px] leading-[1.55] text-text outline-none"
               aria-label={`Edit ${data.filename}`}
             />
-            {saveError && <div className="border-t border-border px-4 py-2 text-xs text-error">{saveError}</div>}
+            {saveError && <div className="border-t border-border px-4 py-2 text-xs text-error-text">{saveError}</div>}
           </div>
         )}
         {!showHistory && !editing && loading && (
@@ -675,7 +675,7 @@ export function PreviewError({
             </button>
           )}
         </div>
-        {probeError && <div className="mt-3 text-[13px] text-error">{probeError}</div>}
+        {probeError && <div className="mt-3 text-[13px] text-error-text">{probeError}</div>}
         {pointer && <LargeFilePointerPanel p={pointer} />}
       </div>
     </div>
@@ -685,7 +685,7 @@ export function PreviewError({
 /** Render the probe's memory pointer as a compact, readable fact sheet. */
 function LargeFilePointerPanel({ p }: { p: LargeFilePointer }) {
   const { t } = useTranslation();
-  if (p.error) return <div className="mt-3 text-[13px] text-error">{p.error}</div>;
+  if (p.error) return <div className="mt-3 text-[13px] text-error-text">{p.error}</div>;
   const fmt = (n: number) => formatNumber(n);
   const rows: [string, string][] = [];
   if (p.format) rows.push([t("filePreview.pointer.format"), p.format]);

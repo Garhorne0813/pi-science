@@ -146,10 +146,10 @@ export function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKe
                       </div>
                       {p.has_key && (
                         <div className="flex items-center gap-2">
-                          <span className="flex items-center gap-1 text-[10px] font-medium text-ok">
+                          <span className="flex items-center gap-1 text-[10px] font-medium text-ok-text">
                             <Check size={10} /> {t("settings.provider.connected")}
                           </span>
-                          <button onClick={() => deleteKey(p.id)} disabled={saving === p.id} className="flex min-h-8 items-center gap-1 rounded-input px-2 text-[11px] text-error hover:bg-error/10">
+                          <button onClick={() => deleteKey(p.id)} disabled={saving === p.id} className="flex min-h-8 items-center gap-1 rounded-input px-2 text-[11px] text-error-text hover:bg-error/10">
                             <Trash2 size={11} /> {t("common.delete")}
                           </button>
                         </div>

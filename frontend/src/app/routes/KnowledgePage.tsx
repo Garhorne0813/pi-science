@@ -149,7 +149,7 @@ export function KnowledgePage() {
             aria-live="polite"
             className={cn(
               "mt-4 whitespace-pre-wrap rounded-input border px-4 py-3 text-sm",
-              error ? "border-error/30 bg-error/5 text-error" : "border-ok/30 bg-ok/5 text-ok",
+              error ? "border-error/30 bg-error/5 text-error-text" : "border-ok/30 bg-ok/5 text-ok-text",
             )}
           >
             {error || message}

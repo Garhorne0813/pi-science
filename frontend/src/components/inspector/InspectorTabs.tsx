@@ -162,16 +162,16 @@ export function InspectorTabs({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="relative h-primary shrink-0 bg-surface">
+      <div className="relative h-11 shrink-0 bg-surface">
         <div
           ref={tabScrollRef}
           role="tablist"
           aria-label={t("filePreview.openFiles")}
-          className="h-control overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          className="h-11 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
           <div
             className={cn(
-              "flex h-control w-max min-w-full border-b border-border px-1",
+              "flex h-11 w-max min-w-full border-b border-border px-1",
               reserveControls && "pr-14",
             )}
           >
@@ -214,7 +214,7 @@ export function InspectorTabs({
                   label={t("filePreview.closeTab", { filename: title })}
                   size="compact"
                   className={cn(
-                    "hover:bg-border hover:text-text",
+                    "h-11 w-11 hover:bg-border hover:text-text",
                     active ? "text-muted" : "text-transparent group-hover:text-muted group-focus-within:text-muted",
                   )}
                   onClick={(event) => {

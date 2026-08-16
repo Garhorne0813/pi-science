@@ -126,6 +126,8 @@
   "conversation.scrollToLatest": "Back to latest",
   "conversation.threadNav": "Conversation",
   "conversation.attachment": "Attachment",
+  "conversation.messageInput": "Message",
+  "conversation.subagentList": "Subagents",
   "conversation.uploadError": "Upload failed",
   "conversation.reviewError": "Project review failed",
   "questionnaire.title": "Answer a few questions",

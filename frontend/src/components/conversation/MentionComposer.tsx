@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from "react";
 import type { SubagentMention } from "../../lib/conversation";
 import { queryClient } from "../../lib/client/query-client";
@@ -71,6 +72,7 @@ function renderHighlighted(value: string, mentions: SubagentMention[]) {
 
 export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onCompositionStart, onCompositionEnd, inputRef, placeholder }: Props) {
   const [agents, setAgents] = useState<AvailableSubagent[]>([]);
+  const { t } = useTranslation();
   const [activeIndex, setActiveIndex] = useState(0);
   const [dismissedStart, setDismissedStart] = useState<number | null>(null);
   const [caret, setCaret] = useState(value.length);
@@ -229,7 +231,7 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
   return (
     <>
       {choices.length > 0 && (
-        <div ref={menuRef} id={listboxId} role="listbox" aria-label="Subagents" className="ui-popover absolute bottom-full left-0 right-0 z-50 mb-1 max-h-56 overflow-y-auto rounded-card p-1">
+        <div ref={menuRef} id={listboxId} role="listbox" aria-label={t("conversation.subagentList")} className="ui-popover absolute bottom-full left-0 right-0 z-50 mb-1 max-h-56 overflow-y-auto rounded-card p-1">
           {choices.map((agent, index) => (
             <button
               key={`${agent.source ?? "agent"}-${agent.name}`}
@@ -262,7 +264,7 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
           ref={inputRef}
           value={value}
           role="combobox"
-          aria-label="Message"
+          aria-label={t("conversation.messageInput")}
           aria-expanded={choices.length > 0}
           aria-controls={choices.length > 0 ? listboxId : undefined}
           aria-activedescendant={choices.length > 0 ? `${listboxId}-option-${activeIndex}` : undefined}

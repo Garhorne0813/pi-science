@@ -105,12 +105,12 @@ export function ProjectsLayout() {
       </a>
       {/* Sidebar */}
       {sidebarCollapsed ? (
-        <aside className="app-sidebar rail-enter flex h-full w-14 shrink-0 flex-col items-center gap-1.5 overflow-hidden border-r border-border px-2.5 py-[18px]">
+        <aside className="app-sidebar rail-enter flex h-full w-[var(--sidebar-collapsed-width)] shrink-0 flex-col items-center gap-1.5 overflow-hidden border-r border-border px-1.5 py-[18px]">
           <IconButton
             icon={PanelLeft}
             label="Expand sidebar"
             size="standard"
-            className="h-9 w-9"
+            className="h-11 w-11"
             onClick={() => setSidebarCollapsed(false)}
           />
           {/* Icon-only nav */}
@@ -419,7 +419,7 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
                 size="compact"
                 onClick={(e) => handleDelete(e, s.id)}
                 className={cn(
-                  "mr-0.5 hover:bg-error/10 hover:text-error",
+                  "mr-0.5 hover:bg-error/10 hover:text-error-text",
                   "hidden group-hover:!inline-flex group-focus-within:!inline-flex", deleting === s.id && "!inline-flex",
                 )}
               />
@@ -454,7 +454,7 @@ function CollapsedNavItem({ to, icon, label }: { to: string; icon: LucideIcon; l
       label={label}
       size="standard"
       onClick={() => navigate(to)}
-      className={cn("h-9 w-9", active && "bg-surface-selected text-accent")}
+      className={cn("h-11 w-11", active && "bg-surface-selected text-accent")}
     />
   );
 }
@@ -491,7 +491,7 @@ export function SettingsNavItem({ cwd, collapsed = false }: { cwd: string | null
 
   if (collapsed) {
     return (
-      <IconButton icon={Settings} label={t("nav.settings")} size="standard" onClick={handleClick} className={cn("h-9 w-9", settingsOpen && "bg-surface-selected text-accent")} />
+      <IconButton icon={Settings} label={t("nav.settings")} size="standard" onClick={handleClick} className={cn("h-11 w-11", settingsOpen && "bg-surface-selected text-accent")} />
     );
   }
   return (

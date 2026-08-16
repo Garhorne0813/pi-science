@@ -9,6 +9,10 @@
 export const FIXED_NOW = "2026-08-15T12:00:00.000Z";
 
 export const VISUAL_CWD = "/tmp/visual-demo";
+/** Dedicated session-free workspace for the landing hero: the mock server
+ *  returns an empty session list for this cwd, so the workspace route can
+ *  never auto-navigate into a conversation. */
+export const VISUAL_LANDING_CWD = "/tmp/visual-landing";
 export const VISUAL_SESSION = "visual-session-1";
 
 export const FIXTURES = {

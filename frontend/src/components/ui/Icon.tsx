@@ -33,7 +33,7 @@ export const IconButton = forwardRef<HTMLButtonElement, Omit<ButtonHTMLAttribute
       aria-label={label}
       title={title ?? label}
       className={cn(
-        "icon-btn-hit inline-flex shrink-0 items-center justify-center rounded-input text-muted transition-colors hover:bg-surface-2 hover:text-text disabled:cursor-not-allowed disabled:opacity-35",
+        "inline-flex shrink-0 items-center justify-center rounded-input text-muted transition-colors hover:bg-surface-2 hover:text-text disabled:cursor-not-allowed disabled:opacity-35",
         metrics.button,
         className,
       )}

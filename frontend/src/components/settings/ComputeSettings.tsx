@@ -65,7 +65,7 @@ function ProbeDetails({ result }: { result: ProbeResult }) {
   const { t } = useTranslation();
   if (!result.reachable) {
     return (
-      <div className="mt-3 flex items-start gap-2 rounded-input border border-error/20 bg-error/5 px-3 py-2.5 text-xs text-error" role="status">
+      <div className="mt-3 flex items-start gap-2 rounded-input border border-error/20 bg-error/5 px-3 py-2.5 text-xs text-error-text" role="status">
         <AlertCircle size={15} className="mt-0.5 shrink-0" />
         <span>{result.error || t("settings.computePage.unreachable")}</span>
       </div>
@@ -287,7 +287,7 @@ export function ComputeSettings({ workspaceCwd }: ComputeSettingsProps) {
           </button>
         </div>
         {draftProbe && draftProbe !== true && <ProbeDetails result={draftProbe} />}
-        {error && <p role="alert" className="mt-3 text-xs text-error">{error}</p>}
+        {error && <p role="alert" className="mt-3 text-xs text-error-text">{error}</p>}
       </div>
 
       {machines.length === 0 ? (
@@ -311,7 +311,7 @@ export function ComputeSettings({ workspaceCwd }: ComputeSettingsProps) {
                   {result === true ? <Loader2 size={13} className="animate-spin" /> : <Server size={13} />}
                   {result === true ? t("settings.computePage.testing") : t("settings.computePage.testConnection")}
                 </button>
-                <button type="button" onClick={() => void handleDelete(machine.label)} className="flex min-h-11 min-w-11 items-center justify-center rounded-input text-error hover:bg-error/10" aria-label={t("common.delete")}><Trash2 size={14} /></button>
+                <button type="button" onClick={() => void handleDelete(machine.label)} className="flex min-h-11 min-w-11 items-center justify-center rounded-input text-error-text hover:bg-error/10" aria-label={t("common.delete")}><Trash2 size={14} /></button>
               </div>
             </div>
 

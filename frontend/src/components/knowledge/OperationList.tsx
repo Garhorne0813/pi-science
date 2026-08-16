@@ -6,11 +6,11 @@ export function OperationList({ operations }: { operations: FileOperation[] }) {
       {operations.map((operation, index) => (
         <div key={`${operation.type}-${index}`}>
           {operation.type === "mkdir" ? (
-            <span className="text-ok">+ mkdir {operation.target}</span>
+            <span className="text-ok-text">+ mkdir {operation.target}</span>
           ) : (
             <>
-              <div className="text-error/80">- {operation.source}</div>
-              <div className="text-ok">+ {operation.target}</div>
+              <div className="text-error-text">- {operation.source}</div>
+              <div className="text-ok-text">+ {operation.target}</div>
             </>
           )}
         </div>

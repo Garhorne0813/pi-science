@@ -67,7 +67,7 @@ export function ContextManagementSection({ config, saving, onSave }: { config: S
         <h2 className="text-[13px] font-semibold text-text">{t("settings.context.title")}</h2>
         <label className="flex cursor-pointer items-center gap-2 text-[11px] text-text">
           <span>{t("settings.context.autoCompact")}</span>
-          <span className="relative inline-flex h-5 w-9 shrink-0 rounded-full bg-surface-2 transition-colors has-[:checked]:bg-accent">
+          <span className="relative inline-flex h-5 w-9 shrink-0 rounded-full bg-surface-2 transition-colors has-[:checked]:bg-accent-fill">
             <input type="checkbox" checked={enabled} disabled={saving} onChange={(event) => updateEnabled(event.target.checked)} className="peer sr-only" />
             <span className="pointer-events-none absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-accent-fg shadow-sm transition-transform peer-checked:translate-x-4" />
           </span>

@@ -85,7 +85,7 @@ export function ProposalCard({
             <span className="rounded-full border border-border bg-surface-2 px-2 py-0.5 text-[11px] font-medium text-text">{knowledgeLabel}</span>
             <span className={cn(
               "rounded-full px-2 py-0.5 text-[11px] font-medium",
-              proposal.importance === "critical" ? "bg-error/10 text-error" : proposal.importance === "important" ? "bg-warn/10 text-warn" : "bg-surface-2 text-muted",
+              proposal.importance === "critical" ? "bg-error/10 text-error-text" : proposal.importance === "important" ? "bg-warn/10 text-warn-text" : "bg-surface-2 text-muted",
             )}>{proposal.importance}</span>
             <span className="text-[11px] text-muted">{t("knowledge.confidenceLevel", { level: proposal.confidence })}</span>
           </div>
@@ -125,7 +125,7 @@ export function ProposalCard({
               <div className="mt-3 rounded-input border border-border bg-bg px-3 py-3">
                 {proposal.proposal_type === "knowledge" ? (
                   <div className="font-mono text-[12px] leading-5">
-                    <div className="text-ok">+ [{knowledgeLabel}] {proposal.title}</div>
+                    <div className="text-ok-text">+ [{knowledgeLabel}] {proposal.title}</div>
                     <div className="mt-1 whitespace-pre-wrap text-text">+ {proposal.summary}</div>
                   </div>
                 ) : (
@@ -135,7 +135,7 @@ export function ProposalCard({
             </>
           )}
 
-          {localError && <div role="alert" className="mt-3 rounded-input bg-error/5 px-3 py-2 text-xs text-error">{localError}</div>}
+          {localError && <div role="alert" className="mt-3 rounded-input bg-error/5 px-3 py-2 text-xs text-error-text">{localError}</div>}
 
           <button type="button" onClick={() => setExpanded((value) => !value)} className="mt-3 flex min-h-11 items-center gap-1.5 text-sm font-medium text-muted hover:text-text">
             {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -150,7 +150,7 @@ export function ProposalCard({
                 </button>
               )}
               {proposal.related_files.length > 0 && <div><span className="font-medium text-text">{t("knowledge.relatedFiles")}:</span> {proposal.related_files.join(", ")}</div>}
-              {proposal.conflicts_with.length > 0 && <div className="flex gap-2 rounded-input bg-warn/10 px-3 py-2 text-warn"><AlertTriangle size={15} className="mt-0.5 shrink-0" /> {t("knowledge.conflictsWith")}: {proposal.conflicts_with.join(", ")}</div>}
+              {proposal.conflicts_with.length > 0 && <div className="flex gap-2 rounded-input bg-warn/10 px-3 py-2 text-warn-text"><AlertTriangle size={15} className="mt-0.5 shrink-0" /> {t("knowledge.conflictsWith")}: {proposal.conflicts_with.join(", ")}</div>}
               {preview && <SafetyPreview data={preview} />}
             </div>
           )}
@@ -173,7 +173,7 @@ export function ProposalCard({
           )}
         </div>
         <div className="flex gap-2">
-          <button type="button" disabled={busy !== null} onClick={() => void decide("reject")} className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-input border border-border px-4 py-2 text-sm text-muted hover:border-error/40 hover:text-error disabled:opacity-50 sm:flex-none">
+          <button type="button" disabled={busy !== null} onClick={() => void decide("reject")} className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-input border border-border px-4 py-2 text-sm text-muted hover:border-error/40 hover:text-error-text disabled:opacity-50 sm:flex-none">
             {busy === "reject" ? <Loader2 size={14} className="animate-spin" /> : <X size={14} />} {t("knowledge.reject")}
           </button>
           <button type="button" disabled={busy !== null} onClick={() => void decide("accept")} className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-input bg-accent-fill px-4 py-2 text-sm font-medium text-accent-fg hover:opacity-90 disabled:opacity-50 sm:flex-none">

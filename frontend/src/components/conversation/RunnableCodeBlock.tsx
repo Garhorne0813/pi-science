@@ -66,8 +66,8 @@ export function RunnableCodeBlock({ code, language, cwd, sessionId, preClassName
           <div className="max-h-48 overflow-y-auto px-3 py-2 leading-5">
             {result.stdout && <pre className="whitespace-pre-wrap break-all text-text">{result.stdout}</pre>}
             {result.result && <pre className="whitespace-pre-wrap break-all text-text">{result.result}</pre>}
-            {result.error && <pre className="whitespace-pre-wrap break-all text-error">{result.error}</pre>}
-            {!result.stdout && !result.result && !result.error && <span className="text-ok">✓</span>}
+            {result.error && <pre className="whitespace-pre-wrap break-all text-error-text">{result.error}</pre>}
+            {!result.stdout && !result.result && !result.error && <span className="text-ok-text">✓</span>}
           </div>
         </div>
       )}

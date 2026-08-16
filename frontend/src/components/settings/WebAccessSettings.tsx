@@ -54,7 +54,7 @@ export function WebAccessSettings() {
   return (
     <Section title={t("settings.web.title")}>
       {error && (
-        <p role="alert" className="mb-3 rounded-input bg-error/10 px-3 py-2 text-[11px] text-error">
+        <p role="alert" className="mb-3 rounded-input bg-error/10 px-3 py-2 text-[11px] text-error-text">
           {error}
         </p>
       )}
@@ -88,7 +88,7 @@ export function WebAccessSettings() {
             <label className="flex min-h-14 items-center justify-between gap-3 py-2">
               <span className="min-w-0 text-[13px] font-medium text-text">
                 <span className="block">{t("settings.web.apiKey")}</span>
-                {selectedProvider?.has_key && <span className="block truncate text-[10px] font-normal text-ok">{selectedProvider.key_source === "llm-settings" ? t("settings.web.fromLlm") : selectedProvider.key_source === "environment" ? t("settings.web.fromEnvironment") : t("settings.web.keySaved")}</span>}
+                {selectedProvider?.has_key && <span className="block truncate text-[10px] font-normal text-ok-text">{selectedProvider.key_source === "llm-settings" ? t("settings.web.fromLlm") : selectedProvider.key_source === "environment" ? t("settings.web.fromEnvironment") : t("settings.web.keySaved")}</span>}
               </span>
               <div className="flex min-w-0 w-[min(100%,22rem)] max-w-[62%] gap-2">
                 <div className="flex min-h-10 min-w-0 flex-1 items-center rounded-input border border-border bg-surface-2 px-3">
@@ -131,7 +131,7 @@ export function WebAccessSettings() {
                   )}
                 </div>
                 {selectedProvider?.key_source === "web-access" && (
-                  <button type="button" aria-label={t("settings.web.removeKey")} onClick={() => void save(config, [selectedProvider.id], false)} disabled={busy} className="min-h-10 rounded-input px-3 text-error hover:bg-error/10">
+                  <button type="button" aria-label={t("settings.web.removeKey")} onClick={() => void save(config, [selectedProvider.id], false)} disabled={busy} className="min-h-10 rounded-input px-3 text-error-text hover:bg-error/10">
                     <Trash2 size={13} />
                   </button>
                 )}

@@ -4,13 +4,15 @@
    classes highlight.js emits for the common languages. */
 :root,
 [data-theme="light"] {
-  --hl-keyword: #4176e6;
-  --hl-string: #0e8a5f;
-  --hl-number: #b4549a;
-  --hl-comment: #81858c;
-  --hl-title: #b35e14;
+  /* Light token colors are chosen against the CodeViewer surface (#f9fafb):
+     every token keeps WCAG AA >= 4.5:1 for normal text. */
+  --hl-keyword: #2f5fd6;
+  --hl-string: #0e7a52;
+  --hl-number: #a43e8e;
+  --hl-comment: #667085;
+  --hl-title: #9a4d0e;
   --hl-type: #7a3ee6;
-  --hl-meta: #81858c;
+  --hl-meta: #667085;
   --hl-literal: #c2410c;
   --hl-symbol: #0f766e;
 }
@@ -19,7 +21,7 @@
   --hl-keyword: #679efe;
   --hl-string: #4ed17e;
   --hl-number: #e87ba4;
-  --hl-comment: #81858c;
+  --hl-comment: #8b9098;
   --hl-title: #f7ad31;
   --hl-type: #a78bfa;
   --hl-meta: #adb2b8;

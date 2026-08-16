@@ -212,4 +212,84 @@ describe("RightPane resizing", () => {
     expect(pane).toHaveAttribute("aria-modal", "true");
     expect(pane).toHaveAttribute("aria-label", "Open file previews");
   });
+
+  it("moves focus into the mobile overlay and restores it on unmount", () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(max-width: 1023.98px)",
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    const trigger = document.createElement("button");
+    trigger.textContent = "Open";
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const { container, unmount } = render(
+      <RightPane onMinimize={vi.fn()}>
+        <button type="button">Close file</button>
+      </RightPane>,
+    );
+
+    expect(document.activeElement).toBe(container.firstElementChild);
+    unmount();
+    expect(document.activeElement).toBe(trigger);
+    trigger.remove();
+  });
+
+  it("traps Tab focus inside the mobile overlay", () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(max-width: 1023.98px)",
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    const { container } = render(
+      <RightPane onMinimize={vi.fn()}>
+        <button type="button">First</button>
+        <button type="button">Second</button>
+      </RightPane>,
+    );
+
+    const dialog = container.firstElementChild!;
+    const first = screen.getByRole("button", { name: "First" });
+    const second = screen.getByRole("button", { name: "Second" });
+
+    first.focus();
+    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(second);
+
+    fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(document.activeElement).toBe(first);
+  });
+
+  it("closes the mobile overlay on Escape", () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(max-width: 1023.98px)",
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    const onMinimize = vi.fn();
+    const { container } = render(
+      <RightPane onMinimize={onMinimize}>
+        <button type="button">First</button>
+      </RightPane>,
+    );
+
+    fireEvent.keyDown(container.firstElementChild!, { key: "Escape" });
+    expect(onMinimize).toHaveBeenCalledTimes(1);
+  });
 });

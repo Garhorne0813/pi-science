@@ -40,7 +40,7 @@ export function AgentProfilesSection() {
 
   return (
     <Section title={t("settings.profiles.title")}>
-      {error && <p className="mb-2 text-[11px] text-error">{error}</p>}
+      {error && <p className="mb-2 text-[11px] text-error-text">{error}</p>}
       <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
         <input value={name} onChange={(event) => setName(event.target.value)} placeholder="PROFILE_NAME" className="rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] font-mono text-text outline-none" />
         <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder={t("settings.profiles.displayName")} className="rounded-input border border-border bg-surface-2 px-3 py-2 text-[12px] text-text outline-none" />

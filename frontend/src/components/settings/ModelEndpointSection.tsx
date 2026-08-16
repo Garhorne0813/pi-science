@@ -40,7 +40,7 @@ export function ModelEndpointSection() {
         <ChevronDown size={14} className="shrink-0 text-muted transition-transform group-open:rotate-180" />
       </summary>
       <div className="border-t border-faint py-3">
-        {error && <p className="mb-3 rounded-input bg-error/10 px-3 py-2 text-xs text-error">{error}</p>}
+        {error && <p className="mb-3 rounded-input bg-error/10 px-3 py-2 text-xs text-error-text">{error}</p>}
         <div className="grid gap-2 sm:grid-cols-[1fr_1.5fr_auto]">
           <input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("settings.endpoints.name")} className="min-h-10 rounded-input border border-border bg-bg px-3 py-2 text-xs text-text outline-none focus:border-accent" />
           <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://host/v1" className="min-h-10 rounded-input border border-border bg-bg px-3 py-2 font-mono text-xs text-text outline-none focus:border-accent" />
@@ -60,9 +60,9 @@ export function ModelEndpointSection() {
                 {endpoint.name}
                 <span className="ml-2 font-mono text-[11px] text-muted">{endpoint.base_url}</span>
               </span>
-              <span className={cn("text-[11px]", endpoint.health === "ready" ? "text-ok" : endpoint.health === "error" ? "text-error" : "text-muted")}>{endpoint.health}</span>
+              <span className={cn("text-[11px]", endpoint.health === "ready" ? "text-ok-text" : endpoint.health === "error" ? "text-error-text" : "text-muted")}>{endpoint.health}</span>
               <button type="button" onClick={() => void settingsApi.checkEndpointHealth(endpoint.endpoint_id)} className="rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2">{t("settings.endpoints.check")}</button>
-              <button type="button" onClick={() => void settingsApi.setEndpointEnabled(endpoint.endpoint_id, !endpoint.enabled)} className={cn("rounded-input px-2 py-1 text-xs", endpoint.enabled ? "bg-ok/10 text-ok" : "bg-surface-2 text-muted")}>{endpoint.enabled ? t("settings.actions.on") : t("settings.actions.off")}</button>
+              <button type="button" onClick={() => void settingsApi.setEndpointEnabled(endpoint.endpoint_id, !endpoint.enabled)} className={cn("rounded-input px-2 py-1 text-xs", endpoint.enabled ? "bg-ok/10 text-ok-text" : "bg-surface-2 text-muted")}>{endpoint.enabled ? t("settings.actions.on") : t("settings.actions.off")}</button>
             </div>
           ))}
         </div>

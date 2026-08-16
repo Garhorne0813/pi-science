@@ -153,7 +153,7 @@ export function NotebooksPage() {
         <div className="ui-card-flat mt-6 flex flex-wrap items-center justify-between gap-2 rounded-card px-4 py-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-medium text-text">
-              {environment?.ready && <CheckCircle2 size={14} className="text-ok" />}
+              {environment?.ready && <CheckCircle2 size={14} className="text-ok-text" />}
               {t("notebooks.workspacePython")}
             </div>
             <p className="mt-0.5 truncate font-mono text-[11px] text-muted">
@@ -180,7 +180,7 @@ export function NotebooksPage() {
                     : t("notebooks.runningElsewhere", { cwd: jupyter.cwd })
                   : jupyter.env_ready ? t("notebooks.environmentReadyShort") : t("notebooks.environmentNotSetUp")}
               </p>
-              {jupyterError && <p role="alert" className="mt-1 text-xs text-error">{jupyterError}</p>}
+              {jupyterError && <p role="alert" className="mt-1 text-xs text-error-text">{jupyterError}</p>}
             </div>
             <div className="flex items-center gap-2">
               {jupyter.running && jupyter.matches_workspace ? (
@@ -188,7 +188,7 @@ export function NotebooksPage() {
                   <a href={jupyter.url!} target="_blank" className="rounded-input px-3 py-1.5 text-xs text-link hover:bg-surface-2 flex items-center gap-1">
                     <ExternalLink size={12} /> {t("common.open")}
                   </a>
-                  <button onClick={stopJupyter} className="rounded-input px-3 py-1.5 text-xs text-error hover:bg-error/10 flex items-center gap-1">
+                  <button onClick={stopJupyter} className="rounded-input px-3 py-1.5 text-xs text-error-text hover:bg-error/10 flex items-center gap-1">
                     <Square size={12} /> {t("common.stop")}
                   </button>
                 </>
