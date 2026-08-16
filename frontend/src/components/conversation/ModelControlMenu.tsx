@@ -31,7 +31,7 @@ const MENU_ROOT_CLASS =
   "ui-popover z-[90] min-w-[210px] max-w-[min(260px,calc(100vw-16px))] rounded-card p-1.5 text-xs text-text outline-none";
 const MENU_ITEM_CLASS =
   "flex min-h-9 cursor-default select-none items-center gap-2 rounded-input px-2.5 py-2 text-xs text-text outline-none transition-colors data-[highlighted]:bg-surface-2 data-[state=open]:bg-surface-2 data-[disabled]:opacity-40";
-const GROUP_HEADER_CLASS = "px-2.5 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-muted";
+const GROUP_HEADER_CLASS = "sticky top-0 z-10 bg-surface-raised px-2.5 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-muted";
 
 export function ModelControlMenu({
   models,
