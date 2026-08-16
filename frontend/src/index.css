@@ -270,8 +270,7 @@
   .ui-card-inset,
   .ui-card-accent,
   .ui-popover,
-  .ui-dialog,
-  .ui-user-message {
+  .ui-dialog {
     border: 1px solid var(--border);
   }
 
@@ -325,7 +324,6 @@
 
   .ui-user-message {
     background: var(--bubble);
-    border-color: color-mix(in srgb, var(--border-strong) 72%, var(--accent-border));
   }
 
   /* Runs uses explicit layout classes because Tailwind's dev scanner does not
