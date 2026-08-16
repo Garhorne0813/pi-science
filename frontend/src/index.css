@@ -262,6 +262,46 @@
   --shadow-pop: 0 18px 48px rgb(0 0 0 / 38%), 0 3px 10px rgb(0 0 0 / 24%);
 }
 
+/* Notebook code is intentionally quieter than the surrounding chrome. The
+   palette keeps syntax legible in both themes without turning cells into a
+   second, competing application surface. */
+.notebook-code-preview {
+  background: color-mix(in srgb, var(--surface-inset) 82%, var(--surface));
+}
+
+.notebook-code-preview .hljs { color: var(--text); background: transparent !important; padding: 0; }
+.notebook-code-preview .hljs-comment,
+.notebook-code-preview .hljs-quote { color: color-mix(in srgb, var(--muted) 82%, transparent); font-style: italic; }
+.notebook-code-preview .hljs-keyword,
+.notebook-code-preview .hljs-selector-tag,
+.notebook-code-preview .hljs-literal { color: #a14f9d; }
+.notebook-code-preview .hljs-string,
+.notebook-code-preview .hljs-doctag,
+.notebook-code-preview .hljs-regexp { color: #397648; }
+.notebook-code-preview .hljs-number,
+.notebook-code-preview .hljs-built_in,
+.notebook-code-preview .hljs-type { color: #b45b25; }
+.notebook-code-preview .hljs-title,
+.notebook-code-preview .hljs-function,
+.notebook-code-preview .hljs-attr { color: #2769a8; }
+.notebook-code-preview .hljs-variable,
+.notebook-code-preview .hljs-params { color: #75572d; }
+
+[data-theme="dark"] .notebook-code-preview .hljs-keyword,
+[data-theme="dark"] .notebook-code-preview .hljs-selector-tag,
+[data-theme="dark"] .notebook-code-preview .hljs-literal { color: #d99bd5; }
+[data-theme="dark"] .notebook-code-preview .hljs-string,
+[data-theme="dark"] .notebook-code-preview .hljs-doctag,
+[data-theme="dark"] .notebook-code-preview .hljs-regexp { color: #9acb9f; }
+[data-theme="dark"] .notebook-code-preview .hljs-number,
+[data-theme="dark"] .notebook-code-preview .hljs-built_in,
+[data-theme="dark"] .notebook-code-preview .hljs-type { color: #e4a06f; }
+[data-theme="dark"] .notebook-code-preview .hljs-title,
+[data-theme="dark"] .notebook-code-preview .hljs-function,
+[data-theme="dark"] .notebook-code-preview .hljs-attr { color: #91bce8; }
+[data-theme="dark"] .notebook-code-preview .hljs-variable,
+[data-theme="dark"] .notebook-code-preview .hljs-params { color: #d2b98c; }
+
 /* Surface hierarchy. Cards use a raised surface, embedded groups use an inset
    surface, and popovers receive the strongest edge and elevation. */
 @layer components {

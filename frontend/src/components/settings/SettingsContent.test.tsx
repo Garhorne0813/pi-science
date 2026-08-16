@@ -101,10 +101,11 @@ describe("SettingsContent", () => {
     expect(general).toHaveClass("h-9", "w-9", "rounded-full", "md:h-10", "md:w-full", "md:rounded-card", "md:px-3", "md:gap-2");
     expect(general).toHaveClass("bg-surface-selected", "text-text");
     expect(screen.getByRole("tab", { name: "Extensions" })).toHaveClass("hover:bg-surface-hover");
+    expect(screen.getByRole("tab", { name: "Environments" })).toBeInTheDocument();
     // Every nav item uses a different outline icon (distinct svg content).
     const icons = screen.getAllByRole("tab").map((tab) => tab.querySelector("svg")?.innerHTML ?? null);
     expect(icons.every(Boolean)).toBe(true);
-    expect(new Set(icons).size).toBe(6);
+    expect(new Set(icons).size).toBe(7);
   });
 
   it("moves the close control into the content header, outside the sidebar", async () => {

@@ -14,6 +14,7 @@ export function FilesPage() {
   const { t } = useTranslation();
   const { confirm, toast } = useFeedback();
   const workspaceCwd = useRequiredWorkspaceCwd();
+  const notebookOnly = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("type") === "notebook";
   const [entries, setEntries] = useState<FileListEntry[]>([]);
   const [breadcrumbs, setBreadcrumbs] = useState<Breadcrumb[]>([]);
   const [subdir, setSubdir] = useState("");
@@ -25,6 +26,7 @@ export function FilesPage() {
   const openInspector = useUiStore((s) => s.openInspector);
   const addWorkspaceReference = useUiStore((s) => s.addWorkspaceReference);
   const fileRevision = useRuntimeStore((s) => s.fileRevision);
+  const visibleEntries = notebookOnly ? entries.filter((entry) => entry.isDir || entry.name.toLowerCase().endsWith(".ipynb")) : entries;
 
   const loadFiles = useCallback(async (dir: string, signal?: AbortSignal) => {
     setLoading(true);
@@ -141,14 +143,14 @@ export function FilesPage() {
 
         {loading ? (
           <div className="text-sm text-muted py-8 text-center">{t("common.loading")}</div>
-        ) : entries.length === 0 ? (
+        ) : visibleEntries.length === 0 ? (
           <div className="text-center py-16">
             <FolderOpen size={40} className="mx-auto text-muted/30 mb-3" />
             <p className="text-sm text-muted">{t("files.empty")}</p>
           </div>
         ) : (
           <div className="ui-card-flat overflow-hidden rounded-card">
-            {entries.map((e) => (
+            {visibleEntries.map((e) => (
               <div key={e.path} onContextMenu={(ev) => handleContextMenu(ev, e)}
                 className="group flex items-center gap-3 px-4 py-2.5 border-b border-faint last:border-b-0 hover:bg-surface-2 cursor-pointer text-sm">
                 <button onClick={() => handleClick(e)} className="flex items-center gap-3 flex-1 min-w-0 text-left">

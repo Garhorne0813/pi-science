@@ -37,4 +37,34 @@ describe("notebook runtime", () => {
       session_id: "session-1",
     });
   });
+
+  it("interrupts only the selected notebook kernel and language", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: JSON_HEADERS }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await notebookRuntime.interrupt("session-1", "/tmp/lab", "python");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/kernels/session-1/interrupt?cwd=%2Ftmp%2Flab&language=python",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("streams cell output before returning the final MIME result", async () => {
+    const body = [
+      JSON.stringify({ type: "started", execution_id: "exec-stream" }),
+      JSON.stringify({ type: "stream", stream: "stdout", text: "step 1\n" }),
+      JSON.stringify({ type: "stream", stream: "stderr", text: "warning\n" }),
+      JSON.stringify({ type: "result", ok: true, stdout: "step 1\nwarning\n", result: "2", error: null, mime: { "application/json": "2" }, execution_id: "exec-stream" }),
+    ].join("\n") + "\n";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 200, headers: { "Content-Type": "application/x-ndjson" } })));
+    const onEvent = vi.fn();
+
+    const result = await notebookRuntime.executeStreaming("session-1", "/tmp/lab", "python", "print('step 1')\n2", "session-1", { source: "session_notebook" }, onEvent);
+
+    expect(onEvent).toHaveBeenNthCalledWith(1, { type: "started", execution_id: "exec-stream" });
+    expect(onEvent).toHaveBeenNthCalledWith(2, { type: "stream", stream: "stdout", text: "step 1\n" });
+    expect(onEvent).toHaveBeenNthCalledWith(3, { type: "stream", stream: "stderr", text: "warning\n" });
+    expect(result).toMatchObject({ ok: true, result: "2", execution_id: "exec-stream", mime: { "application/json": "2" } });
+  });
 });

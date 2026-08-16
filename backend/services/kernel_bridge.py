@@ -12,6 +12,7 @@ user has, offline, with no model key. `result` mirrors Jupyter: the repr of the
 final expression when a cell ends in one, else null.
 """
 import ast
+import base64
 import io
 import json
 import sys
@@ -19,16 +20,63 @@ import traceback
 from contextlib import redirect_stderr, redirect_stdout
 
 
-def run_cell(ns: dict, code: str):
-    """Execute `code` in namespace `ns`. Returns (stdout, result_repr_or_None, error_or_None)."""
-    out = io.StringIO()
+class StreamCapture(io.StringIO):
+    def __init__(self, stream: str, emit):
+        super().__init__()
+        self.stream = stream
+        self.emit = emit
+
+    def write(self, text: str):
+        written = super().write(text)
+        if text:
+            self.emit(self.stream, text)
+        return written
+
+
+def rich_mime(value) -> dict[str, str]:
+    """Collect safe Jupyter-style representations without requiring IPython."""
+    bundle: dict[str, str] = {}
+    for method, mime in (("_repr_html_", "text/html"), ("_repr_svg_", "image/svg+xml")):
+        renderer = getattr(value, method, None)
+        if callable(renderer):
+            try:
+                rendered = renderer()
+                if rendered:
+                    bundle[mime] = str(rendered)
+            except Exception:
+                pass
+    png_renderer = getattr(value, "_repr_png_", None)
+    if callable(png_renderer):
+        try:
+            rendered = png_renderer()
+            if isinstance(rendered, tuple):
+                rendered = rendered[0]
+            if isinstance(rendered, bytes):
+                bundle["image/png"] = base64.b64encode(rendered).decode("ascii")
+        except Exception:
+            pass
+    # Structured values benefit from a JSON representation. Scalars already
+    # have a clearer text/plain repr and rendering both would duplicate output.
+    if isinstance(value, (dict, list, tuple)):
+        try:
+            bundle["application/json"] = json.dumps(value, ensure_ascii=False)
+        except (TypeError, ValueError):
+            pass
+    return bundle
+
+
+def run_cell(ns: dict, code: str, emit=lambda _stream, _text: None):
+    """Execute code and return stdout, result, error, interrupted and MIME data."""
+    out = StreamCapture("stdout", emit)
+    err_out = StreamCapture("stderr", emit)
     try:
         parsed = ast.parse(code, mode="exec")
     except SyntaxError:
-        return "", None, traceback.format_exc(limit=1)
+        return "", None, traceback.format_exc(limit=1), False, {}
 
     body = parsed.body
     result = None
+    mime = {}
     # Jupyter behaviour: if the cell ends in an expression, show its value.
     tail_expr = None
     if body and isinstance(body[-1], ast.Expr):
@@ -37,17 +85,20 @@ def run_cell(ns: dict, code: str):
         tail_expr = ast.Expression(last.value)
 
     try:
-        with redirect_stdout(out), redirect_stderr(out):
+        with redirect_stdout(out), redirect_stderr(err_out):
             if body:
                 exec(compile(ast.Module(body, []), "<cell>", "exec"), ns)  # noqa: S102
             if tail_expr is not None:
                 value = eval(compile(tail_expr, "<cell>", "eval"), ns)  # noqa: S307
                 if value is not None:
                     result = repr(value)
+                    mime = rich_mime(value)
+    except KeyboardInterrupt:
+        return out.getvalue() + err_out.getvalue(), None, "KeyboardInterrupt", True, {}
     except Exception:  # surface the traceback to the notebook, like a kernel does
-        return out.getvalue(), None, traceback.format_exc()
+        return out.getvalue() + err_out.getvalue(), None, traceback.format_exc(), False, {}
 
-    return out.getvalue(), result, None
+    return out.getvalue() + err_out.getvalue(), result, None, False, mime
 
 
 def main() -> None:
@@ -61,6 +112,7 @@ def main() -> None:
         if reconfigure is not None:
             reconfigure(encoding="utf-8")
 
+    protocol_out = sys.stdout
     ns: dict = {"__name__": "__main__"}
     for line in sys.stdin:
         line = line.strip()
@@ -70,16 +122,23 @@ def main() -> None:
             req = json.loads(line)
         except json.JSONDecodeError:
             continue
-        stdout, result, error = run_cell(ns, req.get("code", ""))
+        req_id = req.get("id")
+        def emit(stream: str, text: str):
+            protocol_out.write(json.dumps({"id": req_id, "type": "stream", "stream": stream, "text": text}) + "\n")
+            protocol_out.flush()
+        stdout, result, error, interrupted, mime = run_cell(ns, req.get("code", ""), emit)
         resp = {
-            "id": req.get("id"),
+            "id": req_id,
+            "type": "result",
             "ok": error is None,
             "stdout": stdout,
             "result": result,
             "error": error,
+            "interrupted": interrupted,
+            "mime": mime,
         }
-        sys.stdout.write(json.dumps(resp) + "\n")
-        sys.stdout.flush()
+        protocol_out.write(json.dumps(resp) + "\n")
+        protocol_out.flush()
 
 
 if __name__ == "__main__":

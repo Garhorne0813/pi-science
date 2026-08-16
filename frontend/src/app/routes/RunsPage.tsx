@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle, ArrowLeft, ArrowUpRight, Ban, Check, Circle, CircleDashed, Clock3,
-  Copy, Crosshair, FileOutput, FileSearch, Loader2, MessageSquare, Play, RotateCcw, Search, X,
+  Braces, Copy, Crosshair, FileOutput, FileSearch, Loader2, MessageSquare, Play, RotateCcw, Search, X,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { ExecutionRecord } from "../../types/thread";
@@ -49,6 +49,7 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
   const runs = runsResult.data ?? EMPTY_RUNS;
   const loading = runsResult.isFetching;
   const selectedId = searchParams.get("execution");
+  const hasSessionKernel = Boolean(sessionId && runs.some((run) => run.kind === "kernel_cell"));
 
   useEffect(() => subscribeExecutionInvalidation(workspaceCwd, { onConnectionChange: setLiveConnected }), [workspaceCwd]);
 
@@ -153,7 +154,18 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
         description={filteredRuns.length === runs.length
           ? t("runs.count", { count: runs.length })
           : t("runs.filteredCount", { visible: filteredRuns.length, total: runs.length })}
-        actions={<WorkspacePageRefreshButton label={t("common.refresh")} loading={loading} onClick={() => void runsResult.refetch()} />}
+        actions={<>
+          {hasSessionKernel && (
+            <button
+              type="button"
+              onClick={() => openInspector({ variant: "notebook-panel" })}
+              className="flex min-h-9 items-center gap-1.5 rounded-input border border-border bg-surface px-3 text-xs font-medium text-text transition-colors hover:border-accent-border hover:bg-accent-soft hover:text-accent"
+            >
+              <Braces size={14} /> {t("notebook.openSessionKernel")}
+            </button>
+          )}
+          <WorkspacePageRefreshButton label={t("common.refresh")} loading={loading} onClick={() => void runsResult.refetch()} />
+        </>}
       />
 
       <div className="runs-toolbar mt-5 flex flex-wrap items-center gap-2 rounded-card border border-border p-2">

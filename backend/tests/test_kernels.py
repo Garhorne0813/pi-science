@@ -208,6 +208,28 @@ class TestKernelManager:
         assert spawned[-1].shutdown_called is True
         assert mgr._sessions[mgr._key("same", "python", str(second_cwd))] is healthy
 
+    @pytest.mark.anyio
+    async def test_interrupt_targets_only_the_selected_notebook_and_language(self, tmp_path):
+        mgr = KernelManager()
+
+        class InterruptibleKernel(_FakeKernel):
+            def __init__(self, notebook_id: str, language: str, cwd: str):
+                super().__init__(notebook_id, language, cwd)
+                self.interrupted = False
+
+            def interrupt(self):
+                self.interrupted = True
+                return True
+
+        python = InterruptibleKernel("session-1", "python", str(tmp_path))
+        r_kernel = InterruptibleKernel("session-1", "r", str(tmp_path))
+        mgr._sessions[mgr._key("session-1", "python", str(tmp_path))] = python
+        mgr._sessions[mgr._key("session-1", "r", str(tmp_path))] = r_kernel
+
+        assert await mgr.interrupt_notebook("session-1", cwd=str(tmp_path), language="python") is True
+        assert python.interrupted is True
+        assert r_kernel.interrupted is False
+
 
 @pytest.mark.anyio
 class TestKernelAPI:
@@ -235,6 +257,38 @@ class TestKernelAPI:
         data = res.json()
         assert data["ok"] is True
         assert data["result"] == "84"
+        assert data["mime"] == {}
+
+    async def test_execute_returns_structured_json_mime(self, client):
+        res = await client.post(
+            "/api/kernels/execute",
+            json={"language": "python", "code": "{'answer': 42}", "notebook_id": "test-json-mime"},
+        )
+
+        assert res.status_code == 200
+        assert json.loads(res.json()["mime"]["application/json"]) == {"answer": 42}
+
+    async def test_execute_reports_keyboard_interrupt_as_an_intentional_interruption(self, client):
+        res = await client.post(
+            "/api/kernels/execute",
+            json={"language": "python", "code": "raise KeyboardInterrupt()", "notebook_id": "test-interrupt-result"},
+        )
+
+        assert res.status_code == 200
+        assert res.json() == {"ok": False, "stdout": "", "result": None, "error": "KeyboardInterrupt", "interrupted": True, "mime": {}}
+
+    async def test_execute_stream_emits_chunks_before_the_result(self, client):
+        res = await client.post(
+            "/api/kernels/execute-stream",
+            json={"language": "python", "code": "print('first')\nprint('second')\n42", "notebook_id": "test-stream"},
+        )
+        events = [json.loads(line) for line in res.text.splitlines()]
+
+        assert res.status_code == 200
+        assert [event["text"] for event in events if event["type"] == "stream" and event["stream"] == "stdout"] == ["first", "\n", "second", "\n"]
+        assert events[-1]["type"] == "result"
+        assert events[-1]["result"] == "42"
+        assert events[-1]["mime"] == {}
 
     async def test_execute_response_shape_is_stable(self, client):
         """The execute response carries exactly the CellResult fields."""
@@ -243,7 +297,7 @@ class TestKernelAPI:
             json={"language": "python", "code": "'shape'", "notebook_id": "test-shape"},
         )
         assert res.status_code == 200
-        assert res.json() == {"ok": True, "stdout": "", "result": "'shape'", "error": None}
+        assert res.json() == {"ok": True, "stdout": "", "result": "'shape'", "error": None, "interrupted": False, "mime": {}}
 
     async def test_execute_rejects_invalid_body(self, client):
         """Request validation runs before any kernel is spawned."""

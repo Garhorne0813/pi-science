@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Blocks, BrainCircuit, Loader2, ServerCog, Settings2, Unplug, WandSparkles, X, type LucideIcon } from "lucide-react";
+import { Blocks, Boxes, BrainCircuit, Loader2, ServerCog, Settings2, Unplug, WandSparkles, X, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/ui";
 import { settingsApi } from "../../lib/settings";
@@ -11,13 +11,15 @@ import { LLMTab } from "./LLMTab";
 import { MCPTab } from "./MCPTab";
 import { SkillsTab } from "./SkillsTab";
 import { Icon, IconButton } from "../ui/Icon";
+import { EnvironmentSettings } from "./EnvironmentSettings";
 
-type Tab = "general" | "llm" | "skills" | "extensions" | "mcp" | "compute";
+type Tab = "general" | "llm" | "skills" | "extensions" | "mcp" | "compute" | "environments";
 
 const TABS: { id: Tab; labelKey: string; titleKey: string; icon: LucideIcon }[] = [
   { id: "general", labelKey: "settings.general", titleKey: "settings.general", icon: Settings2 },
   { id: "llm", labelKey: "settings.llm", titleKey: "settings.model.pageTitle", icon: BrainCircuit },
   { id: "skills", labelKey: "skills.title", titleKey: "skills.title", icon: WandSparkles },
+  { id: "environments", labelKey: "settings.environments", titleKey: "settings.environments", icon: Boxes },
   { id: "extensions", labelKey: "settings.extensions", titleKey: "settings.extensions", icon: Blocks },
   { id: "mcp", labelKey: "settings.mcp", titleKey: "settings.mcpPage.title", icon: Unplug },
   { id: "compute", labelKey: "settings.compute", titleKey: "settings.computePage.title", icon: ServerCog },
@@ -205,6 +207,7 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
                 {tab === "extensions" && <ExtensionsTab workspaceCwd={scope} />}
                 {tab === "mcp" && <MCPTab workspaceCwd={scope} />}
                 {tab === "compute" && <ComputeSettings workspaceCwd={scope} />}
+                {tab === "environments" && <EnvironmentSettings workspaceCwd={scope} />}
               </>
             )}
           </div>

@@ -51,6 +51,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
       || pathname === "/openapi.json";
     const needsWorkspaceEnvironment = request.method === "POST" && (
       pathname === "/api/kernels/execute"
+      || pathname === "/api/kernels/execute-stream"
       || pathname === "/api/notebooks/jupyter/start"
     );
     if (needsWorkspaceEnvironment) {
@@ -129,7 +130,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeArtifacts !== false) registerTurnArtifactRoutes(app);
   if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings);
   if (config.nodeExecutions !== false) registerExecutionRoutes(app, jobs);
-  if (config.nodeExecutions !== false) registerKernelExecutionRoutes(app, config);
+  if (config.nodeExecutions !== false) registerKernelExecutionRoutes(app, config, environments);
   if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, research);
   if (config.nodeProject !== false) registerProjectRoutes(app, research, projectReview);
   if (config.nodeLiterature !== false) registerLiteratureRoutes(app);

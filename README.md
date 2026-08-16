@@ -25,7 +25,7 @@
 Most AI research tools stop at reading and summarizing papers. Pi-Science is built around the things an open chat tab **cannot** do:
 
 - **Execute, don't just explain.** Python code blocks in any answer run on a real workspace kernel with one click — state persists across blocks, so a conversation is also a live analysis session.
-- **Reproducibility as a side effect, not a virtue.** Every run lands in an event log, artifacts carry sha256 digests, each workspace gets an isolated environment, and results trace back to the code and data that produced them — without changing how you work.
+- **Reproducibility as a side effect, not a virtue.** Every run lands in an event log, artifacts carry sha256 digests, projects bind to versioned Micromamba environments, and results trace back to the code and data that produced them — without changing how you work.
 - **Autonomous research loops with a human in charge.** Describe an objective and a deterministic metric; a supervised agent proposes candidates, executes them in immutable snapshots, evaluates, analyzes, and iterates — with budgets, pause/resume, and crash recovery.
 - **Literature with real, verifiable citations.** Zero-config Crossref/arXiv/PubMed retrieval with inline DOIs rendered as clickable sources — never invented references.
 - **Local-first by architecture.** Workspaces are plain folders on your machine. Nothing leaves it except the LLM calls you configure — including fully local endpoints such as Ollama or LM Studio. Unpublished data stays yours.
@@ -99,7 +99,13 @@ Re-run the platform-appropriate installer (`scripts/install.sh` or `powershell -
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 ```
 
-Open **Settings → LLM** after startup and configure a provider and default model.
+The installers download Pi Orbit 0.2.0 by default. Set `PI_ORBIT_VERSION` to
+select another compatible release, or set `PI_ORBIT_REPO` to use a local Pi
+Orbit source checkout.
+
+Open **Settings → LLM** after startup and configure a provider and default
+model. Installed and workspace-discovered skills can be enabled, disabled, or
+reset from **Settings → Skills**.
 
 ## Highlights
 
@@ -108,9 +114,9 @@ Open **Settings → LLM** after startup and configure a provider and default mod
 | Agent workspace | Streaming conversations, tool cards, Markdown, LaTeX, slash commands, and interactive extension prompts |
 | Concurrent sessions | Isolated runtimes for active, restored, and forked conversations inside one shared Pi host |
 | Scientific files | Native previews for molecular structures, FITS, genomics, phase data, 3D models, tables, office documents, media, and code |
-| Reproducibility | Artifact hashes, generating code and diffs, environment snapshots, provenance history, and reproduce actions |
+| Reproducibility | Live session-scoped execution records, artifact hashes, generating code and diffs, environment snapshots, provenance history, and reproduce actions |
 | Project memory | Reviewer proposals, human approval, evidence links, project versions, research loops, and Pareto-frontier tracking |
-| Computation | Python/R kernels, notebooks, experiment runs, job control, large-file probing, and optional Jupyter Lab |
+| Computation | Shared versioned Micromamba environments, isolated Python/R Session kernels, executable `.ipynb` files, conversation-linked runs, and an optional app-managed Jupyter Lab |
 | Extensibility | Pi skills, extensions, MCP servers, subagents, custom model providers, and managed endpoints |
 | Workspace safety | Project-scoped metadata, validated paths, isolated session state, and controlled outbound provider discovery |
 
@@ -146,7 +152,17 @@ Type `/` in the conversation composer to open the command menu.
 | `/export <html\|jsonl>` | Export conversation history |
 | `/skill:<name>` | Invoke a dynamically discovered workspace skill |
 
-Pi-Science-managed workspaces trust `.pi/skills/` by default; these project-built-in skills participate in Pi command discovery.
+Pi-Science-managed workspaces trust `.pi/skills/` by default; these
+project-built-in skills participate in Pi command discovery. Use **Settings →
+Skills** to review and control discovered skills. The former standalone
+`/skills` routes have been removed.
+
+## Execution Evidence
+
+Kernel, notebook, and agent-tool executions are recorded in the context of the
+conversation session that produced them. Execution status streams live, and
+the Runs view can locate an execution in its source conversation or open files
+and artifacts produced by that execution.
 
 ## Model Configuration
 
@@ -166,8 +182,10 @@ When a conversation settles, Pi-Science may generate a concise AI title for it
 configured provider as your sessions — a fresh isolated Pi runtime sends the
 most recent few messages (≤ 6 messages, each trimmed to ≤ 200 characters) and
 asks for a title of at most 8 words. This means **the latest conversation
-excerpt is sent to your configured LLM provider** on each settled turn; the
-result is stored locally in your browser.
+excerpt is sent to your configured LLM provider** on each settled turn. The
+result is persisted in the workspace at
+`.pi-science/session-titles.jsonl`; browser storage is retained only as an
+immediate fallback.
 
 To disable it, set the environment variable before starting the services and
 restart:
