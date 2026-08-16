@@ -107,7 +107,9 @@ describe("Pi runtime custom provider materialization", () => {
     const auth = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "auth.json"), "utf8"));
     expect(auth["opencode-go"]).toEqual({ type: "api_key", key: "oc-go-secret" });
     const mode = (await stat(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "auth.json"))).mode & 0o777;
-    expect(mode).toBe(0o600);
+    // Windows has no POSIX mode bits (chmod is best-effort there); the content
+    // assertions above still validate the materialization on every platform.
+    if (process.platform !== "win32") expect(mode).toBe(0o600);
   });
 
   it("preserves non-api-key auth entries, merges Pi-Science keys, and drops stale managed keys", async () => {
