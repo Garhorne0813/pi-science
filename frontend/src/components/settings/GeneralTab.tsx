@@ -19,11 +19,12 @@ export function GeneralTab() {
           ariaLabel={t("settings.appearance.label")}
           value={theme}
           options={[
+            { value: "system", label: t("settings.appearance.system") },
             { value: "light", label: t("settings.appearance.light") },
             { value: "dark", label: t("settings.appearance.dark") },
           ]}
           className="min-w-[12rem]"
-          onSelect={(next) => setTheme(next as "light" | "dark")}
+          onSelect={(next) => setTheme(next as "light" | "dark" | "system")}
         />
       </div>
       <div className="flex min-h-14 items-center justify-between gap-panel px-4 py-2">
@@ -31,7 +32,10 @@ export function GeneralTab() {
         <SettingsSelectMenu
           ariaLabel={t("settings.language.label")}
           value={locale}
-          options={shippedLocales.map((entry) => ({ value: entry.code, label: entry.label }))}
+          options={[
+            { value: "system", label: t("settings.language.system") },
+            ...shippedLocales.map((entry) => ({ value: entry.code, label: entry.label })),
+          ]}
           className="min-w-[12rem]"
           onSelect={(next) => setLocale(next)}
         />
