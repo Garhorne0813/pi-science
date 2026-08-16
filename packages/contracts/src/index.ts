@@ -697,6 +697,18 @@ export const scheduledTaskRunListResponseSchema = z.object({
   runs: z.array(scheduledTaskRunSchema),
 });
 
+export const scheduledTaskPreviewRequestSchema = z.object({
+  cron: z.string().min(1).max(200),
+  timezone: z.string().min(1).max(120),
+});
+
+export const scheduledTaskPreviewResponseSchema = z.object({
+  valid: z.boolean(),
+  error: z.string().nullable(),
+  timezone: z.string(),
+  next_runs: z.array(z.string()).default([]),
+});
+
 export type ScheduledTaskType = z.infer<typeof scheduledTaskTypeSchema>;
 export type ScheduledTaskSchedule = z.infer<typeof scheduledTaskScheduleSchema>;
 export type ScheduledTaskExecutorConfig = z.infer<typeof scheduledTaskExecutorSchema>;
@@ -713,3 +725,5 @@ export type ScheduledTaskUpdate = z.infer<typeof scheduledTaskUpdateSchema>;
 export type ScheduledTaskApproveRequest = z.infer<typeof scheduledTaskApproveRequestSchema>;
 export type ScheduledTaskListResponse = z.infer<typeof scheduledTaskListResponseSchema>;
 export type ScheduledTaskRunListResponse = z.infer<typeof scheduledTaskRunListResponseSchema>;
+export type ScheduledTaskPreviewRequest = z.infer<typeof scheduledTaskPreviewRequestSchema>;
+export type ScheduledTaskPreview = z.infer<typeof scheduledTaskPreviewResponseSchema>;

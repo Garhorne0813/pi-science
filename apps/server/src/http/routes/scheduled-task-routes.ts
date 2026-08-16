@@ -49,6 +49,16 @@ export function registerScheduledTaskRoutes(
     catch (error) { return reply.code(400).send({ error: messageOf(error) }); }
   });
 
+  // Registered before any /:task_id route: a literal "preview" segment must
+  // never be captured as a task id. Query endpoint: 200 even when the
+  // expression is invalid — invalid schedules are a preview result, not an error.
+  app.post("/api/scheduled-tasks/preview", async (request, reply) => {
+    const cwd = await workspace(request, reply);
+    if (!cwd) return;
+    try { return await coordinators.coordinatorFor(cwd).preview(request.body ?? {}); }
+    catch (error) { return reply.code(400).send({ error: messageOf(error) }); }
+  });
+
   app.get<{ Params: { task_id: string } }>("/api/scheduled-tasks/:task_id", async (request, reply) => {
     const cwd = await workspace(request, reply);
     if (!cwd) return;
@@ -93,9 +103,8 @@ export function registerScheduledTaskRoutes(
     const cwd = await workspace(request, reply);
     if (!cwd) return;
     try {
-      const coordinator = coordinators.coordinatorFor(cwd);
-      const task = await coordinator.get(request.params.task_id);
-      if (!task) return reply.code(404).send({ error: "Scheduled task not found" });
+      // Runs outlive their task: deletion keeps the history files, so a deleted
+      // task id still lists its runs (empty list for ids that never existed).
       return { runs: await new ScheduledTaskRepository(cwd).listRuns(request.params.task_id, 100) };
     } catch (error) { return reply.code(400).send({ error: messageOf(error) }); }
   });

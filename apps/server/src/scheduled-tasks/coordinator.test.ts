@@ -303,4 +303,74 @@ describe("ScheduledTaskCoordinator", () => {
     expect(await repository.listRuns(task.task_id, 10)).toHaveLength(1);
     await expect(coordinator.delete(task.task_id)).rejects.toThrow(/not found/);
   });
+
+  it("previews the next 5 runs with the authoritative schedule computation", async () => {
+    const { coordinator } = await harness({}); // fake now = 2025-01-06T00:00:00Z (Monday)
+    const preview = coordinator.preview({ cron: "0 9 * * 1-5", timezone: "UTC" });
+    expect(preview).toEqual({
+      valid: true,
+      error: null,
+      timezone: "UTC",
+      next_runs: [
+        "2025-01-06T09:00:00.000Z",
+        "2025-01-07T09:00:00.000Z",
+        "2025-01-08T09:00:00.000Z",
+        "2025-01-09T09:00:00.000Z",
+        "2025-01-10T09:00:00.000Z",
+      ],
+    });
+  });
+
+  it("previews in the task timezone and for minute-level schedules", async () => {
+    const { coordinator } = await harness({});
+    const shifted = coordinator.preview({ cron: "0 9 * * 1-5", timezone: "Asia/Shanghai" });
+    expect(shifted.valid).toBe(true);
+    expect(shifted.next_runs[0]).toBe("2025-01-06T01:00:00.000Z");
+    const everyMinute = coordinator.preview({ cron: "* * * * *", timezone: "UTC" });
+    expect(everyMinute.valid).toBe(true);
+    expect(everyMinute.next_runs).toEqual([
+      "2025-01-06T00:01:00.000Z",
+      "2025-01-06T00:02:00.000Z",
+      "2025-01-06T00:03:00.000Z",
+      "2025-01-06T00:04:00.000Z",
+      "2025-01-06T00:05:00.000Z",
+    ]);
+  });
+
+  it("preview rejects an invalid timezone and an invalid cron with readable errors", async () => {
+    const { coordinator } = await harness({});
+    expect(coordinator.preview({ cron: "0 9 * * 1-5", timezone: "Not/AZone" })).toEqual({
+      valid: false,
+      error: "无效时区: Not/AZone",
+      timezone: "Not/AZone",
+      next_runs: [],
+    });
+    const badCron = coordinator.preview({ cron: "99 9 * * 1-5", timezone: "UTC" });
+    expect(badCron.valid).toBe(false);
+    expect(badCron.error).toMatch(/无效 cron 表达式/);
+    expect(badCron.error).toMatch(/Constraint error/);
+    expect(badCron.next_runs).toEqual([]);
+    const sixFields = coordinator.preview({ cron: "0 9 * * * *", timezone: "UTC" });
+    expect(sixFields.valid).toBe(false);
+    expect(sixFields.error).toMatch(/expected 5 fields/);
+    const feb31 = coordinator.preview({ cron: "0 0 31 2 *", timezone: "UTC" });
+    expect(feb31.valid).toBe(false);
+    expect(feb31.error).toMatch(/Invalid explicit day of month/);
+  });
+
+  it("preview handles month-day boundaries: leap-day runs span years, invalid day combos fail", async () => {
+    const { coordinator } = await harness({});
+    const leapDay = coordinator.preview({ cron: "0 0 29 2 *", timezone: "UTC" });
+    expect(leapDay.valid).toBe(true);
+    expect(leapDay.next_runs).toEqual([
+      "2028-02-29T00:00:00.000Z",
+      "2032-02-29T00:00:00.000Z",
+      "2036-02-29T00:00:00.000Z",
+      "2040-02-29T00:00:00.000Z",
+      "2044-02-29T00:00:00.000Z",
+    ]);
+    const sunday = coordinator.preview({ cron: "0 9 * * 7", timezone: "UTC" });
+    expect(sunday.valid).toBe(true);
+    expect(sunday.next_runs[0]).toBe("2025-01-12T09:00:00.000Z");
+  });
 });

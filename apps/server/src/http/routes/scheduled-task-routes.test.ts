@@ -104,6 +104,44 @@ describe("scheduled task routes", () => {
     expect(deleteUnknown.statusCode).toBe(404);
   });
 
+  it("previews a schedule: 200 with a valid result, and the literal /preview segment is never a task id", async () => {
+    const { cwd, app } = await harness();
+    const preview = await app.inject({ method: "POST", url: `/api/scheduled-tasks/preview?cwd=${encodeURIComponent(cwd)}`, payload: { cron: "0 9 * * 1-5", timezone: "UTC" } });
+    expect(preview.statusCode).toBe(200); // query endpoint: 200 even for invalid schedules
+    const body = preview.json();
+    expect(body.valid).toBe(true);
+    expect(body.error).toBeNull();
+    expect(body.timezone).toBe("UTC");
+    expect(body.next_runs).toHaveLength(5);
+    for (let index = 1; index < body.next_runs.length; index += 1) {
+      expect(Date.parse(body.next_runs[index]!)).toBeGreaterThan(Date.parse(body.next_runs[index - 1]!));
+    }
+
+    const invalid = await app.inject({ method: "POST", url: `/api/scheduled-tasks/preview?cwd=${encodeURIComponent(cwd)}`, payload: { cron: "99 9 * * 1-5", timezone: "UTC" } });
+    expect(invalid.statusCode).toBe(200);
+    expect(invalid.json()).toMatchObject({ valid: false, error: expect.stringContaining("无效 cron 表达式"), next_runs: [] });
+    const badTz = await app.inject({ method: "POST", url: `/api/scheduled-tasks/preview?cwd=${encodeURIComponent(cwd)}`, payload: { cron: "0 9 * * 1-5", timezone: "Not/AZone" } });
+    expect(badTz.statusCode).toBe(200);
+    expect(badTz.json()).toMatchObject({ valid: false, error: "无效时区: Not/AZone" });
+
+    const missingBody = await app.inject({ method: "POST", url: `/api/scheduled-tasks/preview?cwd=${encodeURIComponent(cwd)}` });
+    expect(missingBody.statusCode).toBe(400);
+  });
+
+  it("keeps run history readable after the task is deleted", async () => {
+    const { cwd, app } = await harness();
+    const created = await app.inject({ method: "POST", url: `/api/scheduled-tasks?cwd=${encodeURIComponent(cwd)}`, payload: createPayload() });
+    const taskId = created.json().task_id as string;
+    await app.inject({ method: "POST", url: `/api/scheduled-tasks/${taskId}/run?cwd=${encodeURIComponent(cwd)}` });
+
+    const deleted = await app.inject({ method: "DELETE", url: `/api/scheduled-tasks/${taskId}?cwd=${encodeURIComponent(cwd)}` });
+    expect(deleted.statusCode).toBe(200);
+    const runs = await app.inject({ method: "GET", url: `/api/scheduled-tasks/${taskId}/runs?cwd=${encodeURIComponent(cwd)}` });
+    expect(runs.statusCode).toBe(200);
+    expect(runs.json().runs).toHaveLength(1);
+    expect(runs.json().runs[0].task_id).toBe(taskId);
+  });
+
   it("rejects a cwd that is not a registered workspace with 403", async () => {
     const { app } = await harness();
     const response = await app.inject({ method: "GET", url: `/api/scheduled-tasks?cwd=${encodeURIComponent(join(tmpdir(), "not-a-workspace-xyz"))}` });
@@ -138,7 +176,8 @@ describe("scheduled task routes", () => {
     const unknownRun = await app.inject({ method: "GET", url: `/api/scheduled-tasks/${taskId}/runs/run-nope?cwd=${encodeURIComponent(cwd)}` });
     expect(unknownRun.statusCode).toBe(404);
     const unknownRuns = await app.inject({ method: "GET", url: `/api/scheduled-tasks/task-nope/runs?cwd=${encodeURIComponent(cwd)}` });
-    expect(unknownRuns.statusCode).toBe(404);
+    expect(unknownRuns.statusCode).toBe(200); // history survives task deletion; unknown ids list empty
+    expect(unknownRuns.json().runs).toEqual([]);
   });
 
   it("approves a sensitive task with matching categories and rejects mismatches", async () => {

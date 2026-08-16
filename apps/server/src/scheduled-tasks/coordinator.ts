@@ -3,9 +3,11 @@ import { CronExpressionParser } from "cron-parser";
 import {
   scheduledTaskApproveRequestSchema,
   scheduledTaskCreateSchema,
+  scheduledTaskPreviewRequestSchema,
   scheduledTaskUpdateSchema,
   type ScheduledTask,
   type ScheduledTaskApproval,
+  type ScheduledTaskPreview,
   type ScheduledTaskRun,
   type ScheduledTaskRunTrigger,
 } from "@pi-science/contracts";
@@ -145,6 +147,23 @@ export class ScheduledTaskCoordinator {
   list(): Promise<ScheduledTask[]> { return this.repository.listTasks(); }
 
   get(taskId: string): Promise<ScheduledTask | null> { return this.repository.getTask(taskId); }
+
+  /** Authoritative schedule preview for the task form: validates timezone and
+   *  cron exactly like create/update, then returns the next 5 trigger instants
+   *  from the same computation the scheduler uses (cron-parser, task timezone). */
+  preview(input: unknown): ScheduledTaskPreview {
+    const parsed = scheduledTaskPreviewRequestSchema.parse(input);
+    if (!isValidTimezone(parsed.timezone)) return { valid: false, error: `无效时区: ${parsed.timezone}`, timezone: parsed.timezone, next_runs: [] };
+    try {
+      assertValidCron(parsed.cron);
+      const expression = CronExpressionParser.parse(parsed.cron, { tz: parsed.timezone, currentDate: new Date(this.now()) });
+      const nextRuns: string[] = [];
+      for (let index = 0; index < 5; index += 1) nextRuns.push(expression.next().toDate().toISOString());
+      return { valid: true, error: null, timezone: parsed.timezone, next_runs: nextRuns };
+    } catch (error) {
+      return { valid: false, error: `无效 cron 表达式: ${error instanceof Error ? error.message : String(error)}`, timezone: parsed.timezone, next_runs: [] };
+    }
+  }
 
   async delete(taskId: string): Promise<void> {
     await this.requireTask(taskId);
@@ -385,7 +404,18 @@ function nextRunAtOf(schedule: { cron: string; timezone: string }, fromMs: numbe
 }
 
 function assertValidSchedule(cron: string, timezone: string): void {
+  assertValidCron(cron);
+  if (!isValidTimezone(timezone)) throw new Error(`invalid timezone: ${timezone}`);
+}
+
+/** cron-parser v5 silently accepts a 6-field seconds schedule and silently
+ *  falls back to the local zone for an unknown tz, so both are checked
+ *  explicitly before handing the expression to the parser. */
+function assertValidCron(cron: string): void {
   if (cron.trim().split(/\s+/).length !== 5) throw new Error(`invalid cron expression: expected 5 fields, got "${cron}"`);
-  try { new Intl.DateTimeFormat("en-US", { timeZone: timezone }); } catch { throw new Error(`invalid timezone: ${timezone}`); }
-  try { CronExpressionParser.parse(cron, { tz: timezone }); } catch (error) { throw new Error(`invalid cron expression: ${error instanceof Error ? error.message : String(error)}`); }
+  try { CronExpressionParser.parse(cron, { tz: "UTC" }); } catch (error) { throw new Error(`invalid cron expression: ${error instanceof Error ? error.message : String(error)}`); }
+}
+
+function isValidTimezone(timezone: string): boolean {
+  try { new Intl.DateTimeFormat("en-US", { timeZone: timezone }); return true; } catch { return false; }
 }

@@ -10,9 +10,9 @@ import { WorkspacePage, WorkspacePageHeader, WorkspacePageRefreshButton } from "
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { useRequiredWorkspaceCwd } from "../../lib/workspace";
 import {
-  approveScheduledTask, createScheduledTask, deleteScheduledTask, runScheduledTask,
+  approveScheduledTask, createScheduledTask, deleteScheduledTask, previewCron, runScheduledTask,
   scheduledTaskRunQuery, scheduledTaskRunsQuery, scheduledTasksQuery, updateScheduledTask,
-  type ScheduledTask, type ScheduledTaskCreateInput, type ScheduledTaskRun, type ScheduledTaskRunStatus,
+  type ScheduledTask, type ScheduledTaskCreateInput, type ScheduledTaskPreview, type ScheduledTaskRun, type ScheduledTaskRunStatus,
 } from "../../lib/scheduled-tasks";
 import { humanReadableCron, isValidCron, nextCronRuns } from "../../lib/scheduled-tasks/cron";
 
@@ -373,7 +373,34 @@ function TaskForm({ cwd, task, onClose }: { cwd: string; task: ScheduledTask | n
   const [saving, setSaving] = useState(false);
   const outputTouched = useRef(task != null);
   const cronValid = isValidCron(cron.trim());
-  const previewRuns = cronValid ? nextCronRuns(cron.trim(), timezone, 5) : [];
+  const [preview, setPreview] = useState<ScheduledTaskPreview | null>(null);
+  const [previewComputing, setPreviewComputing] = useState(false);
+  const [previewFailed, setPreviewFailed] = useState(false);
+  const previewToken = useRef(0);
+
+  // Authoritative preview from the server (same cron-parser computation the
+  // scheduler uses). Debounced 300ms; the local isValidCron still drives the
+  // instant red/green styling. On network failure the local approximation is
+  // a silent fallback — preview is auxiliary, never a toast.
+  useEffect(() => {
+    const expression = cron.trim();
+    if (!isValidCron(expression)) {
+      previewToken.current += 1;
+      setPreview(null);
+      setPreviewFailed(false);
+      setPreviewComputing(false);
+      return;
+    }
+    setPreviewComputing(true);
+    const token = ++previewToken.current;
+    const timer = setTimeout(() => {
+      previewCron(cwd, expression, timezone)
+        .then((result) => { if (previewToken.current === token) { setPreview(result); setPreviewFailed(false); } })
+        .catch(() => { if (previewToken.current === token) setPreviewFailed(true); })
+        .finally(() => { if (previewToken.current === token) setPreviewComputing(false); });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [cron, timezone, cwd]);
 
   // While creating, the output path follows the name until the user edits it.
   useEffect(() => {
@@ -441,10 +468,21 @@ function TaskForm({ cwd, task, onClose }: { cwd: string; task: ScheduledTask | n
               {cronValid && (
                 <div className="rounded-input border border-border bg-surface-2/60 px-3 py-2">
                   <div className="text-xs text-text">{humanReadableCron(cron.trim())} <span className="font-mono text-muted">({cron.trim()})</span></div>
-                  <div className="mt-1.5 text-[10px] text-muted">{t("scheduledTasks.form.nextRuns")}：</div>
-                  <ul className="mt-0.5 space-y-0.5">
-                    {previewRuns.map((run, index) => <li key={index} className="font-mono text-[10px] text-muted">{formatTimestamp(run.toISOString())}</li>)}
-                  </ul>
+                  <div className="mt-1.5 text-[10px] text-muted">{t("scheduledTasks.form.nextRuns")}：{previewComputing && <span className="text-muted/70">（{t("scheduledTasks.form.previewComputing")}）</span>}</div>
+                  {preview?.valid ? (
+                    <ul className="mt-0.5 space-y-0.5">
+                      {preview.next_runs.map((run, index) => <li key={index} className="font-mono text-[10px] text-muted">{formatTimestamp(run)}</li>)}
+                    </ul>
+                  ) : preview && !preview.valid ? (
+                    <p className="mt-0.5 text-[10px] text-error">{preview.error}</p>
+                  ) : previewFailed ? (
+                    <>
+                      <ul className="mt-0.5 space-y-0.5">
+                        {nextCronRuns(cron.trim(), timezone, 5).map((run, index) => <li key={index} className="font-mono text-[10px] text-muted">{formatTimestamp(run.toISOString())}</li>)}
+                      </ul>
+                      <p className="mt-1.5 text-[10px] text-muted/70">{t("scheduledTasks.form.previewError")}</p>
+                    </>
+                  ) : null}
                   <div className="mt-1.5 text-[10px] text-muted/70">{t("scheduledTasks.form.timezoneNote")}</div>
                 </div>
               )}

@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import i18n from "../../i18n";
@@ -102,6 +102,9 @@ async function defaultFetch(input: RequestInfo | URL, init?: RequestInit): Promi
     if (taskId === "task-a") return jsonResponse({ runs: [runA] });
     if (taskId === "task-b") return jsonResponse({ runs: [runB] });
     return jsonResponse({ runs: [] });
+  }
+  if (method === "POST" && url.includes("/preview?")) {
+    return jsonResponse({ valid: true, error: null, timezone: "Asia/Shanghai", next_runs: ["2030-01-01T01:00:00.000Z", "2030-01-02T01:00:00.000Z", "2030-01-03T01:00:00.000Z", "2030-01-04T01:00:00.000Z", "2030-01-05T01:00:00.000Z"] });
   }
   if (method === "POST" && url.startsWith("/api/scheduled-tasks?cwd=")) {
     const body = JSON.parse(String(init?.body)) as ScheduledTask;
@@ -266,6 +269,56 @@ describe("ScheduledTasksPage create form", () => {
     fireEvent.change(screen.getByLabelText("Custom cron"), { target: { value: "99 * * * *" } });
     expect(screen.getByText("Invalid cron expression")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("calls the server preview API on cron input and renders the server next runs", async () => {
+    vi.useFakeTimers();
+    try {
+      renderPage();
+      await act(async () => { await Promise.resolve(); });
+      fireEvent.click(screen.getByRole("button", { name: "New task" }));
+
+      fireEvent.change(screen.getByLabelText("Custom cron"), { target: { value: "0 8 * * *" } });
+      expect(screen.getAllByText(/Computing/).length).toBeGreaterThan(0);
+
+      await act(async () => { vi.advanceTimersByTime(300); });
+      await act(async () => { await Promise.resolve(); });
+
+      expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/scheduled-tasks/preview?"), expect.objectContaining({ method: "POST" }));
+      const previewCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/preview?"))?.[1];
+      expect(JSON.parse(String((previewCall as RequestInit | undefined)?.body))).toEqual({ cron: "0 8 * * *", timezone: expect.any(String) });
+      expect(screen.queryByText(/Computing/)).not.toBeInTheDocument();
+      const items = document.querySelectorAll("li");
+      expect(items).toHaveLength(5);
+      const expected = new Date("2030-01-01T01:00:00.000Z").toLocaleString(undefined, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+      expect(items[0]).toHaveTextContent(expected);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to the local preview when the preview API fails, without a toast", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/preview?")) return jsonResponse({ error: "boom" }, 500);
+      return defaultFetch(input, init);
+    });
+    try {
+      renderPage();
+      await act(async () => { await Promise.resolve(); });
+      fireEvent.click(screen.getByRole("button", { name: "New task" }));
+      fireEvent.change(screen.getByLabelText("Custom cron"), { target: { value: "0 8 * * *" } });
+
+      await act(async () => { vi.advanceTimersByTime(300); });
+      await act(async () => { await Promise.resolve(); });
+
+      expect(screen.getByText("Preview failed to load — showing a local estimate")).toBeInTheDocument();
+      expect(document.querySelectorAll("li").length).toBeGreaterThan(0); // local fallback estimate
+      expect(toastMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

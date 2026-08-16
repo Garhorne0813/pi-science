@@ -55,11 +55,22 @@ export interface ScheduledTaskCreateInput {
 /** PATCH accepts the POST fields plus `enabled`; all fields are optional. */
 export type ScheduledTaskUpdateInput = Partial<ScheduledTaskCreateInput & { enabled: boolean }>;
 
+/** Server-authoritative cron preview (mirror of the contracts schema): the
+ *  server validates the expression and computes the next runs in the task
+ *  timezone, so the form preview matches the real scheduler. */
+export interface ScheduledTaskPreview {
+  valid: boolean;
+  error: string | null;
+  timezone: string;
+  next_runs: string[];
+}
+
 /* ── Query keys ── */
 
 export const scheduledTasksKey = (cwd: string) => ["scheduled-tasks", cwd];
 export const scheduledTaskRunsKey = (cwd: string, taskId: string) => ["scheduled-tasks", cwd, taskId, "runs"];
 export const scheduledTaskRunKey = (cwd: string, taskId: string, runId: string) => [...scheduledTaskRunsKey(cwd, taskId), runId];
+export const scheduledTaskPreviewKey = (cwd: string) => ["scheduled-tasks", cwd, "preview"];
 
 /** The task list carries no run status, so the "pending" signal is an imminent
  *  next trigger: poll fast while a run is about to fire, otherwise stay quiet. */
@@ -145,4 +156,10 @@ export async function approveScheduledTask(cwd: string, taskId: string, categori
   const task = await apiRequest<ScheduledTask>(`/api/scheduled-tasks/${encodeURIComponent(taskId)}/approve?${new URLSearchParams({ cwd })}`, jsonBody("POST", { categories }));
   void queryClient.invalidateQueries({ queryKey: scheduledTasksKey(cwd) });
   return task;
+}
+
+/** Server-side cron preview for the task form: the authoritative schedule
+ *  computation (cron-parser, task timezone) behind the form's live preview. */
+export async function previewCron(cwd: string, cron: string, timezone: string): Promise<ScheduledTaskPreview> {
+  return apiRequest<ScheduledTaskPreview>(`/api/scheduled-tasks/preview?${new URLSearchParams({ cwd })}`, jsonBody("POST", { cron, timezone }));
 }
