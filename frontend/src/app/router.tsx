@@ -11,6 +11,7 @@ const SettingsPage = lazy(() => import("./routes/SettingsPage").then((m) => ({ d
 const FilesPage = lazy(() => import("./routes/FilesPage").then((m) => ({ default: m.FilesPage })));
 const NotebooksPage = lazy(() => import("./routes/NotebooksPage").then((m) => ({ default: m.NotebooksPage })));
 const RunsPage = lazy(() => import("./routes/RunsPage").then((m) => ({ default: m.RunsPage })));
+const ScheduledTasksPage = lazy(() => import("./routes/ScheduledTasksPage").then((m) => ({ default: m.ScheduledTasksPage })));
 const KnowledgePage = lazy(() => import("./routes/KnowledgePage").then((m) => ({ default: m.KnowledgePage })));
 const ResearchPage = lazy(() => import("./routes/ResearchPage").then((m) => ({ default: m.ResearchPage })));
 
@@ -34,6 +35,7 @@ export const router = createBrowserRouter([
       { path: "workspace/:cwd/runs", element: wrap(<RunsPage />) },
       { path: "workspace/:cwd/knowledge", element: wrap(<KnowledgePage />) },
       { path: "workspace/:cwd/research", element: wrap(<ResearchPage />) },
+      { path: "workspace/:cwd/scheduled-tasks", element: wrap(<ScheduledTasksPage />) },
       { path: "workspace/:cwd/settings", element: wrap(<SettingsPage />) },
     ],
   },

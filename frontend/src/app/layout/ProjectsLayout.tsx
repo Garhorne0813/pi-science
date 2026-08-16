@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { lazy, Suspense, useState, useEffect, useRef } from "react";
-import { PanelLeft, Settings, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, FileText, BookOpen, Inbox, FlaskConical, type LucideIcon } from "lucide-react";
+import { PanelLeft, Settings, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, FileText, BookOpen, Inbox, FlaskConical, Clock3, type LucideIcon } from "lucide-react";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { InspectorTabs } from "../../components/inspector/InspectorTabs";
@@ -121,6 +121,7 @@ export function ProjectsLayout() {
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} icon={BookOpen} label={t("nav.notebooks")} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/knowledge`} icon={Inbox} label={t("nav.knowledge")} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/research`} icon={FlaskConical} label={t("nav.research")} />
+              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/scheduled-tasks`} icon={Clock3} label={t("nav.scheduledTasks")} />
             </>
           )}
           <div className="flex-1" />
@@ -159,6 +160,7 @@ export function ProjectsLayout() {
                   <KnowledgeNavItem cwd={activeCwd!} active={location.pathname.endsWith("/knowledge")} />
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/research`} label={t("nav.research")} icon={FlaskConical} active={location.pathname.endsWith("/research")} />
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/notebooks`} label={t("nav.notebooks")} icon={BookOpen} active={location.pathname.endsWith("/notebooks")} />
+                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/scheduled-tasks`} label={t("nav.scheduledTasks")} icon={Clock3} active={location.pathname.endsWith("/scheduled-tasks")} />
                 </>
               )}
             </nav>
@@ -443,7 +445,7 @@ function relativeTime(dateStr: string): string {
 }
 
 /** Icon-only nav item for the collapsed sidebar strip. */
-function CollapsedNavItem({ to, icon, label }: { to: string; icon: LucideIcon; label: string }) {
+export function CollapsedNavItem({ to, icon, label }: { to: string; icon: LucideIcon; label: string }) {
   const navigate = useNavigate();
   const location = useLocation();
   const active = location.pathname.startsWith(to) && to !== "/";
@@ -458,7 +460,7 @@ function CollapsedNavItem({ to, icon, label }: { to: string; icon: LucideIcon; l
   );
 }
 
-function SidebarNavItem({ to, label, icon, active, badge }: { to: string; label: string; icon?: LucideIcon; active: boolean; badge?: number }) {
+export function SidebarNavItem({ to, label, icon, active, badge }: { to: string; label: string; icon?: LucideIcon; active: boolean; badge?: number }) {
   const navigate = useNavigate();
   const setSidebarCollapsed = useUiStore((state) => state.setSidebarCollapsed);
   return (

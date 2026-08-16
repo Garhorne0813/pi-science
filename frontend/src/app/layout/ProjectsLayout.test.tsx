@@ -1,7 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { SettingsNavItem, WorkspaceSessionList } from "./ProjectsLayout";
+import { SettingsNavItem, SidebarNavItem, CollapsedNavItem, WorkspaceSessionList } from "./ProjectsLayout";
+import { Clock3 } from "lucide-react";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { FeedbackContext } from "../../components/feedback/feedback-context";
@@ -42,6 +43,33 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("scheduled-tasks navigation", () => {
+  it("renders the expanded entry and navigates to the scheduled-tasks route", () => {
+    render(
+      <MemoryRouter initialEntries={["/workspace/proj"]}>
+        <Routes>
+          <Route path="/workspace/:cwd" element={<><SidebarNavItem to="/workspace/proj/scheduled-tasks" label="Scheduled Tasks" icon={Clock3} active={false} /><LocationProbe /></>} />
+          <Route path="/workspace/:cwd/scheduled-tasks" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Scheduled Tasks" }));
+    expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/scheduled-tasks");
+  });
+
+  it("renders the collapsed entry and marks it active on the scheduled-tasks route", () => {
+    render(
+      <MemoryRouter initialEntries={["/workspace/proj/scheduled-tasks"]}>
+        <CollapsedNavItem to="/workspace/proj/scheduled-tasks" icon={Clock3} label="Scheduled Tasks" />
+      </MemoryRouter>,
+    );
+
+    const item = screen.getByRole("button", { name: "Scheduled Tasks" });
+    expect(item).toHaveClass("text-accent");
+  });
 });
 
 describe("SettingsNavItem", () => {

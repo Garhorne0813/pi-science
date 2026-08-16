@@ -26,6 +26,7 @@ const environmentSchema = z.object({
   PI_SCIENCE_NODE_WORKSPACES: z.enum(["0", "1"]).default("1"),
   PI_SCIENCE_NODE_EXECUTIONS: z.enum(["0", "1"]).default("1"),
   PI_SCIENCE_NODE_LITERATURE: z.enum(["0", "1"]).default("1"),
+  PI_SCIENCE_NODE_SCHEDULED_TASKS: z.enum(["0", "1"]).default("1"),
   LOG_LEVEL: z.string().default("info"),
 });
 
@@ -55,6 +56,7 @@ export interface ServerConfig {
   nodeCompute?: boolean;
   nodeWorkspaces?: boolean;
   nodeExecutions?: boolean;
+  nodeScheduledTasks?: boolean;
   logLevel: string;
 }
 
@@ -86,6 +88,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Server
     nodeWorkspaces: parsed.PI_SCIENCE_NODE_WORKSPACES === "1",
     nodeExecutions: parsed.PI_SCIENCE_NODE_EXECUTIONS === "1",
     nodeLiterature: parsed.PI_SCIENCE_NODE_LITERATURE === "1",
+    nodeScheduledTasks: parsed.PI_SCIENCE_NODE_SCHEDULED_TASKS === "1",
     logLevel: parsed.LOG_LEVEL,
   };
 }

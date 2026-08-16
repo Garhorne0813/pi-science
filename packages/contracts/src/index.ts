@@ -564,6 +564,7 @@ export type SkillRequirement = z.infer<typeof skillRequirementSchema>;
 export type SkillMetadata = z.infer<typeof skillMetadataSchema>;
 export type SkillValidation = z.infer<typeof skillValidationSchema>;
 export type SkillFile = z.infer<typeof skillFileSchema>;
+
 export const skillContentSchema = z.object({
   skill_id: z.string().min(1),
   name: z.string().min(1),
@@ -587,3 +588,128 @@ export const skillContentSchema = z.object({
 
 export type SkillContent = z.infer<typeof skillContentSchema>;
 export type SkillInfo = z.infer<typeof skillInfoSchema>;
+
+// ── Scheduled tasks ──────────────────────────────────────────────────
+
+export const scheduledTaskTypeSchema = z.enum(["literature_digest"]);
+
+export const scheduledTaskScheduleSchema = z.object({
+  cron: z.string().min(1).max(200),
+  timezone: z.string().min(1).max(120),
+});
+
+export const scheduledTaskExecutorSchema = z.object({
+  kind: z.literal("headless_agent"),
+  config: z.record(z.string(), z.unknown()).default({}),
+});
+
+export const scheduledTaskOutputSchema = z.object({
+  relative_path: z.string().min(1).max(1000),
+});
+
+export const scheduledTaskApprovalSchema = z.object({
+  status: z.enum(["none", "pending", "approved"]),
+  content_hash: z.string().nullable(),
+  revision: z.number().int().nonnegative(),
+  categories: z.array(z.string()).default([]),
+  terms: z.array(z.string()).default([]),
+  updated_at: z.string().nullable(),
+});
+
+export const scheduledTaskRetrySchema = z.object({
+  max_attempts: z.number().int().min(1).max(10).default(2),
+});
+
+export const scheduledTaskSchema = z.object({
+  task_id: z.string().min(1),
+  schema_version: z.literal(1).default(1),
+  revision: z.number().int().nonnegative().default(0),
+  name: z.string().min(1).max(200),
+  type: scheduledTaskTypeSchema,
+  enabled: z.boolean().default(true),
+  schedule: scheduledTaskScheduleSchema,
+  executor: scheduledTaskExecutorSchema,
+  output: scheduledTaskOutputSchema,
+  approval: scheduledTaskApprovalSchema,
+  retry: scheduledTaskRetrySchema,
+  next_run_at: z.string().nullable(),
+  last_run_at: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const scheduledTaskUsageSchema = z.object({
+  model_tokens: z.number().int().nonnegative().default(0),
+  cost_usd: z.number().nonnegative().default(0),
+});
+
+export const scheduledTaskRunSchema = z.object({
+  run_id: z.string().min(1),
+  task_id: z.string().min(1),
+  scheduled_for: z.string(),
+  trigger: z.enum(["cron", "manual", "reconcile"]),
+  idempotency_key: z.string().min(1),
+  status: z.enum(["pending", "running", "succeeded", "failed", "needs_attention", "skipped"]),
+  attempt: z.number().int().nonnegative().default(0),
+  execution_id: z.string().nullable().default(null),
+  started_at: z.string().nullable().default(null),
+  ended_at: z.string().nullable().default(null),
+  output_paths: z.array(z.string()).default([]),
+  error: z.string().nullable().default(null),
+  usage: scheduledTaskUsageSchema.default({ model_tokens: 0, cost_usd: 0 }),
+});
+
+export const scheduledTaskCreateSchema = z.object({
+  name: z.string().min(1).max(200),
+  type: scheduledTaskTypeSchema.default("literature_digest"),
+  enabled: z.boolean().default(true),
+  schedule: scheduledTaskScheduleSchema,
+  executor: z.object({
+    kind: z.literal("headless_agent").default("headless_agent"),
+    config: z.record(z.string(), z.unknown()).default({}),
+  }),
+  output: scheduledTaskOutputSchema,
+  retry: scheduledTaskRetrySchema.default({ max_attempts: 2 }),
+});
+
+export const scheduledTaskUpdateSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  type: scheduledTaskTypeSchema.optional(),
+  enabled: z.boolean().optional(),
+  schedule: scheduledTaskScheduleSchema.partial().optional(),
+  executor: z.object({
+    kind: z.literal("headless_agent").optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
+  }).optional(),
+  output: scheduledTaskOutputSchema.partial().optional(),
+  retry: scheduledTaskRetrySchema.partial().optional(),
+});
+
+export const scheduledTaskApproveRequestSchema = z.object({
+  categories: z.array(z.string()),
+});
+
+export const scheduledTaskListResponseSchema = z.object({
+  tasks: z.array(scheduledTaskSchema),
+});
+
+export const scheduledTaskRunListResponseSchema = z.object({
+  runs: z.array(scheduledTaskRunSchema),
+});
+
+export type ScheduledTaskType = z.infer<typeof scheduledTaskTypeSchema>;
+export type ScheduledTaskSchedule = z.infer<typeof scheduledTaskScheduleSchema>;
+export type ScheduledTaskExecutorConfig = z.infer<typeof scheduledTaskExecutorSchema>;
+export type ScheduledTaskOutput = z.infer<typeof scheduledTaskOutputSchema>;
+export type ScheduledTaskApproval = z.infer<typeof scheduledTaskApprovalSchema>;
+export type ScheduledTaskRetry = z.infer<typeof scheduledTaskRetrySchema>;
+export type ScheduledTask = z.infer<typeof scheduledTaskSchema>;
+export type ScheduledTaskUsage = z.infer<typeof scheduledTaskUsageSchema>;
+export type ScheduledTaskRun = z.infer<typeof scheduledTaskRunSchema>;
+export type ScheduledTaskRunStatus = z.infer<typeof scheduledTaskRunSchema>["status"];
+export type ScheduledTaskRunTrigger = z.infer<typeof scheduledTaskRunSchema>["trigger"];
+export type ScheduledTaskCreate = z.infer<typeof scheduledTaskCreateSchema>;
+export type ScheduledTaskUpdate = z.infer<typeof scheduledTaskUpdateSchema>;
+export type ScheduledTaskApproveRequest = z.infer<typeof scheduledTaskApproveRequestSchema>;
+export type ScheduledTaskListResponse = z.infer<typeof scheduledTaskListResponseSchema>;
+export type ScheduledTaskRunListResponse = z.infer<typeof scheduledTaskRunListResponseSchema>;

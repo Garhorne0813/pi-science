@@ -10,6 +10,7 @@ import { registerSseRoutes } from "../http/routes/sse-routes.js";
 import { registerFileReadRoutes } from "../http/routes/file-routes.js";
 import { registerNodeSessionRoutes } from "../http/routes/node-session-routes.js";
 import { registerJobRoutes } from "../http/routes/job-routes.js";
+import { registerScheduledTaskRoutes } from "../http/routes/scheduled-task-routes.js";
 import { registerArtifactRoutes } from "../http/routes/artifact-routes.js";
 import { registerTurnArtifactRoutes } from "../http/routes/turn-artifact-routes.js";
 import { registerSettingsRoutes } from "../http/routes/settings-routes.js";
@@ -24,7 +25,7 @@ import { validateWorkspaceCwd } from "../security/workspace-security.js";
 import { AiTitleService, PiTitleRuntimeFactory } from "../runtime/title/ai-title-service.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
-  const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, jobs, research, projectReview, scientificRuntime, environments } = modules;
+  const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, jobs, research, projectReview, scientificRuntime, environments, scheduledTasks } = modules;
   const app = Fastify({
     logger: { level: config.logLevel },
     bodyLimit: config.maxBodyBytes,
@@ -133,6 +134,14 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, research);
   if (config.nodeProject !== false) registerProjectRoutes(app, research, projectReview);
   if (config.nodeLiterature !== false) registerLiteratureRoutes(app);
+  if (config.nodeScheduledTasks !== false) {
+    registerScheduledTaskRoutes(app, scheduledTasks);
+    app.addHook("onReady", async () => {
+      const results = await Promise.allSettled((await knownWorkspacePaths()).map((cwd) => scheduledTasks.coordinatorFor(cwd).reconcile()));
+      for (const result of results) if (result.status === "rejected") app.log.error({ err: result.reason }, "scheduled task recovery failed");
+    });
+    app.addHook("onClose", async () => scheduledTasks.shutdown());
+  }
   app.addHook("onReady", async () => {
     const results = await Promise.allSettled((await knownWorkspacePaths()).map((cwd) => research.reconcile(cwd)));
     for (const result of results) if (result.status === "rejected") app.log.error({ err: result.reason }, "research loop recovery failed");
