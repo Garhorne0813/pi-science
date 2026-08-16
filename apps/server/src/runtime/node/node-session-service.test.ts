@@ -887,6 +887,36 @@ describe("Node session lifecycle", () => {
     await blankService.shutdownAll();
   });
 
+  it("re-applies the workspace model and thinking after a restart restores a session", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-replay-config");
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), JSON.stringify({ model: "openrouter/openai/gpt-5.1", thinking: "high" }), "utf8");
+    await service.resume("session-replay-config", cwd);
+    // The session jsonl may carry a model_change from an earlier session-local
+    // switch; the restart must re-apply the workspace config after the switch.
+    await service.reloadConfiguration();
+    const rpcLog = await readFile(process.env.FAKE_PI_LOG!, "utf8");
+    const requests = rpcLog.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { type: string; provider?: string; modelId?: string; level?: string });
+    const setModel = requests.find((request) => request.type === "set_model");
+    expect(setModel).toMatchObject({ provider: "openrouter", modelId: "openai/gpt-5.1" });
+    const setThinking = requests.find((request) => request.type === "set_thinking_level");
+    expect(setThinking).toMatchObject({ level: "high" });
+    // Ordering: the replay happens after the restored session switch and
+    // before the state read that confirms the runtime.
+    const switchIndex = requests.findLastIndex((request) => request.type === "switch_session");
+    const setModelIndex = requests.findIndex((request) => request.type === "set_model");
+    const setThinkingIndex = requests.findIndex((request) => request.type === "set_thinking_level");
+    const stateIndex = requests.findLastIndex((request) => request.type === "get_state");
+    expect(switchIndex).toBeGreaterThanOrEqual(0);
+    expect(setModelIndex).toBeGreaterThan(switchIndex);
+    expect(setThinkingIndex).toBeGreaterThan(setModelIndex);
+    expect(stateIndex).toBeGreaterThan(setThinkingIndex);
+    // The runtime reports the workspace configuration, not a stale session record.
+    await expect(service.state("session-replay-config", cwd)).resolves.toMatchObject({ model: "openrouter/openai/gpt-5.1", thinking: "high" });
+    await service.shutdownAll();
+  });
+
   it("deletes a session whose JSONL appears only after runtime cleanup", async () => {
     const service = testService();
     const cwd = await workspaceWithSessions();

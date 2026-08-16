@@ -1200,7 +1200,23 @@ export class NodeSessionService {
       const switched = sessionPath
         ? await started.process.sendCommand("switch_session", { sessionPath })
         : { success: true };
-      const state = switched.success ? await this.refreshState(started) : switched;
+      // The restored session's jsonl may carry model_change events from
+      // session-local switching; the workspace configuration must win after a
+      // settings-driven reload, so re-apply model/thinking after the switch.
+      let replayed = switched;
+      if (switched.success && config.model && config.model.includes("/")) {
+        const separator = config.model.indexOf("/");
+        const modelResult = await started.process.sendCommand("set_model", {
+          provider: config.model.slice(0, separator),
+          modelId: config.model.slice(separator + 1),
+        });
+        replayed = modelResult.success ? replayed : modelResult;
+      }
+      if (replayed.success && config.thinking) {
+        const thinkingResult = await started.process.sendCommand("set_thinking_level", { level: config.thinking });
+        replayed = thinkingResult.success ? replayed : thinkingResult;
+      }
+      const state = replayed.success ? await this.refreshState(started) : replayed;
       if (state.success && started.activeSessionId) {
         started.restartPending = false;
         this.registerRuntime(started, oldId);
