@@ -26,7 +26,14 @@ export const notebookRuntime = {
   },
 
   /** Cell execution is a mutation with side effects in the kernel — never cached. */
-  async execute(notebookId: string, cwd: string, language: "python" | "r", code: string, sessionId?: string): Promise<CellResult> {
+  async execute(
+    notebookId: string,
+    cwd: string,
+    language: "python" | "r",
+    code: string,
+    sessionId?: string,
+    options: { source?: "agent" | "session_notebook" | "file_notebook" | "terminal"; notebookPath?: string; cellId?: string } = {},
+  ): Promise<CellResult> {
     const query = new URLSearchParams({ cwd });
     return apiRequest<CellResult>(`/api/kernels/execute?${query}`, {
       method: "POST",
@@ -36,6 +43,9 @@ export const notebookRuntime = {
         code,
         notebook_id: notebookId,
         ...(sessionId ? { session_id: sessionId } : {}),
+        ...(options.source ? { source: options.source } : {}),
+        ...(options.notebookPath ? { notebook_path: options.notebookPath } : {}),
+        ...(options.cellId ? { cell_id: options.cellId } : {}),
       }),
       errorFallback: "Cell execution failed",
     });
@@ -43,5 +53,10 @@ export const notebookRuntime = {
 
   async release(notebookId: string, cwd: string): Promise<void> {
     await apiRequest(kernelShutdownUrl(notebookId, cwd), { method: "POST" });
+  },
+
+  async interrupt(notebookId: string, cwd: string, language?: "python" | "r"): Promise<void> {
+    const params = new URLSearchParams({ cwd, ...(language ? { language } : {}) });
+    await apiRequest(`/api/kernels/${encodeURIComponent(notebookId)}/interrupt?${params}`, { method: "POST" });
   },
 };

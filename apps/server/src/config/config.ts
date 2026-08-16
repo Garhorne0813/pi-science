@@ -10,6 +10,7 @@ const environmentSchema = z.object({
   PI_SCIENCE_INTERNAL_TOKEN: z.string().optional(),
   PI_SCIENCE_MANAGE_SCIENTIFIC_RUNTIME: z.enum(["0", "1"]).default("0"),
   PI_SCIENCE_PYTHON_EXECUTABLE: z.string().optional(),
+  PI_SCIENCE_MICROMAMBA_EXECUTABLE: z.string().optional(),
   PI_SCIENCE_PYTHON_CWD: z.string().optional(),
   PI_SCIENCE_SCIENTIFIC_IDLE_MS: z.coerce.number().int().nonnegative().default(5 * 60_000),
   PI_SCIENCE_SCIENTIFIC_STARTUP_MS: z.coerce.number().int().positive().default(30_000),
@@ -39,6 +40,7 @@ export interface ServerConfig {
   internalToken?: string;
   manageScientificRuntime?: boolean;
   pythonExecutable?: string;
+  micromambaExecutable?: string;
   pythonCwd?: string;
   scientificIdleMs?: number;
   scientificStartupMs?: number;
@@ -70,6 +72,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Server
     internalToken: parsed.PI_SCIENCE_INTERNAL_TOKEN,
     manageScientificRuntime: parsed.PI_SCIENCE_MANAGE_SCIENTIFIC_RUNTIME === "1",
     pythonExecutable: parsed.PI_SCIENCE_PYTHON_EXECUTABLE,
+    micromambaExecutable: parsed.PI_SCIENCE_MICROMAMBA_EXECUTABLE,
     pythonCwd: parsed.PI_SCIENCE_PYTHON_CWD,
     scientificIdleMs: parsed.PI_SCIENCE_SCIENTIFIC_IDLE_MS,
     scientificStartupMs: parsed.PI_SCIENCE_SCIENTIFIC_STARTUP_MS,

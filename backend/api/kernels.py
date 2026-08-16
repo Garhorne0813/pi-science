@@ -28,9 +28,13 @@ async def execute_cell(
         cwd = str(WorkspaceContext.from_cwd(cwd, allow_process_cwd=True))
         return await kernel_manager.execute(
             notebook_id=body.notebook_id or "default",
+            session_id=body.session_id,
             language=body.language,
             code=body.code,
             cwd=cwd,
+            environment_revision_id=body.environment_revision_id,
+            environment_prefix=body.environment_prefix,
+            kernel_instance_id=body.kernel_instance_id,
             timeout_seconds=body.timeout_seconds,
         )
     except ValueError as e:
@@ -55,6 +59,20 @@ async def shutdown_notebook(
             raise HTTPException(status_code=403, detail=str(exc)) from exc
     await kernel_manager.shutdown_notebook(notebook_id, cwd=cwd, language=language)
     return {"ok": True}
+
+
+@router.post("/{notebook_id}/interrupt")
+async def interrupt_notebook(
+    notebook_id: str,
+    cwd: str = Query(".", description="Workspace containing the kernel"),
+    language: str | None = Query(None),
+):
+    try:
+        cwd = str(WorkspaceContext.from_cwd(cwd, allow_process_cwd=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    interrupted = await kernel_manager.interrupt_notebook(notebook_id, cwd=cwd, language=language)
+    return {"ok": interrupted}
 
 
 @router.post("/shutdown-all")

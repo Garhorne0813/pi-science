@@ -10,6 +10,10 @@ class ExecuteCellRequest(BaseModel):
     language: Literal["python", "r"]
     code: str
     notebook_id: Optional[str] = None
+    session_id: Optional[str] = None
+    environment_revision_id: Optional[str] = None
+    environment_prefix: Optional[str] = None
+    kernel_instance_id: Optional[str] = None
     timeout_seconds: float = Field(default=120, ge=1, le=600)
 
 

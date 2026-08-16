@@ -37,4 +37,16 @@ describe("notebook runtime", () => {
       session_id: "session-1",
     });
   });
+
+  it("interrupts only the selected notebook kernel and language", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: JSON_HEADERS }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await notebookRuntime.interrupt("session-1", "/tmp/lab", "python");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/kernels/session-1/interrupt?cwd=%2Ftmp%2Flab&language=python",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
 });

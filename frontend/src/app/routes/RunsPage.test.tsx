@@ -273,6 +273,15 @@ describe("RunsPage execution ledger", () => {
     });
   });
 
+  it("offers the session kernel from execution records only when kernel cells exist", async () => {
+    renderSessionPage("/workspace/project/session/session-1?view=runs&execution=exec_kernel");
+    const button = await screen.findByRole("button", { name: "Open session kernel" });
+
+    fireEvent.click(button);
+
+    expect(openInspectorMock).toHaveBeenCalledWith({ variant: "notebook-panel" });
+  });
+
   it("surfaces failure evidence without requiring the output tab", async () => {
     renderPage("/workspace/project/runs?execution=exec_job");
     expect(await screen.findByText("Execution problem")).toBeInTheDocument();

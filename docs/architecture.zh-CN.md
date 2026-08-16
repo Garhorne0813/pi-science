@@ -123,13 +123,13 @@ Pi-Science 采用 local-first 设计：workspace 始终是普通目录，项目�
 ```text
 project/
 ├── AGENTS.md                 # 项目指令
-├── .venv/                    # 工作区级 Python 环境
 ├── node_modules/             # 工作区级 JavaScript 包
 ├── .pi/
 │   ├── skills/
 │   └── agents/
 ├── .pi-science/
 │   ├── project.json           # 稳定项目身份与显示元数据
+│   ├── environment.json       # 指向共享 Micromamba revision 的绑定
 │   ├── memory/
 │   │   └── ledger.json       # 项目记忆规范存储（记录、提案、决策）
 │   ├── sessions/             # 持久化的 Pi session JSONL 文件
@@ -154,12 +154,19 @@ Memory Ledger 是项目记忆的规范存储：它把现有项目知识、审核
 
 ### 包隔离
 
-第一次使用 Agent、Job 或 Python Kernel 时会初始化 `.venv/`。Agent 进程、本地任务和
-Notebook kernel 都会把该环境放在 `PATH` 最前面；`pip` 被配置为拒绝在虚拟环境外
-安装。JavaScript 包保留在 workspace 内；尝试进行 npm/pnpm 全局安装时，目标会被
-重定向到 `.pi-science/` 下，不会修改宿主机安装。已有但格式异常的 `.venv` 不会被
-自动覆盖。可以从 Notebooks 页面或通过 `GET/POST /api/environments/workspace`
-检查或初始化环境。
+Node 控制面维护全局的、带版本的 Micromamba 环境注册表。项目只保存
+`environment.json` 绑定，可以复用已经就绪的 revision，不再重复下载依赖。修改受管
+环境会创建新 revision，不会原地改变其他项目使用的环境。环境选择位于“设置 → 环境”。
+
+每个对话 Session 和语言仍使用独立 Kernel 进程。Python Kernel 通过轻量、可回收的
+venv overlay 继承绑定的 Micromamba revision，因此 Session 内临时 pip 安装不会污染
+共享基础环境。已有 workspace `.venv` 暂时作为迁移回退；格式异常的 `.venv` 不会被
+自动覆盖。JavaScript 包仍保留在 workspace 内，全局 npm/pnpm 安装重定向到
+`.pi-science/`。
+
+Session Notebook 从当前对话内部打开，统一展示 Agent 与用户单元的执行历史；磁盘
+`.ipynb` 文件从“文件”打开，只有保存后才持久化。JupyterLab 使用一个应用级工具环境，
+并把项目绑定的 revision 注册为 kernelspec。
 
 ## 信任与安全边界
 

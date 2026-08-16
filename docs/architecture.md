@@ -133,13 +133,13 @@ project-specific state is stored beside it.
 ```text
 project/
 ├── AGENTS.md                 # project instructions
-├── .venv/                    # workspace-local Python environment
 ├── node_modules/             # workspace-local JavaScript packages
 ├── .pi/
 │   ├── skills/
 │   └── agents/
 ├── .pi-science/
 │   ├── project.json           # stable project identity and display metadata
+│   ├── environment.json       # binding to a shared Micromamba revision
 │   ├── memory/
 │   │   └── ledger.json       # canonical memory ledger (records, proposals, decisions)
 │   ├── sessions/             # persisted Pi session JSONL files
@@ -168,14 +168,24 @@ restart; this is separate from `pinned.json`, which represents user favorites.
 
 ### Package isolation
 
-The first Agent, Job, or Python Kernel use initializes `.venv/`. Agent
-processes, local jobs, and notebook kernels receive that environment at the
-front of `PATH`, and `pip` is configured to refuse installation outside a
-virtual environment. JavaScript packages remain workspace-local; attempted
-global npm/pnpm installs are redirected below `.pi-science/` rather than
-modifying the host installation. Existing malformed `.venv` directories are not
-overwritten automatically. The environment can be inspected or initialized from
-the Notebooks page or through `GET/POST /api/environments/workspace`.
+The Node control plane owns a global registry of versioned Micromamba
+environments. Projects store only an `environment.json` binding and can reuse
+the same ready revision without downloading packages again. Changing a managed
+environment creates a new revision instead of mutating one used by other
+projects. Environment selection lives under Settings → Environments.
+
+Each conversation Session and language still receives an independent Kernel
+process. Python Kernels run through a lightweight disposable venv overlay that
+inherits the bound Micromamba revision, so Session-local pip installs cannot
+modify the shared base. Existing workspace `.venv` directories remain a legacy
+migration fallback and malformed ones are never overwritten automatically.
+JavaScript packages remain workspace-local; attempted global npm/pnpm installs
+are redirected below `.pi-science/`.
+
+Session Notebook is opened from the active conversation and renders the shared
+execution history for Agent and user cells. Disk `.ipynb` files are opened from
+Files and persist only when saved. JupyterLab uses one app-managed tooling
+environment and registers the project's bound revision as a kernelspec.
 
 ## Trust and security boundaries
 

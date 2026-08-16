@@ -31,7 +31,8 @@ class FakeJupyterProcess:
 
 
 @pytest.fixture(autouse=True)
-def reset_jupyter_state(monkeypatch):
+def reset_jupyter_state(monkeypatch, tmp_path):
+    monkeypatch.setenv("PI_SCIENCE_HOME", str(tmp_path / "app-data"))
     monkeypatch.setattr(notebooks, "_jupyter_process", None)
     monkeypatch.setattr(notebooks, "_jupyter_port", None)
     monkeypatch.setattr(notebooks, "_jupyter_cwd", None)
@@ -149,14 +150,14 @@ async def test_jupyter_rejects_missing_workspace(client, temp_workspace):
 
 
 @pytest.mark.anyio
-async def test_jupyter_environment_status_uses_workspace_venv(client, temp_workspace):
+async def test_jupyter_environment_status_uses_application_runtime(client, temp_workspace):
     before = await client.get(
         "/api/notebooks/jupyter/env-status",
         params={"cwd": str(temp_workspace)},
     )
     assert before.status_code == 200
     assert before.json()["ready"] is False
-    assert before.json()["path"] == str(temp_workspace.resolve() / ".venv")
+    assert before.json()["path"] == str(notebooks._workspace_venv(temp_workspace.resolve()))
 
     install_fake_jupyter(temp_workspace)
     after = await client.get(
@@ -167,7 +168,7 @@ async def test_jupyter_environment_status_uses_workspace_venv(client, temp_works
 
 
 @pytest.mark.anyio
-async def test_jupyter_setup_is_get_sse_and_installs_into_workspace(
+async def test_jupyter_setup_is_get_sse_and_installs_into_application_runtime(
     client, temp_workspace, monkeypatch
 ):
     commands = []
@@ -177,6 +178,7 @@ async def test_jupyter_setup_is_get_sse_and_installs_into_workspace(
         return SimpleNamespace(returncode=0, stderr="")
 
     monkeypatch.setattr(notebooks, "_find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr(notebooks, "_find_micromamba", lambda: None)
     monkeypatch.setattr(notebooks.subprocess, "run", fake_run)
 
     response = await client.get(
@@ -191,7 +193,7 @@ async def test_jupyter_setup_is_get_sse_and_installs_into_workspace(
     assert commands[0] == [
         "/usr/bin/uv",
         "venv",
-        str(temp_workspace.resolve() / ".venv"),
+        str(notebooks._workspace_venv(temp_workspace.resolve())),
         "--python",
         "3.12",
     ]
@@ -209,9 +211,5 @@ def test_windows_workspace_environment_paths(temp_workspace, monkeypatch):
     monkeypatch.setattr(notebooks, "_PYTHON_NAME", "python.exe")
     monkeypatch.setattr(notebooks, "_JUPYTER_NAME", "jupyter-lab.exe")
 
-    assert notebooks._env_python(temp_workspace) == (
-        temp_workspace / ".venv" / "Scripts" / "python.exe"
-    )
-    assert notebooks._jupyter_bin(temp_workspace) == (
-        temp_workspace / ".venv" / "Scripts" / "jupyter-lab.exe"
-    )
+    assert notebooks._env_python(temp_workspace) == notebooks._workspace_venv(temp_workspace) / "Scripts" / "python.exe"
+    assert notebooks._jupyter_bin(temp_workspace) == notebooks._workspace_venv(temp_workspace) / "Scripts" / "jupyter-lab.exe"

@@ -8,12 +8,18 @@ import {
   snapshotWorkspace,
 } from "../../runtime/artifacts/workspace-artifact-snapshot.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
+import type { WorkspaceEnvironmentService } from "../../runtime/workspace/workspace-environment.js";
 
 const executeCellRequestSchema = z.object({
   language: z.enum(["python", "r"]),
   code: z.string(),
   notebook_id: z.string().optional().nullable(),
   session_id: z.string().min(1).optional().nullable(),
+  environment_revision_id: z.string().min(1).optional().nullable(),
+  kernel_instance_id: z.string().min(1).optional().nullable(),
+  source: z.enum(["agent", "session_notebook", "file_notebook", "terminal"]).optional(),
+  notebook_path: z.string().optional().nullable(),
+  cell_id: z.string().optional().nullable(),
   timeout_seconds: z.number().min(1).max(600).optional(),
 });
 
@@ -25,7 +31,7 @@ const MAX_RESULT_PREVIEW_CHARS = 16 * 1024;
  * The scientific runtime still executes the cell; this route only records its
  * lifecycle and detects files created or modified in the workspace.
  */
-export function registerKernelExecutionRoutes(app: FastifyInstance, config: ServerConfig): void {
+export function registerKernelExecutionRoutes(app: FastifyInstance, config: ServerConfig, environments: WorkspaceEnvironmentService): void {
   app.post("/api/kernels/execute", async (request, reply) => {
     const parsed = executeCellRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid kernel execution request" });
@@ -39,6 +45,10 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
     }
 
     const body = parsed.data;
+    const environment = await environments.ensure(cwd);
+    if (body.environment_revision_id && environment.revision_id !== body.environment_revision_id) {
+      return reply.code(409).send({ error: "Requested environment revision is not bound to this workspace" });
+    }
     const kernelTimeoutMs = Math.max(config.upstreamTimeoutMs, (body.timeout_seconds ?? 120) * 1_000 + 5_000);
     const code = body.code.length <= MAX_RECORDED_CODE_CHARS
       ? body.code
@@ -59,8 +69,18 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
         code_sha256: createHash("sha256").update(body.code).digest("hex"),
         code_truncated: code.length !== body.code.length,
         timeout_seconds: body.timeout_seconds ?? 120,
+        source: body.source ?? "agent",
+        ...(body.notebook_path ? { notebook_path: body.notebook_path } : {}),
+        ...(body.cell_id ? { cell_id: body.cell_id } : {}),
       },
-      runtime: { cwd, gateway_timeout_ms: kernelTimeoutMs },
+      runtime: {
+        cwd,
+        gateway_timeout_ms: kernelTimeoutMs,
+        environment_id: environment.environment_id ?? "legacy-venv",
+        environment_revision_id: environment.revision_id ?? "legacy-venv",
+        environment_prefix: environment.virtual_env,
+        ...(body.kernel_instance_id ? { kernel_instance_id: body.kernel_instance_id } : {}),
+      },
     });
 
     const upstreamUrl = new URL("/api/kernels/execute", config.pythonOrigin);
@@ -80,6 +100,10 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
           language: body.language,
           code: body.code,
           notebook_id: body.notebook_id,
+          session_id: body.session_id,
+          environment_revision_id: environment.revision_id ?? "legacy-venv",
+          environment_prefix: environment.virtual_env,
+          kernel_instance_id: body.kernel_instance_id,
           timeout_seconds: body.timeout_seconds,
         }),
         signal: AbortSignal.timeout(kernelTimeoutMs),

@@ -1,6 +1,7 @@
-"""Notebook management API — list .ipynb files, manage Jupyter Lab with uv."""
+"""Notebook files and the app-managed, project-independent Jupyter runtime."""
 
 import asyncio
+import json
 import os
 import secrets
 import shutil
@@ -18,11 +19,16 @@ _IS_WINDOWS = os.name == "nt"
 _BIN_DIR = "Scripts" if _IS_WINDOWS else "bin"
 _PYTHON_NAME = "python.exe" if _IS_WINDOWS else "python"
 _JUPYTER_NAME = "jupyter-lab.exe" if _IS_WINDOWS else "jupyter-lab"
-JUPYTER_PACKAGES = ["jupyterlab", "ipykernel", "numpy", "pandas", "matplotlib"]
+JUPYTER_PACKAGES = ["jupyterlab"]
 
 
-def _workspace_venv(workspace: Path) -> Path:
-    return workspace / ".venv"
+def _runtime_root() -> Path:
+    return Path(os.environ.get("PI_SCIENCE_HOME", Path.home() / ".pi-science"))
+
+
+def _workspace_venv(_workspace: Path) -> Path:
+    """Compatibility name: Jupyter now lives in one app-level environment."""
+    return _runtime_root() / "micromamba" / "envs" / "pi-science-jupyter-runtime"
 
 
 def _jupyter_bin(workspace: Path) -> Path:
@@ -35,6 +41,52 @@ def _env_python(workspace: Path) -> Path:
 
 def _find_uv() -> str | None:
     return shutil.which("uv")
+
+
+def _find_micromamba() -> str | None:
+    configured = os.environ.get("PI_SCIENCE_MICROMAMBA_EXECUTABLE")
+    managed = _runtime_root() / "micromamba" / "bin" / ("micromamba.exe" if _IS_WINDOWS else "micromamba")
+    return configured or (str(managed) if managed.exists() else None) or shutil.which("micromamba")
+
+
+def _install_project_kernelspec(workspace: Path) -> None:
+    """Expose the bound project environment without installing Jupyter into it."""
+    binding_path = workspace / ".pi-science" / "environment.json"
+    prefix: Path | None = None
+    revision_id = "legacy"
+    display_name = "Pi-Science Project"
+    language = "python"
+    try:
+        binding = json.loads(binding_path.read_text("utf8"))
+        revision_id = str(binding["revision_id"])
+        registry = json.loads((_runtime_root() / "environments" / "registry.json").read_text("utf8"))
+        revision = next(item for item in registry.get("revisions", []) if item.get("revision_id") == revision_id and item.get("status") == "ready")
+        prefix = Path(revision["prefix"])
+        display_name = str(revision.get("display_name") or display_name)
+        language = str(revision.get("language") or language)
+    except (OSError, ValueError, KeyError, StopIteration, TypeError):
+        legacy = workspace / ".venv"
+        if legacy.exists():
+            prefix = legacy
+    if prefix is None:
+        return
+    bin_dir = prefix / _BIN_DIR
+    if language == "r":
+        executable = bin_dir / ("R.exe" if _IS_WINDOWS else "R")
+        argv = [str(executable), "--slave", "-e", "IRkernel::main()", "--args", "{connection_file}"]
+    else:
+        executable = bin_dir / _PYTHON_NAME
+        argv = [str(executable), "-m", "ipykernel_launcher", "-f", "{connection_file}"]
+    if not executable.exists():
+        return
+    kernel_dir = _workspace_venv(workspace) / "share" / "jupyter" / "kernels" / f"pi-science-{revision_id.lower()}"
+    kernel_dir.mkdir(parents=True, exist_ok=True)
+    (kernel_dir / "kernel.json").write_text(json.dumps({
+        "argv": argv,
+        "display_name": f"{display_name} ({revision_id[:12]})",
+        "language": language,
+        "metadata": {"pi_science_environment_revision_id": revision_id},
+    }, indent=2) + "\n", "utf8")
 
 
 _setup_lock = asyncio.Lock()  # Prevent concurrent setup
@@ -73,25 +125,27 @@ async def list_notebooks(cwd: str = Query(".", description="Working directory"))
 
 @router.get("/jupyter/env-status")
 async def jupyter_env_status(cwd: str = Query(".", description="Working directory")):
-    """Check if Jupyter is installed in the workspace environment."""
+    """Check the application-level Jupyter runtime."""
     ws = _workspace_dir(cwd)
     return {
         "ready": _jupyter_bin(ws).exists(),
         "path": str(_workspace_venv(ws)),
         "uv_available": _find_uv() is not None,
+        "manager": "micromamba" if _find_micromamba() else "uv-fallback",
     }
 
 
 @router.get("/jupyter/setup")
 async def setup_jupyter_env(cwd: str = Query(".", description="Working directory")):
-    """Install Jupyter into the workspace environment. Returns SSE progress."""
+    """Install Jupyter once into the application runtime. Returns SSE progress."""
     ws = _workspace_dir(cwd)
     if _setup_lock.locked():
         raise HTTPException(status_code=409, detail="Setup already in progress")
 
+    micromamba = _find_micromamba()
     uv = _find_uv()
-    if not uv:
-        raise HTTPException(status_code=400, detail="uv not found. Install from https://docs.astral.sh/uv/")
+    if not micromamba and not uv:
+        raise HTTPException(status_code=400, detail="Micromamba runtime is unavailable")
 
     # Acquire before returning the streaming response so two requests cannot both
     # pass the locked() check while waiting for their generators to be consumed.
@@ -100,31 +154,30 @@ async def setup_jupyter_env(cwd: str = Query(".", description="Working directory
     async def event_stream():
         try:
             venv = _workspace_venv(ws)
-            yield f"data: {_sse_msg(text='Creating workspace environment...')}\n\n"
-            if not _env_python(ws).exists():
+            yield f"data: {_sse_msg(text='Creating application Jupyter runtime...')}\n\n"
+            if micromamba:
                 result = await asyncio.to_thread(
                     subprocess.run,
-                    [uv, "venv", str(venv), "--python", "3.12"],
+                    [micromamba, "create", "--yes", "--prefix", str(venv), "--channel", "conda-forge", "--strict-channel-priority", "python=3.12", *JUPYTER_PACKAGES],
                     capture_output=True,
                     text=True,
-                    timeout=120,
+                    timeout=900,
                 )
                 if result.returncode != 0:
                     yield f"data: {_sse_msg('error', result.stderr[-200:])}\n\n"
                     return
-
-            for pkg in JUPYTER_PACKAGES:
-                yield f"data: {_sse_msg(text=f'Installing {pkg}...')}\n\n"
-                result = await asyncio.to_thread(
-                    subprocess.run,
-                    [uv, "pip", "install", pkg, "--python", str(_env_python(ws))],
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
-                )
-                if result.returncode != 0:
-                    yield f"data: {_sse_msg('error', result.stderr[-200:])}\n\n"
-                    return
+            else:
+                if not _env_python(ws).exists():
+                    result = await asyncio.to_thread(subprocess.run, [uv, "venv", str(venv), "--python", "3.12"], capture_output=True, text=True, timeout=120)
+                    if result.returncode != 0:
+                        yield f"data: {_sse_msg('error', result.stderr[-200:])}\n\n"
+                        return
+                for pkg in JUPYTER_PACKAGES:
+                    yield f"data: {_sse_msg(text=f'Installing {pkg}...')}\n\n"
+                    result = await asyncio.to_thread(subprocess.run, [uv, "pip", "install", pkg, "--python", str(_env_python(ws))], capture_output=True, text=True, timeout=300)
+                    if result.returncode != 0:
+                        yield f"data: {_sse_msg('error', result.stderr[-200:])}\n\n"
+                        return
 
             yield f"data: {_sse_msg('done', 'Jupyter environment ready')}\n\n"
         finally:
@@ -228,8 +281,9 @@ async def start_jupyter(cwd: str = Query(".", description="Working directory")):
             if not jupyter_bin.exists():
                 raise HTTPException(
                     status_code=400,
-                    detail="Jupyter Lab is not installed in the workspace environment",
+                    detail="The application Jupyter runtime is not installed",
                 )
+            _install_project_kernelspec(ws)
             _jupyter_port = _find_available_port()
             _jupyter_cwd = str(ws)
             # Random token keeps Jupyter auth on: an unauthenticated server on

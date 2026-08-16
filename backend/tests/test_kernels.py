@@ -208,6 +208,28 @@ class TestKernelManager:
         assert spawned[-1].shutdown_called is True
         assert mgr._sessions[mgr._key("same", "python", str(second_cwd))] is healthy
 
+    @pytest.mark.anyio
+    async def test_interrupt_targets_only_the_selected_notebook_and_language(self, tmp_path):
+        mgr = KernelManager()
+
+        class InterruptibleKernel(_FakeKernel):
+            def __init__(self, notebook_id: str, language: str, cwd: str):
+                super().__init__(notebook_id, language, cwd)
+                self.interrupted = False
+
+            def interrupt(self):
+                self.interrupted = True
+                return True
+
+        python = InterruptibleKernel("session-1", "python", str(tmp_path))
+        r_kernel = InterruptibleKernel("session-1", "r", str(tmp_path))
+        mgr._sessions[mgr._key("session-1", "python", str(tmp_path))] = python
+        mgr._sessions[mgr._key("session-1", "r", str(tmp_path))] = r_kernel
+
+        assert await mgr.interrupt_notebook("session-1", cwd=str(tmp_path), language="python") is True
+        assert python.interrupted is True
+        assert r_kernel.interrupted is False
+
 
 @pytest.mark.anyio
 class TestKernelAPI:
