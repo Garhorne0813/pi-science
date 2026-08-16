@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { lazy, Suspense, useState, useEffect, useRef } from "react";
-import { PanelLeft, Settings, MessageSquare, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, FileText, BookOpen, Inbox, FlaskConical, type LucideIcon } from "lucide-react";
+import { PanelLeft, Settings, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, FileText, BookOpen, Inbox, FlaskConical, type LucideIcon } from "lucide-react";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { InspectorTabs } from "../../components/inspector/InspectorTabs";
@@ -393,7 +393,6 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
                   activeSessionId === s.id ? "text-text font-medium" : "text-text/90",
                 )}
               >
-                <Icon icon={MessageSquare} size="sm" className="shrink-0 text-muted" />
                 <span className="truncate flex-1">{s.name === "New Session" ? t("conversation.newSession") : s.name || s.id.slice(0, 8)}</span>
                 {(s.updated_at || s.created_at) && (
                   <span className="mr-1 shrink-0 text-ui-micro text-muted group-hover:hidden group-focus-within:hidden">

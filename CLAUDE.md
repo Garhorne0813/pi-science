@@ -40,6 +40,14 @@ pnpm --filter frontend test:uat:conversation   # UAT scripts (also :knowledge :n
 Current green baseline, known build warnings, and the characterization-test inventory are recorded
 in `docs/refactoring-baseline.md`. The batch plan is `docs/refactoring-plan.md`.
 
+## UI design standard
+- All frontend UI changes must follow `docs/ui/deepseek-harness-reference.md`, which freezes design
+  parameters (colors, radii, spacing, motion, geometry) extracted from
+  `deepseek-ai/deepseek-harness` at commit `47f943859b`. Use the Tailwind semantic tokens mapped
+  there instead of ad-hoc values.
+- A visual value that has no entry in the reference doc must be added there first with an upstream
+  file + selector citation (or recorded as a Pi-Science proposal) before it is used.
+
 ## 子任务测试分工
 - 并行 worker 只运行自己改动范围的验证（相关 vitest 文件、typecheck、focused Playwright
   用例），不并行运行完整测试套件。

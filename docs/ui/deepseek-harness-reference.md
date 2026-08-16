@@ -24,7 +24,12 @@ source, and so values we invent are clearly marked as our own proposals.
 | `packages/client/ui-theme/src/styles/design-platform.css` | Neutral (bluish) scale, DeepSeek blue scale, alias tokens (text/border/state/specific), light+dark values |
 | `packages/client/ui-theme/src/styles/base.css` | Font stack, easing curve, transition durations |
 | `packages/client/ui-layout/src/client/AppFrame.module.css` | Three-column layout, inspector columns |
-| `packages/client/ui-sidebar/src/client/SidebarRoot.module.css` | Rail geometry (56px, 36px controls, padding 18/10), new-session button (38px, radius 12px), collapse motion 150–200ms |
+| `packages/client/ui-sidebar/src/client/SidebarRoot.module.css` | Rail geometry (56px, 36px controls, padding 18/10), new-session button (38px, radius 12px), collapse motion 150–200ms, expanded padding/logo row/icon buttons |
+| `packages/client/ui-settings-general/src/client/SettingsRoot.module.css` | Settings modal mask/panel, 188px nav rail, nav cells, header/options geometry |
+| `packages/client/ui-workspace/src/client/WorkspaceBrowser.module.css` | Sidebar session-list region: section header, search capsule, list rows, scrollbar seat, bottom fade |
+| `packages/client/ui-theme/src/client/AppearanceRow.module.css` | Settings section rows (padding/gap/separator) and selector cubes |
+| `packages/client/ui-theme/src/styles/scrollbar.css` | Scrollbar skin (8px thumb), l1/l2 elevation rebind, quietBars contract |
+| `packages/client/ui-theme/src/styles/gradient-shadow-text.css` | Shadow lv1–3, mask blur, markdown + UI type scale |
 | `packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css` | Chat content width 748px, composer width = content + 32px, 36px fade mask, tabs 13px/2px active bar |
 | `packages/client/ui-conversation/src/client/skeleton/InputBar.module.css` | Composer card: radius 22px, 1px border `rgba(0,0,0,0.10)` light / `rgba(255,255,255,0.06)` dark, send button 34px circular `#4176e6` (dark `#679efe`) |
 | `packages/client/ui-conversation/src/client/chat/MessageItem.module.css` | User bubble: max-width `min(525px, 82%)`, radius 22px, padding 10px 16px |
@@ -100,6 +105,80 @@ source, and so values we invent are clearly marked as our own proposals.
 | Transition durations | fast `100ms`, normal `200ms`, slow `300ms` | `base.css` |
 | Font | system UI stack (SF/Segoe/PingFang) | `base.css` `--dsw-font-family` |
 
+### Settings panel & rows
+
+| Parameter | Value | Source |
+|---|---|---|
+| Settings modal mask | `rgba(0,0,0,0.24)` light / `rgba(0,0,0,0.50)` dark + `blur(2px)` | `SettingsRoot.module.css` `.mask` → `--dsw-alias-bg-mask-1` / `--dsw-mask-blur` |
+| Settings panel | `800px` wide, `min(800px, calc(100vh - 48px))` tall, radius `24px`, bg `--dsw-alias-bg-layer-2`, `800px` replaces the figma 1080×700 | `.panel` |
+| Panel shadow | lv3 `0 0 1px rgba(0,0,0,.2), 0 0 4px rgba(0,0,0,.02), 0 12px 32px rgba(0,0,0,.08)` | `.panel` → `--dsw-shadow-lv3` (`gradient-shadow-text.css`) |
+| Nav rail column | `188px` wide, padding `22px 12px 0` (figma pad 12/22/12/0), column gap `18px` | `.nav` |
+| Nav title | `16px/24px` weight 500, pad `0 12px` | `.navTitle` |
+| Nav cell | `40px` tall, radius `12px`, pad `12px 16px 9px 12px`, inner gap `8px`, `14px/22px` weight 400 | `.navCell` |
+| Nav cell selected | fill bluish-100 `#EBEFF2` (dark bluish-750 `#43454A`) | `.navCell.active` → `--dsw-specific-sidebar-nav-item-active` |
+| Nav cell hover | fill bluish-75 `#F1F3F5` (dark bluish-850 `#353638`) | `.navCell:hover` → `--dsw-specific-sidebar-nav-item-hover` |
+| Nav cell list gap | `4px` | `.navList` |
+| Content header | `54px` tall, pad `20px 14px 8px 10px` (figma pad 10/20/14/8), close right | `.header` |
+| Close button | `28×28` circle (radius `28px`) | `.close` |
+| Options area | pad `0 24px 24px`, scrolls inside the panel | `.options` |
+| Settings trigger (sidebar) | `34px` tall row, radius `12px`, pad `6px 10px 6px 2px`; rail variant `36×36` circle | `.trigger` / `.trigger.rail` |
+| Setting row group | pad `16px 0`, column gap `8px`, hairline `border-bottom` l2 (stripped on last row) | `AppearanceRow.module.css` `.group` |
+| Row title | `14px/22px` weight 400 | `.title` |
+| Selector cube | `flex 1 1 180px`, pad `20px 32px`, gap `4px`, radius `16px`, `14px/22px` | `.themeCube` |
+| Selected cube | fill bluish-60 `#F5F6F7` (dark bluish-800 `#353638`), border bluish-400 `#ADB2B8` | `.selected` → `--dsw-alias-bg-module-platform` / `--dsw-static-neutral-bluish-400` |
+
+### Sidebar & session list (rail)
+
+| Parameter | Value | Source |
+|---|---|---|
+| Sidebar padding | `12px` inline / `6px` vertical (`--dsh-sidebar-inline-padding: 12px`), text `14px` | `SidebarRoot.module.css` `.root` |
+| Collapsed rail | `56px` wide, pad `18px 10px 6px`, `36×36` icon controls, `12px` vertical rhythm | `.root.collapsed` (figma rail spec) |
+| Logo row | `60px` tall, pad `8px 4px 8px 0`, gap `8px`, mb `8px`; collapsed `36px`/mb `12px` | `.logoRow` / `.collapsed .logoRow` |
+| Sidebar icon button | `28×28` circle, hover = interactive-bg-hover | `.iconButton` |
+| New session button | `38px` tall, pad `8px 16px`, radius `12px`, `1px` l2 border, elevated fill, `14px/22px` weight 500 | `.newSession` |
+| Session-list header | `36px` tall, radius `12px`, pad-left `4px`, gap `4px`, tertiary ink, mb `4px` | `WorkspaceBrowser.module.css` `.sectionHeader` |
+| Search capsule (idle) | `28×28` circle | `.search` |
+| Search capsule (expanded) | `30px` tall, radius `10px`, `1px` l2 border | `.searchExpanded` |
+| Search input | `13px/18px` | `.searchInput` |
+| Clear button | `24×24` circle | `.clearButton` |
+| List row rhythm | `2px` between rows | `.flatList > * + *` |
+| Workspace group gap | `4px` | `.groupSection + .groupSection` |
+| List scroll seat | `scrollbar-gutter: stable`, `8px` bar, `2px` offset, right pad = inset(12) − bar(8) − offset(2), bottom pad `16px` | `.list` |
+| Bottom fade | `24px` gradient to sidebar fill | `.fade` |
+| List seat bleed | `-4px` left / `-(inset)` right so the bar sits at the sidebar edge | `.listArea` / `.regionArea` |
+
+### Overlays, scrollbar, drag handles, type
+
+| Parameter | Value | Source |
+|---|---|---|
+| Scrollbar | `8px` thumb; l1 pair on base surfaces, l2 on elevated (rebind `--dsh-scrollbar-thumb{,-hover}`); `quietBars` = transparent thumb, reservation kept | `scrollbar.css` |
+| Column drag handle | `8px` hit strip centered on the column border (`margin-left: -4px`); no visible chrome for the sidebar edge | `AppFrame.module.css` `.handle` |
+| Details resize pill | `12×32`, radius `10px`, floating fill, revealed on column hover/drag | `.handle[data-side='details']::after` |
+| Column borders | sidebar right `1px` l1; details left `1px` l2 (dropped when collapsed) | `.sidebarCol` / `.detailsCol` |
+| Frame collapse motion | grid tracks `300ms` curve `0.4,0,0.2,1`; transitions pause while dragging | `.frame` |
+| UI type scale | `11/14`, `12/18`, `13/20`, `14/22`, `16/24`, `16/28`(500), `20/28`(500), `24/32`(600); markdown base `16/28` | `gradient-shadow-text.css` `--dsw-font-*` |
+
+## Design rules to follow (设计规范)
+
+Every future frontend UI change must follow this reference:
+
+- Use the existing Tailwind semantic tokens (`frontend/tailwind.config.js` +
+  `frontend/src/index.css`) and the migration mapping above — no ad-hoc
+  hex/rgb/spacing/motion values.
+- Geometry from the confirmed tables: radius scale `8/10/12/16/22`; borders
+  l1 hairline / l2 default / l4 strong; session-row rhythm `2px`; new-session
+  button `38px`/r12; nav cell `40px`/r12; settings panel `r24`; selector cube
+  `flex 1 1 180px`/r16.
+- Motion: curve `cubic-bezier(0.4, 0, 0.2, 1)` with `100/200/300ms`
+  durations; honor `prefers-reduced-motion`.
+- Scrollbars: `8px`-width themed thumb; elevated surfaces rebind the l2 pair;
+  keep `scrollbar-gutter: stable` so revealing the bar never reflows rows.
+- Type: reuse the `ui-micro/meta/caption/label/body/title` tokens instead of
+  fresh font sizes; upstream equivalents are in the type-scale row above.
+- Any visual value not listed here must be added to this document with an
+  upstream file + selector citation before it ships, or recorded under
+  "Provisional values" as an explicit Pi-Science proposal.
+
 ## Provisional values (Pi-Science proposals, no upstream selector)
 
 These keep our app readable without an exact upstream counterpart; a design
@@ -109,7 +188,9 @@ owner should confirm or revise them:
 - App `body` base font-size stays `15px` (existing); UI labels `13px`.
 - Page title scale: `20–28px` sans, weight 500.
 - Inspector default width `420px` (existing, unchanged).
-- Scrollbar: thin, thumb = border color (existing pattern, kept).
+- Scrollbar: upstream spec confirms an `8px` thumb and stable gutter; the
+  existing thin border-color thumb stays as the Pi-Science implementation and
+  should align to `8px`.
 - Focus ring: `2px` accent at `38%` alpha (existing pattern, kept).
 - Motion tokens mapped to upstream curve: fast `100ms`, normal `200ms`,
   slow `300ms`.

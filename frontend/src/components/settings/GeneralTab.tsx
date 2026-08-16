@@ -22,7 +22,7 @@ export function GeneralTab() {
             { value: "light", label: t("settings.appearance.light") },
             { value: "dark", label: t("settings.appearance.dark") },
           ]}
-          className="min-w-[7rem]"
+          className="min-w-[12rem]"
           onSelect={(next) => setTheme(next as "light" | "dark")}
         />
       </div>
@@ -32,7 +32,7 @@ export function GeneralTab() {
           ariaLabel={t("settings.language.label")}
           value={locale}
           options={shippedLocales.map((entry) => ({ value: entry.code, label: entry.label }))}
-          className="min-w-[7rem]"
+          className="min-w-[12rem]"
           onSelect={(next) => setLocale(next)}
         />
       </div>
