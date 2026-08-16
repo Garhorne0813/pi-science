@@ -119,6 +119,15 @@ export function SkillUploadDialog({ open, cwd, onClose }: { open: boolean; cwd: 
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    if (!open) return;
+    setFilename("");
+    setContentBase64("");
+    setCandidates([]);
+    setSelected("");
+    setError(null);
+  }, [open]);
+
   if (!open) return null;
 
   const onFile = async (file: File) => {
@@ -210,6 +219,14 @@ export function SkillGithubDialog({ open, cwd, onClose }: { open: boolean; cwd: 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!open) return;
+    setRepo("");
+    setCandidates([]);
+    setSelected([]);
+    setError(null);
+  }, [open]);
+
   if (!open) return null;
 
   const preview = async () => {
@@ -219,7 +236,7 @@ export function SkillGithubDialog({ open, cwd, onClose }: { open: boolean; cwd: 
       const result = await skillsMutations.previewGithub(repo);
       const next = result.candidates as GithubSkillCandidate[] ?? [];
       setCandidates(next);
-      setSelected(next.map((candidate) => candidate.root_path));
+      setSelected([]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setCandidates([]);
@@ -233,8 +250,12 @@ export function SkillGithubDialog({ open, cwd, onClose }: { open: boolean; cwd: 
     setBusy(true);
     setError(null);
     try {
-      await skillsMutations.importGithub(cwd, repo, selected);
-      onClose();
+      const result = await skillsMutations.importGithub(cwd, repo, selected);
+      if (result.skipped?.length) {
+        setError(`${result.skipped.length} skill(s) skipped: ${result.skipped.map((item) => `${item.name} (${item.reason})`).join("; ")}`);
+      } else {
+        onClose();
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {

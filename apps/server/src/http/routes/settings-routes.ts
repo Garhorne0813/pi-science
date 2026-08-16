@@ -641,9 +641,17 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
   app.put("/api/settings/web-access", async (request, reply) => { const body = (request.body ?? {}) as { provider?: unknown; workflow?: unknown; api_keys?: unknown; remove_keys?: unknown }; const supported = ["openai", "exa", "brave", "parallel", "tavily", "perplexity", "gemini"]; if (body.api_keys && typeof body.api_keys === "object") for (const key of Object.keys(body.api_keys as Record<string, unknown>)) if (!supported.includes(key)) return reply.code(400).send({ error: `Unknown web search provider: ${key}` }); await mutate((config) => { const web = config.web_access ?? {}; web.provider = String(body.provider ?? "auto"); web.workflow = String(body.workflow ?? "none"); const stored = typeof web.api_keys === "object" && web.api_keys ? web.api_keys as Record<string, string> : {}; if (body.api_keys && typeof body.api_keys === "object") for (const [key, value] of Object.entries(body.api_keys as Record<string, unknown>)) if (String(value).trim()) stored[key] = String(value).trim(); if (Array.isArray(body.remove_keys)) for (const key of body.remove_keys.map(String)) delete stored[key]; web.api_keys = stored; config.web_access = web; }); const response = await app.inject({ method: "GET", url: "/api/settings/web-access" }); return respondWithReload(reply, { ok: true, ...(response.json() as Record<string, unknown>) }); });
   app.get("/api/settings/mcp", async () => { const config = await load(); const source = typeof config.mcp_config_path === "string" ? config.mcp_config_path : configPath("mcp.json"); let definitions: Record<string, unknown> = {}; try { const payload = JSON.parse(await readFile(source, "utf8")) as { mcpServers?: unknown }; definitions = payload.mcpServers && typeof payload.mcpServers === "object" ? payload.mcpServers as Record<string, unknown> : {}; } catch { /* empty catalog */ } const configured = Object.keys(definitions); const enabled = Array.isArray(config.mcp_servers) ? config.mcp_servers.filter((id) => configured.includes(id)) : configured; return { servers: enabled, configured, config_path: source }; });
   app.put<{ Params: { server_id: string } }>("/api/settings/mcp/:server_id", async (request, reply) => { const on = String((request.query as { enabled?: string }).enabled ?? "true") !== "false"; await mutate((config) => { const enabled = new Set(Array.isArray(config.mcp_servers) ? config.mcp_servers : []); if (on) enabled.add(request.params.server_id); else enabled.delete(request.params.server_id); config.mcp_servers = [...enabled].sort(); }); return respondWithReload(reply, { ok: true, server: request.params.server_id, enabled: on }); });
-  app.get("/api/settings/skills", async () => {
+  app.get("/api/settings/skills", async (request, reply) => {
+    const cwdValue = query(request, "cwd", "");
     const policy = storedSkillPolicy(await load());
-    const skills = (await unifiedSkillCatalog()).map((skill) => ({ ...skill, enabled: skillEnabled(policy, skill.name) }));
+    let discovered;
+    if (cwdValue) {
+      try { discovered = await skillCatalog(await validateWorkspaceCwd(cwdValue)); }
+      catch (error) { return reply.code(403).send({ error: String(error) }); }
+    } else {
+      discovered = await unifiedSkillCatalog();
+    }
+    const skills = discovered.map((skill) => ({ ...skill, enabled: skillEnabled(policy, skill.name) }));
     return { skills, policy, configured: policy.mode !== "inherit" };
   });
   app.put("/api/settings/skills/toggle", async (request, reply) => {
