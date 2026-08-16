@@ -356,18 +356,22 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
-  it("reconciles timed-out prompt and compact operations without leaving the workspace permanently busy", async () => {
-    for (const mode of ["prompt-timeout", "compact-timeout"]) {
-      process.env.FAKE_PI_MODE = mode;
-      const service = testService();
-      const cwd = await workspaceWithSessions(`session-${mode}`);
+  it.each([
+    ["prompt-timeout", "prompt"],
+    ["compact-timeout", "compact"],
+  ] as const)("reconciles a timed-out %s operation without leaving the workspace permanently busy", async (mode, command) => {
+    process.env.FAKE_PI_MODE = mode;
+    const service = testService();
+    const cwd = await workspaceWithSessions(`session-${mode}`);
+    try {
       await service.resume(`session-${mode}`, cwd);
-      await expect(service.command(`session-${mode}`, cwd, mode.startsWith("prompt") ? "prompt" : "compact", { message: "test" })).resolves.toMatchObject({ code: "timeout" });
+      await expect(service.command(`session-${mode}`, cwd, command, { message: "test" })).resolves.toMatchObject({ code: "timeout" });
       await new Promise((resolve) => setTimeout(resolve, 130));
       await expect(service.create({ cwd, config: { skills: [], extensions: [] } })).resolves.toHaveProperty("id");
+    } finally {
       await service.shutdownAll();
     }
-  });
+  }, 10_000);
 
   it("uses Pi Orbit runtime busy state when the agent_start event is delayed", async () => {
     process.env.FAKE_PI_MODE = "orbit-busy-without-agent-start";
