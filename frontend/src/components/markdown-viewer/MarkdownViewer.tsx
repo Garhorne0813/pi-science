@@ -15,8 +15,9 @@ import { resolveMarkdownResource, type MarkdownResourceContext } from "@/lib/fil
 import { useUiStore } from "@/lib/ui";
 
 /** Two contexts render markdown: chat bubbles (theme colors, compact) and the
- *  file-preview "paper" (document-neutral black-on-white, editorial colors with
- *  compact chat-like typography — a document keeps its own colors in dark mode). */
+ *  file-preview "paper" (editorial colors on a paper canvas whose background
+ *  and ink follow the appearance setting — warm near-white in light mode, warm
+ *  dark in dark mode). */
 type Variant = "chat" | "document";
 
 const STYLES: Record<Variant, Record<string, string>> = {
@@ -44,33 +45,34 @@ const STYLES: Record<Variant, Record<string, string>> = {
     th: "border border-border bg-surface-2 px-3 py-1.5 text-left font-semibold",
     td: "border border-border px-3 py-1.5",
   },
-  // Document "paper": a fixed, theme-independent reading surface (warm ink
-  // on near-white, serif display headings) so long-form previews read like a
-  // document rather than app UI. The colors are deliberate paper constants,
-  // not app-brand colors — the app brand is the DeepSeek-inspired accent blue
-  // and does not leak into document bodies.
+  // Document "paper": a reading surface that follows the appearance setting
+  // (light = warm ink on near-white, dark = light ink on warm dark paper) so
+  // long-form previews read like a document rather than app UI while still
+  // adapting to the active theme. The colors are paper tones declared as the
+  // --doc-* variables in index.css, not app-brand colors — the app brand is
+  // the DeepSeek-inspired accent blue and does not leak into document bodies.
   document: {
-    root: "text-[15px] leading-[1.65] text-[#2b2620] antialiased [font-feature-settings:'liga','kern'] [font-family:-apple-system,'SF_Pro_Text','Segoe_UI','PingFang_SC','Microsoft_YaHei',sans-serif] selection:bg-[#f2d9cd]",
+    root: "text-[15px] leading-[1.65] text-[var(--doc-ink)] antialiased [font-feature-settings:'liga','kern'] [font-family:-apple-system,'SF_Pro_Text','Segoe_UI','PingFang_SC','Microsoft_YaHei',sans-serif] selection:bg-[var(--doc-selection)]",
     p: "my-1.5 tracking-[0.006em] [text-wrap:pretty] first:mt-0 last:mb-0",
-    a: "font-medium text-[#bf5a34] underline decoration-[#e2bdac] decoration-1 underline-offset-[3px] transition-colors hover:decoration-[#bf5a34] [overflow-wrap:anywhere]",
-    code: "rounded-[4px] bg-[#f7f0ea] px-1.5 py-0.5 font-mono text-[13px] text-[#a94e2c] ring-1 ring-[#eee0d6] [overflow-wrap:anywhere]",
-    pre: "my-3 overflow-x-auto rounded-lg bg-[#faf6f2] p-3 font-mono text-[13px] leading-5 ring-1 ring-[#ece2d9] [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-[#4b433a] [&_code]:ring-0",
-    ul: "my-2 ml-5 list-disc space-y-1 marker:text-[#c98a6b]",
-    ol: "my-2 ml-5 list-decimal space-y-1 marker:text-[13px] marker:font-medium marker:text-[#c98a6b]",
+    a: "font-medium text-[var(--doc-accent)] underline decoration-[var(--doc-accent-underline)] decoration-1 underline-offset-[3px] transition-colors hover:decoration-[var(--doc-accent)] [overflow-wrap:anywhere]",
+    code: "rounded-[4px] bg-[var(--doc-code-bg)] px-1.5 py-0.5 font-mono text-[13px] text-[var(--doc-code-ink)] ring-1 ring-[var(--doc-code-ring)] [overflow-wrap:anywhere]",
+    pre: "my-3 overflow-x-auto rounded-lg bg-[var(--doc-pre-bg)] p-3 font-mono text-[13px] leading-5 ring-1 ring-[var(--doc-pre-ring)] [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-[var(--doc-pre-ink)] [&_code]:ring-0",
+    ul: "my-2 ml-5 list-disc space-y-1 marker:text-[var(--doc-marker)]",
+    ol: "my-2 ml-5 list-decimal space-y-1 marker:text-[13px] marker:font-medium marker:text-[var(--doc-marker)]",
     // Serif display headings give the editorial/blog feel; the stack falls back
     // to system CJK serif so Chinese posts read as editorial too. Tracking stays
     // near-zero — negative tracking crams CJK glyphs.
-    h1: "mb-3 mt-5 text-2xl font-bold leading-[1.25] tracking-[-0.01em] text-[#1c1915] [text-wrap:balance] first:mt-0 [font-family:'Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
-    h2: "mb-2 mt-5 flex items-baseline gap-2 text-xl font-semibold leading-snug tracking-[-0.005em] text-[#1c1915] [text-wrap:balance] before:relative before:top-[0.14em] before:h-[0.82em] before:w-[3px] before:shrink-0 before:rounded-full before:bg-[#c15f3c] before:content-[''] first:mt-0 [font-family:'Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
-    h3: "mb-2 mt-4 text-lg font-semibold leading-snug text-[#2b2620] first:mt-0 [font-family:'Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
-    h4: "mb-1.5 mt-3 text-base font-semibold uppercase tracking-[0.08em] text-[#9a8d7c] first:mt-0",
-    h5: "mb-1 mt-3 text-sm font-semibold leading-snug text-[#2b2620] first:mt-0 [font-family:'Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
-    h6: "mb-1 mt-3 text-xs font-semibold uppercase tracking-[0.08em] text-[#9a8d7c] first:mt-0",
-    blockquote: "my-2 rounded-r-md border-l-[3px] border-[#d98c6a] bg-[#faf6f2] py-1.5 pl-3 pr-4 text-[#6b6155] [&_p]:my-1.5",
-    hr: "mx-auto my-4 w-12 border-t-2 border-[#e6ddd2]",
+    h1: "mb-3 mt-5 text-2xl font-bold leading-[1.25] tracking-[-0.01em] text-[var(--doc-ink-strong)] [text-wrap:balance] first:mt-0 [font-family:'Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
+    h2: "mb-2 mt-5 flex items-baseline gap-2 text-xl font-semibold leading-snug tracking-[-0.005em] text-[var(--doc-ink-strong)] [text-wrap:balance] before:relative before:top-[0.14em] before:h-[0.82em] before:w-[3px] before:shrink-0 before:rounded-full before:bg-[var(--doc-h2-bar)] before:content-[''] first:mt-0 [font-family:'Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
+    h3: "mb-2 mt-4 text-lg font-semibold leading-snug text-[var(--doc-ink)] first:mt-0 [font-family:'Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
+    h4: "mb-1.5 mt-3 text-base font-semibold uppercase tracking-[0.08em] text-[var(--doc-ink-muted)] first:mt-0",
+    h5: "mb-1 mt-3 text-sm font-semibold leading-snug text-[var(--doc-ink)] first:mt-0 [font-family:'Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
+    h6: "mb-1 mt-3 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--doc-ink-muted)] first:mt-0",
+    blockquote: "my-2 rounded-r-md border-l-[3px] border-[var(--doc-quote-bar)] bg-[var(--doc-quote-bg)] py-1.5 pl-3 pr-4 text-[var(--doc-quote-ink)] [&_p]:my-1.5",
+    hr: "mx-auto my-4 w-12 border-t-2 border-[var(--doc-hr)]",
     table: "border-collapse text-sm tabular-nums",
-    th: "border-b-2 border-[#e2d5c8] px-3 py-1.5 text-left font-semibold text-[#1c1915]",
-    td: "border-b border-[#efe8df] px-3 py-1.5",
+    th: "border-b-2 border-[var(--doc-table-head-line)] px-3 py-1.5 text-left font-semibold text-[var(--doc-ink-strong)]",
+    td: "border-b border-[var(--doc-table-line)] px-3 py-1.5",
   },
 };
 
@@ -122,7 +124,7 @@ function MathBlock({ children, variant }: { children?: React.ReactNode; variant:
         "katex-display group relative my-4 overflow-x-auto rounded-lg border px-4 pb-3 pt-7",
         variant === "chat"
           ? "border-border bg-[color-mix(in_srgb,var(--surface-2)_50%,transparent)]"
-          : "border-[#e6ddd2] bg-[#faf6f2]",
+          : "border-[var(--doc-hr)] bg-[var(--doc-pre-bg)]",
       )}
     >
       <button
@@ -135,7 +137,7 @@ function MathBlock({ children, variant }: { children?: React.ReactNode; variant:
           "absolute right-2 top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded border opacity-70 transition-opacity hover:opacity-100 disabled:cursor-default disabled:opacity-40",
           variant === "chat"
             ? "border-border bg-surface text-muted hover:text-text"
-            : "border-[#e2d5c8] bg-white/80 text-[#8d7b6b] hover:text-[#bf5a34]",
+            : "border-[var(--doc-table-head-line)] bg-[var(--doc-paper)] text-[var(--doc-ink-muted)] hover:text-[var(--doc-accent)]",
         )}
       >
         {copied ? <Check size={12} /> : <Copy size={12} />}

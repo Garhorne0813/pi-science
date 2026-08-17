@@ -190,6 +190,31 @@
   --motion-normal: 200ms;
   --motion-slow: 300ms;
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Document preview "paper" palette. Light theme = warm near-white paper
+     with warm ink; the dark theme re-themes the same canvas to a warm dark
+     paper so file/document previews follow the appearance setting instead
+     of staying white in dark mode. */
+  --doc-paper: #ffffff;
+  --doc-ink: #2b2620;
+  --doc-ink-strong: #1c1915;
+  --doc-ink-muted: #9a8d7c;
+  --doc-accent: #bf5a34;
+  --doc-accent-underline: #e2bdac;
+  --doc-code-bg: #f7f0ea;
+  --doc-code-ink: #a94e2c;
+  --doc-code-ring: #eee0d6;
+  --doc-pre-bg: #faf6f2;
+  --doc-pre-ink: #4b433a;
+  --doc-pre-ring: #ece2d9;
+  --doc-marker: #c98a6b;
+  --doc-quote-bg: #faf6f2;
+  --doc-quote-ink: #6b6155;
+  --doc-quote-bar: #d98c6a;
+  --doc-hr: #e6ddd2;
+  --doc-table-head-line: #e2d5c8;
+  --doc-table-line: #efe8df;
+  --doc-h2-bar: #c15f3c;
+  --doc-selection: #f2d9cd;
 }
 
 [data-theme="dark"] {
@@ -260,6 +285,29 @@
   --shadow-card: 0 1px 2px rgb(0 0 0 / 22%), 0 8px 24px rgb(0 0 0 / 13%);
   --shadow-card-hover: 0 2px 5px rgb(0 0 0 / 28%), 0 14px 32px rgb(0 0 0 / 20%);
   --shadow-pop: 0 18px 48px rgb(0 0 0 / 38%), 0 3px 10px rgb(0 0 0 / 24%);
+  /* Document preview paper in dark appearance: warm dark canvas, light ink.
+     Keeps the same warm editorial palette family as the light paper. */
+  --doc-paper: #232024;
+  --doc-ink: #e8e2da;
+  --doc-ink-strong: #f4efe8;
+  --doc-ink-muted: #a29a8e;
+  --doc-accent: #e08b65;
+  --doc-accent-underline: #7a5a46;
+  --doc-code-bg: #2e2a26;
+  --doc-code-ink: #d99b7a;
+  --doc-code-ring: #3d352e;
+  --doc-pre-bg: #2a2622;
+  --doc-pre-ink: #d8d0c6;
+  --doc-pre-ring: #38302a;
+  --doc-marker: #c98a6b;
+  --doc-quote-bg: #2a2622;
+  --doc-quote-ink: #b8ada0;
+  --doc-quote-bar: #d98c6a;
+  --doc-hr: #3d362f;
+  --doc-table-head-line: #4a3f35;
+  --doc-table-line: #332c26;
+  --doc-h2-bar: #d97a52;
+  --doc-selection: #4a3527;
 }
 
 /* Notebook code is intentionally quieter than the surrounding chrome. The

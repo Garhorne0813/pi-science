@@ -21,11 +21,12 @@ export function OverviewTab({ document, summary, memorySummary }: { document: st
           </div>
         </div>
         <div className="bg-surface-2 px-2 py-2">
-          {/* Document preview rendered as a neutral white paper page (same
-              treatment as the inspector's markdown document preview): the
-              canvas stays theme-independent in light and dark mode. */}
+          {/* Document preview rendered as a paper page (same treatment as the
+              inspector's markdown document preview): the canvas follows the
+              active appearance — white paper in light mode, warm dark paper in
+              dark mode. */}
           <div
-            className="mx-auto max-w-[760px] rounded-sm bg-white shadow-[0_1px_4px_rgba(0,0,0,.25)]"
+            className="mx-auto max-w-[760px] rounded-sm bg-[var(--doc-paper)] shadow-[0_1px_4px_rgba(0,0,0,.25)]"
             style={{ paddingInline: "1rem", paddingBlock: "1.25rem" }}
           >
             <MarkdownViewer variant="document">{visibleDocument}</MarkdownViewer>

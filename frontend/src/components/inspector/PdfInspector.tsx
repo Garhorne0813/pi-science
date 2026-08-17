@@ -55,7 +55,7 @@ export function PdfInspector({
       {results.length > 0 && <div className="max-h-36 overflow-y-auto border-b border-border bg-surface-2 px-4 py-2">{results.map((result) => <button type="button" key={`${result.page}-${result.snippet}`} onClick={() => setPage(result.page)} className="block w-full truncate py-1 text-left text-[11px] text-muted hover:text-text"><span className="mr-2 font-mono text-accent">p.{result.page}</span>{result.snippet}</button>)}</div>}
 
       {url ? (
-        <iframe title={title} src={url} className="min-h-0 flex-1 bg-white" />
+        <iframe title={title} src={url} className="min-h-0 flex-1 bg-[var(--bg)]" />
       ) : (
         <div className="flex flex-1 items-center justify-center p-6 text-sm text-muted">
           PDF path is unavailable.
