@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { SettingsContent } from "./SettingsContent";
 import { queryClient } from "../../lib/client/query-client";
@@ -41,9 +42,11 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {})
 
 function renderContent(scope: string | null) {
   return render(
-    <QueryClientProvider client={queryClient}>
-      <SettingsContent scope={scope} />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={queryClient}>
+        <SettingsContent scope={scope} />
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
 }
 

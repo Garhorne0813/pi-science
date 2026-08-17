@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Copy, Loader2, Upload, X } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Loader2, MessageSquarePlus, Upload, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useUiStore } from "../../lib/ui";
 import { skillsMutations, type SkillUploadCandidate, type GithubSkillCandidate } from "../../lib/skills/skills-mutations";
 
 function DialogShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
@@ -303,28 +305,32 @@ export function SkillGithubDialog({ open, cwd, onClose }: { open: boolean; cwd: 
   );
 }
 
-export function SkillChatDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function SkillChatDialog({ open, cwd, onClose }: { open: boolean; cwd: string | null; onClose: () => void }) {
   const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
+  const navigate = useNavigate();
   const prompt = t("skills.chatPrompt");
   if (!open) return null;
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(prompt);
-      setCopied(true);
-    } catch { /* clipboard unavailable */ }
+  const openNewChat = () => {
+    if (!cwd) return;
+    useUiStore.getState().setSuppressAutoSessionNav(true);
+    useUiStore.getState().closeSettings();
+    onClose();
+    navigate(`/workspace/${encodeURIComponent(cwd)}`, {
+      state: { suppressAutoSessionNavFor: cwd, initialDraft: prompt },
+    });
   };
   return (
     <DialogShell title={t("skills.chatTitle")} onClose={onClose}>
-      <div className="space-y-3">
+      <div className="space-y-4">
         <p className="text-ui-body text-muted">{t("skills.chatDescription")}</p>
-        <pre className="max-h-64 overflow-auto rounded-input bg-surface-2 p-3 text-xs text-text whitespace-pre-wrap">{prompt}</pre>
-        <div className="flex justify-end gap-2">
-          <button type="button" onClick={() => void copy()} className="flex min-h-9 items-center gap-1.5 rounded-input border border-border px-3 text-ui-caption text-text hover:bg-surface-2">
-            <Copy size={12} />
-            {copied ? t("skills.copied") : t("skills.copy")}
-          </button>
-          <button type="button" onClick={onClose} className="rounded-input bg-accent px-3 py-1.5 text-ui-caption text-white">{t("common.close")}</button>
+        <div className="rounded-card bg-surface-2 px-4 py-3 text-ui-caption text-text">{prompt}</div>
+        <div className="flex justify-end">
+          {cwd && (
+            <button type="button" onClick={openNewChat} className="flex min-h-8 items-center gap-1.5 rounded-input bg-accent px-3 text-ui-caption text-white hover:opacity-90">
+              <MessageSquarePlus size={13} />
+              {t("skills.openNewChat")}
+            </button>
+          )}
         </div>
       </div>
     </DialogShell>

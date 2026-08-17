@@ -980,12 +980,13 @@
   "skills.githubRepo": "GitHub repository",
   "skills.githubPreview": "Preview",
   "skills.chatTitle": "Chat with Claude",
-  "skills.chatDescription": "Close settings, then describe the skill you want in a conversation. The assistant will create it as a project skill.",
-  "skills.chatPrompt": "Please create a new project-level skill. Follow docs/skill-authoring.md and write it to .pi/skills/<skill-name>/SKILL.md in the current project.",
+  "skills.chatDescription": "Click the button below to open a new conversation with the prompt pre-filled. The assistant will help you create a project-level skill.",
+  "skills.chatPrompt": "I'd like to create a new project-level skill. Please ask me for the skill name, when it should trigger, and the expected output, then follow docs/skill-authoring.md and write the skill to .pi/skills/<skill-name>/SKILL.md in the current project (with complete frontmatter and clear instructions).",
   "skills.copy": "Copy",
   "skills.edit": "Edit {{name}}",
   "skills.delete": "Delete {{name}}",
   "skills.deleteTitle": "Delete skill {{name}}?",
   "skills.deleteMessage": "This permanently removes {{name}} from the current project.",
-  "skills.deleteConfirm": "Delete"
+  "skills.deleteConfirm": "Delete",
+  "skills.openNewChat": "Open new conversation"
 }
