@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "../../lib/client/query-client";
 import i18n from "../../i18n";
@@ -32,6 +33,24 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
   if (url.startsWith("/api/settings/skills/project-1?cwd=") && method === "PUT") {
     return Promise.resolve(jsonResponse({ ok: true, skill: { name: "beta", source: "project" } }));
   }
+  if (url.startsWith("/api/settings/skills/upload/preview?cwd=")) {
+    return Promise.resolve(jsonResponse({
+      ok: true,
+      candidates: [{ name: "uploaded-skill", root_path: ".", description: "Uploaded skill", files: [{ path: "SKILL.md", size: 10 }] }],
+    }));
+  }
+  if (url.startsWith("/api/settings/skills/upload/import?cwd=")) {
+    return Promise.resolve(jsonResponse({ ok: true, skill: { name: "uploaded-skill", source: "project" } }));
+  }
+  if (url === "/api/settings/skills/import-github/preview") {
+    return Promise.resolve(jsonResponse({
+      ok: true,
+      candidates: [{ name: "github-skill", root_path: "github-skill", description: "GitHub skill", files: [{ path: "SKILL.md", size: 10 }] }],
+    }));
+  }
+  if (url.startsWith("/api/settings/skills/import-github/import?cwd=")) {
+    return Promise.resolve(jsonResponse({ ok: true, imported: [{ name: "github-skill", source: "project" }], skipped: [] }));
+  }
   if (url.startsWith("/api/skills/project-1/content?cwd=")) {
     return Promise.resolve(jsonResponse({ content: "# Beta\n\nBody" }));
   }
@@ -42,9 +61,11 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {})
 
 function renderTab(cwd: string | null) {
   return render(
-    <QueryClientProvider client={queryClient}>
-      <SkillsTab workspaceCwd={cwd} />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={queryClient}>
+        <SkillsTab workspaceCwd={cwd} />
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -117,5 +138,48 @@ describe("SkillsTab", () => {
     await screen.findByText("beta");
     fireEvent.click(screen.getByRole("button", { name: "Edit beta" }));
     expect(await screen.findByRole("dialog", { name: "Edit project skill" })).toBeInTheDocument();
+  });
+
+  it("offers a button to open a new conversation from the chat dialog", async () => {
+    renderTab("/tmp/ws");
+    const add = await screen.findByRole("button", { name: "Add skill" });
+    fireEvent.pointerDown(add);
+    fireEvent.click(add);
+    fireEvent.click(await screen.findByText("Chat with Claude"));
+    expect(await screen.findByRole("button", { name: "Open new conversation" })).toBeInTheDocument();
+  });
+
+  it("imports an uploaded skill from the upload dialog", async () => {
+    renderTab("/tmp/ws");
+    const add = await screen.findByRole("button", { name: "Add skill" });
+    fireEvent.pointerDown(add);
+    fireEvent.click(add);
+    fireEvent.click(await screen.findByText("Upload a skill"));
+    const fileInput = document.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!fileInput) throw new Error("file input not found");
+    const file = new File(["---\nname: uploaded-skill\ndescription: Uploaded skill\n---\n"], "skill.md", { type: "text/markdown" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+    expect(await screen.findByText("uploaded-skill")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Import" }));
+    await waitFor(() => {
+      expect(calls.some((call) => call.method === "POST" && call.url.includes("/api/settings/skills/upload/import?cwd="))).toBe(true);
+    });
+  });
+
+  it("imports skills from the GitHub dialog", async () => {
+    renderTab("/tmp/ws");
+    const add = await screen.findByRole("button", { name: "Add skill" });
+    fireEvent.pointerDown(add);
+    fireEvent.click(add);
+    fireEvent.click(await screen.findByText("Import from GitHub"));
+    const repoInput = await screen.findByLabelText("GitHub repository");
+    fireEvent.change(repoInput, { target: { value: "owner/repo" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect((await screen.findAllByText("github-skill")).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("checkbox", { name: /github-skill/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Import from GitHub" }));
+    await waitFor(() => {
+      expect(calls.some((call) => call.method === "POST" && call.url.includes("/api/settings/skills/import-github/import?cwd="))).toBe(true);
+    });
   });
 });

@@ -227,7 +227,7 @@ export function SkillsTab({ workspaceCwd }: { workspaceCwd: string | null }) {
       <SkillEditorDialog open={editorOpen} cwd={workspaceCwd ?? ""} initial={editing} onClose={() => { setEditorOpen(false); void reload(); }} />
       <SkillUploadDialog open={uploadOpen} cwd={workspaceCwd ?? ""} onClose={() => { setUploadOpen(false); void reload(); }} />
       <SkillGithubDialog open={githubOpen} cwd={workspaceCwd ?? ""} onClose={() => { setGithubOpen(false); void reload(); }} />
-      <SkillChatDialog open={chatOpen} onClose={() => setChatOpen(false)} />
+      <SkillChatDialog open={chatOpen} cwd={workspaceCwd} onClose={() => setChatOpen(false)} />
     </div>
   );
 }

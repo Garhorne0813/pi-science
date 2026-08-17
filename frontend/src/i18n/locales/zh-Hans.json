@@ -980,12 +980,13 @@
   "skills.githubRepo": "GitHub 仓库",
   "skills.githubPreview": "预览",
   "skills.chatTitle": "让助手帮我写",
-  "skills.chatDescription": "关闭设置后，在会话中描述你想要的技能，助手会按项目级技能创建。",
-  "skills.chatPrompt": "请帮我创建一个项目级技能。请遵循 docs/skill-authoring.md，并将技能写入当前项目的 .pi/skills/<技能名>/SKILL.md。",
+  "skills.chatDescription": "点击下方按钮会打开新对话区，并自动填入提示词。助手会引导你创建项目级技能。",
+  "skills.chatPrompt": "我想创建一个新的项目级技能。请先向我确认：技能名称、触发场景、期望输出。然后遵循 docs/skill-authoring.md，把技能写到当前项目的 .pi/skills/<技能名>/SKILL.md（包含完整 frontmatter 和清晰说明）。",
   "skills.copy": "复制",
   "skills.edit": "编辑 {{name}}",
   "skills.delete": "删除 {{name}}",
   "skills.deleteTitle": "删除技能 {{name}}？",
   "skills.deleteMessage": "这将从当前项目永久删除 {{name}}。",
-  "skills.deleteConfirm": "删除"
+  "skills.deleteConfirm": "删除",
+  "skills.openNewChat": "打开新对话区"
 }
