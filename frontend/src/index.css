@@ -525,6 +525,17 @@ button:disabled {
   scrollbar-gutter: stable both-edges;
 }
 
+/* While a divider drag is in progress (sidebar or preview pane), pin the
+   conversation content and composer widths so messages do not re-wrap every
+   frame (Virtuoso remeasures, KaTeX/code blocks re-layout). The pane simply
+   overlaps the conversation edge; one reflow happens on pointer-up. */
+main[data-resizing] .conversation-content-lock {
+  min-width: calc(var(--conversation-content-width) + 4rem);
+}
+main[data-resizing] .conversation-composer-lock {
+  min-width: var(--conversation-composer-width);
+}
+
 /* Sidebar expand/collapse motion (reference: 150-200ms ease-in-out). The
    expanded panel slides and fades in; the collapsed rail fades its controls
    in from the rail edge, mirroring the upstream collapse choreography. */

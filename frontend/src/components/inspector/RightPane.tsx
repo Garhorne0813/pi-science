@@ -31,10 +31,13 @@ export function RightPane({
   const inspectorMaximized = useUiStore((s) => s.inspectorMaximized);
   const setInspectorWidth = useUiStore((s) => s.setInspectorWidth);
   const setInspectorMaximized = useUiStore((s) => s.setInspectorMaximized);
+  // Divider drag state lives in the UI store so the layout shell can freeze
+  // the conversation content width for the whole drag (sidebar or preview).
+  const dragging = useUiStore((s) => s.inspectorResizing);
+  const setInspectorResizing = useUiStore((s) => s.setInspectorResizing);
   // Live width changes are applied directly once per animation frame. This
   // avoids reconciling the (potentially expensive) preview tree on every
   // pointermove; the persisted store is only written on pointer-up.
-  const [dragging, setDragging] = useState(false);
   const paneRef = useRef<HTMLDivElement | null>(null);
   const dragWidthRef = useRef<number | null>(null);
   const dragFrameRef = useRef<number | null>(null);
@@ -42,6 +45,9 @@ export function RightPane({
   // Maximized never outlives the pane — closing it returns the next pane
   // (possibly for a different artifact or session) to the normal split.
   useEffect(() => () => setInspectorMaximized(false), [setInspectorMaximized]);
+  // Unmount safety net: a drag that ends by unmounting (pane closed mid-drag)
+  // must not leave the resizing flag stuck on and freeze the layout forever.
+  useEffect(() => () => setInspectorResizing(false), [setInspectorResizing]);
   useEffect(() => () => {
     if (dragFrameRef.current !== null) cancelAnimationFrame(dragFrameRef.current);
   }, []);
@@ -122,7 +128,7 @@ export function RightPane({
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     dragWidthRef.current = inspectorWidth;
-    setDragging(true);
+    setInspectorResizing(true);
   };
 
   const onDividerPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -137,7 +143,7 @@ export function RightPane({
       if (dragFrameRef.current !== null) cancelAnimationFrame(dragFrameRef.current);
       dragFrameRef.current = null;
       dragWidthRef.current = null;
-      setDragging(false);
+      setInspectorResizing(false);
       onMinimize();
       return;
     }
@@ -169,7 +175,7 @@ export function RightPane({
       setInspectorWidth(nextWidth);
     }
     dragWidthRef.current = null;
-    setDragging(false);
+    setInspectorResizing(false);
   };
 
   const onDividerKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -200,7 +206,7 @@ export function RightPane({
       )}
       style={{ "--inspector-width": `${inspectorWidth}px` } as CSSProperties}
     >
-      <div className={cn("h-full", dragging && "pointer-events-none")}>{children}</div>
+      <div className={cn("h-full", dragging && "pointer-events-none contain-layout contain-paint")}>{children}</div>
       {/* Drag divider: resize within [INSPECTOR_MIN, INSPECTOR_MAX]; dragging
           toward the pane minimizes it while retaining its tabs. */}
       <div

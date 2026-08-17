@@ -74,6 +74,8 @@ function sessionsRoot(cwd: string): string {
 const HISTORY_PAGE_SIZE = 50;
 const HISTORY_PAGE_MAX_SIZE = 100;
 const HISTORY_SCAN_CHUNK_BYTES = 64 * 1024;
+const LAST_MESSAGE_SCAN_CHUNK_BYTES = 128 * 1024;
+const LAST_MESSAGE_SCAN_MAX_BYTES = 512 * 1024;
 
 function snapshotVersion(size: number, mtimeMs: number): string {
   return `${size}:${mtimeMs}`;
@@ -233,6 +235,45 @@ async function readUserMessageIndex(path: string): Promise<SessionUserMessageInd
   }
   if (pending.length > 0) consume(pending, lineOffset + pending.length);
   return entries;
+}
+
+/**
+ * Return the timestamp of the last `type: "message"` line in a session JSONL
+ * file by scanning backwards from the end (128KB chunks, 512KB max). Bookkeeping
+ * entries (session_info, model_change, ...) appended when a session is merely
+ * viewed or opened do not count, so the session list's updated_at does not
+ * drift without real conversation activity.
+ */
+async function lastMessageTimestamp(path: string): Promise<string | null> {
+  const handle = await open(path, "r");
+  try {
+    const { size } = await handle.stat();
+    const maxBytes = Math.min(size, LAST_MESSAGE_SCAN_MAX_BYTES);
+    let pending = Buffer.alloc(0);
+    let scanPosition = size;
+    while (scanPosition > 0 && pending.length < maxBytes) {
+      const chunkStart = Math.max(0, scanPosition - LAST_MESSAGE_SCAN_CHUNK_BYTES);
+      const chunk = Buffer.alloc(scanPosition - chunkStart);
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, chunkStart);
+      if (bytesRead === 0) break;
+      pending = Buffer.concat([chunk.subarray(0, bytesRead), pending]);
+      scanPosition = chunkStart;
+    }
+    let cursor = pending.length;
+    if (cursor > 0 && pending[cursor - 1] === 0x0a) cursor -= 1;
+    while (cursor > 0) {
+      const newline = pending.lastIndexOf(0x0a, cursor - 1);
+      const message = parseMessageLine(pending.subarray(newline + 1, cursor).toString("utf8"));
+      if (message && typeof message.timestamp === "string") return message.timestamp;
+      cursor = newline;
+      if (newline < 0) break;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    await handle.close();
+  }
 }
 
 // A candidate is every `.jsonl` file discovered while scanning, whether or not
@@ -414,8 +455,17 @@ async function revalidateCache(root: string, cached: CacheEntry): Promise<Cached
       }
       if (meta.mtimeMs !== candidate.mtimeMs || meta.size !== candidate.size) {
         const parsed = await tryParseHeader(candidate.path);
-        candidates.push({ path: candidate.path, mtimeMs: meta.mtimeMs, size: meta.size, header: parsed?.header ?? null, subagent: parsed?.subagent ?? false, sessionInfo: parsed?.sessionInfo ?? false, aiTitle: parsed?.aiTitle ?? false });
-        dirty = true;
+        if (parsed !== null) {
+          candidates.push({ path: candidate.path, mtimeMs: meta.mtimeMs, size: meta.size, header: parsed.header, subagent: parsed.subagent, sessionInfo: parsed.sessionInfo, aiTitle: parsed.aiTitle });
+          dirty = true;
+        } else {
+          // Header transiently unreadable (file is mid-write): keep the last
+          // valid candidate with its OLD mtime/size instead of caching a null
+          // header. The next re-validation sees the mtime/size mismatch and
+          // re-parses, so the session reappears once the write finishes — but
+          // it never drops out of the list during the write window.
+          candidates.push(candidate);
+        }
       } else {
         candidates.push(candidate);
       }
@@ -543,7 +593,7 @@ export class SessionRepository {
       readProject(cwd),
     ]);
     const root = sessionsRoot(cwd);
-    return files.filter((file) => {
+    const rows = await Promise.all(files.filter((file) => {
       if (!isUserVisibleSession(root, file)) return false;
       const parentSession = typeof file.header.parentSession === "string" ? file.header.parentSession : "";
       // A named top-level session is a user-created fork. An unnamed session
@@ -553,14 +603,23 @@ export class SessionRepository {
       // remain and would otherwise resurface in the conversation list.
       if (file.sessionInfo) return true;
       return !parentSession;
-    }).map(({ header, modified }) => ({
-      id: String(header.id),
-      cwd: typeof header.cwd === "string" ? header.cwd : resolve(cwd),
-      project_id: project?.id ?? (typeof header.project_id === "string" ? header.project_id : null),
-      name: null,
-      created_at: typeof header.timestamp === "string" ? header.timestamp : null,
-      updated_at: modified.toISOString(),
+    }).map(async ({ header, modified, path }) => {
+      const headerTimestamp = typeof header.timestamp === "string" ? header.timestamp : null;
+      // updated_at = last real message time, else the session header timestamp
+      // (new sessions without messages), else the file mtime as a fallback.
+      const updatedAt = (await lastMessageTimestamp(path)) ?? headerTimestamp ?? modified.toISOString();
+      return {
+        id: String(header.id),
+        cwd: typeof header.cwd === "string" ? header.cwd : resolve(cwd),
+        project_id: project?.id ?? (typeof header.project_id === "string" ? header.project_id : null),
+        name: null,
+        created_at: headerTimestamp,
+        updated_at: updatedAt,
+      };
     }));
+    // Sort by the effective updated_at (last message time when present) so the
+    // list ordering matches the displayed timestamps.
+    return rows.sort((left, right) => right.updated_at.localeCompare(left.updated_at));
   }
 
   async messagesPage(

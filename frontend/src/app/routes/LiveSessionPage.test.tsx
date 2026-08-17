@@ -289,7 +289,7 @@ afterEach(() => {
 describe("composer send-failure restore", () => {
   it("uses the compact conversation header height", async () => {
     await renderReady();
-    expect(screen.getByRole("banner")).toHaveClass("h-9");
+    expect(screen.getByRole("banner")).toHaveClass("h-11");
   });
 
   it("uses compact spacing for the composer toolbar", async () => {

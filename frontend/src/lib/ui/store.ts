@@ -53,6 +53,11 @@ interface UiState {
    *  once by the session-list effect; never persisted, never crosses workspaces. */
   suppressAutoSessionNav: boolean;
   setSuppressAutoSessionNav: (v: boolean) => void;
+  /** True while any layout divider (sidebar or preview pane) is being dragged;
+   *  lets the layout freeze the conversation content width until the drag ends.
+   *  Never persisted — it is transient drag state only. */
+  inspectorResizing: boolean;
+  setInspectorResizing: (r: boolean) => void;
 }
 
 export interface InspectorTab {
@@ -277,6 +282,9 @@ export const useUiStore = create<UiState>((set) => ({
 
   suppressAutoSessionNav: false,
   setSuppressAutoSessionNav: (v) => set({ suppressAutoSessionNav: v }),
+
+  inspectorResizing: false,
+  setInspectorResizing: (r) => set({ inspectorResizing: r }),
 }));
 
 // Re-export for RightPane compatibility

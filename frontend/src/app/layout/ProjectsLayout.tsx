@@ -36,6 +36,7 @@ export function ProjectsLayout() {
   const setInspectorVisible = useUiStore((s) => s.setInspectorVisible);
   const setInspectorMaximized = useUiStore((s) => s.setInspectorMaximized);
   const setSidebarWidth = useUiStore((s) => s.setSidebarWidth);
+  const inspectorResizing = useUiStore((s) => s.inspectorResizing);
   const [sidebarDragWidth, setSidebarDragWidth] = useState<number | null>(null);
   const [sidebarDragging, setSidebarDragging] = useState(false);
   const sidebarDragWidthRef = useRef<number | null>(null);
@@ -205,7 +206,7 @@ export function ProjectsLayout() {
       )}
 
       {/* Main */}
-      <main id="main-content" tabIndex={-1} className={cn(
+      <main id="main-content" tabIndex={-1} data-resizing={sidebarDragging || inspectorResizing || undefined} className={cn(
         "relative flex min-w-0 flex-1 flex-col overflow-hidden [container-type:inline-size]",
         sidebarCollapsed && "pt-12 md:pt-0",
         inspectorMaximized && "hidden",

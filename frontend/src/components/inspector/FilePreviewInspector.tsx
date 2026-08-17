@@ -534,17 +534,15 @@ function Body({
   if (kind === "markdown") {
     if (showCode) {
       return text !== null ? (
-        <>
+        <div className="flex h-full flex-col p-3">
           <MarkdownPreviewNotice
             truncated={textTruncated}
             loading={fullTextLoading}
             error={fullTextError}
             onLoadFullText={onLoadFullText}
           />
-          <div className="p-3">
-            <CodeViewer code={text} language="markdown" />
-          </div>
-        </>
+          <CodeViewer code={text} language="markdown" className="min-h-0 flex-1" />
+        </div>
       ) : (
         <Note text={t("filePreview.openInDesktop")} />
       );

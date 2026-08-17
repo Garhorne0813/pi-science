@@ -20,8 +20,16 @@ export function OverviewTab({ document, summary, memorySummary }: { document: st
             <p className="text-xs text-muted">{t("knowledge.reviewedSource")}</p>
           </div>
         </div>
-        <div className="px-5 py-7 sm:px-8">
-          <MarkdownViewer variant="document">{visibleDocument}</MarkdownViewer>
+        <div className="bg-surface-2 px-2 py-2">
+          {/* Document preview rendered as a neutral white paper page (same
+              treatment as the inspector's markdown document preview): the
+              canvas stays theme-independent in light and dark mode. */}
+          <div
+            className="mx-auto max-w-[760px] rounded-sm bg-white shadow-[0_1px_4px_rgba(0,0,0,.25)]"
+            style={{ paddingInline: "1rem", paddingBlock: "1.25rem" }}
+          >
+            <MarkdownViewer variant="document">{visibleDocument}</MarkdownViewer>
+          </div>
         </div>
       </article>
       <aside className="space-y-3">

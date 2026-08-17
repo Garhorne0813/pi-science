@@ -57,7 +57,7 @@ export function ConversationFooter() {
   const respondToInteraction = useRuntimeStore((s) => s.respondToInteraction);
 
   return (
-    <div className="mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-6 pt-2">
+    <div className="conversation-content-lock mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-6 pt-2">
       {pendingQuestionnaire && pendingInteraction?.questionnaire ? (
         <QuestionnairePrompt
           questionnaire={pendingQuestionnaire}
@@ -498,7 +498,7 @@ export function LiveSessionPage() {
   // one drops the suggestion into the composer (the user may tweak or append
   // to it) instead of sending it directly. Not shown on the blank welcome page.
   const suggestionChips = suggestions.length > 0 && !working && !research.draft && !research.activeLoop && !input.trim() ? (
-    <div className="mx-auto flex max-w-[var(--conversation-composer-width)] flex-wrap gap-2 px-1 pb-2" aria-label={t("conversation.suggestions")}>
+    <div className="conversation-composer-lock mx-auto flex max-w-[var(--conversation-composer-width)] flex-wrap gap-2 px-1 pb-2" aria-label={t("conversation.suggestions")}>
       {suggestions.map((suggestion) => (
         <button
           key={suggestion}
@@ -522,7 +522,7 @@ export function LiveSessionPage() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <header className="flex h-9 shrink-0 items-center border-b border-faint px-6 pr-24">
+      <header className="flex h-11 shrink-0 items-center border-b border-faint px-6 pr-24">
         <div className="flex items-center gap-2.5 min-w-0">
           <span className={cn("h-2 w-2 rounded-full shrink-0",
             status === "ready" ? "bg-ok" : status === "connecting" ? "bg-warn animate-pulse" : status === "error" ? "bg-error" : "bg-muted"
@@ -592,7 +592,7 @@ export function LiveSessionPage() {
                   context={{ renderInteractionPrompt, working, pendingInteraction }}
                   components={{
                     Header: () => (
-                      <div className="mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-2 pt-6">
+                      <div className="conversation-content-lock mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-2 pt-6">
                         {historyLoading && (
                           <div className="flex items-center gap-2 text-xs text-muted" role="status">
                             <Loader2 size={13} className="animate-spin text-accent" />
@@ -607,7 +607,7 @@ export function LiveSessionPage() {
                     Footer: ConversationFooter,
                   }}
                   itemContent={(_index, group) => (
-                    <div className="mx-auto w-full max-w-[calc(var(--conversation-content-width)+4rem)] px-8 pb-3">
+                    <div className="conversation-content-lock mx-auto w-full max-w-[calc(var(--conversation-content-width)+4rem)] px-8 pb-3">
                       {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock)}
                     </div>
                   )}
@@ -636,7 +636,7 @@ export function LiveSessionPage() {
         )}
 
         {/* Composer */}
-        <div className={cn("px-8 shrink-0", showWelcome ? "py-0" : "pb-5 pt-2")}>
+        <div className={cn("px-8 shrink-0", showWelcome ? "py-0" : "pb-1 pt-1")}>
           {!showWelcome && (
             <div className="relative mx-auto max-w-[var(--conversation-composer-width)]">
               {suggestionChips}
@@ -660,14 +660,18 @@ export function LiveSessionPage() {
             {/* Fixed 36px fade band above the composer card (reference:
                 ConversationRoot composer seat gradient). The card sits at the
                 bottom of the column, so the band softens the transcript edge
-                scrolling into it. */}
-            <div
-              aria-hidden
-              className="pointer-events-none absolute inset-x-0 bottom-full h-[var(--composer-fade-height)] bg-gradient-to-t from-[var(--bg)] to-transparent"
-            />
+                scrolling into it. Rendered only when nothing (suggestion chips,
+                research mode picker) sits above the card: with such content the
+                band visually covers those controls. */}
+            {!modePicker && !suggestionChips && (
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-x-0 bottom-full h-[var(--composer-fade-height)] bg-gradient-to-t from-[var(--bg)] to-transparent"
+              />
+            )}
             <div
               className={cn(
-                "ui-card relative mx-auto max-w-[var(--conversation-composer-width)] rounded-composer shadow-composer transition-colors",
+                "ui-card conversation-composer-lock relative mx-auto max-w-[var(--conversation-composer-width)] rounded-composer shadow-composer transition-colors",
                 composer.dragOver && "border-accent bg-accent/5",
               )}
               onDragOver={(e) => { e.preventDefault(); composer.setDragOver(true); }}

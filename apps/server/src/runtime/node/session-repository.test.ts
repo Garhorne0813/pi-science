@@ -228,6 +228,66 @@ describe("SessionRepository cache", () => {
     expect(second.map((s) => s.id)).toEqual(expect.arrayContaining(["a", "b"]));
     expect(second).toHaveLength(2);
   });
+
+  it("keeps a session visible while its header is transiently unreadable mid-write", async () => {
+    const cwd = await makeWorkspace();
+    const repo = new SessionRepository();
+    const path = join(cwd, ".pi-science", "sessions", "w.jsonl");
+    const valid = sessionHeader("w", cwd);
+    await writeFile(path, valid, "utf8");
+
+    // Warm the cache with a valid listing.
+    const before = await repo.list(cwd);
+    expect(before.map((s) => s.id)).toEqual(["w"]);
+
+    // Simulate the write window: the file is overwritten in place and its
+    // header is transiently unreadable (truncated/half-written). Keep the byte
+    // length identical so only the mtime triggers re-validation.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await writeFile(path, `${"x".repeat(valid.length - 1)}\n`, "utf8");
+
+    // The session must stay listed while the header is unreadable: the cache
+    // keeps the last valid candidate instead of caching a null header.
+    await expect(repo.list(cwd)).resolves.toEqual([
+      expect.objectContaining({ id: "w" }),
+    ]);
+
+    // Once the write completes the file is valid again and re-validates.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await writeFile(path, valid, "utf8");
+    await expect(repo.list(cwd)).resolves.toEqual([
+      expect.objectContaining({ id: "w" }),
+    ]);
+  });
+
+  it("keeps updated_at on the last real message when bookkeeping entries are appended", async () => {
+    const cwd = await makeWorkspace();
+    const repo = new SessionRepository();
+    const path = join(cwd, ".pi-science", "sessions", "ts.jsonl");
+    await writeFile(
+      path,
+      `${sessionHeader("ts", cwd)}${messageLine("m1", "user", "hello", "2026-07-25T01:20:04.624Z")}`,
+      "utf8",
+    );
+
+    const before = await repo.list(cwd);
+    expect(before).toHaveLength(1);
+    expect(before[0]!.updated_at).toBe("2026-07-25T01:20:04.624Z");
+
+    // Opening a session appends bookkeeping entries (model_change, session_info)
+    // with the CURRENT time. These must not move updated_at.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await appendFile(
+      path,
+      `${JSON.stringify({ type: "model_change", id: "mc1", timestamp: "2026-07-25T09:38:13.000Z", model: "gpt-5.5" })}\n${JSON.stringify({ type: "session_info", id: "si1", timestamp: "2026-07-25T09:38:13.000Z", name: "x" })}\n`,
+      "utf8",
+    );
+
+    const after = await repo.list(cwd);
+    expect(after).toHaveLength(1);
+    // Still the last real message timestamp, not the bookkeeping time.
+    expect(after[0]!.updated_at).toBe("2026-07-25T01:20:04.624Z");
+  });
 });
 
 describe("SessionRepository messages streaming", () => {
