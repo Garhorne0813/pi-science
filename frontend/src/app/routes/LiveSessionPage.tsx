@@ -57,7 +57,7 @@ export function ConversationFooter() {
   const respondToInteraction = useRuntimeStore((s) => s.respondToInteraction);
 
   return (
-    <div className="conversation-content-lock mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-6 pt-2">
+    <div className="mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-6 pt-2">
       {pendingQuestionnaire && pendingInteraction?.questionnaire ? (
         <QuestionnairePrompt
           questionnaire={pendingQuestionnaire}
@@ -498,7 +498,7 @@ export function LiveSessionPage() {
   // one drops the suggestion into the composer (the user may tweak or append
   // to it) instead of sending it directly. Not shown on the blank welcome page.
   const suggestionChips = suggestions.length > 0 && !working && !research.draft && !research.activeLoop && !input.trim() ? (
-    <div className="conversation-composer-lock mx-auto flex max-w-[var(--conversation-composer-width)] flex-wrap gap-2 px-1 pb-2" aria-label={t("conversation.suggestions")}>
+    <div className="mx-auto flex max-w-[var(--conversation-composer-width)] flex-wrap gap-2 px-1 pb-2" aria-label={t("conversation.suggestions")}>
       {suggestions.map((suggestion) => (
         <button
           key={suggestion}
@@ -592,7 +592,7 @@ export function LiveSessionPage() {
                   context={{ renderInteractionPrompt, working, pendingInteraction }}
                   components={{
                     Header: () => (
-                      <div className="conversation-content-lock mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-2 pt-6">
+                      <div className="mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-2 pt-6">
                         {historyLoading && (
                           <div className="flex items-center gap-2 text-xs text-muted" role="status">
                             <Loader2 size={13} className="animate-spin text-accent" />
@@ -607,7 +607,7 @@ export function LiveSessionPage() {
                     Footer: ConversationFooter,
                   }}
                   itemContent={(_index, group) => (
-                    <div className="conversation-content-lock mx-auto w-full max-w-[calc(var(--conversation-content-width)+4rem)] px-8 pb-3">
+                    <div className="mx-auto w-full max-w-[calc(var(--conversation-content-width)+4rem)] px-8 pb-3">
                       {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock)}
                     </div>
                   )}
@@ -671,7 +671,7 @@ export function LiveSessionPage() {
             )}
             <div
               className={cn(
-                "ui-card conversation-composer-lock relative mx-auto max-w-[var(--conversation-composer-width)] rounded-composer shadow-composer transition-colors",
+                "ui-card relative mx-auto max-w-[var(--conversation-composer-width)] rounded-composer shadow-composer transition-colors",
                 composer.dragOver && "border-accent bg-accent/5",
               )}
               onDragOver={(e) => { e.preventDefault(); composer.setDragOver(true); }}

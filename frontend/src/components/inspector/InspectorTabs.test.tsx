@@ -79,10 +79,15 @@ describe("InspectorTabs", () => {
     render(<InspectorTabs tabs={tabs} activeTabId={inspectorTabId(second)} cwd="project" reserveControls />);
 
     const tablist = screen.getByRole("tablist", { name: "Open file previews" });
-    expect(tablist.parentElement).toHaveClass("h-11", "bg-surface");
+    expect(tablist.parentElement).toHaveClass("h-11", "border-b", "border-border", "bg-surface");
     expect(tablist.parentElement).not.toHaveClass("mr-14");
-    expect(tablist).toHaveClass("h-11", "overflow-x-auto", "overflow-y-hidden", "[scrollbar-width:none]");
-    expect(tablist.firstElementChild).toHaveClass("h-11", "w-max", "min-w-full", "pr-14");
+    expect(tablist).toHaveClass("h-11", "overflow-x-auto", "overflow-y-hidden", "border-b", "border-border", "[scrollbar-width:none]", "mr-20");
+    expect(tablist.firstElementChild).toHaveClass("h-11", "w-max", "min-w-full");
+    expect(tablist.firstElementChild).not.toHaveClass("pr-20");
+    expect(tablist.firstElementChild).not.toHaveClass("border-b");
+    const controls = screen.getByRole("button", { name: "Expand panel" }).parentElement!;
+    expect(controls).toHaveClass("absolute", "right-card");
+    expect(controls.parentElement).toBe(tablist.parentElement);
     const activeTabContainer = screen.getByRole("tab", { name: "two.txt" }).parentElement;
     expect(activeTabContainer).toHaveClass("h-full");
     expect(screen.getByRole("tab", { name: "two.txt" })).toHaveClass("text-ui-label");

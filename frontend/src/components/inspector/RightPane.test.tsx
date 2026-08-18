@@ -59,6 +59,7 @@ describe("RightPane resizing", () => {
 
     const divider = screen.getByRole("separator", { name: "Resize preview panel" });
     const pane = divider.parentElement!;
+    expect(pane).toHaveClass("lg:border-l", "lg:border-border");
     expect(divider).toHaveAttribute("tabindex", "0");
     fireEvent.pointerDown(divider, { button: 0, pointerId: 1, clientX: 604 });
     fireEvent.pointerMove(divider, { pointerId: 1, clientX: 700 });
@@ -132,6 +133,8 @@ describe("RightPane resizing", () => {
     const divider = screen.getByRole("separator", { name: "Resize preview panel" });
     const pane = divider.parentElement!;
     expect(pane).toHaveClass("order-1");
+    expect(pane).toHaveClass("lg:border-r", "lg:border-border");
+    expect(pane).not.toHaveClass("lg:border-l");
     expect(divider).toHaveClass("right-0");
     expect(divider).not.toHaveClass("left-0");
 

@@ -53,9 +53,8 @@ interface UiState {
    *  once by the session-list effect; never persisted, never crosses workspaces. */
   suppressAutoSessionNav: boolean;
   setSuppressAutoSessionNav: (v: boolean) => void;
-  /** True while any layout divider (sidebar or preview pane) is being dragged;
-   *  lets the layout freeze the conversation content width until the drag ends.
-   *  Never persisted — it is transient drag state only. */
+  /** True while the preview divider is being dragged. Never persisted — it is
+   *  transient interaction state used for drag feedback only. */
   inspectorResizing: boolean;
   setInspectorResizing: (r: boolean) => void;
 }

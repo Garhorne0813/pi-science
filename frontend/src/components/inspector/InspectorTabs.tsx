@@ -8,6 +8,7 @@ import { notifyInspectorLayoutChange } from "@/lib/ui/inspector-layout";
 import { IconButton } from "../ui/Icon";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { InspectorShell } from "./InspectorShell";
+import { PreviewPaneControls } from "./PreviewPaneControls";
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 4;
@@ -56,7 +57,6 @@ export function InspectorTabs({
   const tabScrollRef = useRef<HTMLDivElement | null>(null);
   // Focus origin of the expanded dialog, restored when it closes.
   const lastFocusedRef = useRef<HTMLElement | null>(null);
-  const [tabScrollIndicator, setTabScrollIndicator] = useState({ visible: false, left: 0, width: 100 });
 
   const setTabZoom = (tabId: string, update: (current: number) => number) => {
     setZoomByTab((current) => ({
@@ -117,14 +117,6 @@ export function InspectorTabs({
   useEffect(() => {
     const scroller = tabScrollRef.current;
     if (!scroller) return;
-    const updateIndicator = () => {
-      const { clientWidth, scrollLeft, scrollWidth } = scroller;
-      const visible = scrollWidth > clientWidth + 1;
-      const width = visible ? Math.max(12, (clientWidth / scrollWidth) * 100) : 100;
-      const maxScroll = Math.max(0, scrollWidth - clientWidth);
-      const left = maxScroll > 0 ? (scrollLeft / maxScroll) * (100 - width) : 0;
-      setTabScrollIndicator({ visible, left, width });
-    };
     const handleWheel = (event: WheelEvent) => {
       if (scroller.scrollWidth <= scroller.clientWidth) return;
       // Preserve native horizontal trackpad gestures. A regular vertical
@@ -134,18 +126,11 @@ export function InspectorTabs({
       scroller.scrollLeft += event.deltaY;
       if (scroller.scrollLeft !== previousScrollLeft) event.preventDefault();
     };
-    updateIndicator();
-    scroller.addEventListener("scroll", updateIndicator, { passive: true });
     scroller.addEventListener("wheel", handleWheel, { passive: false });
-    const observer = new ResizeObserver(updateIndicator);
-    observer.observe(scroller);
-    if (scroller.firstElementChild) observer.observe(scroller.firstElementChild);
     return () => {
-      scroller.removeEventListener("scroll", updateIndicator);
       scroller.removeEventListener("wheel", handleWheel);
-      observer.disconnect();
     };
-  }, [tabs.length]);
+  }, []);
 
   // Keep Tab inside the expanded dialog so keyboard users cannot reach the
   // background while it is open.
@@ -178,19 +163,20 @@ export function InspectorTabs({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="relative h-11 shrink-0 bg-surface">
+      <div className="relative h-11 shrink-0 border-b border-border bg-surface">
         <div
           ref={tabScrollRef}
           role="tablist"
           aria-label={t("filePreview.openFiles")}
-          className="h-11 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          className={cn(
+            "h-11 overflow-x-auto overflow-y-hidden border-b border-border [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+            // Reserve a real layout column for the two floating controls. A
+            // padding-only reservation still lets the scroll viewport extend
+            // underneath them when the tabs are scrolled to the end.
+            reserveControls && "mr-20",
+          )}
         >
-          <div
-            className={cn(
-              "flex h-11 w-max min-w-full border-b border-border px-1",
-              reserveControls && "pr-14",
-            )}
-          >
+          <div className="flex h-11 w-max min-w-full px-1">
             {tabs.map((tab, index) => {
             const active = tab.id === activeTabId;
             const title = tabTitle(tab.data, t("notebook.sessionKernel"));
@@ -243,14 +229,7 @@ export function InspectorTabs({
             })}
           </div>
         </div>
-        {tabScrollIndicator.visible && (
-          <div aria-hidden="true" className="absolute inset-x-1 bottom-0 h-1 overflow-hidden rounded-full bg-border/45">
-            <div
-              className="h-full rounded-full bg-muted/55"
-              style={{ marginLeft: `${tabScrollIndicator.left}%`, width: `${tabScrollIndicator.width}%` }}
-            />
-          </div>
-        )}
+        {reserveControls && <PreviewPaneControls embedded />}
       </div>
 
       <div className="min-h-0 flex-1">

@@ -31,8 +31,8 @@ export function RightPane({
   const inspectorMaximized = useUiStore((s) => s.inspectorMaximized);
   const setInspectorWidth = useUiStore((s) => s.setInspectorWidth);
   const setInspectorMaximized = useUiStore((s) => s.setInspectorMaximized);
-  // Divider drag state lives in the UI store so the layout shell can freeze
-  // the conversation content width for the whole drag (sidebar or preview).
+  // Keep divider drag state in the UI store so the pane's drag feedback stays
+  // synchronized with the live width update.
   const dragging = useUiStore((s) => s.inspectorResizing);
   const setInspectorResizing = useUiStore((s) => s.setInspectorResizing);
   // Live width changes are applied directly once per animation frame. This
@@ -201,6 +201,7 @@ export function RightPane({
       onKeyDown={mobileOverlay ? onOverlayKeyDown : undefined}
       className={cn(
         "fixed inset-0 z-50 block h-full w-full bg-surface outline-none lg:relative lg:inset-auto lg:z-auto lg:w-[var(--inspector-width)] lg:shrink-0",
+        side === "right" ? "lg:border-l lg:border-border" : "lg:border-r lg:border-border",
         side === "left" && "order-1",
         dragging && "will-change-[width] select-none",
       )}
