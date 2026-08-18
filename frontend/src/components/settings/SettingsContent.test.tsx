@@ -74,7 +74,10 @@ describe("SettingsContent", () => {
     const nav = await screen.findByRole("tablist", { name: "Settings" });
     expect(nav).toHaveAttribute("aria-orientation", "vertical");
     expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tabpanel", { name: "General" })).toHaveAttribute("aria-labelledby", "settings-tab-general");
+    const panel = screen.getByRole("tabpanel", { name: "General" });
+    expect(panel).toHaveAttribute("aria-labelledby", "settings-tab-general");
+    expect(panel.querySelector(":scope > div > div")).toHaveClass("md:px-0");
+    expect(panel.querySelector(":scope > div > div")).not.toHaveClass("md:px-6");
   });
 
   it("marks the active tab with the selected surface and the rest with hover surfaces", async () => {
