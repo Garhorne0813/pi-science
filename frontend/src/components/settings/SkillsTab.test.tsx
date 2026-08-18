@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "../../lib/client/query-client";
@@ -90,6 +90,12 @@ describe("SkillsTab", () => {
     renderTab("/tmp/ws");
     expect(await screen.findByText("alpha")).toBeInTheDocument();
     expect(await screen.findByText("beta")).toBeInTheDocument();
+    const tables = screen.getAllByRole("table");
+    expect(tables).toHaveLength(2);
+    expect(within(tables[0]).getByText("alpha")).toBeInTheDocument();
+    expect(within(tables[1]).getByText("beta")).toBeInTheDocument();
+    expect(within(tables[0]).queryByRole("columnheader", { name: "Actions" })).not.toBeInTheDocument();
+    expect(within(tables[1]).getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
     expect(screen.getAllByText("project")).toHaveLength(1);
     expect(screen.getAllByText("builtin")).toHaveLength(1);
   });

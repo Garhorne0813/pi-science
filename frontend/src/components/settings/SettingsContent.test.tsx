@@ -146,14 +146,17 @@ describe("SettingsContent", () => {
     expect(await screen.findByText("Models")).toBeInTheDocument();
   });
 
-  it("shows one unified Skills list inside Settings", async () => {
+  it("shows separate Built-in and User Skills tables inside Settings", async () => {
     renderContent(null);
     await screen.findByRole("tablist", { name: "Settings" });
     fireEvent.click(screen.getByRole("tab", { name: "Skills" }));
     expect(await screen.findByText("Analyze alpha data")).toBeInTheDocument();
     expect(screen.getByLabelText("Enable alpha")).toBeChecked();
+    expect(screen.getByRole("heading", { name: "Built-in Skills" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "User Skills" })).toBeInTheDocument();
+    expect(screen.getAllByRole("table")).toHaveLength(2);
+    expect(screen.queryByRole("columnheader", { name: "Actions" })).not.toBeInTheDocument();
     expect(screen.queryByText("Scientific Environment")).not.toBeInTheDocument();
-    expect(screen.queryByText("Built-in Skills")).not.toBeInTheDocument();
     expect(screen.queryByText("Project Skills")).not.toBeInTheDocument();
   });
 

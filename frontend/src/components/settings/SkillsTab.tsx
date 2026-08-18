@@ -30,6 +30,115 @@ const sourceBadge: Record<string, string> = {
   builtin: "bg-surface-2 text-muted",
 };
 
+function SkillTable({
+  id,
+  title,
+  emptyMessage,
+  skills,
+  workspaceCwd,
+  saving,
+  onToggle,
+  onEdit,
+  onDelete,
+}: {
+  id: string;
+  title: string;
+  emptyMessage: string;
+  skills: Skill[];
+  workspaceCwd: string | null;
+  saving: string | null;
+  onToggle: (skill: Skill, enabled: boolean) => void;
+  onEdit: (skill: Skill) => void;
+  onDelete: (skill: Skill) => void;
+}) {
+  const { t } = useTranslation();
+  const hasActions = workspaceCwd !== null && skills.some((skill) => skill.source === "project");
+
+  return (
+    <section aria-labelledby={id} className="space-y-2">
+      <div className="flex items-center justify-between gap-3 px-1">
+        <h2 id={id} className="text-ui-label font-semibold text-text">{title}</h2>
+        <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-muted">{skills.length}</span>
+      </div>
+      <div className="ui-card-flat overflow-hidden rounded-card">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[620px] text-left">
+            <thead className="border-b border-border bg-surface-2/50">
+              <tr>
+                <th scope="col" className="px-4 py-2.5 text-ui-caption font-medium text-muted">{t("skills.tableName")}</th>
+                  <th scope="col" className="px-4 py-2.5 text-ui-caption font-medium text-muted">{t("skills.tableDescription")}</th>
+                  <th scope="col" className="px-4 py-2.5 text-ui-caption font-medium text-muted">{t("skills.tableStatus")}</th>
+                  {hasActions && <th scope="col" className="px-4 py-2.5 text-ui-caption font-medium text-muted">{t("skills.tableActions")}</th>}
+                  <th scope="col" className="w-16 px-4 py-2.5 text-center text-ui-caption font-medium text-muted">{t("skills.tableEnabled")}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {skills.length === 0 ? (
+                <tr>
+                  <td colSpan={hasActions ? 5 : 4} className="px-4 py-8 text-center text-sm text-muted">{emptyMessage}</td>
+                </tr>
+              ) : (
+                skills.map((skill) => {
+                  const valid = skill.validation?.valid !== false;
+                  const projectEditable = workspaceCwd !== null && skill.source === "project";
+                  return (
+                    <tr key={skill.skill_id || skill.name} className="align-top hover:bg-surface-2/30">
+                      <td className="px-4 py-3">
+                        <div className="flex min-w-44 items-start gap-2">
+                          <Package size={16} className="mt-0.5 shrink-0 text-muted" />
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-text">
+                              <span className="truncate">{skill.name}</span>
+                              {skill.source && <span className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${sourceBadge[skill.source]}`}>{skill.source}</span>}
+                            </div>
+                            {!!skill.requirements?.length && <p className="mt-1 text-[10px] text-muted">{t("skills.requirements")}: {skill.requirements.map((item) => `${item.name}${item.version ? ` ${item.version}` : ""}`).join(", ")}</p>}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="max-w-[28rem] px-4 py-3 text-xs text-muted">
+                        <p className="line-clamp-2">{skill.description}</p>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3">
+                        {valid ? (
+                          <span className="inline-flex items-center gap-1.5 text-xs text-ok-text"><ShieldCheck size={13} />{t("skills.validated")}</span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 text-xs text-error-text"><AlertTriangle size={13} />{t("skills.needsAttention")}</span>
+                        )}
+                      </td>
+                      {hasActions && (
+                        <td className="px-4 py-3">
+                          {projectEditable ? (
+                            <div className="flex items-center gap-1">
+                              <button type="button" aria-label={t("skills.edit", { name: skill.name })} onClick={() => onEdit(skill)} className="rounded p-1.5 text-muted hover:bg-surface-2 hover:text-text">
+                                <Pencil size={13} />
+                              </button>
+                              <button type="button" aria-label={t("skills.delete", { name: skill.name })} onClick={() => onDelete(skill)} className="rounded p-1.5 text-muted hover:bg-surface-2 hover:text-error-text">
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted">{t("skills.readOnly")}</span>
+                          )}
+                        </td>
+                      )}
+                      <td className="px-4 py-3 text-center">
+                        <div className="flex items-center justify-center gap-2">
+                          {saving === skill.name && <Loader2 size={12} className="shrink-0 animate-spin text-muted" />}
+                          <input type="checkbox" aria-label={t("skills.enable", { name: skill.name })} checked={skill.enabled !== false} disabled={saving !== null} onChange={(event) => onToggle(skill, event.target.checked)} className="h-4 w-4 accent-[var(--accent)]" />
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export function SkillsTab({ workspaceCwd }: { workspaceCwd: string | null }) {
   const { t } = useTranslation();
   const [skills, setSkills] = useState<Skill[]>([]);
@@ -132,6 +241,9 @@ export function SkillsTab({ workspaceCwd }: { workspaceCwd: string | null }) {
 
   if (loading) return <div className="flex min-h-[240px] items-center justify-center text-sm text-muted"><Loader2 size={18} className="mr-2 animate-spin" />{t("common.loading")}</div>;
 
+  const builtinSkills = skills.filter((skill) => skill.source === "builtin");
+  const userSkills = skills.filter((skill) => skill.source !== "builtin");
+
   return (
     <div className="space-y-card pt-card">
       <div className="flex items-start justify-between gap-3">
@@ -176,40 +288,30 @@ export function SkillsTab({ workspaceCwd }: { workspaceCwd: string | null }) {
         </div>
       </div>
       {error && <p role="alert" className="rounded-input bg-error/10 px-3 py-2 text-ui-caption text-error-text">{error}</p>}
-      <section aria-label={t("skills.title")} className="ui-card-flat divide-y divide-border overflow-hidden rounded-card">
-        {skills.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-muted">{t("skills.empty")}</div>
-        ) : skills.map((skill) => {
-          const valid = skill.validation?.valid !== false;
-          const projectEditable = workspaceCwd !== null && skill.source === "project";
-          return (
-            <div key={skill.skill_id || skill.name} className="flex items-center gap-3 px-4 py-3">
-              <Package size={16} className="shrink-0 text-muted" />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 text-sm font-medium text-text">
-                  <span className="truncate">{skill.name}</span>
-                  {skill.source && <span className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${sourceBadge[skill.source]}`}>{skill.source}</span>}
-                  {valid ? <ShieldCheck size={13} className="shrink-0 text-ok-text" /> : <AlertTriangle size={13} className="shrink-0 text-error-text" />}
-                </div>
-                <p className="line-clamp-2 text-xs text-muted">{skill.description}</p>
-                {!!skill.requirements?.length && <p className="mt-1 text-[10px] text-muted">{t("skills.requirements")}: {skill.requirements.map((item) => `${item.name}${item.version ? ` ${item.version}` : ""}`).join(", ")}</p>}
-              </div>
-              {projectEditable && (
-                <div className="flex shrink-0 items-center gap-1">
-                  <button type="button" aria-label={t("skills.edit", { name: skill.name })} onClick={() => void startEdit(skill)} className="rounded p-1.5 text-muted hover:bg-surface-2 hover:text-text">
-                    <Pencil size={13} />
-                  </button>
-                  <button type="button" aria-label={t("skills.delete", { name: skill.name })} onClick={() => setDeleteConfirm(skill)} className="rounded p-1.5 text-muted hover:bg-surface-2 hover:text-error-text">
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              )}
-              {saving === skill.name && <Loader2 size={12} className="shrink-0 animate-spin text-muted" />}
-              <input type="checkbox" aria-label={t("skills.enable", { name: skill.name })} checked={skill.enabled !== false} disabled={saving !== null} onChange={(event) => void toggle(skill, event.target.checked)} className="h-4 w-4 shrink-0 accent-[var(--accent)]" />
-            </div>
-          );
-        })}
-      </section>
+      <div className="space-y-card">
+        <SkillTable
+          id="builtin-skills-heading"
+          title={t("skills.builtin")}
+          emptyMessage={t("skills.noBuiltin")}
+          skills={builtinSkills}
+          workspaceCwd={workspaceCwd}
+          saving={saving}
+          onToggle={(skill, enabled) => void toggle(skill, enabled)}
+          onEdit={(skill) => void startEdit(skill)}
+          onDelete={setDeleteConfirm}
+        />
+        <SkillTable
+          id="user-skills-heading"
+          title={t("skills.user")}
+          emptyMessage={t("skills.noUser")}
+          skills={userSkills}
+          workspaceCwd={workspaceCwd}
+          saving={saving}
+          onToggle={(skill, enabled) => void toggle(skill, enabled)}
+          onEdit={(skill) => void startEdit(skill)}
+          onDelete={setDeleteConfirm}
+        />
+      </div>
 
       {deleteConfirm && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDeleteConfirm(null); }}>
