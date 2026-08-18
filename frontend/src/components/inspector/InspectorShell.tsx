@@ -30,7 +30,7 @@ export function InspectorShell({
   const cwd = cwdOverride || runtimeCwd;
 
   return (
-    <div className="h-full border-l border-border bg-surface" data-variant={inspector.variant}>
+    <div className="h-full bg-surface" data-variant={inspector.variant}>
       {inspector.variant === "file" && (
         <FilePreviewInspector
           data={inspector}

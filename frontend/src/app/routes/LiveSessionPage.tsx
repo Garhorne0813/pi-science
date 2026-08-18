@@ -522,7 +522,7 @@ export function LiveSessionPage() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <header className="flex h-9 shrink-0 items-center border-b border-faint px-6 pr-24">
+      <header className="flex h-11 shrink-0 items-center border-b border-faint px-6 pr-24">
         <div className="flex items-center gap-2.5 min-w-0">
           <span className={cn("h-2 w-2 rounded-full shrink-0",
             status === "ready" ? "bg-ok" : status === "connecting" ? "bg-warn animate-pulse" : status === "error" ? "bg-error" : "bg-muted"
@@ -636,7 +636,7 @@ export function LiveSessionPage() {
         )}
 
         {/* Composer */}
-        <div className={cn("px-8 shrink-0", showWelcome ? "py-0" : "pb-5 pt-2")}>
+        <div className={cn("px-8 shrink-0", showWelcome ? "py-0" : "pb-1 pt-1")}>
           {!showWelcome && (
             <div className="relative mx-auto max-w-[var(--conversation-composer-width)]">
               {suggestionChips}
@@ -660,11 +660,15 @@ export function LiveSessionPage() {
             {/* Fixed 36px fade band above the composer card (reference:
                 ConversationRoot composer seat gradient). The card sits at the
                 bottom of the column, so the band softens the transcript edge
-                scrolling into it. */}
-            <div
-              aria-hidden
-              className="pointer-events-none absolute inset-x-0 bottom-full h-[var(--composer-fade-height)] bg-gradient-to-t from-[var(--bg)] to-transparent"
-            />
+                scrolling into it. Rendered only when nothing (suggestion chips,
+                research mode picker) sits above the card: with such content the
+                band visually covers those controls. */}
+            {!modePicker && !suggestionChips && (
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-x-0 bottom-full h-[var(--composer-fade-height)] bg-gradient-to-t from-[var(--bg)] to-transparent"
+              />
+            )}
             <div
               className={cn(
                 "ui-card relative mx-auto max-w-[var(--conversation-composer-width)] rounded-composer shadow-composer transition-colors",

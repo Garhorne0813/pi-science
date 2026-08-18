@@ -214,7 +214,7 @@ export function ProjectsLayout() {
         <Outlet />
       </main>
 
-      {isConversationRoute && (!previewOnLeft || !inspectorOpen) && <PreviewPaneControls />}
+      {isConversationRoute && !inspectorOpen && <PreviewPaneControls />}
 
       {/* Inspector — only in workspace context */}
       {isWorkspace && inspectorOpen && activeInspectorTabId && inspectorTabs.length > 0 && (
@@ -222,7 +222,6 @@ export function ProjectsLayout() {
           side={previewOnLeft ? "left" : "right"}
           onMinimize={() => setInspectorVisible(false)}
         >
-          {previewOnLeft && <PreviewPaneControls embedded />}
           <InspectorTabs
             tabs={inspectorTabs}
             activeTabId={activeInspectorTabId}

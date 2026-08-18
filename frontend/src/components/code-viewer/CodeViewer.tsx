@@ -1,15 +1,17 @@
 import { useMemo } from "react";
 import hljs from "highlight.js/lib/common";
+import { cn } from "@/lib/ui";
 import "./highlight-theme.css";
 
 interface Props {
   code: string;
   language?: string;
   startLine?: number;
+  className?: string;
 }
 
 /** Read-only code with a line-number gutter. Scrolls horizontally; no wrapping. */
-export function CodeViewer({ code, language, startLine = 1 }: Props) {
+export function CodeViewer({ code, language, startLine = 1, className }: Props) {
   const html = useMemo(() => {
     try {
       if (language && hljs.getLanguage(language)) {
@@ -24,7 +26,7 @@ export function CodeViewer({ code, language, startLine = 1 }: Props) {
   const lineCount = code.replace(/\n$/, "").split("\n").length;
 
   return (
-    <div className="flex overflow-x-auto rounded-input border border-border bg-surface font-mono text-[12.5px] leading-[1.55]">
+    <div className={cn("flex overflow-x-auto rounded-input border border-border bg-surface font-mono text-[12.5px] leading-[1.55]", className)}>
       <div
         aria-hidden
         className="select-none border-r border-border bg-surface-2 px-3 py-3 text-right text-muted"

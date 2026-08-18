@@ -155,7 +155,7 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
   if (!format) return <div className="p-4 text-sm text-muted">{t("molecule.notChemical")}</div>;
 
   return (
-    <div className="flex h-full min-h-[420px] w-full flex-col overflow-hidden bg-white" data-molecule-viewer="true">
+    <div className="flex h-full min-h-[420px] w-full flex-col overflow-hidden bg-[var(--doc-paper)]" data-molecule-viewer="true">
       <div
         className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-surface px-2 py-1.5"
         role="toolbar"
