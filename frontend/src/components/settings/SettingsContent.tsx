@@ -192,7 +192,7 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
               onClick={onClose}
             />
           </header>
-          <div className="min-h-0 flex-1 px-card py-card md:px-6 md:py-6">
+          <div className="min-h-0 flex-1 px-card py-card md:px-0 md:py-6">
             {loading ? (
               <div className="flex min-h-[240px] items-center justify-center text-sm text-muted">
                 <Icon icon={Loader2} size={18} className="mr-2 animate-spin" />
