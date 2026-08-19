@@ -9,6 +9,7 @@ import {
 } from "../../runtime/artifacts/workspace-artifact-snapshot.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { WorkspaceEnvironmentService } from "../../runtime/workspace/workspace-environment.js";
+import type { KernelStreamEvent, NodeKernelManager } from "../../runtime/kernel/node-kernel-manager.js";
 
 const executeCellRequestSchema = z.object({
   language: z.enum(["python", "r"]),
@@ -27,11 +28,45 @@ const MAX_RECORDED_CODE_CHARS = 64 * 1024;
 const MAX_RESULT_PREVIEW_CHARS = 16 * 1024;
 
 /**
- * Wraps the Python-owned kernel endpoint with Node-owned execution evidence.
- * The scientific runtime still executes the cell; this route only records its
- * lifecycle and detects files created or modified in the workspace.
+ * Executes cells with the Node-owned kernel manager: Node spawns the
+ * project's kernel bridge directly, records execution evidence, and detects
+ * files created or modified in the workspace. No Python worker round trip.
  */
-export function registerKernelExecutionRoutes(app: FastifyInstance, config: ServerConfig, environments: WorkspaceEnvironmentService): void {
+export function registerKernelExecutionRoutes(app: FastifyInstance, config: ServerConfig, environments: WorkspaceEnvironmentService, kernels: NodeKernelManager): void {
+  app.get("/api/kernels/status", async () => kernels.status());
+
+  app.post("/api/kernels/shutdown-all", async () => {
+    await kernels.shutdownAll();
+    return { ok: true };
+  });
+
+  app.post("/api/kernels/:notebook_id/shutdown", async (request, reply) => {
+    const notebookId = (request.params as { notebook_id?: unknown }).notebook_id;
+    if (typeof notebookId !== "string" || !notebookId) return reply.code(400).send({ error: "Missing notebook id" });
+    const cwdValue = (request.query as { cwd?: unknown }).cwd;
+    let cwd: string | undefined;
+    if (cwdValue !== undefined) {
+      try { cwd = await validateWorkspaceCwd(String(cwdValue)); }
+      catch (error) { return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) }); }
+    }
+    const language = (request.query as { language?: unknown }).language;
+    await kernels.shutdownNotebook(notebookId, cwd, language === undefined ? undefined : String(language));
+    return { ok: true };
+  });
+
+  app.post("/api/kernels/:notebook_id/interrupt", async (request, reply) => {
+    const notebookId = (request.params as { notebook_id?: unknown }).notebook_id;
+    if (typeof notebookId !== "string" || !notebookId) return reply.code(400).send({ error: "Missing notebook id" });
+    const cwdValue = (request.query as { cwd?: unknown }).cwd;
+    if (cwdValue === undefined) return reply.code(400).send({ error: "Missing cwd" });
+    let cwd: string;
+    try { cwd = await validateWorkspaceCwd(String(cwdValue)); }
+    catch (error) { return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) }); }
+    const language = (request.query as { language?: unknown }).language;
+    const interrupted = await kernels.interruptNotebook(notebookId, cwd, language === undefined ? undefined : String(language));
+    return { ok: interrupted };
+  });
+
   app.post("/api/kernels/execute", async (request, reply) => {
     const parsed = executeCellRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid kernel execution request" });
@@ -83,61 +118,42 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
       },
     });
 
-    const upstreamUrl = new URL("/api/kernels/execute", config.pythonOrigin);
-    upstreamUrl.searchParams.set("cwd", cwd);
-    // A cell's declared execution timeout can be longer than the gateway's
-    // general-purpose proxy timeout. Give the kernel a small response buffer so
-    // the gateway does not abort a valid long-running cell prematurely.
     try {
-      const upstream = await fetch(upstreamUrl, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-request-id": request.id,
-          ...(config.internalToken ? { "x-pi-science-internal-token": config.internalToken } : {}),
-        },
-        body: JSON.stringify({
-          language: body.language,
-          code: body.code,
-          notebook_id: body.notebook_id,
-          session_id: body.session_id,
-          environment_revision_id: environment.revision_id ?? "legacy-venv",
-          environment_prefix: environment.prefix,
-          kernel_instance_id: body.kernel_instance_id,
-          timeout_seconds: body.timeout_seconds,
-        }),
-        signal: AbortSignal.timeout(kernelTimeoutMs),
+      const result = await kernels.execute({
+        language: body.language,
+        code: body.code,
+        cwd,
+        environment,
+        notebookId: body.notebook_id,
+        sessionId: body.session_id,
+        kernelInstanceId: body.kernel_instance_id,
+        environmentRevisionId: environment.revision_id,
+        timeoutMs: kernelTimeoutMs,
       });
-      const responseBody = await parseResponseBody(upstream);
       const after = await snapshotWorkspace(cwd);
       const diff = after ? diffWorkspaceSnapshots(before, after) : { created: [], modified: [] };
       const written = after
         ? [...diff.created, ...diff.modified]
           .map((entry) => ({ path: entry.path, detection: "snapshot" as const }))
         : [];
-      const responseObject = objectValue(responseBody);
-      const kernelSucceeded = upstream.ok && responseObject.ok !== false;
-      const kernelInterrupted = responseObject.interrupted === true;
-      const error = errorMessage(responseBody);
+      const error = result.error;
       await executionRepository.finish(cwd, execution.execution_id, {
-        status: kernelInterrupted ? "interrupted" : kernelSucceeded ? "succeeded" : "failed",
+        status: result.interrupted ? "interrupted" : result.ok ? "succeeded" : "failed",
         producer: "node-kernel-gateway",
         result: {
-          ok: kernelSucceeded,
-          http_status: upstream.status,
-          stdout_preview: preview(responseObject.stdout),
-          output_preview: preview(responseObject.result),
-          mime: objectValue(responseObject.mime),
+          ok: result.ok,
+          http_status: 200,
+          stdout_preview: preview(result.stdout),
+          output_preview: preview(result.result),
+          mime: result.mime,
           ...(error ? { error } : {}),
         },
         files: { written },
       });
-
-      reply.header("x-pi-science-upstream", "python");
-      return reply.code(upstream.status).send(withExecutionId(responseBody, execution.execution_id));
+      return reply.send(withExecutionId(result, execution.execution_id));
     } catch (error) {
-      const timedOut = error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name);
-      const message = timedOut ? "scientific runtime timed out" : "scientific runtime unavailable";
+      const timedOut = error instanceof Error && error.name === "KernelTimeoutError";
+      const message = timedOut ? "kernel timed out" : error instanceof Error ? error.message : "kernel unavailable";
       const after = await snapshotWorkspace(cwd);
       const diff = after ? diffWorkspaceSnapshots(before, after) : { created: [], modified: [] };
       await executionRepository.finish(cwd, execution.execution_id, {
@@ -148,7 +164,7 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
           written: [...diff.created, ...diff.modified].map((entry) => ({ path: entry.path, detection: "snapshot" })),
         },
       });
-      return reply.code(504).send({ error: message, execution_id: execution.execution_id, request_id: request.id });
+      return reply.code(timedOut ? 504 : 500).send({ error: message, execution_id: execution.execution_id, request_id: request.id });
     }
   });
 
@@ -186,85 +202,49 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
       },
     });
 
-    let streaming = false;
+    reply.hijack();
     try {
-      const upstreamUrl = new URL("/api/kernels/execute-stream", config.pythonOrigin);
-      upstreamUrl.searchParams.set("cwd", cwd);
-      const upstream = await fetch(upstreamUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-request-id": request.id, ...(config.internalToken ? { "x-pi-science-internal-token": config.internalToken } : {}) },
-        body: JSON.stringify({
-          language: body.language, code: body.code, notebook_id: body.notebook_id, session_id: body.session_id,
-          environment_revision_id: environment.revision_id ?? "legacy-venv", environment_prefix: environment.prefix,
-          kernel_instance_id: body.kernel_instance_id, timeout_seconds: body.timeout_seconds,
-        }),
-        signal: AbortSignal.timeout(kernelTimeoutMs),
-      });
-      if (!upstream.ok || !upstream.body) throw new Error(`scientific runtime returned HTTP ${upstream.status}`);
-
-      reply.hijack();
-      streaming = true;
-      reply.raw.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no", "x-pi-science-upstream": "python", "x-request-id": request.id });
+      reply.raw.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no", "x-pi-science-kernel": "node", "x-request-id": request.id });
       reply.raw.write(JSON.stringify({ type: "started", execution_id: execution.execution_id }) + "\n");
-      const reader = upstream.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let finalResult: Record<string, unknown> | null = null;
-      while (true) {
-        const { done, value } = await reader.read();
-        buffer += decoder.decode(value, { stream: !done });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          const event = objectValue(JSON.parse(line));
-          if (event.type === "result") finalResult = event;
-          else if (!reply.raw.destroyed) reply.raw.write(JSON.stringify(event) + "\n");
-        }
-        if (done) break;
-      }
-      if (buffer.trim()) {
-        const event = objectValue(JSON.parse(buffer));
-        if (event.type === "result") finalResult = event;
-      }
-      finalResult ??= { type: "result", ok: false, error: "scientific runtime ended without a result" };
+      const result = await kernels.execute({
+        language: body.language,
+        code: body.code,
+        cwd,
+        environment,
+        notebookId: body.notebook_id,
+        sessionId: body.session_id,
+        kernelInstanceId: body.kernel_instance_id,
+        environmentRevisionId: environment.revision_id,
+        timeoutMs: kernelTimeoutMs,
+        onEvent: (event: KernelStreamEvent) => {
+          if (!reply.raw.destroyed) reply.raw.write(JSON.stringify(event) + "\n");
+        },
+      });
       const after = await snapshotWorkspace(cwd);
       const diff = after ? diffWorkspaceSnapshots(before, after) : { created: [], modified: [] };
-      const interrupted = finalResult.interrupted === true;
-      const succeeded = finalResult.ok !== false;
-      const error = errorMessage(finalResult);
+      const error = result.error;
       await executionRepository.finish(cwd, execution.execution_id, {
-        status: interrupted ? "interrupted" : succeeded ? "succeeded" : "failed",
+        status: result.interrupted ? "interrupted" : result.ok ? "succeeded" : "failed",
         producer: "node-kernel-gateway",
         result: {
-          ok: succeeded, http_status: upstream.status, stdout_preview: preview(finalResult.stdout), output_preview: preview(finalResult.result),
-          mime: objectValue(finalResult.mime), ...(error ? { error } : {}),
+          ok: result.ok, http_status: 200, stdout_preview: preview(result.stdout), output_preview: preview(result.result),
+          mime: result.mime, ...(error ? { error } : {}),
         },
         files: { written: [...diff.created, ...diff.modified].map((entry) => ({ path: entry.path, detection: "snapshot" })) },
       });
       if (!reply.raw.destroyed) {
-        reply.raw.write(JSON.stringify({ ...finalResult, execution_id: execution.execution_id }) + "\n");
+        reply.raw.write(JSON.stringify({ type: "result", ...result, execution_id: execution.execution_id }) + "\n");
         reply.raw.end();
       }
       return reply;
     } catch (error) {
-      const timedOut = error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name);
-      const message = timedOut ? "scientific runtime timed out" : error instanceof Error ? error.message : "scientific runtime unavailable";
+      const timedOut = error instanceof Error && error.name === "KernelTimeoutError";
+      const message = timedOut ? "kernel timed out" : error instanceof Error ? error.message : "kernel unavailable";
       await executionRepository.finish(cwd, execution.execution_id, { status: timedOut ? "timed_out" : "failed", producer: "node-kernel-gateway", result: { ok: false, error: message } });
-      if (streaming) {
-        if (!reply.raw.destroyed) { reply.raw.write(JSON.stringify({ type: "result", ok: false, error: message, execution_id: execution.execution_id }) + "\n"); reply.raw.end(); }
-        return reply;
-      }
-      return reply.code(504).send({ error: message, execution_id: execution.execution_id, request_id: request.id });
+      if (!reply.raw.destroyed) { reply.raw.write(JSON.stringify({ type: "result", ok: false, error: message, execution_id: execution.execution_id }) + "\n"); reply.raw.end(); }
+      return reply;
     }
   });
-}
-
-async function parseResponseBody(response: Response): Promise<unknown> {
-  const text = await response.text();
-  if (!text) return {};
-  try { return JSON.parse(text); }
-  catch { return { error: text }; }
 }
 
 function objectValue(value: unknown): Record<string, unknown> {
@@ -280,10 +260,4 @@ function withExecutionId(value: unknown, executionId: string): Record<string, un
 function preview(value: unknown): string {
   if (value === null || value === undefined) return "";
   return String(value).slice(0, MAX_RESULT_PREVIEW_CHARS);
-}
-
-function errorMessage(value: unknown): string | undefined {
-  const object = objectValue(value);
-  const error = object.error ?? object.detail;
-  return error === null || error === undefined ? undefined : preview(error);
 }

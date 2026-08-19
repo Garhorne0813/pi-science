@@ -25,7 +25,7 @@ import { validateWorkspaceCwd } from "../security/workspace-security.js";
 import { AiTitleService, PiTitleRuntimeFactory } from "../runtime/title/ai-title-service.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
-  const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, jobs, research, projectReview, scientificRuntime, environments } = modules;
+  const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, jobs, research, projectReview, scientificRuntime, environments, kernels } = modules;
   const app = Fastify({
     logger: { level: config.logLevel },
     bodyLimit: config.maxBodyBytes,
@@ -46,7 +46,12 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     if (request.url.startsWith("/api/") && !boundary) {
       return reply.code(404).send({ error: `Unknown API route: ${request.method} ${pathname}` });
     }
-    const needsScientificRuntime = boundary?.owner === "python-scientific-runtime"
+    const nativeKernelExecution = pathname === "/api/kernels/execute"
+      || pathname === "/api/kernels/execute-stream"
+      || pathname === "/api/kernels/status"
+      || pathname === "/api/kernels/shutdown-all"
+      || /^\/api\/kernels\/[^/]+\/(?:shutdown|interrupt)$/.test(pathname);
+    const needsScientificRuntime = (boundary?.owner === "python-scientific-runtime" && !nativeKernelExecution)
       || pathname === "/docs"
       || pathname.startsWith("/docs/")
       || pathname === "/openapi.json";
@@ -131,7 +136,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeArtifacts !== false) registerTurnArtifactRoutes(app);
   if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings);
   if (config.nodeExecutions !== false) registerExecutionRoutes(app, jobs);
-  if (config.nodeExecutions !== false) registerKernelExecutionRoutes(app, config, environments);
+  if (config.nodeExecutions !== false) registerKernelExecutionRoutes(app, config, environments, kernels);
   if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, research);
   if (config.nodeProject !== false) registerProjectRoutes(app, research, projectReview);
   if (config.nodeLiterature !== false) registerLiteratureRoutes(app);
@@ -147,6 +152,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   app.addHook("onClose", async () => scientificRuntime.shutdown());
   app.addHook("onClose", async () => research.shutdown());
   app.addHook("onClose", async () => projectReview.shutdown());
+  app.addHook("onClose", async () => kernels.shutdownAll());
   if (config.nodePiManager) {
     app.all("/api/sessions/*", async (request, reply) => reply.code(404).send({
       ok: false,

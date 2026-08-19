@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { buildApp } from "./app.js";
 import { createServerModules } from "./server-modules.js";
 import type { ServerConfig } from "../config/config.js";
+import type { KernelExecuteOptions, NodeKernelManager } from "../runtime/kernel/node-kernel-manager.js";
 
 const openApps: Array<{ close(): Promise<unknown> }> = [];
 
@@ -62,6 +63,34 @@ function config(pythonOrigin: string, overrides: Partial<ServerConfig> = {}): Se
   };
 }
 
+const fakeKernels = {
+  async execute(options: KernelExecuteOptions) {
+    if (options.code === "write-output") await writeFile(join(options.cwd, "cell-output.csv"), "value\n42\n", "utf8");
+    if (options.code === "kernel-error") return { ok: false, stdout: "before failure\n", result: null, error: "cell failed", interrupted: false, mime: {} };
+    if (options.code === "kernel-interrupted") return { ok: false, stdout: "partial\n", result: null, error: "KeyboardInterrupt", interrupted: true, mime: {} };
+    if (options.code === "stream-output" && options.onEvent) {
+      options.onEvent({ type: "stream", stream: "stdout", text: "first\n" });
+      options.onEvent({ type: "stream", stream: "stdout", text: "second\n" });
+    }
+    const streaming = options.code === "stream-output";
+    return {
+      ok: true,
+      stdout: streaming ? "first\nsecond\n" : "",
+      result: "42",
+      error: null,
+      interrupted: false,
+      mime: streaming ? { "application/json": "42" } : {},
+      isolated: true,
+    };
+  },
+  async shutdownAll() {},
+} as unknown as NodeKernelManager;
+
+function kernelModules() {
+  return { ...createServerModules(config("http://127.0.0.1:1")), kernels: fakeKernels };
+}
+
+
 describe("Node control plane", () => {
   it("exposes liveness and readiness separately", async () => {
     const app = buildApp(config(await startUpstream()));
@@ -88,21 +117,21 @@ describe("Node control plane", () => {
     expect(response.json()).toMatchObject({ status: "ok", scientific_runtime: "external" });
   });
 
-  it("proxies scientific routes and request IDs", async () => {
+  it("serves kernel status from the Node manager and proxies remaining scientific routes", async () => {
     const app = buildApp(config(await startUpstream()));
     openApps.push(app);
-    const scientific = await app.inject({ method: "GET", url: "/api/kernels/status" });
-    expect(scientific.json()).toEqual({ active: 2 });
-    expect(scientific.headers["x-pi-science-runtime"]).toBe("python-scientific-runtime");
+    const status = await app.inject({ method: "GET", url: "/api/kernels/status" });
+    expect(status.json()).toMatchObject({ native: true, active_count: 0, interpreters: { python: expect.any(Boolean), r: expect.any(Boolean) } });
 
     const requestId = await app.inject({ method: "GET", url: "/api/kernels/request-id", headers: { "x-request-id": "smoke-123" } });
     expect(requestId.json()).toEqual({ request_id: "smoke-123" });
+    expect(requestId.headers["x-pi-science-runtime"]).toBe("python-scientific-runtime");
   });
 
   it("provisions the workspace environment before forwarding kernel execution", async () => {
     const workspace = join(tmpdir(), `pi-science-kernel-environment-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
-    const app = buildApp(config(await startUpstream()));
+    const app = buildApp(config("http://127.0.0.1:1"), kernelModules());
     openApps.push(app);
 
     const response = await app.inject({ method: "POST", url: `/api/kernels/execute?cwd=${encodeURIComponent(workspace)}`, payload: { language: "python", code: "1+1" } });
@@ -125,7 +154,7 @@ describe("Node control plane", () => {
   it("detects files written by a kernel cell as execution evidence", async () => {
     const workspace = join(tmpdir(), `pi-science-kernel-output-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
-    const app = buildApp(config(await startUpstream()));
+    const app = buildApp(config("http://127.0.0.1:1"), kernelModules());
     openApps.push(app);
 
     const response = await app.inject({
@@ -151,7 +180,7 @@ describe("Node control plane", () => {
   it("records a kernel-level cell error as a failed execution", async () => {
     const workspace = join(tmpdir(), `pi-science-kernel-failure-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
-    const app = buildApp(config(await startUpstream()));
+    const app = buildApp(config("http://127.0.0.1:1"), kernelModules());
     openApps.push(app);
 
     const response = await app.inject({
@@ -176,7 +205,7 @@ describe("Node control plane", () => {
   it("records an intentional kernel interruption separately from failure", async () => {
     const workspace = join(tmpdir(), `pi-science-kernel-interrupted-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
-    const app = buildApp(config(await startUpstream()));
+    const app = buildApp(config("http://127.0.0.1:1"), kernelModules());
     openApps.push(app);
 
     const response = await app.inject({ method: "POST", url: `/api/kernels/execute?cwd=${encodeURIComponent(workspace)}`, payload: { language: "python", code: "kernel-interrupted" } });
@@ -190,7 +219,7 @@ describe("Node control plane", () => {
   it("forwards streaming kernel chunks and records the final result", async () => {
     const workspace = join(tmpdir(), `pi-science-kernel-stream-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
-    const app = buildApp(config(await startUpstream()));
+    const app = buildApp(config("http://127.0.0.1:1"), kernelModules());
     openApps.push(app);
 
     const response = await app.inject({ method: "POST", url: `/api/kernels/execute-stream?cwd=${encodeURIComponent(workspace)}`, payload: { language: "python", code: "stream-output", notebook_id: "stream-test", session_id: "session-1" } });

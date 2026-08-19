@@ -10,6 +10,7 @@ import {
   type ScientificRuntimeController,
 } from "../runtime/scientific/scientific-runtime-manager.js";
 import { WorkspaceEnvironmentService } from "../runtime/workspace/workspace-environment.js";
+import { NodeKernelManager } from "../runtime/kernel/node-kernel-manager.js";
 import { ResearchLoopCoordinator } from "../research-loop/coordinator.js";
 import { PiResearchSubagentRunner } from "../research-loop/subagent-runner.js";
 import { ProjectReviewService } from "../project-review/service.js";
@@ -24,6 +25,7 @@ export interface ServerModules {
   readonly jobs: JobCoordinator;
   readonly scientificRuntime: ScientificRuntimeController;
   readonly environments: WorkspaceEnvironmentService;
+  readonly kernels: NodeKernelManager;
   readonly research: ResearchLoopCoordinator;
   readonly projectReview: ProjectReviewService;
 }
@@ -34,6 +36,7 @@ export function createServerModules(config?: ServerConfig): ServerModules {
   const sessionRepository = new SessionRepository();
   const piManager = new PiManager();
   const environments = new WorkspaceEnvironmentService(config?.pythonExecutable, config?.micromambaExecutable);
+  const kernels = new NodeKernelManager();
   const projectReview = new ProjectReviewService(new PiReviewSubagentRunner(environments, piManager), sessionRepository);
   const sessions = new NodeSessionService(events, piManager, sessionRepository, environments, projectReview);
   const settings = new SettingsStore();
@@ -48,5 +51,5 @@ export function createServerModules(config?: ServerConfig): ServerModules {
     idleTimeoutMs: config?.scientificIdleMs,
     startupTimeoutMs: config?.scientificStartupMs,
   });
-  return { sessions, events, sessionRepository, piManager, settings, jobs, research, projectReview, scientificRuntime, environments };
+  return { sessions, events, sessionRepository, piManager, settings, jobs, research, projectReview, scientificRuntime, environments, kernels };
 }
