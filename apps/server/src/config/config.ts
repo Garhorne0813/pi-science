@@ -2,7 +2,7 @@ import { z } from "zod";
 
 const environmentSchema = z.object({
   PI_SCIENCE_HOST: z.string().default("127.0.0.1"),
-  PI_SCIENCE_PORT: z.coerce.number().int().min(1).max(65_535).default(8787),
+  PI_SCIENCE_PORT: z.coerce.number().int().min(0).max(65_535).default(8787),
   PI_SCIENCE_PYTHON_ORIGIN: z.url().default("http://127.0.0.1:8788"),
   PI_SCIENCE_CORS: z.string().default("http://localhost:5173,http://127.0.0.1:5173"),
   PI_SCIENCE_MAX_BODY_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),

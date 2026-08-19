@@ -175,6 +175,34 @@ export class WorkspaceEnvironmentService {
     this.creating.set(key, operation);
     return operation;
   }
+/** Install packages into the currently bound revision by creating a new immutable revision. */
+  async installPackages(cwdValue: string, packages: string[]): Promise<WorkspaceEnvironmentStatus> {
+    const cwd = resolve(cwdValue);
+    const currentStatus = await this.status(cwd);
+    if (!currentStatus.revision_id || !currentStatus.environment_id) {
+      throw new Error("Workspace has no bound environment revision; create or bind one first");
+    }
+    const current = (await this.list()).find((item) => item.revision_id === currentStatus.revision_id);
+    if (!current) {
+      throw new Error(`Bound environment revision not found: ${currentStatus.revision_id}`);
+    }
+    if (current.status !== "ready") {
+      throw new Error(`Bound environment revision is not ready: ${current.status}`);
+    }
+    const normalized = [...new Set(packages.map((item) => item.trim()).filter(Boolean))];
+    if (normalized.length === 0) {
+      throw new Error("No packages requested");
+    }
+    const combined = [...new Set([...current.packages, ...normalized])];
+    const revision = await this.create({
+      name: current.name,
+      display_name: current.display_name,
+      language: current.language,
+      packages: combined,
+      supersedes_revision_id: current.revision_id,
+    });
+    return this.bind(cwd, revision.revision_id);
+  }
 
   private async provision(cwd: string): Promise<WorkspaceEnvironmentStatus> {
     const before = await this.status(cwd);

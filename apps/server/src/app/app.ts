@@ -20,6 +20,7 @@ import { registerProjectRoutes } from "../http/routes/project-routes.js";
 import { registerLiteratureRoutes } from "../http/routes/literature-routes.js";
 import { createServerModules, type ServerModules } from "./server-modules.js";
 import { registerEnvironmentRoutes } from "../http/routes/environment-routes.js";
+import { serveFrontend } from "../http/frontend-static.js";
 import { validateWorkspaceCwd } from "../security/workspace-security.js";
 import { AiTitleService, PiTitleRuntimeFactory } from "../runtime/title/ai-title-service.js";
 
@@ -209,6 +210,15 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
         ...(config.internalToken ? { "x-pi-science-internal-token": config.internalToken } : {}),
       }),
     },
+  });
+
+  app.setNotFoundHandler(async (request, reply) => {
+    if (request.method !== "GET" || request.url.startsWith("/api/") || request.url.startsWith("/docs") || request.url.startsWith("/openapi.json")) {
+      return reply.code(404).send({ error: `Route ${request.method} ${request.url} not found` });
+    }
+    const served = await serveFrontend(new URL(request.url, "http://localhost").pathname);
+    if ("error" in served) return reply.code(404).send({ error: served.error });
+    return reply.type(served.type).send(served.stream);
   });
 
   return app;
