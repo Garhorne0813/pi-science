@@ -10,7 +10,7 @@ describe("runtime route boundaries", () => {
 
   it("leaves only scientific runtime groups as compatibility proxies", () => {
     expect(routeBoundaries.filter((boundary) => boundary.availability === "compatibility-proxy").map((boundary) => boundary.prefix)).toEqual([
-      "/api/kernels", "/api/notebooks", "/api/pdfs",
+      "/api/kernels", "/api/notebooks",
     ]);
   });
 });

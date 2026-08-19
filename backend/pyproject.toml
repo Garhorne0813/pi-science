@@ -26,7 +26,6 @@ dependencies = [
     "aiofiles>=24.0",
     "python-multipart>=0.0.9",
     "PyYAML>=6.0",
-    "pypdf>=5.0",
 ]
 
 [project.optional-dependencies]

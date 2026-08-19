@@ -23,7 +23,6 @@ import { ApiError } from "./api";
  *   ["provenance", cwd, "versions" | "env", path | hash]
  *   ["artifact-file", cwd, root, path, maxBytes]
  *   ["slash-commands", cwd, sessionId]
- *   ["pdf-search", cwd, path, query]                     ["compute", "machines"]
  *   ["notebooks", cwd] / ["notebooks", "jupyter", cwd] / ["environments", cwd]
  *   ["workspaces"] / ["workspaces", "pinned"]
  *
