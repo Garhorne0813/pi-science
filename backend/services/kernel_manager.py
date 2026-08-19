@@ -9,7 +9,6 @@ import json
 import os
 import subprocess
 import sys
-import hashlib
 import shutil
 import signal
 import threading
@@ -196,29 +195,11 @@ class KernelManager:
     ) -> KernelSession:
         """Spawn a new kernel subprocess."""
         process_env = os.environ.copy()
-        overlay_dir: Optional[Path] = None
         if language == "python":
             script = KERNEL_BRIDGE_DIR / "kernel_bridge.py"
             selected_prefix = Path(environment_prefix).resolve() if environment_prefix else Path(cwd) / ".venv"
-            base_bin = selected_prefix / ("Scripts" if os.name == "nt" else "bin")
-            base_python = base_bin / ("python.exe" if os.name == "nt" else "python")
-            if base_python.is_file() and environment_revision_id:
-                digest = hashlib.sha256(f"{cwd}\0{kernel_instance_id}\0{environment_revision_id}".encode()).hexdigest()[:20]
-                overlay_dir = Path(cwd) / ".pi-science" / "runtime" / "kernels" / digest / ".venv"
-                await asyncio.to_thread(shutil.rmtree, overlay_dir, True)
-                overlay_dir.parent.mkdir(parents=True, exist_ok=True)
-                result = await asyncio.to_thread(
-                    subprocess.run,
-                    [str(base_python), "-m", "venv", "--system-site-packages", str(overlay_dir)],
-                    capture_output=True, text=True, timeout=120,
-                )
-                if result.returncode != 0:
-                    raise RuntimeError(f"Kernel overlay creation failed: {result.stderr or result.stdout}")
-                venv_dir = overlay_dir
-            else:
-                venv_dir = selected_prefix
-            venv_bin = venv_dir / ("Scripts" if os.name == "nt" else "bin")
-            workspace_python = venv_bin / ("python.exe" if os.name == "nt" else "python")
+            bin_dir = selected_prefix / ("Scripts" if os.name == "nt" else "bin")
+            workspace_python = bin_dir / ("python.exe" if os.name == "nt" else "python")
             if workspace_python.is_file():
                 exe = str(workspace_python)
                 npm_prefix = Path(cwd) / ".pi-science" / "npm-global"
@@ -226,12 +207,11 @@ class KernelManager:
                 pnpm_home = Path(cwd) / ".pi-science" / "pnpm-global"
                 npm_bin = workspace_npm_bin(npm_prefix)
                 process_env.update({
-                    "VIRTUAL_ENV": str(venv_dir),
-                    "PATH": os.pathsep.join([str(venv_bin), str(npm_bin), str(pnpm_home), process_env.get("PATH", "")]),
+                    "PATH": os.pathsep.join([str(bin_dir), str(npm_bin), str(pnpm_home), process_env.get("PATH", "")]),
                     "PYTHONNOUSERSITE": "1",
-                    "PIP_REQUIRE_VIRTUALENV": "1",
                     "PIP_USER": "0",
-                    "UV_PROJECT_ENVIRONMENT": str(venv_dir),
+                    "CONDA_PREFIX": str(selected_prefix),
+                    "PI_SCIENCE_ENVIRONMENT_PREFIX": str(selected_prefix),
                     "npm_config_prefix": str(npm_prefix),
                     "NPM_CONFIG_PREFIX": str(npm_prefix),
                     "npm_config_cache": str(npm_cache),
@@ -271,7 +251,7 @@ class KernelManager:
             session_id=session_id,
             environment_revision_id=environment_revision_id,
             kernel_instance_id=kernel_instance_id,
-            overlay_dir=str(overlay_dir) if overlay_dir else None,
+            overlay_dir=None,
         )
 
         def _drain_stderr():

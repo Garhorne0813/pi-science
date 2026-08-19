@@ -78,7 +78,7 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
         gateway_timeout_ms: kernelTimeoutMs,
         environment_id: environment.environment_id ?? "legacy-venv",
         environment_revision_id: environment.revision_id ?? "legacy-venv",
-        environment_prefix: environment.virtual_env,
+        environment_prefix: environment.prefix,
         ...(body.kernel_instance_id ? { kernel_instance_id: body.kernel_instance_id } : {}),
       },
     });
@@ -102,7 +102,7 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
           notebook_id: body.notebook_id,
           session_id: body.session_id,
           environment_revision_id: environment.revision_id ?? "legacy-venv",
-          environment_prefix: environment.virtual_env,
+          environment_prefix: environment.prefix,
           kernel_instance_id: body.kernel_instance_id,
           timeout_seconds: body.timeout_seconds,
         }),
@@ -181,7 +181,7 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
       },
       runtime: {
         cwd, gateway_timeout_ms: kernelTimeoutMs, environment_id: environment.environment_id ?? "legacy-venv",
-        environment_revision_id: environment.revision_id ?? "legacy-venv", environment_prefix: environment.virtual_env,
+        environment_revision_id: environment.revision_id ?? "legacy-venv", environment_prefix: environment.prefix,
         ...(body.kernel_instance_id ? { kernel_instance_id: body.kernel_instance_id } : {}),
       },
     });
@@ -195,7 +195,7 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
         headers: { "content-type": "application/json", "x-request-id": request.id, ...(config.internalToken ? { "x-pi-science-internal-token": config.internalToken } : {}) },
         body: JSON.stringify({
           language: body.language, code: body.code, notebook_id: body.notebook_id, session_id: body.session_id,
-          environment_revision_id: environment.revision_id ?? "legacy-venv", environment_prefix: environment.virtual_env,
+          environment_revision_id: environment.revision_id ?? "legacy-venv", environment_prefix: environment.prefix,
           kernel_instance_id: body.kernel_instance_id, timeout_seconds: body.timeout_seconds,
         }),
         signal: AbortSignal.timeout(kernelTimeoutMs),

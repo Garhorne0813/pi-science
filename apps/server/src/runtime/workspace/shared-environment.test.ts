@@ -37,8 +37,8 @@ describe("shared environment bindings", () => {
     try {
       const firstStatus = await service.bind(first, "rev_shared");
       const secondStatus = await service.bind(second, "rev_shared");
-      expect(firstStatus.virtual_env).toBe(prefix);
-      expect(secondStatus.virtual_env).toBe(prefix);
+      expect(firstStatus.prefix).toBe(prefix);
+      expect(secondStatus.prefix).toBe(prefix);
       expect(firstStatus.revision_id).toBe("rev_shared");
       expect(JSON.parse(await readFile(join(first, ".pi-science", "environment.json"), "utf8"))).toMatchObject({ environment_id: "env_shared", revision_id: "rev_shared" });
     } finally {

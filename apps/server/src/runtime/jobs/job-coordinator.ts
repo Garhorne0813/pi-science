@@ -24,7 +24,7 @@ const KILL_GRACE_MS = 2_000;
 const PROCESS_CLOSE_FAILSAFE_MS = 5_000;
 const WINDOWS_EXIT_DRAIN_MS = 1_000;
 const POSIX = process.platform !== "win32";
-const RESEARCH_ENVIRONMENT_KEY_NAMES = ["PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "ComSpec", "PATHEXT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "VIRTUAL_ENV", "PYTHONNOUSERSITE", "PIP_REQUIRE_VIRTUALENV", "PIP_USER", "UV_PROJECT_ENVIRONMENT", "npm_config_prefix", "npm_config_cache", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"] as const;
+const RESEARCH_ENVIRONMENT_KEY_NAMES = ["PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "ComSpec", "PATHEXT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "PYTHONNOUSERSITE", "PIP_USER", "CONDA_PREFIX", "PI_SCIENCE_ENVIRONMENT_PREFIX", "npm_config_prefix", "npm_config_cache", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"] as const;
 const RESEARCH_ENVIRONMENT_KEYS = new Map(RESEARCH_ENVIRONMENT_KEY_NAMES.map((key) => [key.toLowerCase(), key]));
 
 export interface JobCoordinatorHooks { beforeSpawn?: (record: Readonly<JobRecord>) => Promise<void>; testBeforeAuthorizedSpawn?: (record: Readonly<JobRecord>) => Promise<void>; beforeTerminalSave?: (record: Readonly<JobRecord>) => Promise<void>; platform?: NodeJS.Platform; now?: () => number; leaseMs?: number; heartbeatMs?: number; ownerProcessAlive?: (pid: number, ownership: Readonly<JobOwnership>) => boolean; ownerProcessIdentity?: (pid: number, platform: NodeJS.Platform) => JobOwnerProcessIdentity | null; childStartIdentity?: (pid: number, platform: NodeJS.Platform) => JobProcessIdentity | null; reapChild?: (identity: Readonly<JobChildIdentity>) => "reaped" | "identity-mismatch" | "unverifiable" | "missing"; onHeartbeatStarted?: (jobId: string) => void; onHeartbeatStopped?: (jobId: string) => void }
@@ -82,7 +82,7 @@ export class JobCoordinator {
     const ownership: JobOwnership = { instance_id: this.instanceId, pid: process.pid, process_started_at: this.processStartedAt, ...(this.processIdentity ? { process_identity: this.processIdentity } : {}), generation: 1, token: randomUUID(), heartbeat_at: new Date(now).toISOString(), lease_expires_at: new Date(now + this.leaseMs).toISOString() };
     const jobId = `job_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
     const executionId = executionIdFor("job", resolve(cwd), jobId);
-    const record: JobRecord = { job_id: jobId, execution_id: executionId, command, cwd, ...(executionCwd !== resolve(cwd) ? { execution_cwd: executionCwd } : {}), surface, status: "pending", created_at: new Date(now).toISOString(), stdout: "", stderr: "", artifact_ids: [], environment: { platform: process.platform, node: process.version, virtual_env: environment.VIRTUAL_ENV, npm_prefix: environment.npm_config_prefix }, requirement, ownership };
+    const record: JobRecord = { job_id: jobId, execution_id: executionId, command, cwd, ...(executionCwd !== resolve(cwd) ? { execution_cwd: executionCwd } : {}), surface, status: "pending", created_at: new Date(now).toISOString(), stdout: "", stderr: "", artifact_ids: [], environment: { platform: process.platform, node: process.version, prefix: environment.PI_SCIENCE_ENVIRONMENT_PREFIX, npm_prefix: environment.npm_config_prefix }, requirement, ownership };
     LIVE_JOB_OWNERS.add(ownership.token);
     await this.executions.start(cwd, {
       execution_id: executionId,

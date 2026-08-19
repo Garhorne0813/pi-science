@@ -92,7 +92,7 @@ describe("native control-plane business routes", () => {
     expect(environment).toMatchObject({
       ready: true,
       workspace: expect.any(String),
-      virtual_env: join(environment.workspace, ".venv"),
+      prefix: join(environment.workspace, ".venv"),
       python: expect.stringContaining(join(environment.workspace, ".venv")),
       npm: { local_prefix: environment.workspace },
     });
@@ -110,7 +110,7 @@ describe("native control-plane business routes", () => {
       job = (await app.inject({ method: "GET", url: `/api/jobs/${job.job_id}?cwd=${encodeURIComponent(cwd)}` })).json();
     }
     expect(job).toMatchObject({ status: "succeeded" });
-    expect(job.stdout.trim()).toBe(environment.virtual_env);
+    expect(job.stdout.trim()).toBe(environment.prefix);
   }, 30_000);
 
   it("uses Pi runtime model capabilities for workspace settings", async () => {

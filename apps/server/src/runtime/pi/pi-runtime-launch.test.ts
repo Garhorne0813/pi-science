@@ -218,8 +218,7 @@ describe("Pi runtime custom provider materialization", () => {
     await mkdir(cwd, { recursive: true });
     const isolated = {
       PATH: join(cwd, ".venv", "bin"),
-      VIRTUAL_ENV: join(cwd, ".venv"),
-      PIP_REQUIRE_VIRTUALENV: "1",
+      PI_SCIENCE_ENVIRONMENT_PREFIX: join(cwd, ".venv"),
       npm_config_prefix: join(cwd, ".pi-science", "npm-global"),
     };
 

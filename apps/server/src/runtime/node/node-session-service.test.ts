@@ -34,7 +34,7 @@ beforeEach(async () => {
     'import readline from "node:readline";',
     'const args = process.argv.slice(2);',
     'if (process.env.FAKE_PI_ARGS_LOG) fs.appendFileSync(process.env.FAKE_PI_ARGS_LOG, JSON.stringify(args) + "\\n");',
-    'if (process.env.FAKE_PI_ENV_LOG) fs.writeFileSync(process.env.FAKE_PI_ENV_LOG, JSON.stringify({ PATH: process.env.PATH, VIRTUAL_ENV: process.env.VIRTUAL_ENV, PIP_REQUIRE_VIRTUALENV: process.env.PIP_REQUIRE_VIRTUALENV, npm_config_prefix: process.env.npm_config_prefix }));',
+    'if (process.env.FAKE_PI_ENV_LOG) fs.writeFileSync(process.env.FAKE_PI_ENV_LOG, JSON.stringify({ PATH: process.env.PATH, CONDA_PREFIX: process.env.CONDA_PREFIX, PI_SCIENCE_ENVIRONMENT_PREFIX: process.env.PI_SCIENCE_ENVIRONMENT_PREFIX, npm_config_prefix: process.env.npm_config_prefix }));',
     'const sessionArg = args.indexOf("--session");',
     'let sessionId = sessionArg >= 0 ? JSON.parse(fs.readFileSync(args[sessionArg + 1], "utf8").split("\\n")[0]).id : `fresh-${process.pid}`;',
     'let counter = 0;',
@@ -185,8 +185,7 @@ describe("Node session lifecycle", () => {
 
     const environment = JSON.parse(await readFile(process.env.FAKE_PI_ENV_LOG, "utf8"));
     expect(environment).toMatchObject({
-      VIRTUAL_ENV: join(cwd, ".venv"),
-      PIP_REQUIRE_VIRTUALENV: "1",
+      PI_SCIENCE_ENVIRONMENT_PREFIX: join(cwd, ".venv"),
       npm_config_prefix: join(cwd, ".pi-science", "npm-global"),
     });
     expect(environment.PATH.split(delimiter)[0]).toBe(join(cwd, ".venv", process.platform === "win32" ? "Scripts" : "bin"));

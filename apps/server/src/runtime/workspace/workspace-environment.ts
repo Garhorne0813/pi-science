@@ -29,7 +29,7 @@ interface ProjectEnvironmentBinding { schema_version: 1; environment_id: string;
 export interface WorkspaceEnvironmentStatus {
   ready: boolean;
   workspace: string;
-  virtual_env: string;
+  prefix: string;
   python: string;
   pip: string;
   environment_id?: string;
@@ -50,8 +50,8 @@ export interface CreateEnvironmentInput {
 }
 
 const DEFAULT_ENVIRONMENT_ID = "env_python_standard";
-const DEFAULT_PACKAGES = ["python=3.12", "pip", "ipykernel", "numpy", "pandas", "scipy", "matplotlib", "seaborn"];
-const DEFAULT_R_PACKAGES = ["python=3.12", "pip", "ipykernel", "r-base=4.4", "r-irkernel", "r-tidyverse", "r-ggplot2"];
+const DEFAULT_PACKAGES = ["python=3.12", "pip"];
+const DEFAULT_R_PACKAGES = ["r-base=4.4"];
 const MICROMAMBA_VERSION = "2.5.0-2";
 const MICROMAMBA_SHA256: Record<string, string> = {
   "linux-64": "c04571cfb0750e5432d530a3068b8fcd232ebed3133358e056e59a90b9852b00",
@@ -82,7 +82,7 @@ export function defaultPythonExecutable(environment: NodeJS.ProcessEnv = process
 }
 
 export function workspaceEnvironmentVariables(status: WorkspaceEnvironmentStatus, inherited: NodeJS.ProcessEnv = process.env, platform = process.platform): NodeJS.ProcessEnv {
-  const paths = environmentPaths(status.virtual_env, platform);
+  const paths = environmentPaths(status.prefix, platform);
   const npmBin = platform === "win32" ? status.npm.global_prefix : join(status.npm.global_prefix, "bin");
   const pnpmHome = join(status.workspace, ".pi-science", "pnpm-global");
   const inheritedPath = platform === "win32" ? Object.entries(inherited).find(([key]) => key.toLowerCase() === "path")?.[1] ?? "" : inherited.PATH ?? "";
@@ -90,12 +90,11 @@ export function workspaceEnvironmentVariables(status: WorkspaceEnvironmentStatus
   return {
     ...base,
     PATH: [paths.bin, npmBin, pnpmHome, inheritedPath].filter(Boolean).join(platform === "win32" ? ";" : delimiter),
-    VIRTUAL_ENV: status.virtual_env,
-    CONDA_PREFIX: status.manager === "micromamba" ? status.virtual_env : undefined,
+    CONDA_PREFIX: status.manager === "micromamba" ? status.prefix : undefined,
     PI_SCIENCE_ENVIRONMENT_ID: status.environment_id,
     PI_SCIENCE_ENVIRONMENT_REVISION_ID: status.revision_id,
-    PI_SCIENCE_ENVIRONMENT_PREFIX: status.virtual_env,
-    PYTHONNOUSERSITE: "1", PIP_REQUIRE_VIRTUALENV: "1", PIP_USER: "0", UV_PROJECT_ENVIRONMENT: status.virtual_env,
+    PI_SCIENCE_ENVIRONMENT_PREFIX: status.prefix,
+    PYTHONNOUSERSITE: "1", PIP_USER: "0",
     npm_config_prefix: status.npm.global_prefix, NPM_CONFIG_PREFIX: status.npm.global_prefix,
     npm_config_cache: status.npm.cache, NPM_CONFIG_CACHE: status.npm.cache, npm_config_update_notifier: "false",
     PNPM_HOME: pnpmHome, COREPACK_HOME: join(status.workspace, ".pi-science", "cache", "corepack"),
@@ -239,7 +238,7 @@ export class WorkspaceEnvironmentService {
 
   private statusFor(workspace: string, prefix: string, manager: NonNullable<WorkspaceEnvironmentStatus["manager"]>, extra: Partial<WorkspaceEnvironmentStatus>): WorkspaceEnvironmentStatus {
     const paths = environmentPaths(prefix);
-    return { ready: false, workspace, virtual_env: prefix, python: paths.python, pip: paths.pip, manager, npm: { local_prefix: workspace, global_prefix: join(workspace, ".pi-science", "npm-global"), cache: join(workspace, ".pi-science", "cache", "npm") }, ...extra };
+    return { ready: false, workspace, prefix: prefix, python: paths.python, pip: paths.pip, manager, npm: { local_prefix: workspace, global_prefix: join(workspace, ".pi-science", "npm-global"), cache: join(workspace, ".pi-science", "cache", "npm") }, ...extra };
   }
 
   private async ensureMicromamba(): Promise<string> {

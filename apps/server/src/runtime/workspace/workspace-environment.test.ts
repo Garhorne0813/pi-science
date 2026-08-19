@@ -12,7 +12,7 @@ describe("workspace environment platform defaults", () => {
   it("preserves a Windows Path-only value under one canonical PATH key", () => {
     const workspace = "C:\\work\\project";
     const status = {
-      ready: true, workspace, virtual_env: join(workspace, ".venv"), python: "python.exe", pip: "pip.exe",
+      ready: true, workspace, prefix: join(workspace, ".venv"), python: "python.exe", pip: "pip.exe",
       npm: { local_prefix: workspace, global_prefix: join(workspace, ".pi-science", "npm-global"), cache: join(workspace, ".pi-science", "cache", "npm") },
     };
 
@@ -21,5 +21,8 @@ describe("workspace environment platform defaults", () => {
     expect(environment.PATH?.split(";").at(-1)).toBe("C:\\Windows\\System32");
     expect(Object.keys(environment).filter((key) => key.toLowerCase() === "path")).toEqual(["PATH"]);
     expect(environment.TEMP).toBe("C:\\Temp");
+expect(environment.VIRTUAL_ENV).toBeUndefined();
+    expect(environment.UV_PROJECT_ENVIRONMENT).toBeUndefined();
+    expect(environment.PIP_REQUIRE_VIRTUALENV).toBeUndefined();
   });
 });

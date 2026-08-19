@@ -177,8 +177,7 @@ async def test_jupyter_setup_is_get_sse_and_installs_into_application_runtime(
         commands.append(command)
         return SimpleNamespace(returncode=0, stderr="")
 
-    monkeypatch.setattr(notebooks, "_find_uv", lambda: "/usr/bin/uv")
-    monkeypatch.setattr(notebooks, "_find_micromamba", lambda: None)
+    monkeypatch.setattr(notebooks, "_find_micromamba", lambda: "/usr/bin/micromamba")
     monkeypatch.setattr(notebooks.subprocess, "run", fake_run)
 
     response = await client.get(
@@ -189,15 +188,18 @@ async def test_jupyter_setup_is_get_sse_and_installs_into_application_runtime(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert '"status": "progress"' in response.text
-    assert '"text": "Installing jupyterlab..."' in response.text
     assert commands[0] == [
-        "/usr/bin/uv",
-        "venv",
+        "/usr/bin/micromamba",
+        "create",
+        "--yes",
+        "--prefix",
         str(notebooks._workspace_venv(temp_workspace.resolve())),
-        "--python",
-        "3.12",
+        "--channel",
+        "conda-forge",
+        "--strict-channel-priority",
+        "python=3.12",
+        "jupyterlab",
     ]
-    assert commands[1][-1] == str(notebooks._env_python(temp_workspace.resolve()))
 
     post_response = await client.post(
         "/api/notebooks/jupyter/setup",
