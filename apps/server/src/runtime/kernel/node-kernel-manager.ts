@@ -63,7 +63,6 @@ export interface NodeKernelManagerDependencies {
   interpreterAvailable?: (command: string) => boolean;
 }
 
-const moduleDir = fileURLToPath(new URL(".", import.meta.url));
 const PYTHON_BRIDGE = fileURLToPath(new URL("./bridges/kernel_bridge.py", import.meta.url));
 const R_BRIDGE = fileURLToPath(new URL("./bridges/kernel_bridge.R", import.meta.url));
 const HEALTH_CHECK_CODE = "1+1";
@@ -195,8 +194,13 @@ class NodeKernelSession {
 
   static async start(options: KernelExecuteOptions, deps: Required<NodeKernelManagerDependencies>): Promise<NodeKernelSession> {
     const session = new NodeKernelSession(options, deps);
-    await session.start();
-    return session;
+    try {
+      await session.start();
+      return session;
+    } catch (error) {
+      await session.stop().catch(() => undefined);
+      throw error;
+    }
   }
 
   execute(options: KernelExecuteOptions): Promise<KernelResult> {
@@ -246,9 +250,17 @@ class NodeKernelSession {
     if (child && child.exitCode === null) {
       child.kill("SIGTERM");
       await new Promise<void>((resolve) => {
+        let settled = false;
         const force = setTimeout(() => child.kill("SIGKILL"), 2_000);
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(force);
+          resolve();
+        };
         force.unref?.();
-        child.once("exit", () => { clearTimeout(force); resolve(); });
+        child.once("exit", finish);
+        child.once("close", finish);
       });
     }
     this.reader?.close();

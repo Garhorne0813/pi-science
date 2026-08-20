@@ -32,6 +32,7 @@ export interface WorkspaceEnvironmentStatus {
   prefix: string;
   python: string;
   pip: string;
+  r?: string;
   environment_id?: string;
   revision_id?: string;
   display_name?: string;
@@ -102,6 +103,11 @@ function environmentPaths(prefix: string, platform = process.platform) {
   return { virtualEnv: prefix, bin, python: join(bin, platform === "win32" ? "python.exe" : "python"), pip: join(bin, platform === "win32" ? "pip.exe" : "pip") };
 }
 
+function environmentExecutable(prefix: string, language: EnvironmentLanguage, platform = process.platform): string {
+  const paths = environmentPaths(prefix, platform);
+  return language === "r" ? join(paths.bin, platform === "win32" ? "Rscript.exe" : "Rscript") : paths.python;
+}
+
 function nodeToolsRoot(workspace: string): string {
   return join(workspace, ".pi-science", "node-tools");
 }
@@ -158,6 +164,32 @@ function bindingPath(cwd: string): string { return join(resolve(cwd), ".pi-scien
 function registryPath(): string { return configPath(join("environments", "registry.json")); }
 function environmentRoot(): string { return configPath(join("micromamba", "envs")); }
 
+function isInheritedRuntimeState(key: string): boolean {
+  const normalized = key.toUpperCase();
+  return normalized === "VIRTUAL_ENV"
+    || normalized === "UV_PROJECT_ENVIRONMENT"
+    || normalized === "PIP_REQUIRE_VIRTUALENV"
+    || normalized === "PI_SCIENCE_PYTHON_EXECUTABLE"
+    || normalized === "PYTHONHOME"
+    || normalized === "PIP_PREFIX"
+    || normalized === "CONDA_DEFAULT_ENV"
+    || normalized === "CONDA_EXE"
+    || normalized === "CONDA_PYTHON_EXE"
+    || normalized === "CONDA_SHLVL"
+    || normalized === "CONDA_PROMPT_MODIFIER"
+    || normalized === "CONDARC"
+    || normalized === "CONDA_CHANNELS"
+    || normalized === "CONDA_DEFAULT_CHANNELS"
+    || normalized === "CONDA_SUBDIR"
+    || normalized === "CONDA_PKGS_DIRS"
+    || normalized === "CONDA_BLD_PATH"
+    || normalized === "MAMBA_ROOT_PREFIX"
+    || normalized === "MAMBA_EXE"
+    || normalized === "MAMBA_NO_RC"
+    || normalized === "MAMBARC"
+    || /^CONDA_PREFIX(?:_\d+)?$/.test(normalized);
+}
+
 function safeName(value: string): string {
   const name = value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
   if (!name || name.length > 64) throw new Error("Environment name must contain 1-64 letters, digits, dots, dashes, or underscores");
@@ -175,7 +207,7 @@ export function workspaceEnvironmentVariables(status: WorkspaceEnvironmentStatus
   const pnpmHome = pnpmHomeFor(status.workspace);
   const corepackHome = corepackHomeFor(status.workspace);
   const inheritedPath = platform === "win32" ? Object.entries(inherited).find(([key]) => key.toLowerCase() === "path")?.[1] ?? "" : inherited.PATH ?? "";
-  const base = platform === "win32" ? Object.fromEntries(Object.entries(inherited).filter(([key]) => key.toLowerCase() !== "path")) : { ...inherited };
+  const base = Object.fromEntries(Object.entries(inherited).filter(([key]) => key.toLowerCase() !== "path" && !isInheritedRuntimeState(key)));
   return {
     ...base,
     PATH: [paths.bin, npmBin, pnpmHome, inheritedPath].filter(Boolean).join(platform === "win32" ? ";" : delimiter),
@@ -225,10 +257,7 @@ export class WorkspaceEnvironmentService {
     const cwd = resolve(cwdValue);
     const revision = (await this.list()).find((item) => item.revision_id === revisionId && item.status === "ready");
     if (!revision) throw new Error(`Ready environment revision not found: ${revisionId}`);
-    await mkdir(join(cwd, ".pi-science"), { recursive: true });
-    const path = bindingPath(cwd);
-    await withWorkspaceWriteLock(cwd, () => writeJsonAtomic(path, { schema_version: 1, environment_id: revision.environment_id, revision_id: revision.revision_id, bound_at: new Date().toISOString() } satisfies ProjectEnvironmentBinding));
-    return this.status(cwd);
+    return withWorkspaceWriteLock(cwd, () => this.bindUnlocked(cwd, revision));
   }
 
   async status(cwdValue: string): Promise<WorkspaceEnvironmentStatus> {
@@ -237,8 +266,9 @@ export class WorkspaceEnvironmentService {
     if (binding) {
       const revision = (await this.list()).find((item) => item.revision_id === binding.revision_id);
       if (!revision) return this.statusFor(workspace, environmentRoot(), "micromamba", { error: `Bound environment revision is missing: ${binding.revision_id}` });
-      const ready = revision.status === "ready" && await executable(environmentPaths(revision.prefix).python);
-      return this.statusFor(workspace, revision.prefix, "micromamba", { ready, environment_id: revision.environment_id, revision_id: revision.revision_id, display_name: revision.display_name, ...(!ready ? { error: revision.failure?.message ?? `Environment is ${revision.status}` } : {}) });
+      const runtimeExecutable = environmentExecutable(revision.prefix, revision.language);
+      const ready = revision.status === "ready" && await executable(runtimeExecutable);
+      return this.statusFor(workspace, revision.prefix, "micromamba", { ready, environment_id: revision.environment_id, revision_id: revision.revision_id, display_name: revision.display_name, ...(!ready ? { error: revision.failure?.message ?? (revision.status === "ready" ? `Environment executable is missing: ${runtimeExecutable}` : `Environment is ${revision.status}`) } : {}) });
     }
     const legacy = environmentPaths(join(workspace, ".venv"));
     if (await exists(join(legacy.virtualEnv, "pyvenv.cfg")) && await executable(legacy.python)) return this.statusFor(workspace, legacy.virtualEnv, "legacy-venv", { ready: true, legacy: true });
@@ -312,6 +342,9 @@ export class WorkspaceEnvironmentService {
   async create(input: CreateEnvironmentInput): Promise<EnvironmentRevision> {
     const name = safeName(input.name);
     const preset = input.preset ? ENVIRONMENT_PRESETS[input.preset] : undefined;
+    if (preset && input.language && input.language !== preset.language) {
+      throw new Error(`Preset ${input.preset} is for ${preset.language} environments`);
+    }
     const language = input.language ?? preset?.language ?? "python";
     const packages = [...new Set((input.packages?.length ? input.packages : preset?.packages ?? (language === "r" ? DEFAULT_R_PACKAGES : DEFAULT_PACKAGES)).map((item) => item.trim()).filter(Boolean))];
     const previous = input.supersedes_revision_id ? (await this.list()).find((item) => item.revision_id === input.supersedes_revision_id) : undefined;
@@ -342,7 +375,9 @@ export class WorkspaceEnvironmentService {
       if (normalized.length === 0) {
         throw new Error("No packages requested");
       }
-      const combined = [...new Set([...current.packages, ...normalized])];
+      const missing = normalized.filter((packageSpec) => !current.packages.includes(packageSpec));
+      if (missing.length === 0) return currentStatus;
+      const combined = [...new Set([...current.packages, ...missing])];
       const revision = await this.create({
         name: current.name,
         display_name: current.display_name,
@@ -350,7 +385,7 @@ export class WorkspaceEnvironmentService {
         packages: combined,
         supersedes_revision_id: current.revision_id,
       });
-      return this.bind(cwd, revision.revision_id);
+      return this.bindUnlocked(cwd, revision);
     });
   }
 
@@ -404,7 +439,7 @@ export class WorkspaceEnvironmentService {
       // Conda prefixes are not safely relocatable: create at the final path and
       // use registry status as the publication boundary. Failed prefixes are
       // removed before the revision is marked failed.
-      await this.run(micromamba, ["create", "--yes", "--prefix", finalPrefix, "--channel", "conda-forge", "--strict-channel-priority", ...input.packages], 20 * 60_000);
+      await this.run(micromamba, ["create", "--yes", "--prefix", finalPrefix, "--channel", "conda-forge", "--strict-channel-priority", ...input.packages], 20 * 60_000, this.micromambaEnvironment());
       await this.runHealthCheck(finalPrefix, input.language);
       revision = { ...revision, status: "ready" };
       await this.upsert(revision);
@@ -421,11 +456,11 @@ export class WorkspaceEnvironmentService {
     if (language === "r") {
       const rscript = join(environmentPaths(prefix).bin, process.platform === "win32" ? "Rscript.exe" : "Rscript");
       if (!await executable(rscript)) throw new Error("Environment health check failed: Rscript is missing");
-      await this.run(rscript, ["-e", "cat(R.version.string)"], 30_000);
+      await this.run(rscript, ["-e", "cat(R.version.string)"], 30_000, this.micromambaEnvironment());
     } else {
       const python = environmentPaths(prefix).python;
       if (!await executable(python)) throw new Error("Environment health check failed: Python executable is missing");
-      await this.run(python, ["-c", "import sys; print(sys.version_info[:2])"], 30_000);
+      await this.run(python, ["-c", "import sys; print(sys.version_info[:2])"], 30_000, this.micromambaEnvironment());
     }
   }
 
@@ -444,12 +479,12 @@ export class WorkspaceEnvironmentService {
 
   private statusFor(workspace: string, prefix: string, manager: NonNullable<WorkspaceEnvironmentStatus["manager"]>, extra: Partial<WorkspaceEnvironmentStatus>): WorkspaceEnvironmentStatus {
     const paths = environmentPaths(prefix);
-    return { ready: false, workspace, prefix: prefix, python: paths.python, pip: paths.pip, manager, npm: { local_prefix: workspace, global_prefix: npmGlobalPrefixFor(workspace), cache: join(workspace, ".pi-science", "cache", "npm") }, ...extra };
+    return { ready: false, workspace, prefix: prefix, python: paths.python, pip: paths.pip, r: environmentExecutable(prefix, "r"), manager, npm: { local_prefix: workspace, global_prefix: npmGlobalPrefixFor(workspace), cache: join(workspace, ".pi-science", "cache", "npm") }, ...extra };
   }
 
   private async ensureMicromamba(): Promise<string> {
     if (this.micromambaExecutable !== "micromamba") return this.micromambaExecutable;
-    try { await this.run("micromamba", ["--version"], 10_000); return "micromamba"; } catch { /* install pinned binary */ }
+    try { await this.run("micromamba", ["--version"], 10_000, this.micromambaEnvironment()); return "micromamba"; } catch { /* install pinned binary */ }
     const platform = process.platform === "darwin"
       ? process.arch === "arm64" ? "osx-arm64" : "osx-64"
       : process.platform === "linux" ? process.arch === "arm64" ? "linux-aarch64" : "linux-64" : null;
@@ -474,9 +509,23 @@ export class WorkspaceEnvironmentService {
     });
   }
 
-  private async run(command: string, args: string[], timeout: number): Promise<void> {
+  private async bindUnlocked(cwd: string, revision: EnvironmentRevision): Promise<WorkspaceEnvironmentStatus> {
+    await mkdir(join(cwd, ".pi-science"), { recursive: true });
+    const path = bindingPath(cwd);
+    await writeJsonAtomic(path, { schema_version: 1, environment_id: revision.environment_id, revision_id: revision.revision_id, bound_at: new Date().toISOString() } satisfies ProjectEnvironmentBinding);
+    return this.status(cwd);
+  }
+
+  private micromambaEnvironment(): NodeJS.ProcessEnv {
+    const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !isInheritedRuntimeState(key)));
+    environment.MAMBA_ROOT_PREFIX = configPath("micromamba");
+    environment.MAMBA_NO_RC = "true";
+    return environment;
+  }
+
+  private async run(command: string, args: string[], timeout: number, env: NodeJS.ProcessEnv = process.env): Promise<void> {
     const result = await new Promise<{ code: number | null; output: string }>((done, reject) => {
-      const child = spawn(command, args, { env: process.env, stdio: ["ignore", "pipe", "pipe"], timeout, killSignal: "SIGKILL" });
+      const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"], timeout, killSignal: "SIGKILL" });
       const output: Buffer[] = [];
       child.stdout.on("data", (chunk: Buffer) => output.push(chunk)); child.stderr.on("data", (chunk: Buffer) => output.push(chunk));
       child.once("error", reject); child.once("close", (code) => done({ code, output: Buffer.concat(output).toString("utf8") }));

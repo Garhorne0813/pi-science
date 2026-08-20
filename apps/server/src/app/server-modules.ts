@@ -34,7 +34,7 @@ export function createServerModules(config?: ServerConfig): ServerModules {
   const piManager = new PiManager();
   const environments = new WorkspaceEnvironmentService(undefined, config?.micromambaExecutable);
   const kernels = new NodeKernelManager();
-  const notebooks = new NotebookService({ micromambaExecutable: config?.micromambaExecutable });
+  const notebooks = new NotebookService({ micromambaExecutable: config?.micromambaExecutable, environments });
   const projectReview = new ProjectReviewService(new PiReviewSubagentRunner(environments, piManager), sessionRepository);
   const sessions = new NodeSessionService(events, piManager, sessionRepository, environments, projectReview);
   const settings = new SettingsStore();

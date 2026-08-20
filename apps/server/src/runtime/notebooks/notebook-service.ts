@@ -5,6 +5,7 @@ import { access, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promi
 import { createServer } from "node:net";
 import { join, resolve, sep } from "node:path";
 import { configPath } from "../../storage/persistence.js";
+import type { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
 
 export interface NotebookFile {
   path: string;
@@ -38,6 +39,7 @@ export interface NotebookServiceDependencies {
   configPath?: typeof configPath;
   platform?: NodeJS.Platform;
   micromambaExecutable?: string;
+  environments?: Pick<WorkspaceEnvironmentService, "installPackages">;
   now?: () => Date;
 }
 
@@ -58,10 +60,20 @@ async function findAvailablePort(): Promise<number> {
   });
 }
 
+function packageName(spec: string): string {
+  return spec.trim().toLowerCase().match(/^[^<>=!\[\s]+/)?.[0] ?? "";
+}
+
+function hasPackage(packages: unknown, name: string): boolean {
+  return Array.isArray(packages)
+    && packages.some((item) => typeof item === "string" && packageName(item) === name);
+}
+
 export class NotebookService {
   private readonly configPath: (name: string) => string;
   private readonly platform: NodeJS.Platform;
   private readonly micromamba?: string;
+  private readonly environments?: Pick<WorkspaceEnvironmentService, "installPackages">;
   readonly jupyterPrefix: string;
   readonly jupyterBin: string;
   private jupyterProcess?: ChildProcess;
@@ -73,6 +85,7 @@ export class NotebookService {
   constructor(deps: NotebookServiceDependencies = {}) {
     this.configPath = deps.configPath ?? configPath;
     this.platform = deps.platform ?? process.platform;
+    this.environments = deps.environments;
     const prefix = this.configPath(join("micromamba", "envs", "pi-science-jupyter-runtime"));
     this.jupyterPrefix = prefix;
     const binDir = join(prefix, this.platform === "win32" ? "Scripts" : "bin");
@@ -133,6 +146,7 @@ export class NotebookService {
         micromamba,
         ["create", "--yes", "--prefix", prefix, "--channel", "conda-forge", "--strict-channel-priority", "python=3.12", "jupyterlab"],
         15 * 60_000,
+        this.micromambaEnvironment(),
       );
       if (result.code !== 0) {
         const message = result.output.slice(-300) || `micromamba exited with ${result.code}`;
@@ -182,7 +196,7 @@ export class NotebookService {
         `--ServerApp.root_dir=${workspace}`,
         `--ServerApp.token=${this.jupyterToken}`,
       ],
-      { stdio: "ignore" },
+      { stdio: "ignore", env: this.micromambaEnvironment() },
     );
     this.jupyterProcess = jupyter;
     jupyter.once("exit", () => {
@@ -220,7 +234,7 @@ export class NotebookService {
     this.stop();
   }
 
-  private async installProjectKernelspec(workspace: string): Promise<void> {
+  private async installProjectKernelspec(workspace: string, allowDependencyInstall = true): Promise<void> {
     const bindingPath = join(workspace, ".pi-science", "environment.json");
     let binding: { environment_id?: unknown; revision_id?: unknown };
     try {
@@ -240,6 +254,14 @@ export class NotebookService {
     const prefix = revision.prefix as string;
     const binDir = join(prefix, this.platform === "win32" ? "Scripts" : "bin");
     const language = typeof revision.language === "string" ? revision.language : "python";
+    const kernelPackage = language === "r" ? "r-irkernel" : "ipykernel";
+    if (!hasPackage(revision.packages, kernelPackage)) {
+      if (!allowDependencyInstall || !this.environments) {
+        throw new Error(`The ${language} environment must include ${kernelPackage} before a Jupyter kernelspec can be created`);
+      }
+      await this.environments.installPackages(workspace, [kernelPackage]);
+      return this.installProjectKernelspec(workspace, false);
+    }
     const displayName = typeof revision.display_name === "string" ? revision.display_name : "Pi-Science Project";
     const executable = language === "r"
       ? join(binDir, this.platform === "win32" ? "R.exe" : "R")
@@ -262,9 +284,30 @@ export class NotebookService {
     );
   }
 
-  private run(command: string, args: string[], timeoutMs: number): Promise<{ code: number | null; output: string }> {
+  private micromambaEnvironment(): NodeJS.ProcessEnv {
+    const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => {
+      const normalized = key.toUpperCase();
+      return normalized !== "VIRTUAL_ENV"
+        && normalized !== "UV_PROJECT_ENVIRONMENT"
+        && normalized !== "CONDA_DEFAULT_ENV"
+        && normalized !== "CONDA_EXE"
+        && normalized !== "CONDA_PYTHON_EXE"
+        && normalized !== "CONDA_SHLVL"
+        && normalized !== "CONDA_PROMPT_MODIFIER"
+        && normalized !== "CONDARC"
+        && normalized !== "MAMBARC"
+        && normalized !== "MAMBA_ROOT_PREFIX"
+        && normalized !== "MAMBA_EXE"
+        && !/^CONDA_PREFIX(?:_\d+)?$/.test(normalized);
+    }));
+    environment.MAMBA_ROOT_PREFIX = this.configPath("micromamba");
+    environment.MAMBA_NO_RC = "true";
+    return environment;
+  }
+
+  private run(command: string, args: string[], timeoutMs: number, env: NodeJS.ProcessEnv = process.env): Promise<{ code: number | null; output: string }> {
     return new Promise((done) => {
-      const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"] });
       const output: Buffer[] = [];
       child.stdout.on("data", (chunk: Buffer) => output.push(chunk));
       child.stderr.on("data", (chunk: Buffer) => output.push(chunk));

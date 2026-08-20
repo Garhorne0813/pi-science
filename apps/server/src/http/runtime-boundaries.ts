@@ -1,4 +1,4 @@
-export type RuntimeOwner = "node-control-plane" | "python-scientific-runtime";
+export type RuntimeOwner = "node-control-plane";
 
 export type RouteAvailability = "native" | "compatibility-proxy";
 

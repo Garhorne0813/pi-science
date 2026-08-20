@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -73,6 +73,31 @@ describe("NodeKernelManager native execution", () => {
       const second = await manager.execute({ language: "python", code: "x + 2", cwd: workspace, environment: status(workspace, prefix), timeoutMs: 10_000 });
       expect(second.ok).toBe(true);
       expect(second.result).toBe("42");
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(python === null)("imports workspace-local Python modules", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pi-science-native-kernel-imports-"));
+    cleanup.push(workspace);
+    const prefix = join(workspace, "env");
+    const bin = join(prefix, "bin");
+    await mkdir(bin, { recursive: true });
+    await symlink(python!, join(bin, "python"));
+    await writeFile(join(workspace, "local_module.py"), "value = 41\n", "utf8");
+
+    const manager = new NodeKernelManager();
+    try {
+      const result = await manager.execute({
+        language: "python",
+        code: "import local_module\nlocal_module.value + 1",
+        cwd: workspace,
+        environment: status(workspace, prefix),
+        timeoutMs: 10_000,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.result).toBe("42");
     } finally {
       await manager.shutdownAll();
     }

@@ -15,11 +15,10 @@ flowchart LR
     PH --> R1[Conversation runtime A]
     PH --> R2[Conversation runtime B]
     PH --> RN[Background agent runtime]
-    CP -->|on demand| PY[Python scientific worker]
-    PY --> K[Python and R kernels]
+    CP -->|spawn on demand| K[Native Python and R kernels]
     CP --> WS[(Workspace files and .pi-science metadata)]
     PH --> WS
-    PY --> WS
+    K --> WS
 ```
 
 The React application is a client of the Node control plane. The control plane
@@ -31,7 +30,7 @@ service the browser calls directly.
 | React web app | Conversations, project knowledge, files, notebooks, runs, skills, settings, and scientific viewers |
 | Node control plane | Sessions, event streaming, files, jobs, provenance, project state, settings, runtime lifecycle, and route authorization |
 | Pi Orbit Web host | Agent sessions and isolated runtimes for conversations and bounded background agents |
-| Python scientific worker | Scientific services, notebooks, PDF processing, and Python/R kernels |
+| Node-native scientific runtime | Workspace-bound Python/R kernels and optional JupyterLab tooling |
 | Workspace | User files plus project-local instructions, skills, environments, sessions, artifacts, and provenance |
 
 ## Pi Orbit runtime model
@@ -104,16 +103,17 @@ directly. `PiProcess` is an adapter over the Web API: it translates the existing
 session command interface into runtime and legacy-session endpoints, and it
 replays scoped events after reconnecting by sequence number.
 
-## Node and Python service boundary
+## Node-native scientific runtime boundary
 
 The Node control plane owns the public application API. Most routes—including
 sessions, workspaces, files, settings, jobs, project knowledge, artifacts,
 provenance, citations, environments, and research loops—are implemented there.
 
-Scientific routes for kernels, notebooks, and PDF processing are compatibility
-proxies to the Python worker. The worker may be externally managed or started on
-demand by the control plane. A managed worker is reclaimed after five minutes
-without active scientific requests by default.
+Scientific routes for kernels and notebooks are implemented directly by the Node
+control plane. Kernel sessions are child processes started from the selected
+Micromamba revision, with JSONL communication and bounded lifecycle control.
+JupyterLab remains optional and uses a separate application-managed tooling
+environment; project kernelspecs point at the selected project revision.
 
 The default local topology is:
 
@@ -122,7 +122,6 @@ The default local topology is:
 | React development app | `http://127.0.0.1:5173` | Browser-facing |
 | Node control plane | `http://127.0.0.1:8787` | Browser-facing application API |
 | Interactive API reference | `http://127.0.0.1:8787/docs` | Served by the control plane |
-| Python scientific worker | `http://127.0.0.1:8788` | Internal, reached through the control plane |
 | Pi Orbit Web host | Random loopback port | Internal and bearer-authenticated |
 
 ## Workspace and persistent state
@@ -174,11 +173,12 @@ the same ready revision without downloading packages again. Changing a managed
 environment creates a new revision instead of mutating one used by other
 projects. Environment selection lives under Settings → Environments.
 
-Each conversation Session and language still receives an independent Kernel
-process. Python Kernels run through a lightweight disposable venv overlay that
-inherits the bound Micromamba revision, so Session-local pip installs cannot
-modify the shared base. Existing workspace `.venv` directories remain a legacy
-migration fallback and malformed ones are never overwritten automatically.
+Each conversation Session and language receives an independent kernel process
+started from the bound Micromamba revision. Ready revisions are immutable;
+package changes create and bind a new revision, so one Session cannot mutate a
+revision used by another project. Existing workspace `.venv` directories remain
+a legacy migration fallback and malformed ones are never overwritten
+automatically.
 JavaScript packages remain workspace-local; attempted global npm/pnpm installs
 are redirected below `.pi-science/`.
 
@@ -214,8 +214,9 @@ environment and registers the project's bound revision as a kernelspec.
   it to settle before giving up; control-plane shutdown skips this and kills the host directly.
 - The shared Pi Orbit host remains alive while the Node control plane is alive,
   even when it currently contains no conversation runtimes.
-- A managed Python worker starts on the first scientific request and is stopped
-  after its idle period. `PI_SCIENCE_SCIENTIFIC_IDLE_MS` controls that period.
+- Kernel child processes are started lazily for the first cell in a Session and
+  are stopped on Session shutdown, workspace shutdown, crash recovery, or
+  timeout cleanup.
 - Runtime commands use bounded request timeouts. Operations that time out are
   reconciled against runtime state so an accepted prompt is not silently treated
   as a failed turn.

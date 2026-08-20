@@ -14,11 +14,10 @@ flowchart LR
     PH --> R1[对话 runtime A]
     PH --> R2[对话 runtime B]
     PH --> RN[后台 agent runtime]
-    CP -->|按需启动| PY[Python 科学计算服务]
-    PY --> K[Python 和 R 内核]
+    CP -->|按需 spawn| K[原生 Python 和 R 内核]
     CP --> WS[(工作区文件和 .pi-science 元数据)]
     PH --> WS
-    PY --> WS
+    K --> WS
 ```
 
 React 应用是 Node 控制面的客户端。控制面拥有应用 API、协调其他 runtime，
@@ -29,7 +28,7 @@ React 应用是 Node 控制面的客户端。控制面拥有应用 API、协调�
 | React Web 应用 | 对话、项目知识、文件、Notebook、实验运行、技能、设置和科学文件查看器 |
 | Node 控制面 | Session、事件流、文件、任务、谱系、项目状态、设置、runtime 生命周期和路由鉴权 |
 | Pi Orbit Web Host | Agent session，以及面向对话和有界后台 agent 的隔离 runtime |
-| Python 科学计算服务 | 科学服务、Notebook、PDF 处理和 Python/R 内核 |
+| Node 原生科学运行时 | 绑定 Workspace 的 Python/R 内核，以及可选 JupyterLab 工具环境 |
 | 工作区 | 用户文件，以及项目级指令、技能、环境、session、产物和谱系 |
 
 ## Pi Orbit 运行时模型
@@ -97,14 +96,14 @@ sequenceDiagram
 上的 adapter：它把现有 session command interface 转换为 runtime 与旧 session API，
 并在重连后从最后一个事件序号继续重放当前 runtime 的事件。
 
-## Node 与 Python 服务边界
+## Node 原生科学运行时边界
 
 Node 控制面拥有公开的应用 API。Session、workspace、文件、设置、任务、项目知识、
 产物、谱系、引用、环境和 research loop 等大部分路由都在 Node 中实现。
 
-Kernel、Notebook 和 PDF 处理等科学计算路由通过兼容代理转发到 Python 服务。
-Python 服务可以由外部管理，也可以由控制面按需启动。默认情况下，受管服务在没有
-活跃科学计算请求五分钟后回收。
+Kernel 和 Notebook 等科学计算路由由 Node 控制面直接实现。Kernel Session 是从所选
+Micromamba revision 启动的子进程，通过 JSONL 通信并由 Node 统一控制生命周期。
+JupyterLab 仍是可选能力，使用独立的应用级工具环境；项目 kernelspec 指向当前项目 revision。
 
 默认本地拓扑如下：
 
@@ -113,7 +112,6 @@ Python 服务可以由外部管理，也可以由控制面按需启动。默认�
 | React 开发应用 | `http://127.0.0.1:5173` | 面向浏览器 |
 | Node 控制面 | `http://127.0.0.1:8787` | 面向浏览器的应用 API |
 | 交互式 API 参考 | `http://127.0.0.1:8787/docs` | 由控制面提供 |
-| Python 科学计算服务 | `http://127.0.0.1:8788` | 内部服务，通过控制面访问 |
 | Pi Orbit Web Host | 随机本机端口 | 内部服务，使用 bearer token 认证 |
 
 ## 工作区与持久化状态
@@ -158,11 +156,11 @@ Node 控制面维护全局的、带版本的 Micromamba 环境注册表。项目
 `environment.json` 绑定，可以复用已经就绪的 revision，不再重复下载依赖。修改受管
 环境会创建新 revision，不会原地改变其他项目使用的环境。环境选择位于“设置 → 环境”。
 
-每个对话 Session 和语言仍使用独立 Kernel 进程。Python Kernel 通过轻量、可回收的
-venv overlay 继承绑定的 Micromamba revision，因此 Session 内临时 pip 安装不会污染
-共享基础环境。已有 workspace `.venv` 暂时作为迁移回退；格式异常的 `.venv` 不会被
-自动覆盖。JavaScript 包仍保留在 workspace 内，全局 npm/pnpm 安装重定向到
-`.pi-science/`。
+每个对话 Session 和语言使用独立 Kernel 进程，直接从绑定的 Micromamba revision 启动。
+Ready revision 不可变；安装包会创建并绑定新的 revision，因此一个 Session 不会修改
+其他项目正在使用的 revision。已有 workspace `.venv` 暂时作为迁移回退；格式异常的
+`.venv` 不会被自动覆盖。JavaScript 包仍保留在 workspace 内，全局 npm/pnpm 安装
+重定向到 `.pi-science/`。
 
 Session Notebook 从当前对话内部打开，统一展示 Agent 与用户单元的执行历史；磁盘
 `.ipynb` 文件从“文件”打开，只有保存后才持久化。JupyterLab 使用一个应用级工具环境，
@@ -187,8 +185,8 @@ Session Notebook 从当前对话内部打开，统一展示 Agent 与用户单�
 - 对话 runtime 默认在空闲 30 分钟后回收。设置 `PI_SCIENCE_IDLE_RUNTIME_MS=0`
   可以关闭控制面清理。
 - 只要 Node 控制面仍在运行，共享 Pi Orbit Host 就保持存活，即使当前没有对话 runtime。
-- 受管 Python 服务在第一次科学计算请求时启动，并在空闲期结束后停止；
-  `PI_SCIENCE_SCIENTIFIC_IDLE_MS` 控制该时长。
+- Kernel 子进程在 Session 首次执行 cell 时按需启动，并在 Session 关闭、workspace
+  关闭、崩溃恢复或超时清理时停止。
 - Runtime 命令使用有界请求超时。超时操作会与 runtime 状态进行 reconciliation，
   避免已接受的 prompt 被静默当成失败 turn。
 - 事件流重连时会携带最后一个已观察到的序号，因此短暂传输中断不需要新建 agent runtime。

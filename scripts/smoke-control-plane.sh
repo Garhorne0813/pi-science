@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run an isolated smoke test for the Node gateway and Python runtime boundary.
+# Run an isolated smoke test for the Node control plane.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -35,10 +35,8 @@ NODE_PORT="$(pick_port)"
 export PI_SCIENCE_HOME="$TEMP_DIR/data"
 export PI_SCIENCE_WORKSPACES="$TEMP_DIR/workspaces"
 mkdir -p "$PI_SCIENCE_HOME" "$PI_SCIENCE_WORKSPACES"
-export UV_CACHE_DIR="$TEMP_DIR/uv-cache"
 export PI_SCIENCE_INTERNAL_TOKEN="smoke-internal-token"
 export PI_SCIENCE_REQUIRE_INTERNAL_TOKEN=1
-mkdir -p "$UV_CACHE_DIR"
 SMOKE_WORKSPACE="$TEMP_DIR/workspace"
 mkdir -p "$SMOKE_WORKSPACE/.pi-science"
 printf 'smoke\n' > "$SMOKE_WORKSPACE/notes.txt"

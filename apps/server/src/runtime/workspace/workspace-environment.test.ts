@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { defaultPythonExecutable, WorkspaceEnvironmentService, workspaceEnvironmentVariables } from "./workspace-environment.js";
+import { defaultPythonExecutable, WorkspaceEnvironmentService, workspaceEnvironmentVariables, type EnvironmentRevision } from "./workspace-environment.js";
 
 describe("workspace environment platform defaults", () => {
   it("uses the Windows Python launcher name when no override is configured", () => {
@@ -15,10 +15,22 @@ describe("workspace environment platform defaults", () => {
     const workspace = "C:\\work\\project";
     const status = {
       ready: true, workspace, prefix: join(workspace, ".venv"), python: "python.exe", pip: "pip.exe",
+      manager: "micromamba" as const,
       npm: { local_prefix: workspace, global_prefix: join(workspace, ".pi-science", "npm-global"), cache: join(workspace, ".pi-science", "cache", "npm") },
     };
 
-    const environment = workspaceEnvironmentVariables(status, { Path: "C:\\Windows\\System32", TEMP: "C:\\Temp" }, "win32");
+    const environment = workspaceEnvironmentVariables(status, {
+      Path: "C:\\Windows\\System32",
+      TEMP: "C:\\Temp",
+      VIRTUAL_ENV: "C:\\old-venv",
+      UV_PROJECT_ENVIRONMENT: "C:\\old-venv",
+      PIP_REQUIRE_VIRTUALENV: "1",
+      CONDA_PREFIX: "C:\\miniforge3",
+      CONDA_PREFIX_1: "C:\\miniforge3\\envs\\base",
+      CONDA_DEFAULT_ENV: "base",
+      CONDA_EXE: "C:\\miniforge3\\Scripts\\conda.exe",
+      PI_SCIENCE_PYTHON_EXECUTABLE: "C:\\old-python.exe",
+    }, "win32");
 
     expect(environment.PATH?.split(";").at(-1)).toBe("C:\\Windows\\System32");
     expect(Object.keys(environment).filter((key) => key.toLowerCase() === "path")).toEqual(["PATH"]);
@@ -26,6 +38,11 @@ describe("workspace environment platform defaults", () => {
     expect(environment.VIRTUAL_ENV).toBeUndefined();
     expect(environment.UV_PROJECT_ENVIRONMENT).toBeUndefined();
     expect(environment.PIP_REQUIRE_VIRTUALENV).toBeUndefined();
+    expect(environment.CONDA_PREFIX).toBe(join(workspace, ".venv"));
+    expect(environment.CONDA_PREFIX_1).toBeUndefined();
+    expect(environment.CONDA_DEFAULT_ENV).toBeUndefined();
+    expect(environment.CONDA_EXE).toBeUndefined();
+    expect(environment.PI_SCIENCE_PYTHON_EXECUTABLE).toBeUndefined();
   });
 
   it("redirects global npm/pnpm tooling into the workspace node-tools dir by default", () => {
@@ -63,11 +80,18 @@ describe("workspace environment package mutation", () => {
     const prefix = join(root, "micromamba", "envs", "rev_old");
     const bin = join(prefix, process.platform === "win32" ? "Scripts" : "bin");
     const python = join(bin, process.platform === "win32" ? "python.exe" : "python");
+    const newPrefix = join(root, "micromamba", "envs", "rev_new");
+    const newBin = join(newPrefix, process.platform === "win32" ? "Scripts" : "bin");
+    const newPython = join(newBin, process.platform === "win32" ? "python.exe" : "python");
     await mkdir(bin, { recursive: true });
     await writeFile(python, "#!/bin/sh\nexit 0\n", "utf8");
     await chmod(python, 0o755);
+    await mkdir(newBin, { recursive: true });
+    await writeFile(newPython, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(newPython, 0o755);
     await mkdir(join(root, "environments"), { recursive: true });
-    await writeFile(join(root, "environments", "registry.json"), JSON.stringify({
+    const registryPath = join(root, "environments", "registry.json");
+    await writeFile(registryPath, JSON.stringify({
       schema_version: 1,
       revisions: [{
         environment_id: "env_test", revision_id: "rev_old", name: "test-env", display_name: "Test Env",
@@ -81,30 +105,101 @@ describe("workspace environment package mutation", () => {
     }), "utf8");
 
     const service = new WorkspaceEnvironmentService();
-    const create = vi.spyOn(service, "create").mockImplementation(async () => ({
-      environment_id: "env_test", revision_id: "rev_new", name: "test-env", display_name: "Test Env",
-      language: "python", status: "ready", prefix: join(root, "micromamba", "envs", "rev_new"), packages: ["python=3.12", "pip", "numpy"],
-      platform: `${process.platform}-${process.arch}`, created_at: new Date().toISOString(), supersedes_revision_id: "rev_old",
-    }));
-    const bind = vi.spyOn(service, "bind").mockImplementation(async (_cwd: string, revisionId: string) => ({
-      ready: true, workspace,
-      prefix: join(root, "micromamba", "envs", "rev_new"),
-      python: join(root, "micromamba", "envs", "rev_new", process.platform === "win32" ? "Scripts" : "bin", process.platform === "win32" ? "python.exe" : "python"),
-      pip: join(root, "micromamba", "envs", "rev_new", process.platform === "win32" ? "Scripts" : "bin", process.platform === "win32" ? "pip.exe" : "pip"),
-      environment_id: "env_test", revision_id: revisionId, manager: "micromamba",
-      npm: { local_prefix: workspace, global_prefix: join(workspace, ".pi-science", "npm-global"), cache: join(workspace, ".pi-science", "cache", "npm") },
-    }));
+    const create = vi.spyOn(service, "create").mockImplementation(async () => {
+      const revision = {
+        environment_id: "env_test", revision_id: "rev_new", name: "test-env", display_name: "Test Env",
+        language: "python" as const, status: "ready" as const, prefix: newPrefix, packages: ["python=3.12", "pip", "numpy"],
+        platform: `${process.platform}-${process.arch}`, created_at: new Date().toISOString(), supersedes_revision_id: "rev_old",
+      };
+      await writeFile(registryPath, JSON.stringify({ schema_version: 1, revisions: [revision] }), "utf8");
+      return revision;
+    });
 
     await expect(service.installPackages(workspace, ["numpy"])).resolves.toMatchObject({
       ready: true,
       revision_id: "rev_new",
-      prefix: join(root, "micromamba", "envs", "rev_new"),
+      prefix: newPrefix,
     });
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       packages: ["python=3.12", "pip", "numpy"],
       supersedes_revision_id: "rev_old",
     }));
-    expect(bind).toHaveBeenCalledWith(workspace, "rev_new");
+    await expect(service.binding(workspace)).resolves.toMatchObject({ revision_id: "rev_new" });
+  });
+
+  it("binds a package mutation without re-entering the workspace write lock", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-science-env-mutation-lock-"));
+    tempDirs.push(root);
+    process.env.PI_SCIENCE_HOME = root;
+    const workspace = join(root, "workspace");
+    const oldPrefix = join(root, "micromamba", "envs", "rev_old");
+    const newPrefix = join(root, "micromamba", "envs", "rev_new");
+    const bin = join(newPrefix, process.platform === "win32" ? "Scripts" : "bin");
+    const python = join(bin, process.platform === "win32" ? "python.exe" : "python");
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    await mkdir(bin, { recursive: true });
+    await writeFile(python, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(python, 0o755);
+    await mkdir(join(root, "environments"), { recursive: true });
+    const oldRevision: EnvironmentRevision = {
+      environment_id: "env_test", revision_id: "rev_old", name: "test-env", display_name: "Test Env",
+      language: "python", status: "ready", prefix: oldPrefix, packages: ["python=3.12", "pip"],
+      platform: `${process.platform}-${process.arch}`, created_at: new Date().toISOString(),
+    };
+    const newRevision = {
+      ...oldRevision, revision_id: "rev_new", prefix: newPrefix, packages: ["python=3.12", "pip", "numpy"],
+      supersedes_revision_id: "rev_old", created_at: new Date().toISOString(),
+    };
+    const registryPath = join(root, "environments", "registry.json");
+    await writeFile(registryPath, JSON.stringify({ schema_version: 1, revisions: [oldRevision] }), "utf8");
+    await writeFile(join(workspace, ".pi-science", "environment.json"), JSON.stringify({
+      schema_version: 1, environment_id: "env_test", revision_id: "rev_old", bound_at: new Date().toISOString(),
+    }), "utf8");
+
+    const service = new WorkspaceEnvironmentService();
+    const create = vi.spyOn(service, "create").mockImplementation(async () => {
+      await writeFile(registryPath, JSON.stringify({ schema_version: 1, revisions: [oldRevision, newRevision] }), "utf8");
+      return newRevision;
+    });
+
+    await expect(service.installPackages(workspace, ["numpy"])).resolves.toMatchObject({
+      ready: true, revision_id: "rev_new", prefix: newPrefix,
+    });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      packages: ["python=3.12", "pip", "numpy"], supersedes_revision_id: "rev_old",
+    }));
+    await expect(service.binding(workspace)).resolves.toMatchObject({ revision_id: "rev_new" });
+  });
+
+  it("checks Rscript rather than Python for an R revision", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-science-r-environment-"));
+    tempDirs.push(root);
+    process.env.PI_SCIENCE_HOME = root;
+    const workspace = join(root, "workspace");
+    const prefix = join(root, "micromamba", "envs", "rev_r");
+    const bin = join(prefix, process.platform === "win32" ? "Scripts" : "bin");
+    const rscript = join(bin, process.platform === "win32" ? "Rscript.exe" : "Rscript");
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    await mkdir(bin, { recursive: true });
+    await writeFile(rscript, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(rscript, 0o755);
+    await mkdir(join(root, "environments"), { recursive: true });
+    await writeFile(join(root, "environments", "registry.json"), JSON.stringify({
+      schema_version: 1,
+      revisions: [{
+        environment_id: "env_r", revision_id: "rev_r", name: "r-env", display_name: "R Env",
+        language: "r", status: "ready", prefix, packages: ["r-base=4.4"],
+        platform: `${process.platform}-${process.arch}`, created_at: new Date().toISOString(),
+      }],
+    }), "utf8");
+    await writeFile(join(workspace, ".pi-science", "environment.json"), JSON.stringify({
+      schema_version: 1, environment_id: "env_r", revision_id: "rev_r", bound_at: new Date().toISOString(),
+    }), "utf8");
+
+    const status = await new WorkspaceEnvironmentService().status(workspace);
+    expect(status.ready).toBe(true);
+    expect(status.r).toBe(rscript);
+    expect(status.error).toBeUndefined();
   });
 
   it("reports node workspace tooling status", async () => {
