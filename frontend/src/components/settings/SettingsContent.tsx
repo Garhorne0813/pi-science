@@ -192,7 +192,7 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
               onClick={onClose}
             />
           </header>
-          <div className="min-h-0 flex-1 px-card py-card md:px-6 md:py-6">
+          <div className="min-h-0 flex-1 px-card py-card md:px-0 md:py-6">
             {loading ? (
               <div className="flex min-h-[240px] items-center justify-center text-sm text-muted">
                 <Icon icon={Loader2} size={18} className="mr-2 animate-spin" />
@@ -203,7 +203,7 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
                 {error && <p role="alert" className="mb-card rounded-input bg-error/10 px-panel py-2 text-ui-caption text-error-text">{error}</p>}
                 {tab === "general" && <GeneralTab />}
                 {tab === "llm" && <LLMTab config={config} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} saveModel={saveModel} saveCompaction={saveCompaction} onConfigReload={loadConfig} />}
-                {tab === "skills" && <SkillsTab />}
+                {tab === "skills" && <SkillsTab workspaceCwd={scope} />}
                 {tab === "extensions" && <ExtensionsTab workspaceCwd={scope} />}
                 {tab === "mcp" && <MCPTab workspaceCwd={scope} />}
                 {tab === "compute" && <ComputeSettings workspaceCwd={scope} />}

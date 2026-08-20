@@ -66,7 +66,13 @@ export function useComposer(params: {
       setFiles([]);
       clearWorkspaceReferences(cwd);
     }
-  }, [activeSessionId, clearWorkspaceReferences, conversationKey, cwd, setInput]);
+    // Support opening a fresh conversation with a pre-filled prompt from
+    // another surface (e.g. the Skills "let the assistant write it" dialog).
+    const initialDraft = (location.state as { initialDraft?: string } | null)?.initialDraft;
+    if (initialDraft && !useRuntimeStore.getState().draft) {
+      setInput(initialDraft);
+    }
+  }, [activeSessionId, clearWorkspaceReferences, conversationKey, cwd, location.state, setInput]);
 
   const uploadFiles = useCallback(async (fileList: FileList | File[]) => {
     const arr = Array.from(fileList);

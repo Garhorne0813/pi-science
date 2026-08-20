@@ -33,7 +33,7 @@ export function PdfInspector({
       </header>
 
       {url ? (
-        <iframe title={title} src={url} className="min-h-0 flex-1 bg-white" />
+        <iframe title={title} src={url} className="min-h-0 flex-1 bg-[var(--bg)]" />
       ) : (
         <div className="flex flex-1 items-center justify-center p-6 text-sm text-muted">
           PDF path is unavailable.

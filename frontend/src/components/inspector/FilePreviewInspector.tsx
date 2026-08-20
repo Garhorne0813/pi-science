@@ -502,8 +502,8 @@ function Body({
   if (kind === "molecule") {
     if (showCode) {
       return text !== null ? (
-        <div className="p-3">
-          <CodeViewer code={text} language={language} />
+        <div>
+          <CodeViewer code={text} language={language} className="w-full rounded-none" />
         </div>
       ) : (
         <Note text={t("filePreview.openInDesktop")} />
@@ -518,8 +518,8 @@ function Body({
   if (kind === "genome") {
     if (showCode) {
       return text !== null ? (
-        <div className="p-3">
-          <CodeViewer code={text} language={language} />
+        <div>
+          <CodeViewer code={text} language={language} className="w-full rounded-none" />
         </div>
       ) : (
         <Note text={t("filePreview.openInDesktop")} />
@@ -534,25 +534,24 @@ function Body({
   if (kind === "markdown") {
     if (showCode) {
       return text !== null ? (
-        <>
+        <div className="flex h-full flex-col">
           <MarkdownPreviewNotice
             truncated={textTruncated}
             loading={fullTextLoading}
             error={fullTextError}
             onLoadFullText={onLoadFullText}
           />
-          <div className="p-3">
-            <CodeViewer code={text} language="markdown" />
-          </div>
-        </>
+          <CodeViewer code={text} language="markdown" className="min-h-0 w-full flex-1 rounded-none" />
+        </div>
       ) : (
         <Note text={t("filePreview.openInDesktop")} />
       );
     }
-    // A document reads as a page: white paper, black text, whatever the app
-    // theme — the same document-neutral canvas the Office previews use.
+    // A document reads as a page on a paper canvas that follows the active
+    // appearance (light = white paper, dark = warm dark paper), matching the
+    // Office-preview treatment while adapting to the theme.
     return text !== null ? (
-      <div className="min-h-full px-2 py-2">
+      <div className="flex h-full min-h-full flex-col">
         <MarkdownPreviewNotice
           truncated={textTruncated}
           loading={fullTextLoading}
@@ -560,7 +559,7 @@ function Body({
           onLoadFullText={onLoadFullText}
         />
         <div
-          className="mx-auto max-w-[760px] rounded-sm bg-white shadow-[0_1px_4px_rgba(0,0,0,.25)]"
+          className="w-full flex-1 rounded-sm bg-[var(--doc-paper)] shadow-[0_1px_4px_rgba(0,0,0,.25)]"
           style={{
             paddingInline: "1rem",
             paddingBlock: "1.25rem",
@@ -575,8 +574,8 @@ function Body({
   }
   if (kind === "html" && showCode) {
     return text !== null ? (
-      <div className="p-3">
-        <CodeViewer code={text} language="html" />
+      <div>
+        <CodeViewer code={text} language="html" className="w-full rounded-none" />
       </div>
     ) : (
       <Note text={t("filePreview.openInDesktop")} />
@@ -594,7 +593,7 @@ function Body({
           title={t("filePreview.htmlPreview")}
           src={url}
           sandbox="allow-scripts allow-same-origin"
-          className="h-full min-h-[480px] w-full bg-white"
+          className="h-full min-h-[480px] w-full bg-[var(--bg)]"
         />
       );
     }
@@ -604,7 +603,7 @@ function Body({
           title={t("filePreview.htmlPreview")}
           srcDoc={text}
           sandbox="allow-scripts allow-same-origin"
-          className="h-full min-h-[480px] w-full bg-white"
+          className="h-full min-h-[480px] w-full bg-[var(--bg)]"
         />
       );
     }
@@ -621,7 +620,7 @@ function Body({
   if (kind === "image") {
     return url ? (
       <div className="flex items-center justify-center min-h-full p-4">
-        <img src={url} alt={filename} className="max-h-full max-w-full rounded-sm border border-border bg-white object-contain" />
+        <img src={url} alt={filename} className="max-h-full max-w-full rounded-sm border border-border bg-white object-contain dark:bg-[var(--surface-inset)]" />
       </div>
     ) : (
       <Note text={t("filePreview.loading")} />
@@ -650,8 +649,8 @@ function Body({
     );
   }
   return text !== null ? (
-    <div className="p-3">
-      <CodeViewer code={text} language={language} />
+    <div>
+      <CodeViewer code={text} language={language} className="w-full rounded-none" />
     </div>
   ) : (
     <Note text={t("filePreview.loading")} />
