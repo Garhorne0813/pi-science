@@ -1,6 +1,5 @@
-import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { access, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./app.js";
@@ -14,43 +13,10 @@ afterEach(async () => {
   await Promise.all(openApps.splice(0).map((app) => app.close()));
 });
 
-async function startUpstream() {
-  const upstream = Fastify();
-  upstream.get("/api/health", async () => ({ status: "ok", active_pi_processes: 3, active_kernels: 2 }));
-  upstream.get("/api/kernels/status", async () => ({ active: 2 }));
-  upstream.get("/api/kernels/request-id", async (request) => ({ request_id: request.headers["x-request-id"] ?? null }));
-  upstream.get("/api/kernels/slow", async () => {
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    return { ok: true };
-  });
-  upstream.post("/api/kernels/execute", async (request) => {
-    const cwd = String((request.query as { cwd?: unknown }).cwd ?? "");
-    const body = request.body as { code?: string };
-    if (body.code === "write-output") await writeFile(join(cwd, "cell-output.csv"), "value\n42\n", "utf8");
-    if (body.code === "kernel-error") return { ok: false, stdout: "before failure\n", result: null, error: "cell failed" };
-    if (body.code === "kernel-interrupted") return { ok: false, stdout: "partial\n", result: null, error: "KeyboardInterrupt", interrupted: true };
-    try { await access(join(cwd, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python")); return { isolated: true }; }
-    catch { return { isolated: false }; }
-  });
-  upstream.post("/api/kernels/execute-stream", async (request, reply) => {
-    const body = request.body as { code?: string };
-    const interrupted = body.code === "stream-interrupted";
-    return reply.type("application/x-ndjson").send([
-      JSON.stringify({ type: "stream", stream: "stdout", text: "first\n" }),
-      JSON.stringify({ type: "stream", stream: "stdout", text: "second\n" }),
-      JSON.stringify({ type: "result", ok: !interrupted, stdout: "first\nsecond\n", result: interrupted ? null : "42", error: interrupted ? "KeyboardInterrupt" : null, interrupted, mime: interrupted ? {} : { "application/json": "42" } }),
-    ].join("\n") + "\n");
-  });
-  await upstream.listen({ host: "127.0.0.1", port: 0 });
-  openApps.push(upstream);
-  return upstream.listeningOrigin;
-}
-
-function config(pythonOrigin: string, overrides: Partial<ServerConfig> = {}): ServerConfig {
+function config(_pythonOrigin: string, overrides: Partial<ServerConfig> = {}): ServerConfig {
   return {
     host: "127.0.0.1",
     port: 0,
-    pythonOrigin,
     corsOrigins: ["http://127.0.0.1:5173"],
     maxBodyBytes: 10 * 1024 * 1024,
     upstreamTimeoutMs: 30_000,
@@ -93,39 +59,35 @@ function kernelModules() {
 
 describe("Node control plane", () => {
   it("exposes liveness and readiness separately", async () => {
-    const app = buildApp(config(await startUpstream()));
+    const app = buildApp(config("http://127.0.0.1:1"));
     openApps.push(app);
     expect((await app.inject({ method: "GET", url: "/internal/live" })).statusCode).toBe(200);
     const ready = await app.inject({ method: "GET", url: "/internal/ready" });
     expect(ready.statusCode).toBe(200);
-    expect(ready.json()).toMatchObject({ status: "ready", scientific_runtime: { state: "external", managed: false } });
+    expect(ready.json()).toMatchObject({ status: "ready", control_plane: "node" });
   });
 
-  it("owns health while retaining scientific runtime fields", async () => {
-    const app = buildApp(config(await startUpstream()));
-    openApps.push(app);
-    const response = await app.inject({ method: "GET", url: "/api/health" });
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ status: "ok", service: "pi-science-server", control_plane: "node", scientific_runtime: "external", active_pi_processes: 0, active_kernels: 0 });
-  });
-
-  it("stays healthy when the scientific worker is unavailable or idle", async () => {
+  it("owns health without a Python scientific worker", async () => {
     const app = buildApp(config("http://127.0.0.1:1"));
     openApps.push(app);
     const response = await app.inject({ method: "GET", url: "/api/health" });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ status: "ok", scientific_runtime: "external" });
+    expect(response.json()).toEqual({ status: "ok", service: "pi-science-server", control_plane: "node", active_pi_processes: 0, active_kernels: 0 });
   });
 
-  it("serves kernel status from the Node manager and proxies remaining scientific routes", async () => {
-    const app = buildApp(config(await startUpstream()));
+  it("stays healthy without any upstream runtime", async () => {
+    const app = buildApp(config("http://127.0.0.1:1"));
+    openApps.push(app);
+    const response = await app.inject({ method: "GET", url: "/api/health" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: "ok" });
+  });
+
+  it("serves kernel and notebook routes from the Node manager", async () => {
+    const app = buildApp(config("http://127.0.0.1:1"));
     openApps.push(app);
     const status = await app.inject({ method: "GET", url: "/api/kernels/status" });
     expect(status.json()).toMatchObject({ native: true, active_count: 0, interpreters: { python: expect.any(Boolean), r: expect.any(Boolean) } });
-
-    const requestId = await app.inject({ method: "GET", url: "/api/kernels/request-id", headers: { "x-request-id": "smoke-123" } });
-    expect(requestId.json()).toEqual({ request_id: "smoke-123" });
-    expect(requestId.headers["x-pi-science-runtime"]).toBe("python-scientific-runtime");
   });
 
   it("provisions the workspace environment before forwarding kernel execution", async () => {
@@ -234,14 +196,6 @@ describe("Node control plane", () => {
     await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }, 30_000);
 
-  it("returns a bounded gateway timeout for an unavailable upstream", async () => {
-    const app = buildApp(config(await startUpstream(), { upstreamTimeoutMs: 20 }));
-    openApps.push(app);
-    const response = await app.inject({ method: "GET", url: "/api/kernels/slow" });
-    expect(response.statusCode).toBe(504);
-    expect(response.json()).toMatchObject({ error: "scientific runtime unavailable" });
-  });
-
   it("tears down the shared Pi runtime manager on close even when nodePiManager is off", async () => {
     const modules = createServerModules(config("http://127.0.0.1:1", { nodePiManager: false }));
     const shutdownSpy = vi.spyOn(modules.piManager, "shutdownAll").mockResolvedValue(undefined);
@@ -267,37 +221,6 @@ describe("Node control plane", () => {
     // One call from the session service (nodePiManager on) and one from the
     // unconditional hook; the second is a no-op because the maps were cleared.
     expect(shutdownSpy).toHaveBeenCalledTimes(2);
-  });
-
-  it("survives a refused upstream connection instead of replying twice", async () => {
-    // Bind and immediately release a port so the proxy connection is refused.
-    const closed = Fastify();
-    await closed.listen({ host: "127.0.0.1", port: 0 });
-    const origin = closed.listeningOrigin;
-    await closed.close();
-
-    const app = buildApp(config(origin));
-    openApps.push(app);
-    await app.listen({ host: "127.0.0.1", port: 0 });
-
-    const uncaught: unknown[] = [];
-    const record = (error: unknown) => uncaught.push(error);
-    process.on("uncaughtException", record);
-    process.on("unhandledRejection", record);
-    try {
-      // /api/bookmarks is a declared boundary with no native handler, so it
-      // falls through to the proxy without passing the scientific-runtime gate
-      // that would answer 503 before any upstream connection is attempted.
-      const response = await fetch(`${app.listeningOrigin}/api/bookmarks`);
-      expect(response.status).toBe(504);
-      expect(await response.json()).toMatchObject({ error: "scientific runtime unavailable" });
-      // The duplicate onError lands a tick after the first reply is flushed.
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    } finally {
-      process.off("uncaughtException", record);
-      process.off("unhandledRejection", record);
-    }
-    expect(uncaught).toEqual([]);
   });
 
   it("can serve read-only session data from the existing JSONL format", async () => {

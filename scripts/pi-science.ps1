@@ -110,7 +110,7 @@ function Remove-RunState {
 }
 
 function Stop-PiScience {
-    param([int]$ControlPlanePort, [int]$FrontendPort, [int]$ScientificRuntimePort)
+    param([int]$ControlPlanePort, [int]$FrontendPort)
 
     $state = Read-RunState
     $stopped = $false
@@ -132,7 +132,7 @@ function Stop-PiScience {
     # case use the local service ports as the recovery signal.
     if (-not $stopped) {
         $fallbackIds = @()
-        foreach ($port in @($ControlPlanePort, $FrontendPort, $ScientificRuntimePort)) {
+        foreach ($port in @($ControlPlanePort, $FrontendPort)) {
             $fallbackIds += @(Get-ListeningProcessIds -Port $port)
         }
         foreach ($processId in @($fallbackIds | Sort-Object -Unique)) {
@@ -150,12 +150,11 @@ function Stop-PiScience {
 }
 
 function Show-PiStatus {
-    param([int]$ControlPlanePort, [int]$FrontendPort, [int]$ScientificRuntimePort)
+    param([int]$ControlPlanePort, [int]$FrontendPort)
 
     $state = Read-RunState
     $controlReady = Test-PortListening -Port $ControlPlanePort
     $frontendReady = Test-PortListening -Port $FrontendPort
-    $runtimeReady = Test-PortListening -Port $ScientificRuntimePort
     $stateProcess = $false
     if ($null -ne $state) {
         foreach ($property in @("control_pid", "frontend_pid")) {
@@ -180,11 +179,6 @@ function Show-PiStatus {
         Write-Output "Frontend: ready on port $FrontendPort"
     } else {
         Write-Output "Frontend: not responding on port $FrontendPort"
-    }
-    if ($runtimeReady) {
-        Write-Output "Python worker: listening on port $ScientificRuntimePort"
-    } else {
-        Write-Output "Python worker: idle (started on demand)"
     }
     if ($null -ne $state) {
         Write-Output "State: $StateFile"
@@ -226,15 +220,13 @@ switch ($command.ToLowerInvariant()) {
     "stop" {
         $controlPort = Get-PositivePort -EnvironmentName "PI_SCIENCE_CONTROL_PLANE_PORT" -Default 8787
         $frontendPort = Get-PositivePort -EnvironmentName "PI_SCIENCE_FRONTEND_PORT" -Default 5173
-        $runtimePort = Get-PositivePort -EnvironmentName "PI_SCIENCE_RUNTIME_PORT" -Default 8788
-        Stop-PiScience -ControlPlanePort $controlPort -FrontendPort $frontendPort -ScientificRuntimePort $runtimePort
+        Stop-PiScience -ControlPlanePort $controlPort -FrontendPort $frontendPort
         exit 0
     }
     "status" {
         $controlPort = Get-PositivePort -EnvironmentName "PI_SCIENCE_CONTROL_PLANE_PORT" -Default 8787
         $frontendPort = Get-PositivePort -EnvironmentName "PI_SCIENCE_FRONTEND_PORT" -Default 5173
-        $runtimePort = Get-PositivePort -EnvironmentName "PI_SCIENCE_RUNTIME_PORT" -Default 8788
-        Show-PiStatus -ControlPlanePort $controlPort -FrontendPort $frontendPort -ScientificRuntimePort $runtimePort
+        Show-PiStatus -ControlPlanePort $controlPort -FrontendPort $frontendPort
         exit 0
     }
     "help" { Show-PiHelp; exit 0 }

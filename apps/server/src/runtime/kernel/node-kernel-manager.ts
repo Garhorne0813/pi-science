@@ -64,8 +64,8 @@ export interface NodeKernelManagerDependencies {
 }
 
 const moduleDir = fileURLToPath(new URL(".", import.meta.url));
-const PYTHON_BRIDGE = fileURLToPath(new URL("../../../../../backend/services/kernel_bridge.py", import.meta.url));
-const R_BRIDGE = fileURLToPath(new URL("../../../../../backend/services/kernel_bridge.R", import.meta.url));
+const PYTHON_BRIDGE = fileURLToPath(new URL("./bridges/kernel_bridge.py", import.meta.url));
+const R_BRIDGE = fileURLToPath(new URL("./bridges/kernel_bridge.R", import.meta.url));
 const HEALTH_CHECK_CODE = "1+1";
 const INTERRUPT_GRACE_MS = 2_000;
 

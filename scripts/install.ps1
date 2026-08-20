@@ -4,8 +4,8 @@
 
 .DESCRIPTION
     Installs the JavaScript workspace, reuses an existing Pi runtime when
-    possible, prepares the Python backend, writes install.env, and installs a
-    collision-safe pi-science.cmd in the user's .local\bin directory.
+    possible, writes install.env, and installs a collision-safe pi-science.cmd
+    in the user's .local\bin directory.
 #>
 
 $ErrorActionPreference = "Stop"
@@ -59,20 +59,6 @@ function Resolve-Executable {
         return $command.Source
     }
     return $command.Name
-}
-
-function Find-VenvPython {
-    param([string]$Root)
-
-    foreach ($candidate in @(
-        (Join-Path $Root ".venv\Scripts\python.exe"),
-        (Join-Path $Root ".venv\Scripts\python")
-    )) {
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-            return (Resolve-Path -LiteralPath $candidate).Path
-        }
-    }
-    return $null
 }
 
 function Invoke-Checked {
@@ -216,72 +202,9 @@ $PnpmStoreDir = if ($env:PNPM_STORE_DIR) { $env:PNPM_STORE_DIR } else { Join-Pat
 New-Item -ItemType Directory -Path $PnpmStoreDir -Force | Out-Null
 Invoke-Checked -FilePath $PnpmPath -Arguments @("--config.store-dir=$PnpmStoreDir", "install", "--frozen-lockfile") -WorkingDirectory $ProjectDir
 
-Write-Host "==> Installing backend dependencies..."
-$CondaEnv = if ($env:CONDA_ENV) { $env:CONDA_ENV } else { "langgraphv1" }
-$PythonPath = $null
-$usedUv = $false
-$condaPath = Get-ProcessCommand "conda"
-if ($condaPath) {
-    try {
-        $condaOutput = @(& $condaPath run -n $CondaEnv python -c "import sys; print(sys.executable)" 2>$null)
-        if ($LASTEXITCODE -eq 0 -and $condaOutput.Count -gt 0) {
-            $candidate = ([string]$condaOutput[$condaOutput.Count - 1]).Trim()
-            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-                $PythonPath = (Resolve-Path -LiteralPath $candidate).Path
-            }
-        }
-    } catch {
-        $PythonPath = $null
-    }
-}
-
-if (-not $PythonPath) {
-    $uvPath = Get-ProcessCommand "uv"
-    if ($uvPath) {
-        $uvCacheDir = if ($env:UV_CACHE_DIR) { $env:UV_CACHE_DIR } else { Join-Path $ProjectDir ".cache\uv" }
-        New-Item -ItemType Directory -Path $uvCacheDir -Force | Out-Null
-        $env:UV_CACHE_DIR = $uvCacheDir
-        Invoke-Checked -FilePath $uvPath -Arguments @("sync", "--extra", "dev") -WorkingDirectory (Join-Path $ProjectDir "backend")
-        $PythonPath = Find-VenvPython -Root (Join-Path $ProjectDir "backend")
-        $usedUv = $true
-    }
-}
-
-if (-not $PythonPath) {
-    $explicitPython = [Environment]::GetEnvironmentVariable("PI_SCIENCE_PYTHON", "Process")
-    if (-not [string]::IsNullOrWhiteSpace($explicitPython)) {
-        $PythonPath = Resolve-Executable $explicitPython
-    }
-    if (-not $PythonPath) {
-        $PythonPath = Resolve-Executable "python"
-    }
-    if (-not $PythonPath) {
-        $PythonPath = Resolve-Executable "py"
-    }
-    if (-not $PythonPath) {
-        throw "No usable Python interpreter found."
-    }
-}
-
-$backendDir = Join-Path $ProjectDir "backend"
-$backendVenvPython = Find-VenvPython -Root $backendDir
-if (-not $usedUv -and -not $backendVenvPython) {
-    $pipCacheDir = if ($env:PIP_CACHE_DIR) { $env:PIP_CACHE_DIR } else { Join-Path $ProjectDir ".cache\pip" }
-    New-Item -ItemType Directory -Path $pipCacheDir -Force | Out-Null
-    $env:PIP_CACHE_DIR = $pipCacheDir
-    Invoke-Checked -FilePath $PythonPath -Arguments @("-m", "pip", "install", "-e", "$backendDir[dev]")
-}
-
-& $PythonPath -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"
-if ($LASTEXITCODE -ne 0) {
-    throw "Python 3.11 or newer is required."
-}
-
 New-Item -ItemType Directory -Path $InstallStateDir -Force | Out-Null
-$pythonForState = To-PortablePath $PythonPath
 $cliForState = To-PortablePath $PiCliPath
 $stateLines = @(
-    "PI_SCIENCE_INSTALL_PYTHON=$pythonForState",
     "PI_SCIENCE_INSTALL_PI_CLI=$cliForState"
 )
 [System.IO.File]::WriteAllLines($InstallStateFile, $stateLines, [System.Text.UTF8Encoding]::new($false))
@@ -326,7 +249,6 @@ if (-not $pathAlreadyContainsBin) {
 }
 
 Write-Host "==> Installation complete."
-Write-Host "  Python:   $PythonPath"
 Write-Host "  Pi CLI:   $PiCliPath"
 Write-Host "  Launcher: $launcherPath"
 Write-Host "  Start it with: pi-science"

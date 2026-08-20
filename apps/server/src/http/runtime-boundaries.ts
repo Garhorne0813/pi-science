@@ -10,8 +10,8 @@ export interface RouteBoundary {
 
 export const routeBoundaries: readonly RouteBoundary[] = [
   { prefix: "/api/health", owner: "node-control-plane", availability: "native" },
-  { prefix: "/api/kernels", owner: "python-scientific-runtime", availability: "compatibility-proxy" },
-  { prefix: "/api/notebooks", owner: "python-scientific-runtime", availability: "compatibility-proxy" },
+  { prefix: "/api/kernels", owner: "node-control-plane", availability: "native" },
+  { prefix: "/api/notebooks", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/sessions", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/files", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/provenance", owner: "node-control-plane", availability: "native" },

@@ -17,10 +17,8 @@ if [ -f "$INSTALL_STATE_FILE" ]; then
   source "$INSTALL_STATE_FILE"
 fi
 
-CONDA_PYTHON="${PI_SCIENCE_PYTHON:-${PI_SCIENCE_INSTALL_PYTHON:-}}"
 PI_CLI="${PI_CLI_PATH:-${PI_SCIENCE_INSTALL_PI_CLI:-}}"
 NODE_COMMAND="$(command -v node || true)"
-[ -x "$CONDA_PYTHON" ] || { echo "Error: Python environment is not installed. Run: bash scripts/install.sh" >&2; exit 1; }
 [ -f "$PI_CLI" ] || { echo "Error: Pi runtime is not installed. Run: bash scripts/install.sh" >&2; exit 1; }
 [ -n "$NODE_COMMAND" ] || { echo "Error: Node.js >=22.12.0 is required. Run: bash scripts/install.sh" >&2; exit 1; }
 PI_NODE_PATH="$("$NODE_COMMAND" -p 'process.execPath')"
@@ -35,10 +33,7 @@ CONTROL_PLANE_STARTED=""
 FRONTEND_PID=""
 FRONTEND_STARTED=""
 CONTROL_PLANE_PORT="${PI_SCIENCE_CONTROL_PLANE_PORT:-8787}"
-SCIENTIFIC_RUNTIME_PORT="${PI_SCIENCE_RUNTIME_PORT:-8788}"
 FRONTEND_PORT="${PI_SCIENCE_FRONTEND_PORT:-5173}"
-STARTUP_TIMEOUT_SECONDS="${PI_SCIENCE_STARTUP_TIMEOUT_SECONDS:-90}"
-PIP_CACHE_DIR="${PIP_CACHE_DIR:-$PROJECT_DIR/.cache/pip}"
 case "$STARTUP_TIMEOUT_SECONDS" in ''|*[!0-9]*) echo "Error: PI_SCIENCE_STARTUP_TIMEOUT_SECONDS must be a positive integer." >&2; exit 1 ;; esac
 [ "$STARTUP_TIMEOUT_SECONDS" -gt 0 ] || { echo "Error: PI_SCIENCE_STARTUP_TIMEOUT_SECONDS must be a positive integer." >&2; exit 1; }
 STARTUP_DEADLINE=$(( $(date +%s) + STARTUP_TIMEOUT_SECONDS ))
@@ -119,7 +114,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 port_is_available() {
-  "$CONDA_PYTHON" -c 'import socket,sys; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", int(sys.argv[1]))); s.close()' "$1" >/dev/null 2>&1
+  "$NODE_COMMAND" -e 'const net=require("net");const s=net.createServer();s.once("error",()=>process.exit(1));s.listen(Number(process.argv[1]),"127.0.0.1",()=>s.close(()=>process.exit(0)));' "$1" >/dev/null 2>&1
 }
 
 wait_for_health() {
@@ -136,17 +131,12 @@ wait_for_health() {
 
 export PI_CLI_PATH="$PI_CLI"
 export PI_NODE_PATH
-export PIP_CACHE_DIR
 export PI_SCIENCE_HOME="${PI_SCIENCE_HOME:-$HOME/.pi-science}"
 export PI_SCIENCE_WORKSPACES="${PI_SCIENCE_WORKSPACES:-$HOME/pi-science-workspaces}"
 export PI_SCIENCE_INTERNAL_TOKEN="${PI_SCIENCE_INTERNAL_TOKEN:-$(openssl rand -hex 32 2>/dev/null || date +%s)}"
 export PI_SCIENCE_REQUIRE_INTERNAL_TOKEN="${PI_SCIENCE_REQUIRE_INTERNAL_TOKEN:-1}"
 mkdir -p "$PI_SCIENCE_HOME/sessions" "$PI_SCIENCE_WORKSPACES"
 
-if ! port_is_available "$SCIENTIFIC_RUNTIME_PORT"; then
-  echo "Error: port $SCIENTIFIC_RUNTIME_PORT is already in use." >&2
-  exit 1
-fi
 if ! port_is_available "$CONTROL_PLANE_PORT"; then
   echo "Error: port $CONTROL_PLANE_PORT is already in use." >&2
   exit 1
@@ -154,12 +144,6 @@ fi
 
 echo "==> Starting Node control plane on http://127.0.0.1:$CONTROL_PLANE_PORT (control plane mode: $CONTROL_PLANE_MODE)"
 cd "$PROJECT_DIR"
-export PI_SCIENCE_PYTHON_ORIGIN="http://127.0.0.1:${SCIENTIFIC_RUNTIME_PORT}"
-export PI_SCIENCE_MANAGE_SCIENTIFIC_RUNTIME="${PI_SCIENCE_MANAGE_SCIENTIFIC_RUNTIME:-1}"
-export PI_SCIENCE_PYTHON_EXECUTABLE="${PI_SCIENCE_PYTHON_EXECUTABLE:-$CONDA_PYTHON}"
-export PI_SCIENCE_PYTHON_CWD="${PI_SCIENCE_PYTHON_CWD:-$PROJECT_DIR/backend}"
-export PI_SCIENCE_SCIENTIFIC_IDLE_MS="${PI_SCIENCE_SCIENTIFIC_IDLE_MS:-300000}"
-export PI_SCIENCE_SCIENTIFIC_STARTUP_MS="${PI_SCIENCE_SCIENTIFIC_STARTUP_MS:-30000}"
 export PI_SCIENCE_BACKEND_URL="${PI_SCIENCE_BACKEND_URL:-http://127.0.0.1:${CONTROL_PLANE_PORT}}"
 export PI_SCIENCE_NODE_SESSIONS="${PI_SCIENCE_NODE_SESSIONS:-1}"
 export PI_SCIENCE_NODE_SSE="${PI_SCIENCE_NODE_SSE:-1}"
@@ -200,7 +184,5 @@ echo ""
 echo "Pi-Science is running:"
 echo "  Frontend:          http://127.0.0.1:$FRONTEND_PORT"
 echo "  Node control plane: http://127.0.0.1:$CONTROL_PLANE_PORT"
-echo "  Python worker:      on demand at http://127.0.0.1:$SCIENTIFIC_RUNTIME_PORT"
-echo "  API docs:           http://127.0.0.1:$CONTROL_PLANE_PORT/docs"
 echo "Press Ctrl+C to stop."
 wait

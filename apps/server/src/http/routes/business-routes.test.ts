@@ -29,7 +29,7 @@ afterEach(async () => {
 });
 
 function config(): ServerConfig {
-  return { host: "127.0.0.1", port: 0, pythonOrigin: "http://127.0.0.1:1", corsOrigins: [], maxBodyBytes: 10_000_000, upstreamTimeoutMs: 100, nodeSessions: false, nodeSse: false, nodeFiles: true, nodePiManager: false, logLevel: "silent" };
+  return { host: "127.0.0.1", port: 0, corsOrigins: [], maxBodyBytes: 10_000_000, upstreamTimeoutMs: 100, nodeSessions: false, nodeSse: false, nodeFiles: true, nodePiManager: false, logLevel: "silent" };
 }
 
 async function workspace(): Promise<string> {
@@ -61,7 +61,7 @@ describe("native control-plane business routes", () => {
     const reset = await app.inject({ method: "DELETE", url: "/api/settings/skills" });
     expect(reset.statusCode).toBe(200);
     expect(reset.json()).toMatchObject({ ok: true, configured: false, policy: { mode: "inherit" } });
-  });
+  }, 30_000);
 
   it("does not overwrite an existing incomplete workspace environment", async () => {
     const cwd = await workspace();

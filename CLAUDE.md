@@ -1,12 +1,11 @@
 # Pi-Science — agent guide
 
-Pi-Science is a local-first scientific AI workbench built as three processes: a **React SPA**
-(`frontend/`) as the only UI; a **Node control plane** (`apps/server/`) that is the sole state
-authority for sessions, jobs, research loops, settings and workspace security; and a **Python
-scientific runtime** (`backend/`) restricted to kernel/notebook execution and file parsing. Each
-conversation runs its own **Pi agent process** (`runtime/pi/`, fetched). Shared DTOs live in
-`packages/contracts/`; builtin agent skills in `skills/`. Python holds no business state — it is a
-replaceable execution service.
+Pi-Science is a local-first scientific AI workbench built around a **React SPA** (`frontend/`) and
+a **Node control plane** (`apps/server/`) that is the sole state authority for sessions, jobs,
+research loops, settings, workspace security, kernels, and notebooks. Each conversation runs its
+own **Pi agent process** (`runtime/pi/`, fetched). Shared DTOs live in `packages/contracts/`;
+builtin agent skills in `skills/`. Compute environments are managed through Micromamba revisions
+and kernels are spawned directly by Node.
 
 ## Security boundary
 - The main control agent must never read, write, or execute files outside the project checkout
@@ -32,7 +31,6 @@ pnpm typecheck                       # contracts + server + frontend
 pnpm test                            # contracts + server + frontend + skills
 pnpm build                           # all JS packages
 pnpm test:skills                     # literature-review skill tests only
-cd backend && uv run pytest -q       # Python runtime
 pnpm smoke                           # control-plane smoke test
 pnpm --filter frontend test:uat:conversation   # UAT scripts (also :knowledge :notebook :office)
 ```

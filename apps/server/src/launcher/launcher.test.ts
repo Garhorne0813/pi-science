@@ -15,7 +15,6 @@ function testConfig(): ServerConfig {
   return {
     host: "127.0.0.1",
     port: 0,
-    pythonOrigin: "http://127.0.0.1:1",
     corsOrigins: [],
     maxBodyBytes: 10 * 1024 * 1024,
     upstreamTimeoutMs: 100,

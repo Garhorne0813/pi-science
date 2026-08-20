@@ -27,14 +27,6 @@ fi
 echo "  Node.js: $("$NODE_PATH" --version)"
 echo "  pnpm:   $(pnpm --version)"
 
-find_venv_python() {
-  local root="$1"
-  for candidate in "$root/.venv/bin/python" "$root/.venv/Scripts/python.exe" "$root/.venv/Scripts/python"; do
-    if [ -x "$candidate" ] || [ -f "$candidate" ]; then echo "$candidate"; return 0; fi
-  done
-  return 1
-}
-
 if [ -n "${PI_CLI_PATH:-}" ]; then
   PI_CLI="$PI_CLI_PATH"
   [ -f "$PI_CLI" ] || { echo "Error: PI_CLI_PATH does not point to a file: $PI_CLI" >&2; exit 1; }
@@ -60,40 +52,8 @@ mkdir -p "$PNPM_STORE_DIR"
 cd "$PROJECT_DIR"
 pnpm --config.store-dir="$PNPM_STORE_DIR" install --frozen-lockfile
 
-echo "==> Installing backend dependencies..."
-CONDA_ENV="${CONDA_ENV:-langgraphv1}"
-CONDA_PYTHON=""
-if command -v conda >/dev/null 2>&1; then
-  CONDA_PYTHON="$(conda run -n "$CONDA_ENV" python -c 'import sys; print(sys.executable)' 2>/dev/null || true)"
-fi
-
-if [ -z "$CONDA_PYTHON" ] && command -v uv >/dev/null 2>&1; then
-  UV_CACHE_DIR="${UV_CACHE_DIR:-$PROJECT_DIR/.cache/uv}"
-  mkdir -p "$UV_CACHE_DIR"
-  export UV_CACHE_DIR
-  (cd "$PROJECT_DIR/backend" && uv sync --extra dev)
-  CONDA_PYTHON="$(find_venv_python "$PROJECT_DIR/backend")"
-elif [ -z "$CONDA_PYTHON" ]; then
-  CONDA_PYTHON="${PI_SCIENCE_PYTHON:-$(command -v python3 || command -v python || true)}"
-  [ -n "$CONDA_PYTHON" ] || { echo "Error: no usable Python interpreter found." >&2; exit 1; }
-  PIP_CACHE_DIR="${PIP_CACHE_DIR:-$PROJECT_DIR/.cache/pip}"
-  mkdir -p "$PIP_CACHE_DIR"
-  export PIP_CACHE_DIR
-  "$CONDA_PYTHON" -m pip install -e "$PROJECT_DIR/backend[dev]"
-elif ! find_venv_python "$PROJECT_DIR/backend" >/dev/null 2>&1; then
-  PIP_CACHE_DIR="${PIP_CACHE_DIR:-$PROJECT_DIR/.cache/pip}"
-  mkdir -p "$PIP_CACHE_DIR"
-  export PIP_CACHE_DIR
-  "$CONDA_PYTHON" -m pip install -e "$PROJECT_DIR/backend[dev]"
-fi
-
-if ! "$CONDA_PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)'; then
-  echo "Error: Python 3.11 or newer is required." >&2
-  exit 1
-fi
-
 mkdir -p "$INSTALL_STATE_DIR"
-printf 'PI_SCIENCE_INSTALL_PYTHON=%q\nPI_SCIENCE_INSTALL_PI_CLI=%q\n' "$CONDA_PYTHON" "$PI_CLI" > "$INSTALL_STATE_FILE"
+printf 'PI_SCIENCE_INSTALL_PI_CLI=%q\n' "$PI_CLI" > "$INSTALL_STATE_FILE"
 
 # Put a `pi-science` command on PATH without following or replacing unrelated
 # files and symlinks. The helper writes through a same-directory temp file.
@@ -102,7 +62,6 @@ LAUNCHER="$BIN_DIR/pi-science"
 bash "$SCRIPT_DIR/write-launcher.sh" "$PROJECT_DIR" "$BIN_DIR"
 
 echo "==> Installation complete."
-echo "  Python:   $CONDA_PYTHON"
 echo "  Pi CLI:   $PI_CLI"
 echo "  Launcher: $LAUNCHER"
 case ":$PATH:" in
