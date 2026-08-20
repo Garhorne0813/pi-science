@@ -7,8 +7,12 @@ import { NodeKernelManager } from "./node-kernel-manager.js";
 import type { WorkspaceEnvironmentStatus } from "../workspace/workspace-environment.js";
 
 function systemPython(): string | null {
-  const result = spawnSync("python3", ["-c", "import sys; print(sys.executable)"], { encoding: "utf8" });
-  return result.status === 0 ? result.stdout.trim() : null;
+  const commands = process.platform === "win32" ? ["python", "python3"] : ["python3", "python"];
+  for (const command of commands) {
+    const result = spawnSync(command, ["-c", "import sys; print(sys.executable)"], { encoding: "utf8" });
+    if (result.status === 0 && result.stdout.trim()) return result.stdout.trim();
+  }
+  return null;
 }
 
 const python = systemPython();
@@ -18,14 +22,26 @@ afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
 });
 
+function environmentPaths(prefix: string): { bin: string; python: string; pip: string } {
+  const bin = join(prefix, process.platform === "win32" ? "Scripts" : "bin");
+  const suffix = process.platform === "win32" ? ".exe" : "";
+  return { bin, python: join(bin, `python${suffix}`), pip: join(bin, `pip${suffix}`) };
+}
+
+async function createTestEnvironment(prefix: string): Promise<void> {
+  const paths = environmentPaths(prefix);
+  await mkdir(paths.bin, { recursive: true });
+  await symlink(python!, paths.python);
+}
+
 function status(workspace: string, prefix: string): WorkspaceEnvironmentStatus {
-  const bin = join(prefix, "bin");
+  const paths = environmentPaths(prefix);
   return {
     ready: true,
     workspace,
     prefix,
-    python: join(bin, "python"),
-    pip: join(bin, "pip"),
+    python: paths.python,
+    pip: paths.pip,
     environment_id: "env_test",
     revision_id: "rev_test",
     manager: "micromamba",
@@ -38,9 +54,7 @@ describe("NodeKernelManager native execution", () => {
     const workspace = await mkdtemp(join(tmpdir(), "pi-science-native-kernel-"));
     cleanup.push(workspace);
     const prefix = join(workspace, "env");
-    const bin = join(prefix, "bin");
-    await mkdir(bin, { recursive: true });
-    await symlink(python!, join(bin, "python"));
+    await createTestEnvironment(prefix);
 
     const manager = new NodeKernelManager();
     try {
@@ -63,9 +77,7 @@ describe("NodeKernelManager native execution", () => {
     const workspace = await mkdtemp(join(tmpdir(), "pi-science-native-kernel-state-"));
     cleanup.push(workspace);
     const prefix = join(workspace, "env");
-    const bin = join(prefix, "bin");
-    await mkdir(bin, { recursive: true });
-    await symlink(python!, join(bin, "python"));
+    await createTestEnvironment(prefix);
 
     const manager = new NodeKernelManager();
     try {
@@ -82,9 +94,7 @@ describe("NodeKernelManager native execution", () => {
     const workspace = await mkdtemp(join(tmpdir(), "pi-science-native-kernel-imports-"));
     cleanup.push(workspace);
     const prefix = join(workspace, "env");
-    const bin = join(prefix, "bin");
-    await mkdir(bin, { recursive: true });
-    await symlink(python!, join(bin, "python"));
+    await createTestEnvironment(prefix);
     await writeFile(join(workspace, "local_module.py"), "value = 41\n", "utf8");
 
     const manager = new NodeKernelManager();
@@ -107,9 +117,7 @@ describe("NodeKernelManager native execution", () => {
     const workspace = await mkdtemp(join(tmpdir(), "pi-science-native-kernel-shutdown-"));
     cleanup.push(workspace);
     const prefix = join(workspace, "env");
-    const bin = join(prefix, "bin");
-    await mkdir(bin, { recursive: true });
-    await symlink(python!, join(bin, "python"));
+    await createTestEnvironment(prefix);
 
     const manager = new NodeKernelManager();
     try {

@@ -39,11 +39,12 @@ describe("NotebookService", () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-jupyter-kernelspec-"));
     cleanup.push(cwd);
     const prefix = join(cwd, "project-env");
-    const bin = join(prefix, "bin");
+    const bin = join(prefix, process.platform === "win32" ? "Scripts" : "bin");
+    const python = join(bin, process.platform === "win32" ? "python.exe" : "python");
     await mkdir(join(cwd, ".pi-science"), { recursive: true });
     await mkdir(bin, { recursive: true });
-    await writeFile(join(bin, "python"), "#!/bin/sh\nexit 0\n", "utf8");
-    await chmod(join(bin, "python"), 0o755);
+    await writeFile(python, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(python, 0o755);
     const registryPath = join(cwd, ".pi-science", "environments", "registry.json");
     await mkdir(join(cwd, ".pi-science", "environments"), { recursive: true });
     await writeFile(registryPath, JSON.stringify({
@@ -65,7 +66,7 @@ describe("NotebookService", () => {
       revision.packages.push("ipykernel");
       await writeFile(registryPath, JSON.stringify(registry), "utf8");
       return {
-        ready: true, workspace: cwd, prefix, python: join(bin, "python"), pip: join(bin, "pip"),
+        ready: true, workspace: cwd, prefix, python, pip: join(bin, process.platform === "win32" ? "pip.exe" : "pip"),
         environment_id: "env_python", revision_id: "rev_python", manager: "micromamba",
         npm: { local_prefix: cwd, global_prefix: join(cwd, ".pi-science", "node-tools", "npm"), cache: join(cwd, ".pi-science", "cache", "npm") },
       } satisfies WorkspaceEnvironmentStatus;
@@ -80,6 +81,6 @@ describe("NotebookService", () => {
 
     expect(installPackages).toHaveBeenCalledWith(cwd, ["ipykernel"]);
     const kernel = JSON.parse(await readFile(join(service.jupyterPrefix, "share", "jupyter", "kernels", "pi-science-rev_python", "kernel.json"), "utf8")) as { argv: string[] };
-    expect(kernel.argv).toEqual([join(bin, "python"), "-m", "ipykernel_launcher", "-f", "{connection_file}"]);
+    expect(kernel.argv).toEqual([python, "-m", "ipykernel_launcher", "-f", "{connection_file}"]);
   });
 });
