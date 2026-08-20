@@ -20,6 +20,13 @@ export function metadataRoot(workspace: string): string {
   return join(resolve(workspace), ".pi-science");
 }
 
+/** Serializes writers for a workspace's metadata under a single workspace-level lock. */
+export async function withWorkspaceWriteLock<T>(workspace: string, operation: () => Promise<T>): Promise<T> {
+  const root = metadataRoot(workspace);
+  await mkdir(root, { recursive: true });
+  return withFileWriteLock(join(root, "workspace.lock"), operation);
+}
+
 export async function appendJsonLine(path: string, value: unknown): Promise<void> {
   await withFileWriteLock(path, async () => {
     await appendJsonLineUnlocked(path, value);

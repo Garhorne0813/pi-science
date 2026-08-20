@@ -97,7 +97,7 @@ async function updatePinnedWorkspace(source: string, destination: string): Promi
   if (changed) await writeJsonAtomic(configPath("pinned.json"), updated);
 }
 export function catalogToolCommands(environment: NodeJS.ProcessEnv = process.env, platform = process.platform): ReadonlyArray<readonly [string, string]> {
-  return [["python", defaultPythonExecutable(environment, platform)], ["Node.js", "node"], ["Git", "git"], ["uv", "uv"]];
+  return [["python", defaultPythonExecutable(environment, platform)], ["Node.js", "node"], ["Git", "git"]];
 }
 
 type ComputeProbeInput = {

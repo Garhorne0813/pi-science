@@ -8,6 +8,7 @@ const createEnvironmentSchema = z.object({
   display_name: z.string().min(1).max(100).optional(),
   language: z.enum(["python", "r"]).optional(),
   packages: z.array(z.string().min(1).max(300)).max(200).optional(),
+  preset: z.enum(["python-minimal", "python-data", "python-science", "r-minimal"]).optional(),
   supersedes_revision_id: z.string().min(1).optional(),
 });
 
@@ -24,6 +25,8 @@ async function workspace(request: { query: unknown }): Promise<string> {
 
 export function registerEnvironmentRoutes(app: FastifyInstance, environments: WorkspaceEnvironmentService): void {
   app.get("/api/environments", async () => ({ environments: await environments.list() }));
+
+  app.get("/api/environments/presets", async () => ({ presets: environments.listPresets() }));
 
   app.post("/api/environments", async (request, reply) => {
     const parsed = createEnvironmentSchema.safeParse(request.body);
@@ -66,6 +69,14 @@ export function registerEnvironmentRoutes(app: FastifyInstance, environments: Wo
     try { cwd = await workspace(request); }
     catch (error) { return reply.code(403).send({ error: String(error) }); }
     try { return await environments.installPackages(cwd, parsed.data.packages); }
+    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
+  app.post("/api/environments/workspace/rollback", async (request, reply) => {
+    let cwd: string;
+    try { cwd = await workspace(request); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+    try { return await environments.rollback(cwd); }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
   });
 }

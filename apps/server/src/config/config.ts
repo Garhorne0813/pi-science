@@ -7,7 +7,6 @@ const environmentSchema = z.object({
   PI_SCIENCE_MAX_BODY_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
   PI_SCIENCE_UPSTREAM_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   PI_SCIENCE_INTERNAL_TOKEN: z.string().optional(),
-  PI_SCIENCE_PYTHON_EXECUTABLE: z.string().optional(),
   PI_SCIENCE_MICROMAMBA_EXECUTABLE: z.string().optional(),
   PI_SCIENCE_NODE_SESSIONS: z.enum(["0", "1"]).default("1"),
   PI_SCIENCE_NODE_SSE: z.enum(["0", "1"]).default("1"),
@@ -32,7 +31,6 @@ export interface ServerConfig {
   maxBodyBytes: number;
   upstreamTimeoutMs: number;
   internalToken?: string;
-  pythonExecutable?: string;
   micromambaExecutable?: string;
   nodeSessions: boolean;
   nodeSse: boolean;
@@ -59,7 +57,6 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Server
     maxBodyBytes: parsed.PI_SCIENCE_MAX_BODY_BYTES,
     upstreamTimeoutMs: parsed.PI_SCIENCE_UPSTREAM_TIMEOUT_MS,
     internalToken: parsed.PI_SCIENCE_INTERNAL_TOKEN,
-    pythonExecutable: parsed.PI_SCIENCE_PYTHON_EXECUTABLE,
     micromambaExecutable: parsed.PI_SCIENCE_MICROMAMBA_EXECUTABLE,
     nodeSessions: parsed.PI_SCIENCE_NODE_SESSIONS === "1",
     nodeSse: parsed.PI_SCIENCE_NODE_SSE === "1",

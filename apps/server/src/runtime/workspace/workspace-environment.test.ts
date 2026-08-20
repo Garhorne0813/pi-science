@@ -120,4 +120,48 @@ describe("workspace environment package mutation", () => {
     expect(status.tooling.npm_prefix).toBe(join(root, ".pi-science", "node-tools", "npm"));
     expect(status.tooling.pnpm_home).toBe(join(root, ".pi-science", "node-tools", "pnpm"));
   });
+
+  it("exposes compute environment presets", () => {
+    const service = new WorkspaceEnvironmentService();
+    const presets = service.listPresets();
+    expect(presets.map((preset) => preset.id)).toEqual([
+      "python-minimal", "python-data", "python-science", "r-minimal",
+    ]);
+    expect(presets.find((preset) => preset.id === "python-science")?.packages).toContain("scipy");
+    expect(presets.find((preset) => preset.id === "r-minimal")?.language).toBe("r");
+  });
+
+  it("rolls the workspace back to the previous ready revision", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-science-rollback-"));
+    tempDirs.push(root);
+    process.env.PI_SCIENCE_HOME = root;
+    const workspace = join(root, "workspace");
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    await mkdir(join(root, "environments"), { recursive: true });
+    const revOldPrefix = join(root, "micromamba", "envs", "rev_old");
+    const revNewPrefix = join(root, "micromamba", "envs", "rev_new");
+    await writeFile(join(root, "environments", "registry.json"), JSON.stringify({
+      schema_version: 1,
+      revisions: [
+        { environment_id: "env_test", revision_id: "rev_old", name: "test-env", display_name: "Test Env", language: "python", status: "ready", prefix: revOldPrefix, packages: ["python=3.12", "pip"], platform: `${process.platform}-${process.arch}`, created_at: "2026-01-01T00:00:00.000Z" },
+        { environment_id: "env_test", revision_id: "rev_new", name: "test-env", display_name: "Test Env", language: "python", status: "ready", prefix: revNewPrefix, packages: ["python=3.12", "pip", "numpy"], platform: `${process.platform}-${process.arch}`, created_at: "2026-01-02T00:00:00.000Z", supersedes_revision_id: "rev_old" },
+      ],
+    }), "utf8");
+    await writeFile(join(workspace, ".pi-science", "environment.json"), JSON.stringify({
+      schema_version: 1, environment_id: "env_test", revision_id: "rev_new", bound_at: "2026-01-02T00:00:00.000Z",
+    }), "utf8");
+
+    const service = new WorkspaceEnvironmentService();
+    const bind = vi.spyOn(service, "bind").mockImplementation(async (_cwd: string, revisionId: string) => ({
+      ready: true, workspace,
+      prefix: join(root, "micromamba", "envs", revisionId),
+      python: join(root, "micromamba", "envs", revisionId, "bin", "python"),
+      pip: join(root, "micromamba", "envs", revisionId, "bin", "pip"),
+      environment_id: "env_test", revision_id: revisionId, manager: "micromamba",
+      npm: { local_prefix: workspace, global_prefix: join(workspace, ".pi-science", "node-tools", "npm"), cache: join(workspace, ".pi-science", "cache", "npm") },
+    }));
+
+    await expect(service.rollback(workspace)).resolves.toMatchObject({ revision_id: "rev_old" });
+    expect(bind).toHaveBeenCalledWith(workspace, "rev_old");
+  });
 });

@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { access, chmod, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { delimiter, join, resolve } from "node:path";
-import { configPath, readJson, withFileWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
+import { configPath, readJson, withFileWriteLock, withWorkspaceWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
 
 export type EnvironmentLanguage = "python" | "r";
 export type EnvironmentStatus = "creating" | "ready" | "failed" | "archived";
@@ -65,12 +65,30 @@ export interface CreateEnvironmentInput {
   display_name?: string;
   language?: EnvironmentLanguage;
   packages?: string[];
+  preset?: EnvironmentPresetId;
   supersedes_revision_id?: string;
+}
+
+export interface EnvironmentPreset {
+  id: EnvironmentPresetId;
+  name: string;
+  language: EnvironmentLanguage;
+  packages: string[];
 }
 
 const DEFAULT_ENVIRONMENT_ID = "env_python_standard";
 const DEFAULT_PACKAGES = ["python=3.12", "pip"];
 const DEFAULT_R_PACKAGES = ["r-base=4.4"];
+
+export const ENVIRONMENT_PRESETS = {
+  "python-minimal": { name: "Python Minimal", language: "python", packages: ["python=3.12", "pip"] },
+  "python-data": { name: "Python Data", language: "python", packages: ["python=3.12", "pip", "numpy", "pandas", "matplotlib"] },
+  "python-science": { name: "Python Science", language: "python", packages: ["python=3.12", "pip", "numpy", "pandas", "scipy", "matplotlib"] },
+  "r-minimal": { name: "R Minimal", language: "r", packages: ["r-base=4.4"] },
+} as const;
+
+export type EnvironmentPresetId = keyof typeof ENVIRONMENT_PRESETS;
+
 const MICROMAMBA_VERSION = "2.5.0-2";
 const MICROMAMBA_SHA256: Record<string, string> = {
   "linux-64": "c04571cfb0750e5432d530a3068b8fcd232ebed3133358e056e59a90b9852b00",
@@ -147,7 +165,7 @@ function safeName(value: string): string {
 }
 
 export function defaultPythonExecutable(environment: NodeJS.ProcessEnv = process.env, platform = process.platform): string {
-  return environment.PI_SCIENCE_PYTHON_EXECUTABLE || environment.PYTHON || (platform === "win32" ? "python" : "python3");
+  return environment.PYTHON || (platform === "win32" ? "python" : "python3");
 }
 
 export function workspaceEnvironmentVariables(status: WorkspaceEnvironmentStatus, inherited: NodeJS.ProcessEnv = process.env, platform = process.platform): NodeJS.ProcessEnv {
@@ -186,6 +204,16 @@ export class WorkspaceEnvironmentService {
     return (await this.registry()).revisions.slice().sort((a, b) => b.created_at.localeCompare(a.created_at));
   }
 
+  listPresets(): EnvironmentPreset[] {
+    return (Object.keys(ENVIRONMENT_PRESETS) as EnvironmentPresetId[]).map((id) => ({
+      id,
+      name: ENVIRONMENT_PRESETS[id].name,
+      language: ENVIRONMENT_PRESETS[id].language,
+      packages: [...ENVIRONMENT_PRESETS[id].packages],
+    }));
+  }
+
+
   async binding(cwdValue: string): Promise<ProjectEnvironmentBinding | null> {
     const value = await readJson<unknown>(bindingPath(cwdValue), null);
     if (!value || typeof value !== "object") return null;
@@ -199,7 +227,7 @@ export class WorkspaceEnvironmentService {
     if (!revision) throw new Error(`Ready environment revision not found: ${revisionId}`);
     await mkdir(join(cwd, ".pi-science"), { recursive: true });
     const path = bindingPath(cwd);
-    await withFileWriteLock(path, () => writeJsonAtomic(path, { schema_version: 1, environment_id: revision.environment_id, revision_id: revision.revision_id, bound_at: new Date().toISOString() } satisfies ProjectEnvironmentBinding));
+    await withWorkspaceWriteLock(cwd, () => writeJsonAtomic(path, { schema_version: 1, environment_id: revision.environment_id, revision_id: revision.revision_id, bound_at: new Date().toISOString() } satisfies ProjectEnvironmentBinding));
     return this.status(cwd);
   }
 
@@ -283,43 +311,71 @@ export class WorkspaceEnvironmentService {
 
   async create(input: CreateEnvironmentInput): Promise<EnvironmentRevision> {
     const name = safeName(input.name);
-    const packages = [...new Set((input.packages?.length ? input.packages : input.language === "r" ? DEFAULT_R_PACKAGES : DEFAULT_PACKAGES).map((item) => item.trim()).filter(Boolean))];
+    const preset = input.preset ? ENVIRONMENT_PRESETS[input.preset] : undefined;
+    const language = input.language ?? preset?.language ?? "python";
+    const packages = [...new Set((input.packages?.length ? input.packages : preset?.packages ?? (language === "r" ? DEFAULT_R_PACKAGES : DEFAULT_PACKAGES)).map((item) => item.trim()).filter(Boolean))];
     const previous = input.supersedes_revision_id ? (await this.list()).find((item) => item.revision_id === input.supersedes_revision_id) : undefined;
     if (input.supersedes_revision_id && !previous) throw new Error(`Environment revision not found: ${input.supersedes_revision_id}`);
     const key = `${previous?.environment_id ?? name}\0${packages.join("\0")}`;
     const current = this.creating.get(key);
     if (current) return current;
-    const operation = this.createRevision({ environment_id: previous?.environment_id ?? `env_${name}_${randomUUID().slice(0, 8)}`, name, display_name: input.display_name?.trim() || name, language: input.language ?? "python", packages, ...(previous ? { supersedes_revision_id: previous.revision_id } : {}) }).finally(() => this.creating.delete(key));
+    const operation = this.createRevision({ environment_id: previous?.environment_id ?? `env_${name}_${randomUUID().slice(0, 8)}`, name, display_name: input.display_name?.trim() || name, language, packages, ...(previous ? { supersedes_revision_id: previous.revision_id } : {}) }).finally(() => this.creating.delete(key));
     this.creating.set(key, operation);
     return operation;
   }
 /** Install packages into the currently bound revision by creating a new immutable revision. */
   async installPackages(cwdValue: string, packages: string[]): Promise<WorkspaceEnvironmentStatus> {
     const cwd = resolve(cwdValue);
-    const currentStatus = await this.status(cwd);
-    if (!currentStatus.revision_id || !currentStatus.environment_id) {
-      throw new Error("Workspace has no bound environment revision; create or bind one first");
-    }
-    const current = (await this.list()).find((item) => item.revision_id === currentStatus.revision_id);
-    if (!current) {
-      throw new Error(`Bound environment revision not found: ${currentStatus.revision_id}`);
-    }
-    if (current.status !== "ready") {
-      throw new Error(`Bound environment revision is not ready: ${current.status}`);
-    }
-    const normalized = [...new Set(packages.map((item) => item.trim()).filter(Boolean))];
-    if (normalized.length === 0) {
-      throw new Error("No packages requested");
-    }
-    const combined = [...new Set([...current.packages, ...normalized])];
-    const revision = await this.create({
-      name: current.name,
-      display_name: current.display_name,
-      language: current.language,
-      packages: combined,
-      supersedes_revision_id: current.revision_id,
+    return withWorkspaceWriteLock(cwd, async () => {
+      const currentStatus = await this.status(cwd);
+      if (!currentStatus.revision_id || !currentStatus.environment_id) {
+        throw new Error("Workspace has no bound environment revision; create or bind one first");
+      }
+      const current = (await this.list()).find((item) => item.revision_id === currentStatus.revision_id);
+      if (!current) {
+        throw new Error(`Bound environment revision not found: ${currentStatus.revision_id}`);
+      }
+      if (current.status !== "ready") {
+        throw new Error(`Bound environment revision is not ready: ${current.status}`);
+      }
+      const normalized = [...new Set(packages.map((item) => item.trim()).filter(Boolean))];
+      if (normalized.length === 0) {
+        throw new Error("No packages requested");
+      }
+      const combined = [...new Set([...current.packages, ...normalized])];
+      const revision = await this.create({
+        name: current.name,
+        display_name: current.display_name,
+        language: current.language,
+        packages: combined,
+        supersedes_revision_id: current.revision_id,
+      });
+      return this.bind(cwd, revision.revision_id);
     });
-    return this.bind(cwd, revision.revision_id);
+  }
+
+
+/** Promote a staging (creating) revision to ready after its health check passes. */
+  async promote(revisionId: string): Promise<EnvironmentRevision> {
+    const revision = (await this.list()).find((item) => item.revision_id === revisionId);
+    if (!revision) throw new Error(`Environment revision not found: ${revisionId}`);
+    if (revision.status !== "creating") throw new Error(`Only creating revisions can be promoted: ${revision.status}`);
+    await this.runHealthCheck(revision.prefix, revision.language);
+    const promoted: EnvironmentRevision = { ...revision, status: "ready" };
+    await this.upsert(promoted);
+    return promoted;
+  }
+
+/** Roll the workspace back to the previous ready revision in the chain. */
+  async rollback(cwdValue: string): Promise<WorkspaceEnvironmentStatus> {
+    const cwd = resolve(cwdValue);
+    const current = await this.status(cwd);
+    if (!current.revision_id) throw new Error("Workspace has no bound environment revision");
+    const currentRevision = (await this.list()).find((item) => item.revision_id === current.revision_id);
+    if (!currentRevision?.supersedes_revision_id) throw new Error("No previous revision to roll back to");
+    const previous = (await this.list()).find((item) => item.revision_id === currentRevision.supersedes_revision_id && item.status === "ready");
+    if (!previous) throw new Error(`Previous ready revision not found: ${currentRevision.supersedes_revision_id}`);
+    return this.bind(cwd, previous.revision_id);
   }
 
   private async provision(cwd: string): Promise<WorkspaceEnvironmentStatus> {
@@ -349,15 +405,7 @@ export class WorkspaceEnvironmentService {
       // use registry status as the publication boundary. Failed prefixes are
       // removed before the revision is marked failed.
       await this.run(micromamba, ["create", "--yes", "--prefix", finalPrefix, "--channel", "conda-forge", "--strict-channel-priority", ...input.packages], 20 * 60_000);
-      if (input.language === "r") {
-        const rscript = join(environmentPaths(finalPrefix).bin, process.platform === "win32" ? "Rscript.exe" : "Rscript");
-        if (!await executable(rscript)) throw new Error("Environment health check failed: Rscript is missing");
-        await this.run(rscript, ["-e", "cat(R.version.string)"], 30_000);
-      } else {
-        const python = environmentPaths(finalPrefix).python;
-        if (!await executable(python)) throw new Error("Environment health check failed: Python executable is missing");
-        await this.run(python, ["-c", "import sys; print(sys.version_info[:2])"], 30_000);
-      }
+      await this.runHealthCheck(finalPrefix, input.language);
       revision = { ...revision, status: "ready" };
       await this.upsert(revision);
       return revision;
@@ -366,6 +414,18 @@ export class WorkspaceEnvironmentService {
       revision = { ...revision, status: "failed", failure: { stage: "create", message: error instanceof Error ? error.message : String(error) } };
       await this.upsert(revision);
       throw error;
+    }
+  }
+
+  private async runHealthCheck(prefix: string, language: EnvironmentLanguage): Promise<void> {
+    if (language === "r") {
+      const rscript = join(environmentPaths(prefix).bin, process.platform === "win32" ? "Rscript.exe" : "Rscript");
+      if (!await executable(rscript)) throw new Error("Environment health check failed: Rscript is missing");
+      await this.run(rscript, ["-e", "cat(R.version.string)"], 30_000);
+    } else {
+      const python = environmentPaths(prefix).python;
+      if (!await executable(python)) throw new Error("Environment health check failed: Python executable is missing");
+      await this.run(python, ["-c", "import sys; print(sys.version_info[:2])"], 30_000);
     }
   }
 
