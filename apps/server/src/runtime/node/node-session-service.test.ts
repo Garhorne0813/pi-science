@@ -186,7 +186,7 @@ describe("Node session lifecycle", () => {
     const environment = JSON.parse(await readFile(process.env.FAKE_PI_ENV_LOG, "utf8"));
     expect(environment).toMatchObject({
       PI_SCIENCE_ENVIRONMENT_PREFIX: join(cwd, ".venv"),
-      npm_config_prefix: join(cwd, ".pi-science", "npm-global"),
+      npm_config_prefix: join(cwd, ".pi-science", "node-tools", "npm"),
     });
     expect(environment.PATH.split(delimiter)[0]).toBe(join(cwd, ".venv", process.platform === "win32" ? "Scripts" : "bin"));
     await service.shutdownAll();

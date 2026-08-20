@@ -36,6 +36,11 @@ export function registerEnvironmentRoutes(app: FastifyInstance, environments: Wo
     try { return await environments.status(await workspace(request)); }
     catch (error) { return reply.code(403).send({ error: String(error) }); }
   });
+
+  app.get("/api/environments/workspace/node-status", async (request, reply) => {
+    try { return await environments.nodeStatus(await workspace(request)); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+  });
   app.post("/api/environments/workspace", async (request, reply) => {
     let cwd: string;
     try { cwd = await workspace(request); }

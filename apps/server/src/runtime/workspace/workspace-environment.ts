@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { constants } from "node:fs";
-import { access, chmod, mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { delimiter, join, resolve } from "node:path";
 import { configPath, readJson, withFileWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
@@ -41,6 +41,25 @@ export interface WorkspaceEnvironmentStatus {
   error?: string;
 }
 
+export interface NodeWorkspaceStatus {
+  workspace: string;
+  node_version: string | null;
+  package_managers: { npm: boolean; pnpm: boolean; yarn: boolean; bun: boolean };
+  lockfile: { exists: boolean; name: string | null };
+  node_modules_exists: boolean;
+  install_needed: boolean;
+  tooling: {
+    npm_prefix: string;
+    npm_cache: string;
+    pnpm_home: string;
+    corepack_home: string;
+    npm_prefix_size: number | null;
+    npm_cache_size: number | null;
+    pnpm_home_size: number | null;
+    corepack_home_size: number | null;
+  };
+}
+
 export interface CreateEnvironmentInput {
   name: string;
   display_name?: string;
@@ -65,6 +84,56 @@ function environmentPaths(prefix: string, platform = process.platform) {
   return { virtualEnv: prefix, bin, python: join(bin, platform === "win32" ? "python.exe" : "python"), pip: join(bin, platform === "win32" ? "pip.exe" : "pip") };
 }
 
+function nodeToolsRoot(workspace: string): string {
+  return join(workspace, ".pi-science", "node-tools");
+}
+
+function npmGlobalPrefixFor(workspace: string): string {
+  return join(nodeToolsRoot(workspace), "npm");
+}
+
+function pnpmHomeFor(workspace: string): string {
+  return join(nodeToolsRoot(workspace), "pnpm");
+}
+
+function corepackHomeFor(workspace: string): string {
+  return join(workspace, ".pi-science", "cache", "corepack");
+}
+
+function commandAvailable(command: string): boolean {
+  try {
+    const result = spawnSync(command, ["--version"], { stdio: "ignore" });
+    return result.error === undefined && result.status !== null;
+  } catch {
+    return false;
+  }
+}
+
+async function dirSize(target: string): Promise<number | null> {
+  try {
+    const info = await stat(target);
+    if (!info.isDirectory()) return null;
+    let total = 0;
+    const stack = [target];
+    while (stack.length) {
+      const dir = stack.pop()!;
+      let entries;
+      try { entries = await readdir(dir, { withFileTypes: true }); } catch { continue; }
+      for (const entry of entries) {
+        const full = join(dir, entry.name);
+        try {
+          const entryInfo = await stat(full);
+          if (entryInfo.isDirectory()) stack.push(full);
+          else total += entryInfo.size;
+        } catch { /* skip unreadable entries */ }
+      }
+    }
+    return total;
+  } catch {
+    return null;
+  }
+}
+
 async function exists(path: string): Promise<boolean> { try { await access(path); return true; } catch { return false; } }
 async function executable(path: string): Promise<boolean> { try { await access(path, constants.X_OK); return true; } catch { return false; } }
 function bindingPath(cwd: string): string { return join(resolve(cwd), ".pi-science", "environment.json"); }
@@ -83,8 +152,10 @@ export function defaultPythonExecutable(environment: NodeJS.ProcessEnv = process
 
 export function workspaceEnvironmentVariables(status: WorkspaceEnvironmentStatus, inherited: NodeJS.ProcessEnv = process.env, platform = process.platform): NodeJS.ProcessEnv {
   const paths = environmentPaths(status.prefix, platform);
-  const npmBin = platform === "win32" ? status.npm.global_prefix : join(status.npm.global_prefix, "bin");
-  const pnpmHome = join(status.workspace, ".pi-science", "pnpm-global");
+  const npmGlobal = status.npm.global_prefix;
+  const npmBin = platform === "win32" ? npmGlobal : join(npmGlobal, "bin");
+  const pnpmHome = pnpmHomeFor(status.workspace);
+  const corepackHome = corepackHomeFor(status.workspace);
   const inheritedPath = platform === "win32" ? Object.entries(inherited).find(([key]) => key.toLowerCase() === "path")?.[1] ?? "" : inherited.PATH ?? "";
   const base = platform === "win32" ? Object.fromEntries(Object.entries(inherited).filter(([key]) => key.toLowerCase() !== "path")) : { ...inherited };
   return {
@@ -95,9 +166,9 @@ export function workspaceEnvironmentVariables(status: WorkspaceEnvironmentStatus
     PI_SCIENCE_ENVIRONMENT_REVISION_ID: status.revision_id,
     PI_SCIENCE_ENVIRONMENT_PREFIX: status.prefix,
     PYTHONNOUSERSITE: "1", PIP_USER: "0",
-    npm_config_prefix: status.npm.global_prefix, NPM_CONFIG_PREFIX: status.npm.global_prefix,
+    npm_config_prefix: npmGlobal, NPM_CONFIG_PREFIX: npmGlobal,
     npm_config_cache: status.npm.cache, NPM_CONFIG_CACHE: status.npm.cache, npm_config_update_notifier: "false",
-    PNPM_HOME: pnpmHome, COREPACK_HOME: join(status.workspace, ".pi-science", "cache", "corepack"),
+    PNPM_HOME: pnpmHome, COREPACK_HOME: corepackHome,
     PYTHONHOME: undefined, PIP_PREFIX: undefined,
   };
 }
@@ -158,6 +229,53 @@ export class WorkspaceEnvironmentService {
     this.provisioning.set(cwd, operation);
     return operation;
   }
+
+  async nodeStatus(cwdValue: string): Promise<NodeWorkspaceStatus> {
+    const workspace = resolve(cwdValue);
+    const packageJson = join(workspace, "package.json");
+    const packageJsonExists = await exists(packageJson);
+    const lockfileCandidates = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock"];
+    let lockfile: { exists: boolean; name: string | null } = { exists: false, name: null };
+    for (const name of lockfileCandidates) {
+      if (await exists(join(workspace, name))) {
+        lockfile = { exists: true, name };
+        break;
+      }
+    }
+    const nodeModules = join(workspace, "node_modules");
+    const nodeModulesExists = await exists(nodeModules);
+    const npmPrefix = npmGlobalPrefixFor(workspace);
+    const npmCache = join(workspace, ".pi-science", "cache", "npm");
+    const pnpmHome = pnpmHomeFor(workspace);
+    const corepackHome = corepackHomeFor(workspace);
+    const [npmPrefixSize, npmCacheSize, pnpmHomeSize, corepackHomeSize] = await Promise.all([
+      dirSize(npmPrefix), dirSize(npmCache), dirSize(pnpmHome), dirSize(corepackHome),
+    ]);
+    return {
+      workspace,
+      node_version: process.versions.node ?? null,
+      package_managers: {
+        npm: commandAvailable("npm"),
+        pnpm: commandAvailable("pnpm"),
+        yarn: commandAvailable("yarn"),
+        bun: commandAvailable("bun"),
+      },
+      lockfile,
+      node_modules_exists: nodeModulesExists,
+      install_needed: packageJsonExists && !nodeModulesExists,
+      tooling: {
+        npm_prefix: npmPrefix,
+        npm_cache: npmCache,
+        pnpm_home: pnpmHome,
+        corepack_home: corepackHome,
+        npm_prefix_size: npmPrefixSize,
+        npm_cache_size: npmCacheSize,
+        pnpm_home_size: pnpmHomeSize,
+        corepack_home_size: corepackHomeSize,
+      },
+    };
+  }
+
 
   async environment(cwdValue: string, inherited: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv> {
     return workspaceEnvironmentVariables(await this.ensure(cwdValue), inherited);
@@ -266,7 +384,7 @@ export class WorkspaceEnvironmentService {
 
   private statusFor(workspace: string, prefix: string, manager: NonNullable<WorkspaceEnvironmentStatus["manager"]>, extra: Partial<WorkspaceEnvironmentStatus>): WorkspaceEnvironmentStatus {
     const paths = environmentPaths(prefix);
-    return { ready: false, workspace, prefix: prefix, python: paths.python, pip: paths.pip, manager, npm: { local_prefix: workspace, global_prefix: join(workspace, ".pi-science", "npm-global"), cache: join(workspace, ".pi-science", "cache", "npm") }, ...extra };
+    return { ready: false, workspace, prefix: prefix, python: paths.python, pip: paths.pip, manager, npm: { local_prefix: workspace, global_prefix: npmGlobalPrefixFor(workspace), cache: join(workspace, ".pi-science", "cache", "npm") }, ...extra };
   }
 
   private async ensureMicromamba(): Promise<string> {

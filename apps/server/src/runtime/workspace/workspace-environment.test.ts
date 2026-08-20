@@ -27,6 +27,24 @@ describe("workspace environment platform defaults", () => {
     expect(environment.UV_PROJECT_ENVIRONMENT).toBeUndefined();
     expect(environment.PIP_REQUIRE_VIRTUALENV).toBeUndefined();
   });
+
+  it("redirects global npm/pnpm tooling into the workspace node-tools dir by default", () => {
+    const workspace = "/work/project";
+    const status = {
+      ready: true, workspace, prefix: join(workspace, ".venv"), python: join(workspace, ".venv", "bin", "python"), pip: join(workspace, ".venv", "bin", "pip"),
+      npm: { local_prefix: workspace, global_prefix: join(workspace, ".pi-science", "node-tools", "npm"), cache: join(workspace, ".pi-science", "cache", "npm") },
+    };
+
+    const environment = workspaceEnvironmentVariables(status, { PATH: "/usr/bin" }, "linux");
+    expect(environment.npm_config_prefix).toBe(join(workspace, ".pi-science", "node-tools", "npm"));
+    expect(environment.NPM_CONFIG_PREFIX).toBe(join(workspace, ".pi-science", "node-tools", "npm"));
+    expect(environment.npm_config_cache).toBe(join(workspace, ".pi-science", "cache", "npm"));
+    expect(environment.PNPM_HOME).toBe(join(workspace, ".pi-science", "node-tools", "pnpm"));
+    expect(environment.COREPACK_HOME).toBe(join(workspace, ".pi-science", "cache", "corepack"));
+    expect(environment.NODE_PATH).toBeUndefined();
+    expect(environment.PATH).toContain(join(workspace, ".pi-science", "node-tools", "npm", "bin"));
+    expect(environment.PATH).toContain(join(workspace, ".pi-science", "node-tools", "pnpm"));
+  });
 });
 
 describe("workspace environment package mutation", () => {
@@ -87,5 +105,19 @@ describe("workspace environment package mutation", () => {
       supersedes_revision_id: "rev_old",
     }));
     expect(bind).toHaveBeenCalledWith(workspace, "rev_new");
+  });
+
+  it("reports node workspace tooling status", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-science-node-status-"));
+    tempDirs.push(root);
+    await writeFile(join(root, "package.json"), JSON.stringify({ name: "temp-project" }), "utf8");
+
+    const service = new WorkspaceEnvironmentService();
+    const status = await service.nodeStatus(root);
+    expect(status.lockfile.exists).toBe(false);
+    expect(status.node_modules_exists).toBe(false);
+    expect(status.install_needed).toBe(true);
+    expect(status.tooling.npm_prefix).toBe(join(root, ".pi-science", "node-tools", "npm"));
+    expect(status.tooling.pnpm_home).toBe(join(root, ".pi-science", "node-tools", "pnpm"));
   });
 });
