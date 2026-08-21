@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { defaultPythonExecutable, WorkspaceEnvironmentService, workspaceEnvironmentVariables, type EnvironmentRevision } from "./workspace-environment.js";
+import { DEFAULT_PACKAGES, DEFAULT_R_PACKAGES, defaultPythonExecutable, WorkspaceEnvironmentService, workspaceEnvironmentVariables, type EnvironmentRevision } from "./workspace-environment.js";
 
 describe("workspace environment platform defaults", () => {
   it("uses the Windows Python launcher name when no override is configured", () => {
@@ -224,6 +224,17 @@ describe("workspace environment package mutation", () => {
     ]);
     expect(presets.find((preset) => preset.id === "python-science")?.packages).toContain("scipy");
     expect(presets.find((preset) => preset.id === "r-minimal")?.language).toBe("r");
+  });
+
+  it("restores scientific defaults: python provisioning equals the science preset and includes numpy", () => {
+    const presets = new WorkspaceEnvironmentService().listPresets();
+    const science = presets.find((preset) => preset.id === "python-science");
+    expect(DEFAULT_PACKAGES).toEqual(science?.packages);
+    expect(DEFAULT_PACKAGES).toEqual(expect.arrayContaining(["ipykernel", "numpy", "pandas", "scipy", "matplotlib", "seaborn"]));
+  });
+
+  it("keeps r defaults able to host notebook kernels", () => {
+    expect(DEFAULT_R_PACKAGES).toEqual(expect.arrayContaining(["r-base=4.4", "r-irkernel"]));
   });
 
   it("rolls the workspace back to the previous ready revision", async () => {

@@ -80,13 +80,17 @@ export interface EnvironmentPreset {
 }
 
 const DEFAULT_ENVIRONMENT_ID = "env_python_standard";
-const DEFAULT_PACKAGES = ["python=3.12", "pip"];
-const DEFAULT_R_PACKAGES = ["r-base=4.4"];
+// New workspaces must be able to run scientific code out of the box, so the
+// default package set equals the python-science preset (shared constant) and
+// the R default mirrors the pre-refactor conda layout that r-irkernel needs.
+const PYTHON_SCIENCE_PACKAGES = ["python=3.12", "pip", "ipykernel", "numpy", "pandas", "scipy", "matplotlib", "seaborn"];
+export const DEFAULT_PACKAGES = PYTHON_SCIENCE_PACKAGES;
+export const DEFAULT_R_PACKAGES = ["python=3.12", "pip", "ipykernel", "r-base=4.4", "r-irkernel", "r-tidyverse", "r-ggplot2"];
 
 export const ENVIRONMENT_PRESETS = {
   "python-minimal": { name: "Python Minimal", language: "python", packages: ["python=3.12", "pip"] },
   "python-data": { name: "Python Data", language: "python", packages: ["python=3.12", "pip", "numpy", "pandas", "matplotlib"] },
-  "python-science": { name: "Python Science", language: "python", packages: ["python=3.12", "pip", "numpy", "pandas", "scipy", "matplotlib"] },
+  "python-science": { name: "Python Science", language: "python", packages: PYTHON_SCIENCE_PACKAGES },
   "r-minimal": { name: "R Minimal", language: "r", packages: ["r-base=4.4"] },
 } as const;
 
