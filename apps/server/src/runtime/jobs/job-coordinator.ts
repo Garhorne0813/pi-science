@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { metadataRoot, readJson, withFileWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
+import type { JobRepository } from "../../storage/sqlite/repositories/job-repository.js";
 import { defaultPythonExecutable, WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
 import { executionIdFor, executionRepository, type ExecutionRepository } from "../executions/execution-repository.js";
 
@@ -43,7 +44,7 @@ export class JobCoordinator {
   private readonly leaseMs: number;
   private readonly heartbeatMs: number;
 
-  constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService(), private readonly hooks: JobCoordinatorHooks = {}, private readonly executions: Pick<ExecutionRepository, "start" | "finish"> = executionRepository) {
+  constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService(), private readonly hooks: JobCoordinatorHooks = {}, private readonly executions: Pick<ExecutionRepository, "start" | "finish"> = executionRepository, private readonly repository?: JobRepository) {
     const platform = hooks.platform ?? process.platform;
     this.processIdentity = hooks.ownerProcessIdentity ? hooks.ownerProcessIdentity(process.pid, platform) : ownerProcessIdentity(process.pid, platform);
     this.processStartedAt = this.processIdentity?.value ?? new Date(Date.now() - process.uptime() * 1000).toISOString();
@@ -106,6 +107,10 @@ export class JobCoordinator {
   }
 
   async list(cwd: string, limit: number): Promise<JobRecord[]> {
+    if (this.repository) {
+      const records = await this.repository.list(cwd, limit);
+      return Promise.all(records.map((record) => this.healOrphan(record)));
+    }
     let names: string[];
     try { names = await readdir(this.jobsDir(cwd)); } catch { return []; }
     const records: JobRecord[] = [];
@@ -120,12 +125,25 @@ export class JobCoordinator {
     return (await this.list(cwd, Number.MAX_SAFE_INTEGER)).some((record) => ["pending", "running"].includes(record.status));
   }
 
-  async get(cwd: string, id: string): Promise<JobRecord | null> { const record = await readJson<JobRecord | null>(this.jobPath(cwd, id), null); return record ? this.healOrphan(record) : null; }
+  async get(cwd: string, id: string): Promise<JobRecord | null> {
+    if (this.repository) { const record = await this.repository.get(cwd, id); return record ? this.healOrphan(record) : null; }
+    const record = await readJson<JobRecord | null>(this.jobPath(cwd, id), null); return record ? this.healOrphan(record) : null;
+  }
   async logs(cwd: string, id: string) { const record = await this.get(cwd, id); return record ? { job_id: record.job_id, stdout: record.stdout, stderr: record.stderr, stdout_truncated: record.stdout_truncated === true, stderr_truncated: record.stderr_truncated === true } : null; }
   async cancel(cwd: string, id: string): Promise<JobRecord | null> {
     this.cancelled.add(id);
     const child = this.children.get(id);
     if (child) terminate(child);
+    if (this.repository) {
+      const current = await this.repository.get(cwd, id);
+      if (!current) { this.cancelled.delete(id); return null; }
+      if (isTerminal(current.status)) { if (current.status !== "cancelled") this.cancelled.delete(id); return current; }
+      let diagnostic: string | undefined;
+      if (!child && current.ownership?.child) diagnostic = `cancellation cleanup: ${this.reapOrphanChild(current.ownership)}`;
+      const cancelled = await this.repository.cancel(cwd, id, this.now(), diagnostic);
+      if (cancelled) await this.finishExecution(cancelled);
+      return cancelled;
+    }
     const path = this.jobPath(cwd, id);
     const cancelled = await withFileWriteLock(path, async () => {
       const record = await readJson<JobRecord | null>(path, null);
@@ -150,7 +168,10 @@ export class JobCoordinator {
 
   private jobsDir(cwd: string) { return join(metadataRoot(cwd), "jobs"); }
   private jobPath(cwd: string, id: string) { if (!/^job_[A-Za-z0-9]{16}$/.test(id)) throw new Error("Invalid job id"); const root = resolve(this.jobsDir(cwd)); const target = resolve(root, `${id}.json`); const rel = relative(root, target); if (isAbsolute(rel) || rel.startsWith("..")) throw new Error("Job path escapes the workspace"); return target; }
-  private async save(record: JobRecord) { await writeJsonAtomic(this.jobPath(record.cwd, record.job_id), record); }
+  private async save(record: JobRecord) {
+    if (this.repository) { await this.repository.save(record); return; }
+    await writeJsonAtomic(this.jobPath(record.cwd, record.job_id), record);
+  }
   private ownershipMatches(left: JobOwnership | undefined, right: JobOwnership | undefined): boolean { return Boolean(left && right && left.instance_id === right.instance_id && left.generation === right.generation && left.token === right.token); }
   private ownerCrediblyAlive(ownership: JobOwnership): boolean {
     if (LIVE_JOB_OWNERS.has(ownership.token)) return true;
@@ -177,6 +198,16 @@ export class JobCoordinator {
   }
   private async healOrphan(record: JobRecord): Promise<JobRecord> {
     if (!isNonterminal(record.status) || this.jobs.has(record.job_id)) return record;
+    if (this.repository) {
+      const now = this.now();
+      if (!record.ownership) {
+        if (now - Date.parse(record.created_at) < ORPHAN_GRACE_MS) return record;
+      } else if (Date.parse(record.ownership.lease_expires_at) > now || this.ownerCrediblyAlive(record.ownership)) return record;
+      const note = record.ownership ? `job owner lease expired and owner process is no longer active (${record.ownership.instance_id}); ${this.reapOrphanChild(record.ownership)}` : "job was orphaned by a server restart";
+      const healed = await this.repository.heal(record, now, note);
+      if (healed && isTerminal(healed.status)) await this.finishExecution(healed);
+      return healed ?? record;
+    }
     const path = this.jobPath(record.cwd, record.job_id);
     const healed = await withFileWriteLock(path, async () => {
       const current = await readJson<JobRecord | null>(path, null);
@@ -201,6 +232,20 @@ export class JobCoordinator {
     const refresh = async () => {
       const ownership = record.ownership;
       if (!ownership) return;
+      if (this.repository) {
+        const current = await this.repository.get(record.cwd, record.job_id);
+        if (!current || !isNonterminal(current.status) || !this.ownershipMatches(current.ownership, ownership)) {
+          if (current?.status === "cancelled") { const child = this.children.get(record.job_id); if (child) terminate(child); }
+          this.stopHeartbeat(record.job_id); return;
+        }
+        const updated = await this.repository.heartbeat(record, ownership, this.now());
+        if (!updated || !isNonterminal(updated.status) || !this.ownershipMatches(updated.ownership, ownership)) {
+          if (updated?.status === "cancelled") { const child = this.children.get(record.job_id); if (child) terminate(child); }
+          this.stopHeartbeat(record.job_id); return;
+        }
+        record.ownership = updated.ownership;
+        return;
+      }
       const path = this.jobPath(record.cwd, record.job_id);
       await withFileWriteLock(path, async () => {
         const current = await readJson<JobRecord | null>(path, null);
@@ -224,13 +269,31 @@ export class JobCoordinator {
   }
   private async run(record: JobRecord, environment: NodeJS.ProcessEnv): Promise<void> {
     const path = this.jobPath(record.cwd, record.job_id);
-    if (this.cancelled.has(record.job_id)) { record.status = "cancelled"; record.ended_at = new Date(this.now()).toISOString(); await this.save(record); await this.finishExecution(record); this.cancelled.delete(record.job_id); LIVE_JOB_OWNERS.delete(record.ownership?.token ?? ""); return; }
+    if (this.cancelled.has(record.job_id)) {
+      const cancelled = this.repository
+        ? await this.repository.cancel(record.cwd, record.job_id, this.now())
+        : (record.status = "cancelled", record.ended_at = new Date(this.now()).toISOString(), await this.save(record), record);
+      if (cancelled) Object.assign(record, cancelled);
+      await this.finishExecution(record);
+      this.cancelled.delete(record.job_id); LIVE_JOB_OWNERS.delete(record.ownership?.token ?? ""); return;
+    }
     let enteredRunning = false;
-    try { enteredRunning = await withFileWriteLock(path, async () => {
+    try {
+      if (this.repository) {
+        const current = await this.repository.transitionToRunning(record, this.now());
+        if (!current || isTerminal(current.status) || !this.ownershipMatches(current.ownership, record.ownership)) {
+          if (current) Object.assign(record, current);
+          enteredRunning = false;
+        } else {
+          Object.assign(record, current);
+          enteredRunning = true;
+        }
+      } else enteredRunning = await withFileWriteLock(path, async () => {
       const current = await readJson<JobRecord | null>(path, null);
       if (!current || isTerminal(current.status) || !this.ownershipMatches(current.ownership, record.ownership)) { if (current) Object.assign(record, current); return false; }
       current.status = "running"; current.started_at = new Date(this.now()).toISOString(); Object.assign(record, current); await writeJsonAtomic(path, current); return true;
-    }); } catch (error) { LIVE_JOB_OWNERS.delete(record.ownership?.token ?? ""); throw error; }
+      });
+    } catch (error) { LIVE_JOB_OWNERS.delete(record.ownership?.token ?? ""); throw error; }
     if (!enteredRunning) { LIVE_JOB_OWNERS.delete(record.ownership?.token ?? ""); return; }
     this.startHeartbeat(record);
     let child: ChildProcess | undefined; let stdout = Buffer.alloc(0); let stderr = Buffer.alloc(0); let stdoutTruncated = false; let stderrTruncated = false; let timedOut = false; let childResult: Promise<{ code: number | null }> | undefined;
@@ -242,34 +305,64 @@ export class JobCoordinator {
     try {
       await this.hooks.beforeSpawn?.(record);
       if (this.cancelled.has(record.job_id)) { record.status = "cancelled"; return; }
-      const spawned = await withFileWriteLock(path, async () => {
-        const current = await readJson<JobRecord | null>(path, null);
-        if (!current || isTerminal(current.status) || !this.ownershipMatches(current.ownership, record.ownership)) { if (current) Object.assign(record, current); return false; }
-        // Test-only deterministic barrier. Production callers cannot inject work
-        // into this spawn-authorization critical section.
-        await this.hooks.testBeforeAuthorizedSpawn?.(record);
-        // spawn() returns synchronously. Authorization, process creation, durable
-        // child identity and local registration therefore share one per-job
-        // critical section; another coordinator cannot cancel between them.
-        child = spawn(record.command[0]!, record.command.slice(1), { cwd: record.execution_cwd ?? record.cwd, env: environment, stdio: ["ignore", "pipe", "pipe"], detached: POSIX });
-        this.children.set(record.job_id, child);
-        child.stdout?.on("data", (chunk: Buffer) => { stdout = appendTail(stdout, chunk, () => { stdoutTruncated = true; }); });
-        child.stderr?.on("data", (chunk: Buffer) => { stderr = appendTail(stderr, chunk, () => { stderrTruncated = true; }); });
-        const timeout = Math.max(1, Number(record.requirement.timeout_seconds ?? 3600)) * 1000;
-        childResult = new Promise<{ code: number | null }>((done) => {
-          let timeoutTimer: NodeJS.Timeout | undefined; let closeFailsafe: NodeJS.Timeout | undefined; let settled = false;
-          const finish = (code: number | null) => { if (settled) return; settled = true; if (timeoutTimer) clearTimeout(timeoutTimer); if (closeFailsafe) clearTimeout(closeFailsafe); done({ code }); };
-          child!.once("close", (code) => finish(code));
-          child!.once("exit", (code) => { if (!POSIX && !timedOut && !settled) { closeFailsafe = setTimeout(() => finish(code), WINDOWS_EXIT_DRAIN_MS); closeFailsafe.unref(); } });
-          timeoutTimer = setTimeout(() => { timedOut = true; terminate(child!); closeFailsafe = setTimeout(() => finish(null), PROCESS_CLOSE_FAILSAFE_MS); closeFailsafe.unref(); }, timeout);
+      const spawned = this.repository
+        ? await (async () => {
+          const current = await this.repository!.get(record.cwd, record.job_id);
+          if (!current || isTerminal(current.status) || !this.ownershipMatches(current.ownership, record.ownership)) { if (current) Object.assign(record, current); return false; }
+          await this.hooks.testBeforeAuthorizedSpawn?.(record);
+          child = spawn(record.command[0]!, record.command.slice(1), { cwd: record.execution_cwd ?? record.cwd, env: environment, stdio: ["ignore", "pipe", "pipe"], detached: POSIX });
+          this.children.set(record.job_id, child);
+          child.stdout?.on("data", (chunk: Buffer) => { stdout = appendTail(stdout, chunk, () => { stdoutTruncated = true; }); });
+          child.stderr?.on("data", (chunk: Buffer) => { stderr = appendTail(stderr, chunk, () => { stderrTruncated = true; }); });
+          const timeout = Math.max(1, Number(record.requirement.timeout_seconds ?? 3600)) * 1000;
+          childResult = new Promise<{ code: number | null }>((done) => {
+            let timeoutTimer: NodeJS.Timeout | undefined; let closeFailsafe: NodeJS.Timeout | undefined; let settled = false;
+            const finish = (code: number | null) => { if (settled) return; settled = true; if (timeoutTimer) clearTimeout(timeoutTimer); if (closeFailsafe) clearTimeout(closeFailsafe); done({ code }); };
+            child!.once("close", (code) => finish(code));
+            child!.once("exit", (code) => { if (!POSIX && !timedOut && !settled) { closeFailsafe = setTimeout(() => finish(code), WINDOWS_EXIT_DRAIN_MS); closeFailsafe.unref(); } });
+            timeoutTimer = setTimeout(() => { timedOut = true; terminate(child!); closeFailsafe = setTimeout(() => finish(null), PROCESS_CLOSE_FAILSAFE_MS); closeFailsafe.unref(); }, timeout);
+          });
+          const platform = this.hooks.platform ?? process.platform;
+          const childIdentity: JobChildIdentity = { pid: child.pid!, process_identity: this.hooks.childStartIdentity?.(child.pid!, platform) ?? childProcessIdentity(child.pid!, platform), process_group: platform !== "win32", platform, ownership_generation: current.ownership!.generation, ownership_token: current.ownership!.token };
+          const updatedOwnership = { ...current.ownership!, child: childIdentity };
+          record.ownership = updatedOwnership;
+          const durable = await this.repository!.setChild(record, updatedOwnership, this.now());
+          if (!durable || durable.status === "cancelled" || !this.ownershipMatches(durable.ownership, updatedOwnership)) {
+            terminate(child);
+            if (durable) Object.assign(record, durable);
+            return false;
+          }
+          Object.assign(record, durable);
+          return true;
+        })()
+        : await withFileWriteLock(path, async () => {
+          const current = await readJson<JobRecord | null>(path, null);
+          if (!current || isTerminal(current.status) || !this.ownershipMatches(current.ownership, record.ownership)) { if (current) Object.assign(record, current); return false; }
+          // Test-only deterministic barrier. Production callers cannot inject work
+          // into this spawn-authorization critical section.
+          await this.hooks.testBeforeAuthorizedSpawn?.(record);
+          // spawn() returns synchronously. Authorization, process creation, durable
+          // child identity and local registration therefore share one per-job
+          // critical section; another coordinator cannot cancel between them.
+          child = spawn(record.command[0]!, record.command.slice(1), { cwd: record.execution_cwd ?? record.cwd, env: environment, stdio: ["ignore", "pipe", "pipe"], detached: POSIX });
+          this.children.set(record.job_id, child);
+          child.stdout?.on("data", (chunk: Buffer) => { stdout = appendTail(stdout, chunk, () => { stdoutTruncated = true; }); });
+          child.stderr?.on("data", (chunk: Buffer) => { stderr = appendTail(stderr, chunk, () => { stderrTruncated = true; }); });
+          const timeout = Math.max(1, Number(record.requirement.timeout_seconds ?? 3600)) * 1000;
+          childResult = new Promise<{ code: number | null }>((done) => {
+            let timeoutTimer: NodeJS.Timeout | undefined; let closeFailsafe: NodeJS.Timeout | undefined; let settled = false;
+            const finish = (code: number | null) => { if (settled) return; settled = true; if (timeoutTimer) clearTimeout(timeoutTimer); if (closeFailsafe) clearTimeout(closeFailsafe); done({ code }); };
+            child!.once("close", (code) => finish(code));
+            child!.once("exit", (code) => { if (!POSIX && !timedOut && !settled) { closeFailsafe = setTimeout(() => finish(code), WINDOWS_EXIT_DRAIN_MS); closeFailsafe.unref(); } });
+            timeoutTimer = setTimeout(() => { timedOut = true; terminate(child!); closeFailsafe = setTimeout(() => finish(null), PROCESS_CLOSE_FAILSAFE_MS); closeFailsafe.unref(); }, timeout);
+          });
+          const platform = this.hooks.platform ?? process.platform;
+          const childIdentity: JobChildIdentity = { pid: child.pid!, process_identity: this.hooks.childStartIdentity?.(child.pid!, platform) ?? childProcessIdentity(child.pid!, platform), process_group: platform !== "win32", platform, ownership_generation: current.ownership!.generation, ownership_token: current.ownership!.token };
+          current.ownership = { ...current.ownership!, child: childIdentity };
+          record.ownership = current.ownership;
+          await writeJsonAtomic(path, current);
+          return true;
         });
-        const platform = this.hooks.platform ?? process.platform;
-        const childIdentity: JobChildIdentity = { pid: child.pid!, process_identity: this.hooks.childStartIdentity?.(child.pid!, platform) ?? childProcessIdentity(child.pid!, platform), process_group: platform !== "win32", platform, ownership_generation: current.ownership!.generation, ownership_token: current.ownership!.token };
-        current.ownership = { ...current.ownership!, child: childIdentity };
-        record.ownership = current.ownership;
-        await writeJsonAtomic(path, current);
-        return true;
-      });
       if (!spawned || !child || !childResult) return;
       if (this.cancelled.has(record.job_id)) terminate(child);
       const result = await childResult;
@@ -285,7 +378,15 @@ export class JobCoordinator {
       record.ended_at = new Date(this.now()).toISOString(); this.children.delete(record.job_id);
       try {
         await this.hooks.beforeTerminalSave?.(record);
-        await withFileWriteLock(path, async () => {
+        if (this.repository) {
+          const current = await this.repository.getById(record.job_id);
+          const terminal = current && isTerminal(current.status);
+          const ownsCurrent = this.ownershipMatches(current?.ownership, record.ownership);
+          const durable = current?.status === "cancelled"
+            ? await this.repository.updateCancelledDiagnostic({ ...record, status: "cancelled", ended_at: current.ended_at ?? record.ended_at, ownership: current.ownership, stderr: mergeDiagnosticText(record.stderr, current.stderr) }, this.now())
+            : terminal || !ownsCurrent ? current ?? record : await this.repository.saveTerminal(record, this.now());
+          Object.assign(record, durable ?? current ?? record);
+        } else await withFileWriteLock(path, async () => {
           const current = await readJson<JobRecord | null>(path, null);
           const terminal = current && isTerminal(current.status);
           const ownsCurrent = this.ownershipMatches(current?.ownership, record.ownership);

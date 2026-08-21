@@ -20,9 +20,9 @@ fi
 PI_CLI="${PI_CLI_PATH:-${PI_SCIENCE_INSTALL_PI_CLI:-}}"
 NODE_COMMAND="$(command -v node || true)"
 [ -f "$PI_CLI" ] || { echo "Error: Pi runtime is not installed. Run: bash scripts/install.sh" >&2; exit 1; }
-[ -n "$NODE_COMMAND" ] || { echo "Error: Node.js >=22.12.0 is required. Run: bash scripts/install.sh" >&2; exit 1; }
+[ -n "$NODE_COMMAND" ] || { echo "Error: Node.js >=24.16.0 is required. Run: bash scripts/install.sh" >&2; exit 1; }
 PI_NODE_PATH="$("$NODE_COMMAND" -p 'process.execPath')"
-"$PI_NODE_PATH" "$SCRIPT_DIR/check-node-version.mjs" || { echo "Error: Node.js >=22.12.0 is required (found $("$PI_NODE_PATH" --version)). Run: bash scripts/install.sh" >&2; exit 1; }
+"$PI_NODE_PATH" "$SCRIPT_DIR/check-node-version.mjs" || { echo "Error: Node.js >=24.16.0 is required (found $("$PI_NODE_PATH" --version)). Run: bash scripts/install.sh" >&2; exit 1; }
 CONTROL_PLANE_CLI="$PROJECT_DIR/apps/server/node_modules/tsx/dist/cli.mjs"
 VITE_BIN="$PROJECT_DIR/frontend/node_modules/.bin/vite"
 [ -f "$CONTROL_PLANE_CLI" ] || { echo "Error: server dependencies are not installed. Run: bash scripts/install.sh" >&2; exit 1; }

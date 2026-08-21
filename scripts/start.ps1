@@ -173,13 +173,13 @@ if (-not $PiCliPath) {
     throw "Pi runtime is not installed. Run: powershell -File scripts/install.ps1"
 }
 if (-not $NodePath) {
-    throw "Node.js >=22.12.0 is required. Run: powershell -File scripts/install.ps1"
+    throw "Node.js >=24.16.0 is required. Run: powershell -File scripts/install.ps1"
 }
 
 $NodeVersionCheck = Join-Path $ScriptDir "check-node-version.mjs"
 & $NodePath $NodeVersionCheck
 if ($LASTEXITCODE -ne 0) {
-    throw "Node.js >=22.12.0 is required."
+    throw "Node.js >=24.16.0 is required."
 }
 
 $ControlPlaneCli = Join-Path $ProjectDir "apps\server\node_modules\tsx\dist\cli.mjs"

@@ -163,12 +163,12 @@ function Read-RuntimeCli {
 Write-Host "==> Checking installation prerequisites..."
 $NodePath = Get-ProcessCommand "node"
 if (-not $NodePath) {
-    throw "Node.js >=22.12.0 is required."
+    throw "Node.js >=24.16.0 is required."
 }
 $NodeVersionCheck = Join-Path $ScriptDir "check-node-version.mjs"
 & $NodePath $NodeVersionCheck
 if ($LASTEXITCODE -ne 0) {
-    throw "Node.js >=22.12.0 is required."
+    throw "Node.js >=24.16.0 is required."
 }
 $PnpmPath = Get-ProcessCommand "pnpm"
 if (-not $PnpmPath) {

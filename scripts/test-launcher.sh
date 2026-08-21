@@ -24,9 +24,9 @@ wait_port_available() { local port="$1" attempts=100; while [ "$attempts" -gt 0 
 wait_file() { local file="$1" attempts=200; while [ "$attempts" -gt 0 ]; do [ -f "$file" ] && return 0; sleep 0.05; attempts=$((attempts - 1)); done; return 1; }
 wait_pid_gone() { local pid="$1" attempts=100; while [ "$attempts" -gt 0 ]; do ! kill -0 "$pid" 2>/dev/null && return 0; sleep 0.1; attempts=$((attempts - 1)); done; return 1; }
 
-if node "$NODE_CHECK_SCRIPT" 22.11.0; then fail "Node 22.11 was accepted"; fi
-node "$NODE_CHECK_SCRIPT" 22.12.0 || fail "Node 22.12 was rejected"
-node "$NODE_CHECK_SCRIPT" 23.0.0 || fail "Node 23 was rejected"
+if node "$NODE_CHECK_SCRIPT" 24.15.0; then fail "Node 24.15 was accepted"; fi
+node "$NODE_CHECK_SCRIPT" 24.16.0 || fail "Node 24.16 was rejected"
+node "$NODE_CHECK_SCRIPT" 25.0.0 || fail "Node 25 was rejected"
 
 # Static contract: package-local executables, preserved CWD, no package-manager
 # wrapper, actionable diagnostics, and the shared readiness deadline.
@@ -40,7 +40,7 @@ assert_contains "$START_SCRIPT" 'check-node-version.mjs'
 assert_not_contains "$START_SCRIPT" 'npm run dev'
 assert_not_contains "$START_SCRIPT" 'pnpm --config.store-dir'
 assert_contains "$INSTALL_SCRIPT" 'write-launcher.sh'
-assert_contains "$PROJECT_DIR/package.json" '"node": ">=22.12.0"'
+assert_contains "$PROJECT_DIR/package.json" '"node": ">=24.16.0"'
 
 # PATH launcher installation: checkout paths with spaces, owned reinstall,
 # legacy-owned migration, and refusal of unrelated/symlink/directory entries.

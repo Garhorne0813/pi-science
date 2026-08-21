@@ -5,7 +5,7 @@ import { access, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promi
 import { createServer } from "node:net";
 import { join, resolve, sep } from "node:path";
 import { configPath } from "../../storage/persistence.js";
-import type { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
+import type { EnvironmentRevision, WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
 
 export interface NotebookFile {
   path: string;
@@ -39,7 +39,7 @@ export interface NotebookServiceDependencies {
   configPath?: typeof configPath;
   platform?: NodeJS.Platform;
   micromambaExecutable?: string;
-  environments?: Pick<WorkspaceEnvironmentService, "installPackages">;
+  environments?: Pick<WorkspaceEnvironmentService, "installPackages"> & Partial<Pick<WorkspaceEnvironmentService, "list">>;
   now?: () => Date;
 }
 
@@ -73,7 +73,7 @@ export class NotebookService {
   private readonly configPath: (name: string) => string;
   private readonly platform: NodeJS.Platform;
   private readonly micromamba?: string;
-  private readonly environments?: Pick<WorkspaceEnvironmentService, "installPackages">;
+  private readonly environments?: Pick<WorkspaceEnvironmentService, "installPackages"> & Partial<Pick<WorkspaceEnvironmentService, "list">>;
   readonly jupyterPrefix: string;
   readonly jupyterBin: string;
   private jupyterProcess?: ChildProcess;
@@ -243,15 +243,20 @@ export class NotebookService {
       return;
     }
     if (typeof binding.revision_id !== "string") return;
-    let registry: { revisions?: Array<Record<string, unknown>> };
-    try {
-      registry = JSON.parse(await readFile(this.configPath(join("environments", "registry.json")), "utf8")) as typeof registry;
-    } catch {
-      return;
+    let revision: EnvironmentRevision | Record<string, unknown> | undefined;
+    if (this.environments?.list) {
+      revision = (await this.environments.list()).find((item) => item.revision_id === binding.revision_id && item.status === "ready");
+    } else {
+      let registry: { revisions?: Array<Record<string, unknown>> };
+      try {
+        registry = JSON.parse(await readFile(this.configPath(join("environments", "registry.json")), "utf8")) as typeof registry;
+      } catch {
+        return;
+      }
+      revision = registry.revisions?.find((item) => item.revision_id === binding.revision_id && item.status === "ready");
     }
-    const revision = registry.revisions?.find((item) => item.revision_id === binding.revision_id && item.status === "ready");
     if (!revision || typeof revision.prefix !== "string") return;
-    const prefix = revision.prefix as string;
+    const prefix = revision.prefix;
     const binDir = join(prefix, this.platform === "win32" ? "Scripts" : "bin");
     const language = typeof revision.language === "string" ? revision.language : "python";
     const kernelPackage = language === "r" ? "r-irkernel" : "ipykernel";
