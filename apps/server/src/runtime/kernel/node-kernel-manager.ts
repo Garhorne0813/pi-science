@@ -98,6 +98,7 @@ function defaultInterpreterAvailable(command: string): boolean {
 
 export class NodeKernelManager {
   private readonly sessions = new Map<string, NodeKernelSession>();
+  private readonly starting = new Map<string, Promise<NodeKernelSession>>();
   private readonly deps: Required<NodeKernelManagerDependencies>;
 
   constructor(deps: NodeKernelManagerDependencies = {}) {
@@ -110,19 +111,38 @@ export class NodeKernelManager {
 
   async execute(options: KernelExecuteOptions): Promise<KernelResult> {
     const key = sessionKey(options);
-    let session = this.sessions.get(key);
-    if (!session || session.exited) {
-      if (session) await session.stop().catch(() => undefined);
-      session = await NodeKernelSession.start(options, this.deps);
-      this.sessions.set(key, session);
-    }
+    const session = await this.ensureSession(key, options);
     try {
       return await session.execute(options);
     } catch (error) {
-      this.sessions.delete(key);
+      if (this.sessions.get(key) === session) this.sessions.delete(key);
       await session.stop().catch(() => undefined);
       throw error;
     }
+  }
+
+  /** Cold starts are deduplicated per session key so concurrent cells share one kernel spawn. */
+  private ensureSession(key: string, options: KernelExecuteOptions): Promise<NodeKernelSession> {
+    const existing = this.sessions.get(key);
+    if (existing && !existing.exited) return Promise.resolve(existing);
+    const pending = this.starting.get(key);
+    if (pending) return pending;
+    const started = this.startSession(key, options).finally(() => {
+      if (this.starting.get(key) === started) this.starting.delete(key);
+    });
+    this.starting.set(key, started);
+    return started;
+  }
+
+  private async startSession(key: string, options: KernelExecuteOptions): Promise<NodeKernelSession> {
+    const stale = this.sessions.get(key);
+    if (stale) {
+      await stale.stop().catch(() => undefined);
+      if (this.sessions.get(key) === stale) this.sessions.delete(key);
+    }
+    const session = await NodeKernelSession.start(options, this.deps);
+    this.sessions.set(key, session);
+    return session;
   }
 
   status(): KernelManagerStatus {
@@ -149,8 +169,10 @@ export class NodeKernelManager {
     });
     for (const key of keys) {
       const session = this.sessions.get(key);
-      if (session) await session.stop().catch(() => undefined);
+      if (!session) continue;
+      // Detach before stopping so a concurrent execute cannot attach to a dying session.
       this.sessions.delete(key);
+      await session.stop().catch(() => undefined);
     }
   }
 

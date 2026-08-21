@@ -134,4 +134,53 @@ describe("NodeKernelManager native execution", () => {
     }
   });
 
+  it.skipIf(python === null)("deduplicates a concurrent cold start into one kernel session", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pi-science-native-kernel-race-"));
+    cleanup.push(workspace);
+    const prefix = join(workspace, "env");
+    await createTestEnvironment(prefix);
+
+    const manager = new NodeKernelManager();
+    try {
+      const options = { language: "python" as const, cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-race", timeoutMs: 10_000 };
+      const [first, second] = await Promise.all([
+        manager.execute({ ...options, code: "x = 40" }),
+        manager.execute({ ...options, code: "x + 2" }),
+      ]);
+      expect(first.ok).toBe(true);
+      expect(second.ok).toBe(true);
+      expect(second.result).toBe("42");
+      expect(manager.status().active_count).toBe(1);
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(python === null)("handles cell timeouts without leaking the manager state", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pi-science-native-kernel-timeout-"));
+    cleanup.push(workspace);
+    const prefix = join(workspace, "env");
+    await createTestEnvironment(prefix);
+
+    const manager = new NodeKernelManager();
+    try {
+      const outcome = await manager.execute({ language: "python", code: "import time\ntime.sleep(5)", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-timeout", timeoutMs: 500 }).then(
+        (value) => ({ resolved: true as const, value }),
+        (error: Error) => ({ resolved: false as const, error }),
+      );
+      if (outcome.resolved) {
+        // POSIX: SIGINT succeeded, the bridge reported the interrupt and the namespace survives.
+        expect(outcome.value.ok).toBe(false);
+        expect(outcome.value.interrupted).toBe(true);
+        expect(manager.status().active_count).toBe(1);
+      } else {
+        // Windows or a failed interrupt: the session is torn down instead of leaking.
+        expect(outcome.error.message).toMatch(/timed out|interrupt/i);
+        expect(manager.status().active_count).toBe(0);
+      }
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
 });
