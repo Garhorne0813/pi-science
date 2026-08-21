@@ -18,6 +18,13 @@ function systemPython(): string | null {
 }
 
 const python = systemPython();
+function systemRscript(): string | null {
+  const command = process.platform === "win32" ? "Rscript.exe" : "Rscript";
+  const result = spawnSync(command, ["--version"], { encoding: "utf8" });
+  return result.status === 0 ? command : null;
+}
+
+const rscript = systemRscript();
 const cleanup: string[] = [];
 
 afterEach(async () => {
@@ -195,12 +202,12 @@ describe("NodeKernelManager platform interrupt semantics", () => {
     const writes: string[] = [];
     stdin.on("data", (chunk: Buffer) => writes.push(String(chunk)));
     const kills: (string | number)[] = [];
-    (child as Record<string, unknown>).stdin = stdin;
-    (child as Record<string, unknown>).stdout = new PassThrough();
-    (child as Record<string, unknown>).stderr = new PassThrough();
-    (child as Record<string, unknown>).pid = 4242;
-    (child as Record<string, unknown>).exitCode = null;
-    (child as Record<string, unknown>).kill = ((signal?: string | number) => { kills.push(signal ?? "SIGTERM"); return true; }) as ChildProcess["kill"];
+    (child as unknown as Record<string, unknown>).stdin = stdin;
+    (child as unknown as Record<string, unknown>).stdout = new PassThrough();
+    (child as unknown as Record<string, unknown>).stderr = new PassThrough();
+    (child as unknown as Record<string, unknown>).pid = 4242;
+    (child as unknown as Record<string, unknown>).exitCode = null;
+    (child as unknown as Record<string, unknown>).kill = ((signal?: string | number) => { kills.push(signal ?? "SIGTERM"); return true; }) as ChildProcess["kill"];
     return { child, writes, kills, answered: new Set<string>() };
   }
 
@@ -217,7 +224,7 @@ describe("NodeKernelManager platform interrupt semantics", () => {
         const session = fakeChild();
         sessions.push(session);
         return session.child;
-      }) as unknown as typeof spawn,
+      }) as unknown as typeof import("node:child_process").spawn,
       killProcessTree: (pid: number) => { treeKills.push(pid); },
     });
     return { manager, spawned, treeKills, sessions };
@@ -229,7 +236,7 @@ describe("NodeKernelManager platform interrupt semantics", () => {
       const request = JSON.parse(line) as { id: string };
       if (session.answered.has(request.id)) continue;
       session.answered.add(request.id);
-      session.child.stdout!.write(`${JSON.stringify({ id: request.id, type: "result", ok: true, stdout: "", result: "2", error: null, interrupted: false, ...overrides })}\n`);
+      (session.child.stdout as PassThrough).write(`${JSON.stringify({ id: request.id, type: "result", ok: true, stdout: "", result: "2", error: null, interrupted: false, ...overrides })}\n`);
     }
   }
 
@@ -312,4 +319,51 @@ describe("NodeKernelManager platform interrupt semantics", () => {
     }
     expect(treeKills).toContain(4242);
   });
+
+  it.skipIf(python === null || process.platform === "win32")("keeps the session usable after an interrupted cell", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pi-science-kernel-recover-"));
+    cleanup.push(workspace);
+    const prefix = join(workspace, "env");
+    await createTestEnvironment(prefix);
+
+    const manager = new NodeKernelManager();
+    try {
+      await manager.execute({ language: "python", code: "x = 41", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-recover", timeoutMs: 8_000 });
+      const outcome = await manager.execute({ language: "python", code: "import time\ntime.sleep(5)", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-recover", timeoutMs: 500 }).then(
+        (value) => ({ resolved: true as const, value }),
+        (error: Error) => ({ resolved: false as const, error }),
+      );
+      expect(outcome.resolved && outcome.value.interrupted).toBe(true);
+      // The interrupted namespace survives; the queued follow-up cell runs normally.
+      const followup = await manager.execute({ language: "python", code: "x + 1", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-recover", timeoutMs: 5_000 });
+      expect(followup.ok).toBe(true);
+      expect(followup.result).toBe("42");
+      const snapshot = manager.status();
+      expect(snapshot.active_count).toBe(1);
+      expect(snapshot.sessions.every((session) => session.alive)).toBe(true);
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(rscript === null)("executes cells through the real R bridge with a persistent namespace", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pi-science-r-bridge-"));
+    cleanup.push(workspace);
+    const prefix = join(workspace, "env");
+    const binDir = join(prefix, process.platform === "win32" ? "Scripts" : "bin");
+    await mkdir(binDir, { recursive: true });
+    await symlink(rscript!, join(binDir, process.platform === "win32" ? "Rscript.exe" : "Rscript"));
+
+    const manager = new NodeKernelManager();
+    try {
+      const first = await manager.execute({ language: "r", code: "answer <- 21", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-r", timeoutMs: 15_000 });
+      expect(first.ok).toBe(true);
+      const second = await manager.execute({ language: "r", code: "answer * 2", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-r", timeoutMs: 15_000 });
+      expect(second.ok).toBe(true);
+      expect(second.result).toBe("[1] 42");
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
 });

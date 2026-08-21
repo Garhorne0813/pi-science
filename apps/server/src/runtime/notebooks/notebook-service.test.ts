@@ -1,6 +1,6 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NotebookService } from "./notebook-service.js";
 import type { WorkspaceEnvironmentStatus } from "../workspace/workspace-environment.js";
@@ -120,5 +120,35 @@ describe("NotebookService", () => {
       expect(result.status).toBe("rejected");
       if (result.status === "rejected") expect((result.reason as Error).message).toBe("stop-here");
     }
+  });
+  // The shim records Jupyter argv through a Node script, which cannot be
+  // launched bare on win32; the boundary assertions below are POSIX-covered.
+  it.skipIf(process.platform === "win32")("binds jupyter to the workspace root and fences cross-workspace control", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-jupyter-scope-"));
+    cleanup.push(cwd);
+    const other = await mkdtemp(join(tmpdir(), "pi-science-jupyter-other-"));
+    cleanup.push(other);
+    const record = join(cwd, "spawn-args.json");
+    const service = new NotebookService({ configPath: (name) => join(cwd, ".pi-science", name) });
+    await mkdir(join(service.jupyterPrefix, "bin"), { recursive: true });
+    await writeFile(service.jupyterBin, `#!/usr/bin/env node\nimport { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(record)}, JSON.stringify(process.argv.slice(2)));\nsetInterval(() => {}, 30_000);\n`, "utf8");
+    await chmod(service.jupyterBin, 0o755);
+
+    const started = await service.start(cwd);
+    expect(started.running).toBe(true);
+    // The shim boots asynchronously; wait for its argv record to land on disk.
+    const args = await vi.waitFor(async () => JSON.parse(await readFile(record, "utf8")) as string[]);
+    expect(args).toContain(`--ServerApp.root_dir=${resolve(cwd)}`);
+    const tokenArg = args.find((item) => item.startsWith("--ServerApp.token="));
+    expect(tokenArg).toBeDefined();
+    expect(started.url).toBe(`http://127.0.0.1:${started.port}/lab?token=${tokenArg!.split("=")[1]}`);
+
+    expect(service.status(other)).toMatchObject({ running: true, matches_workspace: false });
+    expect(service.status(cwd)).toMatchObject({ running: true, matches_workspace: true });
+    await expect(service.start(other)).rejects.toThrow("already running for another workspace");
+    expect(() => service.stop(other)).toThrowError("Cannot stop Jupyter Lab owned by another workspace");
+
+    expect(service.stop(cwd).running).toBe(false);
+    expect(service.status()).toMatchObject({ running: false, port: null, url: null });
   });
 });
