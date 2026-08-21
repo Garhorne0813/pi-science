@@ -26,6 +26,12 @@ const WINDOWS_EXIT_DRAIN_MS = 1_000;
 const POSIX = process.platform !== "win32";
 const RESEARCH_ENVIRONMENT_KEY_NAMES = ["PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "ComSpec", "PATHEXT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "PYTHONNOUSERSITE", "PIP_USER", "CONDA_PREFIX", "PI_SCIENCE_ENVIRONMENT_PREFIX", "npm_config_prefix", "npm_config_cache", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"] as const;
 const RESEARCH_ENVIRONMENT_KEYS = new Map(RESEARCH_ENVIRONMENT_KEY_NAMES.map((key) => [key.toLowerCase(), key]));
+// Local jobs run user commands without research-surface isolation, so they get
+// the same default-deny baseline plus the workspace environment identity
+// variables and Windows toolchain locations. Host secrets (API keys, cloud
+// credentials) must never reach a job child process through inheritance.
+const LOCAL_JOB_ENVIRONMENT_KEY_NAMES = [...RESEARCH_ENVIRONMENT_KEY_NAMES, "PI_SCIENCE_ENVIRONMENT_ID", "PI_SCIENCE_ENVIRONMENT_REVISION_ID", "NPM_CONFIG_PREFIX", "NPM_CONFIG_CACHE", "ProgramFiles", "ProgramData"] as const;
+const LOCAL_JOB_ENVIRONMENT_KEYS = new Map(LOCAL_JOB_ENVIRONMENT_KEY_NAMES.map((key) => [key.toLowerCase(), key]));
 
 export interface JobCoordinatorHooks { beforeSpawn?: (record: Readonly<JobRecord>) => Promise<void>; testBeforeAuthorizedSpawn?: (record: Readonly<JobRecord>) => Promise<void>; beforeTerminalSave?: (record: Readonly<JobRecord>) => Promise<void>; platform?: NodeJS.Platform; now?: () => number; leaseMs?: number; heartbeatMs?: number; ownerProcessAlive?: (pid: number, ownership: Readonly<JobOwnership>) => boolean; ownerProcessIdentity?: (pid: number, platform: NodeJS.Platform) => JobOwnerProcessIdentity | null; childStartIdentity?: (pid: number, platform: NodeJS.Platform) => JobProcessIdentity | null; reapChild?: (identity: Readonly<JobChildIdentity>) => "reaped" | "identity-mismatch" | "unverifiable" | "missing"; onHeartbeatStarted?: (jobId: string) => void; onHeartbeatStopped?: (jobId: string) => void }
 
@@ -74,7 +80,8 @@ export class JobCoordinator {
         .filter((entry): entry is [string, string] => /^PI_SCIENCE_[A-Z0-9_]+$/.test(entry[0]) && typeof entry[1] === "string"))
       : {};
     const surface = typeof body.surface === "string" ? body.surface : "local";
-    const environment = { ...(surface.startsWith("research") ? restrictResearchEnvironment(baseEnvironment, this.hooks.platform ?? process.platform) : baseEnvironment), ...requestedEnvironment };
+    const platform = this.hooks.platform ?? process.platform;
+    const environment = { ...(surface.startsWith("research") ? restrictResearchEnvironment(baseEnvironment, platform) : restrictLocalJobEnvironment(baseEnvironment, platform)), ...requestedEnvironment };
     const executionCwd = typeof body.execution_cwd === "string" ? resolve(body.execution_cwd) : resolve(cwd);
     const executionRelative = relative(resolve(cwd), executionCwd);
     if (isAbsolute(executionRelative) || executionRelative === ".." || executionRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) throw new Error("execution cwd escapes the workspace");
@@ -412,11 +419,19 @@ function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
 }
 
 export function restrictResearchEnvironment(environment: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
+  return restrictEnvironmentKeys(environment, RESEARCH_ENVIRONMENT_KEY_NAMES, RESEARCH_ENVIRONMENT_KEYS, platform);
+}
+
+export function restrictLocalJobEnvironment(environment: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
+  return restrictEnvironmentKeys(environment, LOCAL_JOB_ENVIRONMENT_KEY_NAMES, LOCAL_JOB_ENVIRONMENT_KEYS, platform);
+}
+
+function restrictEnvironmentKeys(environment: NodeJS.ProcessEnv, keyNames: readonly string[], canonicalKeys: Map<string, string>, platform: NodeJS.Platform): NodeJS.ProcessEnv {
   const restricted: NodeJS.ProcessEnv = {};
-  for (const key of RESEARCH_ENVIRONMENT_KEY_NAMES) if (environment[key] !== undefined) restricted[key] = environment[key];
+  for (const key of keyNames) if (environment[key] !== undefined) restricted[key] = environment[key];
   if (platform !== "win32") return restricted;
   for (const [key, value] of Object.entries(environment)) {
-    const canonical = RESEARCH_ENVIRONMENT_KEYS.get(key.toLowerCase());
+    const canonical = canonicalKeys.get(key.toLowerCase());
     if (canonical && value !== undefined && restricted[canonical] === undefined) restricted[canonical] = value;
   }
   return restricted;
