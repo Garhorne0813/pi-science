@@ -3,11 +3,13 @@ import type { WorkspaceEnvironmentService } from "../../runtime/workspace/worksp
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { z } from "zod";
 
+const packageSpecSchema = z.string().min(1).max(300).regex(/^[^-]/, "Package specs must not start with '-'");
+
 const createEnvironmentSchema = z.object({
   name: z.string().min(1).max(64),
   display_name: z.string().min(1).max(100).optional(),
   language: z.enum(["python", "r"]).optional(),
-  packages: z.array(z.string().min(1).max(300)).max(200).optional(),
+  packages: z.array(packageSpecSchema).max(200).optional(),
   preset: z.enum(["python-minimal", "python-data", "python-science", "r-minimal"]).optional(),
   supersedes_revision_id: z.string().min(1).optional(),
 });
@@ -15,7 +17,7 @@ const createEnvironmentSchema = z.object({
 const bindEnvironmentSchema = z.object({ revision_id: z.string().min(1) });
 
 const installPackagesSchema = z.object({
-  packages: z.array(z.string().min(1).max(300)).min(1).max(200),
+  packages: z.array(packageSpecSchema).min(1).max(200),
 });
 
 async function workspace(request: { query: unknown }): Promise<string> {

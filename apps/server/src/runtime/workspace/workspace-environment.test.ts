@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -258,5 +258,65 @@ describe("workspace environment package mutation", () => {
 
     await expect(service.rollback(workspace)).resolves.toMatchObject({ revision_id: "rev_old" });
     expect(bind).toHaveBeenCalledWith(workspace, "rev_old");
+  });
+});
+
+describe("environment revision integrity", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(tempDirs.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+  });
+
+  async function seedWorkspace(): Promise<{ root: string; workspace: string; prefix: string }> {
+    const root = await mkdtemp(join(tmpdir(), "pi-science-env-integrity-"));
+    tempDirs.push(root);
+    process.env.PI_SCIENCE_HOME = root;
+    const workspace = join(root, "workspace");
+    const prefix = join(root, "micromamba", "envs", "rev_old");
+    const bin = join(prefix, process.platform === "win32" ? "Scripts" : "bin");
+    const python = join(bin, process.platform === "win32" ? "python.exe" : "python");
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    await mkdir(bin, { recursive: true });
+    await writeFile(python, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(python, 0o755);
+    await mkdir(join(prefix, "conda-meta"), { recursive: true });
+    await writeFile(join(prefix, "conda-meta", "python-3.12.8-h000.json"), "{}", "utf8");
+    await mkdir(join(root, "environments"), { recursive: true });
+    await writeFile(join(root, "environments", "registry.json"), JSON.stringify({
+      schema_version: 1,
+      revisions: [{
+        environment_id: "env_test", revision_id: "rev_old", name: "test-env", display_name: "Test Env",
+        language: "python", status: "ready", prefix, packages: ["python=3.12", "pip"],
+        platform: `${process.platform}-${process.arch}`, created_at: new Date().toISOString(),
+      }],
+    }), "utf8");
+    await writeFile(join(workspace, ".pi-science", "environment.json"), JSON.stringify({
+      schema_version: 1, environment_id: "env_test", revision_id: "rev_old", bound_at: new Date().toISOString(),
+    }), "utf8");
+    return { root, workspace, prefix };
+  }
+
+  it("backfills a snapshot for legacy records and passes", async () => {
+    const { workspace } = await seedWorkspace();
+    const service = new WorkspaceEnvironmentService();
+
+    await expect(service.bind(workspace, "rev_old")).resolves.toMatchObject({ ready: true, revision_id: "rev_old" });
+    const registryPath = join(process.env.PI_SCIENCE_HOME!, "environments", "registry.json");
+    const registry = JSON.parse(await readFile(registryPath, "utf8")) as { revisions: Array<{ integrity_snapshot?: string[] }> };
+    expect(registry.revisions[0]?.integrity_snapshot).toEqual(["python-3.12.8-h000.json"]);
+  });
+
+  it("rejects binding and reports drift when the bound prefix changes out of band", async () => {
+    const { workspace, prefix } = await seedWorkspace();
+    const service = new WorkspaceEnvironmentService();
+    await service.bind(workspace, "rev_old");
+
+    await writeFile(join(prefix, "conda-meta", "sneaky-package-1.0-h000.json"), "{}", "utf8");
+
+    await expect(service.bind(workspace, "rev_old")).rejects.toThrow(/modified outside Pi-Science/);
+    const status = await service.status(workspace);
+    expect(status.ready).toBe(false);
+    expect(status.error).toMatch(/modified outside Pi-Science/);
   });
 });

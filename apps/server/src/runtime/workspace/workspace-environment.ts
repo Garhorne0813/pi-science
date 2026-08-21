@@ -20,6 +20,8 @@ export interface EnvironmentRevision {
   platform: string;
   created_at: string;
   supersedes_revision_id?: string;
+  /** Sorted conda-meta manifests plus site-packages dist-info / R library entries; detects out-of-band prefix mutation (e.g. direct pip install). */
+  integrity_snapshot?: string[];
   failure?: { stage: string; message: string };
 }
 
@@ -160,6 +162,24 @@ async function dirSize(target: string): Promise<number | null> {
 
 async function exists(path: string): Promise<boolean> { try { await access(path); return true; } catch { return false; } }
 async function executable(path: string): Promise<boolean> { try { await access(path, constants.X_OK); return true; } catch { return false; } }
+
+/** Content fingerprint of a conda prefix built from directory listings only (no subprocesses).
+ * pip installs add dist-info directories without touching conda-meta, so both are captured. */
+async function integritySnapshot(prefix: string): Promise<string[]> {
+  const parts: string[] = [];
+  try { parts.push(...(await readdir(join(prefix, "conda-meta"))).filter((name) => name.endsWith(".json")).sort()); } catch { /* not a conda prefix */ }
+  try {
+    const libDir = process.platform === "win32" ? join(prefix, "Lib") : join(prefix, "lib");
+    const pythonLib = (await readdir(libDir)).find((name) => /^python3\.\d+$/.test(name));
+    if (pythonLib) parts.push(...(await readdir(join(libDir, pythonLib, "site-packages"))).filter((name) => name.endsWith(".dist-info")).sort());
+  } catch { /* no Python site-packages */ }
+  try { parts.push(...(await readdir(join(prefix, "library"))).sort()); } catch { /* no R library */ }
+  return parts;
+}
+
+function snapshotDriftError(revisionId: string): string {
+  return `Environment revision ${revisionId} was modified outside Pi-Science (for example by a direct pip install into the shared prefix). Roll back or create a new revision via the packages API instead of mutating the prefix.`;
+}
 function bindingPath(cwd: string): string { return join(resolve(cwd), ".pi-science", "environment.json"); }
 function registryPath(): string { return configPath(join("environments", "registry.json")); }
 function environmentRoot(): string { return configPath(join("micromamba", "envs")); }
@@ -257,6 +277,7 @@ export class WorkspaceEnvironmentService {
     const cwd = resolve(cwdValue);
     const revision = (await this.list()).find((item) => item.revision_id === revisionId && item.status === "ready");
     if (!revision) throw new Error(`Ready environment revision not found: ${revisionId}`);
+    await this.verifyRevisionIntegrity(revision);
     return withWorkspaceWriteLock(cwd, () => this.bindUnlocked(cwd, revision));
   }
 
@@ -267,8 +288,13 @@ export class WorkspaceEnvironmentService {
       const revision = (await this.list()).find((item) => item.revision_id === binding.revision_id);
       if (!revision) return this.statusFor(workspace, environmentRoot(), "micromamba", { error: `Bound environment revision is missing: ${binding.revision_id}` });
       const runtimeExecutable = environmentExecutable(revision.prefix, revision.language);
-      const ready = revision.status === "ready" && await executable(runtimeExecutable);
-      return this.statusFor(workspace, revision.prefix, "micromamba", { ready, environment_id: revision.environment_id, revision_id: revision.revision_id, display_name: revision.display_name, ...(!ready ? { error: revision.failure?.message ?? (revision.status === "ready" ? `Environment executable is missing: ${runtimeExecutable}` : `Environment is ${revision.status}`) } : {}) });
+      let driftError: string | undefined;
+      if (revision.status === "ready" && revision.integrity_snapshot && await executable(runtimeExecutable)) {
+        const current = await integritySnapshot(revision.prefix);
+        if (current.join("\n") !== revision.integrity_snapshot.join("\n")) driftError = snapshotDriftError(revision.revision_id);
+      }
+      const ready = revision.status === "ready" && !driftError && await executable(runtimeExecutable);
+      return this.statusFor(workspace, revision.prefix, "micromamba", { ready, environment_id: revision.environment_id, revision_id: revision.revision_id, display_name: revision.display_name, ...(!ready ? { error: driftError ?? revision.failure?.message ?? (revision.status === "ready" ? `Environment executable is missing: ${runtimeExecutable}` : `Environment is ${revision.status}`) } : {}) });
     }
     const legacy = environmentPaths(join(workspace, ".venv"));
     if (await exists(join(legacy.virtualEnv, "pyvenv.cfg")) && await executable(legacy.python)) return this.statusFor(workspace, legacy.virtualEnv, "legacy-venv", { ready: true, legacy: true });
@@ -441,7 +467,7 @@ export class WorkspaceEnvironmentService {
       // removed before the revision is marked failed.
       await this.run(micromamba, ["create", "--yes", "--prefix", finalPrefix, "--channel", "conda-forge", "--strict-channel-priority", ...input.packages], 20 * 60_000, this.micromambaEnvironment());
       await this.runHealthCheck(finalPrefix, input.language);
-      revision = { ...revision, status: "ready" };
+      revision = { ...revision, status: "ready", integrity_snapshot: await integritySnapshot(finalPrefix) };
       await this.upsert(revision);
       return revision;
     } catch (error) {
@@ -462,6 +488,18 @@ export class WorkspaceEnvironmentService {
       if (!await executable(python)) throw new Error("Environment health check failed: Python executable is missing");
       await this.run(python, ["-c", "import sys; print(sys.version_info[:2])"], 30_000, this.micromambaEnvironment());
     }
+  }
+
+  /** Hard gate for attaching a revision to a workspace. Legacy records without a snapshot are
+   * backfilled instead of failing so existing installations migrate lazily. */
+  private async verifyRevisionIntegrity(revision: EnvironmentRevision): Promise<void> {
+    if (revision.status !== "ready") return;
+    const current = await integritySnapshot(revision.prefix);
+    if (!revision.integrity_snapshot) {
+      await this.upsert({ ...revision, integrity_snapshot: current });
+      return;
+    }
+    if (current.join("\n") !== revision.integrity_snapshot.join("\n")) throw new Error(snapshotDriftError(revision.revision_id));
   }
 
   private async registry(): Promise<EnvironmentRegistry> {
