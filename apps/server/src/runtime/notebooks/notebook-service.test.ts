@@ -83,4 +83,42 @@ describe("NotebookService", () => {
     const kernel = JSON.parse(await readFile(join(service.jupyterPrefix, "share", "jupyter", "kernels", "pi-science-rev_python", "kernel.json"), "utf8")) as { argv: string[] };
     expect(kernel.argv).toEqual([python, "-m", "ipykernel_launcher", "-f", "{connection_file}"]);
   });
+
+  it("rejects a second setup while one is already running", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-jupyter-setup-race-"));
+    cleanup.push(cwd);
+    const service = new NotebookService({ configPath: (name) => join(cwd, ".pi-science", name), micromambaExecutable: join(cwd, "missing", "micromamba") });
+
+    const first = service.setup(cwd);
+    await expect(service.setup(cwd)).rejects.toThrow("Setup already in progress");
+    // The first attempt fails because the injected micromamba binary does not exist; the slot must free up.
+    await expect(first).resolves.toMatchObject({ status: "error" });
+    await expect(service.setup(cwd)).resolves.toMatchObject({ status: "error" });
+  });
+
+  it("serializes concurrent starts so only one runs at a time", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-jupyter-start-race-"));
+    cleanup.push(cwd);
+    const service = new NotebookService({ configPath: (name) => join(cwd, ".pi-science", name) });
+    await mkdir(join(service.jupyterPrefix, "bin"), { recursive: true });
+    await writeFile(service.jupyterBin, "", "utf8");
+    let active = 0;
+    let maxActive = 0;
+    const spy = vi.spyOn(service as unknown as { installProjectKernelspec: (workspace: string) => Promise<void> }, "installProjectKernelspec")
+      .mockImplementation(async () => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+        active -= 1;
+        throw new Error("stop-here");
+      });
+
+    const results = await Promise.allSettled([service.start(cwd), service.start(cwd)]);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(maxActive).toBe(1);
+    for (const result of results) {
+      expect(result.status).toBe("rejected");
+      if (result.status === "rejected") expect((result.reason as Error).message).toBe("stop-here");
+    }
+  });
 });

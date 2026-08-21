@@ -81,6 +81,7 @@ export class NotebookService {
   private jupyterCwd: string | null = null;
   private jupyterToken: string | null = null;
   private setupInProgress = false;
+  private startQueue: Promise<unknown> = Promise.resolve();
 
   constructor(deps: NotebookServiceDependencies = {}) {
     this.configPath = deps.configPath ?? configPath;
@@ -133,15 +134,16 @@ export class NotebookService {
     if (this.setupInProgress) throw new Error("Setup already in progress");
     const micromamba = this.micromamba;
     if (!micromamba || micromamba === "unavailable") throw new Error("Micromamba runtime is unavailable");
-    const prefix = this.jupyterPrefix;
-    await mkdir(join(prefix, ".."), { recursive: true });
-    const emit = (status: JupyterSetupEvent["status"], text: string) => {
-      const event: JupyterSetupEvent = { status, text };
-      onEvent?.(event);
-    };
-    emit("progress", "Creating application Jupyter runtime...");
+    // Claim the slot before the first await so concurrent callers cannot both pass the check.
     this.setupInProgress = true;
     try {
+      const prefix = this.jupyterPrefix;
+      await mkdir(join(prefix, ".."), { recursive: true });
+      const emit = (status: JupyterSetupEvent["status"], text: string) => {
+        const event: JupyterSetupEvent = { status, text };
+        onEvent?.(event);
+      };
+      emit("progress", "Creating application Jupyter runtime...");
       const result = await this.run(
         micromamba,
         ["create", "--yes", "--prefix", prefix, "--channel", "conda-forge", "--strict-channel-priority", "python=3.12", "jupyterlab"],
@@ -173,7 +175,14 @@ export class NotebookService {
     return payload;
   }
 
-  async start(cwd: string): Promise<JupyterStatusPayload> {
+  /** Starts are serialized so two concurrent requests cannot spawn competing Jupyter processes. */
+  start(cwd: string): Promise<JupyterStatusPayload> {
+    const run = this.startQueue.then(() => this.startUnlocked(cwd), () => this.startUnlocked(cwd));
+    this.startQueue = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  private async startUnlocked(cwd: string): Promise<JupyterStatusPayload> {
     const workspace = resolve(cwd);
     if (!(await pathExists(workspace))) throw new Error(`Workspace directory does not exist: ${workspace}`);
     if (this.jupyterProcess && this.jupyterProcess.exitCode === null) {
