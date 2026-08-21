@@ -241,12 +241,12 @@ try {
         if ($ControlPlaneProcess.HasExited) {
             throw "Control plane exited during startup. See $ControlLog and $ControlErrorLog"
         }
-        if (Test-HttpReady -Uri "http://127.0.0.1:$ControlPlanePort/api/health") {
+        if (Test-HttpReady -Uri "http://127.0.0.1:$ControlPlanePort/internal/ready") {
             break
         }
         Start-Sleep -Milliseconds 250
     } while ((Get-Date) -lt $controlDeadline)
-    if (-not (Test-HttpReady -Uri "http://127.0.0.1:$ControlPlanePort/api/health")) {
+    if (-not (Test-HttpReady -Uri "http://127.0.0.1:$ControlPlanePort/internal/ready")) {
         throw "Control plane did not become ready within ${StartupTimeout}s. See $ControlLog"
     }
 

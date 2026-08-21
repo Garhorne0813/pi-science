@@ -97,8 +97,11 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   }));
 
   app.get("/internal/ready", async (_request, reply) => {
-    if (!stateReady) return reply.code(503).send({ status: "not_ready", service: "pi-science-server", control_plane: "node", sqlite: { ...stateStore.diagnostics(), status: "failed", error: stateError instanceof Error ? stateError.message : String(stateError ?? "SQLite state store is not ready") } });
-    return { status: "ready", service: "pi-science-server", control_plane: "node", sqlite: sqliteEnabled ? stateStore.diagnostics() : { status: "disabled", schema_version: null, journal_mode: null, pending_requests: 0 } };
+    const diagnostics = stateStore.diagnostics();
+    if (sqliteEnabled && (!stateReady || diagnostics.status !== "ready")) {
+      return reply.code(503).send({ status: "not_ready", service: "pi-science-server", control_plane: "node", sqlite: { ...diagnostics, error: diagnostics.error ?? (stateError instanceof Error ? stateError.message : String(stateError ?? "SQLite state store is not ready")) } });
+    }
+    return { status: "ready", service: "pi-science-server", control_plane: "node", sqlite: sqliteEnabled ? diagnostics : { status: "disabled", schema_version: null, journal_mode: null, pending_requests: 0 } };
   });
 
   app.get("/internal/diagnostics", async () => ({ sqlite: sqliteEnabled ? stateStore.diagnostics() : { status: "disabled" } }));

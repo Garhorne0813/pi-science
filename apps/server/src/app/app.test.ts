@@ -6,6 +6,7 @@ import { buildApp } from "./app.js";
 import { createServerModules } from "./server-modules.js";
 import type { ServerConfig } from "../config/config.js";
 import type { KernelExecuteOptions, NodeKernelManager } from "../runtime/kernel/node-kernel-manager.js";
+import { InMemorySqliteStateStore } from "../storage/sqlite/state-store.js";
 
 const openApps: Array<{ close(): Promise<unknown> }> = [];
 
@@ -65,6 +66,21 @@ describe("Node control plane", () => {
     const ready = await app.inject({ method: "GET", url: "/internal/ready" });
     expect(ready.statusCode).toBe(200);
     expect(ready.json()).toMatchObject({ status: "ready", control_plane: "node" });
+  });
+
+  it("becomes unready if the SQLite worker exits after startup", async () => {
+    const stateStore = new InMemorySqliteStateStore();
+    const modules = createServerModules(config("http://127.0.0.1:1"), { sqliteEnabled: true, stateStore });
+    const app = buildApp(config("http://127.0.0.1:1"), modules);
+    openApps.push(app);
+
+    expect((await app.inject({ method: "GET", url: "/internal/ready" })).statusCode).toBe(200);
+    await stateStore.crashForTest();
+    await vi.waitFor(() => expect(stateStore.diagnostics().status).toBe("failed"));
+
+    const response = await app.inject({ method: "GET", url: "/internal/ready" });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ status: "not_ready", sqlite: { status: "failed" } });
   });
 
   it("owns health without a Python scientific worker", async () => {

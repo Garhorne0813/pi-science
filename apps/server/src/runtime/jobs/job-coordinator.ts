@@ -135,12 +135,14 @@ export class JobCoordinator {
     const child = this.children.get(id);
     if (child) terminate(child);
     if (this.repository) {
-      const current = await this.repository.get(cwd, id);
-      if (!current) { this.cancelled.delete(id); return null; }
-      if (isTerminal(current.status)) { if (current.status !== "cancelled") this.cancelled.delete(id); return current; }
-      let diagnostic: string | undefined;
-      if (!child && current.ownership?.child) diagnostic = `cancellation cleanup: ${this.reapOrphanChild(current.ownership)}`;
-      const cancelled = await this.repository.cancel(cwd, id, this.now(), diagnostic);
+      const cancelled = await this.repository.locked(id, async () => {
+        const current = await this.repository!.get(cwd, id);
+        if (!current) { this.cancelled.delete(id); return null; }
+        if (isTerminal(current.status)) { if (current.status !== "cancelled") this.cancelled.delete(id); return current; }
+        let diagnostic: string | undefined;
+        if (!child && current.ownership?.child) diagnostic = `cancellation cleanup: ${this.reapOrphanChild(current.ownership)}`;
+        return this.repository!.cancel(cwd, id, this.now(), diagnostic);
+      });
       if (cancelled) await this.finishExecution(cancelled);
       return cancelled;
     }
@@ -306,10 +308,11 @@ export class JobCoordinator {
       await this.hooks.beforeSpawn?.(record);
       if (this.cancelled.has(record.job_id)) { record.status = "cancelled"; return; }
       const spawned = this.repository
-        ? await (async () => {
+        ? await this.repository.locked(record.job_id, async () => {
           const current = await this.repository!.get(record.cwd, record.job_id);
           if (!current || isTerminal(current.status) || !this.ownershipMatches(current.ownership, record.ownership)) { if (current) Object.assign(record, current); return false; }
           await this.hooks.testBeforeAuthorizedSpawn?.(record);
+          if (this.cancelled.has(record.job_id)) { record.status = "cancelled"; return false; }
           child = spawn(record.command[0]!, record.command.slice(1), { cwd: record.execution_cwd ?? record.cwd, env: environment, stdio: ["ignore", "pipe", "pipe"], detached: POSIX });
           this.children.set(record.job_id, child);
           child.stdout?.on("data", (chunk: Buffer) => { stdout = appendTail(stdout, chunk, () => { stdoutTruncated = true; }); });
@@ -334,7 +337,7 @@ export class JobCoordinator {
           }
           Object.assign(record, durable);
           return true;
-        })()
+        })
         : await withFileWriteLock(path, async () => {
           const current = await readJson<JobRecord | null>(path, null);
           if (!current || isTerminal(current.status) || !this.ownershipMatches(current.ownership, record.ownership)) { if (current) Object.assign(record, current); return false; }

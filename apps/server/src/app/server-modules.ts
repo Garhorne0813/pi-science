@@ -37,10 +37,17 @@ export interface ServerModules {
   readonly sqliteEnabled: boolean;
 }
 
+export interface ServerModuleOptions {
+  sqliteEnabled?: boolean;
+  stateStore?: SqliteStateStore;
+}
+
 /** Creates an app-owned module graph. No mutable runtime state is shared across apps. */
-export function createServerModules(config?: ServerConfig): ServerModules {
-  const sqliteEnabled = process.env.PI_SCIENCE_SQLITE_STATE !== "0";
-  const stateStore = new SqliteStateStore({ path: configPath("state.sqlite") });
+export function createServerModules(config?: ServerConfig, options: ServerModuleOptions = {}): ServerModules {
+  const configuredSqlite = process.env.PI_SCIENCE_SQLITE_STATE;
+  const sqliteEnabled = options.sqliteEnabled
+    ?? (configuredSqlite === "1" || (configuredSqlite !== "0" && process.env.NODE_ENV !== "test"));
+  const stateStore = options.stateStore ?? new SqliteStateStore({ path: sqliteEnabled ? configPath("state.sqlite") : ":memory:" });
   const workspaces = new WorkspaceRepository(stateStore);
   const environmentRepository = new EnvironmentRepository(stateStore);
   const jobRepository = new JobRepository(stateStore, workspaces);

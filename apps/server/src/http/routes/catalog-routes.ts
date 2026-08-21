@@ -104,12 +104,11 @@ async function managedWorkspacePath(pathValue: string, action: "delete" | "renam
   return canonicalRequested;
 }
 
-async function updatePinnedWorkspace(source: string, destination: string, workspaceRepository?: WorkspaceRepository, projectId?: string): Promise<void> {
+async function updateWorkspaceLocation(source: string, destination: string, workspaceRepository?: WorkspaceRepository, projectId?: string): Promise<void> {
   if (workspaceRepository && projectId) {
-    const pinned = await workspaceRepository.listPinned();
-    let matching: (typeof pinned)[number] | undefined;
-    for (const location of pinned) {
-      if (location.project_id !== projectId) continue;
+    const locations = await workspaceRepository.getByProject(projectId);
+    let matching: (typeof locations)[number] | undefined;
+    for (const location of locations) {
       const canonical = await realpath(location.path).catch(async () => join(await realpath(dirname(location.path)).catch(() => dirname(location.path)), basename(location.path)));
       if (canonical === source) { matching = location; break; }
     }
@@ -410,7 +409,7 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
     const sourceProject = await ensureProject(source);
     try {
       await rename(source, destination);
-      await updatePinnedWorkspace(source, destination, workspaceRepository, sourceProject.id);
+      await updateWorkspaceLocation(source, destination, workspaceRepository, sourceProject.id);
       await updateProject(destination, { name });
       return await workspaceInfo(destination, workspaceRepository);
     } catch { return reply.code(404).send({ error: "Workspace not found" }); }

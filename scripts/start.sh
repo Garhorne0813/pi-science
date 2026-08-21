@@ -162,7 +162,7 @@ CONTROL_PLANE_STARTED="$(process_start_identity "$CONTROL_PLANE_PID")"
 [ -n "$CONTROL_PLANE_STARTED" ] || { echo "Error: unable to establish control-plane process identity." >&2; exit 1; }
 
 echo "  Waiting for control plane..."
-wait_for_health "$CONTROL_PLANE_PID" "http://127.0.0.1:${CONTROL_PLANE_PORT}/api/health" "control plane"
+wait_for_health "$CONTROL_PLANE_PID" "http://127.0.0.1:${CONTROL_PLANE_PORT}/internal/ready" "control plane"
 
 echo "==> Starting frontend on http://127.0.0.1:$FRONTEND_PORT"
 port_is_available "$FRONTEND_PORT" || { echo "Error: port $FRONTEND_PORT is already in use; refusing to reuse an unverified frontend." >&2; exit 1; }

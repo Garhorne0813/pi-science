@@ -21,8 +21,10 @@ export class JobRepository {
 
   async get(cwd: string, jobId: string): Promise<JobRecord | null> {
     if (!/^job_[A-Za-z0-9]{16}$/.test(jobId)) throw new Error("Invalid job id");
-    const row = await this.store.get<JobRow>("SELECT * FROM jobs WHERE job_id = ? AND workspace_path = ?", [jobId, resolve(cwd)]);
-    return row ? toRecord(row) : null;
+    const projectId = await this.workspaces.projectIdForPath(cwd);
+    if (!projectId) return null;
+    const row = await this.store.get<JobRow>("SELECT * FROM jobs WHERE job_id = ? AND project_id = ?", [jobId, projectId]);
+    return row ? toRecord(row, resolve(cwd)) : null;
   }
 
   async getById(jobId: string): Promise<JobRecord | null> {
@@ -31,16 +33,24 @@ export class JobRepository {
   }
 
   async list(cwd: string, limit: number): Promise<JobRecord[]> {
+    const projectId = await this.workspaces.projectIdForPath(cwd);
+    if (!projectId) return [];
     const rows = await this.store.all<JobRow>(
-      "SELECT * FROM jobs WHERE workspace_path = ? ORDER BY created_at DESC LIMIT ?",
-      [resolve(cwd), Math.max(1, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(limit)))],
+      "SELECT * FROM jobs WHERE project_id = ? ORDER BY created_at DESC LIMIT ?",
+      [projectId, Math.max(1, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(limit)))],
     );
-    return rows.map(toRecord);
+    return rows.map((row) => toRecord(row, resolve(cwd)));
   }
 
   async hasActive(cwd: string): Promise<boolean> {
-    const row = await this.store.get<{ count: number }>("SELECT COUNT(*) AS count FROM jobs WHERE workspace_path = ? AND status IN ('pending', 'running')", [resolve(cwd)]);
+    const projectId = await this.workspaces.projectIdForPath(cwd);
+    if (!projectId) return false;
+    const row = await this.store.get<{ count: number }>("SELECT COUNT(*) AS count FROM jobs WHERE project_id = ? AND status IN ('pending', 'running')", [projectId]);
     return Number(row?.count ?? 0) > 0;
+  }
+
+  locked<T>(jobId: string, operation: () => Promise<T>): Promise<T> {
+    return this.store.serialized(`job:${jobId}`, operation);
   }
 
   async transitionToRunning(record: JobRecord, startedAt: number): Promise<JobRecord | null> {
@@ -78,10 +88,12 @@ export class JobRepository {
   }
 
   async cancel(cwd: string, jobId: string, endedAt: number, diagnostic?: string): Promise<JobRecord | null> {
+    const projectId = await this.workspaces.projectIdForPath(cwd);
+    if (!projectId) return null;
     const result = await this.store.run(
       `UPDATE jobs SET status = 'cancelled', ended_at = ?, stderr = CASE WHEN ? IS NULL THEN stderr ELSE ? END, updated_at = ?
-        WHERE job_id = ? AND workspace_path = ? AND status IN ('pending', 'running')`,
-      [endedAt, diagnostic ?? null, diagnostic ?? null, endedAt, jobId, resolve(cwd)],
+        WHERE job_id = ? AND project_id = ? AND status IN ('pending', 'running')`,
+      [endedAt, diagnostic ?? null, diagnostic ?? null, endedAt, jobId, projectId],
     );
     if (Number(result.changes) === 0) return this.get(cwd, jobId);
     return this.get(cwd, jobId);
@@ -226,7 +238,7 @@ function jobParams(record: JobRecord, projectId: string): Array<string | number 
   ];
 }
 
-function toRecord(row: JobRow): JobRecord {
+function toRecord(row: JobRow, workspacePath = row.workspace_path): JobRecord {
   const command = parseJson<unknown>(row.command_json, []);
   const requirement = parseJson<Record<string, unknown>>(row.requirement_json, {});
   const environment = parseJson<Record<string, unknown>>(row.environment_json, {});
@@ -236,7 +248,7 @@ function toRecord(row: JobRow): JobRecord {
     job_id: row.job_id,
     ...(row.execution_id ? { execution_id: row.execution_id } : {}),
     command: Array.isArray(command) ? command.map(String) : [],
-    cwd: row.workspace_path,
+    cwd: workspacePath,
     ...(row.execution_cwd ? { execution_cwd: row.execution_cwd } : {}),
     surface: row.surface,
     status: row.status,

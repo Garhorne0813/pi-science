@@ -42,6 +42,7 @@ export class SqliteStateStore {
   private worker?: Worker;
   private nextRequestId = 1;
   private pending = new Map<number, PendingRequest>();
+  private readonly keyedOperations = new Map<string, Promise<void>>();
   private state: SqliteDiagnostics["status"] = "closed";
   private schemaVersion: number | null = null;
   private journalMode: string | null = null;
@@ -99,6 +100,30 @@ export class SqliteStateStore {
       pending_requests: this.pending.size,
       ...(this.failure ? { error: this.failure.message, error_code: this.failure.code } : {}),
     };
+  }
+
+  /** Serializes an app-owned domain critical section without holding a SQLite
+   * transaction across asynchronous application work. Repositories sharing
+   * this store therefore share the same lock namespace. */
+  async serialized<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.keyedOperations.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+    const pending = previous.catch(() => undefined).then(() => gate);
+    this.keyedOperations.set(key, pending);
+    await previous.catch(() => undefined);
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.keyedOperations.get(key) === pending) this.keyedOperations.delete(key);
+    }
+  }
+
+  /** Terminates the worker so failure and readiness recovery can be exercised. */
+  async crashForTest(): Promise<void> {
+    if (process.env.NODE_ENV !== "test") throw new Error("crashForTest is only available in tests");
+    await this.worker?.terminate();
   }
 
   private async startWorker(): Promise<void> {

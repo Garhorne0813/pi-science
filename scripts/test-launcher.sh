@@ -145,7 +145,11 @@ writeFileSync(new URL("../../../../../control.pid", import.meta.url), String(pro
 writeFileSync(new URL("../../../../../control.argv", import.meta.url), JSON.stringify(process.argv.slice(2)));
 const child = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
 writeFileSync(new URL("../../../../../control.child.pid", import.meta.url), String(child.pid));
-const server = http.createServer((req, res) => { res.writeHead(req.url === "/api/health" ? 200 : 404); res.end("ok"); });
+const server = http.createServer((req, res) => {
+  const ready = req.url === "/api/health" || req.url === "/internal/ready";
+  res.writeHead(ready ? 200 : 404);
+  res.end("ok");
+});
 setTimeout(() => server.listen(Number(process.env.PI_SCIENCE_PORT), "127.0.0.1"), Number(process.env.PI_SCIENCE_TEST_CONTROL_DELAY_MS || 0));
 const stop = () => { child.kill("SIGTERM"); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 500).unref(); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -174,7 +178,7 @@ FRONTEND_PORT="$(free_port)"
 LOG="$TEMP_ROOT/start.log"
 PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_CONTROL_PLANE_PORT="$CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=10 bash "$FIXTURE/scripts/start.sh" >"$LOG" 2>&1 &
 START_PID=$!
-wait_url "http://127.0.0.1:$CONTROL_PORT/api/health" || { cat "$LOG" >&2; fail "control plane did not become ready"; }
+wait_url "http://127.0.0.1:$CONTROL_PORT/internal/ready" || { cat "$LOG" >&2; fail "control plane did not become ready"; }
 wait_url "http://127.0.0.1:$FRONTEND_PORT" || { cat "$LOG" >&2; fail "frontend did not become ready"; }
 FIXTURE_CANONICAL="$(cd "$FIXTURE" && pwd -P)"
 [ "$(cat "$FIXTURE/control.cwd")" = "$FIXTURE_CANONICAL/apps/server" ] || fail "control plane CWD changed"
@@ -413,7 +417,7 @@ WATCH_CONTROL_PORT="$(free_port)"; WATCH_RUNTIME_PORT="$(free_port)"; WATCH_FRON
 rm -f "$FIXTURE/control.pid"
 PI_SCIENCE_PYTHON="$(command -v python3)" PI_CLI_PATH="$FIXTURE/pi-cli.mjs" PI_SCIENCE_SERVER_WATCH=1 PI_SCIENCE_CONTROL_PLANE_PORT="$WATCH_CONTROL_PORT" PI_SCIENCE_RUNTIME_PORT="$WATCH_RUNTIME_PORT" PI_SCIENCE_FRONTEND_PORT="$WATCH_FRONTEND_PORT" PI_SCIENCE_STARTUP_TIMEOUT_SECONDS=10 bash "$FIXTURE/scripts/start.sh" >"$TEMP_ROOT/watch.log" 2>&1 &
 WATCH_START_PID=$!
-wait_url "http://127.0.0.1:$WATCH_CONTROL_PORT/api/health" || { cat "$TEMP_ROOT/watch.log" >&2; fail "watch control plane did not become ready"; }
+wait_url "http://127.0.0.1:$WATCH_CONTROL_PORT/internal/ready" || { cat "$TEMP_ROOT/watch.log" >&2; fail "watch control plane did not become ready"; }
 wait_url "http://127.0.0.1:$WATCH_FRONTEND_PORT" || { cat "$TEMP_ROOT/watch.log" >&2; fail "watch frontend did not become ready"; }
 [ "$(cat "$FIXTURE/control.argv")" = '["watch","src/app/main.ts"]' ] || fail "watch opt-in argv is not watch mode: $(cat "$FIXTURE/control.argv")"
 assert_contains "$TEMP_ROOT/watch.log" 'control plane mode: watch'
@@ -436,7 +440,7 @@ env = {**os.environ, "PI_SCIENCE_PYTHON": python, "PI_CLI_PATH": cli, "PI_SCIENC
 with open(log, "wb") as output:
     child = subprocess.Popen(["bash", script], env=env, stdout=output, stderr=subprocess.STDOUT)
     deadline = time.time() + 10
-    for url in (f"http://127.0.0.1:{control}/api/health", f"http://127.0.0.1:{frontend}"):
+    for url in (f"http://127.0.0.1:{control}/internal/ready", f"http://127.0.0.1:{frontend}"):
         while True:
             try:
                 urllib.request.urlopen(url, timeout=.2).read(); break

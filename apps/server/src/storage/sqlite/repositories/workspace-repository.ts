@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import type { ProjectManifest } from "../../../project/project-registry.js";
-import { ensureProject } from "../../../project/project-registry.js";
+import { ensureProject, readProject } from "../../../project/project-registry.js";
 import type { SqliteStateStore } from "../state-store.js";
 
 export interface WorkspaceLocationInput {
@@ -241,6 +241,15 @@ export class WorkspaceRepository {
 
   async ensureProjectForPath(cwd: string): Promise<string> {
     return (await this.rememberWorkspace(cwd)).project_id;
+  }
+
+  /** Resolves the stable project identity without creating a project or
+   * touching recent-workspace state. */
+  async projectIdForPath(cwd: string): Promise<string | null> {
+    const workspace = resolve(cwd);
+    const manifest = await readProject(workspace);
+    if (manifest) return manifest.id;
+    return (await this.getByPath(workspace))?.project_id ?? null;
   }
 }
 
