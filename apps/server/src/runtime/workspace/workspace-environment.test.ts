@@ -71,6 +71,18 @@ describe("workspace environment package mutation", () => {
     await Promise.all(tempDirs.splice(0).map((path) => rm(path, { recursive: true, force: true })));
   });
 
+  it("rejects option-like package specs after trimming during create", async () => {
+    const service = new WorkspaceEnvironmentService();
+    await expect(service.create({ name: "unsafe", packages: [" --file=/host/packages.txt"] })).rejects.toThrow("Package specs must not start with '-'");
+  });
+
+  it("rejects option-like package specs after trimming during install", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-science-env-package-validation-"));
+    tempDirs.push(root);
+    const service = new WorkspaceEnvironmentService();
+    await expect(service.installPackages(root, [" --file=/host/packages.txt"])).rejects.toThrow("Package specs must not start with '-'");
+  });
+
   it("creates a new immutable revision with merged packages and binds it", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-science-env-mutation-"));
     tempDirs.push(root);

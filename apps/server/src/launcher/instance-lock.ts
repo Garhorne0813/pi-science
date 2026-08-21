@@ -85,7 +85,7 @@ async function readLockSnapshot(path: string): Promise<LockSnapshot | null> {
 }
 
 function pidAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
 }
 
 /** Unlink a stale lock only after re-validating its content and mtime immediately before removal.

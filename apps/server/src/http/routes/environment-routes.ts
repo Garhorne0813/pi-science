@@ -3,7 +3,7 @@ import type { WorkspaceEnvironmentService } from "../../runtime/workspace/worksp
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { z } from "zod";
 
-const packageSpecSchema = z.string().min(1).max(300).regex(/^[^-]/, "Package specs must not start with '-'");
+const packageSpecSchema = z.string().trim().min(1).max(300).regex(/^[^-]/, "Package specs must not start with '-'");
 
 const createEnvironmentSchema = z.object({
   name: z.string().min(1).max(64),

@@ -220,6 +220,12 @@ function safeName(value: string): string {
   return name;
 }
 
+function cleanPackageSpecs(packages: readonly string[]): string[] {
+  const cleaned = [...new Set(packages.map((item) => item.trim()).filter(Boolean))];
+  if (cleaned.some((item) => item.startsWith("-"))) throw new Error("Package specs must not start with '-'");
+  return cleaned;
+}
+
 export function defaultPythonExecutable(environment: NodeJS.ProcessEnv = process.env, platform = process.platform): string {
   return environment.PYTHON || (platform === "win32" ? "python" : "python3");
 }
@@ -376,7 +382,7 @@ export class WorkspaceEnvironmentService {
       throw new Error(`Preset ${input.preset} is for ${preset.language} environments`);
     }
     const language = input.language ?? preset?.language ?? "python";
-    const packages = [...new Set((input.packages?.length ? input.packages : preset?.packages ?? (language === "r" ? DEFAULT_R_PACKAGES : DEFAULT_PACKAGES)).map((item) => item.trim()).filter(Boolean))];
+    const packages = cleanPackageSpecs(input.packages?.length ? input.packages : preset?.packages ?? (language === "r" ? DEFAULT_R_PACKAGES : DEFAULT_PACKAGES));
     const previous = input.supersedes_revision_id ? (await this.list()).find((item) => item.revision_id === input.supersedes_revision_id) : undefined;
     if (input.supersedes_revision_id && !previous) throw new Error(`Environment revision not found: ${input.supersedes_revision_id}`);
     const key = `${previous?.environment_id ?? name}\0${packages.join("\0")}`;
@@ -388,6 +394,8 @@ export class WorkspaceEnvironmentService {
   }
 /** Install packages into the currently bound revision by creating a new immutable revision. */
   async installPackages(cwdValue: string, packages: string[]): Promise<WorkspaceEnvironmentStatus> {
+    const cleaned = cleanPackageSpecs(packages);
+    if (cleaned.length === 0) throw new Error("No packages requested");
     const cwd = resolve(cwdValue);
     return withWorkspaceWriteLock(cwd, async () => {
       const currentStatus = await this.status(cwd);
@@ -401,11 +409,7 @@ export class WorkspaceEnvironmentService {
       if (current.status !== "ready") {
         throw new Error(`Bound environment revision is not ready: ${current.status}`);
       }
-      const normalized = [...new Set(packages.map((item) => item.trim()).filter(Boolean))];
-      if (normalized.length === 0) {
-        throw new Error("No packages requested");
-      }
-      const missing = normalized.filter((packageSpec) => !current.packages.includes(packageSpec));
+      const missing = cleaned.filter((packageSpec) => !current.packages.includes(packageSpec));
       if (missing.length === 0) return currentStatus;
       const combined = [...new Set([...current.packages, ...missing])];
       const revision = await this.create({

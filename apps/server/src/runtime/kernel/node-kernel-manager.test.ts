@@ -254,6 +254,73 @@ describe("NodeKernelManager platform interrupt semantics", () => {
     return result;
   }
 
+  it("cancels a cold start before shutdownAll returns", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-kernel-start-shutdown-all-"));
+    cleanup.push(cwd);
+    const { manager, sessions } = managerWithFake("linux");
+    const env = status(cwd, join(cwd, "env"));
+    const execution = manager.execute({ language: "python", code: "1+1", cwd, environment: env, notebookId: "nb-starting", timeoutMs: 30_000 }).then(
+      (value) => ({ resolved: true as const, value }),
+      (error: Error) => ({ resolved: false as const, error }),
+    );
+    try {
+      await waitForRequest(sessions, 1);
+      const shutdown = manager.shutdownAll();
+      await vi.waitFor(() => expect(sessions[0]!.kills).toContain("SIGTERM"));
+      await expect(manager.execute({ language: "python", code: "2+2", cwd, environment: env, notebookId: "nb-late", timeoutMs: 30_000 })).rejects.toThrow("Kernel shutdown is in progress");
+      sessions[0]!.child.emit("close", 0);
+      await shutdown;
+
+      const outcome = await execution;
+      expect(outcome.resolved).toBe(false);
+      if (!outcome.resolved) expect(outcome.error.message).toContain("cancelled by shutdown");
+      expect(manager.status().active_count).toBe(0);
+    } finally {
+      const stopping = manager.shutdownAll().catch(() => undefined);
+      for (const session of sessions) session.child.emit("close", 0);
+      await stopping;
+    }
+  });
+
+  it("cancels only the matching cold start during shutdownNotebook", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-kernel-start-shutdown-notebook-"));
+    cleanup.push(cwd);
+    const { manager, sessions } = managerWithFake("linux");
+    const env = status(cwd, join(cwd, "env"));
+    const target = manager.execute({ language: "python", code: "1+1", cwd, environment: env, notebookId: "nb-target", timeoutMs: 30_000 }).then(
+      (value) => ({ resolved: true as const, value }),
+      (error: Error) => ({ resolved: false as const, error }),
+    );
+    const survivor = manager.execute({ language: "python", code: "2+2", cwd, environment: env, notebookId: "nb-survivor", timeoutMs: 30_000 }).then(
+      (value) => ({ resolved: true as const, value }),
+      (error: Error) => ({ resolved: false as const, error }),
+    );
+    try {
+      await vi.waitFor(() => { expect(sessions).toHaveLength(2); expect(sessions.every((session) => session.writes.length >= 1)).toBe(true); });
+      const shutdown = manager.shutdownNotebook("nb-target", cwd);
+      await vi.waitFor(() => expect(sessions[0]!.kills).toContain("SIGTERM"));
+      expect(sessions[1]!.kills).toEqual([]);
+      await expect(manager.execute({ language: "python", code: "3+3", cwd, environment: env, notebookId: "nb-target", timeoutMs: 30_000 })).rejects.toThrow("Kernel shutdown is in progress");
+      sessions[0]!.child.emit("close", 0);
+      await shutdown;
+
+      const targetOutcome = await target;
+      expect(targetOutcome.resolved).toBe(false);
+      if (!targetOutcome.resolved) expect(targetOutcome.error.message).toContain("cancelled by shutdown");
+      respondPending(sessions[1]!);
+      await waitForRequest([sessions[1]!], 2);
+      respondPending(sessions[1]!);
+      const survivorOutcome = await survivor;
+      expect(survivorOutcome.resolved).toBe(true);
+      if (survivorOutcome.resolved) expect(survivorOutcome.value.ok).toBe(true);
+      expect(manager.status().active_count).toBe(1);
+    } finally {
+      const stopping = manager.shutdownAll().catch(() => undefined);
+      for (const session of sessions) session.child.emit("close", 0);
+      await stopping;
+    }
+  });
+
   it("spawns detached on windows and interrupts a running cell with SIGBREAK", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-win32-interrupt-"));
     cleanup.push(cwd);

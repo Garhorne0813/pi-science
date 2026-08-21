@@ -1,8 +1,7 @@
-import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { acquireSingleInstanceLock, SingleInstanceError } from "./instance-lock.js";
 
 const cleanup: string[] = [];
@@ -15,14 +14,6 @@ async function lockPath(): Promise<string> {
   const cwd = await mkdtemp(join(tmpdir(), "pi-science-launcher-"));
   cleanup.push(cwd);
   return join(cwd, "instance.lock");
-}
-
-/** A pid whose owning process has exited and been reaped. */
-async function deadPid(): Promise<number> {
-  const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
-  const pid = child.pid!;
-  await new Promise((resolve) => child.once("close", resolve));
-  return pid;
 }
 
 async function setOldMtime(path: string): Promise<void> {
@@ -47,25 +38,18 @@ describe("single instance lock", () => {
     await expect(acquireSingleInstanceLock(path)).resolves.toBeDefined();
   });
 
-  it("reclaims a stale lock left by a dead process", async (ctx) => {
+  it("reclaims a stale lock when the recorded pid no longer exists", async () => {
     const path = await lockPath();
-    // Some dev machines recycle or alias pids so fast that a freshly reaped pid reads as alive again,
-    // which correctly refuses the recycle. Retry a few rounds, then skip instead of flaking.
-    for (let round = 0; round < 3; round += 1) {
-      const pid = await deadPid();
-      await writeFile(path, JSON.stringify({ pid, acquired_at: new Date(Date.now() - 120_000).toISOString(), token: "old" }), "utf8");
-      await setOldMtime(path);
-      try {
-        const lock = await acquireSingleInstanceLock(path);
-        expect(JSON.parse(await readFile(path, "utf8")).pid).toBe(process.pid);
-        await lock.release();
-        return;
-      } catch (error) {
-        if (!(error instanceof SingleInstanceError)) throw error;
-        await rm(path, { force: true });
-      }
+    await writeFile(path, JSON.stringify({ pid: 424_242, acquired_at: new Date(Date.now() - 120_000).toISOString(), token: "old" }), "utf8");
+    await setOldMtime(path);
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("missing"), { code: "ESRCH" }); });
+    try {
+      const lock = await acquireSingleInstanceLock(path);
+      expect(JSON.parse(await readFile(path, "utf8")).pid).toBe(process.pid);
+      await lock.release();
+    } finally {
+      kill.mockRestore();
     }
-    ctx.skip(true, "host pid semantics are unstable for dead-pid fixtures");
   });
 
   it("never recycles a lock whose recorded pid is still alive", async () => {
@@ -74,6 +58,19 @@ describe("single instance lock", () => {
     await setOldMtime(path);
 
     await expect(acquireSingleInstanceLock(path)).rejects.toBeInstanceOf(SingleInstanceError);
+  });
+
+  it("never recycles a lock when pid liveness cannot be confirmed", async () => {
+    const path = await lockPath();
+    await writeFile(path, JSON.stringify({ pid: 424_242, acquired_at: new Date(Date.now() - 120_000).toISOString(), token: "unknown" }), "utf8");
+    await setOldMtime(path);
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("denied"), { code: "EPERM" }); });
+    try {
+      await expect(acquireSingleInstanceLock(path)).rejects.toBeInstanceOf(SingleInstanceError);
+      expect(JSON.parse(await readFile(path, "utf8")).token).toBe("unknown");
+    } finally {
+      kill.mockRestore();
+    }
   });
 
   it("self-heals a corrupt lock file once its mtime expires", async () => {

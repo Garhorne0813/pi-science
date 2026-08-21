@@ -84,10 +84,25 @@ interface PendingCell {
   promise: Promise<KernelResult>;
 }
 
-function sessionKey(options: KernelExecuteOptions): string {
-  const identity = options.kernelInstanceId ?? options.sessionId ?? options.notebookId ?? "default";
-  return [options.cwd, identity, options.environmentRevisionId ?? "legacy", options.language].join("\0");
+interface KernelStartState { options: KernelExecuteOptions; controller: AbortController }
+interface KernelShutdownScope { notebookId: string; cwd?: string; language?: string }
+
+function kernelIdentity(options: KernelExecuteOptions): string {
+  return options.kernelInstanceId ?? options.sessionId ?? options.notebookId ?? "default";
 }
+
+function sessionKey(options: KernelExecuteOptions): string {
+  return [options.cwd, kernelIdentity(options), options.environmentRevisionId ?? "legacy", options.language].join("\0");
+}
+
+function matchesShutdown(options: KernelExecuteOptions, scope: KernelShutdownScope): boolean {
+  const identity = options.kernelInstanceId ?? options.sessionId ?? options.notebookId;
+  return (options.notebookId === scope.notebookId || identity === scope.notebookId)
+    && (scope.cwd === undefined || resolve(options.cwd) === scope.cwd)
+    && (scope.language === undefined || options.language === scope.language);
+}
+
+function kernelStartCancelledError(): Error { return new Error("Kernel start cancelled by shutdown"); }
 
 function defaultInterpreterAvailable(command: string): boolean {
   try {
@@ -104,7 +119,9 @@ function defaultKillProcessTree(pid: number): void {
 
 export class NodeKernelManager {
   private readonly sessions = new Map<string, NodeKernelSession>();
-  private readonly starting = new Map<string, Promise<NodeKernelSession>>();
+  private readonly starting = new Map<string, { state: KernelStartState; promise: Promise<NodeKernelSession> }>();
+  private readonly notebookShutdowns = new Set<KernelShutdownScope>();
+  private stoppingAll: Promise<void> | null = null;
   private readonly deps: Required<NodeKernelManagerDependencies>;
 
   constructor(deps: NodeKernelManagerDependencies = {}) {
@@ -131,24 +148,31 @@ export class NodeKernelManager {
 
   /** Cold starts are deduplicated per session key so concurrent cells share one kernel spawn. */
   private ensureSession(key: string, options: KernelExecuteOptions): Promise<NodeKernelSession> {
+    if (this.stoppingAll || [...this.notebookShutdowns].some((scope) => matchesShutdown(options, scope))) return Promise.reject(new Error("Kernel shutdown is in progress"));
     const existing = this.sessions.get(key);
     if (existing && !existing.exited) return Promise.resolve(existing);
     const pending = this.starting.get(key);
-    if (pending) return pending;
-    const started = this.startSession(key, options).finally(() => {
-      if (this.starting.get(key) === started) this.starting.delete(key);
+    if (pending) return pending.promise;
+    const state: KernelStartState = { options: { ...options }, controller: new AbortController() };
+    const started = this.startSession(key, options, state).finally(() => {
+      if (this.starting.get(key)?.state === state) this.starting.delete(key);
     });
-    this.starting.set(key, started);
+    this.starting.set(key, { state, promise: started });
     return started;
   }
 
-  private async startSession(key: string, options: KernelExecuteOptions): Promise<NodeKernelSession> {
+  private async startSession(key: string, options: KernelExecuteOptions, state: KernelStartState): Promise<NodeKernelSession> {
     const stale = this.sessions.get(key);
     if (stale) {
       await stale.stop().catch(() => undefined);
       if (this.sessions.get(key) === stale) this.sessions.delete(key);
     }
-    const session = await NodeKernelSession.start(options, this.deps);
+    if (state.controller.signal.aborted) throw kernelStartCancelledError();
+    const session = await NodeKernelSession.start(options, this.deps, state.controller.signal);
+    if (state.controller.signal.aborted || this.starting.get(key)?.state !== state) {
+      await session.stop().catch(() => undefined);
+      throw kernelStartCancelledError();
+    }
     this.sessions.set(key, session);
     return session;
   }
@@ -166,21 +190,21 @@ export class NodeKernelManager {
   }
 
   async shutdownNotebook(notebookId: string, cwd?: string, language?: string): Promise<void> {
-    const resolved = cwd ? resolve(cwd) : undefined;
-    const keys = [...this.sessions.keys()].filter((key) => {
-      const session = this.sessions.get(key);
-      if (!session) return false;
-      const identity = session.kernelInstanceId ?? session.sessionId ?? session.notebookId;
-      return (session.notebookId === notebookId || identity === notebookId)
-        && (resolved === undefined || session.cwd === resolved)
-        && (language === undefined || session.language === language);
-    });
-    for (const key of keys) {
-      const session = this.sessions.get(key);
-      if (!session) continue;
-      // Detach before stopping so a concurrent execute cannot attach to a dying session.
-      this.sessions.delete(key);
-      await session.stop().catch(() => undefined);
+    const scope: KernelShutdownScope = { notebookId, ...(cwd ? { cwd: resolve(cwd) } : {}), ...(language ? { language } : {}) };
+    this.notebookShutdowns.add(scope);
+    try {
+      const starts = [...this.starting.values()].filter(({ state }) => matchesShutdown(state.options, scope));
+      for (const { state } of starts) state.controller.abort();
+      const sessions: NodeKernelSession[] = [];
+      for (const [key, session] of this.sessions) {
+        const identity = session.kernelInstanceId ?? session.sessionId ?? session.notebookId;
+        if ((session.notebookId !== notebookId && identity !== notebookId) || (scope.cwd !== undefined && session.cwd !== scope.cwd) || (language !== undefined && session.language !== language)) continue;
+        this.sessions.delete(key);
+        sessions.push(session);
+      }
+      await Promise.all([...sessions.map((session) => session.stop().catch(() => undefined)), ...starts.map(({ promise }) => promise.then(() => undefined, () => undefined))]);
+    } finally {
+      this.notebookShutdowns.delete(scope);
     }
   }
 
@@ -196,10 +220,21 @@ export class NodeKernelManager {
     return interrupted;
   }
 
-  async shutdownAll(): Promise<void> {
+  shutdownAll(): Promise<void> {
+    if (this.stoppingAll) return this.stoppingAll;
+    const stopping = this.stopAll().finally(() => {
+      if (this.stoppingAll === stopping) this.stoppingAll = null;
+    });
+    this.stoppingAll = stopping;
+    return stopping;
+  }
+
+  private async stopAll(): Promise<void> {
+    const starts = [...this.starting.values()];
+    for (const { state } of starts) state.controller.abort();
     const sessions = [...this.sessions.values()];
     this.sessions.clear();
-    await Promise.all(sessions.map((session) => session.stop().catch(() => undefined)));
+    await Promise.all([...sessions.map((session) => session.stop().catch(() => undefined)), ...starts.map(({ promise }) => promise.then(() => undefined, () => undefined))]);
   }
 }
 
@@ -211,6 +246,7 @@ class NodeKernelSession {
   private readonly rCodeFile?: string;
   private readonly stderrTail: string[] = [];
   private tail: Promise<void> = Promise.resolve();
+  private stopPromise?: Promise<void>;
 
   private constructor(
     private readonly options: KernelExecuteOptions,
@@ -222,14 +258,20 @@ class NodeKernelSession {
     }
   }
 
-  static async start(options: KernelExecuteOptions, deps: Required<NodeKernelManagerDependencies>): Promise<NodeKernelSession> {
+  static async start(options: KernelExecuteOptions, deps: Required<NodeKernelManagerDependencies>, signal?: AbortSignal): Promise<NodeKernelSession> {
     const session = new NodeKernelSession(options, deps);
+    const stopOnAbort = () => { void session.stop().catch(() => undefined); };
+    signal?.addEventListener("abort", stopOnAbort, { once: true });
     try {
-      await session.start();
+      if (signal?.aborted) throw kernelStartCancelledError();
+      await session.start(signal);
+      if (signal?.aborted) throw kernelStartCancelledError();
       return session;
     } catch (error) {
       await session.stop().catch(() => undefined);
-      throw error;
+      throw signal?.aborted ? kernelStartCancelledError() : error;
+    } finally {
+      signal?.removeEventListener("abort", stopOnAbort);
     }
   }
 
@@ -280,7 +322,12 @@ class NodeKernelSession {
   }
 
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    this.stopPromise ??= this.stopUnlocked();
+    return this.stopPromise;
+  }
+
+  private async stopUnlocked(): Promise<void> {
     this.exited = true;
     for (const pending of this.pending.values()) pending.reject(new Error("Kernel process stopped"));
     this.pending.clear();
@@ -322,7 +369,7 @@ class NodeKernelSession {
     if (this.rCodeFile) await rm(this.rCodeFile, { force: true }).catch(() => undefined);
   }
 
-  private async start(): Promise<void> {
+  private async start(signal?: AbortSignal): Promise<void> {
     const executable = this.executablePath();
     const args = this.options.language === "python"
       ? [PYTHON_BRIDGE]
@@ -331,6 +378,7 @@ class NodeKernelSession {
       await mkdir(join(this.options.cwd, ".pi-science", "runtime", "kernels"), { recursive: true });
       await writeFile(this.rCodeFile, "", "utf8");
     }
+    if (signal?.aborted) throw kernelStartCancelledError();
     const env = this.deps.workspaceEnvironmentVariables(this.options.environment);
     const child = this.deps.spawnProcess(executable, args, {
       cwd: this.options.cwd,
@@ -354,15 +402,16 @@ class NodeKernelSession {
       for (const pending of this.pending.values()) pending.reject(error);
       this.pending.clear();
     });
-    child.once("exit", (code, signal) => {
+    child.once("exit", (code, exitSignal) => {
       if (this.child !== child) return;
       this.exited = true;
-      const message = `Kernel process exited (code=${code ?? "none"}, signal=${signal ?? "none"})${this.stderrTail.length ? `: ${this.stderrTail.at(-1)?.trim()}` : ""}`;
+      const message = `Kernel process exited (code=${code ?? "none"}, signal=${exitSignal ?? "none"})${this.stderrTail.length ? `: ${this.stderrTail.at(-1)?.trim()}` : ""}`;
       for (const pending of this.pending.values()) pending.reject(new Error(message));
       this.pending.clear();
       this.reader?.close();
       this.reader = undefined;
     });
+    if (signal?.aborted) throw kernelStartCancelledError();
 
     const health = await this.sendRequest(HEALTH_CHECK_CODE, undefined, 30_000);
     if (!health.ok) throw new Error(`Kernel health check failed: ${health.error ?? "unknown error"}`);

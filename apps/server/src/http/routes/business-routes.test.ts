@@ -63,6 +63,17 @@ describe("native control-plane business routes", () => {
     expect(reset.json()).toMatchObject({ ok: true, configured: false, policy: { mode: "inherit" } });
   }, 30_000);
 
+  it("rejects option-like environment package specs after trimming", async () => {
+    const app = buildApp(config());
+    apps.push(app);
+
+    const create = await app.inject({ method: "POST", url: "/api/environments", payload: { name: "unsafe", packages: [" --file=/host/packages.txt"] } });
+    const install = await app.inject({ method: "POST", url: "/api/environments/workspace/packages", payload: { packages: [" --file=/host/packages.txt"] } });
+
+    expect(create.statusCode).toBe(400);
+    expect(install.statusCode).toBe(400);
+  });
+
   it("does not overwrite an existing incomplete workspace environment", async () => {
     const cwd = await workspace();
     await mkdir(join(cwd, ".venv"), { recursive: true });
