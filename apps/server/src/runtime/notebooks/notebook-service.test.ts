@@ -1,6 +1,6 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NotebookService } from "./notebook-service.js";
 import type { WorkspaceEnvironmentStatus } from "../workspace/workspace-environment.js";
@@ -100,7 +100,7 @@ describe("NotebookService", () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-jupyter-start-race-"));
     cleanup.push(cwd);
     const service = new NotebookService({ configPath: (name) => join(cwd, ".pi-science", name) });
-    await mkdir(join(service.jupyterPrefix, "bin"), { recursive: true });
+    await mkdir(dirname(service.jupyterBin), { recursive: true });
     await writeFile(service.jupyterBin, "", "utf8");
     let active = 0;
     let maxActive = 0;
@@ -130,7 +130,7 @@ describe("NotebookService", () => {
     cleanup.push(other);
     const record = join(cwd, "spawn-args.json");
     const service = new NotebookService({ configPath: (name) => join(cwd, ".pi-science", name) });
-    await mkdir(join(service.jupyterPrefix, "bin"), { recursive: true });
+    await mkdir(dirname(service.jupyterBin), { recursive: true });
     await writeFile(service.jupyterBin, `#!/usr/bin/env node\nimport { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(record)}, JSON.stringify(process.argv.slice(2)));\nsetInterval(() => {}, 30_000);\n`, "utf8");
     await chmod(service.jupyterBin, 0o755);
 

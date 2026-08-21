@@ -19,9 +19,17 @@ function systemPython(): string | null {
 
 const python = systemPython();
 function systemRscript(): string | null {
-  const command = process.platform === "win32" ? "Rscript.exe" : "Rscript";
-  const result = spawnSync(command, ["--version"], { encoding: "utf8" });
-  return result.status === 0 ? command : null;
+  // Windows is excluded at the R bridge test below: a copied or linked
+  // Rscript.exe derives R_HOME from its own module path, which points into the
+  // fixture prefix instead of the real installation.
+  if (process.platform === "win32") return null;
+  const probe = spawnSync("Rscript", ["--version"], { encoding: "utf8" });
+  if (probe.status !== 0) return null;
+  // A symlink target resolves against the link's own directory, so the fixture
+  // needs an absolute path; the bare command name would point the link at itself.
+  const located = spawnSync("which", ["Rscript"], { encoding: "utf8" });
+  const absolute = located.status === 0 ? located.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean) : undefined;
+  return absolute ?? null;
 }
 
 const rscript = systemRscript();
@@ -413,13 +421,16 @@ describe("NodeKernelManager platform interrupt semantics", () => {
     }
   });
 
+  // Real-boundary coverage for Windows: the fake-child tests above pin the
+  // win32 spawn/detach/SIGBREAK semantics, and the Python bridge tests exercise
+  // the identical stdio protocol on every platform.
   it.skipIf(rscript === null)("executes cells through the real R bridge with a persistent namespace", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "pi-science-r-bridge-"));
     cleanup.push(workspace);
     const prefix = join(workspace, "env");
-    const binDir = join(prefix, process.platform === "win32" ? "Scripts" : "bin");
+    const binDir = join(prefix, "bin");
     await mkdir(binDir, { recursive: true });
-    await symlink(rscript!, join(binDir, process.platform === "win32" ? "Rscript.exe" : "Rscript"));
+    await symlink(rscript!, join(binDir, "Rscript"));
 
     const manager = new NodeKernelManager();
     try {
