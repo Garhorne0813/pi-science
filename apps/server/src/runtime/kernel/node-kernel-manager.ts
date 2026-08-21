@@ -61,6 +61,8 @@ export interface NodeKernelManagerDependencies {
   workspaceEnvironmentVariables?: (status: WorkspaceEnvironmentStatus, inherited?: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   interpreterAvailable?: (command: string) => boolean;
+  spawnProcess?: typeof spawn;
+  killProcessTree?: (pid: number) => void;
 }
 
 const PYTHON_BRIDGE = fileURLToPath(new URL("./bridges/kernel_bridge.py", import.meta.url));
@@ -96,6 +98,10 @@ function defaultInterpreterAvailable(command: string): boolean {
   }
 }
 
+function defaultKillProcessTree(pid: number): void {
+  spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }).once("error", () => undefined);
+}
+
 export class NodeKernelManager {
   private readonly sessions = new Map<string, NodeKernelSession>();
   private readonly starting = new Map<string, Promise<NodeKernelSession>>();
@@ -106,6 +112,8 @@ export class NodeKernelManager {
       workspaceEnvironmentVariables: deps.workspaceEnvironmentVariables ?? workspaceEnvironmentVariables,
       platform: deps.platform ?? process.platform,
       interpreterAvailable: deps.interpreterAvailable ?? defaultInterpreterAvailable,
+      spawnProcess: deps.spawnProcess ?? spawn,
+      killProcessTree: deps.killProcessTree ?? defaultKillProcessTree,
     };
   }
 
@@ -253,13 +261,22 @@ class NodeKernelSession {
   interrupt(): boolean {
     const child = this.child;
     if (!child || child.exitCode !== null) return false;
+    // An idle kernel has no cell in flight; signalling it would tear down a
+    // healthy process and its namespace for nothing.
+    if (this.pending.size === 0) return false;
     try {
-      if (this.deps.platform === "win32") child.kill();
-      else child.kill("SIGINT");
+      child.kill(this.interruptSignal());
       return true;
     } catch {
       return false;
     }
+  }
+
+  private interruptSignal(): NodeJS.Signals {
+    // With a detached Windows spawn, SIGBREAK arrives as CTRL_BREAK_EVENT and
+    // kernel_bridge.py converts it into an in-cell KeyboardInterrupt; POSIX
+    // keeps the plain SIGINT path.
+    return this.deps.platform === "win32" ? "SIGBREAK" : "SIGINT";
   }
 
 
@@ -270,20 +287,35 @@ class NodeKernelSession {
     const child = this.child;
     this.child = undefined;
     if (child && child.exitCode === null) {
-      child.kill("SIGTERM");
-      await new Promise<void>((resolve) => {
-        let settled = false;
-        const force = setTimeout(() => child.kill("SIGKILL"), 2_000);
-        const finish = () => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(force);
-          resolve();
-        };
-        force.unref?.();
-        child.once("exit", finish);
-        child.once("close", finish);
-      });
+      if (this.deps.platform === "win32" && child.pid !== undefined) {
+        // Detached Windows kernels form their own process group; killing only
+        // the direct child (TerminateProcess) would orphan grandchildren, so
+        // tear down the whole tree and wait for the pipes to close.
+        this.deps.killProcessTree?.(child.pid);
+        await new Promise<void>((resolve) => {
+          let settled = false;
+          const finish = () => { if (!settled) { settled = true; resolve(); } };
+          child.once("exit", finish);
+          child.once("close", finish);
+          const failsafe = setTimeout(finish, 2_000);
+          failsafe.unref?.();
+        });
+      } else {
+        child.kill("SIGTERM");
+        await new Promise<void>((resolve) => {
+          let settled = false;
+          const force = setTimeout(() => child.kill("SIGKILL"), 2_000);
+          const finish = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(force);
+            resolve();
+          };
+          force.unref?.();
+          child.once("exit", finish);
+          child.once("close", finish);
+        });
+      }
     }
     this.reader?.close();
     this.reader = undefined;
@@ -300,10 +332,13 @@ class NodeKernelSession {
       await writeFile(this.rCodeFile, "", "utf8");
     }
     const env = this.deps.workspaceEnvironmentVariables(this.options.environment);
-    const child = spawn(executable, args, {
+    const child = this.deps.spawnProcess(executable, args, {
       cwd: this.options.cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],
+      // A new process group lets Windows deliver CTRL_BREAK_EVENT (SIGBREAK)
+      // to the kernel alone instead of terminating the whole tree.
+      ...(this.deps.platform === "win32" ? { detached: true } : {}),
     });
     this.child = child;
     this.exited = false;
@@ -393,8 +428,7 @@ class NodeKernelSession {
     const pending = this.pending.get(id);
     if (!pending) return null;
     try {
-      if (this.deps.platform === "win32") child.kill();
-      else child.kill("SIGINT");
+      child.kill(this.interruptSignal());
     } catch {
       return null;
     }

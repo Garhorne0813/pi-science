@@ -1,9 +1,11 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { NodeKernelManager } from "./node-kernel-manager.js";
+import { PassThrough } from "node:stream";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { NodeKernelManager, type KernelResult } from "./node-kernel-manager.js";
 import type { WorkspaceEnvironmentStatus } from "../workspace/workspace-environment.js";
 
 function systemPython(): string | null {
@@ -183,4 +185,131 @@ describe("NodeKernelManager native execution", () => {
     }
   });
 
+});
+
+describe("NodeKernelManager platform interrupt semantics", () => {
+  interface FakeSession { child: ChildProcess; writes: string[]; kills: (string | number)[]; answered: Set<string> }
+  function fakeChild(): FakeSession {
+    const child = new EventEmitter() as unknown as ChildProcess;
+    const stdin = new PassThrough();
+    const writes: string[] = [];
+    stdin.on("data", (chunk: Buffer) => writes.push(String(chunk)));
+    const kills: (string | number)[] = [];
+    (child as Record<string, unknown>).stdin = stdin;
+    (child as Record<string, unknown>).stdout = new PassThrough();
+    (child as Record<string, unknown>).stderr = new PassThrough();
+    (child as Record<string, unknown>).pid = 4242;
+    (child as Record<string, unknown>).exitCode = null;
+    (child as Record<string, unknown>).kill = ((signal?: string | number) => { kills.push(signal ?? "SIGTERM"); return true; }) as ChildProcess["kill"];
+    return { child, writes, kills, answered: new Set<string>() };
+  }
+
+  function managerWithFake(platform: NodeJS.Platform) {
+    const spawned: { args: string[]; options?: SpawnOptions }[] = [];
+    const treeKills: number[] = [];
+    const sessions: FakeSession[] = [];
+    const manager = new NodeKernelManager({
+      platform,
+      workspaceEnvironmentVariables: () => ({}),
+      interpreterAvailable: () => true,
+      spawnProcess: ((command: string, args: readonly string[], options?: SpawnOptions) => {
+        spawned.push({ args: [...args], options });
+        const session = fakeChild();
+        sessions.push(session);
+        return session.child;
+      }) as unknown as typeof spawn,
+      killProcessTree: (pid: number) => { treeKills.push(pid); },
+    });
+    return { manager, spawned, treeKills, sessions };
+  }
+
+  /** Answers every bridge request that has not been responded to yet. */
+  function respondPending(session: FakeSession, overrides: Partial<KernelResult> = {}): void {
+    for (const line of session.writes) {
+      const request = JSON.parse(line) as { id: string };
+      if (session.answered.has(request.id)) continue;
+      session.answered.add(request.id);
+      session.child.stdout!.write(`${JSON.stringify({ id: request.id, type: "result", ok: true, stdout: "", result: "2", error: null, interrupted: false, ...overrides })}\n`);
+    }
+  }
+
+  async function waitForRequest(sessions: FakeSession[], count: number): Promise<void> {
+    await vi.waitFor(() => { expect(sessions.length).toBeGreaterThan(0); expect(sessions[0]!.writes.length).toBeGreaterThanOrEqual(count); });
+  }
+
+  /** Runs a cell to completion: answers the health probe, then the cell itself. */
+  async function driveExecute(manager: NodeKernelManager, sessions: FakeSession[], cwd: string, env: WorkspaceEnvironmentStatus, code: string): Promise<KernelResult> {
+    const result = manager.execute({ language: "python", code, cwd, environment: env, kernelInstanceId: "k-interrupt", timeoutMs: 30_000 });
+    await waitForRequest(sessions, 1);
+    respondPending(sessions[0]!);
+    await waitForRequest(sessions, 2);
+    respondPending(sessions[0]!);
+    return result;
+  }
+
+  it("spawns detached on windows and interrupts a running cell with SIGBREAK", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-win32-interrupt-"));
+    cleanup.push(cwd);
+    const { manager, spawned, treeKills, sessions } = managerWithFake("win32");
+    const env = status(cwd, join(cwd, "env"));
+    try {
+      const first = await driveExecute(manager, sessions, cwd, env, "1+1");
+      expect(first.ok).toBe(true);
+      expect(spawned[0]?.options).toMatchObject({ detached: true });
+
+      const second = manager.execute({ language: "python", code: "import time\ntime.sleep(30)", cwd, environment: env, kernelInstanceId: "k-interrupt", timeoutMs: 30_000 });
+      await waitForRequest(sessions, 3);
+      expect(await manager.interruptNotebook("k-interrupt", cwd)).toBe(true);
+      expect(sessions[0]!.kills).toContain("SIGBREAK");
+      respondPending(sessions[0]!, { ok: false, result: null, error: "KeyboardInterrupt", interrupted: true });
+      const result = await second;
+      expect(result.interrupted).toBe(true);
+    } finally {
+      const stopping = manager.shutdownAll().catch(() => undefined);
+      for (const session of sessions) session.child.emit("close", 0);
+      await stopping;
+    }
+    expect(treeKills).toContain(4242);
+  });
+
+  it("keeps posix spawns attached and signals SIGINT", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-posix-interrupt-"));
+    cleanup.push(cwd);
+    const { manager, spawned, treeKills, sessions } = managerWithFake("linux");
+    const env = status(cwd, join(cwd, "env"));
+    try {
+      const first = await driveExecute(manager, sessions, cwd, env, "1+1");
+      expect(first.ok).toBe(true);
+      expect(spawned[0]?.options?.detached).toBeUndefined();
+
+      const second = manager.execute({ language: "python", code: "import time\ntime.sleep(30)", cwd, environment: env, kernelInstanceId: "k-interrupt", timeoutMs: 30_000 });
+      await waitForRequest(sessions, 3);
+      expect(await manager.interruptNotebook("k-interrupt", cwd)).toBe(true);
+      expect(sessions[0]!.kills).toContain("SIGINT");
+      respondPending(sessions[0]!, { ok: false, result: null, error: "KeyboardInterrupt", interrupted: true });
+      expect((await second).interrupted).toBe(true);
+    } finally {
+      const stopping = manager.shutdownAll().catch(() => undefined);
+      for (const session of sessions) session.child.emit("close", 0);
+      await stopping;
+    }
+    expect(treeKills).toEqual([]);
+  });
+
+  it("spares an idle kernel from manual interrupts", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-idle-interrupt-"));
+    cleanup.push(cwd);
+    const { manager, treeKills, sessions } = managerWithFake("win32");
+    const env = status(cwd, join(cwd, "env"));
+    try {
+      await driveExecute(manager, sessions, cwd, env, "1+1");
+      expect(await manager.interruptNotebook("k-interrupt", cwd)).toBe(false);
+      expect(sessions[0]!.kills).toEqual([]);
+    } finally {
+      const stopping = manager.shutdownAll().catch(() => undefined);
+      for (const session of sessions) session.child.emit("close", 0);
+      await stopping;
+    }
+    expect(treeKills).toContain(4242);
+  });
 });
