@@ -7,6 +7,7 @@ import { registerNodeSessionRoutes } from "./node-session-routes.js";
 import { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import { registerSessionReadRoutes } from "./session-routes.js";
 import { sessionRepository } from "../../runtime/node/session-repository.js";
+import { sessionTitleRepository } from "../../runtime/node/session-titles.js";
 import { AI_TITLE_PROMPT_INSTRUCTION } from "../../runtime/title/title-prompt.js";
 
 const cleanup: string[] = [];
@@ -109,6 +110,25 @@ describe("native Node conversation routes", () => {
     await server.close();
   });
 
+  it("returns an existing persisted title without generating a replacement", async () => {
+    const cwd = await workspaceWithSessions("session-title-existing");
+    await sessionTitleRepository.setTitle(cwd, "session-title-existing", "Existing title");
+    let generateCalls = 0;
+    const aiTitleService = {
+      async generateTitle() {
+        generateCalls += 1;
+        return "Unexpected replacement";
+      },
+    };
+    const server = Fastify({ logger: false });
+    registerNodeSessionRoutes(server, nodeSessionService, sessionRepository, aiTitleService as never);
+    const response = await server.inject({ method: "POST", url: `/api/sessions/session-title-existing/title?cwd=${encodeURIComponent(cwd)}` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, title: "Existing title" });
+    expect(generateCalls).toBe(0);
+    await server.close();
+  });
+
   it("persists the generated AI title server-side without a client PUT", async () => {
     const cwd = await workspaceWithSessions("session-title-persist");
     const aiTitleService = {
@@ -126,6 +146,39 @@ describe("native Node conversation routes", () => {
     expect(raw).toContain("AI 自动标题");
     const listed = await server.inject({ method: "GET", url: `/api/sessions?cwd=${encodeURIComponent(cwd)}` });
     expect((listed.json() as Array<{ id: string; name: string | null }>).find((s) => s.id === "session-title-persist")?.name).toBe("AI 自动标题");
+    await server.close();
+  });
+
+  it("keeps a concurrent explicit title when AI generation finishes later", async () => {
+    const cwd = await workspaceWithSessions("session-title-race");
+    let generationStarted!: () => void;
+    let releaseGeneration!: () => void;
+    const started = new Promise<void>((resolve) => { generationStarted = resolve; });
+    const release = new Promise<void>((resolve) => { releaseGeneration = resolve; });
+    const aiTitleService = {
+      async generateTitle() {
+        generationStarted();
+        await release;
+        return "late AI title";
+      },
+    };
+    const server = Fastify({ logger: false });
+    registerNodeSessionRoutes(server, nodeSessionService, sessionRepository, aiTitleService as never);
+
+    const postPromise = server.inject({ method: "POST", url: `/api/sessions/session-title-race/title?cwd=${encodeURIComponent(cwd)}` });
+    await started;
+    const put = await server.inject({
+      method: "PUT",
+      url: `/api/sessions/session-title-race/title?cwd=${encodeURIComponent(cwd)}`,
+      payload: { title: "explicit title" },
+    });
+    expect(put.statusCode).toBe(200);
+    releaseGeneration();
+
+    const post = await postPromise;
+    expect(post.statusCode).toBe(200);
+    expect(post.json()).toEqual({ ok: true, title: "explicit title" });
+    await expect(sessionTitleRepository.getTitles(cwd)).resolves.toEqual(new Map([["session-title-race", "explicit title"]]));
     await server.close();
   });
 

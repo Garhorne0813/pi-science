@@ -31,7 +31,7 @@ describe("loadSessionsInternal stale protection", () => {
 
     const stale = loadSessionsInternal();
     const fresh = await loadSessionsInternal();
-    expect(fresh.map((session) => session.id)).toEqual(["fresh-session"]);
+    expect(fresh?.map((session) => session.id)).toEqual(["fresh-session"]);
     expect(useRuntimeStore.getState().sessions.map((session) => session.id)).toEqual(["fresh-session"]);
 
     releaseStale[0]?.(); // stale response arrives after the fresh one
@@ -64,5 +64,17 @@ describe("loadSessionsInternal stale protection", () => {
     // drive navigation from), never an empty array.
     await expect(stale).resolves.toMatchObject([{ id: "kept" }]);
     expect(useRuntimeStore.getState().sessions.map((session) => session.id)).toEqual(["kept"]);
+  });
+
+  it("returns null when the session list request fails", async () => {
+    useRuntimeStore.setState({ cwd: "/workspace", activeSessionId: null, sessions: [] });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/sessions?")) return jsonResponse({ error: "backend unavailable" }, 503);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await expect(loadSessionsInternal()).resolves.toBeNull();
+    expect(useRuntimeStore.getState().sessions).toEqual([]);
   });
 });

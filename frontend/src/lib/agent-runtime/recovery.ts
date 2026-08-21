@@ -222,14 +222,23 @@ async function runConnectionRecovery(
         historyLoading: false,
         historySnapshotVersion: history.snapshot_version,
       });
-      backfillSessionName(cwd, sessionId, useRuntimeStore.getState().thread);
     }
     if (historySucceeded && stateSucceeded) {
+      const sessionList = await loadSessionsInternal(cwd);
+      if (sessionList !== null) {
+        const latest = useRuntimeStore.getState();
+        if (
+          connectionGeneration !== generations.connection
+          || activityGeneration !== generations.activity
+          || latest.activeSessionId !== sessionId
+          || latest.cwd !== cwd
+        ) return;
+        backfillSessionName(cwd, sessionId, latest.thread);
+      }
       useRuntimeStore.setState({ status: "ready" });
       // The connection was restored after a loss: files may have changed
       // while the stream was down and no terminal event reached the tree.
       markWorkspaceFilesChanged();
-      void loadSessionsInternal();
       return;
     }
     if (attempt + 1 < CONNECTION_RECOVERY_MAX_ATTEMPTS) {
@@ -322,12 +331,15 @@ export async function reconcileAfterGap(
       historyLoading: false,
       historySnapshotVersion: historyResult.value.snapshot_version,
     });
-    backfillSessionName(cwd, sessionId, useRuntimeStore.getState().thread);
+  }
+  const sessionList = await loadSessionsInternal(cwd);
+  if (historyResult.status === "fulfilled" && sessionList !== null) {
+    const latest = useRuntimeStore.getState();
+    if (latest.activeSessionId === sessionId && latest.cwd === cwd) backfillSessionName(cwd, sessionId, latest.thread);
   }
   useRuntimeStore.setState({
     status: historyResult.status === "fulfilled" && stateResult.status === "fulfilled" ? "ready" : "error",
   });
-  void loadSessionsInternal();
 }
 
 /** How many consecutive one-second idle REST rounds with no confirmed reply

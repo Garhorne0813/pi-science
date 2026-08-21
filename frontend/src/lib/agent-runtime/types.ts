@@ -97,7 +97,7 @@ export interface RuntimeState {
   abort: () => Promise<void>;
   setModel: (model: string, thinking?: string) => Promise<string | null>;
   respondToInteraction: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => Promise<void>;
-  loadSessions: (cwd?: string) => Promise<SessionInfo[]>;
+  loadSessions: (cwd?: string) => Promise<SessionInfo[] | null>;
   loadSession: (sessionId: string) => Promise<void>;
   loadOlderMessages: () => Promise<number>;
   loadMessagesForNavigation: (before: string) => Promise<number>;

@@ -1,6 +1,6 @@
 /** Session list loading and the optimistic-session bookkeeping it needs. */
 
-import { getClient, getSessionName, type SessionInfo } from "../client/pi-science-client";
+import { clearDerivedSessionName, getClient, getSessionName, setLocalSessionName, type SessionInfo } from "../client/pi-science-client";
 import { useRuntimeStore } from "./store";
 
 /** Sessions created locally that the backend has not listed yet. Owned here
@@ -12,7 +12,7 @@ export const optimisticSessionIds = new Set<string>();
  *  fresher one that resolved later (slow first request vs fast second). */
 let sessionsListVersion = 0;
 
-export async function loadSessionsInternal(cwdOverride?: string): Promise<SessionInfo[]> {
+export async function loadSessionsInternal(cwdOverride?: string): Promise<SessionInfo[] | null> {
   const state = useRuntimeStore.getState();
   const requestedCwd = cwdOverride ?? state.cwd;
   const requestVersion = ++sessionsListVersion;
@@ -23,18 +23,27 @@ export async function loadSessionsInternal(cwdOverride?: string): Promise<Sessio
     const client = getClient();
     const fromDisk = await client.listSessions(requestedCwd);
     const current = useRuntimeStore.getState();
-    if (current.cwd !== requestedCwd) return [];
+    if (current.cwd !== requestedCwd) return null;
     if (requestVersion !== sessionsListVersion) {
       // A newer load superseded this one. Never overwrite the fresher list,
       // but return the current authoritative list (callers like ProjectsLayout
       // drive auto-navigation from the returned sessions).
       return current.sessions.slice(0, 50);
     }
-    // Inject names from localStorage
-    const named = fromDisk.map((s: SessionInfo) => ({
-      ...s,
-      name: s.name || current.sessions.find((item) => item.id === s.id)?.name || getSessionName(requestedCwd, s.id) || undefined,
-    }));
+    // Server titles are authoritative. Sync them into localStorage so
+    // activation and title generation see the same value even when the
+    // session list request races history loading.
+    const named = fromDisk.map((s: SessionInfo) => {
+      const serverName = typeof s.name === "string" ? s.name.trim() : "";
+      if (serverName) {
+        clearDerivedSessionName(requestedCwd, s.id);
+        setLocalSessionName(requestedCwd, s.id, serverName);
+      }
+      return {
+        ...s,
+        name: serverName || current.sessions.find((item) => item.id === s.id)?.name || getSessionName(requestedCwd, s.id) || undefined,
+      };
+    });
     // Preserve only the active, newly-created optimistic entry. Treating every
     // disk-missing item as optimistic resurrects sessions after deletion.
     const diskIds = new Set(named.map((s: SessionInfo) => s.id));
@@ -47,6 +56,6 @@ export async function loadSessionsInternal(cwdOverride?: string): Promise<Sessio
     return merged.slice(0, 50);
   } catch (err) {
     console.error("Failed to load sessions:", err);
-    return [];
+    return null;
   }
 }

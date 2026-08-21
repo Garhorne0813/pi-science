@@ -76,11 +76,16 @@ export function registerNodeSessionRoutes(
     }
     const exists = await sessionRepository.findPath(workspace, sessionId);
     if (!exists) return reply.code(404).send({ ok: false, code: "not_found", error: "session not found" });
+    const existingTitle = (await titles.getTitles(workspace)).get(sessionId);
+    if (existingTitle) return { ok: true, title: existingTitle };
     const title = await aiTitleService.generateTitle(workspace, sessionId);
     // Persist the generated title server-side so a lost client PUT (tab closed,
-    // network drop) cannot lose it; null means no title was produced.
-    if (title) await titles.setTitle(workspace, sessionId, title);
-    return { ok: true, title };
+    // network drop) cannot lose it; null means no title was produced. The
+    // conditional write protects an explicit title written while generation
+    // was in flight.
+    if (!title) return { ok: true, title: null };
+    const authoritativeTitle = await titles.setTitleIfAbsent(workspace, sessionId, title);
+    return { ok: true, title: authoritativeTitle };
   });
 
   app.put<{ Params: { session_id: string } }>("/api/sessions/:session_id/title", async (request, reply) => {

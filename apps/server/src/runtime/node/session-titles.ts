@@ -46,6 +46,26 @@ export class SessionTitleRepository {
     });
   }
 
+  /** Store a generated title only when no title exists. The check and write
+   *  share one file lock so a concurrent explicit rename cannot be replaced by
+   *  a late AI result. Returns the title that remains authoritative. */
+  async setTitleIfAbsent(cwd: string, sessionId: string, title: string): Promise<string> {
+    const file = this.file(cwd);
+    let authoritative = title;
+    await withFileWriteLock(file, async () => {
+      const records = await readJsonLines<SessionTitleRecord>(file);
+      const existing = records.find((record) => record?.session_id === sessionId && record.title);
+      if (existing?.title) {
+        authoritative = existing.title;
+        return;
+      }
+      const next = records.filter((record) => record?.session_id !== sessionId);
+      next.push({ session_id: sessionId, title, updated_at: new Date().toISOString() });
+      await rewriteTitles(file, next);
+    });
+    return authoritative;
+  }
+
   async deleteTitle(cwd: string, sessionId: string): Promise<void> {
     const file = this.file(cwd);
     await withFileWriteLock(file, async () => {

@@ -25,7 +25,7 @@ export type {
   TurnArtifactTurn,
 } from "./types";
 export { clampThinkingLevel, conversationModelOptions } from "./models";
-export { aiTitleAttemptedAt, clearAiTitle, clearAiTitleAttempted, clearSessionName, deriveSessionName, getSessionName, hasAiTitle, markAiTitle, markAiTitleAttempted, moveSessionName, setSessionName } from "./session-names";
+export { aiTitleAttemptedAt, clearAiTitle, clearAiTitleAttempted, clearDerivedSessionName, clearSessionName, deriveSessionName, getSessionName, hasAiTitle, hasDerivedSessionName, markAiTitle, markAiTitleAttempted, markDerivedSessionName, moveSessionName, setLocalSessionName, setSessionName } from "./session-names";
 export { clearCachedMessages } from "./message-cache";
 
 // ── Client ──

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { getSessionName } from "../client/pi-science-client";
 import { useRuntimeStore } from "./index";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 import * as fileRevision from "./file-revision";
@@ -309,6 +310,41 @@ describe("runtime event subscription", () => {
         "/workspace\u0000session-a": true,
       });
     });
+  });
+
+  it("keeps a persisted title and skips AI generation after an idle replay", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([{
+        id: "session-a",
+        cwd: "/workspace",
+        name: "Persisted experiment title",
+      }]);
+      if (url.includes("/title")) return jsonResponse({ ok: true, title: "Unexpected replacement" });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    await vi.waitFor(() => {
+      expect(useRuntimeStore.getState().sessions).toContainEqual(
+        expect.objectContaining({ id: "session-a", name: "Persisted experiment title" }),
+      );
+    });
+
+    FakeEventSource.instances[0].emit("agent_start", { type: "agent_start", sessionId: "session-a" });
+    FakeEventSource.instances[0].emit("session.idle", {
+      type: "session.idle",
+      sessionId: "session-a",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/title"))).toBe(false);
+    expect(getSessionName("/workspace", "session-a")).toBe("Persisted experiment title");
+    expect(useRuntimeStore.getState().sessions).toContainEqual(
+      expect.objectContaining({ id: "session-a", name: "Persisted experiment title" }),
+    );
   });
 
   it("skips the title request when the session is already marked AI-titled", async () => {

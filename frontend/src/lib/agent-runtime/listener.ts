@@ -2,7 +2,7 @@
  *  lifecycle, interaction prompts and thread folding. */
 
 import type { PiScienceClient, SessionStats } from "../client/pi-science-client";
-import { aiTitleAttemptedAt, hasAiTitle, markAiTitleAttempted } from "../client/pi-science-client";
+import { aiTitleAttemptedAt, getSessionName, hasAiTitle, hasDerivedSessionName, markAiTitleAttempted } from "../client/pi-science-client";
 import { appendRuntimeError, isMissingSessionError } from "./errors";
 import { markWorkspaceFilesChanged } from "./file-revision";
 import { foldEvent, resetTurnBuffer } from "./event-fold";
@@ -40,10 +40,15 @@ function clearOptimisticRetry(): void {
  *  does not spawn a fresh Pi process on every idle event. */
 const aiTitleInFlight = new Set<string>();
 const AI_TITLE_RETRY_MS = 60 * 60 * 1000;
+const PLACEHOLDER_SESSION_NAME = "New Session";
 
 function maybeGenerateAiTitle(sessionId: string, cwd?: string): void {
   const client = _listenerClient;
   if (!client || !cwd || hasAiTitle(cwd, sessionId)) return;
+  const current = useRuntimeStore.getState();
+  const localName = getSessionName(cwd, sessionId);
+  const sessionName = localName || current.sessions.find((session) => session.id === sessionId)?.name || "";
+  if (sessionName && sessionName !== PLACEHOLDER_SESSION_NAME && !hasDerivedSessionName(cwd, sessionId)) return;
   const attemptedAt = aiTitleAttemptedAt(cwd, sessionId);
   if (attemptedAt && Date.now() - attemptedAt < AI_TITLE_RETRY_MS) return;
   const key = `${cwd}\u0000${sessionId}`;
@@ -300,11 +305,16 @@ export function registerEventListener(client: PiScienceClient) {
         pendingQuestionnaire: null,
       });
       markWorkspaceFilesChanged();
+      const sessionListRefresh = loadSessionsInternal();
       if (successful && state.activeSessionId && event.handledWithoutTurn !== true) {
         void resyncCompletedHistory(state.activeSessionId, state.cwd);
-        maybeGenerateAiTitle(state.activeSessionId, state.cwd);
+        // Refresh the authoritative server title before deciding whether an AI
+        // title is allowed to run. This prevents replayed idle events from
+        // replacing a title that already exists on the server.
+        void sessionListRefresh.then((sessions) => {
+          if (sessions !== null) maybeGenerateAiTitle(state.activeSessionId!, state.cwd);
+        });
       }
-      void loadSessionsInternal();
     } else if (event.type === "session.stats") {
       ++generations.activity;
       const stats = event.stats as SessionStats | undefined;

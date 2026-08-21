@@ -40,6 +40,23 @@ describe("SessionTitleRepository", () => {
     expect(raw.match(/\"second\"/)).not.toBeNull();
   });
 
+  it("keeps an existing title when a conditional write races a rename", async () => {
+    const repo = new SessionTitleRepository();
+    const cwd = await workspace();
+    await repo.setTitle(cwd, "s1", "explicit title");
+
+    await expect(repo.setTitleIfAbsent(cwd, "s1", "late AI title")).resolves.toBe("explicit title");
+    await expect(repo.getTitles(cwd)).resolves.toEqual(new Map([["s1", "explicit title"]]));
+  });
+
+  it("writes a conditional title when no title exists", async () => {
+    const repo = new SessionTitleRepository();
+    const cwd = await workspace();
+
+    await expect(repo.setTitleIfAbsent(cwd, "s1", "AI title")).resolves.toBe("AI title");
+    await expect(repo.getTitles(cwd)).resolves.toEqual(new Map([["s1", "AI title"]]));
+  });
+
   it("deletes a title for a session and keeps the others", async () => {
     const repo = new SessionTitleRepository();
     const cwd = await workspace();

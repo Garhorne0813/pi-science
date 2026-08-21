@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { getSessionName, hasAiTitle, markAiTitle, setSessionName } from "../client/pi-science-client";
+import { getSessionName, hasAiTitle, hasDerivedSessionName, markAiTitle, markDerivedSessionName, setLocalSessionName, setSessionName } from "../client/pi-science-client";
 import { useRuntimeStore } from "./index";
-import { applyAiSessionName } from "./naming";
+import { applyAiSessionName, applyPromptSessionName } from "./naming";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
 
@@ -90,6 +90,32 @@ describe("session naming", () => {
     );
   });
 
+  it("keeps a server-provided title when history is loaded", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) {
+        return jsonResponse({ messages: [
+          { id: "user-1", role: "user", content: [{ type: "text", text: "totally different text" }] },
+        ] });
+      }
+      if (url.includes("/state")) return jsonResponse(state("server-named-session"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([{
+        id: "server-named-session",
+        cwd: "/workspace",
+        name: "Persisted experiment title",
+      }]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    useRuntimeStore.setState({ cwd: "/workspace", sessions: [{ id: "server-named-session", cwd: "/workspace" }] });
+
+    await useRuntimeStore.getState().connect("/workspace", "server-named-session");
+
+    expect(getSessionName("/workspace", "server-named-session")).toBe("Persisted experiment title");
+    expect(useRuntimeStore.getState().sessions).toContainEqual(
+      expect.objectContaining({ id: "server-named-session", name: "Persisted experiment title" }),
+    );
+  });
+
   it("backfills the name during gap recovery once history first contains a user block", async () => {
     let messageReads = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -127,6 +153,40 @@ describe("session naming", () => {
     await useRuntimeStore.getState().sendPrompt("x".repeat(100));
 
     expect(getSessionName("/workspace", "session-long")).toBe(`${"x".repeat(48)}…`);
+  });
+
+  it("keeps a derived fallback local until the AI title is applied", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/title")) return jsonResponse({ ok: true, title: "AI title" });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useRuntimeStore.setState({ cwd: "/workspace", sessions: [{ id: "session-derived", cwd: "/workspace", name: "New Session" }] });
+
+    applyPromptSessionName("/workspace", "session-derived", "First question");
+    expect(getSessionName("/workspace", "session-derived")).toBe("First question");
+    expect(hasDerivedSessionName("/workspace", "session-derived")).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    applyAiSessionName("/workspace", "session-derived", "AI title");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(getSessionName("/workspace", "session-derived")).toBe("AI title");
+    expect(hasDerivedSessionName("/workspace", "session-derived")).toBe(false);
+  });
+
+  it("does not overwrite a server title loaded while AI generation is in flight", () => {
+    setLocalSessionName("/workspace", "session-inflight", "First question");
+    markDerivedSessionName("/workspace", "session-inflight");
+    useRuntimeStore.setState({ sessions: [{ id: "session-inflight", cwd: "/workspace", name: "Persisted title" }] });
+
+    applyAiSessionName("/workspace", "session-inflight", "Late AI title");
+
+    expect(getSessionName("/workspace", "session-inflight")).toBe("First question");
+    expect(useRuntimeStore.getState().sessions).toContainEqual(
+      expect.objectContaining({ id: "session-inflight", name: "Persisted title" }),
+    );
+    expect(hasAiTitle("/workspace", "session-inflight")).toBe(false);
   });
 
   it("does not overwrite a name when the session is already AI-titled (in-flight guard)", () => {

@@ -284,7 +284,7 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
         if (cancelled) return;
         // Auto-load most recent session if none active
         const state = useRuntimeStore.getState();
-        if (merged.length > 0 && !state.activeSessionId) {
+        if (merged && merged.length > 0 && !state.activeSessionId) {
           const latest = merged[0];
           navigate(`/workspace/${encodeURIComponent(cwd)}/session/${latest.id}`);
         }
