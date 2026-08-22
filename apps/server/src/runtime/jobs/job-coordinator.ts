@@ -382,13 +382,15 @@ export class JobCoordinator {
       try {
         await this.hooks.beforeTerminalSave?.(record);
         if (this.repository) {
-          const current = await this.repository.getById(record.job_id);
-          const terminal = current && isTerminal(current.status);
-          const ownsCurrent = this.ownershipMatches(current?.ownership, record.ownership);
-          const durable = current?.status === "cancelled"
-            ? await this.repository.updateCancelledDiagnostic({ ...record, status: "cancelled", ended_at: current.ended_at ?? record.ended_at, ownership: current.ownership, stderr: mergeDiagnosticText(record.stderr, current.stderr) }, this.now())
-            : terminal || !ownsCurrent ? current ?? record : await this.repository.saveTerminal(record, this.now());
-          Object.assign(record, durable ?? current ?? record);
+          await this.repository.locked(record.job_id, async () => {
+            const current = await this.repository!.getById(record.job_id);
+            const terminal = current && isTerminal(current.status);
+            const ownsCurrent = this.ownershipMatches(current?.ownership, record.ownership);
+            const durable = current?.status === "cancelled"
+              ? await this.repository!.updateCancelledDiagnostic({ ...record, status: "cancelled", ended_at: current.ended_at ?? record.ended_at, ownership: current.ownership, stderr: mergeDiagnosticText(record.stderr, current.stderr) }, this.now())
+              : terminal || !ownsCurrent ? current ?? record : await this.repository!.saveTerminal(record, this.now());
+            Object.assign(record, durable ?? current ?? record);
+          });
         } else await withFileWriteLock(path, async () => {
           const current = await readJson<JobRecord | null>(path, null);
           const terminal = current && isTerminal(current.status);
