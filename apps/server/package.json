@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-kernel-bridges.mjs",
     "dev": "tsx watch src/app/main.ts",
     "start": "node dist/app/main.js",
     "test": "vitest run",

@@ -29,7 +29,7 @@ afterEach(async () => {
 });
 
 function config(): ServerConfig {
-  return { host: "127.0.0.1", port: 0, pythonOrigin: "http://127.0.0.1:1", corsOrigins: [], maxBodyBytes: 10_000_000, upstreamTimeoutMs: 100, nodeSessions: false, nodeSse: false, nodeFiles: true, nodePiManager: false, logLevel: "silent" };
+  return { host: "127.0.0.1", port: 0, corsOrigins: [], maxBodyBytes: 10_000_000, upstreamTimeoutMs: 100, nodeSessions: false, nodeSse: false, nodeFiles: true, nodePiManager: false, logLevel: "silent" };
 }
 
 async function workspace(): Promise<string> {
@@ -61,6 +61,17 @@ describe("native control-plane business routes", () => {
     const reset = await app.inject({ method: "DELETE", url: "/api/settings/skills" });
     expect(reset.statusCode).toBe(200);
     expect(reset.json()).toMatchObject({ ok: true, configured: false, policy: { mode: "inherit" } });
+  }, 30_000);
+
+  it("rejects option-like environment package specs after trimming", async () => {
+    const app = buildApp(config());
+    apps.push(app);
+
+    const create = await app.inject({ method: "POST", url: "/api/environments", payload: { name: "unsafe", packages: [" --file=/host/packages.txt"] } });
+    const install = await app.inject({ method: "POST", url: "/api/environments/workspace/packages", payload: { packages: [" --file=/host/packages.txt"] } });
+
+    expect(create.statusCode).toBe(400);
+    expect(install.statusCode).toBe(400);
   });
 
   it("does not overwrite an existing incomplete workspace environment", async () => {
@@ -92,7 +103,7 @@ describe("native control-plane business routes", () => {
     expect(environment).toMatchObject({
       ready: true,
       workspace: expect.any(String),
-      virtual_env: join(environment.workspace, ".venv"),
+      prefix: join(environment.workspace, ".venv"),
       python: expect.stringContaining(join(environment.workspace, ".venv")),
       npm: { local_prefix: environment.workspace },
     });
@@ -110,7 +121,7 @@ describe("native control-plane business routes", () => {
       job = (await app.inject({ method: "GET", url: `/api/jobs/${job.job_id}?cwd=${encodeURIComponent(cwd)}` })).json();
     }
     expect(job).toMatchObject({ status: "succeeded" });
-    expect(job.stdout.trim()).toBe(environment.virtual_env);
+    expect(job.stdout.trim()).toBe(environment.prefix);
   }, 30_000);
 
   it("uses Pi runtime model capabilities for workspace settings", async () => {

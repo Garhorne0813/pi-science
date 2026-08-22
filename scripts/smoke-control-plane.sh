@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run an isolated smoke test for the Node gateway and Python runtime boundary.
+# Run an isolated smoke test for the Node control plane.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -21,12 +21,9 @@ done
 if ! command -v curl >/dev/null 2>&1; then echo "curl is required" >&2; exit 10; fi
 if ! command -v python3 >/dev/null 2>&1; then echo "python3 is required" >&2; exit 10; fi
 if ! command -v pnpm >/dev/null 2>&1; then echo "pnpm is required" >&2; exit 10; fi
-if ! command -v uv >/dev/null 2>&1; then echo "uv is required" >&2; exit 10; fi
 
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pi-science-smoke.XXXXXX")"
-PY_LOG="$TEMP_DIR/python.log"
 NODE_LOG="$TEMP_DIR/node.log"
-PY_PID=""
 NODE_PID=""
 SSE_PID=""
 
@@ -34,15 +31,12 @@ pick_port() {
     python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
 }
 
-PY_PORT="$(pick_port)"
 NODE_PORT="$(pick_port)"
 export PI_SCIENCE_HOME="$TEMP_DIR/data"
 export PI_SCIENCE_WORKSPACES="$TEMP_DIR/workspaces"
 mkdir -p "$PI_SCIENCE_HOME" "$PI_SCIENCE_WORKSPACES"
-export UV_CACHE_DIR="$TEMP_DIR/uv-cache"
 export PI_SCIENCE_INTERNAL_TOKEN="smoke-internal-token"
 export PI_SCIENCE_REQUIRE_INTERNAL_TOKEN=1
-mkdir -p "$UV_CACHE_DIR"
 SMOKE_WORKSPACE="$TEMP_DIR/workspace"
 mkdir -p "$SMOKE_WORKSPACE/.pi-science"
 printf 'smoke\n' > "$SMOKE_WORKSPACE/notes.txt"
@@ -51,7 +45,6 @@ cleanup() {
     local exit_code=$?
     if [ -n "$SSE_PID" ]; then kill "$SSE_PID" 2>/dev/null || true; fi
     if [ -n "$NODE_PID" ]; then kill "$NODE_PID" 2>/dev/null || true; fi
-    if [ -n "$PY_PID" ]; then kill "$PY_PID" 2>/dev/null || true; fi
     wait 2>/dev/null || true
     if [ "$KEEP_TEMP" = true ] || [ "$exit_code" -ne 0 ]; then
         echo "smoke artifacts: $TEMP_DIR" >&2
@@ -70,16 +63,6 @@ fi
 echo "[smoke] building Node server"
 (cd "$ROOT_DIR" && pnpm --filter @pi-science/server build >/dev/null)
 
-echo "[smoke] starting Python runtime on $PY_PORT"
-(
-    cd "$ROOT_DIR/backend"
-    env PI_SCIENCE_HOME="$PI_SCIENCE_HOME" PI_SCIENCE_WORKSPACES="$PI_SCIENCE_WORKSPACES" \
-        PI_SCIENCE_PORT="$PY_PORT" PI_SCIENCE_CORS="http://127.0.0.1:5173" \
-        PI_SCIENCE_INTERNAL_TOKEN="$PI_SCIENCE_INTERNAL_TOKEN" PI_SCIENCE_REQUIRE_INTERNAL_TOKEN=1 \
-        PI_CLI_PATH="${PI_CLI_PATH:-}" UV_CACHE_DIR="$UV_CACHE_DIR" uv run uvicorn main:app --host 127.0.0.1 --port "$PY_PORT"
-) >"$PY_LOG" 2>&1 &
-PY_PID=$!
-
 wait_http() {
     local url="$1"
     local attempts=0
@@ -91,12 +74,6 @@ wait_http() {
     return 1
 }
 
-if ! wait_http "http://127.0.0.1:${PY_PORT}/api/health"; then
-    echo "Python runtime did not become ready" >&2
-    sed -n '1,120p' "$PY_LOG" >&2 || true
-    exit 20
-fi
-
 echo "[smoke] starting Node gateway on $NODE_PORT"
 NODE_MIGRATION_FLAGS=(PI_SCIENCE_NODE_SESSIONS=1 PI_SCIENCE_NODE_SSE=1 PI_SCIENCE_NODE_PI_MANAGER=1)
 if [ "$NATIVE_READONLY" = true ]; then
@@ -104,7 +81,7 @@ if [ "$NATIVE_READONLY" = true ]; then
 fi
 (
     cd "$ROOT_DIR"
-    env PI_SCIENCE_PORT="$NODE_PORT" PI_SCIENCE_PYTHON_ORIGIN="http://127.0.0.1:${PY_PORT}" \
+    env PI_SCIENCE_PORT="$NODE_PORT" \
         PI_SCIENCE_CORS="http://127.0.0.1:5173" PI_SCIENCE_INTERNAL_TOKEN="$PI_SCIENCE_INTERNAL_TOKEN" \
         PI_CLI_PATH="${PI_CLI_PATH:-}" PI_NODE_PATH="${PI_NODE_PATH:-$(command -v node)}" \
         "${NODE_MIGRATION_FLAGS[@]}" pnpm --filter @pi-science/server start
@@ -172,13 +149,10 @@ curl --fail --silent --show-error --dump-header "$HEALTH_HEADERS" --output /dev/
     "http://127.0.0.1:${NODE_PORT}/api/health"
 assert_header_file_contains "$HEALTH_HEADERS" 'x-pi-science-runtime: node-control-plane'
 
-echo "[smoke] compatibility proxy"
-assert_status 403 "http://127.0.0.1:${PY_PORT}/api/settings/config"
+echo "[smoke] native kernel status and settings"
 assert_status 200 "http://127.0.0.1:${NODE_PORT}/api/kernels/status"
 assert_status 200 "http://127.0.0.1:${NODE_PORT}/api/settings/config"
 assert_body_contains '"api_keys"' "http://127.0.0.1:${NODE_PORT}/api/settings/config"
-assert_status 200 "http://127.0.0.1:${NODE_PORT}/openapi.json"
-assert_status 200 "http://127.0.0.1:${NODE_PORT}/docs"
 
 WORKSPACE_Q="$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$SMOKE_WORKSPACE")"
 

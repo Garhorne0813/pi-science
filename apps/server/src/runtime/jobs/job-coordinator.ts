@@ -24,8 +24,55 @@ const KILL_GRACE_MS = 2_000;
 const PROCESS_CLOSE_FAILSAFE_MS = 5_000;
 const WINDOWS_EXIT_DRAIN_MS = 1_000;
 const POSIX = process.platform !== "win32";
-const RESEARCH_ENVIRONMENT_KEY_NAMES = ["PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "ComSpec", "PATHEXT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "VIRTUAL_ENV", "PYTHONNOUSERSITE", "PIP_REQUIRE_VIRTUALENV", "PIP_USER", "UV_PROJECT_ENVIRONMENT", "npm_config_prefix", "npm_config_cache", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"] as const;
+const RESEARCH_ENVIRONMENT_KEY_NAMES = ["PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "ComSpec", "PATHEXT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL", "PYTHONNOUSERSITE", "PIP_USER", "CONDA_PREFIX", "PI_SCIENCE_ENVIRONMENT_PREFIX", "npm_config_prefix", "npm_config_cache", "npm_config_update_notifier", "PNPM_HOME", "COREPACK_HOME"] as const;
 const RESEARCH_ENVIRONMENT_KEYS = new Map(RESEARCH_ENVIRONMENT_KEY_NAMES.map((key) => [key.toLowerCase(), key]));
+// Local jobs run user commands without research-surface isolation, so they get
+// the same default-deny baseline plus the workspace environment identity
+// variables and Windows toolchain locations. Host secrets (API keys, cloud
+// credentials) must never reach a job child process through inheritance.
+const LOCAL_JOB_ENVIRONMENT_KEY_NAMES = [
+  ...RESEARCH_ENVIRONMENT_KEY_NAMES,
+  "PI_SCIENCE_ENVIRONMENT_ID",
+  "PI_SCIENCE_ENVIRONMENT_REVISION_ID",
+  "NPM_CONFIG_PREFIX",
+  "NPM_CONFIG_CACHE",
+  "npm_config_registry",
+  "NPM_CONFIG_REGISTRY",
+  "PIP_INDEX_URL",
+  "PIP_EXTRA_INDEX_URL",
+  "PIP_TRUSTED_HOST",
+  "UV_INDEX_URL",
+  "UV_EXTRA_INDEX_URL",
+  "YARN_NPM_REGISTRY_SERVER",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+  "CUDA_VISIBLE_DEVICES",
+  "NVIDIA_VISIBLE_DEVICES",
+  "ROCR_VISIBLE_DEVICES",
+  "HIP_VISIBLE_DEVICES",
+  "GPU_DEVICE_ORDINAL",
+  "CUDA_PATH",
+  "CUDA_HOME",
+  "ROCM_PATH",
+  "HIP_PATH",
+  "NVIDIA_DRIVER_CAPABILITIES",
+  "ProgramFiles",
+  "ProgramData",
+] as const;
+const LOCAL_JOB_ENVIRONMENT_KEYS = new Map(LOCAL_JOB_ENVIRONMENT_KEY_NAMES.map((key) => [key.toLowerCase(), key]));
+const LOCAL_JOB_URL_ENVIRONMENT_KEYS = new Set([
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "pip_index_url",
+  "pip_extra_index_url",
+  "uv_index_url",
+  "uv_extra_index_url",
+  "npm_config_registry",
+  "yarn_npm_registry_server",
+]);
 
 export interface JobCoordinatorHooks { beforeSpawn?: (record: Readonly<JobRecord>) => Promise<void>; testBeforeAuthorizedSpawn?: (record: Readonly<JobRecord>) => Promise<void>; beforeTerminalSave?: (record: Readonly<JobRecord>) => Promise<void>; platform?: NodeJS.Platform; now?: () => number; leaseMs?: number; heartbeatMs?: number; ownerProcessAlive?: (pid: number, ownership: Readonly<JobOwnership>) => boolean; ownerProcessIdentity?: (pid: number, platform: NodeJS.Platform) => JobOwnerProcessIdentity | null; childStartIdentity?: (pid: number, platform: NodeJS.Platform) => JobProcessIdentity | null; reapChild?: (identity: Readonly<JobChildIdentity>) => "reaped" | "identity-mismatch" | "unverifiable" | "missing"; onHeartbeatStarted?: (jobId: string) => void; onHeartbeatStopped?: (jobId: string) => void }
 
@@ -54,7 +101,7 @@ export class JobCoordinator {
 
   capabilities(requirement: JobRequirement) {
     const runtime = { node: process.execPath, python: defaultPythonExecutable(), r: null };
-    const checks = { cpu: 1, memory_mb: null, gpu: Boolean(process.env.CUDA_VISIBLE_DEVICES || process.env.NVIDIA_VISIBLE_DEVICES), runtime, packages: {} };
+    const checks = { cpu: 1, memory_mb: null, gpu: Boolean(process.env.CUDA_VISIBLE_DEVICES || process.env.NVIDIA_VISIBLE_DEVICES || process.env.ROCR_VISIBLE_DEVICES || process.env.HIP_VISIBLE_DEVICES), runtime, packages: {} };
     const reasons: string[] = [];
     if (Number(requirement.cpu ?? 1) > 1) reasons.push(`requires ${requirement.cpu} CPUs, host has 1`);
     if (requirement.gpu && !checks.gpu) reasons.push("GPU requested but no visible GPU was detected");
@@ -74,7 +121,8 @@ export class JobCoordinator {
         .filter((entry): entry is [string, string] => /^PI_SCIENCE_[A-Z0-9_]+$/.test(entry[0]) && typeof entry[1] === "string"))
       : {};
     const surface = typeof body.surface === "string" ? body.surface : "local";
-    const environment = { ...(surface.startsWith("research") ? restrictResearchEnvironment(baseEnvironment, this.hooks.platform ?? process.platform) : baseEnvironment), ...requestedEnvironment };
+    const platform = this.hooks.platform ?? process.platform;
+    const environment = { ...(surface.startsWith("research") ? restrictResearchEnvironment(baseEnvironment, platform) : restrictLocalJobEnvironment(baseEnvironment, platform)), ...requestedEnvironment };
     const executionCwd = typeof body.execution_cwd === "string" ? resolve(body.execution_cwd) : resolve(cwd);
     const executionRelative = relative(resolve(cwd), executionCwd);
     if (isAbsolute(executionRelative) || executionRelative === ".." || executionRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) throw new Error("execution cwd escapes the workspace");
@@ -82,7 +130,7 @@ export class JobCoordinator {
     const ownership: JobOwnership = { instance_id: this.instanceId, pid: process.pid, process_started_at: this.processStartedAt, ...(this.processIdentity ? { process_identity: this.processIdentity } : {}), generation: 1, token: randomUUID(), heartbeat_at: new Date(now).toISOString(), lease_expires_at: new Date(now + this.leaseMs).toISOString() };
     const jobId = `job_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
     const executionId = executionIdFor("job", resolve(cwd), jobId);
-    const record: JobRecord = { job_id: jobId, execution_id: executionId, command, cwd, ...(executionCwd !== resolve(cwd) ? { execution_cwd: executionCwd } : {}), surface, status: "pending", created_at: new Date(now).toISOString(), stdout: "", stderr: "", artifact_ids: [], environment: { platform: process.platform, node: process.version, virtual_env: environment.VIRTUAL_ENV, npm_prefix: environment.npm_config_prefix }, requirement, ownership };
+    const record: JobRecord = { job_id: jobId, execution_id: executionId, command, cwd, ...(executionCwd !== resolve(cwd) ? { execution_cwd: executionCwd } : {}), surface, status: "pending", created_at: new Date(now).toISOString(), stdout: "", stderr: "", artifact_ids: [], environment: { platform: process.platform, node: process.version, prefix: environment.PI_SCIENCE_ENVIRONMENT_PREFIX, npm_prefix: environment.npm_config_prefix }, requirement, ownership };
     LIVE_JOB_OWNERS.add(ownership.token);
     await this.executions.start(cwd, {
       execution_id: executionId,
@@ -412,12 +460,48 @@ function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
 }
 
 export function restrictResearchEnvironment(environment: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
+  return restrictEnvironmentKeys(environment, RESEARCH_ENVIRONMENT_KEY_NAMES, RESEARCH_ENVIRONMENT_KEYS, platform, false);
+}
+
+export function restrictLocalJobEnvironment(environment: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
+  return restrictEnvironmentKeys(environment, LOCAL_JOB_ENVIRONMENT_KEY_NAMES, LOCAL_JOB_ENVIRONMENT_KEYS, platform, true);
+}
+
+function sanitizeLocalJobEnvironmentValue(key: string, value: string): string | undefined {
+  if (!LOCAL_JOB_URL_ENVIRONMENT_KEYS.has(key.toLowerCase())) return value;
+  // Package indexes may contain several whitespace-separated URLs. Strip
+  // credentials before passing them to a child process; the URL itself is
+  // still useful for local mirrors and proxies, while embedded tokens are not.
+  return value.split(/\s+/).filter(Boolean).map((part) => {
+    try {
+      const url = new URL(part);
+      if (!url.protocol || !url.hostname) return "";
+      url.username = "";
+      url.password = "";
+      url.search = "";
+      url.hash = "";
+      return url.toString();
+    } catch {
+      return "";
+    }
+  }).filter(Boolean).join(" ");
+}
+
+function restrictEnvironmentKeys(environment: NodeJS.ProcessEnv, keyNames: readonly string[], canonicalKeys: Map<string, string>, platform: NodeJS.Platform, sanitizeValues: boolean): NodeJS.ProcessEnv {
   const restricted: NodeJS.ProcessEnv = {};
-  for (const key of RESEARCH_ENVIRONMENT_KEY_NAMES) if (environment[key] !== undefined) restricted[key] = environment[key];
+  for (const key of keyNames) {
+    const value = environment[key];
+    if (value === undefined) continue;
+    const sanitized = sanitizeValues ? sanitizeLocalJobEnvironmentValue(key, value) : value;
+    if (sanitized !== undefined) restricted[key] = sanitized;
+  }
   if (platform !== "win32") return restricted;
   for (const [key, value] of Object.entries(environment)) {
-    const canonical = RESEARCH_ENVIRONMENT_KEYS.get(key.toLowerCase());
-    if (canonical && value !== undefined && restricted[canonical] === undefined) restricted[canonical] = value;
+    const canonical = canonicalKeys.get(key.toLowerCase());
+    if (canonical && value !== undefined && restricted[canonical] === undefined) {
+      const sanitized = sanitizeValues ? sanitizeLocalJobEnvironmentValue(canonical, value) : value;
+      if (sanitized !== undefined) restricted[canonical] = sanitized;
+    }
   }
   return restricted;
 }

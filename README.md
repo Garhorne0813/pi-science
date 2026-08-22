@@ -14,7 +14,6 @@
   </p>
   <p>
     <img src="https://img.shields.io/badge/Node.js-%E2%89%A522.12-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22.12+" />
-    <img src="https://img.shields.io/badge/Python-%E2%89%A53.11-3776AB?logo=python&logoColor=white" alt="Python 3.11+" />
     <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111" alt="React 19" />
     <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License" />
   </p>
@@ -210,9 +209,6 @@ pnpm typecheck
 
 # Production build
 pnpm build
-
-# Python tests
-uv run --directory backend pytest -q
 ```
 
 Additional end-to-end checks:

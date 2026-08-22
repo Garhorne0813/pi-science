@@ -160,20 +160,15 @@ function Write-RunState {
 }
 
 $installValues = Read-InstallEnv -Path $InstallStateFile
-$pythonValue = Get-ConfiguredValue -EnvironmentName "PI_SCIENCE_PYTHON" -InstallName "PI_SCIENCE_INSTALL_PYTHON" -InstallValues $installValues
 $piCliValue = Get-ConfiguredValue -EnvironmentName "PI_CLI_PATH" -InstallName "PI_SCIENCE_INSTALL_PI_CLI" -InstallValues $installValues
 $nodeValue = Get-ConfiguredValue -EnvironmentName "PI_NODE_PATH" -InstallName "PI_NODE_PATH" -InstallValues @{}
 
-$PythonPath = Resolve-Executable $pythonValue
 $PiCliPath = Resolve-Executable $piCliValue
 $NodePath = Resolve-Executable $nodeValue
 if (-not $NodePath) {
     $NodePath = Resolve-Executable "node"
 }
 
-if (-not $PythonPath) {
-    throw "Python environment is not installed. Run: powershell -File scripts/install.ps1"
-}
 if (-not $PiCliPath) {
     throw "Pi runtime is not installed. Run: powershell -File scripts/install.ps1"
 }
@@ -197,13 +192,9 @@ if (-not (Test-Path -LiteralPath $ViteScript -PathType Leaf)) {
 }
 
 $ControlPlanePort = Get-PositiveInteger -EnvironmentName "PI_SCIENCE_CONTROL_PLANE_PORT" -Default 8787
-$ScientificRuntimePort = Get-PositiveInteger -EnvironmentName "PI_SCIENCE_RUNTIME_PORT" -Default 8788
 $FrontendPort = Get-PositiveInteger -EnvironmentName "PI_SCIENCE_FRONTEND_PORT" -Default 5173
 $StartupTimeout = Get-PositiveInteger -EnvironmentName "PI_SCIENCE_STARTUP_TIMEOUT_SECONDS" -Default 90
 
-if (-not (Test-PortAvailable -Port $ScientificRuntimePort)) {
-    throw "Port $ScientificRuntimePort is already in use."
-}
 if (-not (Test-PortAvailable -Port $ControlPlanePort)) {
     throw "Port $ControlPlanePort is already in use."
 }
@@ -213,24 +204,16 @@ if (-not (Test-PortAvailable -Port $FrontendPort)) {
 
 $env:PI_CLI_PATH = $PiCliPath
 $env:PI_NODE_PATH = $NodePath
-$env:PIP_CACHE_DIR = if ($env:PIP_CACHE_DIR) { $env:PIP_CACHE_DIR } else { Join-Path $ProjectDir ".cache\pip" }
 $env:PI_SCIENCE_HOME = if ($env:PI_SCIENCE_HOME) { $env:PI_SCIENCE_HOME } else { Join-Path $HOME ".pi-science" }
 $env:PI_SCIENCE_WORKSPACES = if ($env:PI_SCIENCE_WORKSPACES) { $env:PI_SCIENCE_WORKSPACES } else { Join-Path $HOME "pi-science-workspaces" }
 $env:PI_SCIENCE_INTERNAL_TOKEN = if ($env:PI_SCIENCE_INTERNAL_TOKEN) { $env:PI_SCIENCE_INTERNAL_TOKEN } else { [guid]::NewGuid().ToString("N") }
 $env:PI_SCIENCE_REQUIRE_INTERNAL_TOKEN = if ($env:PI_SCIENCE_REQUIRE_INTERNAL_TOKEN) { $env:PI_SCIENCE_REQUIRE_INTERNAL_TOKEN } else { "1" }
 $env:PI_SCIENCE_PORT = "$ControlPlanePort"
-$env:PI_SCIENCE_PYTHON_ORIGIN = "http://127.0.0.1:$ScientificRuntimePort"
-$env:PI_SCIENCE_MANAGE_SCIENTIFIC_RUNTIME = if ($env:PI_SCIENCE_MANAGE_SCIENTIFIC_RUNTIME) { $env:PI_SCIENCE_MANAGE_SCIENTIFIC_RUNTIME } else { "1" }
-$env:PI_SCIENCE_PYTHON_EXECUTABLE = if ($env:PI_SCIENCE_PYTHON_EXECUTABLE) { $env:PI_SCIENCE_PYTHON_EXECUTABLE } else { $PythonPath }
-$env:PI_SCIENCE_PYTHON_CWD = if ($env:PI_SCIENCE_PYTHON_CWD) { $env:PI_SCIENCE_PYTHON_CWD } else { Join-Path $ProjectDir "backend" }
-$env:PI_SCIENCE_SCIENTIFIC_IDLE_MS = if ($env:PI_SCIENCE_SCIENTIFIC_IDLE_MS) { $env:PI_SCIENCE_SCIENTIFIC_IDLE_MS } else { "300000" }
-$env:PI_SCIENCE_SCIENTIFIC_STARTUP_MS = if ($env:PI_SCIENCE_SCIENTIFIC_STARTUP_MS) { $env:PI_SCIENCE_SCIENTIFIC_STARTUP_MS } else { "30000" }
 $env:PI_SCIENCE_BACKEND_URL = if ($env:PI_SCIENCE_BACKEND_URL) { $env:PI_SCIENCE_BACKEND_URL } else { "http://127.0.0.1:$ControlPlanePort" }
 $env:PI_SCIENCE_NODE_SESSIONS = if ($env:PI_SCIENCE_NODE_SESSIONS) { $env:PI_SCIENCE_NODE_SESSIONS } else { "1" }
 $env:PI_SCIENCE_NODE_SSE = if ($env:PI_SCIENCE_NODE_SSE) { $env:PI_SCIENCE_NODE_SSE } else { "1" }
 $env:PI_SCIENCE_NODE_PI_MANAGER = if ($env:PI_SCIENCE_NODE_PI_MANAGER) { $env:PI_SCIENCE_NODE_PI_MANAGER } else { "1" }
 
-New-Item -ItemType Directory -Path $env:PIP_CACHE_DIR -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $env:PI_SCIENCE_HOME "sessions") -Force | Out-Null
 New-Item -ItemType Directory -Path $env:PI_SCIENCE_WORKSPACES -Force | Out-Null
 New-Item -ItemType Directory -Path $RuntimeDir -Force | Out-Null
@@ -294,7 +277,6 @@ try {
     Write-Host "Pi-Science is running:"
     Write-Host "  Frontend:            http://127.0.0.1:$FrontendPort"
     Write-Host "  Node control plane:  http://127.0.0.1:$ControlPlanePort"
-    Write-Host "  Python worker:       on demand at http://127.0.0.1:$ScientificRuntimePort"
     Write-Host "  Logs:                $RuntimeDir"
     Write-Host "Press Ctrl+C to stop."
 

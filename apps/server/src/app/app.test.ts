@@ -1,11 +1,11 @@
-import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { access, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./app.js";
 import { createServerModules } from "./server-modules.js";
 import type { ServerConfig } from "../config/config.js";
+import type { KernelExecuteOptions, NodeKernelManager } from "../runtime/kernel/node-kernel-manager.js";
 
 const openApps: Array<{ close(): Promise<unknown> }> = [];
 
@@ -13,43 +13,10 @@ afterEach(async () => {
   await Promise.all(openApps.splice(0).map((app) => app.close()));
 });
 
-async function startUpstream() {
-  const upstream = Fastify();
-  upstream.get("/api/health", async () => ({ status: "ok", active_pi_processes: 3, active_kernels: 2 }));
-  upstream.get("/api/kernels/status", async () => ({ active: 2 }));
-  upstream.get("/api/kernels/request-id", async (request) => ({ request_id: request.headers["x-request-id"] ?? null }));
-  upstream.get("/api/kernels/slow", async () => {
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    return { ok: true };
-  });
-  upstream.post("/api/kernels/execute", async (request) => {
-    const cwd = String((request.query as { cwd?: unknown }).cwd ?? "");
-    const body = request.body as { code?: string };
-    if (body.code === "write-output") await writeFile(join(cwd, "cell-output.csv"), "value\n42\n", "utf8");
-    if (body.code === "kernel-error") return { ok: false, stdout: "before failure\n", result: null, error: "cell failed" };
-    if (body.code === "kernel-interrupted") return { ok: false, stdout: "partial\n", result: null, error: "KeyboardInterrupt", interrupted: true };
-    try { await access(join(cwd, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python")); return { isolated: true }; }
-    catch { return { isolated: false }; }
-  });
-  upstream.post("/api/kernels/execute-stream", async (request, reply) => {
-    const body = request.body as { code?: string };
-    const interrupted = body.code === "stream-interrupted";
-    return reply.type("application/x-ndjson").send([
-      JSON.stringify({ type: "stream", stream: "stdout", text: "first\n" }),
-      JSON.stringify({ type: "stream", stream: "stdout", text: "second\n" }),
-      JSON.stringify({ type: "result", ok: !interrupted, stdout: "first\nsecond\n", result: interrupted ? null : "42", error: interrupted ? "KeyboardInterrupt" : null, interrupted, mime: interrupted ? {} : { "application/json": "42" } }),
-    ].join("\n") + "\n");
-  });
-  await upstream.listen({ host: "127.0.0.1", port: 0 });
-  openApps.push(upstream);
-  return upstream.listeningOrigin;
-}
-
-function config(pythonOrigin: string, overrides: Partial<ServerConfig> = {}): ServerConfig {
+function config(_pythonOrigin: string, overrides: Partial<ServerConfig> = {}): ServerConfig {
   return {
     host: "127.0.0.1",
     port: 0,
-    pythonOrigin,
     corsOrigins: ["http://127.0.0.1:5173"],
     maxBodyBytes: 10 * 1024 * 1024,
     upstreamTimeoutMs: 30_000,
@@ -62,47 +29,71 @@ function config(pythonOrigin: string, overrides: Partial<ServerConfig> = {}): Se
   };
 }
 
+const fakeKernels = {
+  async execute(options: KernelExecuteOptions) {
+    if (options.code === "write-output") await writeFile(join(options.cwd, "cell-output.csv"), "value\n42\n", "utf8");
+    if (options.code === "kernel-error") return { ok: false, stdout: "before failure\n", result: null, error: "cell failed", interrupted: false, mime: {} };
+    if (options.code === "kernel-interrupted") return { ok: false, stdout: "partial\n", result: null, error: "KeyboardInterrupt", interrupted: true, mime: {} };
+    if (options.code === "stream-output" && options.onEvent) {
+      options.onEvent({ type: "stream", stream: "stdout", text: "first\n" });
+      options.onEvent({ type: "stream", stream: "stdout", text: "second\n" });
+    }
+    const streaming = options.code === "stream-output";
+    return {
+      ok: true,
+      stdout: streaming ? "first\nsecond\n" : "",
+      result: "42",
+      error: null,
+      interrupted: false,
+      mime: streaming ? { "application/json": "42" } : {},
+      isolated: true,
+    };
+  },
+  async shutdownAll() {},
+} as unknown as NodeKernelManager;
+
+function kernelModules() {
+  return { ...createServerModules(config("http://127.0.0.1:1")), kernels: fakeKernels };
+}
+
+
 describe("Node control plane", () => {
   it("exposes liveness and readiness separately", async () => {
-    const app = buildApp(config(await startUpstream()));
+    const app = buildApp(config("http://127.0.0.1:1"));
     openApps.push(app);
     expect((await app.inject({ method: "GET", url: "/internal/live" })).statusCode).toBe(200);
     const ready = await app.inject({ method: "GET", url: "/internal/ready" });
     expect(ready.statusCode).toBe(200);
-    expect(ready.json()).toMatchObject({ status: "ready", scientific_runtime: { state: "external", managed: false } });
+    expect(ready.json()).toMatchObject({ status: "ready", control_plane: "node" });
   });
 
-  it("owns health while retaining scientific runtime fields", async () => {
-    const app = buildApp(config(await startUpstream()));
-    openApps.push(app);
-    const response = await app.inject({ method: "GET", url: "/api/health" });
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ status: "ok", service: "pi-science-server", control_plane: "node", scientific_runtime: "external", active_pi_processes: 0, active_kernels: 0 });
-  });
-
-  it("stays healthy when the scientific worker is unavailable or idle", async () => {
+  it("owns health without a Python scientific worker", async () => {
     const app = buildApp(config("http://127.0.0.1:1"));
     openApps.push(app);
     const response = await app.inject({ method: "GET", url: "/api/health" });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ status: "ok", scientific_runtime: "external" });
+    expect(response.json()).toEqual({ status: "ok", service: "pi-science-server", control_plane: "node", active_pi_processes: 0, active_kernels: 0 });
   });
 
-  it("proxies scientific routes and request IDs", async () => {
-    const app = buildApp(config(await startUpstream()));
+  it("stays healthy without any upstream runtime", async () => {
+    const app = buildApp(config("http://127.0.0.1:1"));
     openApps.push(app);
-    const scientific = await app.inject({ method: "GET", url: "/api/kernels/status" });
-    expect(scientific.json()).toEqual({ active: 2 });
-    expect(scientific.headers["x-pi-science-runtime"]).toBe("python-scientific-runtime");
+    const response = await app.inject({ method: "GET", url: "/api/health" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: "ok" });
+  });
 
-    const requestId = await app.inject({ method: "GET", url: "/api/kernels/request-id", headers: { "x-request-id": "smoke-123" } });
-    expect(requestId.json()).toEqual({ request_id: "smoke-123" });
+  it("serves kernel and notebook routes from the Node manager", async () => {
+    const app = buildApp(config("http://127.0.0.1:1"));
+    openApps.push(app);
+    const status = await app.inject({ method: "GET", url: "/api/kernels/status" });
+    expect(status.json()).toMatchObject({ native: true, active_count: 0, interpreters: { python: expect.any(Boolean), r: expect.any(Boolean) } });
   });
 
   it("provisions the workspace environment before forwarding kernel execution", async () => {
     const workspace = join(tmpdir(), `pi-science-kernel-environment-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
-    const app = buildApp(config(await startUpstream()));
+    const app = buildApp(config("http://127.0.0.1:1"), kernelModules());
     openApps.push(app);
 
     const response = await app.inject({ method: "POST", url: `/api/kernels/execute?cwd=${encodeURIComponent(workspace)}`, payload: { language: "python", code: "1+1" } });
@@ -125,7 +116,7 @@ describe("Node control plane", () => {
   it("detects files written by a kernel cell as execution evidence", async () => {
     const workspace = join(tmpdir(), `pi-science-kernel-output-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
-    const app = buildApp(config(await startUpstream()));
+    const app = buildApp(config("http://127.0.0.1:1"), kernelModules());
     openApps.push(app);
 
     const response = await app.inject({
@@ -151,7 +142,7 @@ describe("Node control plane", () => {
   it("records a kernel-level cell error as a failed execution", async () => {
     const workspace = join(tmpdir(), `pi-science-kernel-failure-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
-    const app = buildApp(config(await startUpstream()));
+    const app = buildApp(config("http://127.0.0.1:1"), kernelModules());
     openApps.push(app);
 
     const response = await app.inject({
@@ -176,7 +167,7 @@ describe("Node control plane", () => {
   it("records an intentional kernel interruption separately from failure", async () => {
     const workspace = join(tmpdir(), `pi-science-kernel-interrupted-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
-    const app = buildApp(config(await startUpstream()));
+    const app = buildApp(config("http://127.0.0.1:1"), kernelModules());
     openApps.push(app);
 
     const response = await app.inject({ method: "POST", url: `/api/kernels/execute?cwd=${encodeURIComponent(workspace)}`, payload: { language: "python", code: "kernel-interrupted" } });
@@ -190,7 +181,7 @@ describe("Node control plane", () => {
   it("forwards streaming kernel chunks and records the final result", async () => {
     const workspace = join(tmpdir(), `pi-science-kernel-stream-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     await mkdir(join(workspace, ".pi-science"), { recursive: true });
-    const app = buildApp(config(await startUpstream()));
+    const app = buildApp(config("http://127.0.0.1:1"), kernelModules());
     openApps.push(app);
 
     const response = await app.inject({ method: "POST", url: `/api/kernels/execute-stream?cwd=${encodeURIComponent(workspace)}`, payload: { language: "python", code: "stream-output", notebook_id: "stream-test", session_id: "session-1" } });
@@ -204,14 +195,6 @@ describe("Node control plane", () => {
     expect(execution.json()).toMatchObject({ status: "succeeded", result: { stdout_preview: "first\nsecond\n", mime: { "application/json": "42" } } });
     await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }, 30_000);
-
-  it("returns a bounded gateway timeout for an unavailable upstream", async () => {
-    const app = buildApp(config(await startUpstream(), { upstreamTimeoutMs: 20 }));
-    openApps.push(app);
-    const response = await app.inject({ method: "GET", url: "/api/kernels/slow" });
-    expect(response.statusCode).toBe(504);
-    expect(response.json()).toMatchObject({ error: "scientific runtime unavailable" });
-  });
 
   it("tears down the shared Pi runtime manager on close even when nodePiManager is off", async () => {
     const modules = createServerModules(config("http://127.0.0.1:1", { nodePiManager: false }));
@@ -238,37 +221,6 @@ describe("Node control plane", () => {
     // One call from the session service (nodePiManager on) and one from the
     // unconditional hook; the second is a no-op because the maps were cleared.
     expect(shutdownSpy).toHaveBeenCalledTimes(2);
-  });
-
-  it("survives a refused upstream connection instead of replying twice", async () => {
-    // Bind and immediately release a port so the proxy connection is refused.
-    const closed = Fastify();
-    await closed.listen({ host: "127.0.0.1", port: 0 });
-    const origin = closed.listeningOrigin;
-    await closed.close();
-
-    const app = buildApp(config(origin));
-    openApps.push(app);
-    await app.listen({ host: "127.0.0.1", port: 0 });
-
-    const uncaught: unknown[] = [];
-    const record = (error: unknown) => uncaught.push(error);
-    process.on("uncaughtException", record);
-    process.on("unhandledRejection", record);
-    try {
-      // /api/bookmarks is a declared boundary with no native handler, so it
-      // falls through to the proxy without passing the scientific-runtime gate
-      // that would answer 503 before any upstream connection is attempted.
-      const response = await fetch(`${app.listeningOrigin}/api/bookmarks`);
-      expect(response.status).toBe(504);
-      expect(await response.json()).toMatchObject({ error: "scientific runtime unavailable" });
-      // The duplicate onError lands a tick after the first reply is flushed.
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    } finally {
-      process.off("uncaughtException", record);
-      process.off("unhandledRejection", record);
-    }
-    expect(uncaught).toEqual([]);
   });
 
   it("can serve read-only session data from the existing JSONL format", async () => {

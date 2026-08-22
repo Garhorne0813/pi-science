@@ -15,7 +15,6 @@ LEGACY_PID_FILE="$RUN_DIR/run.pid"
 LOG_FILE="$RUN_DIR/pi-science.log"
 LAUNCH_LOCK_DIR="$RUN_DIR/start.lock"
 CONTROL_PLANE_PORT="${PI_SCIENCE_CONTROL_PLANE_PORT:-8787}"
-SCIENTIFIC_RUNTIME_PORT="${PI_SCIENCE_RUNTIME_PORT:-8788}"
 FRONTEND_PORT="${PI_SCIENCE_FRONTEND_PORT:-5173}"
 FRONTEND_URL="http://127.0.0.1:$FRONTEND_PORT"
 READY_TIMEOUT_SECONDS="${PI_SCIENCE_STARTUP_TIMEOUT_SECONDS:-90}"
@@ -337,7 +336,6 @@ cmd_status() {
   if [ -n "$pid" ]; then echo "Supervisor:         running (pid $pid, logs at $LOG_FILE)"; else echo "Supervisor:         not started by 'pi-science start --detach'"; fi
   if control_plane_is_ready; then echo "Node control plane: ready at http://127.0.0.1:$CONTROL_PLANE_PORT"; else echo "Node control plane: not responding on port $CONTROL_PLANE_PORT"; fi
   if frontend_is_ready; then echo "Frontend:           ready at $FRONTEND_URL"; else echo "Frontend:           not responding on port $FRONTEND_PORT"; fi
-  if [ -n "$(port_listener_pids "$SCIENTIFIC_RUNTIME_PORT")" ]; then echo "Python worker:      listening on port $SCIENTIFIC_RUNTIME_PORT"; else echo "Python worker:      idle (started on demand)"; fi
   echo "Checkout:           $PROJECT_DIR"
 }
 

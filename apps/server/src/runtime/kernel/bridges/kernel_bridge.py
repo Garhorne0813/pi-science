@@ -15,6 +15,8 @@ import ast
 import base64
 import io
 import json
+import os
+import signal
 import sys
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
@@ -112,7 +114,21 @@ def main() -> None:
         if reconfigure is not None:
             reconfigure(encoding="utf-8")
 
+    # Windows delivers CTRL_BREAK_EVENT as SIGBREAK. Convert it into the same
+    # in-cell KeyboardInterrupt path as POSIX SIGINT so an interrupted cell
+    # reports `interrupted` instead of losing the whole kernel process.
+    sigbreak = getattr(signal, "SIGBREAK", None)
+    if sigbreak is not None:
+        def raise_interrupt(_signum, _frame):
+            raise KeyboardInterrupt
+        signal.signal(sigbreak, raise_interrupt)
+
     protocol_out = sys.stdout
+    # The bridge is launched by absolute path, so Python would otherwise put
+    # the bridge directory—not the workspace—at the front of sys.path.
+    workspace = os.getcwd()
+    if workspace not in sys.path:
+        sys.path.insert(0, workspace)
     ns: dict = {"__name__": "__main__"}
     for line in sys.stdin:
         line = line.strip()

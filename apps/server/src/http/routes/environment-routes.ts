@@ -3,15 +3,22 @@ import type { WorkspaceEnvironmentService } from "../../runtime/workspace/worksp
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { z } from "zod";
 
+const packageSpecSchema = z.string().trim().min(1).max(300).regex(/^[^-]/, "Package specs must not start with '-'");
+
 const createEnvironmentSchema = z.object({
   name: z.string().min(1).max(64),
   display_name: z.string().min(1).max(100).optional(),
   language: z.enum(["python", "r"]).optional(),
-  packages: z.array(z.string().min(1).max(300)).max(200).optional(),
+  packages: z.array(packageSpecSchema).max(200).optional(),
+  preset: z.enum(["python-minimal", "python-data", "python-science", "r-minimal"]).optional(),
   supersedes_revision_id: z.string().min(1).optional(),
 });
 
 const bindEnvironmentSchema = z.object({ revision_id: z.string().min(1) });
+
+const installPackagesSchema = z.object({
+  packages: z.array(packageSpecSchema).min(1).max(200),
+});
 
 async function workspace(request: { query: unknown }): Promise<string> {
   const value = (request.query as { cwd?: unknown }).cwd;
@@ -20,6 +27,8 @@ async function workspace(request: { query: unknown }): Promise<string> {
 
 export function registerEnvironmentRoutes(app: FastifyInstance, environments: WorkspaceEnvironmentService): void {
   app.get("/api/environments", async () => ({ environments: await environments.list() }));
+
+  app.get("/api/environments/presets", async () => ({ presets: environments.listPresets() }));
 
   app.post("/api/environments", async (request, reply) => {
     const parsed = createEnvironmentSchema.safeParse(request.body);
@@ -30,6 +39,11 @@ export function registerEnvironmentRoutes(app: FastifyInstance, environments: Wo
 
   app.get("/api/environments/workspace", async (request, reply) => {
     try { return await environments.status(await workspace(request)); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+  });
+
+  app.get("/api/environments/workspace/node-status", async (request, reply) => {
+    try { return await environments.nodeStatus(await workspace(request)); }
     catch (error) { return reply.code(403).send({ error: String(error) }); }
   });
   app.post("/api/environments/workspace", async (request, reply) => {
@@ -47,6 +61,24 @@ export function registerEnvironmentRoutes(app: FastifyInstance, environments: Wo
     try { cwd = await workspace(request); }
     catch (error) { return reply.code(403).send({ error: String(error) }); }
     try { return await environments.bind(cwd, parsed.data.revision_id); }
+    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
+  app.post("/api/environments/workspace/packages", async (request, reply) => {
+    const parsed = installPackagesSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid package install request" });
+    let cwd: string;
+    try { cwd = await workspace(request); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+    try { return await environments.installPackages(cwd, parsed.data.packages); }
+    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
+  app.post("/api/environments/workspace/rollback", async (request, reply) => {
+    let cwd: string;
+    try { cwd = await workspace(request); }
+    catch (error) { return reply.code(403).send({ error: String(error) }); }
+    try { return await environments.rollback(cwd); }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
   });
 }

@@ -28,7 +28,7 @@ interface JupyterStatus {
 
 interface WorkspaceEnvironment {
   ready: boolean;
-  virtual_env: string;
+  prefix: string;
   python: string;
   error?: string;
 }
