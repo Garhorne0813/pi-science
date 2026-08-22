@@ -1,6 +1,6 @@
 /** Session list loading and the optimistic-session bookkeeping it needs. */
 
-import { clearDerivedSessionName, getClient, getSessionName, setLocalSessionName, type SessionInfo } from "../client/pi-science-client";
+import { clearDerivedSessionName, getClient, getSessionName, markDerivedSessionName, setLocalSessionName, type SessionInfo } from "../client/pi-science-client";
 import { useRuntimeStore } from "./store";
 
 /** Sessions created locally that the backend has not listed yet. Owned here
@@ -32,11 +32,15 @@ export async function loadSessionsInternal(cwdOverride?: string): Promise<Sessio
     }
     // Server titles are authoritative. Sync them into localStorage so
     // activation and title generation see the same value even when the
-    // session list request races history loading.
+    // session list request races history loading. The derived flag travels
+    // with the title: a synced fallback must stay replaceable by a later AI
+    // title (also after a localStorage/cache clear), while a final one keeps
+    // blocking regeneration.
     const named = fromDisk.map((s: SessionInfo) => {
       const serverName = typeof s.name === "string" ? s.name.trim() : "";
       if (serverName) {
-        clearDerivedSessionName(requestedCwd, s.id);
+        if (s.name_derived === true) markDerivedSessionName(requestedCwd, s.id);
+        else clearDerivedSessionName(requestedCwd, s.id);
         setLocalSessionName(requestedCwd, s.id, serverName);
       }
       return {

@@ -310,9 +310,17 @@ export function registerEventListener(client: PiScienceClient) {
         void resyncCompletedHistory(state.activeSessionId, state.cwd);
         // Refresh the authoritative server title before deciding whether an AI
         // title is allowed to run. This prevents replayed idle events from
-        // replacing a title that already exists on the server.
+        // replacing a title that already exists on the server. The re-read
+        // after the refresh also skips the OLD event when the user switched
+        // cwd or active session while the request was in flight.
         void sessionListRefresh.then((sessions) => {
-          if (sessions !== null) maybeGenerateAiTitle(state.activeSessionId!, state.cwd);
+          const latest = useRuntimeStore.getState();
+          if (
+            sessions === null
+            || latest.activeSessionId !== state.activeSessionId
+            || latest.cwd !== state.cwd
+          ) return;
+          maybeGenerateAiTitle(state.activeSessionId!, state.cwd);
         });
       }
     } else if (event.type === "session.stats") {

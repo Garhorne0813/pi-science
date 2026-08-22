@@ -442,6 +442,38 @@ describe("runtime event subscription", () => {
     expect(JSON.parse(localStorage.getItem("pi-science.session-names") ?? "{}")).toEqual({});
   });
 
+  it("skips AI title generation when the user switches away during the settle refresh", async () => {
+    let armed = false;
+    let releaseList!: (response: Response) => void;
+    const delayedList = new Promise<Response>((resolve) => { releaseList = resolve; });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.startsWith("/api/sessions?")) {
+        // The initial activation refreshes the list immediately; only the
+        // settle-time refresh is held open as the switch window.
+        return armed ? delayedList : jsonResponse([]);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    armed = true;
+
+    FakeEventSource.instances[0].emit("agent_start", { type: "agent_start", sessionId: "session-a" });
+    FakeEventSource.instances[0].emit("session.idle", { type: "session.idle", sessionId: "session-a" });
+    // The user moves to another workspace/session while the settle-time list
+    // refresh is still in flight.
+    useRuntimeStore.setState({ cwd: "/workspace-b", activeSessionId: "session-b" });
+    releaseList(jsonResponse([]));
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/title"))).toBe(false);
+  });
+
   it("refreshes the workspace file tree exactly once per settled turn", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

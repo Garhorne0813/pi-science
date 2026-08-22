@@ -155,10 +155,12 @@ describe("session naming", () => {
     expect(getSessionName("/workspace", "session-long")).toBe(`${"x".repeat(48)}…`);
   });
 
-  it("keeps a derived fallback local until the AI title is applied", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+  it("keeps a derived fallback replaceable: persists it flagged and lets the AI title win", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("/title")) return jsonResponse({ ok: true, title: "AI title" });
+      if (url.includes("/title")) {
+        return jsonResponse({ ok: true, title: init ? (JSON.parse(String(init.body)) as { title: string }).title : "AI title" });
+      }
       throw new Error(`Unexpected request: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -167,10 +169,14 @@ describe("session naming", () => {
     applyPromptSessionName("/workspace", "session-derived", "First question");
     expect(getSessionName("/workspace", "session-derived")).toBe("First question");
     expect(hasDerivedSessionName("/workspace", "session-derived")).toBe(true);
-    expect(fetchMock).not.toHaveBeenCalled();
+    // The fallback is persisted fire-and-forget, flagged as derived so the
+    // server-side AI title may still replace it (survives cache clears).
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const derivedPut = fetchMock.mock.calls.find(([, init]) => String(init?.body ?? "").includes("derived"));
+    expect(String(derivedPut?.[0])).toContain("session-derived/title");
+    expect(JSON.parse(String(derivedPut?.[1]?.body))).toEqual({ title: "First question", derived: true });
 
     applyAiSessionName("/workspace", "session-derived", "AI title");
-    expect(fetchMock).not.toHaveBeenCalled();
     expect(getSessionName("/workspace", "session-derived")).toBe("AI title");
     expect(hasDerivedSessionName("/workspace", "session-derived")).toBe(false);
   });

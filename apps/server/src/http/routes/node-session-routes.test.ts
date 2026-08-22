@@ -182,6 +182,97 @@ describe("native Node conversation routes", () => {
     await server.close();
   });
 
+  it("does not leave an orphan title when the session is deleted while generation runs", async () => {
+    const cwd = await workspaceWithSessions("session-title-del");
+    let generationStarted!: () => void;
+    let releaseGeneration!: () => void;
+    const started = new Promise<void>((resolve) => { generationStarted = resolve; });
+    const release = new Promise<void>((resolve) => { releaseGeneration = resolve; });
+    const aiTitleService = {
+      async generateTitle() {
+        generationStarted();
+        await release;
+        return "orphan AI title";
+      },
+    };
+    const server = Fastify({ logger: false });
+    registerNodeSessionRoutes(server, nodeSessionService, sessionRepository, aiTitleService as never);
+
+    const postPromise = server.inject({ method: "POST", url: `/api/sessions/session-title-del/title?cwd=${encodeURIComponent(cwd)}` });
+    await started;
+    // The session disappears while the AI title generation is in flight.
+    await expect(nodeSessionService.delete("session-title-del", cwd)).resolves.toMatchObject({ success: true });
+    releaseGeneration();
+
+    const post = await postPromise;
+    expect(post.statusCode).toBe(200);
+    expect(post.json()).toEqual({ ok: true, title: null });
+    // The conditional write confirmed existence under the title-file lock, so
+    // no orphan record may survive the delete.
+    await expect(sessionTitleRepository.getTitles(cwd)).resolves.toEqual(new Map());
+    await server.close();
+  });
+
+  it("stores a client-derived fallback flagged and lets a later AI title replace it", async () => {
+    const cwd = await workspaceWithSessions("session-title-derived");
+    let generateCalls = 0;
+    const aiTitleService = {
+      async generateTitle() {
+        generateCalls += 1;
+        return "AI 替换标题";
+      },
+    };
+    const server = Fastify({ logger: false });
+    registerSessionReadRoutes(server, sessionRepository, nodeSessionService);
+    registerNodeSessionRoutes(server, nodeSessionService, sessionRepository, aiTitleService as never);
+
+    // The client persists the first-user-message fallback flagged as derived.
+    const put = await server.inject({
+      method: "PUT",
+      url: `/api/sessions/session-title-derived/title?cwd=${encodeURIComponent(cwd)}`,
+      payload: { title: "first user question", derived: true },
+    });
+    expect(put.statusCode).toBe(200);
+
+    // The list exposes it as a derived name...
+    const listed = await server.inject({ method: "GET", url: `/api/sessions?cwd=${encodeURIComponent(cwd)}` });
+    const listedSession = (listed.json() as Array<{ id: string; name: string | null; name_derived?: boolean }>).find((s) => s.id === "session-title-derived");
+    expect(listedSession).toMatchObject({ name: "first user question", name_derived: true });
+
+    // ...so the AI generator still runs and replaces the fallback.
+    const post = await server.inject({ method: "POST", url: `/api/sessions/session-title-derived/title?cwd=${encodeURIComponent(cwd)}` });
+    expect(post.statusCode).toBe(200);
+    expect(post.json()).toEqual({ ok: true, title: "AI 替换标题" });
+    expect(generateCalls).toBe(1);
+    await expect(sessionTitleRepository.getTitles(cwd)).resolves.toEqual(new Map([["session-title-derived", "AI 替换标题"]]));
+    // The replaced record is final again: no derived flag survives.
+    const finalListed = await server.inject({ method: "GET", url: `/api/sessions?cwd=${encodeURIComponent(cwd)}` });
+    const finalSession = (finalListed.json() as Array<{ id: string; name_derived?: boolean }>).find((s) => s.id === "session-title-derived");
+    expect(finalSession?.name_derived).toBeUndefined();
+    await server.close();
+  });
+
+  it("keeps a late derived PUT from overwriting a final title", async () => {
+    const cwd = await workspaceWithSessions("session-title-derived-late");
+    const server = app();
+    // An explicit rename lands first...
+    const putFinal = await server.inject({
+      method: "PUT",
+      url: `/api/sessions/session-title-derived-late/title?cwd=${encodeURIComponent(cwd)}`,
+      payload: { title: "user rename" },
+    });
+    expect(putFinal.statusCode).toBe(200);
+    // ...then the stale derived PUT arrives and must not win.
+    const putDerived = await server.inject({
+      method: "PUT",
+      url: `/api/sessions/session-title-derived-late/title?cwd=${encodeURIComponent(cwd)}`,
+      payload: { title: "stale fallback", derived: true },
+    });
+    expect(putDerived.statusCode).toBe(200);
+    await expect(sessionTitleRepository.getTitles(cwd)).resolves.toEqual(new Map([["session-title-derived-late", "user rename"]]));
+    await server.close();
+  });
+
   it("does not persist when AI title generation returns null", async () => {
     const cwd = await workspaceWithSessions("session-title-null");
     const aiTitleService = { async generateTitle() { return null; } };

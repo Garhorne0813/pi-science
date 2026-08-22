@@ -2,7 +2,7 @@
  *  sidebar entry in sync with the stored one. */
 
 import type { ThreadBlock } from "../../types/thread";
-import { deriveSessionName, getSessionName, markDerivedSessionName, setLocalSessionName } from "../client/pi-science-client";
+import { deriveSessionName, getSessionName, setLocalSessionName, setSessionName } from "../client/pi-science-client";
 import { clearAiTitleAttempted, clearDerivedSessionName, hasAiTitle, hasDerivedSessionName, markAiTitle } from "../client/session-names";
 import { visibleUserMessage } from "../files";
 import type { Thread } from "./event-fold";
@@ -21,7 +21,8 @@ function existingSessionName(cwd: string, sessionId: string): string {
  *  history. Sessions created before client-side naming existed (or whose
  *  localStorage entry is missing) would otherwise show raw ids in the sidebar
  *  forever. Never overwrites a stored or server-provided name and no-ops on
- *  empty threads. */
+ *  empty threads. Persisted flagged as derived so the fallback survives
+ *  browsers/cache clears while a later AI title can still replace it. */
 export function backfillSessionName(cwd: string, sessionId: string, thread: Thread): void {
   if (existingSessionName(cwd, sessionId)) return;
   const firstUser = thread.blocks.find(
@@ -29,20 +30,19 @@ export function backfillSessionName(cwd: string, sessionId: string, thread: Thre
   );
   const name = firstUser ? deriveSessionName(visibleUserMessage(firstUser.text)) : "";
   if (!name) return;
-  setLocalSessionName(cwd, sessionId, name);
-  markDerivedSessionName(cwd, sessionId);
+  setSessionName(cwd, sessionId, name, { derived: true });
   useRuntimeStore.setState((state) => ({
     sessions: state.sessions.map((session) => session.id === sessionId ? { ...session, name } : session),
   }));
 }
 
 /** Use the first user message as the session name. A message that is only
- *  file references still gets a stable fallback label. */
+ *  file references still gets a stable fallback label. Persisted flagged as
+ *  derived for the same durability/replacement contract as the backfill. */
 export function applyPromptSessionName(cwd: string, sessionId: string, message: string): void {
   if (existingSessionName(cwd, sessionId)) return;
   const sessionName = deriveSessionName(visibleUserMessage(message)) || "Referenced files";
-  setLocalSessionName(cwd, sessionId, sessionName);
-  markDerivedSessionName(cwd, sessionId);
+  setSessionName(cwd, sessionId, sessionName, { derived: true });
   useRuntimeStore.setState((state) => ({
     sessions: state.sessions.map((session) => session.id === sessionId ? { ...session, name: sessionName } : session),
   }));

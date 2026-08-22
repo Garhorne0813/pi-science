@@ -106,20 +106,26 @@ export function getSessionName(cwd: string, sessionId: string): string {
   return typeof value === "string" ? value : "";
 }
 
+/** Server titles are capped at 100 characters; the local mirror must use the
+ *  same limit so a persisted final title is not silently truncated here. */
+const SESSION_NAME_MAX_LENGTH = 100;
+
 export function setLocalSessionName(cwd: string, sessionId: string, name: string): void {
   const names = loadNames();
-  names[sessionKey(cwd, sessionId)] = name.slice(0, 50);  // Cap length
+  names[sessionKey(cwd, sessionId)] = name.slice(0, SESSION_NAME_MAX_LENGTH);
   saveNames(names);
 }
 
-export function setSessionName(cwd: string, sessionId: string, name: string): void {
-  clearDerivedSessionName(cwd, sessionId);
+export function setSessionName(cwd: string, sessionId: string, name: string, options: { derived?: boolean } = {}): void {
+  if (options.derived === true) markDerivedSessionName(cwd, sessionId);
+  else clearDerivedSessionName(cwd, sessionId);
   setLocalSessionName(cwd, sessionId, name);
   // Best-effort server persistence (fire-and-forget): the localStorage
   // registry stays the immediate source and the fallback when the control
-  // plane is unreachable, so naming never blocks the prompt path.
+  // plane is unreachable, so naming never blocks the prompt path. Derived
+  // fallbacks are flagged server-side so a later AI title can replace them.
   void import("./pi-science-client").then(({ getClient }) => {
-    void getClient().setSessionTitle(sessionId, name.slice(0, 100), cwd).catch(() => undefined);
+    void getClient().setSessionTitle(sessionId, name.slice(0, SESSION_NAME_MAX_LENGTH), cwd, { derived: options.derived === true }).catch(() => undefined);
   });
 }
 

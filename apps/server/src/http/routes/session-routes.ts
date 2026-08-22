@@ -29,10 +29,15 @@ export function registerSessionReadRoutes(app: FastifyInstance, sessionRepositor
           sessions.unshift({ id: runtime.id, cwd, project_id: project.id, name: null, created_at: null, updated_at: new Date().toISOString() });
         }
       }
-      const titleById = await titles.getTitles(cwd);
+      const titleById = await titles.getTitleRecords(cwd);
       for (const session of sessions) {
-        const title = titleById.get(session.id);
-        if (title) (session as { name: string | null }).name = title;
+        const record = titleById.get(session.id);
+        if (record?.title) {
+          (session as { name: string | null }).name = record.title;
+          // Clients need the derived/final distinction so a synced fallback
+          // name stays replaceable by a later AI title.
+          if (record.derived) (session as { name_derived?: boolean }).name_derived = true;
+        }
       }
       return sessions;
     } catch (error) {
