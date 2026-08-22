@@ -42,6 +42,9 @@ describe("model endpoint routes", () => {
     expect(invalid.statusCode).toBe(400);
     expect(invalid.json().error).toContain("absolute http(s)");
 
+    const malformed = await app.inject({ method: "POST", url: "/api/endpoints", payload: { name: "bad", base_url: "http://user:password@" } });
+    expect(malformed.statusCode).toBe(400);
+
     const stored = JSON.parse(await readFile(join(home, "model-endpoints.json"), "utf8")) as Array<Record<string, unknown>>;
     expect(stored).toHaveLength(1);
     expect(stored[0]?.endpoint_id).toBe(created.json().endpoint_id);
@@ -67,6 +70,19 @@ describe("model endpoint routes", () => {
     const degraded = await app.inject({ method: "POST", url: "/api/endpoints", payload: { name: "down", base_url: "http://down.example" } });
     const downHealth = await app.inject({ method: "POST", url: `/api/endpoints/${degraded.json().endpoint_id}/health` });
     expect(downHealth.json().health).toBe("degraded");
+  });
+
+  it("serializes concurrent endpoint read-modify-write operations", async () => {
+    const { app } = await appWith();
+    const responses = await Promise.all([
+      app.inject({ method: "POST", url: "/api/endpoints", payload: { name: "one", base_url: "http://one.example" } }),
+      app.inject({ method: "POST", url: "/api/endpoints", payload: { name: "two", base_url: "http://two.example" } }),
+      app.inject({ method: "POST", url: "/api/endpoints", payload: { name: "three", base_url: "http://three.example" } }),
+    ]);
+    expect(responses.every((response) => response.statusCode === 200)).toBe(true);
+
+    const list = await app.inject({ method: "GET", url: "/api/endpoints" });
+    expect(list.json().endpoints.map((endpoint: { name: string }) => endpoint.name).sort()).toEqual(["one", "three", "two"]);
   });
 
   it("maps probe failures to health error and unknown ids to 404", async () => {

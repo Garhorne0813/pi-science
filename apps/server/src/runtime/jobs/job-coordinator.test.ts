@@ -552,4 +552,23 @@ describe("job coordinator", () => {
     const filtered = restrictLocalJobEnvironment({ PaTh: "C:\\tools", pRoGrAmFiLeS: "C:\\Apps", pi_science_environment_revision_id: "rev_9", sEcReT_tOkEn: "leak-me" }, "win32");
     expect(filtered).toEqual({ PATH: "C:\\tools", ProgramFiles: "C:\\Apps", PI_SCIENCE_ENVIRONMENT_REVISION_ID: "rev_9" });
   });
+
+  it("passes local GPU and package-network settings without embedded URL credentials", () => {
+    const filtered = restrictLocalJobEnvironment({
+      CUDA_VISIBLE_DEVICES: "0",
+      NVIDIA_VISIBLE_DEVICES: "all",
+      HTTP_PROXY: "http://proxy-user:proxy-secret@proxy.example:8080",
+      PIP_INDEX_URL: "https://mirror-user:mirror-secret@packages.example/simple?token=also-secret",
+      NO_PROXY: "127.0.0.1,localhost",
+      SECRET_TOKEN: "leak-me",
+    }, "linux");
+    expect(filtered).toMatchObject({
+      CUDA_VISIBLE_DEVICES: "0",
+      NVIDIA_VISIBLE_DEVICES: "all",
+      HTTP_PROXY: "http://proxy.example:8080/",
+      PIP_INDEX_URL: "https://packages.example/simple",
+      NO_PROXY: "127.0.0.1,localhost",
+    });
+    expect(filtered.SECRET_TOKEN).toBeUndefined();
+  });
 });

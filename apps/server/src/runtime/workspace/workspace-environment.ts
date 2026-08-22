@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { constants } from "node:fs";
-import { access, chmod, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { delimiter, join, resolve } from "node:path";
 import { configPath, readJson, withFileWriteLock, withWorkspaceWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
@@ -20,7 +20,7 @@ export interface EnvironmentRevision {
   platform: string;
   created_at: string;
   supersedes_revision_id?: string;
-  /** Sorted conda-meta manifests plus site-packages dist-info / R library entries; detects out-of-band prefix mutation (e.g. direct pip install). */
+  /** Versioned content fingerprints of package metadata; detects out-of-band prefix mutation (e.g. direct pip install). */
   integrity_snapshot?: string[];
   failure?: { stage: string; message: string };
 }
@@ -167,9 +167,39 @@ async function dirSize(target: string): Promise<number | null> {
 async function exists(path: string): Promise<boolean> { try { await access(path); return true; } catch { return false; } }
 async function executable(path: string): Promise<boolean> { try { await access(path, constants.X_OK); return true; } catch { return false; } }
 
-/** Content fingerprint of a conda prefix built from directory listings only (no subprocesses).
- * pip installs add dist-info directories without touching conda-meta, so both are captured. */
-async function integritySnapshot(prefix: string): Promise<string[]> {
+const INTEGRITY_SNAPSHOT_VERSION = "v2";
+
+async function fileDigest(path: string): Promise<string> {
+  return createHash("sha256").update(await readFile(path)).digest("hex");
+}
+
+async function directoryDigest(root: string): Promise<string> {
+  const digest = createHash("sha256");
+  const walk = async (directory: string, relativeRoot = ""): Promise<void> => {
+    let entries;
+    try { entries = await readdir(directory, { withFileTypes: true }); } catch {
+      digest.update(`unreadable:${relativeRoot}\n`);
+      return;
+    }
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      const relativePath = relativeRoot ? `${relativeRoot}/${entry.name}` : entry.name;
+      const fullPath = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        digest.update(`directory:${relativePath}\n`);
+        await walk(fullPath, relativePath);
+      } else if (entry.isFile()) {
+        digest.update(`file:${relativePath}\n`);
+        try { digest.update(await readFile(fullPath)); } catch { digest.update("unreadable"); }
+        digest.update("\n");
+      }
+    }
+  };
+  await walk(root);
+  return digest.digest("hex");
+}
+
+/** Legacy name-only snapshot used by revisions written before v2 content fingerprints. */
+async function legacyIntegritySnapshot(prefix: string): Promise<string[]> {
   const parts: string[] = [];
   try { parts.push(...(await readdir(join(prefix, "conda-meta"))).filter((name) => name.endsWith(".json")).sort()); } catch { /* not a conda prefix */ }
   try {
@@ -179,6 +209,57 @@ async function integritySnapshot(prefix: string): Promise<string[]> {
   } catch { /* no Python site-packages */ }
   try { parts.push(...(await readdir(join(prefix, "library"))).sort()); } catch { /* no R library */ }
   return parts;
+}
+
+/** Content fingerprint of package manifests without invoking a package manager.
+ * Conda metadata and Python dist-info are small and are hashed in full. R
+ * package names plus DESCRIPTION files cover the package inventory and its
+ * declared metadata without hashing an entire R library on every status call. */
+async function integritySnapshot(prefix: string): Promise<string[]> {
+  const parts: string[] = [];
+  try {
+    const root = join(prefix, "conda-meta");
+    for (const name of (await readdir(root)).filter((item) => item.endsWith(".json")).sort()) {
+      parts.push(`${INTEGRITY_SNAPSHOT_VERSION}:conda-meta/${name}:${await fileDigest(join(root, name))}`);
+    }
+  } catch { /* not a conda prefix */ }
+
+  try {
+    const libDir = process.platform === "win32" ? join(prefix, "Lib") : join(prefix, "lib");
+    const pythonLib = (await readdir(libDir)).find((name) => /^python3\.\d+$/.test(name));
+    if (pythonLib) {
+      const root = join(libDir, pythonLib, "site-packages");
+      for (const name of (await readdir(root)).filter((item) => item.endsWith(".dist-info")).sort()) {
+        parts.push(`${INTEGRITY_SNAPSHOT_VERSION}:python-dist-info/${name}:${await directoryDigest(join(root, name))}`);
+      }
+    }
+  } catch { /* no Python site-packages */ }
+
+  const rLibraryRoots = [
+    ["library", join(prefix, "library")],
+    ["lib-R-library", join(prefix, "lib", "R", "library")],
+  ] as const;
+  for (const [label, root] of rLibraryRoots) {
+    try {
+      for (const name of (await readdir(root)).sort()) {
+        const packagePath = join(root, name);
+        const packageInfo = await stat(packagePath).catch(() => null);
+        if (!packageInfo) continue;
+        if (!packageInfo.isDirectory()) {
+          parts.push(`${INTEGRITY_SNAPSHOT_VERSION}:r-library/${label}/${name}:${await fileDigest(packagePath)}`);
+          continue;
+        }
+        const description = join(packagePath, "DESCRIPTION");
+        const descriptionDigest = await fileDigest(description).catch(() => "missing");
+        parts.push(`${INTEGRITY_SNAPSHOT_VERSION}:r-library/${label}/${name}:${descriptionDigest}`);
+      }
+    } catch { /* no R library */ }
+  }
+  return parts.sort();
+}
+
+function isVersionedIntegritySnapshot(snapshot: readonly string[]): boolean {
+  return snapshot.length > 0 && snapshot.every((item) => item.startsWith(`${INTEGRITY_SNAPSHOT_VERSION}:`));
 }
 
 function snapshotDriftError(revisionId: string): string {
@@ -300,7 +381,9 @@ export class WorkspaceEnvironmentService {
       const runtimeExecutable = environmentExecutable(revision.prefix, revision.language);
       let driftError: string | undefined;
       if (revision.status === "ready" && revision.integrity_snapshot && await executable(runtimeExecutable)) {
-        const current = await integritySnapshot(revision.prefix);
+        const current = isVersionedIntegritySnapshot(revision.integrity_snapshot)
+          ? await integritySnapshot(revision.prefix)
+          : await legacyIntegritySnapshot(revision.prefix);
         if (current.join("\n") !== revision.integrity_snapshot.join("\n")) driftError = snapshotDriftError(revision.revision_id);
       }
       const ready = revision.status === "ready" && !driftError && await executable(runtimeExecutable);
@@ -507,7 +590,16 @@ export class WorkspaceEnvironmentService {
       await this.upsert({ ...revision, integrity_snapshot: current });
       return;
     }
-    if (current.join("\n") !== revision.integrity_snapshot.join("\n")) throw new Error(snapshotDriftError(revision.revision_id));
+    if (isVersionedIntegritySnapshot(revision.integrity_snapshot)) {
+      if (current.join("\n") !== revision.integrity_snapshot.join("\n")) throw new Error(snapshotDriftError(revision.revision_id));
+      return;
+    }
+
+    // Validate the old name-only snapshot once before upgrading it, so a
+    // pre-v2 revision is not silently trusted during migration.
+    const legacyCurrent = await legacyIntegritySnapshot(revision.prefix);
+    if (legacyCurrent.join("\n") !== revision.integrity_snapshot.join("\n")) throw new Error(snapshotDriftError(revision.revision_id));
+    await this.upsert({ ...revision, integrity_snapshot: current });
   }
 
   private async registry(): Promise<EnvironmentRegistry> {

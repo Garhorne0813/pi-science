@@ -327,7 +327,17 @@ describe("environment revision integrity", () => {
     await expect(service.bind(workspace, "rev_old")).resolves.toMatchObject({ ready: true, revision_id: "rev_old" });
     const registryPath = join(process.env.PI_SCIENCE_HOME!, "environments", "registry.json");
     const registry = JSON.parse(await readFile(registryPath, "utf8")) as { revisions: Array<{ integrity_snapshot?: string[] }> };
-    expect(registry.revisions[0]?.integrity_snapshot).toEqual(["python-3.12.8-h000.json"]);
+    expect(registry.revisions[0]?.integrity_snapshot).toEqual([expect.stringMatching(/^v2:conda-meta\/python-3\.12\.8-h000\.json:[0-9a-f]{64}$/)]);
+  });
+
+  it("rejects content changes even when the package manifest filename is unchanged", async () => {
+    const { workspace, prefix } = await seedWorkspace();
+    const service = new WorkspaceEnvironmentService();
+    await service.bind(workspace, "rev_old");
+
+    await writeFile(join(prefix, "conda-meta", "python-3.12.8-h000.json"), '{"tampered":true}', "utf8");
+
+    await expect(service.bind(workspace, "rev_old")).rejects.toThrow(/modified outside Pi-Science/);
   });
 
   it("rejects binding and reports drift when the bound prefix changes out of band", async () => {

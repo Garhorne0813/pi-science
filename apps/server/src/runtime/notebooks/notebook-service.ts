@@ -82,6 +82,7 @@ export class NotebookService {
   private jupyterToken: string | null = null;
   private setupInProgress = false;
   private startQueue: Promise<unknown> = Promise.resolve();
+  private lifecycleGeneration = 0;
 
   constructor(deps: NotebookServiceDependencies = {}) {
     this.configPath = deps.configPath ?? configPath;
@@ -177,24 +178,52 @@ export class NotebookService {
 
   /** Starts are serialized so two concurrent requests cannot spawn competing Jupyter processes. */
   start(cwd: string): Promise<JupyterStatusPayload> {
-    const run = this.startQueue.then(() => this.startUnlocked(cwd), () => this.startUnlocked(cwd));
+    const generation = this.lifecycleGeneration;
+    const run = this.startQueue.then(() => this.startUnlocked(cwd, generation), () => this.startUnlocked(cwd, generation));
     this.startQueue = run.then(() => undefined, () => undefined);
     return run;
   }
 
-  private async startUnlocked(cwd: string): Promise<JupyterStatusPayload> {
+  private assertStartActive(generation: number): void {
+    if (generation !== this.lifecycleGeneration) throw new Error("Jupyter start cancelled");
+  }
+
+  private clearJupyterState(): void {
+    this.jupyterProcess = undefined;
+    this.jupyterPort = null;
+    this.jupyterCwd = null;
+    this.jupyterToken = null;
+  }
+
+  private stopProcess(): void {
+    const process = this.jupyterProcess;
+    if (process && process.exitCode === null) {
+      process.kill("SIGTERM");
+      try { process.kill("SIGKILL"); } catch { /* best effort */ }
+    }
+    this.clearJupyterState();
+  }
+
+  private async startUnlocked(cwd: string, generation: number): Promise<JupyterStatusPayload> {
     const workspace = resolve(cwd);
+    this.assertStartActive(generation);
     if (!(await pathExists(workspace))) throw new Error(`Workspace directory does not exist: ${workspace}`);
+    this.assertStartActive(generation);
     if (this.jupyterProcess && this.jupyterProcess.exitCode === null) {
       if (this.jupyterCwd === workspace) return { ...this.status(), message: "Already running" };
       throw new Error(`Jupyter Lab is already running for another workspace: ${this.jupyterCwd ?? "unknown"}`);
     }
-    this.stop();
+    this.stopProcess();
+    this.assertStartActive(generation);
     if (!(await pathExists(this.jupyterBin))) throw new Error("The application Jupyter runtime is not installed");
+    this.assertStartActive(generation);
     await this.installProjectKernelspec(workspace);
+    this.assertStartActive(generation);
     this.jupyterPort = await findAvailablePort();
+    this.assertStartActive(generation);
     this.jupyterCwd = workspace;
     this.jupyterToken = randomBytes(24).toString("hex");
+    this.assertStartActive(generation);
     const jupyter = spawn(
       this.jupyterBin,
       [
@@ -210,14 +239,12 @@ export class NotebookService {
     this.jupyterProcess = jupyter;
     jupyter.once("exit", () => {
       if (this.jupyterProcess !== jupyter) return;
-      this.jupyterProcess = undefined;
-      this.jupyterPort = null;
-      this.jupyterCwd = null;
-      this.jupyterToken = null;
+      this.clearJupyterState();
     });
     await new Promise((resolveWait) => setImmediate(resolveWait));
+    this.assertStartActive(generation);
     if (jupyter.exitCode !== null) {
-      this.stop();
+      this.stopProcess();
       throw new Error("Jupyter Lab exited during startup");
     }
     return this.status();
@@ -227,20 +254,14 @@ export class NotebookService {
     if (cwd !== undefined && this.jupyterProcess && this.jupyterProcess.exitCode === null && this.jupyterCwd !== resolve(cwd)) {
       throw new Error("Cannot stop Jupyter Lab owned by another workspace");
     }
-    const process = this.jupyterProcess;
-    if (process && process.exitCode === null) {
-      process.kill("SIGTERM");
-      try { process.kill("SIGKILL"); } catch { /* best effort */ }
-    }
-    this.jupyterProcess = undefined;
-    this.jupyterPort = null;
-    this.jupyterCwd = null;
-    this.jupyterToken = null;
+    this.lifecycleGeneration += 1;
+    this.stopProcess();
     return { running: false, port: null, url: null, cwd: null, matches_workspace: true };
   }
 
   async shutdown(): Promise<void> {
     this.stop();
+    await this.startQueue;
   }
 
   private async installProjectKernelspec(workspace: string, allowDependencyInstall = true): Promise<void> {

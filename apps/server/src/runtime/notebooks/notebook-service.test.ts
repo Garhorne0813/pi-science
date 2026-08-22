@@ -121,6 +121,33 @@ describe("NotebookService", () => {
       if (result.status === "rejected") expect((result.reason as Error).message).toBe("stop-here");
     }
   });
+
+  it("cancels an in-flight start when the service is stopped", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-jupyter-start-cancel-"));
+    cleanup.push(cwd);
+    const service = new NotebookService({ configPath: (name) => join(cwd, ".pi-science", name) });
+    await mkdir(dirname(service.jupyterBin), { recursive: true });
+    await writeFile(service.jupyterBin, "", "utf8");
+
+    let release!: () => void;
+    const entered = new Promise<void>((resolveEntered) => {
+      const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+      vi.spyOn(service as unknown as { installProjectKernelspec: (workspace: string) => Promise<void> }, "installProjectKernelspec")
+        .mockImplementation(async () => {
+          resolveEntered();
+          await gate;
+        });
+    });
+
+    const start = service.start(cwd);
+    await entered;
+    service.stop();
+    release();
+
+    await expect(start).rejects.toThrow("Jupyter start cancelled");
+    expect(service.status()).toMatchObject({ running: false, port: null, url: null });
+  });
+
   // The shim records Jupyter argv through a Node script, which cannot be
   // launched bare on win32; the boundary assertions below are POSIX-covered.
   it.skipIf(process.platform === "win32")("binds jupyter to the workspace root and fences cross-workspace control", async () => {

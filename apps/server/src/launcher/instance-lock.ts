@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, stat, unlink } from "node:fs/promises";
+import { mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 export class SingleInstanceError extends Error {
@@ -54,7 +54,6 @@ export async function acquireSingleInstanceLock(lockPath: string): Promise<Insta
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      if (!(await isStaleLock(path))) throw new SingleInstanceError();
       if (!(await reclaimStaleLock(path))) throw new SingleInstanceError();
       return attempt();
     }
@@ -63,7 +62,7 @@ export async function acquireSingleInstanceLock(lockPath: string): Promise<Insta
   return attempt();
 }
 
-interface LockSnapshot { mtimeMs: number; pid: number | null }
+interface LockSnapshot { mtimeMs: number; pid: number | null; text: string }
 
 async function readLockSnapshot(path: string): Promise<LockSnapshot | null> {
   let info;
@@ -81,33 +80,31 @@ async function readLockSnapshot(path: string): Promise<LockSnapshot | null> {
   } catch {
     pid = null; // Corrupt content (for example a truncated write): only recyclable once the mtime expires.
   }
-  return { mtimeMs: info.mtimeMs, pid };
+  return { mtimeMs: info.mtimeMs, pid, text };
 }
 
 function pidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
 }
 
-/** Unlink a stale lock only after re-validating its content and mtime immediately before removal.
- * A fresh lock always carries a live pid, so a concurrent recycler that lost the race never deletes it.
- * Remaining window: a lock written between the final snapshot and unlink can still be removed; the next
- * contender then wins the open("wx") while the previous holder keeps running. Full exclusion would need
- * OS advisory locks; this keeps the window to two filesystem operations. */
+/** Reclaims a stale lock by atomically moving it out of the acquisition path.
+ * A contender can acquire `path` after the rename, but it can never be removed
+ * by the cleanup of the older lock. Content verification also prevents moving
+ * a replacement lock back over a newer owner. */
 async function reclaimStaleLock(path: string): Promise<boolean> {
   const before = await readLockSnapshot(path);
   if (!before || Date.now() - before.mtimeMs < STALE_MS) return false;
   if (before.pid !== null && pidAlive(before.pid)) return false;
   const current = await readLockSnapshot(path);
-  if (!current || current.mtimeMs !== before.mtimeMs || current.pid !== before.pid) return false;
+  if (!current || current.mtimeMs !== before.mtimeMs || current.pid !== before.pid || current.text !== before.text) return false;
   if (current.pid !== null && pidAlive(current.pid)) return false;
-  try { await unlink(path); } catch { return false; }
+  const claim = `${path}.stale-${process.pid}-${randomUUID()}`;
+  try { await rename(path, claim); } catch { return false; }
+  const moved = await readFile(claim, "utf8").catch(() => null);
+  if (moved !== before.text) {
+    try { await rename(claim, path); } catch { /* never overwrite a replacement lock */ }
+    return false;
+  }
+  await unlink(claim).catch(() => undefined);
   return true;
-}
-
-async function isStaleLock(path: string): Promise<boolean> {
-  const owner = await readLockSnapshot(path);
-  if (!owner) return false;
-  if (Date.now() - owner.mtimeMs < STALE_MS) return false;
-  if (owner.pid === null) return true; // Corrupt content plus expired mtime: safe to recycle.
-  return !pidAlive(owner.pid);
 }
