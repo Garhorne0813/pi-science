@@ -14,17 +14,20 @@ export class JobRepository {
   }
 
   async save(record: JobRecord): Promise<JobRecord> {
-    const projectId = await this.workspaces.ensureProjectForPath(record.cwd);
-    await this.store.run(upsertSql(), jobParams(record, projectId));
+    const location = await this.workspaces.rememberWorkspace(record.cwd);
+    await this.store.run(upsertSql(), jobParams(record, location.project_id, location.path));
     return (await this.get(record.cwd, record.job_id))!;
   }
 
   async get(cwd: string, jobId: string): Promise<JobRecord | null> {
     if (!/^job_[A-Za-z0-9]{16}$/.test(jobId)) throw new Error("Invalid job id");
-    const projectId = await this.workspaces.projectIdForPath(cwd);
-    if (!projectId) return null;
-    const row = await this.store.get<JobRow>("SELECT * FROM jobs WHERE job_id = ? AND project_id = ?", [jobId, projectId]);
-    return row ? toRecord(row, resolve(cwd)) : null;
+    const location = await this.workspaces.getByPath(cwd);
+    if (!location) return null;
+    const row = await this.store.get<JobRow>(
+      "SELECT * FROM jobs WHERE job_id = ? AND project_id = ? AND workspace_path = ?",
+      [jobId, location.project_id, location.path],
+    );
+    return row ? toRecord(row, location.path) : null;
   }
 
   async getById(jobId: string): Promise<JobRecord | null> {
@@ -33,19 +36,22 @@ export class JobRepository {
   }
 
   async list(cwd: string, limit: number): Promise<JobRecord[]> {
-    const projectId = await this.workspaces.projectIdForPath(cwd);
-    if (!projectId) return [];
+    const location = await this.workspaces.getByPath(cwd);
+    if (!location) return [];
     const rows = await this.store.all<JobRow>(
-      "SELECT * FROM jobs WHERE project_id = ? ORDER BY created_at DESC LIMIT ?",
-      [projectId, Math.max(1, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(limit)))],
+      "SELECT * FROM jobs WHERE project_id = ? AND workspace_path = ? ORDER BY created_at DESC LIMIT ?",
+      [location.project_id, location.path, Math.max(1, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(limit)))],
     );
-    return rows.map((row) => toRecord(row, resolve(cwd)));
+    return rows.map((row) => toRecord(row, location.path));
   }
 
   async hasActive(cwd: string): Promise<boolean> {
-    const projectId = await this.workspaces.projectIdForPath(cwd);
-    if (!projectId) return false;
-    const row = await this.store.get<{ count: number }>("SELECT COUNT(*) AS count FROM jobs WHERE project_id = ? AND status IN ('pending', 'running')", [projectId]);
+    const location = await this.workspaces.getByPath(cwd);
+    if (!location) return false;
+    const row = await this.store.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM jobs WHERE project_id = ? AND workspace_path = ? AND status IN ('pending', 'running')",
+      [location.project_id, location.path],
+    );
     return Number(row?.count ?? 0) > 0;
   }
 
@@ -88,12 +94,12 @@ export class JobRepository {
   }
 
   async cancel(cwd: string, jobId: string, endedAt: number, diagnostic?: string): Promise<JobRecord | null> {
-    const projectId = await this.workspaces.projectIdForPath(cwd);
-    if (!projectId) return null;
+    const location = await this.workspaces.getByPath(cwd);
+    if (!location) return null;
     const result = await this.store.run(
       `UPDATE jobs SET status = 'cancelled', ended_at = ?, stderr = CASE WHEN ? IS NULL THEN stderr ELSE ? END, updated_at = ?
-        WHERE job_id = ? AND project_id = ? AND status IN ('pending', 'running')`,
-      [endedAt, diagnostic ?? null, diagnostic ?? null, endedAt, jobId, projectId],
+        WHERE job_id = ? AND project_id = ? AND workspace_path = ? AND status IN ('pending', 'running')`,
+      [endedAt, diagnostic ?? null, diagnostic ?? null, endedAt, jobId, location.project_id, location.path],
     );
     if (Number(result.changes) === 0) return this.get(cwd, jobId);
     return this.get(cwd, jobId);
@@ -208,13 +214,13 @@ function upsertSql(): string {
       updated_at = excluded.updated_at`;
 }
 
-function jobParams(record: JobRecord, projectId: string): Array<string | number | null> {
+function jobParams(record: JobRecord, projectId: string, workspacePath: string): Array<string | number | null> {
   const ownership = record.ownership;
   return [
     record.job_id,
     record.execution_id ?? null,
     projectId,
-    resolve(record.cwd),
+    workspacePath,
     record.execution_cwd ? resolve(record.execution_cwd) : null,
     record.surface,
     JSON.stringify(record.command),

@@ -185,6 +185,18 @@ export class WorkspaceRepository {
     if (!from || !to) throw new Error("Both workspace paths are required");
     await this.store.batch([
       { sql: "UPDATE project_locations SET canonical_path = ? WHERE canonical_path = ? AND project_id = ?", params: [to, from, projectId] },
+      {
+        sql: `UPDATE jobs SET workspace_path = ?,
+                execution_cwd = CASE
+                  WHEN execution_cwd IS NULL THEN NULL
+                  WHEN execution_cwd = ? THEN ?
+                  WHEN substr(execution_cwd, 1, length(?) + 1) = ? || ? THEN ? || substr(execution_cwd, length(?) + 1)
+                  ELSE execution_cwd
+                END,
+                updated_at = ?
+              WHERE project_id = ? AND workspace_path = ?`,
+        params: [to, from, to, from, from, process.platform === "win32" ? "\\" : "/", to, from, Date.now(), projectId, from],
+      },
       { sql: "UPDATE projects SET updated_at = ?, last_seen_at = ? WHERE project_id = ?", params: [Date.now(), Date.now(), projectId] },
     ]);
   }
@@ -195,7 +207,8 @@ export class WorkspaceRepository {
   }
 
   async importLegacy(sources: LegacyWorkspaceSources): Promise<{ rows: number; skipped: number }> {
-    const pinned = new Set(sources.pinned_paths.map((path) => normalizePath(path)));
+    const canonicalPinnedPaths = await Promise.all(sources.pinned_paths.map((path) => canonicalPath(path)));
+    const pinned = new Set(canonicalPinnedPaths.map((path) => normalizePath(path)));
     let rows = 0;
     let skipped = 0;
     const sourceGroups: Array<[string, string | undefined, string[]]> = [
@@ -207,6 +220,12 @@ export class WorkspaceRepository {
     for (const [source, fingerprint, group] of sourceGroups) {
       if (!fingerprint || await importAlreadyApplied(this.store, source, fingerprint)) { if (fingerprint) skipped += group.length; continue; }
       changedSources.add(source);
+    }
+    if (changedSources.has("workspace-pinned")) {
+      for (const location of await this.listPinned()) {
+        const canonical = await canonicalPath(location.path);
+        if (!pinned.has(normalizePath(canonical))) await this.setPinnedPath(location.path, false, true);
+      }
     }
     const pathsToImport = unique(sourceGroups.filter(([source]) => changedSources.has(source)).flatMap(([, , paths]) => paths));
     for (const pathValue of pathsToImport) {
@@ -226,7 +245,7 @@ export class WorkspaceRepository {
         canonical_path: path,
         preserve_path: preservePath,
         is_managed: sources.managed_paths.some((item) => normalizePath(item) === normalizePath(path)),
-        is_pinned: pinned.has(normalizePath(path)),
+        is_pinned: pinned.has(normalizePath(await canonicalPath(path))),
         ...(exists ? {} : { last_opened_at: undefined }),
         ...(exists ? {} : { touch: false }),
       });
