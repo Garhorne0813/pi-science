@@ -38,7 +38,7 @@ Start options:
 EOF
 }
 
-control_plane_is_ready() { curl --fail --silent "http://127.0.0.1:${CONTROL_PLANE_PORT}/api/health" >/dev/null 2>&1; }
+control_plane_is_ready() { curl --fail --silent "http://127.0.0.1:${CONTROL_PLANE_PORT}/internal/ready" >/dev/null 2>&1; }
 frontend_is_ready() { curl --fail --silent "$FRONTEND_URL" >/dev/null 2>&1; }
 port_listener_pids() { command -v lsof >/dev/null 2>&1 || return 0; lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | sort -u || true; }
 open_browser() { if command -v open >/dev/null 2>&1; then open "$1" >/dev/null 2>&1 || true; elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$1" >/dev/null 2>&1 || true; fi; }

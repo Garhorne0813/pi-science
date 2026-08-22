@@ -11,12 +11,12 @@ INSTALL_STATE_FILE="$INSTALL_STATE_DIR/install.env"
 
 echo "==> Checking installation prerequisites..."
 if ! command -v node >/dev/null 2>&1; then
-  echo "Error: Node.js >=22.12.0 is required." >&2
+  echo "Error: Node.js >=24.16.0 is required." >&2
   exit 1
 fi
 NODE_PATH="$(node -p 'process.execPath')"
 if ! "$NODE_PATH" "$SCRIPT_DIR/check-node-version.mjs"; then
-  echo "Error: Node.js >=22.12.0 is required (found $("$NODE_PATH" --version))." >&2
+  echo "Error: Node.js >=24.16.0 is required (found $("$NODE_PATH" --version))." >&2
   exit 1
 fi
 if ! command -v pnpm >/dev/null 2>&1; then

@@ -13,7 +13,7 @@
     · <a href="#开发与测试">开发与测试</a>
   </p>
   <p>
-    <img src="https://img.shields.io/badge/Node.js-%E2%89%A522.12-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22.12+" />
+    <img src="https://img.shields.io/badge/Node.js-%E2%89%A524.16-339933?logo=nodedotjs&logoColor=white" alt="Node.js 24.16+" />
     <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111" alt="React 19" />
     <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License" />
   </p>
@@ -35,7 +35,7 @@
 
 ### 环境要求
 
-- Node.js 22.12 或更高版本
+- Node.js 24.16 或更高版本
 - Python 3.11 或更高版本
 - pnpm
 - 一个 LLM 提供商 API Key，或可信的 OpenAI / Anthropic 兼容本地端点

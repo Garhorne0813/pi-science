@@ -4,6 +4,7 @@ import { access, chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } 
 import { createHash, randomUUID } from "node:crypto";
 import { delimiter, join, resolve } from "node:path";
 import { configPath, readJson, withFileWriteLock, withWorkspaceWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
+import type { EnvironmentRepository } from "../../storage/sqlite/repositories/environment-repository.js";
 
 export type EnvironmentLanguage = "python" | "r";
 export type EnvironmentStatus = "creating" | "ready" | "failed" | "archived";
@@ -341,6 +342,7 @@ export class WorkspaceEnvironmentService {
   constructor(
     private readonly basePython = defaultPythonExecutable(),
     private readonly micromambaExecutable = process.env.PI_SCIENCE_MICROMAMBA_EXECUTABLE || "micromamba",
+    private readonly environmentRepository?: EnvironmentRepository,
   ) {}
 
   async list(): Promise<EnvironmentRevision[]> {
@@ -603,11 +605,16 @@ export class WorkspaceEnvironmentService {
   }
 
   private async registry(): Promise<EnvironmentRegistry> {
+    if (this.environmentRepository) return { schema_version: 1, revisions: await this.environmentRepository.list() };
     const value = await readJson<EnvironmentRegistry>(registryPath(), { schema_version: 1, revisions: [] });
     return value.schema_version === 1 && Array.isArray(value.revisions) ? value : { schema_version: 1, revisions: [] };
   }
 
   private async upsert(revision: EnvironmentRevision): Promise<void> {
+    if (this.environmentRepository) {
+      await this.environmentRepository.upsert(revision);
+      return;
+    }
     const path = registryPath();
     await withFileWriteLock(path, async () => {
       const registry = await this.registry();
