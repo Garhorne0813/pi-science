@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { getClient } from "../client/pi-science-client";
+import { queryClient } from "../client/query-client";
 import { workspaceFiles } from "../workspace";
 import { generations } from "./generations";
 import { useRuntimeStore } from "./index";
@@ -323,6 +324,82 @@ describe("runtime conversation recovery", () => {
 
     expect(useRuntimeStore.getState().activeSessionId).toBe("session-b");
     expect(useRuntimeStore.getState().working).toBe(true);
+  });
+
+  it("does not revert the workspace when a recovery finishes after a cwd switch", async () => {
+    // The stale-cwd race: loadSessionsInternal(cwd) resets the store to the
+    // requested workspace whenever it differs, so a recovery that awaited the
+    // network across a workspace switch must not run its session-list refresh
+    // for the OLD workspace. The switch happens during the turn-artifacts
+    // read, AFTER recovery passed its first staleness check.
+    let recovery = false;
+    let releaseMessages!: (response: Response) => void;
+    let releaseState!: (response: Response) => void;
+    let releaseArtifacts!: (response: Response) => void;
+    const delayedMessages = new Promise<Response>((resolve) => { releaseMessages = resolve; });
+    const delayedState = new Promise<Response>((resolve) => { releaseState = resolve; });
+    const delayedArtifacts = new Promise<Response>((resolve) => { releaseArtifacts = resolve; });
+    const sessionListRequests: string[] = [];
+    let artifactsRequests = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("session-a/messages")) return recovery ? delayedMessages : jsonResponse({ messages: [] });
+      if (url.includes("session-a/state")) return recovery ? delayedState : jsonResponse(state("session-a"));
+      if (url.includes("session-a/artifacts")) {
+        // The initial connect also reads artifacts; only the RECOVERY's read
+        // must be held open so the switch can happen inside that await.
+        if (!recovery) return jsonResponse({ turns: [] });
+        artifactsRequests += 1;
+        return delayedArtifacts;
+      }
+      if (url.startsWith("/api/sessions?")) {
+        sessionListRequests.push(url);
+        return jsonResponse([]);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    // The connect pass already cached the turn-artifacts query (staleTime
+    // 3s); clear it so the recovery's own artifacts read goes to the network
+    // and can be held open as the interleave window.
+    queryClient.clear();
+    sessionListRequests.length = 0;
+    recovery = true;
+    const reconnecting = reconcileAfterConnectionLoss(
+      getClient(),
+      "session-a",
+      "/workspace",
+      generations.connection,
+      generations.activity,
+    );
+
+    // History/state resolve while the user is still on the old workspace...
+    releaseMessages(jsonResponse({ messages: [] }));
+    releaseState(jsonResponse(state("session-a")));
+    // ...and recovery reaches its turn-artifacts read (its first staleness
+    // check has passed at this point).
+    await vi.waitFor(() => expect(artifactsRequests).toBeGreaterThanOrEqual(1));
+    // ...then the user switches workspaces while the turn-artifacts read of
+    // the recovery is still in flight.
+    useRuntimeStore.setState({
+      cwd: "/workspace-b",
+      activeSessionId: "session-b",
+      sessions: [{ id: "session-b", cwd: "/workspace-b" }],
+      status: "connecting",
+    });
+    releaseArtifacts(jsonResponse({ turns: [] }));
+    await reconnecting;
+
+    // The stale recovery changed nothing in the new workspace context.
+    const current = useRuntimeStore.getState();
+    expect(current.cwd).toBe("/workspace-b");
+    expect(current.activeSessionId).toBe("session-b");
+    expect(current.sessions.map((session) => session.id)).toEqual(["session-b"]);
+    // It must not settle the NEW context either.
+    expect(current.status).toBe("connecting");
+    // And it never refreshed the OLD workspace's session list.
+    expect(sessionListRequests).toEqual([]);
   });
 
   it("rebuilds conversation history when the durable SSE cursor has expired", async () => {

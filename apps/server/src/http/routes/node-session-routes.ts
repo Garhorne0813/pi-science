@@ -76,16 +76,29 @@ export function registerNodeSessionRoutes(
     }
     const exists = await sessionRepository.findPath(workspace, sessionId);
     if (!exists) return reply.code(404).send({ ok: false, code: "not_found", error: "session not found" });
+    // Only a FINAL title blocks regeneration; a derived fallback (first-user
+    // message persisted by the client) must still be replaceable by the AI.
+    const existingRecord = (await titles.getTitleRecords(workspace)).get(sessionId);
+    if (existingRecord?.title && !existingRecord.derived) return { ok: true, title: existingRecord.title };
     const title = await aiTitleService.generateTitle(workspace, sessionId);
     // Persist the generated title server-side so a lost client PUT (tab closed,
-    // network drop) cannot lose it; null means no title was produced.
-    if (title) await titles.setTitle(workspace, sessionId, title);
-    return { ok: true, title };
+    // network drop) cannot lose it; null means no title was produced. The
+    // conditional write protects an explicit title written while generation
+    // was in flight, and its existence confirmation runs under the title-file
+    // lock: a session deleted while generation ran cannot leave an orphan
+    // record behind (the delete's own locked deleteTitle covers the remaining
+    // interleaving).
+    if (!title) return { ok: true, title: null };
+    const authoritativeTitle = await titles.setTitleIfAbsent(workspace, sessionId, title, async () => {
+      return (await sessionRepository.findPath(workspace, sessionId)) !== null;
+    });
+    if (!authoritativeTitle) return { ok: true, title: null };
+    return { ok: true, title: authoritativeTitle };
   });
 
   app.put<{ Params: { session_id: string } }>("/api/sessions/:session_id/title", async (request, reply) => {
     const sessionId = request.params.session_id;
-    const body = (request.body ?? {}) as { title?: unknown };
+    const body = (request.body ?? {}) as { title?: unknown; derived?: unknown };
     const title = typeof body.title === "string" ? body.title.trim() : "";
     if (!title) return reply.code(400).send({ ok: false, code: "invalid_request", error: "title must be a non-empty string" });
     if (title.length > 100) return reply.code(400).send({ ok: false, code: "invalid_request", error: "title must be at most 100 characters" });
@@ -101,7 +114,11 @@ export function registerNodeSessionRoutes(
     const exists = (await sessionRepository.findPath(workspace, sessionId)) !== null
       || nodeSessionService.liveSessions(workspace).some((session) => session.id === sessionId);
     if (!exists) return reply.code(404).send({ ok: false, code: "not_found", error: "session not found" });
-    await titles.setTitle(workspace, sessionId, title);
+    // A derived fallback (client-derived from the first user message) is stored
+    // marked so the AI generator may still replace it; an unmarked PUT is a
+    // final rename. A late derived write can never overwrite a final title.
+    if (body.derived === true) await titles.setDerivedTitle(workspace, sessionId, title);
+    else await titles.setTitle(workspace, sessionId, title);
     return { ok: true, title };
   });
 

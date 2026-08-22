@@ -10,6 +10,9 @@ export interface SessionInfo {
   id: string;
   cwd: string;
   name?: string;
+  /** True when `name` is a derived fallback (first user message) that an AI
+   *  title may still replace; absent means the name is final (or missing). */
+  name_derived?: boolean;
   created_at?: string;
   updated_at?: string;
   project_id?: string | null;

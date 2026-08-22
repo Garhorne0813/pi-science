@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { getSessionName } from "../client/pi-science-client";
 import { useRuntimeStore } from "./index";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 import * as fileRevision from "./file-revision";
@@ -311,6 +312,41 @@ describe("runtime event subscription", () => {
     });
   });
 
+  it("keeps a persisted title and skips AI generation after an idle replay", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([{
+        id: "session-a",
+        cwd: "/workspace",
+        name: "Persisted experiment title",
+      }]);
+      if (url.includes("/title")) return jsonResponse({ ok: true, title: "Unexpected replacement" });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    await vi.waitFor(() => {
+      expect(useRuntimeStore.getState().sessions).toContainEqual(
+        expect.objectContaining({ id: "session-a", name: "Persisted experiment title" }),
+      );
+    });
+
+    FakeEventSource.instances[0].emit("agent_start", { type: "agent_start", sessionId: "session-a" });
+    FakeEventSource.instances[0].emit("session.idle", {
+      type: "session.idle",
+      sessionId: "session-a",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/title"))).toBe(false);
+    expect(getSessionName("/workspace", "session-a")).toBe("Persisted experiment title");
+    expect(useRuntimeStore.getState().sessions).toContainEqual(
+      expect.objectContaining({ id: "session-a", name: "Persisted experiment title" }),
+    );
+  });
+
   it("skips the title request when the session is already marked AI-titled", async () => {
     localStorage.setItem(
       "pi-science.session-names-ai",
@@ -404,6 +440,38 @@ describe("runtime event subscription", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(localStorage.getItem("pi-science.session-names-ai")).toBeNull();
     expect(JSON.parse(localStorage.getItem("pi-science.session-names") ?? "{}")).toEqual({});
+  });
+
+  it("skips AI title generation when the user switches away during the settle refresh", async () => {
+    let armed = false;
+    let releaseList!: (response: Response) => void;
+    const delayedList = new Promise<Response>((resolve) => { releaseList = resolve; });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.startsWith("/api/sessions?")) {
+        // The initial activation refreshes the list immediately; only the
+        // settle-time refresh is held open as the switch window.
+        return armed ? delayedList : jsonResponse([]);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    armed = true;
+
+    FakeEventSource.instances[0].emit("agent_start", { type: "agent_start", sessionId: "session-a" });
+    FakeEventSource.instances[0].emit("session.idle", { type: "session.idle", sessionId: "session-a" });
+    // The user moves to another workspace/session while the settle-time list
+    // refresh is still in flight.
+    useRuntimeStore.setState({ cwd: "/workspace-b", activeSessionId: "session-b" });
+    releaseList(jsonResponse([]));
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/title"))).toBe(false);
   });
 
   it("refreshes the workspace file tree exactly once per settled turn", async () => {
