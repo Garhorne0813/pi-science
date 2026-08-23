@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { resourceRoot } from "./resource-root.js";
 
 export type PiAiProviderCatalogEntry = {
   id: string;
@@ -18,10 +19,7 @@ export type PiAiProviderCatalogEntry = {
  *  back to custom providers only. Environment credential detection is a
  *  boolean only — keys are never exposed. */
 export async function loadPiAiProviderCatalog(): Promise<PiAiProviderCatalogEntry[]> {
-  // Resolve from this module, not process.cwd(). The server is launched from
-  // both the repository root and apps/server during development/tests.
-  const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
-  const dist = join(projectRoot, "runtime", "pi", "node_modules", "@earendil-works", "pi-ai", "dist");
+  const dist = join(resourceRoot(), "runtime", "pi", "node_modules", "@earendil-works", "pi-ai", "dist");
   const providersModule = join(dist, "providers", "all.js");
   const envKeysModule = join(dist, "env-api-keys.js");
   if (!existsSync(providersModule) || !existsSync(envKeysModule)) return [];
@@ -74,8 +72,7 @@ export async function loadPiAiProviderCatalog(): Promise<PiAiProviderCatalogEntr
  *  providers; OAuth tokens are never stored in the process environment by
  *  Pi-Science). Never leaks the key value. */
 export async function hasEnvApiKey(providerId: string): Promise<boolean> {
-  const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
-  const envKeysModule = join(projectRoot, "runtime", "pi", "node_modules", "@earendil-works", "pi-ai", "dist", "env-api-keys.js");
+  const envKeysModule = join(resourceRoot(), "runtime", "pi", "node_modules", "@earendil-works", "pi-ai", "dist", "env-api-keys.js");
   if (!existsSync(envKeysModule)) return false;
   try {
     const { getEnvApiKey } = await import(pathToFileURL(envKeysModule).href) as { getEnvApiKey?: (provider: string, env: NodeJS.ProcessEnv) => string | undefined };

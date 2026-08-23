@@ -59,6 +59,15 @@ function kernelModules() {
 
 
 describe("Node control plane", () => {
+  it("requires the desktop session cookie when desktop mode is enabled", async () => {
+    const token = "a".repeat(64);
+    const app = buildApp(config("http://127.0.0.1:1", { desktopToken: token }));
+    openApps.push(app);
+    expect((await app.inject({ method: "GET", url: "/api/health" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/api/health", headers: { cookie: `pi_science_desktop=${token}` } })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/internal/ready" })).statusCode).toBe(200);
+  });
+
   it("exposes liveness and readiness separately", async () => {
     const app = buildApp(config("http://127.0.0.1:1"));
     openApps.push(app);

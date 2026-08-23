@@ -3,6 +3,9 @@ packages:
   - packages/*
   - frontend
 
+injectWorkspacePackages: true
+
 allowBuilds:
   '@scarf/scarf': false
+  electron: true
   esbuild: true
