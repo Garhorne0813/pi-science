@@ -27,7 +27,7 @@ Most AI research tools stop at reading and summarizing papers. Pi-Science is bui
 - **Reproducibility as a side effect, not a virtue.** Every run lands in an event log, artifacts carry sha256 digests, projects bind to versioned Micromamba environments, and results trace back to the code and data that produced them — without changing how you work.
 - **Autonomous research loops with a human in charge.** Describe an objective and a deterministic metric; a supervised agent proposes candidates, executes them in immutable snapshots, evaluates, analyzes, and iterates — with budgets, pause/resume, and crash recovery.
 - **Literature with real, verifiable citations.** Zero-config Crossref/arXiv/PubMed retrieval with inline DOIs rendered as clickable sources — never invented references.
-- **Local-first by architecture.** Workspaces are plain folders on your machine. Nothing leaves it except the LLM calls you configure — including fully local endpoints such as Ollama or LM Studio. Unpublished data stays yours.
+- **Local-first by architecture.** Workspaces are plain folders on your machine, and project files stay local unless you send content through a configured model or explicitly invoke an external service such as literature search. Fully local endpoints such as Ollama and LM Studio are supported, and connector destinations are recorded in a local egress audit.
 
 Each project keeps its own conversations, files, runs, provenance, and reviewed knowledge. Conversations run in isolated runtimes inside a shared Pi host, so multiple sessions continue concurrently without blocking one another.
 
@@ -98,7 +98,7 @@ Re-run the platform-appropriate installer (`scripts/install.sh` or `powershell -
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 ```
 
-The installers download Pi Orbit 0.2.0 by default. Set `PI_ORBIT_VERSION` to
+The installers download Pi Orbit 0.3.0 by default. Set `PI_ORBIT_VERSION` to
 select another compatible release, or set `PI_ORBIT_REPO` to use a local Pi
 Orbit source checkout.
 
@@ -136,8 +136,10 @@ Pi-Science renders common research formats directly in the browser.
 
 ## Architecture
 
-Pi-Science uses a local-first control plane, one shared Pi Orbit Web host with
-isolated agent runtimes, and an on-demand scientific worker. See the
+Pi-Science uses a local-first Node control plane, one shared Pi Orbit Web host
+with isolated agent runtimes, and on-demand native Python/R kernel processes.
+Global workspace, environment, and job state is coordinated through SQLite;
+project files and reproducibility records remain inside each workspace. See the
 [architecture reference](docs/architecture.md) for process ownership, service
 boundaries, workspace state, lifecycle, and security details.
 
@@ -165,7 +167,7 @@ and artifacts produced by that execution.
 
 ## Model Configuration
 
-Providers can be configured from **Settings → LLM**. Pi-Science supports built-in vendors, OpenAI-compatible endpoints, Anthropic-compatible endpoints, and trusted keyless local services such as Ollama or LM Studio.
+Providers can be configured from **Settings → LLM**. Pi-Science supports built-in vendors, OpenAI-compatible endpoints, Anthropic-compatible endpoints, and trusted keyless local services such as Ollama or LM Studio. Managed endpoints can be registered, enabled or disabled, and health-checked from the same page. Health checks are bounded outbound requests; private-network endpoints are allowed by default for local model servers and can be disabled with `PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS=0`.
 
 API keys may also be provided through environment variables:
 
@@ -231,7 +233,7 @@ pnpm --filter frontend test:uat:office
 
 - [Architecture](docs/architecture.md)
 - [Research loop architecture (ADR)](docs/adr-research-loop-subagents.md)
-- Interactive API reference while the stack is running
+- Runtime health and SQLite diagnostics are available from the control-plane internal endpoints.
 
 ## Contributing
 

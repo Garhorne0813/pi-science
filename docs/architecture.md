@@ -16,7 +16,9 @@ flowchart LR
     PH --> R2[Conversation runtime B]
     PH --> RN[Background agent runtime]
     CP -->|spawn on demand| K[Native Python and R kernels]
+    CP --> DB[(Global state.sqlite)]
     CP --> WS[(Workspace files and .pi-science metadata)]
+    CP -->|bounded outbound HTTP| EXT[Configured model and literature services]
     PH --> WS
     K --> WS
 ```
@@ -28,9 +30,10 @@ service the browser calls directly.
 | Component | Responsibility |
 |---|---|
 | React web app | Conversations, project knowledge, files, notebooks, runs, skills, settings, and scientific viewers |
-| Node control plane | Sessions, event streaming, files, jobs, provenance, project state, settings, runtime lifecycle, and route authorization |
+| Node control plane | Sessions, event streaming, files, jobs, provenance, project state, settings, SQLite coordination, runtime lifecycle, and route authorization |
 | Pi Orbit Web host | Agent sessions and isolated runtimes for conversations and bounded background agents |
 | Node-native scientific runtime | Workspace-bound Python/R kernels and optional JupyterLab tooling |
+| Global SQLite state | Workspace locations, environment revisions, durable jobs, leases, and legacy-import markers |
 | Workspace | User files plus project-local instructions, skills, environments, sessions, artifacts, and provenance |
 
 ## Pi Orbit runtime model
@@ -121,13 +124,16 @@ The default local topology is:
 |---|---|---|
 | React development app | `http://127.0.0.1:5173` | Browser-facing |
 | Node control plane | `http://127.0.0.1:8787` | Browser-facing application API |
-| Interactive API reference | `http://127.0.0.1:8787/docs` | Served by the control plane |
 | Pi Orbit Web host | Random loopback port | Internal and bearer-authenticated |
+
+The control plane exposes `/internal/live`, `/internal/ready`, and
+`/internal/diagnostics` for launcher health checks and local diagnostics.
 
 ## Workspace and persistent state
 
-Pi-Science is local-first: the workspace remains a normal directory and
-project-specific state is stored beside it.
+Pi-Science is local-first: a workspace remains a normal directory, and portable
+project state is stored beside it. Application-wide coordination state is kept
+separately in the control-plane configuration root.
 
 ```text
 project/
@@ -145,11 +151,33 @@ project/
 │   ├── agent/                # project-local fallback runtime config
 │   ├── runs/                 # execution workspaces and outputs
 │   ├── solutions/            # immutable research candidates
+│   ├── session-titles.jsonl
+│   ├── turn-artifacts.jsonl
 │   ├── artifacts.jsonl
 │   ├── provenance.jsonl
 │   └── research-records-v2.jsonl
 └── research files
 ```
+
+The global configuration root is `PI_SCIENCE_HOME` when set, otherwise
+`~/.pi-science`; a checkout-local `.runtime/pi-science` directory is used as a
+fallback when the preferred location is not writable. Production starts a
+dedicated worker thread for `state.sqlite` and enables SQLite by default. The
+database uses WAL journaling and stores:
+
+- stable project identities and canonical workspace locations, including
+  managed, pinned, recently opened, and missing-location state;
+- immutable Micromamba environment revisions and their lifecycle status;
+- durable job records, output, ownership generations, and recovery leases; and
+- migration history and fingerprints for legacy imports.
+
+SQLite schema migrations run before the server reports ready. A failed store or
+migration keeps `/internal/ready` at HTTP 503, while `/internal/diagnostics`
+reports the store status, schema version, journal mode, and pending requests.
+The worker checkpoints the database during graceful shutdown. Setting
+`PI_SCIENCE_SQLITE_STATE=0` disables this state layer for diagnostics or
+rollback; file-backed compatibility paths then remain available where
+implemented.
 
 Reviewed project memory is created lazily. Agent findings do not become formal
 project knowledge until the user accepts them.
@@ -161,14 +189,16 @@ files are migrated on first read and retained as a compatibility projection for
 older clients and local tooling.
 
 External workspaces are explicitly registered through the workspace-open API.
-Their canonical paths are persisted in the global
-`registered-workspaces.json` registry so they can be rediscovered after a
-restart; this is separate from `pinned.json`, which represents user favorites.
+Their canonical paths and pin state are persisted in SQLite so they can be
+rediscovered after a restart. On startup, legacy `registered-workspaces.json`,
+`pinned.json`, environment-registry files, and workspace job records are
+imported idempotently; they are compatibility inputs rather than the canonical
+production stores.
 
 ### Package isolation
 
-The Node control plane owns a global registry of versioned Micromamba
-environments. Projects store only an `environment.json` binding and can reuse
+The Node control plane owns a SQLite-backed global registry of versioned
+Micromamba environments. Projects store only an `environment.json` binding and can reuse
 the same ready revision without downloading packages again. Changing a managed
 environment creates a new revision instead of mutating one used by other
 projects. Environment selection lives under Settings → Environments.
@@ -202,8 +232,19 @@ environment and registers the project's bound revision as a kernelspec.
   register only workspaces whose instructions and skills they trust.
 - Runtime identity includes both workspace and session identity to prevent one
   workspace from being resumed through another runtime.
-- Project metadata uses validated paths, atomic writes, and advisory locks where
-  multiple writers may update the same record.
+- Project-local metadata uses validated paths, atomic writes, and advisory locks
+  where multiple writers may update the same record. Global state mutations are
+  serialized through repository operations in the SQLite worker.
+- Model providers and explicit literature/connector actions may send requests
+  outside the machine. Endpoint URLs reject embedded credentials; health probes
+  have redirect, response-size, and timeout limits, and cross-origin redirects
+  cannot retain sensitive headers. Private endpoints are allowed by default for
+  local model servers and can be rejected with
+  `PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS=0`.
+- Outbound connector destinations are recorded locally in
+  `egress-audit.jsonl` by default. Set `egress_audit: false` in `config.json` to
+  disable that audit. The audit records the connector identity, target domain,
+  timestamp, and approval state—not request bodies or credentials.
 
 ## Lifecycle and recovery
 
@@ -222,6 +263,9 @@ environment and registers the project's bound revision as a kernelspec.
   as a failed turn.
 - Event streams reconnect with the last observed sequence number so transient
   transport interruptions do not require a new agent runtime.
+- Durable jobs use owner generations and expiring leases in SQLite. Startup
+  recovery reconciles interrupted work without allowing an older process to
+  overwrite a newer terminal result.
 
 ## Research loops
 

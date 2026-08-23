@@ -27,7 +27,7 @@
 - **可复现是副作用，不是美德。**每次运行进入事件日志、产物带 sha256 摘要、项目绑定到带版本的 Micromamba 环境，结论可以追溯到产生它的代码与数据——不需要你改变工作方式。
 - **自主研究循环，人保持掌控。**描述目标和确定性指标；受监督的智能体提出候选方案、在不可变快照中执行、评估、分析并迭代——带预算控制、暂停恢复和崩溃自愈。
 - **文献引用真实可验证。**零配置直连 Crossref/arXiv/PubMed 检索，内联 DOI 渲染为可点击的来源——绝不编造参考文献。
-- **架构级 local-first。**工作区就是你机器上的普通文件夹。除了你配置的 LLM 调用（也支持 Ollama、LM Studio 等纯本地端点），任何数据不离开本机。未发表的数据始终属于你。
+- **架构级 local-first。**工作区就是你机器上的普通文件夹；除非你通过已配置的模型发送内容，或显式调用文献检索等外部服务，否则项目文件不会离开本机。支持 Ollama、LM Studio 等纯本地端点，连接器的目标域名会记录到本地出站审计中。
 
 每个项目独立保存对话、文件、实验运行、产物谱系和审核后的项目知识；对话在共享 Pi Host 内使用隔离 runtime，因此多个 session 可以并行执行，互不阻塞。
 
@@ -98,7 +98,7 @@ Windows 启动器在两个服务健康后写入 `.runtime/pi-science/run.state`�
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 ```
 
-安装器默认下载 Pi Orbit 0.2.0。可通过 `PI_ORBIT_VERSION` 选择其他兼容版本，或通过 `PI_ORBIT_REPO` 使用本地 Pi Orbit 源码仓库。
+安装器默认下载 Pi Orbit 0.3.0。可通过 `PI_ORBIT_VERSION` 选择其他兼容版本，或通过 `PI_ORBIT_REPO` 使用本地 Pi Orbit 源码仓库。
 
 启动后进入 **Settings → LLM**，配置提供商和默认模型即可开始使用。已安装及从工作区发现的 skills 可在 **Settings → Skills** 中启用、禁用或重置。
 
@@ -132,9 +132,10 @@ Pi-Science 可以直接在浏览器中渲染常见科研格式。
 
 ## 系统架构
 
-Pi-Science 使用 local-first 控制面、一个承载隔离 agent runtime 的共享 Pi Orbit
-Web Host，以及按需启动的科学计算服务。进程归属、服务边界、工作区状态、生命周期和
-安全设计详见[架构文档](docs/architecture.zh-CN.md)。
+Pi-Science 使用 local-first Node 控制面、一个承载隔离 agent runtime 的共享 Pi Orbit
+Web Host，以及按需启动的原生 Python/R Kernel 进程。全局 workspace、环境和任务状态
+由 SQLite 协调，项目文件和可复现性记录仍保存在各自 workspace 内。进程归属、服务
+边界、工作区状态、生命周期和安全设计详见[架构文档](docs/architecture.zh-CN.md)。
 
 ## 斜杠命令
 
@@ -154,7 +155,7 @@ Pi-Science 托管的工作区默认信任 `.pi/skills/`；其中的项目内置 
 
 ## 模型配置
 
-可以在 **Settings → LLM** 中配置提供商。Pi-Science 支持内置厂商、OpenAI-compatible、Anthropic-compatible，以及 Ollama、LM Studio 等可信的无 Key 本地服务。
+可以在 **Settings → LLM** 中配置提供商。Pi-Science 支持内置厂商、OpenAI-compatible、Anthropic-compatible，以及 Ollama、LM Studio 等可信的无 Key 本地服务。还可以在同一页面注册、启停并检查托管模型端点。健康检查是带超时和响应大小限制的出站请求；为支持本地模型服务，默认允许私网端点，可通过 `PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS=0` 禁用。
 
 也可以通过环境变量提供 API Key：
 
@@ -208,7 +209,7 @@ pnpm --filter frontend test:uat:office
 
 - [架构文档](docs/architecture.zh-CN.md)
 - [研究循环架构（ADR）](docs/adr-research-loop-subagents.md)
-- 运行栈启动后可查看交互式 API 参考
+- 控制面的内部端点提供运行状态和 SQLite 诊断信息
 
 ## 参与贡献
 
