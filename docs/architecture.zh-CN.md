@@ -15,7 +15,9 @@ flowchart LR
     PH --> R2[对话 runtime B]
     PH --> RN[后台 agent runtime]
     CP -->|按需 spawn| K[原生 Python 和 R 内核]
+    CP --> DB[(全局 state.sqlite)]
     CP --> WS[(工作区文件和 .pi-science 元数据)]
+    CP -->|有界出站 HTTP| EXT[已配置的模型与文献服务]
     PH --> WS
     K --> WS
 ```
@@ -26,9 +28,10 @@ React 应用是 Node 控制面的客户端。控制面拥有应用 API、协调�
 | 组件 | 职责 |
 |---|---|
 | React Web 应用 | 对话、项目知识、文件、Notebook、实验运行、技能、设置和科学文件查看器 |
-| Node 控制面 | Session、事件流、文件、任务、谱系、项目状态、设置、runtime 生命周期和路由鉴权 |
+| Node 控制面 | Session、事件流、文件、任务、谱系、项目状态、设置、SQLite 协调、runtime 生命周期和路由鉴权 |
 | Pi Orbit Web Host | Agent session，以及面向对话和有界后台 agent 的隔离 runtime |
 | Node 原生科学运行时 | 绑定 Workspace 的 Python/R 内核，以及可选 JupyterLab 工具环境 |
+| 全局 SQLite 状态 | Workspace 位置、环境 revision、持久任务、租约和旧状态导入标记 |
 | 工作区 | 用户文件，以及项目级指令、技能、环境、session、产物和谱系 |
 
 ## Pi Orbit 运行时模型
@@ -111,12 +114,15 @@ JupyterLab 仍是可选能力，使用独立的应用级工具环境；项目 ke
 |---|---|---|
 | React 开发应用 | `http://127.0.0.1:5173` | 面向浏览器 |
 | Node 控制面 | `http://127.0.0.1:8787` | 面向浏览器的应用 API |
-| 交互式 API 参考 | `http://127.0.0.1:8787/docs` | 由控制面提供 |
 | Pi Orbit Web Host | 随机本机端口 | 内部服务，使用 bearer token 认证 |
+
+控制面通过 `/internal/live`、`/internal/ready` 和 `/internal/diagnostics`
+提供启动器健康检查与本地诊断信息。
 
 ## 工作区与持久化状态
 
-Pi-Science 采用 local-first 设计：workspace 始终是普通目录，项目级状态保存在其内部。
+Pi-Science 采用 local-first 设计：workspace 始终是普通目录，可移植的项目级状态保存在
+其内部；跨项目的协调状态则单独保存在控制面配置目录中。
 
 ```text
 project/
@@ -134,11 +140,29 @@ project/
 │   ├── agent/                # 项目级 runtime 配置回退目录
 │   ├── runs/                 # 执行工作区与输出
 │   ├── solutions/            # 不可变 research candidate
+│   ├── session-titles.jsonl
+│   ├── turn-artifacts.jsonl
 │   ├── artifacts.jsonl
 │   ├── provenance.jsonl
 │   └── research-records-v2.jsonl
 └── 科研文件
 ```
+
+如果设置了 `PI_SCIENCE_HOME`，它就是全局配置目录；否则默认使用
+`~/.pi-science`。首选位置不可写时，会回退到当前 checkout 下的
+`.runtime/pi-science`。生产环境默认启用 SQLite，并由专用 worker thread 管理
+`state.sqlite`。数据库使用 WAL journal，并保存：
+
+- 稳定项目身份和规范化 workspace 位置，包括托管、收藏、最近打开与位置缺失状态；
+- 不可变 Micromamba environment revision 及其生命周期状态；
+- 持久任务记录、输出、owner generation 与恢复租约；
+- schema migration 历史和旧状态导入指纹。
+
+服务报告 ready 之前会完成 SQLite schema migration。数据库或迁移失败时，
+`/internal/ready` 持续返回 HTTP 503；`/internal/diagnostics` 会报告状态、schema
+版本、journal mode 和等待中的请求。正常关闭时 worker 会 checkpoint 数据库。
+设置 `PI_SCIENCE_SQLITE_STATE=0` 可在诊断或回退时禁用该状态层；已实现的文件存储
+兼容路径会继续生效。
 
 审核后的项目记忆按需创建。Agent 发现只有在用户接受后，才会成为正式项目知识。
 
@@ -146,13 +170,14 @@ Memory Ledger 是项目记忆的规范存储：它把现有项目知识、审核
 和决策审计事件统一放在一起。已有的 `.pi-science/project-state.json` 会在第一次读取时
 迁移，并继续作为旧客户端和本地工具的兼容投影保留。
 
-外部 workspace 通过打开 workspace 的 API 显式注册。其规范化路径会写入全局
-`registered-workspaces.json`，因此重启后仍可重新发现；它与表示用户收藏的
-`pinned.json` 分开保存。
+外部 workspace 通过打开 workspace 的 API 显式注册，其规范化路径和收藏状态写入
+SQLite，因此重启后仍可重新发现。启动时会幂等导入旧的
+`registered-workspaces.json`、`pinned.json`、环境 registry 文件和 workspace 任务
+记录；这些文件是兼容输入，不再是生产环境的规范存储。
 
 ### 包隔离
 
-Node 控制面维护全局的、带版本的 Micromamba 环境注册表。项目只保存
+Node 控制面在 SQLite 中维护全局的、带版本的 Micromamba 环境注册表。项目只保存
 `environment.json` 绑定，可以复用已经就绪的 revision，不再重复下载依赖。修改受管
 环境会创建新 revision，不会原地改变其他项目使用的环境。环境选择位于“设置 → 环境”。
 
@@ -177,19 +202,31 @@ Session Notebook 从当前对话内部打开，统一展示 Agent 与用户单�
   项目 trust，因此只应注册你信任其中项目指令与技能的 workspace。
 - Runtime identity 同时包含 workspace 和 session identity，防止通过另一个 workspace
   的 runtime 恢复 session。
-- 多个 writer 可能更新同一记录时，项目元数据使用经过校验的路径、原子写入和 advisory
-  lock。
+- 多个 writer 可能更新同一记录时，项目本地元数据使用经过校验的路径、原子写入和
+  advisory lock；全局状态变更通过 SQLite worker 中的 repository 操作串行化。
+- 模型提供商以及用户显式触发的文献/连接器操作可能向本机外发送请求。端点 URL 不允许
+  嵌入凭据；健康检查限制重定向次数、响应大小和超时时间，跨 origin 跳转不会携带敏感
+  header。为支持本地模型服务，默认允许私网端点；设置
+  `PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS=0` 可以拒绝私网地址。
+- 默认将出站连接器的目标记录到本地 `egress-audit.jsonl`。在 `config.json` 中设置
+  `egress_audit: false` 可以关闭审计。记录只包含连接器身份、目标域名、时间戳和审批
+  状态，不保存请求正文或凭据。
 
 ## 生命周期与恢复
 
 - 对话 runtime 默认在空闲 30 分钟后回收。设置 `PI_SCIENCE_IDLE_RUNTIME_MS=0`
-  可以关闭控制面清理。
+  可以关闭控制面清理；Pi Orbit Host 自身会按 `PI_ORBIT_IDLE_TIMEOUT_MS` 回收空闲
+  runtime，默认期限为 24 小时。
+- 删除繁忙 runtime 时，最多等待 `PI_SCIENCE_DISPOSE_TIMEOUT_MS`（默认 60 秒）让其
+  稳定；控制面关闭时会跳过等待并直接停止 Host。
 - 只要 Node 控制面仍在运行，共享 Pi Orbit Host 就保持存活，即使当前没有对话 runtime。
 - Kernel 子进程在 Session 首次执行 cell 时按需启动，并在 Session 关闭、workspace
   关闭、崩溃恢复或超时清理时停止。
 - Runtime 命令使用有界请求超时。超时操作会与 runtime 状态进行 reconciliation，
   避免已接受的 prompt 被静默当成失败 turn。
 - 事件流重连时会携带最后一个已观察到的序号，因此短暂传输中断不需要新建 agent runtime。
+- 持久任务在 SQLite 中使用 owner generation 和带期限的 lease。启动恢复会协调被中断的
+  工作，同时防止旧进程覆盖新 owner 已写入的终态结果。
 
 ## 研究循环
 
