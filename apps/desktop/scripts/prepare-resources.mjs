@@ -1,7 +1,8 @@
 import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
+import { copyCompanionNodeModules, findCompanionNodeModules } from "../dist/prepare-resources.js";
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const projectRoot = resolve(desktopRoot, "../..");
@@ -20,6 +21,13 @@ await Promise.all([
   requirePath(join(projectRoot, "runtime", "pi", ".cli-path"), "Pi Orbit marker"),
 ]);
 
+const sourceRuntimeRoot = join(projectRoot, "runtime", "pi");
+const sourceCliValue = (await readFile(join(sourceRuntimeRoot, ".cli-path"), "utf8")).trim();
+if (!sourceCliValue) throw new Error(`Pi Orbit marker is empty: ${join(sourceRuntimeRoot, ".cli-path")}`);
+const sourceCli = resolve(sourceCliValue);
+await requirePath(sourceCli, "Pi Orbit executable");
+const companionNodeModules = findCompanionNodeModules(sourceCli, sourceRuntimeRoot);
+
 await rm(stageRoot, { recursive: true, force: true });
 await mkdir(stageRoot, { recursive: true });
 
@@ -35,20 +43,21 @@ await Promise.all([
   cp(join(desktopRoot, "src", "server-runner.cjs"), join(stageRoot, "server-runner.cjs")),
 ]);
 
-const sourceCli = (await readFile(join(projectRoot, "runtime", "pi", ".cli-path"), "utf8")).trim();
-await requirePath(sourceCli, "Pi Orbit executable");
 const packagedCliDir = join(stageRoot, "runtime", "pi", "pi-orbit");
 await mkdir(dirname(packagedCliDir), { recursive: true });
 await cp(dirname(sourceCli), packagedCliDir, { recursive: true });
 const relativeCli = relative(stageRoot, join(packagedCliDir, basename(sourceCli)));
 await writeFile(join(stageRoot, "runtime", "pi", ".cli-path-relative"), `${relativeCli}\n`, "utf8");
 
-const runtimeModules = join(projectRoot, "runtime", "pi", "node_modules");
+await copyCompanionNodeModules(companionNodeModules, join(stageRoot, "runtime", "pi"));
+const stagedProviderCatalog = join(stageRoot, "runtime", "pi", "node_modules", "@earendil-works", "pi-ai", "dist", "providers", "all.js");
 try {
-  await stat(runtimeModules);
-  await cp(runtimeModules, join(stageRoot, "runtime", "pi", "node_modules"), { recursive: true });
-} catch {
-  // Pi Orbit itself remains usable; the Settings page reports missing optional extensions.
+  const { builtinProviders } = await import(pathToFileURL(stagedProviderCatalog).href);
+  const providers = typeof builtinProviders === "function" ? builtinProviders() : [];
+  if (!Array.isArray(providers) || providers.length === 0) throw new Error("catalog returned no providers");
+} catch (error) {
+  const detail = error instanceof Error ? error.message : String(error);
+  throw new Error(`Pi Orbit provider catalog is unusable in the packaged resource root: ${detail}`);
 }
 
 await writeFile(join(stageRoot, "runtime-manifest.json"), `${JSON.stringify({

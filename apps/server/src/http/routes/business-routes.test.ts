@@ -1036,7 +1036,7 @@ describe("native control-plane business routes", () => {
       const url = String(input);
       requests.push(url);
       if (url.endsWith("/models")) return new Response(JSON.stringify({ data: [
-        { id: "inline-model", max_model_len: 800_000, reasoning: true, thinking_levels: ["off", "high"] },
+        { id: "inline-model", max_model_len: 800_000, reasoning: true, thinking_levels: ["off", "high"], vendor_metadata: { huge_description: "do-not-return" } },
         { id: "detail-model" },
       ] }), { status: 200, headers: { "content-type": "application/json" } });
       if (url.endsWith("/models/detail-model")) return new Response(JSON.stringify({ id: "detail-model", context_window: 262_144, supports_reasoning: false }), { status: 200, headers: { "content-type": "application/json" } });
@@ -1067,6 +1067,54 @@ describe("native control-plane business routes", () => {
       expect.objectContaining({ id: "custom-metadata-api/inline-model", context_window: 800_000, reasoning: true }),
       expect.objectContaining({ id: "custom-metadata-api/detail-model", context_window: 262_144, reasoning: false }),
     ]));
+  });
+
+  it("accepts a large model inventory without probing every model", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    const rows = Array.from({ length: 1_500 }, (_, index) => ({ id: `large-model-${index}`, context_window: 128_000, reasoning: false, description: "x".repeat(8_192) }));
+    const payload = JSON.stringify({ data: rows });
+    expect(Buffer.byteLength(payload)).toBeGreaterThan(8 * 1024 * 1024);
+    const requests: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      requests.push(String(input));
+      return new Response(payload, { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const app = buildApp(config()); apps.push(app);
+
+    const discovered = await app.inject({
+      method: "POST",
+      url: "/api/settings/custom-providers/discover",
+      payload: { name: "Large API", base_url: "http://127.0.0.1:30004/v1", api_key: "secret", api: "openai-completions" },
+    });
+
+    expect(discovered.statusCode).toBe(200);
+    expect(discovered.json().provider.models).toHaveLength(rows.length);
+    expect(discovered.json().provider.model_hints["large-model-0"]).toEqual({ context_window: 128_000, reasoning: false, source: "models" });
+    expect(discovered.json().provider.model_hints["large-model-0"]).not.toHaveProperty("description");
+    // Inline reasoning metadata is sufficient, so no per-model detail/probe
+    // requests are needed even though the inventory is larger than the old 8 MiB cap.
+    expect(requests).toEqual(["http://127.0.0.1:30004/v1/models"]);
+  });
+
+  it("reports the independent upstream response cap clearly", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", {
+      status: 200,
+      headers: { "content-length": String(32 * 1024 * 1024 + 1), "content-type": "application/json" },
+    }));
+    const app = buildApp(config()); apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/settings/custom-providers/discover",
+      payload: { name: "Too Large API", base_url: "http://127.0.0.1:30005/v1", api_key: "secret", api: "openai-completions" },
+    });
+
+    expect(response.statusCode).toBe(502);
+    expect(response.json().error).toContain("Model discovery response is too large");
+    expect(response.json().error).toContain("32 MiB");
   });
 
   it("allows a slower direct-save capability probe without falling back to 128K", async () => {

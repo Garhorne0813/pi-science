@@ -15,19 +15,18 @@ export type PiAiProviderCatalogEntry = {
 /** Load the pi-ai runtime provider catalog without making it a compile-time
  *  dependency of the control plane. The runtime shipped under
  *  `runtime/pi/node_modules/@earendil-works/pi-ai` is the current Pi Orbit
- *  companion; older installs simply yield an empty catalog and callers fall
- *  back to custom providers only. Environment credential detection is a
- *  boolean only — keys are never exposed. */
+ *  companion; older installs without the provider module yield an empty catalog
+ *  and callers fall back to custom providers only. Environment credential
+ *  detection is a boolean only — keys are never exposed. */
 export async function loadPiAiProviderCatalog(): Promise<PiAiProviderCatalogEntry[]> {
   const dist = join(resourceRoot(), "runtime", "pi", "node_modules", "@earendil-works", "pi-ai", "dist");
   const providersModule = join(dist, "providers", "all.js");
-  const envKeysModule = join(dist, "env-api-keys.js");
-  if (!existsSync(providersModule) || !existsSync(envKeysModule)) return [];
+  if (!existsSync(providersModule)) return [];
   try {
-    const [{ builtinProviders }, { getEnvApiKey }] = await Promise.all([
-      import(pathToFileURL(providersModule).href),
-      import(pathToFileURL(envKeysModule).href),
-    ]);
+    // Provider metadata is the settings inventory's required runtime surface.
+    // The environment-key adapter is optional across pi-ai releases; a missing
+    // adapter must not hide every provider from Settings.
+    const { builtinProviders } = await import(pathToFileURL(providersModule).href);
     const providers = typeof builtinProviders === "function" ? builtinProviders() : [];
     const result: PiAiProviderCatalogEntry[] = [];
     for (const provider of providers) {

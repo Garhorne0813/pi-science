@@ -340,7 +340,52 @@ function publicCustom(item: NonNullable<Settings["custom_providers"]>[number]): 
 function slug(value: string): string { return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "custom-api"; }
 function query(request: { query: unknown }, name: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[name]; return typeof value === "string" && value ? value : fallback; }
 function compactionThreshold(config: Settings, available: Array<Record<string, unknown>>, configured: string): number { if (typeof config.compaction_threshold_percent === "number") return config.compaction_threshold_percent; const contextWindow = Number(available.find((item) => item.id === configured)?.context_window ?? config.model_context_window ?? 0); return contextWindow > 16384 ? Math.min(95, Math.max(50, Math.round((1 - 16384 / contextWindow) * 100))) : 85; }
-async function readBoundedJson(response: Response, maxBytes: number): Promise<Record<string, unknown>> { if (Number(response.headers.get("content-length") ?? 0) > maxBytes) throw new Error("Model discovery response is too large"); if (!response.body) return {}; const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let size = 0; try { while (true) { const next = await reader.read(); if (next.done) break; size += next.value.byteLength; if (size > maxBytes) throw new Error("Model discovery response is too large"); chunks.push(next.value); } } finally { reader.releaseLock(); } const bytes = new Uint8Array(size); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; } const text = new TextDecoder().decode(bytes); try { return JSON.parse(text) as Record<string, unknown>; } catch { return text ? { message: text } : {}; } }
+// This cap applies only to the upstream /models response. Fastify's global
+// request body limit stays unchanged. The 32 MiB wire budget covers common
+// providers with verbose model metadata; the 10,000-model and 64-probe caps
+// bound the parsed inventory and follow-up work.
+const MAX_MODEL_DISCOVERY_RESPONSE_BYTES = 32 * 1024 * 1024;
+const MAX_DISCOVERED_MODELS = 10_000;
+const MAX_CAPABILITY_PROBES = 64;
+function modelDiscoverySizeError(maxBytes: number, received?: number): Error {
+  const limit = maxBytes % (1024 * 1024) === 0 ? `${maxBytes / (1024 * 1024)} MiB` : `${maxBytes} bytes`;
+  return new Error(`Model discovery response is too large (limit ${limit}${received ? `; received at least ${received} bytes` : ""})`);
+}
+async function readBoundedJson(response: Response, maxBytes: number): Promise<unknown> {
+  const declared = Number(response.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await response.body?.cancel();
+    throw modelDiscoverySizeError(maxBytes, declared);
+  }
+  if (!response.body) return {};
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      size += next.value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        throw modelDiscoverySizeError(maxBytes, size);
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const text = new TextDecoder().decode(bytes);
+  if (!text) return {};
+  try { return JSON.parse(text) as unknown; }
+  catch { throw new Error("Model discovery returned invalid JSON"); }
+}
 
 type ModelHint = { context_window?: number; reasoning?: boolean; thinking_levels?: string[]; source?: string };
 type ProviderDiscovery = { safeUrl: URL; models: string[]; modelHints: Record<string, ModelHint> };
@@ -464,26 +509,41 @@ async function discoverProvider(baseUrl: string, apiKey: string, api: string, al
   const normalizedBase = safeUrl.toString().replace(/\/$/, "");
   const signal = AbortSignal.timeout(timeoutMs);
   const response = await fetch(`${normalizedBase}/models`, { headers: authHeaders(apiKey, api), redirect: "error", signal });
-  const payload = await readBoundedJson(response, 2 * 1024 * 1024);
-  if (!response.ok) throw new Error(String(payload.error ?? payload.message ?? `Model discovery returned ${response.status}`));
-  const rows = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : [];
-  const rowById = new Map<string, unknown>();
+  // Model inventories can legitimately be larger than a capability response;
+  // keep this limit local to the upstream discovery fetch instead of widening
+  // Fastify's request-body limit for the whole control plane.
+  const payload = await readBoundedJson(response, MAX_MODEL_DISCOVERY_RESPONSE_BYTES);
+  const payloadObject = payload && typeof payload === "object" && !Array.isArray(payload) ? payload as Record<string, unknown> : {};
+  if (!response.ok) throw new Error(String(payloadObject.error ?? payloadObject.message ?? `Model discovery returned ${response.status}`));
+  const rows = Array.isArray(payloadObject.data) ? payloadObject.data : Array.isArray(payloadObject.models) ? payloadObject.models : [];
+  // Keep only model ids and the small capability subset extracted from each
+  // row. Provider-specific metadata is never copied into the discovery DTO.
+  const inlineHints = new Map<string, Omit<ModelHint, "source">>();
   for (const row of rows) {
     const id = typeof row === "string" ? row : row && typeof row === "object" ? String((row as Record<string, unknown>).id ?? (row as Record<string, unknown>).name ?? "") : "";
-    if (id && !rowById.has(id)) rowById.set(id, row);
+    if (!id || id.length > 512 || inlineHints.has(id)) continue;
+    if (inlineHints.size >= MAX_DISCOVERED_MODELS) throw new Error(`Model discovery returned more than ${MAX_DISCOVERED_MODELS} models`);
+    inlineHints.set(id, capabilitiesFromPayload(row));
   }
-  const models = [...rowById.keys()];
+  const models = [...inlineHints.keys()];
   const piModels = await loadPiAiCatalog();
+  const piModelsById = new Map(piModels.map((candidate) => [String(candidate.id ?? ""), candidate]));
   const modelHints: Record<string, ModelHint> = {};
+  let probesStarted = 0;
   await forEachConcurrent(models, 4, async (model) => {
-    const inlineHint = capabilitiesFromPayload(rowById.get(model));
+    const inlineHint = inlineHints.get(model) ?? {};
     let hint: ModelHint = usefulHint(inlineHint) ? { ...inlineHint, source: "models" } : { source: "fallback" };
-    if (!hint.context_window || typeof hint.reasoning !== "boolean") {
+    // Preserve inline metadata for every model, but bound the potentially
+    // expensive detail/protocol probes for providers with very large lists.
+    const needsProbe = !hint.context_window || typeof hint.reasoning !== "boolean";
+    const probe = needsProbe && probesStarted < MAX_CAPABILITY_PROBES;
+    if (probe) {
+      probesStarted += 1;
       const detail = await fetchCapability(`${normalizedBase}/models/${encodeURIComponent(model)}`, { headers: authHeaders(apiKey, api), signal }, "model-detail");
       hint = mergeHint(hint, detail);
     }
-    if (!hint.context_window || typeof hint.reasoning !== "boolean") hint = mergeHint(hint, await probeModelProtocol(normalizedBase, model, apiKey, api, signal));
-    const pi = piModels.find((candidate) => String(candidate.id ?? "") === model);
+    if (probe && (!hint.context_window || typeof hint.reasoning !== "boolean")) hint = mergeHint(hint, await probeModelProtocol(normalizedBase, model, apiKey, api, signal));
+    const pi = piModelsById.get(model);
     if (pi) hint = mergeHint(hint, { ...capabilitiesFromPayload(pi), source: "pi-ai" });
     if (usefulHint(hint)) modelHints[model] = hint;
   });
@@ -634,7 +694,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
     return reloaded; });
   app.put("/api/settings/compaction", async (request, reply) => { const body = (request.body ?? {}) as { enabled?: unknown; threshold_percent?: unknown }; const threshold = body.threshold_percent === undefined ? undefined : Number(body.threshold_percent); if (threshold !== undefined && (!Number.isFinite(threshold) || threshold < 50 || threshold > 95)) return reply.code(400).send({ error: "Compaction threshold must be between 50 and 95 percent" }); const stored = await mutate((config) => { config.compaction_enabled = body.enabled !== false; if (threshold !== undefined) config.compaction_threshold_percent = threshold; return config.compaction_threshold_percent; }); return respondWithReload(nodeSessionService, reply, { ok: true, compaction_enabled: body.enabled !== false, compaction_threshold_percent: threshold ?? stored }); });
   app.get("/api/settings/custom-providers", async () => ({ providers: (await load()).custom_providers?.map(publicCustom) ?? [] }));
-  app.post("/api/settings/custom-providers/discover", async (request, reply) => { const body = (request.body ?? {}) as Record<string, unknown>; const baseUrl = String(body.base_url ?? "").replace(/\/$/, ""); const api = String(body.api ?? "openai-completions"); let discovered: ProviderDiscovery; try { const config = await load(); discovered = await discoverProvider(baseUrl, String(body.api_key ?? ""), api, config.allow_private_providers !== false && process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0", 10_000); } catch (error) { const message = error instanceof Error ? error.message : String(error); const status = /private|reserved|invalid|absolute/i.test(message) ? 400 : 502; return reply.code(status).send({ error: `Model discovery failed: ${message}` }); } if (!discovered.models.length) return reply.code(422).send({ error: "No models were returned by this provider" }); const id = slug(String(body.name ?? discovered.safeUrl.hostname)); return { provider: { id, name: String(body.name ?? "Custom API"), base_url: baseUrl, api, models: discovered.models, model_hints: discovered.modelHints } }; });
+  app.post("/api/settings/custom-providers/discover", async (request, reply) => { const body = (request.body ?? {}) as Record<string, unknown>; const baseUrl = String(body.base_url ?? "").replace(/\/$/, ""); const api = String(body.api ?? "openai-completions"); let discovered: ProviderDiscovery; try { const config = await load(); discovered = await discoverProvider(baseUrl, String(body.api_key ?? ""), api, config.allow_private_providers !== false && process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0", 10_000); } catch (error) { const message = error instanceof Error ? error.message : String(error); const status = /private|reserved|invalid|absolute/i.test(message) ? 400 : /more than \d+ models/i.test(message) ? 422 : 502; return reply.code(status).send({ error: `Model discovery failed: ${message}` }); } if (!discovered.models.length) return reply.code(422).send({ error: "No models were returned by this provider" }); const id = slug(String(body.name ?? discovered.safeUrl.hostname)); return { provider: { id, name: String(body.name ?? "Custom API"), base_url: baseUrl, api, models: discovered.models, model_hints: discovered.modelHints } }; });
   app.put<{ Params: { provider_id: string } }>("/api/settings/custom-providers/:provider_id", async (request, reply) => { const body = (request.body ?? {}) as Record<string, unknown>; const baseUrl = String(body.base_url ?? "").replace(/\/$/, ""); if (!/^https?:\/\//.test(baseUrl)) return reply.code(400).send({ error: "base_url must be an absolute http(s) URL" }); const modelList = Array.isArray(body.models) ? [...new Set(body.models.map(String).map((item) => item.trim()).filter(Boolean))] : []; if (!modelList.length) return reply.code(400).send({ error: "At least one model is required" }); const contextWindow = Number(body.context_window ?? 128000); if (!Number.isInteger(contextWindow) || contextWindow < 4096) return reply.code(400).send({ error: "context_window must be at least 4096 tokens" }); const requestedId = request.params.provider_id; const id = slug(requestedId); const result = await mutate((config) => { const old = config.custom_providers?.find((item) => item.id === id); if (old && requestedId !== old.id) return { conflict: true as const }; const requestedKey = String(body.api_key ?? ""); const next = { id, name: String(body.name ?? "Custom API"), base_url: baseUrl, api: String(body.api ?? "openai-completions"), models: modelList, api_key: requestedKey || old?.api_key || "", reasoning: typeof body.reasoning === "boolean" ? body.reasoning : old?.reasoning, context_window: contextWindow, model_hints: body.model_hints && typeof body.model_hints === "object" ? body.model_hints as NonNullable<Settings["custom_providers"]>[number]["model_hints"] : old?.model_hints }; config.custom_providers = [...(config.custom_providers ?? []).filter((item) => item.id !== id), next]; return { conflict: false as const, provider: next }; }); if (result.conflict) return reply.code(409).send({ error: `Provider ID '${requestedId}' conflicts with existing provider '${id}'` }); return respondWithReload(reply, { ok: true, provider: publicCustom(result.provider) }); });
   app.delete<{ Params: { provider_id: string } }>("/api/settings/custom-providers/:provider_id", async (request, reply) => { const id = slug(request.params.provider_id); await mutate((config) => { config.custom_providers = (config.custom_providers ?? []).filter((item) => item.id !== id); if (String(config.model ?? "").startsWith(`custom-${id}/`)) config.model = ""; }); return respondWithReload(reply, { ok: true, id }); });
   app.get("/api/settings/web-access", async () => { const config = await load(); const web = config.web_access ?? {}; const stored = typeof web.api_keys === "object" && web.api_keys ? web.api_keys as Record<string, string> : {}; return { provider: typeof web.provider === "string" ? web.provider : "auto", workflow: typeof web.workflow === "string" ? web.workflow : "none", providers: Object.entries({ openai: "OPENAI_API_KEY", exa: "EXA_API_KEY", brave: "BRAVE_API_KEY", parallel: "PARALLEL_API_KEY", tavily: "TAVILY_API_KEY", perplexity: "PERPLEXITY_API_KEY", gemini: "GEMINI_API_KEY" }).map(([id, env]) => ({ id, has_key: Boolean(stored[id] || process.env[env]), key_source: stored[id] ? "web-access" : process.env[env] ? "environment" : null, env })) }; });
