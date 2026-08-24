@@ -115,7 +115,7 @@ reset from **Settings → Skills**.
 | Scientific files | Native previews for molecular structures, FITS, genomics, phase data, 3D models, tables, office documents, media, and code |
 | Reproducibility | Live session-scoped execution records, artifact hashes, generating code and diffs, environment snapshots, provenance history, and reproduce actions |
 | Project memory | Reviewer proposals, human approval, evidence links, project versions, research loops, and Pareto-frontier tracking |
-| Computation | Shared versioned Micromamba environments, isolated Python/R Session kernels, executable `.ipynb` files, conversation-linked runs, and an optional app-managed Jupyter Lab |
+| Computation | Shared versioned Micromamba environments, isolated Python/R Session kernels, executable `.ipynb` files, agent notebook cell read/edit/run tools, conversation-linked runs, and an optional app-managed Jupyter Lab |
 | Extensibility | Pi skills, extensions, MCP servers, subagents, custom model providers, and managed endpoints |
 | Workspace safety | Project-scoped metadata, validated paths, isolated session state, and controlled outbound provider discovery |
 
@@ -164,6 +164,11 @@ Kernel, notebook, and agent-tool executions are recorded in the context of the
 conversation session that produced them. Execution status streams live, and
 the Runs view can locate an execution in its source conversation or open files
 and artifacts produced by that execution.
+
+Managed Pi sessions provide `notebook_read`, `notebook_edit`, and
+`notebook_run` for file-backed `.ipynb` notebooks. Cell edits are revision-safe,
+and selected cells run through the same persistent Python/R kernels used by the
+workbench.
 
 ## Model Configuration
 
