@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConversationEventHub, conversationEventHub } from "../events/conversation-event-hub.js";
 import type { SseEventRecord } from "../events/event-store.js";
 import { NodeSessionService } from "./node-session-service.js";
+import { sessionTitleRepository } from "./session-titles.js";
 import { PiManager } from "../pi/pi-manager.js";
 import { PiOrbitRequestError } from "../pi/pi-orbit-host.js";
 import { loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
@@ -931,6 +932,27 @@ describe("Node session lifecycle", () => {
     expect(publish).toHaveBeenCalledWith(blankCwd, (created as { id: string }).id, expect.objectContaining({ type: "session.replaced" }));
     publish.mockRestore();
     await blankService.shutdownAll();
+  });
+
+  it("moves a persisted title to the replacement session when a restart changes the id", async () => {
+    await mkdir(process.env.PI_SCIENCE_HOME!, { recursive: true });
+    await writeFile(join(process.env.PI_SCIENCE_HOME!, "config.json"), JSON.stringify({ model: "", thinking: "off" }), "utf8");
+    const service = testService();
+    const cwd = await workspaceWithSessions();
+    const created = await service.create({ cwd, config: { skills: [], extensions: [] } });
+    expect("id" in created).toBe(true);
+    const oldId = (created as { id: string }).id;
+    await sessionTitleRepository.setTitle(cwd, oldId, "Persisted 标题");
+
+    const replacements = await service.reloadConfiguration();
+
+    expect(replacements).toEqual([{ cwd, oldId, newId: expect.any(String) }]);
+    // The replacement was announced only after the title moved: the persisted
+    // title lives under the new id and the old record is gone.
+    await expect(sessionTitleRepository.getTitles(cwd)).resolves.toEqual(new Map([
+      [replacements[0]!.newId, "Persisted 标题"],
+    ]));
+    await service.shutdownAll();
   });
 
   it("re-applies the workspace model and thinking when resuming a persisted session", async () => {

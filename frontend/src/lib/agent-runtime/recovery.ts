@@ -215,6 +215,15 @@ async function runConnectionRecovery(
     if (historyResult.status === "fulfilled") {
       const history = historyResult.value;
       const restored = mergeHistoryWithLive(await attachPersistedTurnArtifacts(threadFromMessages(history.messages), sessionId, cwd), useRuntimeStore.getState().thread);
+      // The artifact read awaited the network: a switch may have happened
+      // while it ran, so re-check before writing anything back.
+      const afterArtifacts = useRuntimeStore.getState();
+      if (
+        connectionGeneration !== generations.connection
+        || activityGeneration !== generations.activity
+        || afterArtifacts.activeSessionId !== sessionId
+        || afterArtifacts.cwd !== cwd
+      ) return;
       useRuntimeStore.setState({
         thread: restored,
         historyCursor: history.next_cursor,
@@ -222,14 +231,35 @@ async function runConnectionRecovery(
         historyLoading: false,
         historySnapshotVersion: history.snapshot_version,
       });
-      backfillSessionName(cwd, sessionId, useRuntimeStore.getState().thread);
     }
     if (historySucceeded && stateSucceeded) {
+      // The history/state reads above awaited the network. Re-check before
+      // refreshing the list: loadSessionsInternal(cwd) synchronously resets
+      // the store ({cwd, sessions: [], activeSessionId: null}) whenever the
+      // current workspace differs, so a recovery that lost the race against a
+      // workspace/session switch would otherwise drag the store back to the
+      // OLD workspace. The check and the call share one synchronous task, so
+      // no switch can interleave between them.
+      const beforeList = useRuntimeStore.getState();
+      if (
+        connectionGeneration !== generations.connection
+        || activityGeneration !== generations.activity
+        || beforeList.activeSessionId !== sessionId
+        || beforeList.cwd !== cwd
+      ) return;
+      const sessionList = await loadSessionsInternal(cwd);
+      const latest = useRuntimeStore.getState();
+      if (
+        connectionGeneration !== generations.connection
+        || activityGeneration !== generations.activity
+        || latest.activeSessionId !== sessionId
+        || latest.cwd !== cwd
+      ) return;
+      if (sessionList !== null) backfillSessionName(cwd, sessionId, latest.thread);
       useRuntimeStore.setState({ status: "ready" });
       // The connection was restored after a loss: files may have changed
       // while the stream was down and no terminal event reached the tree.
       markWorkspaceFilesChanged();
-      void loadSessionsInternal();
       return;
     }
     if (attempt + 1 < CONNECTION_RECOVERY_MAX_ATTEMPTS) {
@@ -286,7 +316,7 @@ export function reconcileAfterConnectionLoss(
   return promise;
 }
 
-/** Recover the authoritative conversation snapshot after a `stream.gap`:"}]} Беларусь.functions.edit  code...  (json) $1? Wrong? Tool output omitted? Need see. ["}]} NakneАҞӘА 全民彩票天天атәуп 天天彩票网.functions.edit  code￣色жәк 彩神争霸输钱json  suliaq  񟿿 เกมสล็อตԥсҭазаара? Unclear JSON valid? Actually tool returned? Need inspect. Wait no output likely? Let's check. уҳәа. [
+/** Recover the authoritative conversation snapshot after a `stream.gap`:
  *  re-read both the message history and the runtime state in parallel, and
  *  base `working` on the authoritative state rather than blindly clearing it.
  *  The new SSE subscription (rebuilt by the client transport) only carries
@@ -315,6 +345,10 @@ export async function reconcileAfterGap(
   // with live blocks so a text.updated arriving during this request is kept.
   if (historyResult.status === "fulfilled") {
     const merged = mergeHistoryWithLive(await attachPersistedTurnArtifacts(threadFromMessages(historyResult.value.messages), sessionId, cwd), useRuntimeStore.getState().thread);
+    // The artifact read awaited the network: a switch may have happened while
+    // it ran, so re-check before writing anything back.
+    const afterArtifacts = useRuntimeStore.getState();
+    if (afterArtifacts.activeSessionId !== sessionId || afterArtifacts.cwd !== cwd) return;
     useRuntimeStore.setState({
       thread: merged,
       historyCursor: historyResult.value.next_cursor,
@@ -322,12 +356,19 @@ export async function reconcileAfterGap(
       historyLoading: false,
       historySnapshotVersion: historyResult.value.snapshot_version,
     });
-    backfillSessionName(cwd, sessionId, useRuntimeStore.getState().thread);
   }
+  // The history/state reads above awaited the network. Re-check before
+  // refreshing the list: loadSessionsInternal(cwd) would otherwise reset the
+  // store back to this possibly-stale workspace (see runConnectionRecovery).
+  const beforeList = useRuntimeStore.getState();
+  if (beforeList.activeSessionId !== sessionId || beforeList.cwd !== cwd) return;
+  const sessionList = await loadSessionsInternal(cwd);
+  const latest = useRuntimeStore.getState();
+  if (latest.activeSessionId !== sessionId || latest.cwd !== cwd) return;
+  if (historyResult.status === "fulfilled" && sessionList !== null) backfillSessionName(cwd, sessionId, latest.thread);
   useRuntimeStore.setState({
     status: historyResult.status === "fulfilled" && stateResult.status === "fulfilled" ? "ready" : "error",
   });
-  void loadSessionsInternal();
 }
 
 /** How many consecutive one-second idle REST rounds with no confirmed reply

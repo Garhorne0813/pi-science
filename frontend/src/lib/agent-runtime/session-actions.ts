@@ -102,7 +102,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         // return can prevent the list (and its persisted title) from loading at
         // all. Stale-list protection in loadSessionsInternal keeps this safe
         // when the user switches workspaces/sessions while the request runs.
-        void loadSessionsInternal(cwd);
+        const sessionListLoad = loadSessionsInternal(cwd);
 
         // Optimistic render: if we have a cached message snapshot for this
         // session, render it immediately so the user sees the conversation
@@ -184,7 +184,14 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           nextState.status = "ready";
         }
         set(nextState);
-        if (nextState.thread) backfillSessionName(cwd, targetSessionId, nextState.thread);
+        if (nextState.thread) {
+          // Wait for the authoritative session list before deriving a fallback
+          // name. Otherwise a slow list request can race this backfill and a
+          // persisted server title can be replaced by the first user message.
+          const sessionList = await sessionListLoad;
+          if (generation !== generations.connection || localMutationGeneration !== generations.localMutation) return;
+          if (sessionList !== null) backfillSessionName(cwd, targetSessionId, nextState.thread);
+        }
 
         // A refresh can restore a cached busy snapshot after the turn's final
         // SSE event has already passed. Keep checking the authoritative state

@@ -25,7 +25,7 @@ export type {
   TurnArtifactTurn,
 } from "./types";
 export { clampThinkingLevel, conversationModelOptions } from "./models";
-export { aiTitleAttemptedAt, clearAiTitle, clearAiTitleAttempted, clearSessionName, deriveSessionName, getSessionName, hasAiTitle, markAiTitle, markAiTitleAttempted, moveSessionName, setSessionName } from "./session-names";
+export { aiTitleAttemptedAt, clearAiTitle, clearAiTitleAttempted, clearDerivedSessionName, clearSessionName, deriveSessionName, getSessionName, hasAiTitle, hasDerivedSessionName, markAiTitle, markAiTitleAttempted, markDerivedSessionName, moveSessionName, setLocalSessionName, setSessionName } from "./session-names";
 export { clearCachedMessages } from "./message-cache";
 
 // ── Client ──
@@ -127,9 +127,10 @@ export class PiScienceClient {
   }
 
   /** Persist a session display title on the server (best-effort; the
-   *  localStorage registry remains the immediate/fallback source). */
-  async setSessionTitle(sessionId: string, title: string, cwd?: string): Promise<void> {
-    await rest.setSessionTitle(this.baseUrl, sessionId, title, cwd);
+   *  localStorage registry remains the immediate/fallback source). A derived
+   *  title is stored flagged so a later AI title may still replace it. */
+  async setSessionTitle(sessionId: string, title: string, cwd?: string, options?: { derived?: boolean }): Promise<void> {
+    await rest.setSessionTitle(this.baseUrl, sessionId, title, cwd, options);
   }
 
   async deleteSession(sessionId: string, cwd?: string): Promise<void> {
