@@ -1,10 +1,11 @@
 /** Fetch wrapper with a request timeout, plus backend error extraction. */
 
 export const REQUEST_TIMEOUT_MS = 45_000;
+export const SESSION_CREATION_TIMEOUT_MS = 120_000;
 
-export async function request(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+export async function request(input: RequestInfo | URL, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const timer = globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(input, { ...init, signal: controller.signal });
   } catch (error) {

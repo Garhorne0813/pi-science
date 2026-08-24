@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { resourceRoot } from "./resource-root.js";
 
 type CatalogModel = Record<string, unknown>;
 
@@ -8,10 +9,7 @@ type CatalogModel = Record<string, unknown>;
  * dependency of the control plane. Older installs simply use the legacy
  * fallback in settings-routes.ts. */
 export async function loadPiAiCatalog(): Promise<CatalogModel[]> {
-  // Resolve from this module, not process.cwd(). The server is launched from
-  // both the repository root and apps/server during development/tests.
-  const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
-  const generated = join(projectRoot, "runtime", "pi", "node_modules", "@earendil-works", "pi-ai", "dist", "models.generated.js");
+  const generated = join(resourceRoot(), "runtime", "pi", "node_modules", "@earendil-works", "pi-ai", "dist", "models.generated.js");
   if (!existsSync(generated)) return [];
   try {
     const module = await import(pathToFileURL(generated).href) as { MODELS?: Record<string, unknown> };

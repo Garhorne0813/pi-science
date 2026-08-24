@@ -14,7 +14,9 @@ import { configRoot } from "../../storage/persistence.js";
 // exhausted and session creation fails hard.
 let sharedWebPort: number | null = null;
 let sharedWebToken: string | null = null;
-const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
+const PROJECT_ROOT = process.env.PI_SCIENCE_RESOURCE_ROOT
+  ? resolve(process.env.PI_SCIENCE_RESOURCE_ROOT)
+  : resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
 const PI_SCIENCE_SYSTEM_PROMPT = join(PROJECT_ROOT, "harness", "AGENTS.md");
 /** Outer Pi session variables that describe a Pi process this control plane
  *  does not own (typically the shell that launched the server). They must
@@ -203,7 +205,6 @@ function globalSkillPolicy(settings: Record<string, any>): RuntimeSkillPolicy {
 }
 
 export function seedWorkspaceAssets(cwd: string): string[] {
-  const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
   // The workspace metadata dirs are managed state. A symlink (or plain file)
   // left at cwd/.pi or cwd/.pi-science would make every write below (skills
   // mirror, stale cleanup) land inside — and delete from — the linked
@@ -212,7 +213,7 @@ export function seedWorkspaceAssets(cwd: string): string[] {
   replaceForeignEntry(join(cwd, ".pi"));
   const metadata = join(cwd, ".pi-science");
   mkdirSync(metadata, { recursive: true });
-  const sourceSkills = join(projectRoot, "skills");
+  const sourceSkills = join(PROJECT_ROOT, "skills");
   const targetSkills = join(cwd, ".pi", "skills");
   // The .pi/skills tree is managed state: if a previous seed or the runtime
   // left a symlink (or plain file) here, remove it first. Never seed through

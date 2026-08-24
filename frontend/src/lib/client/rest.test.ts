@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { PiScienceClient } from "./pi-science-client";
+import { REQUEST_TIMEOUT_MS, SESSION_CREATION_TIMEOUT_MS } from "./http";
 import { installClientTestEnvironment } from "./test-helpers";
 
 
@@ -23,6 +24,28 @@ describe("PiScienceClient REST calls", () => {
 
     const [, init] = fetchMock.mock.calls[0];
     expect(JSON.parse(init.body)).toEqual({ cwd: "/workspace", config: {} });
+  });
+
+  it("allows a desktop cold-start session to outlive the default request timeout", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    try {
+      vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        signal = init?.signal ?? undefined;
+        return new Promise<Response>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+        });
+      }));
+      const pending = new PiScienceClient().createSession("/workspace");
+      const rejection = expect(pending).rejects.toThrow("Request timed out while contacting the Pi-Science backend");
+
+      await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(SESSION_CREATION_TIMEOUT_MS - REQUEST_TIMEOUT_MS);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("surfaces delete failures instead of silently removing the UI entry", async () => {

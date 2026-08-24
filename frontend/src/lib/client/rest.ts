@@ -1,7 +1,7 @@
 /** REST calls against the pi-science control plane. Each function takes the
  *  client's base URL (empty string = relative URLs through the Vite proxy). */
 
-import { request, responseError } from "./http";
+import { request, responseError, SESSION_CREATION_TIMEOUT_MS } from "./http";
 import { cacheMessages } from "./message-cache";
 import type { HistoryMessage, InteractionResponse, SessionInfo, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
 
@@ -14,7 +14,7 @@ export async function createSession(baseUrl: string, cwd: string, model?: string
       cwd,
       config,
     }),
-  });
+  }, SESSION_CREATION_TIMEOUT_MS);
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.ok === false) {
     throw new Error(responseError(data, `Create session failed: ${res.statusText}`));

@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { resourceRoot } from "./resource-root.js";
 
 export type PiAiProviderCatalogEntry = {
   id: string;
@@ -14,22 +15,18 @@ export type PiAiProviderCatalogEntry = {
 /** Load the pi-ai runtime provider catalog without making it a compile-time
  *  dependency of the control plane. The runtime shipped under
  *  `runtime/pi/node_modules/@earendil-works/pi-ai` is the current Pi Orbit
- *  companion; older installs simply yield an empty catalog and callers fall
- *  back to custom providers only. Environment credential detection is a
- *  boolean only — keys are never exposed. */
+ *  companion; older installs without the provider module yield an empty catalog
+ *  and callers fall back to custom providers only. Environment credential
+ *  detection is a boolean only — keys are never exposed. */
 export async function loadPiAiProviderCatalog(): Promise<PiAiProviderCatalogEntry[]> {
-  // Resolve from this module, not process.cwd(). The server is launched from
-  // both the repository root and apps/server during development/tests.
-  const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
-  const dist = join(projectRoot, "runtime", "pi", "node_modules", "@earendil-works", "pi-ai", "dist");
+  const dist = join(resourceRoot(), "runtime", "pi", "node_modules", "@earendil-works", "pi-ai", "dist");
   const providersModule = join(dist, "providers", "all.js");
-  const envKeysModule = join(dist, "env-api-keys.js");
-  if (!existsSync(providersModule) || !existsSync(envKeysModule)) return [];
+  if (!existsSync(providersModule)) return [];
   try {
-    const [{ builtinProviders }, { getEnvApiKey }] = await Promise.all([
-      import(pathToFileURL(providersModule).href),
-      import(pathToFileURL(envKeysModule).href),
-    ]);
+    // Provider metadata is the settings inventory's required runtime surface.
+    // The environment-key adapter is optional across pi-ai releases; a missing
+    // adapter must not hide every provider from Settings.
+    const { builtinProviders } = await import(pathToFileURL(providersModule).href);
     const providers = typeof builtinProviders === "function" ? builtinProviders() : [];
     const result: PiAiProviderCatalogEntry[] = [];
     for (const provider of providers) {
@@ -74,8 +71,7 @@ export async function loadPiAiProviderCatalog(): Promise<PiAiProviderCatalogEntr
  *  providers; OAuth tokens are never stored in the process environment by
  *  Pi-Science). Never leaks the key value. */
 export async function hasEnvApiKey(providerId: string): Promise<boolean> {
-  const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
-  const envKeysModule = join(projectRoot, "runtime", "pi", "node_modules", "@earendil-works", "pi-ai", "dist", "env-api-keys.js");
+  const envKeysModule = join(resourceRoot(), "runtime", "pi", "node_modules", "@earendil-works", "pi-ai", "dist", "env-api-keys.js");
   if (!existsSync(envKeysModule)) return false;
   try {
     const { getEnvApiKey } = await import(pathToFileURL(envKeysModule).href) as { getEnvApiKey?: (provider: string, env: NodeJS.ProcessEnv) => string | undefined };

@@ -1,0 +1,24 @@
+{
+  "name": "@pi-science/desktop",
+  "productName": "Pi-Science",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "install:electron": "node node_modules/electron/install.js",
+    "start": "pnpm install:electron && electron .",
+    "prepare:resources": "node scripts/prepare-resources.mjs",
+    "package": "pnpm prepare:resources && node scripts/package-desktop.mjs"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "@types/node": "^24.13.2",
+    "electron": "43.4.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

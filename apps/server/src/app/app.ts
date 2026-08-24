@@ -1,6 +1,6 @@
 import cors from "@fastify/cors";
 import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { gatewayHealthSchema } from "@pi-science/contracts";
 import type { ServerConfig } from "../config/config.js";
 import { routeBoundary, runtimeOwner } from "../http/runtime-boundaries.js";
@@ -26,6 +26,16 @@ import { validateWorkspaceCwd } from "../security/workspace-security.js";
 import { AiTitleService, PiTitleRuntimeFactory } from "../runtime/title/ai-title-service.js";
 import { importLegacyState } from "../storage/sqlite/legacy-state.js";
 
+const DESKTOP_COOKIE = "pi_science_desktop";
+
+function desktopRequestAuthorized(cookieHeader: string | undefined, expected: string): boolean {
+  const actual = cookieHeader?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${DESKTOP_COOKIE}=`))?.slice(DESKTOP_COOKIE.length + 1);
+  if (!actual) return false;
+  const actualBytes = Buffer.from(actual);
+  const expectedBytes = Buffer.from(expected);
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+}
+
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
   const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
   let stateReady = !sqliteEnabled;
@@ -45,6 +55,9 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   app.addHook("onRequest", async (request, reply) => {
     reply.header("x-request-id", request.id);
     const pathname = request.url.split("?")[0] ?? request.url;
+    if (config.desktopToken && pathname.startsWith("/api/") && !desktopRequestAuthorized(request.headers.cookie, config.desktopToken)) {
+      return reply.code(401).send({ error: "Unauthorized desktop request" });
+    }
     const boundary = routeBoundary(pathname);
     if (request.url.startsWith("/api/") && !boundary) {
       return reply.code(404).send({ error: `Unknown API route: ${request.method} ${pathname}` });
