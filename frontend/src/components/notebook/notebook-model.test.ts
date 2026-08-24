@@ -4,7 +4,9 @@ import {
   kernelShutdownUrl,
   outputText,
   parseNotebookDocument,
+  newNotebookCellId,
   sourceText,
+  stableCellId,
   stableNotebookId,
 } from "./notebook-model";
 
@@ -46,5 +48,17 @@ describe("notebook model", () => {
     expect(kernelShutdownUrl("notebook/a", "/tmp/project one")).toBe(
       "/api/kernels/notebook%2Fa/shutdown?cwd=%2Ftmp%2Fproject+one",
     );
+  });
+
+  it("preserves notebook cell ids and deterministically identifies legacy cells", () => {
+    const persisted = { id: "cell-persisted", cell_type: "code" as const, source: "x = 1" };
+    expect(stableCellId(persisted, 0, "analysis/demo.ipynb")).toBe("cell-persisted");
+
+    const legacy = { cell_type: "code" as const, source: "x = 1" };
+    const first = stableCellId(legacy, 0, "analysis/demo.ipynb");
+    expect(first).toBe(stableCellId(legacy, 0, "analysis/demo.ipynb"));
+    expect(first).toMatch(/^cell-[0-9a-f]+$/);
+    expect(first).not.toBe(stableCellId(legacy, 1, "analysis/demo.ipynb"));
+    expect(newNotebookCellId()).not.toBe(newNotebookCellId());
   });
 });

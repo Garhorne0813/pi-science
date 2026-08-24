@@ -118,6 +118,13 @@ Micromamba revision, with JSONL communication and bounded lifecycle control.
 JupyterLab remains optional and uses a separate application-managed tooling
 environment; project kernelspecs point at the selected project revision.
 
+Managed Pi sessions also load the built-in `pi-science-notebook` extension. Its
+`notebook_read`, `notebook_edit`, and `notebook_run` tools call the Node notebook
+and kernel routes rather than reading files or spawning kernels themselves.
+Notebook edits use the file SHA-256 returned by `notebook_read` as an optimistic
+revision check; source edits clear stale outputs, and executions retain the
+existing execution/artifact provenance chain.
+
 The default local topology is:
 
 | Service | Address | Exposure |

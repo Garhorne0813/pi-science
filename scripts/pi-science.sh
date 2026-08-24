@@ -7,8 +7,9 @@
 #   pi-science status                           report what is running
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+source "$SCRIPT_DIR/node-runtime.sh"
 RUN_DIR="$PROJECT_DIR/.runtime/pi-science"
 STATE_DIR="$RUN_DIR/run.state"
 LEGACY_PID_FILE="$RUN_DIR/run.pid"
@@ -241,6 +242,11 @@ $current}"
 cmd_start() {
   local detach=false open=true
   while [ $# -gt 0 ]; do case "$1" in -d|--detach) detach=true ;; --no-open) open=false ;; *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;; esac; shift; done
+
+  if ! pi_science_prepare_node 0; then
+    pi_science_node_error
+    exit 1
+  fi
 
   if [ "$detach" = true ]; then
     acquire_launch_lock || exit 1

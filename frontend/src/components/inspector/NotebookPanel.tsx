@@ -8,6 +8,7 @@ import { apiRequest } from "../../lib/client/api";
 import { Braces, ChevronDown, Loader2, Pencil, Play, Square, TerminalSquare, Trash2, X } from "lucide-react";
 import { NotebookCodePreview } from "../notebook/NotebookCodePreview";
 import { NotebookMimeOutput } from "../notebook/NotebookMimeOutput";
+import { newNotebookCellId } from "../notebook/notebook-model";
 import { cn } from "../../lib/ui";
 
 interface Cell {
@@ -37,10 +38,6 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
       .then(setInterpreters)
       .catch(() => setInterpreters({ python: false, r: false }));
   }, []);
-
-  useEffect(() => () => {
-    void notebookRuntime.release(notebookId, cwd || ".").catch(() => undefined);
-  }, [cwd, notebookId]);
 
   const { data: executions = [] } = useQuery({
     ...sessionRunsQuery(cwd || ".", sessionId || ""),
@@ -105,7 +102,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
   const submitDraft = useCallback(async () => {
     const code = draft.trimEnd();
     if (!code.trim() || !interpreters?.[draftLanguage]) return;
-    const cell: Cell = { id: `cell-${Date.now()}`, code, language: draftLanguage, result: null, running: true, editing: false };
+    const cell: Cell = { id: newNotebookCellId(), code, language: draftLanguage, result: null, running: true, editing: false };
     setCells((current) => [...current, cell]);
     setDraft("");
     await executeCell(cell.id, cell.code, cell.language);

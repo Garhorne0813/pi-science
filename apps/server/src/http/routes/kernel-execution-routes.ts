@@ -6,7 +6,9 @@ import { executionRepository } from "../../runtime/executions/execution-reposito
 import {
   diffWorkspaceSnapshots,
   snapshotWorkspace,
+  type WorkspaceDiff,
 } from "../../runtime/artifacts/workspace-artifact-snapshot.js";
+import { publishWorkspaceArtifacts } from "../../runtime/artifacts/workspace-artifact-publisher.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { WorkspaceEnvironmentService } from "../../runtime/workspace/workspace-environment.js";
 import type { KernelStreamEvent, NodeKernelManager } from "../../runtime/kernel/node-kernel-manager.js";
@@ -132,10 +134,7 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
       });
       const after = await snapshotWorkspace(cwd);
       const diff = after ? diffWorkspaceSnapshots(before, after) : { created: [], modified: [] };
-      const written = after
-        ? [...diff.created, ...diff.modified]
-          .map((entry) => ({ path: entry.path, detection: "snapshot" as const }))
-        : [];
+      const outputEvidence = await publishKernelOutputs(cwd, diff, execution.execution_id, body);
       const error = result.error;
       await executionRepository.finish(cwd, execution.execution_id, {
         status: result.interrupted ? "interrupted" : result.ok ? "succeeded" : "failed",
@@ -148,7 +147,8 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
           mime: result.mime,
           ...(error ? { error } : {}),
         },
-        files: { written },
+        files: { written: outputEvidence.written },
+        artifacts: outputEvidence.artifacts,
       });
       return reply.send(withExecutionId(result, execution.execution_id));
     } catch (error) {
@@ -156,13 +156,13 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
       const message = timedOut ? "kernel timed out" : error instanceof Error ? error.message : "kernel unavailable";
       const after = await snapshotWorkspace(cwd);
       const diff = after ? diffWorkspaceSnapshots(before, after) : { created: [], modified: [] };
+      const outputEvidence = await publishKernelOutputs(cwd, diff, execution.execution_id, body);
       await executionRepository.finish(cwd, execution.execution_id, {
         status: timedOut ? "timed_out" : "failed",
         producer: "node-kernel-gateway",
         result: { ok: false, error: message },
-        files: {
-          written: [...diff.created, ...diff.modified].map((entry) => ({ path: entry.path, detection: "snapshot" })),
-        },
+        files: { written: outputEvidence.written },
+        artifacts: outputEvidence.artifacts,
       });
       return reply.code(timedOut ? 504 : 500).send({ error: message, execution_id: execution.execution_id, request_id: request.id });
     }
@@ -222,6 +222,7 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
       });
       const after = await snapshotWorkspace(cwd);
       const diff = after ? diffWorkspaceSnapshots(before, after) : { created: [], modified: [] };
+      const outputEvidence = await publishKernelOutputs(cwd, diff, execution.execution_id, body);
       const error = result.error;
       await executionRepository.finish(cwd, execution.execution_id, {
         status: result.interrupted ? "interrupted" : result.ok ? "succeeded" : "failed",
@@ -230,7 +231,8 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
           ok: result.ok, http_status: 200, stdout_preview: preview(result.stdout), output_preview: preview(result.result),
           mime: result.mime, ...(error ? { error } : {}),
         },
-        files: { written: [...diff.created, ...diff.modified].map((entry) => ({ path: entry.path, detection: "snapshot" })) },
+        files: { written: outputEvidence.written },
+        artifacts: outputEvidence.artifacts,
       });
       if (!reply.raw.destroyed) {
         reply.raw.write(JSON.stringify({ type: "result", ...result, execution_id: execution.execution_id }) + "\n");
@@ -240,11 +242,66 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
     } catch (error) {
       const timedOut = error instanceof Error && error.name === "KernelTimeoutError";
       const message = timedOut ? "kernel timed out" : error instanceof Error ? error.message : "kernel unavailable";
-      await executionRepository.finish(cwd, execution.execution_id, { status: timedOut ? "timed_out" : "failed", producer: "node-kernel-gateway", result: { ok: false, error: message } });
+      const after = await snapshotWorkspace(cwd);
+      const diff = after ? diffWorkspaceSnapshots(before, after) : { created: [], modified: [] };
+      const outputEvidence = await publishKernelOutputs(cwd, diff, execution.execution_id, body);
+      await executionRepository.finish(cwd, execution.execution_id, {
+        status: timedOut ? "timed_out" : "failed",
+        producer: "node-kernel-gateway",
+        result: { ok: false, error: message },
+        files: { written: outputEvidence.written },
+        artifacts: outputEvidence.artifacts,
+      });
       if (!reply.raw.destroyed) { reply.raw.write(JSON.stringify({ type: "result", ok: false, error: message, execution_id: execution.execution_id }) + "\n"); reply.raw.end(); }
       return reply;
     }
   });
+}
+
+async function publishKernelOutputs(
+  cwd: string,
+  diff: WorkspaceDiff,
+  executionId: string,
+  body: z.infer<typeof executeCellRequestSchema>,
+): Promise<{
+  written: Array<{
+    path: string;
+    detection: "snapshot";
+    sha256?: string;
+    artifact_id?: string;
+    artifact_version?: number;
+  }>;
+  artifacts: Array<{ artifact_id: string; version: number; relation: "output" }>;
+}> {
+  const entries = [...diff.created, ...diff.modified];
+  const published = await publishWorkspaceArtifacts(cwd, entries.map((entry) => entry.path), {
+    tool: "node-kernel-gateway",
+    executionId,
+    sessionId: body.session_id,
+    source: body.source,
+    notebookPath: body.notebook_path,
+    cellId: body.cell_id,
+  });
+  const byPath = new Map(published.map((artifact) => [artifact.path, artifact]));
+  return {
+    written: entries.map((entry) => {
+      const artifact = byPath.get(entry.path);
+      return {
+        path: entry.path,
+        detection: "snapshot" as const,
+        ...(artifact ? {
+          sha256: artifact.sha256,
+          artifact_id: artifact.artifact_id,
+          artifact_version: artifact.version,
+        } : {}),
+      };
+    }),
+    artifacts: published.map((artifact) => ({
+      artifact_id: artifact.artifact_id,
+      version: artifact.version,
+      relation: "output" as const,
+    })),
+  };
 }
 
 function objectValue(value: unknown): Record<string, unknown> {
