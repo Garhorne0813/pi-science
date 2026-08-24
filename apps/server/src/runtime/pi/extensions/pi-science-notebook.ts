@@ -236,12 +236,11 @@ export default function registerPiScienceNotebook(pi: any) {
   pi.registerTool({
     name: "notebook_read",
     label: "Read Notebook",
-    description: "Read a file-backed .ipynb notebook with stable cell ids, source, execution metadata, and bounded output previews.",
+    description: "Inspect a file-backed .ipynb by stable cell id, returning source, execution metadata, a revision hash, and bounded output previews.",
     promptSnippet: "Read a .ipynb notebook before editing or running its cells",
     promptGuidelines: [
-      "Use notebook_read before notebook_edit so you have the current revision hash and stable cell ids.",
       "Use cell_ids when you only need a subset of a large notebook; outputs are bounded previews.",
-      "This tool reads file-backed notebooks. It does not represent the transient in-memory session notebook.",
+      "Set include_outputs: false when source and cell identity are enough; this tool reads file-backed notebooks, not the transient session notebook.",
     ],
     parameters: NOTEBOOK_READ_SCHEMA,
     async execute(_toolCallId: string, params: unknown, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: any) {
@@ -267,13 +266,11 @@ export default function registerPiScienceNotebook(pi: any) {
   pi.registerTool({
     name: "notebook_edit",
     label: "Edit Notebook",
-    description: "Edit source or clear outputs in a file-backed .ipynb notebook using stable cell ids and optimistic revision checks.",
+    description: "Apply revision-checked source or structural edits to a file-backed .ipynb; never executes code.",
     promptSnippet: "Apply precise source edits to notebook cells with revision protection",
     promptGuidelines: [
-      "Call notebook_read first and pass its sha256 as expected_sha256; on a conflict, read again and re-plan the edit.",
-      "Replacing a cell's source clears its execution_count and outputs because those results are stale.",
+      "Pass the sha256 from notebook_read as expected_sha256; if the edit reports a conflict, reread before retrying.",
       "Use insert_cell with an optional before_cell_id or delete_cell for structural edits; use stable ids returned by notebook_read.",
-      "notebook_edit changes notebook structure only; call notebook_run explicitly to execute code.",
     ],
     parameters: NOTEBOOK_EDIT_SCHEMA,
     async execute(_toolCallId: string, params: unknown, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: any) {
@@ -306,12 +303,11 @@ export default function registerPiScienceNotebook(pi: any) {
   pi.registerTool({
     name: "notebook_run",
     label: "Run Notebook Cells",
-    description: "Execute selected code cells from a file-backed .ipynb notebook through the persistent Node-owned kernel and return execution ids.",
+    description: "Execute selected code cells in order through the persistent Node-owned kernel and return execution and artifact evidence.",
     promptSnippet: "Run selected notebook code cells in order through the persistent kernel",
     promptGuidelines: [
-      "Read the notebook first and pass stable cell ids; markdown and raw cells cannot be executed.",
-      "Cells execute sequentially in one persistent notebook kernel, so later cells can use earlier definitions.",
-      "Use clean_kernel only when a fresh namespace is explicitly needed; execution is never implicit after notebook_edit.",
+      "Pass cell_ids in the intended execution order; use continue_on_error only when later cells are independent of a failure.",
+      "Use clean_kernel when the run must start from a fresh namespace; otherwise the existing kernel state is intentionally reused.",
     ],
     parameters: NOTEBOOK_RUN_SCHEMA,
     async execute(_toolCallId: string, params: unknown, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: any) {
