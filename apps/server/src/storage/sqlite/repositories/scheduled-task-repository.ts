@@ -116,6 +116,9 @@ export interface SkipOccurrenceInput {
   context_json?: string;
   error_code?: string;
   error_message?: string;
+  /** Overlap-forbid branch (default): guarded on an active Run existing.
+   * Misfire-skip branch (false): no active Run required (docs §5.7 skip). */
+  requires_active_run?: boolean;
   now: number;
 }
 
@@ -146,6 +149,9 @@ export interface FinishAttemptTerminal {
 export interface RetryAttemptPlan {
   execution_id: string;
   available_at: number;
+  /** Optional caller-supplied attempt id so the deterministic execution_id can
+   * be derived from it before insert; defaults to an internally generated id. */
+  attempt_id?: string;
 }
 
 export interface RetryDecision {
@@ -506,10 +512,10 @@ export class ScheduledTaskRepository {
                    AND t.deleted_at IS NULL
                    AND t.approval_status != 'pending'
                    AND t.next_run_at = ?
-                   AND EXISTS (
+                   ${input.requires_active_run === false ? "" : `AND EXISTS (
                      SELECT 1 FROM scheduled_task_runs active
                       WHERE active.task_id = t.task_id AND active.active_slot = 1
-                   )`,
+                   )`}`,
           params: [
             input.run_id, input.trigger_source, input.scheduled_for, input.business_date, input.occurrence_key,
             input.snapshot_json, input.snapshot_sha256, input.context_json ?? "{}",
@@ -722,7 +728,7 @@ export class ScheduledTaskRepository {
    * pending attempt joins the same run and the run returns to pending.
    * UNIQUE(run_id, attempt_no) is the final guard against double retries. */
   async insertRetryAttempt(runId: string, oldAttemptId: string, plan: RetryAttemptPlan, nowMs: number): Promise<ScheduledTaskRunAttempt> {
-    const newAttemptId = newId("satt");
+    const newAttemptId = plan.attempt_id ?? newId("satt");
     await this.store.batch([
       {
         sql: `INSERT INTO scheduled_task_run_attempts
@@ -890,6 +896,75 @@ export class ScheduledTaskRepository {
     return true;
   }
 
+  // --- scheduler / dispatcher queries (docs §11.3, §7.6) ---------------------
+
+  /** Due tasks for the occurrence claim batch: active, not approval-pending,
+   * not deleted, next_run_at <= nowMs. Ordered by due time then id for stable
+   * claim order across processes. */
+  async listDueTasks(nowMs: number, limit = 50): Promise<ScheduledTask[]> {
+    const rows = await this.store.all<TaskRow>(
+      `SELECT * FROM scheduled_tasks
+        WHERE deleted_at IS NULL AND lifecycle_status = 'active'
+          AND approval_status != 'pending' AND next_run_at IS NOT NULL AND next_run_at <= ?
+        ORDER BY next_run_at, task_id
+        LIMIT ?`,
+      [nowMs, Math.max(1, Math.floor(limit))],
+    );
+    return rows.map(toTaskDto);
+  }
+
+  /** Durable pending-attempt outbox (docs §7.6): status='pending' AND
+   * available_at <= availableAt, oldest first, bounded by limit. */
+  async listPendingAttempts(availableAtMs: number, limit = 50): Promise<ScheduledTaskRunAttempt[]> {
+    const rows = await this.store.all<AttemptRow>(
+      `SELECT * FROM scheduled_task_run_attempts
+        WHERE status = 'pending' AND available_at <= ?
+        ORDER BY available_at, attempt_id
+        LIMIT ?`,
+      [availableAtMs, Math.max(1, Math.floor(limit))],
+    );
+    return rows.map(toAttemptDto);
+  }
+
+  /** Currently running attempts (lease diagnostics / shutdown settle checks). */
+  async listActiveAttempts(limit = 100): Promise<ScheduledTaskRunAttempt[]> {
+    const rows = await this.store.all<AttemptRow>(
+      "SELECT * FROM scheduled_task_run_attempts WHERE status = 'running' ORDER BY started_at, attempt_id LIMIT ?",
+      [Math.max(1, Math.floor(limit))],
+    );
+    return rows.map(toAttemptDto);
+  }
+
+  /** docs §9.3 initial approval gate: only flips a matching revision + scope
+   * hash task to 'pending' and clears next_run_at (a pending task must never
+   * be armed). Returns false when any assertion missed. */
+  async touchTaskApprovalPending(
+    taskId: string,
+    expectedRevision: number,
+    expectedScopeHash: string,
+    options: { categories?: string[]; terms?: string[]; now?: number } = {},
+  ): Promise<boolean> {
+    try {
+      await this.store.batch([{
+        sql: `UPDATE scheduled_tasks
+                SET approval_status = 'pending', approval_categories_json = ?, approval_terms_json = ?,
+                    approval_updated_at = ?, next_run_at = NULL, updated_at = ?
+              WHERE task_id = ? AND revision = ? AND approval_scope_hash = ?
+                AND deleted_at IS NULL AND lifecycle_status = 'active' AND approval_status = 'none'`,
+        params: [
+          JSON.stringify(options.categories ?? []), JSON.stringify(options.terms ?? []),
+          options.now ?? Date.now(), options.now ?? Date.now(),
+          taskId, expectedRevision, expectedScopeHash,
+        ],
+        expectChanges: 1,
+      }]);
+    } catch (error) {
+      if (isExpectChangesFailure(error)) return false;
+      throw error;
+    }
+    return true;
+  }
+
   // --- deadlines and histories -----------------------------------------------
 
   /** Earliest of: due task next_run_at, pending attempt available_at, running
@@ -954,9 +1029,16 @@ export class ScheduledTaskRepository {
     return page(rows, limit, (last) => encodeCursor({ n: Number(last.attempt_no) }), toAttemptDto);
   }
 
+  /** Keeps the scheduled_tasks FK satisfied for project ids created outside
+   * SQLite (ensureProject manifest fallback path in the service). */
+  async ensureProjectRow(projectId: string, name: string, now: number): Promise<void> {
+    await this.store.batch([
+      { sql: `INSERT INTO projects (project_id, name, manifest_version, created_at, updated_at, last_seen_at) VALUES (?, ?, 1, ?, ?, ?) ON CONFLICT(project_id) DO NOTHING`, params: [projectId, name, now, now, now] },
+    ]);
+  }
+
   /** Policy-limit counter: live (non-completed, non-deleted) tasks bound to a workspace. */
-  async countActiveTasksByWorkspace(workspacePath: string): Promise<number> {
-    const row = await this.store.get<{ count: number }>(
+  async countActiveTasksByWorkspace(workspacePath: string): Promise<number> {    const row = await this.store.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM scheduled_tasks WHERE workspace_path = ? AND deleted_at IS NULL AND lifecycle_status != 'completed'",
       [workspacePath],
     );
@@ -1260,7 +1342,7 @@ function manualRunInsert(
 // Cursor, id and small helpers
 // ---------------------------------------------------------------------------
 
-function newId(prefix: string): string {
+export function newId(prefix: string): string {
   return `${prefix}_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
 }
 

@@ -1,7 +1,8 @@
 // Error codes for scheduled tasks, subset of the docs §12.7 table needed by
-// Phase 2 (schedule validation, parser, approval) and Phase 3 (repository CAS,
-// pagination, lifecycle transitions). Later phases extend the union — never
-// reuse a code for a different scenario.
+// Phase 2 (schedule validation, parser, approval), Phase 3 (repository CAS,
+// pagination, lifecycle transitions) and Phase 4 (service, scheduler,
+// dispatcher). Later phases extend the union — never reuse a code for a
+// different scenario.
 export type ScheduledTaskErrorCode =
   | "INVALID_SCHEDULE"
   | "INVALID_TIMEZONE"
@@ -9,10 +10,16 @@ export type ScheduledTaskErrorCode =
   | "SCHEDULED_TASK_POLICY_VIOLATION"
   | "INVALID_CURSOR"
   | "SCHEDULED_TASK_NOT_FOUND"
+  | "SCHEDULED_TASK_RUN_NOT_FOUND"
   | "SCHEDULED_TASK_REVISION_CONFLICT"
   | "SCHEDULED_TASK_APPROVAL_REQUIRED"
   | "SCHEDULED_TASK_APPROVAL_SCOPE_CHANGED"
-  | "TASK_HAS_ACTIVE_RUN";
+  | "TASK_HAS_ACTIVE_RUN"
+  | "RUN_RETRY_NOT_ALLOWED"
+  | "WORKSPACE_FORBIDDEN"
+  | "OUTPUT_ROOT_FORBIDDEN"
+  | "EXECUTOR_UNAVAILABLE"
+  | "SCHEDULED_TASKS_DISABLED";
 
 export class ScheduledTaskError extends Error {
   readonly code: ScheduledTaskErrorCode;
@@ -55,3 +62,18 @@ export const approvalScopeChanged = (taskId: string, scopeHash: string) =>
 
 export const taskHasActiveRun = (taskId: string) =>
   new ScheduledTaskError("TASK_HAS_ACTIVE_RUN", "Scheduled task still has an active run", { task_id: taskId });
+
+export const runNotFound = (runId: string) =>
+  new ScheduledTaskError("SCHEDULED_TASK_RUN_NOT_FOUND", `Scheduled task run not found: ${runId}`, { run_id: runId });
+
+export const runRetryNotAllowed = (runId: string, reason: string) =>
+  new ScheduledTaskError("RUN_RETRY_NOT_ALLOWED", `Run cannot be retried: ${reason}`, { run_id: runId });
+
+export const workspaceForbidden = (workspacePath: string) =>
+  new ScheduledTaskError("WORKSPACE_FORBIDDEN", `Path is not a registered workspace: ${workspacePath}`, { workspace_path: workspacePath });
+
+export const outputRootForbidden = (relativeRoot: string, reason: string) =>
+  new ScheduledTaskError("OUTPUT_ROOT_FORBIDDEN", `Output root is not allowed: ${reason}`, { relative_root: relativeRoot });
+
+export const scheduledTasksDisabled = () =>
+  new ScheduledTaskError("SCHEDULED_TASKS_DISABLED", "Scheduled tasks feature is disabled (PI_SCIENCE_SCHEDULED_TASKS != 1)", {});
