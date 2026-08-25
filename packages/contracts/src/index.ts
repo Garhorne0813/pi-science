@@ -192,6 +192,7 @@ export const executionKindSchema = z.enum([
   "job",
   "research_agent",
   "research_evaluation",
+  "scheduled_task",
 ]);
 
 export const executionSurfaceSchema = z.enum([
@@ -236,6 +237,9 @@ export const executionCorrelationSchema = z.object({
   candidate_id: z.string().optional(),
   parent_execution_id: z.string().optional(),
   request_id: z.string().optional(),
+  scheduled_task_id: z.string().optional(),
+  scheduled_task_run_id: z.string().optional(),
+  scheduled_task_attempt_id: z.string().optional(),
 }).default({});
 
 export const executionFileEvidenceSchema = z.object({

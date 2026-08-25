@@ -124,6 +124,45 @@ describe("gateway contracts", () => {
     })).toThrow();
   });
 
+  it("validates scheduled-task execution kind and correlation ids", () => {
+    const base = {
+      schema_version: 1,
+      event_id: "event-2",
+      execution_id: "exec-2",
+      sequence: 1,
+      event_type: "execution.started",
+      surface: "pi",
+      workspace_id: "/tmp/project",
+      created_at: "now",
+      producer: "scheduled-task-service",
+    };
+    expect(executionEventSchema.parse({ ...base, kind: "scheduled_task", payload: { correlation: { scheduled_task_id: "task-1", scheduled_task_run_id: "run-7", scheduled_task_attempt_id: "attempt-2" } } })).toMatchObject({ kind: "scheduled_task" });
+    expect(executionRecordSchema.parse({
+      schema_version: 1,
+      execution_id: "exec-2",
+      kind: "scheduled_task",
+      surface: "pi",
+      status: "running",
+      workspace_id: "/tmp/project",
+      created_at: "now",
+      producer: "scheduled-task-service",
+      correlation: { scheduled_task_id: "task-1", run_id: "run-7" },
+    }).correlation).toMatchObject({ scheduled_task_id: "task-1", run_id: "run-7" });
+    // Unknown kinds and non-string correlation ids are rejected at the wire layer.
+    expect(() => executionEventSchema.parse({ ...base, kind: "shell" })).toThrow();
+    expect(() => executionRecordSchema.parse({
+      schema_version: 1,
+      execution_id: "exec-2",
+      kind: "scheduled_task",
+      surface: "pi",
+      status: "running",
+      workspace_id: "/tmp/project",
+      created_at: "now",
+      producer: "scheduled-task-service",
+      correlation: { scheduled_task_attempt_id: 7 },
+    })).toThrow();
+  });
+
   it("validates scheduled task schedules and rejects malformed ones", () => {
     expect(scheduledTaskScheduleSchema.parse({ type: "once", at: "2026-09-01T09:00:00+08:00", timezone: "Asia/Shanghai" })).toMatchObject({ type: "once" });
     expect(scheduledTaskScheduleSchema.parse({ type: "interval", every_seconds: 3600, anchor_at: "2026-08-25T00:00:00.000Z", timezone: "UTC" })).toMatchObject({ type: "interval" });

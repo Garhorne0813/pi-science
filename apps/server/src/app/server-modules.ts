@@ -14,6 +14,7 @@ import { ResearchLoopCoordinator } from "../research-loop/coordinator.js";
 import { PiResearchSubagentRunner } from "../research-loop/subagent-runner.js";
 import { ProjectReviewService } from "../project-review/service.js";
 import { PiReviewSubagentRunner } from "../project-review/subagent-runner.js";
+import { LiteratureService } from "../literature/literature-service.js";
 import { configPath } from "../storage/persistence.js";
 import { EnvironmentRepository } from "../storage/sqlite/repositories/environment-repository.js";
 import { JobRepository } from "../storage/sqlite/repositories/job-repository.js";
@@ -31,6 +32,7 @@ export interface ServerModules {
   readonly environments: WorkspaceEnvironmentService;
   readonly research: ResearchLoopCoordinator;
   readonly projectReview: ProjectReviewService;
+  readonly literature: LiteratureService;
   readonly stateStore: SqliteStateStore;
   readonly workspaces: WorkspaceRepository;
   readonly environmentRepository: EnvironmentRepository;
@@ -61,6 +63,7 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
   const settings = new SettingsStore();
   const jobs = new JobCoordinator(environments);
   const research = new ResearchLoopCoordinator(jobs, new PiResearchSubagentRunner(environments, piManager));
+  const literature = new LiteratureService();
   const scientificRuntime = new ScientificRuntimeManager({
     origin: config?.pythonOrigin ?? "http://127.0.0.1:8788",
     managed: config?.manageScientificRuntime,
@@ -70,5 +73,5 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
     idleTimeoutMs: config?.scientificIdleMs,
     startupTimeoutMs: config?.scientificStartupMs,
   });
-  return { sessions, events, sessionRepository, piManager, settings, jobs, research, projectReview, scientificRuntime, environments, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled };
+  return { sessions, events, sessionRepository, piManager, settings, jobs, research, projectReview, literature, scientificRuntime, environments, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled };
 }

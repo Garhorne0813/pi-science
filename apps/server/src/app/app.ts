@@ -25,7 +25,7 @@ import { AiTitleService, PiTitleRuntimeFactory } from "../runtime/title/ai-title
 import { importLegacyState } from "../storage/sqlite/legacy-state.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
-  const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, jobs, research, projectReview, scientificRuntime, environments, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
+  const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, jobs, research, projectReview, literature, scientificRuntime, environments, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
   let stateReady = !sqliteEnabled;
   let stateError: unknown;
   const app = Fastify({
@@ -142,7 +142,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeExecutions !== false) registerKernelExecutionRoutes(app, config, environments);
   if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, research, sqliteEnabled ? workspaces : undefined);
   if (config.nodeProject !== false) registerProjectRoutes(app, research, projectReview);
-  if (config.nodeLiterature !== false) registerLiteratureRoutes(app);
+  if (config.nodeLiterature !== false) registerLiteratureRoutes(app, literature);
   app.addHook("onReady", async () => {
     if (sqliteEnabled) {
       try {

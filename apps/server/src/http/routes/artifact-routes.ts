@@ -5,9 +5,9 @@ import { basename, extname, join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { appendJsonLine, appendJsonLineUnlocked, metadataRoot, readJsonLines, withFileWriteLock, workspaceFile } from "../../storage/persistence.js";
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/workspace-security.js";
+import { provenanceRepository, type Provenance } from "../../runtime/provenance/provenance-repository.js";
 
 interface Artifact { artifact_id: string; version: number; path: string; kind: string; mime: string; size: number; sha256: string; published_at: string; producer?: Record<string, unknown>; inputs?: unknown[]; environment?: Record<string, unknown>; verification?: Record<string, unknown> }
-interface Provenance { path: string; version: number; ts: number; tool: string; toolCallId?: string; sessionId: string; model?: string; contentHash?: string; content?: string; diff?: string; executionId?: string }
 const MAX_PUBLISH_BYTES = 2 * 1024 * 1024 * 1024;
 
 async function hashFile(path: string): Promise<{ sha256: string; size: number }> {
@@ -21,9 +21,10 @@ async function ws(request: { query: unknown }, reply: { code: (status: number) =
 function mime(path: string): string { const table: Record<string, string> = { ".json": "application/json", ".csv": "text/csv", ".txt": "text/plain", ".md": "text/markdown", ".html": "text/html", ".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg" }; return table[extname(path).toLowerCase()] ?? "application/octet-stream"; }
 function kind(path: string, contentType: string): string { if (contentType.startsWith("image/")) return "image"; if (contentType.startsWith("text/") || [".md", ".json", ".yaml", ".yml", ".py", ".sh"].includes(extname(path).toLowerCase())) return "text"; if ([".csv", ".tsv", ".xlsx", ".parquet"].includes(extname(path).toLowerCase())) return "table"; if ([".pdf", ".docx", ".pptx"].includes(extname(path).toLowerCase())) return "document"; return "file"; }
 
-export async function recordProvenance(cwd: string, body: Record<string, unknown>): Promise<Provenance> {
-  const path = String(body.path ?? "");
-  return withFileWriteLock(workspaceFile(cwd, "provenance.jsonl"), async () => { const records = await readJsonLines<Provenance>(workspaceFile(cwd, "provenance.jsonl")); const version = records.filter((record) => record.path === path).reduce((max, record) => Math.max(max, record.version), 0) + 1; const content = typeof body.content === "string" ? body.content : undefined; const record: Provenance = { path, version, ts: Date.now() / 1000, tool: String(body.tool ?? "unknown"), sessionId: String(body.session_id ?? body.sessionId ?? ""), ...(body.tool_call_id ? { toolCallId: String(body.tool_call_id) } : {}), ...(body.model ? { model: String(body.model) } : {}), ...(content !== undefined ? { contentHash: createHash("sha256").update(content).digest("hex").slice(0, 16), content: content.slice(0, 100_000) } : {}), ...(body.diff ? { diff: String(body.diff) } : {}), ...(body.execution_id ? { executionId: String(body.execution_id) } : {}) }; await appendJsonLineUnlocked(workspaceFile(cwd, "provenance.jsonl"), record); return record; });
+// Thin delegation kept for existing importers (file-routes.ts); the ledger
+// implementation lives in runtime/provenance/provenance-repository.ts.
+export function recordProvenance(cwd: string, body: Record<string, unknown>): Promise<Provenance> {
+  return provenanceRepository.record(cwd, body);
 }
 
 export function registerArtifactRoutes(app: FastifyInstance): void {
@@ -35,7 +36,7 @@ export function registerArtifactRoutes(app: FastifyInstance): void {
 
   app.get("/api/provenance", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const query = request.query as { path?: string; session_id?: string; limit?: string }; let records = await readJsonLines<Provenance>(workspaceFile(cwd, "provenance.jsonl")); if (query.path) records = records.filter((record) => record.path === query.path); if (query.session_id) records = records.filter((record) => record.sessionId === query.session_id); records.reverse(); return { records: records.slice(0, Math.min(1000, Math.max(1, Number(query.limit ?? 100)))), total: records.length }; });
   app.get<{ Params: { path: string } }>("/api/provenance/versions/*", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const path = ((request.params as { path?: string; "*"?: string }).path ?? (request.params as { "*"?: string })["*"] ?? "").replace(/^\//, ""); const records = (await readJsonLines<Provenance>(workspaceFile(cwd, "provenance.jsonl"))).filter((record) => record.path === path); return { path, versions: records }; });
-  app.post("/api/provenance/record", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const query = request.query as Record<string, unknown>; const body = (request.body ?? {}) as Record<string, unknown>; return recordProvenance(cwd, { ...query, ...body }); });
+  app.post("/api/provenance/record", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const query = request.query as Record<string, unknown>; const body = (request.body ?? {}) as Record<string, unknown>; return provenanceRepository.record(cwd, { ...query, ...body }); });
   app.post("/api/provenance/capture", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const hash = createHash("sha256").update(`${process.version}:${process.platform}`).digest("hex").slice(0, 16); const text = `${process.version}\nplatform=${process.platform}\narch=${process.arch}\n`; await import("node:fs/promises").then(({ mkdir, writeFile }) => mkdir(join(metadataRoot(cwd), "env"), { recursive: true }).then(() => writeFile(join(metadataRoot(cwd), "env", `${hash}.txt`), text))); return { ts: Date.now() / 1000, label: (request.query as { label?: string }).label ?? null, node: process.version, platform: process.platform, packages_hash: hash, package_count: 0, cpu_count: 1 }; });
   app.get<{ Params: { hash: string } }>("/api/provenance/env/:hash", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; if (!/^[0-9a-f]{16}$/.test(request.params.hash)) return reply.code(400).send({ error: "Invalid environment lockfile hash" }); try { const text = await readFile(join(metadataRoot(cwd), "env", `${request.params.hash}.txt`), "utf8"); return { hash: request.params.hash, text }; } catch { return reply.code(404).send({ error: "Environment lockfile not found" }); } });
 }

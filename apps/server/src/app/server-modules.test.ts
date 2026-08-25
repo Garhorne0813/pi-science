@@ -12,5 +12,6 @@ describe("server module graph", () => {
     expect(first.piManager).not.toBe(second.piManager);
     expect(first.settings).not.toBe(second.settings);
     expect(first.jobs).not.toBe(second.jobs);
+    expect(first.literature).not.toBe(second.literature);
   });
 });

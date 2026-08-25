@@ -285,7 +285,7 @@ export interface ProvenanceEnvironment {
 export interface ExecutionRecord {
   schema_version: 1;
   execution_id: string;
-  kind: "tool" | "kernel_cell" | "job" | "research_agent" | "research_evaluation";
+  kind: "tool" | "kernel_cell" | "job" | "research_agent" | "research_evaluation" | "scheduled_task";
   surface: "pi" | "python" | "r" | "local" | "ssh" | "hpc" | "research";
   status: "pending" | "running" | "succeeded" | "failed" | "cancelled" | "timed_out" | "interrupted" | "lost";
   workspace_id: string;
