@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { artifactManifestSchema, createResearchLoopSchema, createSessionRequestSchema, executionEventSchema, executionRecordSchema, gatewayHealthSchema, jobRecordSchema, piRpcCommandSchema, researchLoopSchema, sessionEventSchema, sessionStatsSchema, skillContentSchema } from "./index.js";
+import {
+  artifactManifestSchema,
+  concurrencyPolicySchema,
+  createResearchLoopSchema,
+  createSessionRequestSchema,
+  executionEventSchema,
+  executionRecordSchema,
+  gatewayHealthSchema,
+  jobRecordSchema,
+  literatureDigestConfigSchema,
+  literatureProviderSchema,
+  misfirePolicySchema,
+  piRpcCommandSchema,
+  researchLoopSchema,
+  retryPolicySchema,
+  scheduledTaskApprovalSchema,
+  scheduledTaskBudgetSchema,
+  scheduledTaskExecutorSchema,
+  scheduledTaskScheduleSchema,
+  sessionEventSchema,
+  sessionStatsSchema,
+  skillContentSchema,
+} from "./index.js";
 
 describe("gateway contracts", () => {
   it("accepts a healthy Node gateway response", () => {
@@ -100,5 +122,51 @@ describe("gateway contracts", () => {
       skill_id: "s1", name: "alpha", digest: "0123456789abcdef",
       source: "builtin", location: "alpha/SKILL.md",
     })).toThrow();
+  });
+
+  it("validates scheduled task schedules and rejects malformed ones", () => {
+    expect(scheduledTaskScheduleSchema.parse({ type: "once", at: "2026-09-01T09:00:00+08:00", timezone: "Asia/Shanghai" })).toMatchObject({ type: "once" });
+    expect(scheduledTaskScheduleSchema.parse({ type: "interval", every_seconds: 3600, anchor_at: "2026-08-25T00:00:00.000Z", timezone: "UTC" })).toMatchObject({ type: "interval" });
+    expect(scheduledTaskScheduleSchema.parse({ type: "cron", expression: "0 9 * * 1-5", timezone: "Asia/Shanghai" })).toMatchObject({ type: "cron" });
+    // once.at must carry Z or an explicit offset.
+    expect(() => scheduledTaskScheduleSchema.parse({ type: "once", at: "2026-09-01T09:00:00", timezone: "Asia/Shanghai" })).toThrow();
+    // interval floor is 300s and anchor_at must be UTC-normalized.
+    expect(() => scheduledTaskScheduleSchema.parse({ type: "interval", every_seconds: 299, anchor_at: "2026-08-25T00:00:00.000Z", timezone: "UTC" })).toThrow();
+    expect(() => scheduledTaskScheduleSchema.parse({ type: "interval", every_seconds: 3600, anchor_at: "2026-08-25T00:00:00+00:00", timezone: "UTC" })).toThrow();
+    // cron is strictly 5 fields; seconds forms are rejected at the wire layer too.
+    expect(() => scheduledTaskScheduleSchema.parse({ type: "cron", expression: "0 9 * * * *", timezone: "UTC" })).toThrow();
+  });
+
+  it("allows only the literature_digest executor and known providers", () => {
+    const executor = {
+      kind: "literature_digest" as const,
+      config: { query: "CRISPR off-target", providers: ["pubmed"] },
+    };
+    expect(scheduledTaskExecutorSchema.parse(executor)).toMatchObject({ config: { max_results: 30, language: "zh-CN" } });
+    // Shell / job_command / command fields have no place in v1 contracts (docs §3.3).
+    for (const kind of ["shell", "job_command", "job", "command"]) {
+      expect(() => scheduledTaskExecutorSchema.parse({ ...executor, kind })).toThrow();
+    }
+    // Unknown execution fields are stripped, never carried into the typed result.
+    expect(scheduledTaskExecutorSchema.parse({ ...executor, command: ["rm", "-rf"] })).not.toHaveProperty("command");
+    expect(literatureProviderSchema.parse("pubmed")).toBe("pubmed");
+    // crossref is deliberately absent from v1 providers.
+    expect(() => literatureProviderSchema.parse("crossref")).toThrow();
+    expect(() => literatureDigestConfigSchema.parse({ query: "", providers: ["pubmed"] })).toThrow();
+    expect(() => literatureDigestConfigSchema.parse({ query: "q", providers: [] })).toThrow();
+    expect(() => literatureDigestConfigSchema.parse({ query: "q", providers: ["pubmed"], max_results: 101 })).toThrow();
+  });
+
+  it("applies retry/budget/policy/approval defaults for scheduled tasks", () => {
+    expect(retryPolicySchema.parse({})).toEqual({ max_attempts: 3, initial_backoff_seconds: 30, multiplier: 4, max_backoff_seconds: 600 });
+    expect(() => retryPolicySchema.parse({ max_attempts: 6 })).toThrow();
+    expect(scheduledTaskBudgetSchema.parse({})).toEqual({ max_wall_time_seconds: 900 });
+    expect(() => scheduledTaskBudgetSchema.parse({ max_wall_time_seconds: 59 })).toThrow();
+    expect(misfirePolicySchema.parse("skip")).toBe("skip");
+    expect(() => misfirePolicySchema.parse("run_all")).toThrow();
+    expect(concurrencyPolicySchema.parse("forbid")).toBe("forbid");
+    expect(() => concurrencyPolicySchema.parse("allow")).toThrow();
+    const approval = scheduledTaskApprovalSchema.parse({});
+    expect(approval).toEqual({ status: "none", scope_hash: "", approved_revision: null, categories: [], terms: [], approved_at: null });
   });
 });

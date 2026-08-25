@@ -587,3 +587,111 @@ export const skillContentSchema = z.object({
 
 export type SkillContent = z.infer<typeof skillContentSchema>;
 export type SkillInfo = z.infer<typeof skillInfoSchema>;
+
+// ── Scheduled tasks (wire schemas only; server-internal entity interfaces live in apps/server/src/scheduled-tasks/types.ts) ──
+
+/** RFC 3339 with a mandatory zone designator (`Z`, `z`, or ±HH:MM offset). */
+const rfc3339WithZone = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/, "must be RFC 3339 with Z or explicit offset");
+
+/** RFC 3339 normalized to UTC (`Z`) — server-generated anchor instants. */
+const rfc3339Utc = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?[Zz]$/, "must be RFC 3339 in UTC (Z)");
+
+/** IANA timezone name; deep validation (Intl probe) is server-side in validateSchedule. */
+const ianaTimezone = z.string().min(1).regex(/^\S+$/, "must be an IANA timezone name");
+
+export const scheduledOnceScheduleSchema = z.object({
+  type: z.literal("once"),
+  at: rfc3339WithZone,
+  timezone: ianaTimezone,
+});
+
+export const scheduledIntervalScheduleSchema = z.object({
+  type: z.literal("interval"),
+  // First-version minimum interval is 300 seconds (docs §5.3).
+  every_seconds: z.number().int().min(300),
+  anchor_at: rfc3339Utc,
+  timezone: ianaTimezone,
+});
+
+export const scheduledCronScheduleSchema = z.object({
+  type: z.literal("cron"),
+  // First version accepts exactly 5 fields (no seconds field); 6-field and
+  // @predefined forms are rejected here and again by the server parser wrapper.
+  expression: z.string().refine((expr) => expr.trim().split(/\s+/).length === 5, "cron expression must have exactly 5 fields"),
+  timezone: ianaTimezone,
+});
+
+export const scheduledTaskScheduleSchema = z.discriminatedUnion("type", [
+  scheduledOnceScheduleSchema,
+  scheduledIntervalScheduleSchema,
+  scheduledCronScheduleSchema,
+]);
+
+export const literatureProviderSchema = z.enum(["pubmed", "genbank", "arxiv", "pubchem", "uniprot"]);
+
+export const literatureDigestConfigSchema = z.object({
+  query: z.string().min(1).max(2000),
+  providers: z.array(literatureProviderSchema).min(1),
+  instructions: z.string().max(4000).optional(),
+  max_results: z.number().int().min(1).max(100).default(30),
+  language: z.enum(["zh-CN", "en"]).default("zh-CN"),
+});
+
+// Only `literature_digest` is allowed. Shell / job_command / command arrays are
+// deliberately absent (docs §3.3, §9.12).
+export const scheduledTaskExecutorSchema = z.object({
+  kind: z.literal("literature_digest"),
+  config: literatureDigestConfigSchema,
+});
+
+export const retryPolicySchema = z.object({
+  max_attempts: z.number().int().min(1).max(5).default(3),
+  initial_backoff_seconds: z.number().int().min(1).default(30),
+  multiplier: z.number().min(1).default(4),
+  max_backoff_seconds: z.number().int().min(1).default(600),
+});
+
+export const scheduledTaskBudgetSchema = z.object({
+  max_wall_time_seconds: z.number().int().min(60).max(3600).default(900),
+});
+
+export const misfirePolicySchema = z.enum(["coalesce_latest", "skip"]);
+export const concurrencyPolicySchema = z.enum(["forbid"]);
+
+/** Canonical approval-scope payload hashed by the server (docs §9.4); fixed key order is enforced by the hash builder, not JSON parsing. */
+export const approvalScopeHashPayloadSchema = z.object({
+  executor_kind: z.literal("literature_digest"),
+  query: z.string().min(1),
+  providers: z.array(literatureProviderSchema).min(1),
+  instructions: z.string(),
+  max_results: z.number().int().min(1).max(100),
+  language: z.enum(["zh-CN", "en"]),
+  output_relative_root: z.string().min(1),
+});
+
+export const scheduledTaskApprovalSchema = z.object({
+  status: z.enum(["none", "pending", "approved"]).default("none"),
+  scope_hash: z.string().default(""),
+  approved_revision: z.number().int().nonnegative().nullable().default(null),
+  categories: z.array(z.string()).default([]),
+  terms: z.array(z.string()).default([]),
+  approved_at: z.string().nullable().default(null),
+});
+
+export type ScheduledOnceSchedule = z.infer<typeof scheduledOnceScheduleSchema>;
+export type ScheduledIntervalSchedule = z.infer<typeof scheduledIntervalScheduleSchema>;
+export type ScheduledCronSchedule = z.infer<typeof scheduledCronScheduleSchema>;
+export type ScheduledTaskSchedule = z.infer<typeof scheduledTaskScheduleSchema>;
+export type LiteratureProvider = z.infer<typeof literatureProviderSchema>;
+export type LiteratureDigestConfig = z.infer<typeof literatureDigestConfigSchema>;
+export type ScheduledTaskExecutor = z.infer<typeof scheduledTaskExecutorSchema>;
+export type RetryPolicy = z.infer<typeof retryPolicySchema>;
+export type ScheduledTaskBudget = z.infer<typeof scheduledTaskBudgetSchema>;
+export type MisfirePolicy = z.infer<typeof misfirePolicySchema>;
+export type ConcurrencyPolicy = z.infer<typeof concurrencyPolicySchema>;
+export type ApprovalScopeHashPayload = z.infer<typeof approvalScopeHashPayloadSchema>;
+export type ScheduledTaskApproval = z.infer<typeof scheduledTaskApprovalSchema>;
