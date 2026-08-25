@@ -198,6 +198,8 @@ export class WorkspaceRepository {
         params: [to, from, to, from, from, process.platform === "win32" ? "\\" : "/", to, from, Date.now(), projectId, from],
       },
       { sql: "UPDATE projects SET updated_at = ?, last_seen_at = ? WHERE project_id = ?", params: [Date.now(), Date.now(), projectId] },
+      // Scheduled tasks follow the current location (docs §10.2); Run snapshots keep the old path as historical evidence.
+      { sql: "UPDATE scheduled_tasks SET workspace_path = ?, updated_at = ? WHERE project_id = ? AND workspace_path = ?", params: [to, Date.now(), projectId, from] },
     ]);
   }
 

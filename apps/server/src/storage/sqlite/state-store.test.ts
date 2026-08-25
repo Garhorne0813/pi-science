@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { JobRecord } from "../../runtime/jobs/job-coordinator.js";
 import { JobRepository } from "./repositories/job-repository.js";
 import { fingerprintPaths, WorkspaceRepository } from "./repositories/workspace-repository.js";
+import { loadMigrations } from "./migrations.js";
 import { InMemorySqliteStateStore } from "./state-store.js";
 
 const stores: InMemorySqliteStateStore[] = [];
@@ -62,7 +63,7 @@ function runningJob(cwd: string): JobRecord {
 describe("SQLite state store", () => {
   it("starts the worker, applies migrations, and rolls back a failed batch", async () => {
     const state = await store();
-    expect(state.diagnostics()).toMatchObject({ status: "ready", schema_version: 1 });
+    expect(state.diagnostics()).toMatchObject({ status: "ready", schema_version: (await loadMigrations()).at(-1)?.version ?? null });
 
     await expect(state.batch([
       { sql: "INSERT INTO projects (project_id, name, manifest_version, created_at, updated_at, last_seen_at) VALUES (?, ?, 1, 1, 1, 1)", params: ["project-one", "one"] },
