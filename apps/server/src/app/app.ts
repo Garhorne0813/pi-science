@@ -1,4 +1,5 @@
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { gatewayHealthSchema } from "@pi-science/contracts";
@@ -87,7 +88,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     const statusCode = error.code === "FST_ERR_CTP_BODY_TOO_LARGE" ? 413 : error.statusCode ?? 500;
     app.log.error({ err: error, requestId: request.id, path: request.url }, "request failed");
     return reply.code(statusCode).send({
-      error: statusCode === 413 ? "request body too large" : "internal server error",
+      error: statusCode === 413 ? "request body too large" : statusCode === 429 ? "rate limit exceeded" : "internal server error",
       request_id: request.id,
     });
   });
@@ -120,7 +121,16 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeSse || config.nodePiManager) registerSseRoutes(app, nodeSessionService, events);
   if (config.nodeFiles) registerFileReadRoutes(app);
   if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository, new AiTitleService(new PiTitleRuntimeFactory(piManager)));
-  if (config.nodeJobs !== false) registerJobRoutes(app, jobs);
+  if (config.nodeJobs !== false) {
+    // Keep command execution rate-limited without throttling read-only control
+    // plane routes. The child scope ensures the plugin's onRoute hook sees the
+    // job routes registered below while remaining isolated from the rest of
+    // the application.
+    void app.register(async (jobScope) => {
+      await jobScope.register(rateLimit, { global: false });
+      registerJobRoutes(jobScope, jobs);
+    });
+  }
   registerEnvironmentRoutes(app, environments);
   if (config.nodeArtifacts !== false) registerArtifactRoutes(app);
   if (config.nodeArtifacts !== false) registerTurnArtifactRoutes(app);

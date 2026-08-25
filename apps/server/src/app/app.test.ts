@@ -101,6 +101,22 @@ describe("Node control plane", () => {
     expect((await app.inject({ method: "OPTIONS", url: "/api/health" })).statusCode).not.toBe(401);
   });
 
+  it("rate-limits job submission before arbitrary commands are launched", async () => {
+    const app = buildApp(config("http://127.0.0.1:1"));
+    openApps.push(app);
+
+    const responses = [];
+    for (let index = 0; index < 31; index += 1) {
+      responses.push(await app.inject({
+        method: "POST",
+        url: "/api/jobs?cwd=.",
+        payload: { command: [] },
+      }));
+    }
+
+    expect(responses.filter((response) => response.statusCode === 429)).toHaveLength(1);
+  });
+
   it("stays healthy without any upstream runtime", async () => {
     const app = buildApp(config("http://127.0.0.1:1"));
     openApps.push(app);
