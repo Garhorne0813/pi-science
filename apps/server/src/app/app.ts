@@ -15,16 +15,19 @@ import { registerTurnArtifactRoutes } from "../http/routes/turn-artifact-routes.
 import { registerSettingsRoutes } from "../http/routes/settings-routes.js";
 import { registerExecutionRoutes } from "../http/routes/execution-routes.js";
 import { registerKernelExecutionRoutes } from "../http/routes/kernel-execution-routes.js";
-import { knownWorkspacePaths, registerCatalogRoutes } from "../http/routes/catalog-routes.js";
+import { knownWorkspacePaths, registerCatalogRoutes, rootDir } from "../http/routes/catalog-routes.js";
 import { registerProjectRoutes } from "../http/routes/project-routes.js";
 import { registerLiteratureRoutes } from "../http/routes/literature-routes.js";
 import { createServerModules, type ServerModules } from "./server-modules.js";
 import { registerEnvironmentRoutes } from "../http/routes/environment-routes.js";
 import { validateWorkspaceCwd } from "../security/workspace-security.js";
 import { AiTitleService, PiTitleRuntimeFactory } from "../runtime/title/ai-title-service.js";
+import { importLegacyState } from "../storage/sqlite/legacy-state.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
-  const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, jobs, research, projectReview, scientificRuntime, environments } = modules;
+  const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, jobs, research, projectReview, scientificRuntime, environments, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
+  let stateReady = !sqliteEnabled;
+  let stateError: unknown;
   const app = Fastify({
     logger: { level: config.logLevel },
     bodyLimit: config.maxBodyBytes,
@@ -116,9 +119,15 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     });
   });
 
-  app.get("/internal/ready", async () => {
-    return { status: "ready", service: "pi-science-server", control_plane: "node", scientific_runtime: scientificRuntime.snapshot() };
+  app.get("/internal/ready", async (_request, reply) => {
+    const diagnostics = stateStore.diagnostics();
+    if (sqliteEnabled && (!stateReady || diagnostics.status !== "ready")) {
+      return reply.code(503).send({ status: "not_ready", service: "pi-science-server", control_plane: "node", sqlite: { ...diagnostics, error: diagnostics.error ?? (stateError instanceof Error ? stateError.message : String(stateError ?? "SQLite state store is not ready")) } });
+    }
+    return { status: "ready", service: "pi-science-server", control_plane: "node", scientific_runtime: scientificRuntime.snapshot(), sqlite: sqliteEnabled ? diagnostics : { status: "disabled", schema_version: null, journal_mode: null, pending_requests: 0 } };
   });
+
+  app.get("/internal/diagnostics", async () => ({ sqlite: sqliteEnabled ? stateStore.diagnostics() : { status: "disabled" } }));
 
   if (config.nodeSessions || config.nodePiManager) registerSessionReadRoutes(app, sessionRepository, nodeSessionService);
   if (config.nodeSse || config.nodePiManager) registerSseRoutes(app, nodeSessionService, events);
@@ -131,11 +140,22 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings);
   if (config.nodeExecutions !== false) registerExecutionRoutes(app, jobs);
   if (config.nodeExecutions !== false) registerKernelExecutionRoutes(app, config, environments);
-  if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, research);
+  if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, research, sqliteEnabled ? workspaces : undefined);
   if (config.nodeProject !== false) registerProjectRoutes(app, research, projectReview);
   if (config.nodeLiterature !== false) registerLiteratureRoutes(app);
   app.addHook("onReady", async () => {
-    const results = await Promise.allSettled((await knownWorkspacePaths()).map((cwd) => research.reconcile(cwd)));
+    if (sqliteEnabled) {
+      try {
+        await stateStore.start();
+        await importLegacyState({ store: stateStore, workspaces, environments: environmentRepository, jobs: jobRepository, managedRoot: rootDir(), logger: (message, details) => app.log.info({ ...details }, message) });
+        stateReady = true;
+      } catch (error) {
+        stateError = error;
+        app.log.error({ err: error }, "SQLite state initialization failed");
+      }
+    }
+    const recoveryRepository = sqliteEnabled && stateReady ? workspaces : undefined;
+    const results = await Promise.allSettled((await knownWorkspacePaths(recoveryRepository)).map((cwd) => research.reconcile(cwd)));
     for (const result of results) if (result.status === "rejected") app.log.error({ err: result.reason }, "research loop recovery failed");
   });
   if (config.nodePiManager) app.addHook("onClose", async () => nodeSessionService.shutdownAll());
@@ -146,6 +166,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   app.addHook("onClose", async () => scientificRuntime.shutdown());
   app.addHook("onClose", async () => research.shutdown());
   app.addHook("onClose", async () => projectReview.shutdown());
+  app.addHook("onClose", async () => stateStore.close());
   if (config.nodePiManager) {
     app.all("/api/sessions/*", async (request, reply) => reply.code(404).send({
       ok: false,

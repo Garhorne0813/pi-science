@@ -15,16 +15,26 @@ import type { ResearchLoopCoordinator } from "../../research-loop/coordinator.js
 import { findExecutable, pathIsInside, userHome } from "../../support/platform-utils.js";
 import { defaultPythonExecutable } from "../../runtime/workspace/workspace-environment.js";
 import { ensureProject, updateProject } from "../../project/project-registry.js";
+import type { WorkspaceRepository } from "../../storage/sqlite/repositories/workspace-repository.js";
 
 function q(request: { query: unknown }, key: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[key]; return typeof value === "string" && value ? value : fallback; }
 async function ws(request: { query: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): Promise<string | null> { try { return await validateWorkspaceCwd(q(request, "cwd")); } catch (error) { reply.code(403).send({ error: String(error) }); return null; } }
-function rootDir(): string { return resolve(process.env.PI_SCIENCE_WORKSPACES ?? join(userHome(), "pi-science-workspaces")); }
+export function rootDir(): string { return resolve(process.env.PI_SCIENCE_WORKSPACES ?? join(userHome(), "pi-science-workspaces")); }
 const REGISTERED_WORKSPACES_FILE = "registered-workspaces.json";
 
-async function rememberExternalWorkspace(path: string): Promise<void> {
+async function rememberExternalWorkspace(path: string, workspaceRepository?: WorkspaceRepository): Promise<void> {
   const canonicalPath = await realpath(path);
   const managedRoot = await realpath(rootDir()).catch(() => rootDir());
   if (pathIsInside(managedRoot, canonicalPath, true)) return;
+  if (workspaceRepository) {
+    await workspaceRepository.rememberWorkspace(canonicalPath);
+    // Keep a one-time compatibility snapshot for pre-SQLite installations.
+    // SQLite remains the canonical writer after this bootstrap snapshot.
+    const registryPath = configPath(REGISTERED_WORKSPACES_FILE);
+    try { await access(registryPath); }
+    catch { await writeJsonAtomic(registryPath, [canonicalPath]); }
+    return;
+  }
   const registryPath = configPath(REGISTERED_WORKSPACES_FILE);
   await withFileWriteLock(registryPath, async () => {
     const registered = await readJson<string[]>(registryPath, []);
@@ -33,8 +43,17 @@ async function rememberExternalWorkspace(path: string): Promise<void> {
   });
 }
 
-export async function knownWorkspacePaths(): Promise<string[]> {
+export async function knownWorkspacePaths(workspaceRepository?: WorkspaceRepository): Promise<string[]> {
   const paths = new Set<string>();
+  if (workspaceRepository) {
+    for (const location of await workspaceRepository.listKnown()) {
+      try {
+        if ((await stat(join(location.path, ".pi-science"))).isDirectory()) paths.add(location.path);
+        else await workspaceRepository.markMissing(location.path);
+      } catch { await workspaceRepository.markMissing(location.path); }
+    }
+    return [...paths];
+  }
   try {
     for (const name of await readdir(rootDir())) {
       const path = join(rootDir(), name);
@@ -51,8 +70,9 @@ export async function knownWorkspacePaths(): Promise<string[]> {
   }
   return [...paths];
 }
-async function workspaceInfo(path: string): Promise<Record<string, unknown>> {
+async function workspaceInfo(path: string, workspaceRepository?: WorkspaceRepository): Promise<Record<string, unknown>> {
   const project = await ensureProject(path);
+  await workspaceRepository?.rememberWorkspace(path, { managed: pathIsInside(rootDir(), path, true), preservePath: pathIsInside(rootDir(), path, true) });
   const [sessions, metadata] = await Promise.all([sessionRepository.list(path), stat(path)]);
   return {
     name: project.name,
@@ -84,7 +104,17 @@ async function managedWorkspacePath(pathValue: string, action: "delete" | "renam
   return canonicalRequested;
 }
 
-async function updatePinnedWorkspace(source: string, destination: string): Promise<void> {
+async function updateWorkspaceLocation(source: string, destination: string, workspaceRepository?: WorkspaceRepository, projectId?: string): Promise<void> {
+  if (workspaceRepository && projectId) {
+    const locations = await workspaceRepository.getByProject(projectId);
+    let matching: (typeof locations)[number] | undefined;
+    for (const location of locations) {
+      const canonical = await realpath(location.path).catch(async () => join(await realpath(dirname(location.path)).catch(() => dirname(location.path)), basename(location.path)));
+      if (canonical === source) { matching = location; break; }
+    }
+    if (matching) await workspaceRepository.moveLocation(projectId, matching.path, destination, true);
+    return;
+  }
   const pinned = await readJson<string[]>(configPath("pinned.json"), []);
   let changed = false;
   const updated = await Promise.all(pinned.map(async (path) => {
@@ -204,7 +234,7 @@ const DEMOS: Record<string, { source: string; workspace: string }> = {
   climate: { source: "demos/climate-trends", workspace: "Climate Trends" },
 };
 
-export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinator, research?: ResearchLoopCoordinator): void {
+export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinator, research?: ResearchLoopCoordinator, workspaceRepository?: WorkspaceRepository): void {
   // ── Skills (delegated to skill-catalog service) ──
   app.get("/api/skills", async (request, reply) => {
     const root = await ws(request, reply);
@@ -333,9 +363,9 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
   });
 
   // ── Workspaces ──
-  app.get("/api/workspaces", async () => { const result = await Promise.all((await knownWorkspacePaths()).map((path) => workspaceInfo(path))); return result.sort((left, right) => String(right.last_modified).localeCompare(String(left.last_modified))); });
-  app.post("/api/workspaces", async (request, reply) => { const body = (request.body ?? {}) as { name?: unknown }; const name = String(body.name ?? "").trim().replace(/[\\/]/g, "-").slice(0, 100); if (!name) return reply.code(400).send({ error: "Invalid workspace name" }); const path = join(rootDir(), name); try { await stat(path); return reply.code(409).send({ error: "Workspace already exists" }); } catch { /* create */ } await import("node:fs/promises").then(({ mkdir }) => mkdir(join(path, ".pi-science"), { recursive: true })); return await workspaceInfo(path); });
-  app.post("/api/workspaces/open", async (request, reply) => { const requestedPath = expandUserPath(String(((request.body ?? {}) as { path?: unknown }).path ?? "")); let path: string; try { if (!(await stat(requestedPath)).isDirectory()) return reply.code(400).send({ error: "Not a directory" }); path = await realpath(requestedPath); } catch { return reply.code(404).send({ error: "Folder not found" }); } await import("node:fs/promises").then(({ mkdir }) => mkdir(join(path, ".pi-science"), { recursive: true })); await rememberExternalWorkspace(path); return await workspaceInfo(path); });
+  app.get("/api/workspaces", async () => { const result = await Promise.all((await knownWorkspacePaths(workspaceRepository)).map((path) => workspaceInfo(path, workspaceRepository))); return result.sort((left, right) => String(right.last_modified).localeCompare(String(left.last_modified))); });
+  app.post("/api/workspaces", async (request, reply) => { const body = (request.body ?? {}) as { name?: unknown }; const name = String(body.name ?? "").trim().replace(/[\\/]/g, "-").slice(0, 100); if (!name) return reply.code(400).send({ error: "Invalid workspace name" }); const path = join(rootDir(), name); try { await stat(path); return reply.code(409).send({ error: "Workspace already exists" }); } catch { /* create */ } await import("node:fs/promises").then(({ mkdir }) => mkdir(join(path, ".pi-science"), { recursive: true })); return await workspaceInfo(path, workspaceRepository); });
+  app.post("/api/workspaces/open", async (request, reply) => { const requestedPath = expandUserPath(String(((request.body ?? {}) as { path?: unknown }).path ?? "")); let path: string; try { if (!(await stat(requestedPath)).isDirectory()) return reply.code(400).send({ error: "Not a directory" }); path = await realpath(requestedPath); } catch { return reply.code(404).send({ error: "Folder not found" }); } await import("node:fs/promises").then(({ mkdir }) => mkdir(join(path, ".pi-science"), { recursive: true })); await rememberExternalWorkspace(path, workspaceRepository); return await workspaceInfo(path, workspaceRepository); });
   app.post("/api/workspaces/demo", async (request, reply) => {
     const demo = DEMOS[String((request.query as { name?: unknown }).name ?? "")];
     if (!demo) return reply.code(400).send({ error: "Unknown demo" });
@@ -359,7 +389,7 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
     }
     await mkdir(join(target, ".pi-science"), { recursive: true });
     await writeFile(sentinel, `${demo.source}\n`, "utf8");
-    return await workspaceInfo(target);
+    return await workspaceInfo(target, workspaceRepository);
   });
   app.post("/api/workspaces/rename", async (request, reply) => {
     const body = (request.body ?? {}) as { path?: unknown; name?: unknown };
@@ -376,16 +406,37 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
     if (await research?.hasActive(source) || await jobs?.hasActive(source)) return reply.code(409).send({ error: "Pause or cancel active research and jobs before renaming this workspace" });
     const destination = join(root, name);
     try { await stat(destination); return reply.code(409).send({ error: "Workspace already exists" }); } catch { /* available */ }
+    const sourceProject = await ensureProject(source);
     try {
       await rename(source, destination);
-      await updatePinnedWorkspace(source, destination);
+      await updateWorkspaceLocation(source, destination, workspaceRepository, sourceProject.id);
       await updateProject(destination, { name });
-      return await workspaceInfo(destination);
+      return await workspaceInfo(destination, workspaceRepository);
     } catch { return reply.code(404).send({ error: "Workspace not found" }); }
   });
-  app.get("/api/workspaces/pinned", async () => ({ paths: await readJson<string[]>(configPath("pinned.json"), []) }));
-  app.post("/api/workspaces/pin", async (request) => { const path = String(((request.body ?? {}) as { path?: unknown }).path ?? ""); const paths = await readJson<string[]>(configPath("pinned.json"), []); if (!paths.includes(path)) paths.push(path); await writeJsonAtomic(configPath("pinned.json"), paths); return { ok: true, pinned: true }; });
-  app.post("/api/workspaces/unpin", async (request) => { const path = String(((request.body ?? {}) as { path?: unknown }).path ?? ""); const paths = (await readJson<string[]>(configPath("pinned.json"), [])).filter((item) => item !== path); await writeJsonAtomic(configPath("pinned.json"), paths); return { ok: true, pinned: false }; });
+  app.get("/api/workspaces/pinned", async () => ({ paths: workspaceRepository ? (await workspaceRepository.listPinned()).map((location) => location.path) : await readJson<string[]>(configPath("pinned.json"), []) }));
+  app.post("/api/workspaces/pin", async (request) => {
+    const path = String(((request.body ?? {}) as { path?: unknown }).path ?? "");
+    if (workspaceRepository) {
+      const requested = resolve(path);
+      try { await workspaceRepository.rememberWorkspace(requested, { pinned: true, preservePath: true }); }
+      catch { await workspaceRepository.rememberMissing(requested, { pinned: true, preservePath: true }); }
+    } else {
+      const paths = await readJson<string[]>(configPath("pinned.json"), []);
+      if (!paths.includes(path)) paths.push(path);
+      await writeJsonAtomic(configPath("pinned.json"), paths);
+    }
+    return { ok: true, pinned: true };
+  });
+  app.post("/api/workspaces/unpin", async (request) => {
+    const path = String(((request.body ?? {}) as { path?: unknown }).path ?? "");
+    if (workspaceRepository) await workspaceRepository.setPinnedPath(path, false, true).catch(() => undefined);
+    else {
+      const paths = (await readJson<string[]>(configPath("pinned.json"), [])).filter((item) => item !== path);
+      await writeJsonAtomic(configPath("pinned.json"), paths);
+    }
+    return { ok: true, pinned: false };
+  });
   app.delete("/api/workspaces/delete", async (request, reply) => {
     let path: string;
     try { path = await managedWorkspacePath(String(((request.body ?? {}) as { path?: unknown }).path ?? ""), "delete"); }
