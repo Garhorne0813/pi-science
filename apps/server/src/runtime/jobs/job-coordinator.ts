@@ -110,8 +110,9 @@ export class JobCoordinator {
         const current = await this.repository!.get(cwd, id);
         if (!current) { this.cancelled.delete(id); return null; }
         if (isTerminal(current.status)) { if (current.status !== "cancelled") this.cancelled.delete(id); return current; }
-        let diagnostic: string | undefined;
-        if (!child && current.ownership?.child) diagnostic = `cancellation cleanup: ${this.reapOrphanChild(current.ownership)}`;
+        const diagnostic = !child && current.status === "running"
+          ? `cancellation cleanup: ${current.ownership?.child ? this.reapOrphanChild(current.ownership) : "no persisted child identity was available; no process was signalled"}`
+          : undefined;
         return this.repository!.cancel(cwd, id, this.now(), diagnostic);
       });
       if (cancelled) await this.finishExecution(cancelled);
@@ -122,8 +123,8 @@ export class JobCoordinator {
       const record = await readJson<JobRecord | null>(path, null);
       if (!record) { this.cancelled.delete(id); return null; }
       if (isTerminal(record.status)) { if (record.status !== "cancelled") this.cancelled.delete(id); return record; }
-      if (!child && record.ownership?.child) {
-        const cleanup = this.reapOrphanChild(record.ownership);
+      if (!child && record.status === "running") {
+        const cleanup = record.ownership?.child ? this.reapOrphanChild(record.ownership) : "no persisted child identity was available; no process was signalled";
         const note = `cancellation cleanup: ${cleanup}`;
         record.stderr = record.stderr ? `${record.stderr}\n${note}` : note;
       }
@@ -370,7 +371,44 @@ function mergeDiagnosticText(runner: string, durable: string): string {
 export function parseCommand(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String).filter(Boolean);
   if (typeof value !== "string") return [];
-  const tokens: string[] = []; const pattern = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'|([^\s]+)/g;
-  for (const match of value.matchAll(pattern)) tokens.push((match[1] ?? match[2] ?? match[3] ?? "").replace(/\\([\\"'])/g, "$1"));
+  const tokens: string[] = [];
+  let token = "";
+  let quote: '"' | "'" | null = null;
+  let inToken = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]!;
+    if (quote === '"') {
+      if (character === '"') { quote = null; inToken = true; continue; }
+      if (character === "\\") {
+        const next = value[index + 1];
+        if (next === "\\" || next === '"' || next === "'") { token += next; index += 1; }
+        else token += character;
+      } else token += character;
+      inToken = true;
+      continue;
+    }
+    if (quote === "'") {
+      if (character === "'") { quote = null; inToken = true; continue; }
+      token += character;
+      inToken = true;
+      continue;
+    }
+    if (character === '"' || character === "'") { quote = character; inToken = true; continue; }
+    if (character === "\\") {
+      const next = value[index + 1];
+      if (next !== undefined && (next === "\\" || next === '"' || next === "'")) { token += next; index += 1; }
+      else token += character;
+      inToken = true;
+      continue;
+    }
+    const isWhitespace = character === " " || character === "\t" || character === "\n" || character === "\r" || character === "\v" || character === "\f";
+    if (isWhitespace) {
+      if (inToken) { tokens.push(token); token = ""; inToken = false; }
+      continue;
+    }
+    token += character;
+    inToken = true;
+  }
+  if (inToken) tokens.push(token);
   return tokens;
 }

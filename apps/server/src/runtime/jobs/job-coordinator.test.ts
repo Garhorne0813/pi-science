@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { availableParallelism, tmpdir, totalmem } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { JobCoordinator, type JobOwnership, type JobRecord, type JobStatus, restrictLocalJobEnvironment, restrictResearchEnvironment, windowsTaskkillArgs } from "./job-coordinator.js";
+import { JobCoordinator, parseCommand, type JobOwnership, type JobRecord, type JobStatus, restrictLocalJobEnvironment, restrictResearchEnvironment, windowsTaskkillArgs } from "./job-coordinator.js";
 
 const cleanup: string[] = [];
 const jobs: JobCoordinator[] = [];
@@ -58,6 +58,11 @@ async function linuxStartTicks(pid: number): Promise<string | null> {
 async function processExists(pid: number): Promise<boolean> { try { process.kill(pid, 0); return true; } catch { return false; } }
 
 describe("job coordinator", () => {
+  it("parses command strings without a backtracking regular expression", () => {
+    expect(parseCommand(`python -c "print('hello world')" --label='quoted value'`)).toEqual(["python", "-c", "print('hello world')", "--label=quoted value"]);
+    expect(parseCommand("node -e 'process.stdout.write(\\\"ok\\\")'" )).toEqual(["node", "-e", "process.stdout.write(\\\"ok\\\")"]);
+  });
+
   it("reports host CPU and memory capacity instead of a hard-coded single CPU", () => {
     const coordinator = jobCoordinator();
     const result = coordinator.capabilities({ cpu: availableParallelism(), memory_mb: Math.floor(totalmem() / (1024 * 1024)) });
