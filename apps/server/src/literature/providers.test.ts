@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resetThrottle, searchArxiv, searchGenBank, searchPubChem, searchPubMed, searchUniProt } from "./providers.js";
+import { resetThrottle, searchArxiv, searchGenBank, searchPubChem, searchPubMed, searchUniProt, throttle } from "./providers.js";
 
 vi.mock("node:dns/promises", () => ({
   lookup: vi.fn(async (hostname: string) => [{ address: "93.184.216.34", family: 4 }]),
@@ -133,6 +133,18 @@ describe("searchPubMed", () => {
     stubFetch([{ match: "esearch.fcgi", body: PUBMED_SEARCH }]);
     await expect(searchPubMed("crispr", { approved: false })).rejects.toThrow(/private or reserved/i);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("throttle", () => {
+  it("serializes concurrent calls within the same rate bucket", async () => {
+    const started: number[] = [];
+    await Promise.all([
+      throttle("test", 30).then(() => started.push(Date.now())),
+      throttle("test", 30).then(() => started.push(Date.now())),
+    ]);
+    expect(started).toHaveLength(2);
+    expect(Math.abs(started[1]! - started[0]!)).toBeGreaterThanOrEqual(25);
   });
 });
 

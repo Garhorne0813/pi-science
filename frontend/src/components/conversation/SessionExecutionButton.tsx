@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -8,14 +8,15 @@ import { cn } from "../../lib/ui";
 
 export function SessionExecutionButton({ cwd, sessionId, active, onToggle }: { cwd: string; sessionId?: string; active: boolean; onToggle: () => void }) {
   const { t } = useTranslation();
+  const [liveConnected, setLiveConnected] = useState(false);
   const { data: runs = [] } = useQuery({
-    ...sessionRunsQuery(cwd, sessionId ?? ""),
+    ...sessionRunsQuery(cwd, sessionId ?? "", liveConnected),
     enabled: Boolean(sessionId),
   });
 
   useEffect(() => {
     if (!sessionId) return;
-    return subscribeExecutionInvalidation(cwd);
+    return subscribeExecutionInvalidation(cwd, { onConnectionChange: setLiveConnected });
   }, [cwd, sessionId]);
 
   if (!sessionId) return null;

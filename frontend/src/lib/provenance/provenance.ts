@@ -1,4 +1,4 @@
-import type { ProvenanceRecord } from "../../types/thread";
+import type { ProvenanceRecord } from "@pi-science/contracts";
 import { apiRequest } from "../client/api";
 import { queryClient } from "../client/query-client";
 
@@ -17,8 +17,9 @@ function read<T>(queryKey: string[], path: string): Promise<T> {
 export async function listProvenance(cwd: string, path: string): Promise<ProvenanceRecord[]> {
   try {
     const params = new URLSearchParams({ cwd });
-    const data = await read<{ versions?: ProvenanceRecord[] }>(provenanceKey(cwd, "versions", path), `${API}/versions/${encodeURIComponent(path)}?${params}`);
-    return data.versions ?? [];
+    const { provenanceVersionsResponseSchema } = await import("@pi-science/contracts");
+    const data = provenanceVersionsResponseSchema.parse(await read<unknown>(provenanceKey(cwd, "versions", path), `${API}/versions/${encodeURIComponent(path)}?${params}`));
+    return data.versions;
   } catch {
     return [];
   }

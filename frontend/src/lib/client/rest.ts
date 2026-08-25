@@ -4,6 +4,7 @@
 import { request, responseError } from "./http";
 import { cacheMessages } from "./message-cache";
 import type { HistoryMessage, InteractionResponse, SessionInfo, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
+import { parseWirePayload } from "./wire-schema";
 
 export async function createSession(baseUrl: string, cwd: string, model?: string): Promise<{ id: string; cwd?: string; project_id?: string }> {
   const config = model ? { model } : {};
@@ -19,7 +20,8 @@ export async function createSession(baseUrl: string, cwd: string, model?: string
   if (!res.ok || data.ok === false) {
     throw new Error(responseError(data, `Create session failed: ${res.statusText}`));
   }
-  return data;
+  const { createSessionResponseSchema } = await import("@pi-science/contracts");
+  return parseWirePayload(data, createSessionResponseSchema, "Create session failed");
 }
 
 export async function listSessions(baseUrl: string, cwd: string): Promise<SessionInfo[]> {
@@ -27,7 +29,13 @@ export async function listSessions(baseUrl: string, cwd: string): Promise<Sessio
   const res = await request(`${baseUrl}/api/sessions?${params}`);
   const data = await res.json().catch(() => ([]));
   if (!res.ok) throw new Error(responseError(data, `List sessions failed: ${res.statusText}`));
-  return Array.isArray(data) ? data : [];
+  const { sessionInfoSchema } = await import("@pi-science/contracts");
+  return parseWirePayload(data, sessionInfoSchema.array(), "List sessions failed").map((session) => ({
+    ...session,
+    name: session.name ?? undefined,
+    created_at: session.created_at ?? undefined,
+    updated_at: session.updated_at ?? undefined,
+  }));
 }
 
 export async function getMessagesPage(
@@ -46,16 +54,13 @@ export async function getMessagesPage(
   if (!res.ok || data.ok === false) {
     throw new Error(responseError(data, `Load messages failed: ${res.statusText}`));
   }
-  const messages = Array.isArray(data.messages) ? data.messages as HistoryMessage[] : [];
+  const { sessionMessagePageSchema } = await import("@pi-science/contracts");
+  const page = parseWirePayload(data, sessionMessagePageSchema, "Load messages failed");
+  const messages = page.messages as HistoryMessage[];
   // Persist to the local cache so the next switch to this session can
   // render instantly before the network response arrives.
   if (cwd && !options.before) cacheMessages(cwd, sessionId, messages);
-  return {
-    messages,
-    next_cursor: typeof data.next_cursor === "string" ? data.next_cursor : null,
-    has_more: data.has_more === true,
-    snapshot_version: typeof data.snapshot_version === "string" ? data.snapshot_version : "",
-  };
+  return { ...page, messages };
 }
 
 export async function getMessages(baseUrl: string, sessionId: string, cwd?: string): Promise<HistoryMessage[]> {
@@ -71,10 +76,8 @@ export async function getUserMessageIndex(baseUrl: string, sessionId: string, cw
   if (!res.ok || data.ok === false) {
     throw new Error(responseError(data, `Load message index failed: ${res.statusText}`));
   }
-  return {
-    messages: Array.isArray(data.messages) ? data.messages : [],
-    snapshot_version: typeof data.snapshot_version === "string" ? data.snapshot_version : "",
-  };
+  const { sessionUserMessageIndexSchema } = await import("@pi-science/contracts");
+  return parseWirePayload(data, sessionUserMessageIndexSchema, "Load message index failed");
 }
 
 export async function getTurnArtifacts(baseUrl: string, sessionId: string, cwd?: string): Promise<{ turns: TurnArtifactTurn[] }> {
@@ -107,7 +110,13 @@ export async function getSessionState(baseUrl: string, sessionId: string, cwd: s
   if (!res.ok || data.ok === false) {
     throw new Error(responseError(data, `Read session state failed: ${res.statusText}`));
   }
-  return data as SessionState;
+  const { sessionStateSchema } = await import("@pi-science/contracts");
+  const state = parseWirePayload(data, sessionStateSchema, "Read session state failed");
+  return {
+    ...state,
+    model: state.model ?? undefined,
+    thinking: state.thinking ?? undefined,
+  };
 }
 
 export async function getSessionStats(baseUrl: string, sessionId: string, cwd: string): Promise<SessionStats> {
@@ -117,7 +126,8 @@ export async function getSessionStats(baseUrl: string, sessionId: string, cwd: s
   if (!res.ok || data.ok === false) {
     throw new Error(responseError(data, `Read session stats failed: ${res.statusText}`));
   }
-  return data.stats as SessionStats;
+  const { sessionStatsSchema } = await import("@pi-science/contracts");
+  return parseWirePayload(data.stats, sessionStatsSchema, "Read session stats failed");
 }
 
 export async function forkSession(baseUrl: string, sessionId: string, cwd: string, entryId?: string): Promise<{ id: string }> {

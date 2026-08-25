@@ -27,7 +27,7 @@ export function apiErrorMessage(payload: unknown, fallback?: string): string {
  *  belong to the QueryClient (lib/client/query-client.ts) — this only speaks HTTP. */
 export async function apiRequest<T>(url: string, options: ApiRequestOptions = {}): Promise<T> {
   const { errorFallback, ...init } = options;
-  const response = await fetch(url, init);
+  const response = await fetch(url, { ...init, credentials: init.credentials ?? "include" });
   const contentType = response.headers.get("content-type") || "";
   const data = contentType.includes("application/json")
     ? await response.json().catch(() => ({}))

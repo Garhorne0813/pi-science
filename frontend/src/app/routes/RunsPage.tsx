@@ -5,7 +5,7 @@ import {
   Braces, Copy, Crosshair, FileOutput, FileSearch, Loader2, MessageSquare, Play, RotateCcw, Search, X,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import type { ExecutionRecord } from "../../types/thread";
+import type { ExecutionRecord } from "@pi-science/contracts";
 import { cn, useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { fileInspectorForPath } from "../../lib/artifacts";
@@ -45,7 +45,7 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
   const [loadingLogs, setLoadingLogs] = useState<Record<string, boolean>>({});
   const [liveConnected, setLiveConnected] = useState(false);
 
-  const runsResult = useQuery(sessionId ? sessionRunsQuery(workspaceCwd, sessionId) : runsQuery(workspaceCwd));
+  const runsResult = useQuery(sessionId ? sessionRunsQuery(workspaceCwd, sessionId, liveConnected) : runsQuery(workspaceCwd, liveConnected));
   const runs = runsResult.data ?? EMPTY_RUNS;
   const loading = runsResult.isFetching;
   const selectedId = searchParams.get("execution");

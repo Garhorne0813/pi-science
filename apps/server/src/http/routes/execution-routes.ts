@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { executionKindSchema, executionStatusSchema } from "@pi-science/contracts";
+import { executionKindSchema, executionListResponseSchema, executionRecordSchema, executionStatusSchema, executionLogResponseSchema } from "@pi-science/contracts";
 import { executionRepository } from "../../runtime/executions/execution-repository.js";
 import { subscribeExecutionEvents } from "../../runtime/executions/execution-events.js";
 import type { JobCoordinator } from "../../runtime/jobs/job-coordinator.js";
@@ -53,14 +53,14 @@ export function registerExecutionRoutes(app: FastifyInstance, jobs?: Pick<JobCoo
       ...(kind?.success ? { kind: kind.data } : {}),
       ...(status?.success ? { status: status.data } : {}),
     });
-    return { executions };
+    return executionListResponseSchema.parse({ executions });
   });
 
   app.get<{ Params: { execution_id: string } }>("/api/executions/:execution_id", async (request, reply) => {
     const cwd = await workspace(request, reply);
     if (!cwd) return;
     const execution = await executionRepository.get(cwd, request.params.execution_id);
-    return execution ?? reply.code(404).send({ error: "Execution not found" });
+    return execution ? executionRecordSchema.parse(execution) : reply.code(404).send({ error: "Execution not found" });
   });
 
   app.get<{ Params: { execution_id: string } }>("/api/executions/:execution_id/logs", async (request, reply) => {
@@ -71,20 +71,20 @@ export function registerExecutionRoutes(app: FastifyInstance, jobs?: Pick<JobCoo
     const jobId = execution.kind === "job" ? execution.correlation.job_id : undefined;
     if (jobs && jobId) {
       const logs = await jobs.logs(cwd, jobId);
-      if (logs) return {
+      if (logs) return executionLogResponseSchema.parse({
         execution_id: execution.execution_id,
         stdout: logs.stdout,
         stderr: logs.stderr,
         source: "job" as const,
         complete: !logs.stdout_truncated && !logs.stderr_truncated,
-      };
+      });
     }
-    return {
+    return executionLogResponseSchema.parse({
       execution_id: execution.execution_id,
       stdout: String(execution.result.stdout_preview ?? ""),
       stderr: String(execution.result.stderr_preview ?? execution.result.error ?? ""),
       source: "preview" as const,
       complete: false,
-    };
+    });
   });
 }

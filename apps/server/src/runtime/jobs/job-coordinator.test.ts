@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir, totalmem } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { JobCoordinator, type JobOwnership, type JobRecord, type JobStatus, restrictLocalJobEnvironment, restrictResearchEnvironment, windowsTaskkillArgs } from "./job-coordinator.js";
@@ -58,6 +58,14 @@ async function linuxStartTicks(pid: number): Promise<string | null> {
 async function processExists(pid: number): Promise<boolean> { try { process.kill(pid, 0); return true; } catch { return false; } }
 
 describe("job coordinator", () => {
+  it("reports host CPU and memory capacity instead of a hard-coded single CPU", () => {
+    const coordinator = jobCoordinator();
+    const result = coordinator.capabilities({ cpu: availableParallelism(), memory_mb: Math.floor(totalmem() / (1024 * 1024)) });
+    expect(result.status).toBe("ready");
+    expect(result.checks.cpu).toBe(availableParallelism());
+    expect(result.checks.memory_mb).toBe(Math.floor(totalmem() / (1024 * 1024)));
+  });
+
   it("heals orphaned pending/running records after a restart and unblocks hasActive", async () => {
     const cwd = await workspace();
     await writeStoredJob(cwd, "job_orphan0000000000", "running", new Date(Date.now() - 60_000).toISOString(), "earlier stderr");

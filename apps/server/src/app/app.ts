@@ -25,6 +25,7 @@ import { serveFrontend } from "../http/frontend-static.js";
 import { validateWorkspaceCwd } from "../security/workspace-security.js";
 import { AiTitleService, PiTitleRuntimeFactory } from "../runtime/title/ai-title-service.js";
 import { importLegacyState } from "../storage/sqlite/legacy-state.js";
+import { internalAuthCookie, requestInternalToken, tokensMatch } from "../security/internal-auth.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
   const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
@@ -45,6 +46,14 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   app.addHook("onRequest", async (request, reply) => {
     reply.header("x-request-id", request.id);
     const pathname = request.url.split("?")[0] ?? request.url;
+    const authEnabled = config.requireInternalToken !== false && Boolean(config.internalToken);
+    // CORS preflight must be answered before the application-token check; the
+    // actual request still has to carry the token or the HttpOnly cookie.
+    if (authEnabled && request.method !== "OPTIONS" && (pathname.startsWith("/api/") || pathname === "/internal/diagnostics")) {
+      if (!tokensMatch(config.internalToken!, requestInternalToken(request.headers))) {
+        return reply.code(401).send({ error: "control-plane authentication required" });
+      }
+    }
     const boundary = routeBoundary(pathname);
     if (request.url.startsWith("/api/") && !boundary) {
       return reply.code(404).send({ error: `Unknown API route: ${request.method} ${pathname}` });
@@ -162,6 +171,9 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     }
     const served = await serveFrontend(new URL(request.url, "http://localhost").pathname);
     if ("error" in served) return reply.code(404).send({ error: served.error });
+    if (config.requireInternalToken !== false && config.internalToken && served.type.startsWith("text/html")) {
+      reply.header("set-cookie", internalAuthCookie(config.internalToken));
+    }
     return reply.type(served.type).send(served.stream);
   });
 

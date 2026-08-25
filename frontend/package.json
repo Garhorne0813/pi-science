@@ -21,6 +21,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@pi-science/contracts": "workspace:*",
     "@fontsource/inter": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@fontsource/source-serif-4": "^5.2.9",
@@ -74,7 +75,7 @@
     "oxlint": "^1.71.0",
     "playwright-core": "^1.62.1",
     "pptxgenjs": "^4.0.1",
-    "typescript": "~6.0.2",
+    "typescript": "^7.0.2",
     "vite": "^8.1.1",
     "vitest": "^4.1.10"
   },

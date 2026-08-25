@@ -40,9 +40,21 @@ const PROVIDER_BUCKET: Record<LiteratureProviderId, string> = {
 };
 
 const lastRequestAt = new Map<string, number>();
+const throttleTails = new Map<string, Promise<void>>();
 
-/** Serialize calls per rate bucket and enforce a minimum interval between them. */
-export async function throttle(key: string, minIntervalMs = BUCKET_INTERVAL_MS[key] ?? 250): Promise<void> {
+type ThrottleTurn = { predecessor: Promise<void>; tail: Promise<void>; release: () => void };
+
+function enqueueThrottle(key: string): ThrottleTurn {
+  const predecessor = throttleTails.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const turn = new Promise<void>((resolve) => { release = resolve; });
+  const tail = predecessor.then(() => turn);
+  throttleTails.set(key, tail);
+  return { predecessor, tail, release };
+}
+
+async function waitForThrottle(turn: ThrottleTurn, key: string, minIntervalMs: number): Promise<void> {
+  await turn.predecessor;
   const now = Date.now();
   const last = lastRequestAt.get(key) ?? 0;
   const wait = last + minIntervalMs - now;
@@ -50,9 +62,25 @@ export async function throttle(key: string, minIntervalMs = BUCKET_INTERVAL_MS[k
   lastRequestAt.set(key, Date.now());
 }
 
+function releaseThrottle(key: string, turn: ThrottleTurn): void {
+  turn.release();
+  if (throttleTails.get(key) === turn.tail) throttleTails.delete(key);
+}
+
+/** Serialize calls per rate bucket and enforce a minimum interval between them. */
+export async function throttle(key: string, minIntervalMs = BUCKET_INTERVAL_MS[key] ?? 250): Promise<void> {
+  const turn = enqueueThrottle(key);
+  try {
+    await waitForThrottle(turn, key, minIntervalMs);
+  } finally {
+    releaseThrottle(key, turn);
+  }
+}
+
 /** Reset throttle state (tests). */
 export function resetThrottle(): void {
   lastRequestAt.clear();
+  throttleTails.clear();
 }
 
 export function sha256Hex(input: string): string {
@@ -93,21 +121,29 @@ async function fetchProviderText(provider: LiteratureProviderId, url: string, co
 }
 
 async function runThrottled(provider: LiteratureProviderId, context: ProviderContext, fetcher: () => Promise<string[]>): Promise<ProviderResult> {
-  await throttle(PROVIDER_BUCKET[provider]);
-  const rawBodies = await fetcher();
-  return {
-    result: {
-      provider,
-      query: "",
-      hitCount: 0,
-      truncated: false,
-      records: [],
-      retrievedAt: new Date().toISOString(),
-      responseHash: combinedHash(rawBodies),
-      cached: false,
-    },
-    rawBodies,
-  };
+  const bucket = PROVIDER_BUCKET[provider];
+  const turn = enqueueThrottle(bucket);
+  try {
+    await waitForThrottle(turn, bucket, BUCKET_INTERVAL_MS[bucket] ?? 250);
+    const rawBodies = await fetcher();
+    return {
+      result: {
+        provider,
+        query: "",
+        hitCount: 0,
+        truncated: false,
+        records: [],
+        retrievedAt: new Date().toISOString(),
+        responseHash: combinedHash(rawBodies),
+        cached: false,
+      },
+      rawBodies,
+    };
+  } finally {
+    // Hold the bucket turn for the whole provider operation, so a multi-step
+    // call (NCBI search + summary) cannot overlap the next caller.
+    releaseThrottle(bucket, turn);
+  }
 }
 
 function withQuery(query: string, result: LiteratureSearchResult): LiteratureSearchResult {
@@ -122,7 +158,7 @@ async function ncbiSearch(db: "pubmed" | "nuccore", provider: "pubmed" | "genban
     const parsed = JSON.parse(searchBody) as { esearchresult?: { idlist?: string[]; retmax?: string } };
     const ids = parsed.esearchresult?.idlist ?? [];
     if (ids.length === 0) return [searchBody];
-    await throttle(PROVIDER_BUCKET[provider]); // space esearch/esummary within one search
+    await new Promise((resolve) => setTimeout(resolve, BUCKET_INTERVAL_MS[PROVIDER_BUCKET[provider]] ?? 250)); // space esearch/esummary within one search
     const summaryUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=${db}&id=${ids.join(",")}&retmode=json`;
     const summaryBody = await fetchProviderText(provider, summaryUrl, context);
     return [searchBody, summaryBody];

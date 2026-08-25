@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, ReactNode, Ref } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -126,6 +126,7 @@ export function LiveSessionPage() {
   // newer interaction or an unmount cancels stale callbacks before they touch
   // the next session's page. sessionRef guards against cross-session staleness.
   const scrollTimersRef = useRef<number[]>([]);
+  const followOutputCancelRef = useRef<(() => void) | null>(null);
   const sessionRef = useRef(sessionId);
   const locatedFocusRef = useRef<string | null>(null);
   useEffect(() => {
@@ -186,12 +187,31 @@ export function LiveSessionPage() {
     }
   }, [handleThreadScroll]);
 
-  useLayoutEffect(() => {
-    if (followOutputRef.current) {
+  const scheduleFollowOutput = useCallback(() => {
+    if (followOutputCancelRef.current) return;
+    const apply = () => {
+      followOutputCancelRef.current = null;
+      if (!followOutputRef.current) return;
       if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
       virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "auto" });
+    };
+    if (typeof window.requestAnimationFrame === "function") {
+      const frame = window.requestAnimationFrame(apply);
+      followOutputCancelRef.current = () => window.cancelAnimationFrame(frame);
+    } else {
+      // Keep jsdom/tests deterministic; browsers use the frame-coalesced path.
+      apply();
     }
-  }, [thread.blocks]);
+  }, []);
+
+  useEffect(() => {
+    if (followOutputRef.current) scheduleFollowOutput();
+  }, [scheduleFollowOutput, thread.blocks]);
+
+  useEffect(() => () => {
+    followOutputCancelRef.current?.();
+    followOutputCancelRef.current = null;
+  }, []);
 
   // When a new turn starts (user sends a message or the agent resumes), snap
   // the view back to the newest content. The user may have scrolled up to read

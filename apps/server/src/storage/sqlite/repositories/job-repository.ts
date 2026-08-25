@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { JobOwnership, JobRecord, JobStatus } from "../../../runtime/jobs/job-coordinator.js";
+import type { JobOwnership, JobRecord, JobStatus } from "../../../runtime/jobs/job-types.js";
 import { metadataRoot } from "../../persistence.js";
 import type { SqliteStateStore } from "../state-store.js";
 import { WorkspaceRepository } from "./workspace-repository.js";
