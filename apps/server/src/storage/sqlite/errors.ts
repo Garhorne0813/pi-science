@@ -7,6 +7,7 @@ export type SqliteErrorCode =
   | "SQLITE_NOT_READY"
   | "SQLITE_CLOSED"
   | "SQLITE_MIGRATION"
+  | "SQLITE_EXPECT_CHANGES"
   | "SQLITE_UNKNOWN";
 
 export class SqliteStateError extends Error {
@@ -28,6 +29,7 @@ export function classifySqliteError(error: unknown): SqliteErrorCode {
   if (code.includes("BUSY") || message.includes("SQLITE_BUSY") || message.includes("DATABASE IS LOCKED")) return "SQLITE_BUSY";
   if (code.includes("CORRUPT") || message.includes("SQLITE_CORRUPT") || message.includes("MALFORMED")) return "SQLITE_CORRUPT";
   if (code.includes("FULL") || message.includes("SQLITE_FULL") || message.includes("DISK FULL")) return "SQLITE_FULL";
+  if (code === "SQLITE_EXPECT_CHANGES") return "SQLITE_EXPECT_CHANGES";
   return "SQLITE_UNKNOWN";
 }
 
@@ -46,6 +48,8 @@ function isSqliteErrorCode(value: string | undefined): value is SqliteErrorCode 
     || value === "SQLITE_WORKER"
     || value === "SQLITE_NOT_READY"
     || value === "SQLITE_CLOSED"
+    || value === "SQLITE_MIGRATION"
+    || value === "SQLITE_EXPECT_CHANGES"
     || value === "SQLITE_MIGRATION"
     || value === "SQLITE_UNKNOWN";
 }

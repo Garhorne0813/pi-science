@@ -72,6 +72,24 @@ describe("SQLite state store", () => {
     expect(await state.get<{ count: number }>("SELECT COUNT(*) AS count FROM projects")).toEqual({ count: 0 });
   });
 
+  it("rolls back the whole batch when an expectChanges assertion fails before commit", async () => {
+    const state = await store();
+
+    await expect(state.batch([
+      { sql: "INSERT INTO projects (project_id, name, manifest_version, created_at, updated_at, last_seen_at) VALUES (?, ?, 1, 1, 1, 1)", params: ["project-early", "early"] },
+      { sql: "UPDATE projects SET name = ? WHERE project_id = ?", params: ["renamed", "project-missing"], expectChanges: 1 },
+    ])).rejects.toMatchObject({ code: "SQLITE_EXPECT_CHANGES" });
+
+    // The earlier INSERT must be rolled back together with the failed assertion.
+    expect(await state.get<{ count: number }>("SELECT COUNT(*) AS count FROM projects")).toEqual({ count: 0 });
+
+    await state.batch([
+      { sql: "INSERT INTO projects (project_id, name, manifest_version, created_at, updated_at, last_seen_at) VALUES (?, ?, 1, 1, 1, 1)", params: ["project-ok", "ok"] },
+      { sql: "UPDATE projects SET name = ? WHERE project_id = ?", params: ["renamed", "project-ok"], expectChanges: 1 },
+    ]);
+    expect(await state.get<{ name: string }>("SELECT name FROM projects WHERE project_id = 'project-ok'")).toEqual({ name: "renamed" });
+  });
+
   it("keeps job history attached to project identity after a workspace rename", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-science-sqlite-rename-"));
     directories.push(root);
