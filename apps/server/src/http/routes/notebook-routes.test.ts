@@ -42,7 +42,9 @@ describe("notebook document routes", () => {
     expect(editedBody).toMatchObject({ ok: true, changed_cell_ids: [cellId], stale_cell_ids: [cellId] });
     const stored = JSON.parse(await readFile(join(cwd, path), "utf8")) as { cells: Array<{ id: string; source: string; execution_count: number | null; outputs: unknown[] }> };
     expect(stored.cells[0]).toMatchObject({ id: cellId, source: "value = 2\n", execution_count: null, outputs: [] });
-    expect((await stat(join(cwd, path))).mode & 0o7777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect((await stat(join(cwd, path))).mode & 0o7777).toBe(0o600);
+    }
 
     const output = await app.inject({
       method: "POST",
@@ -64,7 +66,9 @@ describe("notebook document routes", () => {
     expect(output.json()).toMatchObject({ ok: true, cell_id: cellId, execution_count: 2, output_count: 3 });
     const afterOutput = JSON.parse(await readFile(join(cwd, path), "utf8")) as { cells: Array<{ execution_count: number | null; outputs: unknown[] }> };
     expect(afterOutput.cells[0]).toMatchObject({ execution_count: 2, outputs: expect.arrayContaining([{ output_type: "stream", name: "stdout", text: "value\n" }]) });
-    expect((await stat(join(cwd, path))).mode & 0o7777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect((await stat(join(cwd, path))).mode & 0o7777).toBe(0o600);
+    }
     const provenance = (await readFile(join(cwd, ".pi-science", "provenance.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(provenance.at(-1)).toMatchObject({ tool: "notebook_run", executionId: "exec-notebook-cell" });
 
