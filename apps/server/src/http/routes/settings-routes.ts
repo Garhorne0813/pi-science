@@ -663,11 +663,45 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       const canonicalModel = canonicalState?.aliases[model] ?? model;
       const selected = (await modelResources.listModels({ available: true })).find((item) => item.id === canonicalModel);
       if (model && !selected) return reply.code(422).send({ code: "no_routable_endpoint", error: "Model is not available from a configured provider" });
-      const levels = normalizeThinkingLevels(selected?.capabilities.thinking_levels);
+      let levels = normalizeThinkingLevels(selected?.capabilities.thinking_levels);
+      let runtimeLevelsVerified = false;
+      if (cwdValue && canonicalModel) {
+        const actual = await nodeSessionService.availableThinkingLevels(cwdValue, canonicalModel).catch(() => null);
+        if (actual?.success && actual.data && typeof actual.data === "object") {
+          const data = actual.data as Record<string, unknown>;
+          const runtimeLevels = normalizeThinkingLevels(data.levels);
+          if (runtimeLevels && data.model === canonicalModel) {
+            levels = runtimeLevels;
+            runtimeLevelsVerified = true;
+          }
+        }
+      }
       const thinking = clampThinking(requestedThinking, levels ?? ["off"]);
       await mutate((config) => { config.model = canonicalModel; config.thinking = thinking; const contextWindow = Number(selected?.capabilities.context_window ?? 0); if (contextWindow > 0) config.model_context_window = contextWindow; });
+      if (runtimeLevelsVerified && canonicalModel.startsWith("user-") && selected) {
+        const separator = canonicalModel.indexOf("/");
+        if (separator > 0) await modelResources.applyRuntimeCapabilities(canonicalModel.slice(0, separator), canonicalModel.slice(separator + 1), { reasoning: selected.capabilities.reasoning, thinking_levels: levels ?? selected.capabilities.thinking_levels });
+      }
       const reloaded = await respondWithRuntimeReload(nodeSessionService, reply, { ok: true, model: canonicalModel, thinking });
       if ("send" in reloaded) return reloaded;
+      if (cwdValue && canonicalModel) {
+        const actual = await nodeSessionService.availableThinkingLevels(cwdValue, canonicalModel).catch(() => null);
+        if (actual?.success && actual.data && typeof actual.data === "object") {
+          const data = actual.data as Record<string, unknown>;
+          const runtimeLevels = normalizeThinkingLevels(data.levels);
+          if (runtimeLevels && data.model === canonicalModel) {
+            if (canonicalModel.startsWith("user-") && selected) {
+              const separator = canonicalModel.indexOf("/");
+              if (separator > 0) await modelResources.applyRuntimeCapabilities(canonicalModel.slice(0, separator), canonicalModel.slice(separator + 1), { reasoning: selected.capabilities.reasoning, thinking_levels: runtimeLevels });
+            }
+            const effective = clampThinking(requestedThinking, runtimeLevels);
+            if (effective !== thinking) {
+              await mutate((config) => { if (String(config.model ?? "") === canonicalModel) config.thinking = effective; });
+              reloaded.thinking = effective;
+            }
+          }
+        }
+      }
       return reloaded;
     }
     const catalog = await modelCatalog(nodeSessionService, current, cwdValue, modelResources); const selected = catalog.available.find((item) => item.id === model); if (model && !selected) return reply.code(400).send({ error: "Model is not available from a configured provider" }); // Never persist a thinking level the model does not support. Clamp to the

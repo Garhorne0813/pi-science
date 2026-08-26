@@ -124,6 +124,10 @@ function capabilityPatchFromPayload(value: unknown): CapabilityPatch {
         const levels = normalizeThinkingLevels(child.filter((level) => THINKING_LEVEL_SET.has(String(level))));
         if (levels) patch.thinking_levels = levels;
       }
+      if (key === "thinkinglevelmap" && child && typeof child === "object" && patch.thinking_levels === undefined) {
+        const levels = normalizeThinkingLevels(Object.entries(child as Record<string, unknown>).filter(([, mapped]) => mapped !== null).map(([level]) => level));
+        if (levels) patch.thinking_levels = levels;
+      }
       if ((key === "vision" || key === "supports_vision") && typeof child === "boolean" && patch.vision === undefined) patch.vision = child;
       if ((key === "tools" || key === "supports_tools") && typeof child === "boolean" && patch.tools === undefined) patch.tools = child;
       if ((key === "structured_output" || key === "supports_structured_output") && typeof child === "boolean" && patch.structured_output === undefined) patch.structured_output = child;
