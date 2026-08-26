@@ -504,40 +504,76 @@ export class ModelResourceService {
         const created = await this.credentials.put({ kind: "api_key", backend: "managed", secret: input.auth.secret, label: `${provider.name} key`, owner_provider_id: provider.id });
         await this.updateEndpoint(endpoint.id, { credential_ref: created.id });
       }
+    } else if (input.auth?.kind === "none") {
+      const endpointRef = endpoint.credential_ref;
+      const refs = new Set((await this.credentials.listMetadata()).filter((item) => item.owner_provider_id === provider.id).map((item) => item.id));
+      if (endpointRef) refs.add(endpointRef);
+      if (endpointRef) await this.updateEndpoint(endpoint.id, { credential_ref: null });
+      for (const ref of refs) {
+        const current = await this.repository.read();
+        const metadata = await this.credentials.metadata(ref);
+        const shared = Object.values(current.credential_refs).includes(ref) || current.endpoints.some((item) => item.credential_ref === ref);
+        const owned = metadata?.owner_provider_id === provider.id || ref === endpointRef && metadata?.owner_provider_id === undefined;
+        if (!shared && owned) await this.credentials.remove(ref);
+      }
     }
+    if (input.auth?.kind) await this.updateProvider(id, { auth_kind: input.auth.kind });
     const updated = await this.repository.read();
     return { provider: structuredClone(updated.providers.find((item) => item.id === id)!), endpoint: structuredClone(updated.endpoints.find((item) => item.id === endpoint.id)!), binding: structuredClone(updated.bindings.find((item) => item.id === binding.id)!) };
   }
 
-  /** Delete a custom provider and the resources it owns: models/bindings, the
-   *  owned endpoint, and the owned managed credential (raw secret removed from
-   *  disk). Shared endpoints/credentials are kept. Endpoints/credentials
-   *  created before ownership metadata existed are treated as owned when this
-   *  provider is their only remaining binder. */
+  /** Delete owned secrets and endpoints before the provider. Keeping the
+   *  provider until the last step makes a failed cleanup safe to retry. */
   async deleteCustomProvider(id: string): Promise<{ id: string; removed_endpoints: number; removed_credentials: number }> {
     await this.ensureMigrated();
     const state = await this.repository.read();
-    if (!state.providers.some((item) => item.id === id)) throw resourceError("resource_not_found", `Provider '${id}' was not found`);
+    const providerExists = state.providers.some((item) => item.id === id);
     const bindingEndpointIds = new Set(state.bindings.filter((binding) => binding.provider_id === id).map((binding) => binding.endpoint_id));
     const otherBindings = state.bindings.filter((binding) => binding.provider_id !== id);
-    let removedEndpoints = 0;
-    let removedCredentials = 0;
-    await this.deleteProvider(id, true);
-    for (const endpoint of state.endpoints) {
+    const removableEndpoints = state.endpoints.filter((endpoint) => {
       const owned = endpoint.owner_provider_id === id || (endpoint.owner_provider_id === undefined && bindingEndpointIds.has(endpoint.id));
-      if (!owned || !bindingEndpointIds.has(endpoint.id)) continue;
-      if (otherBindings.some((binding) => binding.endpoint_id === endpoint.id)) continue;
-      await this.deleteEndpoint(endpoint.id, true);
-      removedEndpoints += 1;
+      return owned && !otherBindings.some((binding) => binding.endpoint_id === endpoint.id);
+    });
+    const removableEndpointIds = new Set(removableEndpoints.map((endpoint) => endpoint.id));
+    const systemCredentialRefs = new Set(Object.values(state.credential_refs));
+    const credentialMetadata = await this.credentials.listMetadata();
+    const removableCredentialRefs = new Set<string>();
+    for (const endpoint of removableEndpoints) {
       const ref = endpoint.credential_ref;
-      if (!ref) continue;
-      const metadata = await this.credentials.metadata(ref);
-      const ownedCredential = metadata && (metadata.owner_provider_id === id || metadata.owner_provider_id === undefined);
-      if (!ownedCredential) continue;
-      const remaining = await this.repository.read();
-      if (remaining.endpoints.some((item) => item.credential_ref === ref)) continue;
-      await this.credentials.remove(ref);
-      removedCredentials += 1;
+      if (!ref || systemCredentialRefs.has(ref)) continue;
+      const metadata = credentialMetadata.find((item) => item.id === ref);
+      if (!metadata || (metadata.owner_provider_id !== id && metadata.owner_provider_id !== undefined)) continue;
+      if (state.endpoints.some((item) => !removableEndpointIds.has(item.id) && item.credential_ref === ref)) continue;
+      removableCredentialRefs.add(ref);
+    }
+    for (const metadata of credentialMetadata) {
+      if (metadata.owner_provider_id !== id || systemCredentialRefs.has(metadata.id)) continue;
+      if (state.endpoints.some((endpoint) => !removableEndpointIds.has(endpoint.id) && endpoint.credential_ref === metadata.id)) continue;
+      removableCredentialRefs.add(metadata.id);
+    }
+
+    let removedCredentials = 0;
+    for (const ref of removableCredentialRefs) if (await this.credentials.remove(ref)) removedCredentials += 1;
+    let removedEndpoints = 0;
+    for (const endpoint of removableEndpoints) {
+      try { await this.deleteEndpoint(endpoint.id, true); removedEndpoints += 1; }
+      catch (error) { if (!(error instanceof Error) || !String(error.message).includes("was not found")) throw error; }
+    }
+
+    if (providerExists) await this.deleteProvider(id, true);
+    else {
+      const legacyId = id.startsWith("user-") ? id.slice("user-".length) : id;
+      await this.repository.update((current) => {
+        const modelRefs = current.models.filter((model) => model.provider_id === id).map((model) => canonicalModelRef(id, model.model_id));
+        current.providers = current.providers.filter((provider) => provider.id !== id);
+        current.models = current.models.filter((model) => model.provider_id !== id);
+        current.bindings = current.bindings.filter((binding) => binding.provider_id !== id);
+        for (const [alias, target] of Object.entries(current.aliases)) if (modelRefs.includes(target) || target.startsWith(`${id}/`)) delete current.aliases[alias];
+      });
+      await this.settings.update((current) => {
+        const model = String(current.model ?? "");
+        if (model.startsWith(`${id}/`) || model.startsWith(`custom-${legacyId}/`) || model.startsWith(`${legacyId}/`)) current.model = "";
+      });
     }
     return { id, removed_endpoints: removedEndpoints, removed_credentials: removedCredentials };
   }

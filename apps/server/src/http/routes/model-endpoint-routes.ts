@@ -175,7 +175,7 @@ function registerCanonicalEndpointRoutes(app: FastifyInstance, service: ModelRes
   app.post<{ Params: { endpoint_id: string } }>("/api/endpoints/:endpoint_id/health", async (request, reply) => {
     try {
       const endpoint = publicCanonicalEndpoint(await service.probeEndpoint(request.params.endpoint_id));
-      return { ok: true, ...endpoint, endpoint };
+      return await canonicalReload(nodeSessionService, reply, { ok: true, ...endpoint, endpoint });
     }
     catch (error) { return canonicalError(reply, error); }
   });

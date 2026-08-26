@@ -190,6 +190,24 @@ describe("Node Pi Orbit adapter", () => {
     await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
+  it("recycles the shared host before starting runtimes from a changed model catalog", async () => {
+    const manager = new PiManager();
+    managers.push(manager);
+    const runtime = await fakeWebRuntime();
+    const first = await manager.start("catalog-before", runtime);
+    const firstPid = first.child.pid;
+
+    await expect(manager.recycleWebHost()).resolves.toBe(true);
+    expect(manager.hostProcessCount).toBe(0);
+    expect(manager.activeCount).toBe(0);
+
+    const second = await manager.start("catalog-after", runtime);
+    expect(manager.hostProcessCount).toBe(1);
+    expect(second.child.pid).not.toBe(firstPid);
+    await manager.shutdownAll();
+    await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
   it("intersects a global named skill policy with each runtime catalog", async () => {
     const manager = new PiManager();
     managers.push(manager);

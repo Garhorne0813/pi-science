@@ -38,6 +38,12 @@ export class PiManager {
     await process.shutdown();
   }
 
+  async recycleWebHost(): Promise<boolean> {
+    if (!this.webHost && !this.webHostStart) return false;
+    await this.shutdownAll();
+    return true;
+  }
+
   async shutdownAll(): Promise<void> {
     await Promise.allSettled(this.pendingStarts.values());
     const processes = [...this.processes.entries()];

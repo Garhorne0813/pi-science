@@ -27,6 +27,26 @@ afterEach(async () => {
 });
 
 describe("model resource routes", () => {
+  it("switches an aggregate provider to no authentication", async () => {
+    const reloadConfiguration = vi.fn().mockResolvedValue([]);
+    const session = { reloadConfiguration } as unknown as NodeSessionService;
+    const service = new ModelResourceService();
+    const app = Fastify({ logger: false });
+    registerModelResourceRoutes(app, service, session);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ data: [{ id: "model-a" }] }), { status: 200, headers: { "content-type": "application/json" } }));
+
+    const created = await app.inject({ method: "POST", url: "/api/custom-providers", payload: { name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", auth: { kind: "api_key", secret: "route-secret" } } });
+    expect(created.statusCode).toBe(200);
+    const providerId = created.json().provider.id as string;
+    const credentialId = created.json().credential.id as string;
+
+    const updated = await app.inject({ method: "PUT", url: `/api/custom-providers/${providerId}`, payload: { auth: { kind: "none" } } });
+
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toMatchObject({ provider: { auth_kind: "none" }, endpoint: { credential_ref: null } });
+    expect(await service.credentials.metadata(credentialId)).toBeNull();
+  });
+
   it("runs provider → credential → endpoint → binding → discovery and fails closed when disabled", async () => {
     const reloadConfiguration = vi.fn().mockResolvedValue([]);
     const session = { reloadConfiguration } as unknown as NodeSessionService;
@@ -72,6 +92,9 @@ describe("model resource routes", () => {
     expect(disabled.json()).toMatchObject({ endpoint: { enabled: false, health: "blocked" } });
     const unavailable = await app.inject({ method: "GET", url: `/api/models?provider_id=${providerId}` });
     expect(unavailable.json().models).toEqual(expect.arrayContaining([expect.objectContaining({ id: `${providerId}/model-a`, available: false, availability_reason: "disabled_endpoint" })]));
-    expect(reloadConfiguration).toHaveBeenCalled();
+    reloadConfiguration.mockClear();
+    const probed = await app.inject({ method: "POST", url: `/api/endpoints/${endpointId}/health` });
+    expect(probed.statusCode).toBe(200);
+    expect(reloadConfiguration).toHaveBeenCalledTimes(1);
   });
 });

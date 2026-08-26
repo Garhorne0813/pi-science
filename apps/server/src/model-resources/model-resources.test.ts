@@ -280,6 +280,40 @@ describe("resource service", () => {
     expect((await service.credentials.metadata(credential))?.id).toBe(credential);
   });
 
+  it("keeps credentials referenced by a system provider when deleting a custom provider", async () => {
+    const service = new ModelResourceService();
+    const credential = await service.credentials.put({ kind: "api_key", backend: "managed", secret: "system-shared-secret" });
+    await service.repository.update((state) => { state.credential_refs["opencode-go"] = credential.id; });
+    const provider = await service.createProvider({ name: "Lab", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "api_key", enabled: true });
+    const endpoint = await service.createEndpoint({ name: "Shared connection", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", credential_ref: credential.id, enabled: true, data_egress: "local" });
+    await service.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 1 });
+
+    const removed = await service.deleteCustomProvider(provider.id);
+
+    expect(removed).toMatchObject({ removed_endpoints: 1, removed_credentials: 0 });
+    expect((await service.credentials.metadata(credential.id))?.id).toBe(credential.id);
+    expect((await service.repository.read()).credential_refs["opencode-go"]).toBe(credential.id);
+  });
+
+  it("keeps the provider retryable when owned credential cleanup fails", async () => {
+    const service = new ModelResourceService();
+    const created = await service.createCustomProvider({ name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", auth: { kind: "api_key", secret: "retry-secret" } });
+    const remove = vi.spyOn(service.credentials, "remove").mockRejectedValueOnce(new Error("injected credential delete failure"));
+
+    await expect(service.deleteCustomProvider(created.provider.id)).rejects.toThrow("injected credential delete failure");
+    let state = await service.repository.read();
+    expect(state.providers.some((provider) => provider.id === created.provider.id)).toBe(true);
+    expect(state.endpoints.some((endpoint) => endpoint.id === created.endpoint.id)).toBe(true);
+    expect(await service.credentials.metadata(created.credential!.id)).not.toBeNull();
+
+    remove.mockRestore();
+    await expect(service.deleteCustomProvider(created.provider.id)).resolves.toMatchObject({ removed_endpoints: 1, removed_credentials: 1 });
+    await expect(service.deleteCustomProvider(created.provider.id)).resolves.toMatchObject({ removed_endpoints: 0, removed_credentials: 0 });
+    state = await service.repository.read();
+    expect(state.providers.some((provider) => provider.id === created.provider.id)).toBe(false);
+    expect(await service.credentials.metadata(created.credential!.id)).toBeNull();
+  });
+
   it("updates a custom provider connection base URL and key", async () => {
     const service = new ModelResourceService();
     await service.createCustomProvider({ name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", auth: { kind: "api_key", secret: "old-secret" } });
@@ -290,5 +324,29 @@ describe("resource service", () => {
     expect(after.endpoints.find((item) => item.id === endpointId)?.base_url).toBe("http://127.0.0.1:9000/v1");
     expect(await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8")).not.toContain("old-secret");
     expect(await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8")).toContain("new-secret");
+  });
+
+  it("retries credential cleanup when switching a custom provider to no authentication", async () => {
+    const service = new ModelResourceService();
+    const created = await service.createCustomProvider({ name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", auth: { kind: "api_key", secret: "retry-auth-secret" } });
+    const remove = vi.spyOn(service.credentials, "remove").mockRejectedValueOnce(new Error("injected auth cleanup failure"));
+
+    await expect(service.updateCustomProvider(created.provider.id, { auth: { kind: "none" } })).rejects.toThrow("injected auth cleanup failure");
+    remove.mockRestore();
+    await expect(service.updateCustomProvider(created.provider.id, { auth: { kind: "none" } })).resolves.toMatchObject({ provider: { auth_kind: "none" }, endpoint: { credential_ref: null } });
+    expect(await service.credentials.metadata(created.credential!.id)).toBeNull();
+  });
+
+  it("switches a custom provider to no authentication and removes its owned credential", async () => {
+    const service = new ModelResourceService();
+    const created = await service.createCustomProvider({ name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", auth: { kind: "api_key", secret: "remove-auth-secret" } });
+
+    await service.updateCustomProvider(created.provider.id, { auth: { kind: "none" } });
+
+    const state = await service.repository.read();
+    expect(state.providers.find((provider) => provider.id === created.provider.id)?.auth_kind).toBe("none");
+    expect(state.endpoints.find((endpoint) => endpoint.id === created.endpoint.id)?.credential_ref).toBeNull();
+    expect(await service.credentials.metadata(created.credential!.id)).toBeNull();
+    expect(await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8")).not.toContain("remove-auth-secret");
   });
 });

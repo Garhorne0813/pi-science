@@ -71,10 +71,10 @@ export const modelResourcesApi = {
     return apiRequest(`/api/endpoints/${encodeURIComponent(endpointId)}/health`, { method: "POST" });
   },
   /** Aggregate custom-provider surface: one call owns the whole lifecycle. */
-  createCustomProvider(body: { name: string; base_url: string; protocol: string; api?: string; auth?: { kind: "api_key" | "none"; secret?: string } | null }): Promise<CustomProviderResult> {
+  createCustomProvider(body: { name: string; base_url: string; protocol: string; api?: string; auth?: { kind: "api_key" | "none"; secret?: string } | null; models?: string[] }): Promise<CustomProviderResult> {
     return apiRequest("/api/custom-providers", { ...json("POST", body) });
   },
-  updateCustomProvider(providerId: string, body: { name?: string; base_url?: string; api?: string; auth?: { kind: "api_key"; secret: string } }): Promise<CustomProviderResult> {
+  updateCustomProvider(providerId: string, body: { name?: string; base_url?: string; api?: string; auth?: { kind: "api_key"; secret: string } | { kind: "none" } }): Promise<CustomProviderResult> {
     return apiRequest(`/api/custom-providers/${encodeURIComponent(providerId)}`, { ...json("PUT", body) });
   },
   deleteCustomProvider(providerId: string): Promise<unknown> {

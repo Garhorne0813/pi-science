@@ -221,9 +221,12 @@ export function registerModelResourceRoutes(app: FastifyInstance, resources: Mod
       const baseUrl = body.base_url && typeof body.base_url === "string" ? body.base_url.trim() : undefined;
       const api = body.api && typeof body.api === "string" ? body.api as "openai-completions" | "openai-responses" | "anthropic-messages" | "ollama" | "native" : undefined;
       const auth = body.auth && typeof body.auth === "object" ? body.auth as Record<string, unknown> : null;
+      const authKind = auth?.kind === "none" ? "none" : auth?.kind === "api_key" ? "api_key" : null;
+      if (body.auth !== undefined && authKind === null) return reply.code(400).send({ code: "invalid_resource", error: "auth.kind must be api_key or none" });
       const secret = auth?.secret && typeof auth.secret === "string" ? auth.secret : undefined;
-      if (!name && !baseUrl && !api && !secret) return reply.code(400).send({ code: "invalid_resource", error: "nothing to update" });
-      const result = await resources.updateCustomProvider(request.params.provider_id, { ...(name ? { name } : {}), ...(baseUrl ? { base_url: baseUrl } : {}), ...(api ? { api } : {}), ...(secret ? { auth: { kind: "api_key", secret } } : {}) });
+      if (authKind === "api_key" && !secret) return reply.code(400).send({ code: "invalid_resource", error: "auth.secret is required for api_key auth" });
+      if (!name && !baseUrl && !api && !authKind) return reply.code(400).send({ code: "invalid_resource", error: "nothing to update" });
+      const result = await resources.updateCustomProvider(request.params.provider_id, { ...(name ? { name } : {}), ...(baseUrl ? { base_url: baseUrl } : {}), ...(api ? { api } : {}), ...(authKind ? { auth: { kind: authKind, ...(secret ? { secret } : {}) } } : {}) });
       return await reload(nodeSessionService, reply, { ok: true, ...result });
     } catch (error) { return routeError(reply, error); }
   });

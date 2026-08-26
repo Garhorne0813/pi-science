@@ -468,6 +468,24 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
+  it("matches canonical custom model refs against projected runtime identities for thinking levels", async () => {
+    const credentials = new CredentialStore();
+    await credentials.put({ id: "cred-thinking", kind: "api_key", backend: "managed", secret: "secret-thinking" });
+    const state = emptyModelResourceState();
+    state.migration = { version: 1, completed_at: new Date().toISOString() };
+    state.providers.push({ id: "user-lab", name: "Lab", kind: "user", adapter: "openai-compatible", enabled: true, catalog_mode: "hybrid", auth_kind: "api_key", source: "user" });
+    state.endpoints.push({ id: "ep-thinking", name: "Thinking", base_url: "http://127.0.0.1:8001/v1", protocol: "openai", credential_ref: "cred-thinking", enabled: true, health: "unknown", data_egress: "local" });
+    state.bindings.push({ id: "bind-thinking", provider_id: "user-lab", endpoint_id: "ep-thinking", enabled: true, priority: 1, model_aliases: { "model-a": "remote-model-a" } });
+    state.models.push({ provider_id: "user-lab", model_id: "model-a", display_name: "Lab · model-a", enabled: true, capabilities: { reasoning: true, thinking_levels: ["off", "low", "high"], context_window: null, max_output_tokens: null }, capability_source: "manual" });
+    await new ModelResourceRepository().replace(state);
+    const service = new NodeSessionService(undefined, undefined, undefined, passthroughEnvironments, null, undefined, { ensureMigrated: async () => ({ migrated: false, provider_count: 1, model_count: 1, endpoint_count: 1, binding_count: 1, warnings: [] }), isModelAvailable: async () => true });
+    const cwd = await workspaceWithSessions("thinking-levels-projected");
+    await service.resume("thinking-levels-projected", cwd);
+    await expect(service.configure("thinking-levels-projected", cwd, "user-lab/model-a", "low")).resolves.toMatchObject({ success: true });
+    await expect(service.availableThinkingLevels(cwd, "user-lab/model-a")).resolves.toMatchObject({ data: { levels: ["off", "low", "high"], model: "user-lab/model-a" } });
+    await service.shutdownAll();
+  });
+
   it("refuses thinking levels when the live state model differs from the expected model", async () => {
     const service = testService();
     const cwd = await workspaceWithSessions("thinking-levels-mismatch");

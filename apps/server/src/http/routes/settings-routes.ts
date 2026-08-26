@@ -68,7 +68,10 @@ const FALLBACK_MODEL_HINTS: Record<string, { contextWindow: number; thinkingLeve
 };
 async function respondWithRuntimeReload<T extends Record<string, unknown>>(nodeSessionService: NodeSessionService, reply: FastifyReply, payload: T): Promise<(T & { session_replacements: Array<{ cwd: string; oldId: string; newId: string }> }) | FastifyReply> {
   try { return { ...payload, session_replacements: await nodeSessionService.reloadConfiguration() }; }
-  catch (error) { return reply.code(502).send({ ok: false, error: `Settings were saved, but Pi runtime reload failed: ${String(error)}` }); }
+  catch (error) {
+    reply.code(502).send({ ok: false, error: `Settings were saved, but Pi runtime reload failed: ${String(error)}` });
+    return reply;
+  }
 }
 function storedSkillPolicy(config: Settings): RuntimeSkillPolicy {
   const policy = config.skill_policy;

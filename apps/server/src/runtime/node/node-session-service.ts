@@ -179,6 +179,7 @@ export class NodeSessionService {
   /** Whole-session wall-clock timing (LLM/TTFT/decode/tool durations) folded
    *  from the raw Pi event stream; persisted via the stats checkpoint. */
   private readonly statsProjector = new SessionStatsProjector();
+  private hostReloadPending = false;
   private log: (level: "info" | "warn" | "error", message: string) => void = () => {};
 
   constructor(
@@ -452,13 +453,12 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
-    // The levels a model supports are a property of that model, so the result
-    // must never come from a different runtime than the configured model.
-    // Without an expectation the first healthy runtime wins (legacy callers);
-    // with an expectation only a runtime whose config model matches is usable.
+    const expectedCanonical = expectedModel ? canonicalRuntimeModelRef(expectedModel) : null;
+    // Runtime state uses projected provider/model IDs. Compare canonical IDs so
+    // split providers and model aliases still match the saved settings model.
     const candidates = [...this.runtimes.values()]
       .filter((candidate) => candidate.cwd === cwd && !candidate.closing && candidate.activeSessionId)
-      .filter((candidate) => !expectedModel || candidate.config.model === expectedModel);
+      .filter((candidate) => !expectedCanonical || canonicalFromRuntimeModelRef(candidate.config.model ?? "") === expectedCanonical);
     const runtime = candidates[0];
     if (!runtime) {
       return { success: false, code: expectedModel ? "model_mismatch" : "not_found", error: expectedModel ? "no runtime is using the requested model" : "pi process not found" };
@@ -468,13 +468,11 @@ export class NodeSessionService {
       if (this.runtimes.get(key) !== runtime || runtime.closing) {
         return { success: false, code: "not_found", error: "pi process not found" };
       }
-      // Refresh state inside the lock so the model identity we verify is the
-      // same one the runtime reports right now, not a stale config snapshot.
       const state = await this.refreshState(runtime);
       if (!state.success || !state.data || typeof state.data !== "object") return state;
-      const actualModel = runtime.config.model ?? null;
-      if (expectedModel && actualModel !== expectedModel) {
-        return { success: false, code: "model_mismatch", error: `runtime is using ${actualModel ?? "unknown"} instead of ${expectedModel}` };
+      const actualModel = runtime.config.model ? canonicalFromRuntimeModelRef(runtime.config.model) : null;
+      if (expectedCanonical && actualModel !== expectedCanonical) {
+        return { success: false, code: "model_mismatch", error: `runtime is using ${actualModel ?? "unknown"} instead of ${expectedCanonical}` };
       }
       this.scheduleIdleCleanup(runtime);
       const result = await runtime.process.sendCommand("get_available_thinking_levels");
@@ -655,34 +653,46 @@ export class NodeSessionService {
   }
 
   async reloadConfiguration(): Promise<Array<{ cwd: string; oldId: string; newId: string }>> {
-    const replacements: Array<{ cwd: string; oldId: string; newId: string }> = [];
-    const failures: Array<{ cwd: string; code: string; error: string }> = [];
-    for (const [key, snapshot] of [...this.runtimes.entries()]) {
-      const cwd = snapshot.cwd;
-      const result = await this.withLock(key, async () => {
-        const current = this.runtimes.get(key);
-        if (current !== snapshot) return {};
-        const runtime = current;
-        if (!runtime) return {};
-        if (runtime.busy) {
-          runtime.restartPending = true;
+    return this.withLock("\0configuration-reload", async () => {
+      const runtimes = [...new Set(this.runtimes.values())];
+      if (this.manager.hostProcessCount > 0) this.hostReloadPending = true;
+      if (this.hostReloadPending && runtimes.some((runtime) => runtime.busy)) {
+        for (const runtime of runtimes) runtime.restartPending = true;
+        return [];
+      }
+      if (this.hostReloadPending) {
+        await this.manager.recycleWebHost();
+        this.hostReloadPending = false;
+      }
+      const replacements: Array<{ cwd: string; oldId: string; newId: string }> = [];
+      const failures: Array<{ cwd: string; code: string; error: string }> = [];
+      for (const [key, snapshot] of [...this.runtimes.entries()]) {
+        const cwd = snapshot.cwd;
+        const result = await this.withLock(key, async () => {
+          const current = this.runtimes.get(key);
+          if (current !== snapshot) return {};
+          const runtime = current;
+          if (!runtime) return {};
+          if (runtime.busy) {
+            runtime.restartPending = true;
+            return {};
+          }
+          const oldId = runtime.activeSessionId;
+          const restarted = await this.restartRuntimeUnlocked(runtime, effectiveConfig());
+          if ("error" in restarted) return { failure: { cwd, code: restarted.code, error: restarted.error } };
+          if (oldId && restarted.activeSessionId !== oldId) {
+            return { replacement: { cwd, oldId, newId: restarted.activeSessionId } };
+          }
           return {};
-        }
-        const oldId = runtime.activeSessionId;
-        const restarted = await this.restartRuntimeUnlocked(runtime, effectiveConfig());
-        if ("error" in restarted) return { failure: { cwd, code: restarted.code, error: restarted.error } };
-        if (oldId && restarted.activeSessionId !== oldId) {
-          return { replacement: { cwd, oldId, newId: restarted.activeSessionId } };
-        }
-        return {};
-      });
-      if (result.replacement) replacements.push(result.replacement);
-      if (result.failure) failures.push(result.failure);
-    }
-    if (failures.length) {
-      throw new Error(failures.map((item) => `${item.cwd}: ${item.code}: ${item.error}`).join("; "));
-    }
-    return replacements;
+        });
+        if (result.replacement) replacements.push(result.replacement);
+        if (result.failure) failures.push(result.failure);
+      }
+      if (failures.length) {
+        throw new Error(failures.map((item) => `${item.cwd}: ${item.code}: ${item.error}`).join("; "));
+      }
+      return replacements;
+    });
   }
 
   async setGlobalSkillPolicy(policy: RuntimeSkillPolicy): Promise<void> {
@@ -873,6 +883,14 @@ export class NodeSessionService {
   }
 
   private async reloadRuntimeAfterTurn(runtime: RuntimeRecord): Promise<void> {
+    if (this.hostReloadPending) {
+      if ([...new Set(this.runtimes.values())].some((candidate) => candidate.busy)) return;
+      try { await this.reloadConfiguration(); }
+      catch (error) {
+        if (runtime.activeSessionId) await this.eventHub.publish(runtime.cwd, runtime.activeSessionId, { type: "error", sessionId: runtime.activeSessionId, message: `Failed to reload Pi runtime after settings changed: ${error instanceof Error ? error.message : String(error)}` });
+      }
+      return;
+    }
     await this.withLock(runtimeKey(runtime.cwd, runtime.activeSessionId), async () => {
       if (this.runtimes.get(runtimeKey(runtime.cwd, runtime.activeSessionId)) !== runtime || runtime.busy) return;
       const oldId = runtime.activeSessionId;

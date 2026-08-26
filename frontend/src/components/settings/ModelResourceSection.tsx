@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronDown, Loader2, Pencil, PlugZap, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Loader2, Pencil, PlugZap, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/ui";
 import { queryClient } from "../../lib/client/query-client";
@@ -80,7 +80,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
   const openEdit = (provider: ModelProvider) => {
     const connection = connectionFor(provider.id);
     const protocol = provider.adapter === "anthropic-compatible" ? "anthropic" : provider.adapter === "ollama" ? "ollama" : "openai";
-    setForm({ name: provider.name, baseUrl: connection?.base_url ?? "", protocol, authKind: "api_key", apiKey: "" });
+    setForm({ name: provider.name, baseUrl: connection?.base_url ?? "", protocol, authKind: provider.auth_kind === "none" ? "none" : "api_key", apiKey: "" });
     setTestResult(null);
     if (modal?.mode === "edit" && modal.provider.id === provider.id) {
       // Keep the previous selection when the modal is already open for it.
@@ -89,6 +89,12 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
     }
     setError(null);
     setModal({ mode: "edit", provider });
+  };
+
+  const invalidateTestResult = () => {
+    setTestResult(null);
+    if (modal?.mode === "edit") setSelectedModels(new Set(modelsFor(modal.provider.id).filter((model) => model.enabled).map((model) => model.model_id)));
+    else setSelectedModels(new Set());
   };
 
   const runTest = async () => {
@@ -112,7 +118,8 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
 
   const save = async () => {
     if (!form.name.trim() || !form.baseUrl.trim()) return;
-    if (modal?.mode === "create" && form.authKind === "api_key" && !form.apiKey.trim()) {
+    const needsKey = form.authKind === "api_key" && (modal?.mode === "create" || modal?.mode === "edit" && modal.provider.auth_kind === "none");
+    if (needsKey && !form.apiKey.trim()) {
       setError(t("settings.resources.keyRequired", { defaultValue: "Enter an API key or choose No authentication." }));
       return;
     }
@@ -129,10 +136,13 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
         });
         if (result.discovery_error) setError(result.discovery_error);
       } else if (modal?.mode === "edit") {
+        const auth = form.authKind === "none"
+          ? modal.provider.auth_kind === "none" ? {} : { auth: { kind: "none" as const } }
+          : form.apiKey.trim() ? { auth: { kind: "api_key" as const, secret: form.apiKey.trim() } } : {};
         await modelResourcesApi.updateCustomProvider(modal.provider.id, {
           name: form.name.trim(),
           base_url: form.baseUrl.trim(),
-          ...(form.apiKey.trim() ? { auth: { kind: "api_key" as const, secret: form.apiKey.trim() } } : {}),
+          ...auth,
         });
         if (testResult) {
           await modelResourcesApi.updateCustomProviderModels(modal.provider.id, { enabled: [...selectedModels] });
@@ -236,6 +246,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
     try {
       await modelResourcesApi.probeEndpoint(id);
       await invalidate();
+      await onConfigReload();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -371,7 +382,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
               </div>
             )}
             <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder={t("settings.resources.name", { defaultValue: "Provider name" })} className="min-h-10 w-full rounded-input border border-border bg-bg px-3 py-2 text-xs text-text outline-none focus:border-accent" />
-            <input value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder={t("settings.resources.baseUrl", { defaultValue: "Base URL, for example https://api.example.com/v1" })} className="min-h-10 w-full rounded-input border border-border bg-bg px-3 py-2 font-mono text-xs text-text outline-none focus:border-accent" />
+            <input value={form.baseUrl} onChange={(event) => { setForm({ ...form, baseUrl: event.target.value }); invalidateTestResult(); }} placeholder={t("settings.resources.baseUrl", { defaultValue: "Base URL, for example https://api.example.com/v1" })} className="min-h-10 w-full rounded-input border border-border bg-bg px-3 py-2 font-mono text-xs text-text outline-none focus:border-accent" />
             <div className="grid gap-2 sm:grid-cols-2">
               <SettingsSelectMenu
                 variant="field"
@@ -382,7 +393,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
                   { value: "anthropic", label: t("settings.resources.anthropic", { defaultValue: "Anthropic-compatible" }) },
                   { value: "ollama", label: t("settings.resources.ollama", { defaultValue: "Ollama" }) },
                 ]}
-                onSelect={(value) => setForm({ ...form, protocol: value as ProviderForm["protocol"] })}
+                onSelect={(value) => { setForm({ ...form, protocol: value as ProviderForm["protocol"] }); invalidateTestResult(); }}
               />
               <SettingsSelectMenu
                 variant="field"
@@ -392,14 +403,14 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
                   { value: "api_key", label: t("settings.resources.managedKey", { defaultValue: "API key" }) },
                   { value: "none", label: t("settings.resources.noAuth", { defaultValue: "No authentication" }) },
                 ]}
-                onSelect={(value) => setForm({ ...form, authKind: value as ProviderForm["authKind"] })}
+                onSelect={(value) => { const authKind = value as ProviderForm["authKind"]; setForm({ ...form, authKind, ...(authKind === "none" ? { apiKey: "" } : {}) }); invalidateTestResult(); }}
               />
             </div>
             {form.authKind === "api_key" && (
               <input
                 type="password"
                 value={form.apiKey}
-                onChange={(event) => setForm({ ...form, apiKey: event.target.value })}
+                onChange={(event) => { setForm({ ...form, apiKey: event.target.value }); invalidateTestResult(); }}
                 placeholder={modal.mode === "edit" ? t("settings.resources.editKeyPlaceholder", { defaultValue: "New API key (leave empty to keep)" }) : t("settings.resources.apiKey", { defaultValue: "API key" })}
                 className="min-h-10 w-full rounded-input border border-border bg-bg px-3 py-2 font-mono text-xs text-text outline-none focus:border-accent"
               />
