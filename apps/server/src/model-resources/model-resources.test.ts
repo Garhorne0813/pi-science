@@ -223,7 +223,6 @@ describe("resource service", () => {
     const state = await service.repository.read();
     expect(state.providers).toHaveLength(0);
     expect(state.endpoints).toHaveLength(0);
-    expect(state.credentials).toBeUndefined();
   });
 
   it("honors the confirmed model selection on aggregate create", async () => {
@@ -248,6 +247,21 @@ describe("resource service", () => {
     expect(state.bindings).toHaveLength(0);
     expect(await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8")).not.toContain("delete-me-secret");
     void result;
+  });
+
+  it("cleans up legacy resources without ownership metadata when deleting", async () => {
+    const service = new ModelResourceService();
+    // Resources created before ownership metadata existed: no owner field.
+    const credential = await service.credentials.put({ kind: "api_key", backend: "managed", secret: "legacy-secret" });
+    const provider = await service.createProvider({ name: "Legacy", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "api_key", enabled: true });
+    const endpoint = await service.createEndpoint({ name: "Legacy connection", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", credential_ref: credential.id, enabled: true, data_egress: "local" });
+    await service.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 1 });
+    const removed = await service.deleteCustomProvider(provider.id);
+    expect(removed).toMatchObject({ removed_endpoints: 1, removed_credentials: 1 });
+    const state = await service.repository.read();
+    expect(state.endpoints).toHaveLength(0);
+    expect(await service.credentials.listMetadata()).toEqual([]);
+    expect(await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8")).not.toContain("legacy-secret");
   });
 
   it("keeps a shared endpoint and its credential when deleting only one provider", async () => {

@@ -511,7 +511,9 @@ export class ModelResourceService {
 
   /** Delete a custom provider and the resources it owns: models/bindings, the
    *  owned endpoint, and the owned managed credential (raw secret removed from
-   *  disk). Shared endpoints/credentials are kept. */
+   *  disk). Shared endpoints/credentials are kept. Endpoints/credentials
+   *  created before ownership metadata existed are treated as owned when this
+   *  provider is their only remaining binder. */
   async deleteCustomProvider(id: string): Promise<{ id: string; removed_endpoints: number; removed_credentials: number }> {
     await this.ensureMigrated();
     const state = await this.repository.read();
@@ -522,14 +524,16 @@ export class ModelResourceService {
     let removedCredentials = 0;
     await this.deleteProvider(id, true);
     for (const endpoint of state.endpoints) {
-      if (endpoint.owner_provider_id !== id || !bindingEndpointIds.has(endpoint.id)) continue;
+      const owned = endpoint.owner_provider_id === id || (endpoint.owner_provider_id === undefined && bindingEndpointIds.has(endpoint.id));
+      if (!owned || !bindingEndpointIds.has(endpoint.id)) continue;
       if (otherBindings.some((binding) => binding.endpoint_id === endpoint.id)) continue;
       await this.deleteEndpoint(endpoint.id, true);
       removedEndpoints += 1;
       const ref = endpoint.credential_ref;
       if (!ref) continue;
       const metadata = await this.credentials.metadata(ref);
-      if (metadata?.owner_provider_id !== id) continue;
+      const ownedCredential = metadata && (metadata.owner_provider_id === id || metadata.owner_provider_id === undefined);
+      if (!ownedCredential) continue;
       const remaining = await this.repository.read();
       if (remaining.endpoints.some((item) => item.credential_ref === ref)) continue;
       await this.credentials.remove(ref);
