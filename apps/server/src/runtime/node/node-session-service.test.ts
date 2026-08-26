@@ -8,6 +8,8 @@ import { NodeSessionService } from "./node-session-service.js";
 import { PiManager } from "../pi/pi-manager.js";
 import { PiOrbitRequestError } from "../pi/pi-orbit-host.js";
 import { loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
+import { CredentialStore } from "../../model-resources/credential-store.js";
+import { ModelResourceRepository, emptyModelResourceState } from "../../model-resources/model-resource-repository.js";
 import { readJsonLines } from "../../storage/persistence.js";
 import { ProjectReviewService } from "../../project-review/service.js";
 import { parseReviewResult, type ReviewRunRequest, type ReviewRunResult, type ReviewSubagentRunner } from "../../project-review/types.js";
@@ -385,6 +387,73 @@ describe("Node session lifecycle", () => {
     expect(log).toContain('"type":"extension_ui_response","id":"question-1","confirmed":true');
     await service.shutdownAll();
   });
+
+  it("sends set_model with the projected runtime identity instead of the canonical ref", async () => {
+    const credentials = new CredentialStore();
+    await credentials.put({ id: "cred-a", kind: "api_key", backend: "managed", secret: "secret-a" });
+    await credentials.put({ id: "cred-b", kind: "api_key", backend: "managed", secret: "secret-b" });
+    const state = emptyModelResourceState();
+    state.migration = { version: 1, completed_at: new Date().toISOString() };
+    state.providers.push({ id: "user-lab", name: "Lab", kind: "user", adapter: "openai-compatible", enabled: true, catalog_mode: "hybrid", auth_kind: "api_key", source: "user" });
+    state.endpoints.push(
+      { id: "ep-a", name: "A", base_url: "http://127.0.0.1:8001/v1", protocol: "openai", credential_ref: "cred-a", enabled: true, health: "unknown", data_egress: "local" },
+      { id: "ep-b", name: "B", base_url: "http://127.0.0.1:8002/v1", protocol: "openai", credential_ref: "cred-b", enabled: true, health: "unknown", data_egress: "remote" },
+    );
+    state.bindings.push(
+      { id: "bind-a", provider_id: "user-lab", endpoint_id: "ep-a", enabled: true, priority: 1, model_allowlist: ["model-a"], model_aliases: { "model-a": "remote-model-a" } },
+      { id: "bind-b", provider_id: "user-lab", endpoint_id: "ep-b", enabled: true, priority: 2, model_allowlist: ["model-b"] },
+    );
+    state.models.push(
+      { provider_id: "user-lab", model_id: "model-a", display_name: "Lab · model-a", enabled: true, capabilities: { reasoning: false, thinking_levels: ["off"], context_window: null, max_output_tokens: null }, capability_source: "manual" },
+      { provider_id: "user-lab", model_id: "model-b", display_name: "Lab · model-b", enabled: true, capabilities: { reasoning: false, thinking_levels: ["off"], context_window: null, max_output_tokens: null }, capability_source: "manual" },
+    );
+    await new ModelResourceRepository().replace(state);
+    const service = new NodeSessionService(undefined, undefined, undefined, passthroughEnvironments, null, undefined, { ensureMigrated: async () => ({ migrated: false, provider_count: 0, model_count: 0, endpoint_count: 0, binding_count: 0, warnings: [] }), isModelAvailable: async () => true });
+    const cwd = await workspaceWithSessions("runtime-identity");
+    const log = join(cwd, "set-model.log");
+    process.env.FAKE_PI_LOG = log;
+    await service.resume("runtime-identity", cwd);
+    const configured = await service.configure("runtime-identity", cwd, "user-lab/model-a", "low");
+    expect(configured).toMatchObject({ success: true });
+    // The runtime request carries the generated credential (by design), but
+    // the session response must never echo it back to the caller.
+    expect(JSON.stringify(configured)).not.toContain("secret-a");
+    expect(JSON.stringify(configured)).not.toContain("PI_RUNTIME_CREDENTIAL");
+    const logText = await readFile(log, "utf8");
+    // The canonical ref is user-lab/model-a, but Pi only knows the projected
+    // runtime provider (split endpoint) and the aliased model id.
+    expect(logText).toContain('"type":"set_model","provider":"user-lab--ep-a","modelId":"remote-model-a"');
+    expect(logText).not.toContain('"type":"set_model","provider":"user-lab","modelId":"model-a"');
+    await service.shutdownAll();
+  }, 30_000);
+
+  it("replays the projected runtime identity when a set_model failure restarts the runtime", async () => {
+    const credentials = new CredentialStore();
+    await credentials.put({ id: "cred-a", kind: "api_key", backend: "managed", secret: "secret-a" });
+    const state = emptyModelResourceState();
+    state.migration = { version: 1, completed_at: new Date().toISOString() };
+    state.providers.push({ id: "user-lab", name: "Lab", kind: "user", adapter: "openai-compatible", enabled: true, catalog_mode: "hybrid", auth_kind: "api_key", source: "user" });
+    state.endpoints.push({ id: "ep-a", name: "A", base_url: "http://127.0.0.1:8001/v1", protocol: "openai", credential_ref: "cred-a", enabled: true, health: "unknown", data_egress: "local" });
+    state.bindings.push({ id: "bind-a", provider_id: "user-lab", endpoint_id: "ep-a", enabled: true, priority: 1, model_aliases: { "model-a": "remote-model-a" } });
+    state.models.push({ provider_id: "user-lab", model_id: "model-a", display_name: "Lab · model-a", enabled: true, capabilities: { reasoning: false, thinking_levels: ["off"], context_window: null, max_output_tokens: null }, capability_source: "manual" });
+    await new ModelResourceRepository().replace(state);
+    const service = new NodeSessionService(undefined, undefined, undefined, passthroughEnvironments, null, undefined, { ensureMigrated: async () => ({ migrated: false, provider_count: 0, model_count: 0, endpoint_count: 0, binding_count: 0, warnings: [] }), isModelAvailable: async () => true });
+    const cwd = await workspaceWithSessions("runtime-replay");
+    const log = join(cwd, "replay.log");
+    process.env.FAKE_PI_LOG = log;
+    // The fake Pi rejects one set_model so configure falls back to a runtime
+    // restart, whose recovery path re-applies the workspace configuration.
+    process.env.FAKE_PI_REJECT_MODEL = "user-lab/remote-model-a";
+    await service.resume("runtime-replay", cwd);
+    await service.configure("runtime-replay", cwd, "user-lab/model-a", "low");
+    const logText = await readFile(log, "utf8");
+    const matches = logText.match(/"type":"set_model","provider":"user-lab","modelId":"remote-model-a"/g) ?? [];
+    // Failed live set_model + replayed after restart: both use runtime identity.
+    expect(matches.length).toBeGreaterThanOrEqual(2);
+    expect(logText).not.toContain('"type":"set_model","provider":"user-lab","modelId":"model-a"');
+    await service.shutdownAll();
+    delete process.env.FAKE_PI_REJECT_MODEL;
+  }, 30_000);
 
   it("returns the live runtime's actual thinking levels with the verified model identity", async () => {
     const service = testService();

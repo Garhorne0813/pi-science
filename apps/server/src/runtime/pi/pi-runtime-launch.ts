@@ -6,7 +6,7 @@ import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, read
 import type { PiConfig } from "@pi-science/contracts";
 import type { PiProcessOptions, RuntimeSkillPolicy } from "./pi-process.js";
 import { configRoot } from "../../storage/persistence.js";
-import { canonicalRuntimeModelRef, projectPiRuntime } from "./pi-runtime-projection.js";
+import { canonicalRuntimeModelRef, projectedRuntimeModelRef, projectPiRuntime } from "./pi-runtime-projection.js";
 
 // The Pi Orbit host is a singleton per control plane: one port + one auth
 // token are allocated on the first buildPiProcessOptions call and reused by
@@ -60,7 +60,11 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
   const dataRoot = configRoot();
   const settings = readSettings(dataRoot);
   const skillPolicy = globalSkillPolicy(settings);
-  const effectiveModel = config.model || (typeof settings.model === "string" ? canonicalRuntimeModelRef(settings.model) : "");
+  const configuredModel = config.model ?? (typeof settings.model === "string" ? settings.model : "");
+  // The projection decides the runtime provider split and the model aliases.
+  // Pass the projected runtime ref to Pi; the canonical ref stays in settings
+  // and on the session API.
+  const effectiveModel = configuredModel ? projectedRuntimeModelRef(configuredModel) : "";
   const effectiveThinking = config.thinking || (typeof settings.thinking === "string" ? settings.thinking : "high");
   // The workspace model identity the agent can observe through the bash tool
   // environment (PI_PROVIDER/PI_MODEL), derived from the same effectiveModel

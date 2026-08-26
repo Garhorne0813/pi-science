@@ -304,6 +304,58 @@ describe("Pi runtime custom provider materialization", () => {
     expect(options.web?.runtime.model).toBe("user-lab/model-a");
   });
 
+  it("launches with the projected runtime identity (split endpoint + model alias)", async () => {
+    const credentials = new CredentialStore();
+    await credentials.put({ id: "cred-a", kind: "api_key", backend: "managed", secret: "secret-a" });
+    await credentials.put({ id: "cred-b", kind: "api_key", backend: "managed", secret: "secret-b" });
+    const state = emptyModelResourceState();
+    state.migration = { version: 1, completed_at: new Date().toISOString() };
+    state.providers.push({ id: "user-lab", name: "Lab", kind: "user", adapter: "openai-compatible", enabled: true, catalog_mode: "hybrid", auth_kind: "api_key", source: "user" });
+    state.endpoints.push(
+      { id: "ep-a", name: "A", base_url: "http://127.0.0.1:8001/v1", protocol: "openai", credential_ref: "cred-a", enabled: true, health: "unknown", data_egress: "local" },
+      { id: "ep-b", name: "B", base_url: "http://127.0.0.1:8002/v1", protocol: "openai", credential_ref: "cred-b", enabled: true, health: "unknown", data_egress: "remote" },
+    );
+    state.bindings.push(
+      { id: "bind-a", provider_id: "user-lab", endpoint_id: "ep-a", enabled: true, priority: 1, model_allowlist: ["model-a"], model_aliases: { "model-a": "remote-model-a" } },
+      { id: "bind-b", provider_id: "user-lab", endpoint_id: "ep-b", enabled: true, priority: 2, model_allowlist: ["model-b"] },
+    );
+    state.models.push(
+      { provider_id: "user-lab", model_id: "model-a", display_name: "Lab · model-a", enabled: true, capabilities: { reasoning: false, thinking_levels: ["off"], context_window: null, max_output_tokens: null }, capability_source: "manual" },
+      { provider_id: "user-lab", model_id: "model-b", display_name: "Lab · model-b", enabled: true, capabilities: { reasoning: false, thinking_levels: ["off"], context_window: null, max_output_tokens: null }, capability_source: "manual" },
+    );
+    await new ModelResourceRepository().replace(state);
+
+    const cwd = join(tmpdir(), `pi-runtime-identity-split-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    const options = buildPiProcessOptions(cwd, { model: "user-lab/model-a", thinking: "low", skills: [], extensions: [] })!;
+    expect(options.web?.runtime.model).toBe("user-lab--ep-a/remote-model-a");
+    expect(options.args).toContain("--model");
+    expect(options.args[options.args.indexOf("--model") + 1]).toBe("user-lab--ep-a/remote-model-a");
+    expect(options.web?.runtime.runtimeEnv?.PI_PROVIDER).toBe("user-lab--ep-a");
+    expect(options.web?.runtime.runtimeEnv?.PI_MODEL).toBe("remote-model-a");
+  });
+
+  it("launches with the projected runtime identity for a single endpoint + model alias", async () => {
+    const credentials = new CredentialStore();
+    await credentials.put({ id: "cred-a", kind: "api_key", backend: "managed", secret: "secret-a" });
+    const state = emptyModelResourceState();
+    state.migration = { version: 1, completed_at: new Date().toISOString() };
+    state.providers.push({ id: "user-lab", name: "Lab", kind: "user", adapter: "openai-compatible", enabled: true, catalog_mode: "hybrid", auth_kind: "api_key", source: "user" });
+    state.endpoints.push({ id: "ep-a", name: "A", base_url: "http://127.0.0.1:8001/v1", protocol: "openai", credential_ref: "cred-a", enabled: true, health: "unknown", data_egress: "local" });
+    state.bindings.push({ id: "bind-a", provider_id: "user-lab", endpoint_id: "ep-a", enabled: true, priority: 1, model_aliases: { "model-a": "remote-model-a" } });
+    state.models.push({ provider_id: "user-lab", model_id: "model-a", display_name: "Lab · model-a", enabled: true, capabilities: { reasoning: false, thinking_levels: ["off"], context_window: null, max_output_tokens: null }, capability_source: "manual" });
+    await new ModelResourceRepository().replace(state);
+
+    const cwd = join(tmpdir(), `pi-runtime-identity-single-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    const options = buildPiProcessOptions(cwd, { model: "user-lab/model-a", thinking: "low", skills: [], extensions: [] })!;
+    expect(options.web?.runtime.model).toBe("user-lab/remote-model-a");
+    expect(options.web?.runtime.runtimeEnv?.PI_PROVIDER).toBe("user-lab");
+    expect(options.web?.runtime.runtimeEnv?.PI_MODEL).toBe("remote-model-a");
+  });
+
   it("strips outer Pi session variables injected through the workspace environment too", async () => {
     const cwd = join(tmpdir(), `pi-runtime-env-isolation-workspace-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(cwd);

@@ -86,5 +86,26 @@ describe("Pi runtime projection", () => {
     expect(env[variableB]).toBe("secret-b");
     expect(JSON.stringify(catalog)).not.toContain("secret-a");
     expect(JSON.stringify(catalog)).not.toContain("secret-b");
+    expect(result.modelRefs["user-lab/model-a"]).toBe("user-lab--ep-a/remote-model-a");
+    expect(result.modelRefs["user-lab/model-b"]).toBe("user-lab--ep-b/model-b");
+  });
+
+  it("maps a single endpoint + model alias to a stable runtime ref", async () => {
+    const repository = new ModelResourceRepository();
+    const credentials = new CredentialStore();
+    await credentials.put({ id: "cred-a", kind: "api_key", backend: "managed", secret: "secret-a" });
+    const state = emptyModelResourceState();
+    state.migration = { version: 1, completed_at: new Date().toISOString() };
+    state.providers.push({ id: "user-lab", name: "Lab", kind: "user", adapter: "openai-compatible", enabled: true, catalog_mode: "hybrid", auth_kind: "api_key", source: "user" });
+    state.endpoints.push({ id: "ep-a", name: "A", base_url: "http://127.0.0.1:8001/v1", protocol: "openai", credential_ref: "cred-a", enabled: true, health: "unknown", data_egress: "local" });
+    state.bindings.push({ id: "bind-a", provider_id: "user-lab", endpoint_id: "ep-a", enabled: true, priority: 1, model_aliases: { "model-a": "remote-model-a" } });
+    state.models.push({ provider_id: "user-lab", model_id: "model-a", display_name: "Lab · model-a", enabled: true, capabilities: { reasoning: false, thinking_levels: ["off"], context_window: null, max_output_tokens: null }, capability_source: "manual" });
+    await repository.replace(state);
+    const agentDir = join(process.env.PI_SCIENCE_HOME!, "agent");
+    await mkdir(agentDir, { recursive: true });
+    const result = projectPiRuntime(agentDir, process.env.PI_SCIENCE_HOME!, {});
+    expect(result.providers["user-lab"]).toBeDefined();
+    expect(result.providers["user-lab--ep-a"]).toBeUndefined();
+    expect(result.modelRefs["user-lab/model-a"]).toBe("user-lab/remote-model-a");
   });
 });

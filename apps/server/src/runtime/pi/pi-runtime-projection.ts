@@ -11,6 +11,9 @@ export type PiRuntimeProjectionResult = {
   providers: Record<string, unknown>;
   runtimeSecrets: Record<string, string>;
   systemApiKeys: Record<string, string>;
+  /** Canonical model ref (provider/model) -> the Pi runtime ref the same
+   * projection decision produced (runtime_provider/aliased_model). */
+  modelRefs: Record<string, string>;
 };
 
 function runtimeApi(protocol: string, api?: string): string {
@@ -48,6 +51,7 @@ function projectionFromState(state: ModelResourceState, credentials: CredentialS
   const resolved = resolver.resolveStateSync(state).filter((model) => model.available);
   const providers: Record<string, Record<string, unknown>> = {};
   const runtimeSecrets: Record<string, string> = {};
+  const modelRefs: Record<string, string> = {};
   for (const provider of state.providers.filter((item) => item.enabled && item.kind === "user")) {
     const models = resolved.filter((model) => model.provider_id === provider.id);
     // Pi providers have one baseUrl/apiKey. Group models by the chosen route
@@ -85,6 +89,13 @@ function projectionFromState(state: ModelResourceState, credentials: CredentialS
         }
       }
       providers[runtimeId] = projected;
+      // Record the canonical -> runtime identity using the exact same route
+      // selection that produced the runtime provider above, so launch and
+      // set_model never re-resolve a different route.
+      for (const model of group) {
+        const selected = model.routes[0];
+        if (selected) modelRefs[`${model.provider_id}/${model.model_id}`] = `${runtimeId}/${selected.model_id}`;
+      }
     }
   }
   const systemApiKeys: Record<string, string> = {};
@@ -92,7 +103,7 @@ function projectionFromState(state: ModelResourceState, credentials: CredentialS
     const credential = credentials.readSync(credentialRef);
     if (credential?.secret) systemApiKeys[providerId] = credential.secret;
   }
-  return { providers, runtimeSecrets, systemApiKeys };
+  return { providers, runtimeSecrets, systemApiKeys, modelRefs };
 }
 
 /** Build and write the only Pi-specific model catalog. Domain resources remain
@@ -125,6 +136,29 @@ export function projectPiRuntime(agentDir: string, dataRoot: string, env: NodeJS
 export function canonicalRuntimeModelRef(model: string): string {
   const state = new ModelResourceRepository().readSync();
   return state.aliases[model] ?? model;
+}
+
+/** Map a canonical model ref to the Pi runtime ref the current projection
+ *  would produce for it. Projection and mapping share one route decision, so
+ *  launch/set_model can never resolve a different endpoint than models.json.
+ *  Values without a mapping (builtin providers, unmigrated installs) are
+ *  passed through unchanged and the mapping is idempotent. */
+export function projectedRuntimeModelRef(model: string): string {
+  const canonical = canonicalRuntimeModelRef(model);
+  const state = new ModelResourceRepository().readSync();
+  const plan = projectionFromState(state, new CredentialStore());
+  return plan.modelRefs[canonical] ?? canonical;
+}
+
+/** Reverse mapping for user-visible state: a Pi-reported runtime ref back to
+ *  the stable canonical ref. Unknown refs pass through unchanged. */
+export function canonicalFromRuntimeModelRef(runtimeRef: string): string {
+  const state = new ModelResourceRepository().readSync();
+  const plan = projectionFromState(state, new CredentialStore());
+  for (const [canonical, runtime] of Object.entries(plan.modelRefs)) {
+    if (runtime === runtimeRef) return canonical;
+  }
+  return runtimeRef;
 }
 
 export function projectionProvidersFromResolved(resolved: ResolvedRuntimeProvider[]): Record<string, unknown> {

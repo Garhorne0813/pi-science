@@ -10,7 +10,7 @@ import { PiManager, piManager } from "../pi/pi-manager.js";
 import { PiOrbitRequestError } from "../pi/pi-orbit-host.js";
 import type { PiProcess, PiProcessOptions, PiResult, RuntimeSkillPolicy } from "../pi/pi-process.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
-import { canonicalRuntimeModelRef } from "../pi/pi-runtime-projection.js";
+import { canonicalFromRuntimeModelRef, canonicalRuntimeModelRef, projectedRuntimeModelRef } from "../pi/pi-runtime-projection.js";
 import type { ProjectReviewService } from "../../project-review/service.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { SessionRepository, invalidateSessionFileCache, sessionRepository } from "./session-repository.js";
@@ -368,6 +368,9 @@ export class NodeSessionService {
       catch (error) { return { success: false, code: "model_resources_migration_failed", error: `unable to migrate model resources: ${error instanceof Error ? error.message : String(error)}` }; }
       model = canonicalRuntimeModelRef(model);
       if (model.startsWith("user-") && !(await this.modelResources.isModelAvailable(model))) return { success: false, code: "no_routable_endpoint", error: `model is not routable: ${model}` };
+      // Pi only knows the projected runtime identity (split provider per
+      // endpoint, aliased model id). The canonical ref stays user-facing.
+      model = projectedRuntimeModelRef(model);
     }
     return this.withLock(`${cwd}\0${sessionId}`, async () => {
       const activated = await this.activateUnlocked(sessionId, cwd);
@@ -1297,11 +1300,12 @@ export class NodeSessionService {
    *  Fails fast on the first rejected step (after transient busy retries) and
    *  leaves the runtime untouched. */
   private async replaySessionConfig(process: PiProcess, config: PiConfig): Promise<PiResult> {
-    if (config.model?.includes("/")) {
-      const separator = config.model.indexOf("/");
+    const model = config.model ? projectedRuntimeModelRef(config.model) : null;
+    if (model?.includes("/")) {
+      const separator = model.indexOf("/");
       const result = await this.sendRecoveryCommand(process, "set_model", {
-        provider: config.model.slice(0, separator),
-        modelId: config.model.slice(separator + 1),
+        provider: model.slice(0, separator),
+        modelId: model.slice(separator + 1),
       });
       if (!result.success) return result;
     }
@@ -1396,17 +1400,19 @@ export class NodeSessionService {
   }
 
   private configMatches(runtime: RuntimeRecord, model?: string | null, thinking?: string | null): boolean {
-    return (!model || runtime.config.model === model) && (!thinking || runtime.config.thinking === thinking);
+    const runtimeModel = model ? projectedRuntimeModelRef(model) : null;
+    return (!runtimeModel || runtime.config.model === runtimeModel) && (!thinking || runtime.config.thinking === thinking);
   }
 
   private async rollbackConfig(runtime: RuntimeRecord, previous: PiConfig): Promise<PiResult> {
     if (previous.model?.includes("/")) {
-      const separator = previous.model.indexOf("/");
-      const model = await runtime.process.sendCommand("set_model", {
-        provider: previous.model.slice(0, separator),
-        modelId: previous.model.slice(separator + 1),
+      const model = projectedRuntimeModelRef(previous.model);
+      const separator = model.indexOf("/");
+      const result = await runtime.process.sendCommand("set_model", {
+        provider: model.slice(0, separator),
+        modelId: model.slice(separator + 1),
       });
-      if (!model.success) return { success: false, code: "rollback_failed", error: `unable to roll back model configuration: ${String(model.error ?? "runtime rejected rollback")}` };
+      if (!result.success) return { success: false, code: "rollback_failed", error: `unable to roll back model configuration: ${String(result.error ?? "runtime rejected rollback")}` };
     }
     if (previous.thinking) {
       const thinking = await runtime.process.sendCommand("set_thinking_level", { level: previous.thinking });
@@ -1548,7 +1554,7 @@ export class NodeSessionService {
       is_streaming: runtime.busy || Boolean(data.isStreaming),
       is_compacting: Boolean(data.isCompacting),
       pending_message_count: Number(data.pendingMessageCount ?? 0),
-      model: model?.provider && model.id ? `${model.provider}/${model.id}` : runtime.config.model ?? null,
+      model: model?.provider && model.id ? canonicalFromRuntimeModelRef(`${model.provider}/${model.id}`) : runtime.config.model ? canonicalFromRuntimeModelRef(runtime.config.model) : null,
       thinking: typeof data.thinkingLevel === "string" ? data.thinkingLevel : runtime.config.thinking ?? null,
       context_tokens: contextTokens === null || Number.isFinite(contextTokens) ? contextTokens : null,
       context_window: Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : null,
