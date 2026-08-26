@@ -79,6 +79,7 @@ function metadataFrom(input: {
   environmentVariable?: string;
   externalProvider?: string;
   externalRef?: string;
+  ownerProviderId?: string;
   secret?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -94,6 +95,7 @@ function metadataFrom(input: {
     ...(input.environmentVariable ? { environment_variable: input.environmentVariable } : {}),
     ...(input.externalProvider ? { external_provider: input.externalProvider } : {}),
     ...(input.externalRef ? { external_ref: input.externalRef } : {}),
+    ...(input.ownerProviderId ? { owner_provider_id: input.ownerProviderId } : {}),
     created_at: input.createdAt ?? now,
     updated_at: input.updatedAt ?? now,
     last_validated_at: input.lastValidatedAt ?? null,
@@ -159,6 +161,7 @@ export class CredentialStore {
         environmentVariable,
         externalProvider: input.external_provider ?? existing?.metadata.external_provider,
         externalRef: input.external_ref ?? existing?.metadata.external_ref,
+        ownerProviderId: input.owner_provider_id ?? existing?.metadata.owner_provider_id,
         secret,
         createdAt: existing?.metadata.created_at,
         lastValidatedAt: existing?.metadata.last_validated_at,
@@ -200,6 +203,7 @@ export class CredentialStore {
         environmentVariable: metadata.environment_variable,
         externalProvider: metadata.external_provider,
         externalRef: metadata.external_ref,
+        ownerProviderId: metadata.owner_provider_id,
         secret,
         createdAt: existing?.metadata.created_at,
       });

@@ -147,6 +147,48 @@ export function registerModelResourceRoutes(app: FastifyInstance, resources: Mod
     catch (error) { return routeError(reply, error); }
   });
 
+  /** Aggregate surface for the user-facing custom provider: one call creates
+   *  the credential/endpoint/provider/binding and discovers models. */
+  app.post("/api/custom-providers", async (request, reply) => {
+    try {
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const name = String(body.name ?? "").trim();
+      const baseUrl = String(body.base_url ?? "").trim();
+      if (!name || !baseUrl) return reply.code(400).send({ code: "invalid_resource", error: "name and base_url are required" });
+      const protocol = body.protocol === "anthropic" || body.protocol === "ollama" || body.protocol === "native" ? body.protocol : "openai";
+      const api = body.api && typeof body.api === "string" ? body.api as "openai-completions" | "openai-responses" | "anthropic-messages" | "ollama" | "native" : undefined;
+      const dataEgress = body.data_egress === "local" || body.data_egress === "remote" ? body.data_egress : undefined;
+      const auth = body.auth && typeof body.auth === "object" ? body.auth as Record<string, unknown> : null;
+      const authKind = auth?.kind === "none" ? "none" : auth?.kind === "api_key" ? "api_key" : null;
+      if (authKind === null) return reply.code(400).send({ code: "invalid_resource", error: "auth.kind must be api_key or none" });
+      const secret = auth?.secret && typeof auth.secret === "string" ? auth.secret : undefined;
+      if (authKind === "api_key" && !secret) return reply.code(400).send({ code: "invalid_resource", error: "auth.secret is required for api_key auth" });
+      const result = await resources.createCustomProvider({ name, base_url: baseUrl, protocol: protocol as "openai" | "anthropic" | "ollama" | "native", api, data_egress: dataEgress, auth: { kind: authKind, ...(secret ? { secret } : {}) } });
+      return await reload(nodeSessionService, reply, { ok: true, ...result });
+    } catch (error) { return routeError(reply, error); }
+  });
+
+  app.put<{ Params: { provider_id: string } }>("/api/custom-providers/:provider_id", async (request, reply) => {
+    try {
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const name = body.name && typeof body.name === "string" ? body.name.trim() : undefined;
+      const baseUrl = body.base_url && typeof body.base_url === "string" ? body.base_url.trim() : undefined;
+      const api = body.api && typeof body.api === "string" ? body.api as "openai-completions" | "openai-responses" | "anthropic-messages" | "ollama" | "native" : undefined;
+      const auth = body.auth && typeof body.auth === "object" ? body.auth as Record<string, unknown> : null;
+      const secret = auth?.secret && typeof auth.secret === "string" ? auth.secret : undefined;
+      if (!name && !baseUrl && !api && !secret) return reply.code(400).send({ code: "invalid_resource", error: "nothing to update" });
+      const result = await resources.updateCustomProvider(request.params.provider_id, { ...(name ? { name } : {}), ...(baseUrl ? { base_url: baseUrl } : {}), ...(api ? { api } : {}), ...(secret ? { auth: { kind: "api_key", secret } } : {}) });
+      return await reload(nodeSessionService, reply, { ok: true, ...result });
+    } catch (error) { return routeError(reply, error); }
+  });
+
+  app.delete<{ Params: { provider_id: string } }>("/api/custom-providers/:provider_id", async (request, reply) => {
+    try {
+      const result = await resources.deleteCustomProvider(request.params.provider_id);
+      return await reload(nodeSessionService, reply, { ok: true, ...result });
+    } catch (error) { return routeError(reply, error); }
+  });
+
   app.get("/api/settings/model", async (_request, reply) => {
     try { return await resources.modelPreferences(); }
     catch (error) { return routeError(reply, error); }

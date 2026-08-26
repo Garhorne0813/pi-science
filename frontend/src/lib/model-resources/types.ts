@@ -53,6 +53,15 @@ export interface ModelResource {
   routes: ModelRoute[];
 }
 
+export interface CustomProviderResult {
+  provider: ModelProvider;
+  endpoint: ModelEndpointResource;
+  credential: CredentialMetadata | null;
+  binding: ProviderEndpointBinding;
+  discovery?: { model_count: number };
+  discovery_error?: string;
+}
+
 export interface ModelEndpointResource {
   id: string;
   endpoint_id?: string;

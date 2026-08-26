@@ -4,6 +4,7 @@ import {
   type CreateCredentialRequest,
   type CreateEndpointRequest,
   type CreateProviderRequest,
+  type CredentialMetadata,
   type Endpoint,
   type Model,
   type ModelCapabilities,
@@ -427,6 +428,106 @@ export class ModelResourceService {
     return { id, removed_models: modelIds.length, removed_bindings: bindings.length };
   }
 
+  /** Custom-provider aggregate: create credential/endpoint/provider/binding as
+   *  one use case. On failure every resource created here is compensated so
+   *  the UI's single "Add provider" action cannot leave orphan data behind. */
+  async createCustomProvider(input: { name: string; base_url: string; protocol?: Endpoint["protocol"]; api?: Endpoint["api"]; data_egress?: Endpoint["data_egress"]; auth?: { kind: "api_key" | "none"; secret?: string } | null }): Promise<{ provider: Provider; endpoint: Endpoint; credential: CredentialMetadata | null; binding: ProviderEndpointBinding; discovery?: { model_count: number }; discovery_error?: string }> {
+    await this.ensureMigrated();
+    const providerId = ModelResourceRepository.providerId(input.name);
+    if ((await this.repository.read()).providers.some((item) => item.id === providerId)) throw resourceError("provider_id_conflict", `Provider ID '${providerId}' already exists`);
+    const protocol = normalizeProtocol(input.protocol ?? "openai");
+    let credential: CredentialMetadata | null = null;
+    let endpoint!: Endpoint;
+    let provider!: Provider;
+    let binding!: ProviderEndpointBinding;
+    const compensation = async (): Promise<void> => {
+      if (binding) { await this.repository.update((state) => { state.bindings = state.bindings.filter((item) => item.id !== binding.id); }); }
+      if (provider) { await this.repository.update((state) => { state.providers = state.providers.filter((item) => item.id !== provider.id); state.models = state.models.filter((item) => item.provider_id !== provider.id); }); }
+      if (endpoint) { await this.deleteEndpoint(endpoint.id, true); }
+      if (credential) { await this.credentials.remove(credential.id); }
+    };
+    try {
+      if (input.auth?.kind === "api_key" && input.auth.secret) {
+        credential = await this.credentials.put({ kind: "api_key", backend: "managed", secret: input.auth.secret, label: `${input.name} key`, owner_provider_id: providerId });
+      }
+      endpoint = await this.createEndpoint({
+        name: `${input.name} connection`,
+        base_url: input.base_url,
+        protocol,
+        api: input.api,
+        credential_ref: credential?.id ?? null,
+        enabled: true,
+        data_egress: input.data_egress ?? (input.base_url.startsWith("http://127.") || input.base_url.includes("localhost") ? "local" : "remote"),
+        owner_provider_id: providerId,
+      });
+      provider = await this.createProvider({ name: input.name, adapter: adapterForEndpoint(protocol), catalog_mode: "hybrid", auth_kind: input.auth?.kind ?? "none", enabled: true });
+      binding = await this.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, priority: 100, enabled: true });
+    } catch (error) {
+      await compensation();
+      throw error;
+    }
+    try {
+      const discovered = await this.discover(provider.id, binding.id);
+      return { provider, endpoint, credential, binding, discovery: { model_count: discovered.models.length } };
+    } catch (error) {
+      return { provider, endpoint, credential, binding, discovery_error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /** Edit a custom provider's connection: name, base URL, API format, or key.
+   *  The canonical split stays hidden from the caller. */
+  async updateCustomProvider(id: string, input: { name?: string; base_url?: string; api?: Endpoint["api"]; auth?: { kind?: "api_key" | "none"; secret?: string } | null }): Promise<{ provider: Provider; endpoint: Endpoint; binding: ProviderEndpointBinding }> {
+    await this.ensureMigrated();
+    const state = await this.repository.read();
+    const provider = state.providers.find((item) => item.id === id);
+    if (!provider || provider.kind !== "user") throw resourceError("resource_not_found", `Custom provider '${id}' was not found`);
+    const binding = state.bindings.find((item) => item.provider_id === id);
+    if (!binding) throw resourceError("resource_not_found", `Provider '${id}' has no connection`);
+    const endpoint = state.endpoints.find((item) => item.id === binding.endpoint_id);
+    if (!endpoint) throw resourceError("resource_not_found", `Provider '${id}' connection endpoint was not found`);
+    await this.updateProvider(id, { ...(input.name ? { name: input.name } : {}) });
+    await this.updateEndpoint(endpoint.id, { ...(input.base_url ? { base_url: input.base_url } : {}), ...(input.api ? { api: input.api } : {}) });
+    if (input.auth?.kind === "api_key" && input.auth.secret) {
+      if (endpoint.credential_ref) {
+        await this.credentials.put({ id: endpoint.credential_ref, kind: "api_key", backend: "managed", secret: input.auth.secret, owner_provider_id: provider.id });
+      } else {
+        const created = await this.credentials.put({ kind: "api_key", backend: "managed", secret: input.auth.secret, label: `${provider.name} key`, owner_provider_id: provider.id });
+        await this.updateEndpoint(endpoint.id, { credential_ref: created.id });
+      }
+    }
+    const updated = await this.repository.read();
+    return { provider: structuredClone(updated.providers.find((item) => item.id === id)!), endpoint: structuredClone(updated.endpoints.find((item) => item.id === endpoint.id)!), binding: structuredClone(updated.bindings.find((item) => item.id === binding.id)!) };
+  }
+
+  /** Delete a custom provider and the resources it owns: models/bindings, the
+   *  owned endpoint, and the owned managed credential (raw secret removed from
+   *  disk). Shared endpoints/credentials are kept. */
+  async deleteCustomProvider(id: string): Promise<{ id: string; removed_endpoints: number; removed_credentials: number }> {
+    await this.ensureMigrated();
+    const state = await this.repository.read();
+    if (!state.providers.some((item) => item.id === id)) throw resourceError("resource_not_found", `Provider '${id}' was not found`);
+    const bindingEndpointIds = new Set(state.bindings.filter((binding) => binding.provider_id === id).map((binding) => binding.endpoint_id));
+    const otherBindings = state.bindings.filter((binding) => binding.provider_id !== id);
+    let removedEndpoints = 0;
+    let removedCredentials = 0;
+    await this.deleteProvider(id, true);
+    for (const endpoint of state.endpoints) {
+      if (endpoint.owner_provider_id !== id || !bindingEndpointIds.has(endpoint.id)) continue;
+      if (otherBindings.some((binding) => binding.endpoint_id === endpoint.id)) continue;
+      await this.deleteEndpoint(endpoint.id, true);
+      removedEndpoints += 1;
+      const ref = endpoint.credential_ref;
+      if (!ref) continue;
+      const metadata = await this.credentials.metadata(ref);
+      if (metadata?.owner_provider_id !== id) continue;
+      const remaining = await this.repository.read();
+      if (remaining.endpoints.some((item) => item.credential_ref === ref)) continue;
+      await this.credentials.remove(ref);
+      removedCredentials += 1;
+    }
+    return { id, removed_endpoints: removedEndpoints, removed_credentials: removedCredentials };
+  }
+
   async listEndpoints(): Promise<Endpoint[]> {
     await this.ensureMigrated();
     return (await this.repository.read()).endpoints;
@@ -455,6 +556,7 @@ export class ModelResourceService {
       enabled: input.enabled,
       health: "unknown",
       data_egress: input.data_egress,
+      ...(input.owner_provider_id ? { owner_provider_id: input.owner_provider_id } : {}),
       ...(input.rate_limit ? { rate_limit: input.rate_limit } : {}),
       ...(input.network_policy ? { network_policy: input.network_policy } : {}),
       last_checked_at: null,

@@ -1,5 +1,5 @@
 import { apiRequest } from "../client/api";
-import type { CredentialMetadata, ModelEndpointResource, ModelPreferences, ModelProvider, ModelResource, ProviderEndpointBinding } from "./types";
+import type { CredentialMetadata, CustomProviderResult, ModelEndpointResource, ModelPreferences, ModelProvider, ModelResource, ProviderEndpointBinding } from "./types";
 
 export const modelResourceKeys = {
   providers: ["model-resources", "providers"] as const,
@@ -64,7 +64,20 @@ export const modelResourcesApi = {
   setEndpointEnabled(endpointId: string, enabled: boolean): Promise<unknown> {
     return apiRequest(`/api/endpoints/${encodeURIComponent(endpointId)}/enabled?enabled=${enabled}`, { method: "PUT" });
   },
+  updateEndpoint(endpointId: string, body: { base_url?: string; name?: string }): Promise<{ endpoint: ModelEndpointResource }> {
+    return apiRequest(`/api/endpoints/${encodeURIComponent(endpointId)}`, { ...json("PUT", body) });
+  },
   probeEndpoint(endpointId: string): Promise<unknown> {
     return apiRequest(`/api/endpoints/${encodeURIComponent(endpointId)}/health`, { method: "POST" });
+  },
+  /** Aggregate custom-provider surface: one call owns the whole lifecycle. */
+  createCustomProvider(body: { name: string; base_url: string; protocol: string; api?: string; auth?: { kind: "api_key" | "none"; secret?: string } | null }): Promise<CustomProviderResult> {
+    return apiRequest("/api/custom-providers", { ...json("POST", body) });
+  },
+  updateCustomProvider(providerId: string, body: { name?: string; base_url?: string; api?: string; auth?: { kind: "api_key"; secret: string } }): Promise<CustomProviderResult> {
+    return apiRequest(`/api/custom-providers/${encodeURIComponent(providerId)}`, { ...json("PUT", body) });
+  },
+  deleteCustomProvider(providerId: string): Promise<unknown> {
+    return apiRequest(`/api/custom-providers/${encodeURIComponent(providerId)}`, { method: "DELETE" });
   },
 };

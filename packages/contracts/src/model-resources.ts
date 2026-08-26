@@ -75,6 +75,9 @@ export const endpointSchema = z.object({
   enabled: z.boolean().default(true),
   health: endpointHealthSchema.default("unknown"),
   data_egress: endpointDataEgressSchema.default("remote"),
+  /** Set when the endpoint was created as part of a custom-provider
+   *  aggregate: aggregate deletion removes exactly the endpoints it owns. */
+  owner_provider_id: z.string().min(1).optional(),
   rate_limit: z.object({
     requests_per_minute: z.number().int().positive().optional(),
     tokens_per_minute: z.number().int().positive().optional(),
@@ -102,6 +105,7 @@ export const credentialMetadataSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   last_validated_at: z.string().nullable().optional(),
+  owner_provider_id: z.string().min(1).optional(),
 });
 
 export const bindingSchema = z.object({
@@ -174,6 +178,7 @@ export const createEndpointRequestSchema = z.object({
   credential_ref: z.string().min(1).nullable().optional(),
   enabled: z.boolean().default(true),
   data_egress: endpointDataEgressSchema.default("remote"),
+  owner_provider_id: z.string().min(1).optional(),
   rate_limit: endpointSchema.shape.rate_limit,
   network_policy: endpointSchema.shape.network_policy,
 });
@@ -204,6 +209,7 @@ export const createCredentialRequestSchema = z.object({
   environment_variable: z.string().optional(),
   external_provider: z.string().max(200).optional(),
   external_ref: z.string().max(500).optional(),
+  owner_provider_id: z.string().min(1).optional(),
 });
 
 export const updateCredentialRequestSchema = createCredentialRequestSchema.partial().omit({ id: true });

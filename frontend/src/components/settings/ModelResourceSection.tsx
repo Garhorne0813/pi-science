@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronDown, Loader2, RefreshCw, Server, Trash2 } from "lucide-react";
+import { Check, ChevronDown, Loader2, Pencil, RefreshCw, Server, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/ui";
 import { queryClient } from "../../lib/client/query-client";
@@ -18,10 +18,16 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editBaseUrl, setEditBaseUrl] = useState("");
+  const [editApiKey, setEditApiKey] = useState("");
   const providersRead = useQuery({ queryKey: modelResourceKeys.providers, queryFn: modelResourcesApi.providers, staleTime: 0 });
   const endpointsRead = useQuery({ queryKey: modelResourceKeys.endpoints, queryFn: modelResourcesApi.endpoints, staleTime: 0 });
+  const bindingsRead = useQuery({ queryKey: modelResourceKeys.bindings(), queryFn: () => modelResourcesApi.bindings(), staleTime: 0 });
   const providers = (providersRead.data?.providers ?? []).filter((provider) => provider.kind === "user");
   const endpoints = endpointsRead.data?.endpoints ?? [];
+  const bindings = bindingsRead.data?.bindings ?? [];
 
   const invalidate = async () => {
     await Promise.all([
@@ -50,20 +56,45 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
     setBusy("add");
     setError(null);
     try {
-      const credential = authKind === "api_key"
-        ? (await modelResourcesApi.createCredential({ kind: "api_key", backend: "managed", secret: apiKey.trim(), label: `${name.trim()} key` })).credential
-        : null;
-      const endpoint = (await modelResourcesApi.createEndpoint({ name: `${name.trim()} ${t("settings.resources.connectionSuffix", { defaultValue: "connection" })}`, base_url: baseUrl.trim(), protocol, credential_ref: credential?.id ?? null, data_egress: baseUrl.startsWith("http://127.") || baseUrl.includes("localhost") ? "local" : "remote" })).endpoint;
-      const provider = (await modelResourcesApi.createProvider({ name: name.trim(), adapter: protocol === "anthropic" ? "anthropic-compatible" : protocol === "ollama" ? "ollama" : "openai-compatible", catalog_mode: "hybrid", auth_kind: authKind, enabled: true })).provider;
-      const binding = (await modelResourcesApi.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, priority: 100, enabled: true })).binding;
-      try {
-        await modelResourcesApi.discover(provider.id, binding.id);
-      } catch (cause) {
-        setError(cause instanceof Error ? cause.message : String(cause));
-      }
+      const result = await modelResourcesApi.createCustomProvider({
+        name: name.trim(),
+        base_url: baseUrl.trim(),
+        protocol,
+        auth: authKind === "api_key" ? { kind: "api_key", secret: apiKey.trim() } : { kind: "none" },
+      });
+      if (result.discovery_error) setError(result.discovery_error);
       await invalidate();
       await onConfigReload();
       reset();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const startEdit = (provider: ModelProvider) => {
+    const binding = bindings.find((item) => item.provider_id === provider.id);
+    const endpoint = binding ? endpoints.find((item) => item.id === binding.endpoint_id) : undefined;
+    setEditingId(provider.id);
+    setEditName(provider.name);
+    setEditBaseUrl(endpoint?.base_url ?? "");
+    setEditApiKey("");
+  };
+
+  const saveEdit = async (providerId: string) => {
+    if (!editName.trim() || !editBaseUrl.trim()) return;
+    setBusy(`edit:${providerId}`);
+    setError(null);
+    try {
+      await modelResourcesApi.updateCustomProvider(providerId, {
+        name: editName.trim(),
+        base_url: editBaseUrl.trim(),
+        ...(editApiKey.trim() ? { auth: { kind: "api_key" as const, secret: editApiKey.trim() } } : {}),
+      });
+      setEditingId(null);
+      await invalidate();
+      await onConfigReload();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -89,7 +120,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
     setBusy(`delete:${provider.id}`);
     setError(null);
     try {
-      await modelResourcesApi.deleteProvider(provider.id);
+      await modelResourcesApi.deleteCustomProvider(provider.id);
       await invalidate();
       await onConfigReload();
     } catch (cause) {
@@ -181,19 +212,42 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
           {providers.length > 0 && (
             <div className="divide-y divide-faint overflow-hidden rounded-input border border-faint">
               <p className="px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">{t("settings.resources.providers", { defaultValue: "Providers" })}</p>
-              {providers.map((provider: ModelProvider) => (
-                <div key={provider.id} className="flex min-h-12 items-center gap-2 px-3 py-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs font-medium text-text">{provider.name}</p>
-                    <p className="truncate font-mono text-[10px] text-muted">{provider.id} · {provider.models.length} {t("settings.resources.models", { defaultValue: "models" })}</p>
+              {providers.map((provider: ModelProvider) => {
+                const binding = bindings.find((item) => item.provider_id === provider.id);
+                const connection = binding ? endpoints.find((item) => item.id === binding.endpoint_id) : undefined;
+                return (
+                  <div key={provider.id} className="py-2">
+                    <div className="flex min-h-10 items-center gap-2 px-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs font-medium text-text">{provider.name}</p>
+                        <p className="truncate font-mono text-[10px] text-muted">
+                          {provider.id} · {provider.models.length} {t("settings.resources.models", { defaultValue: "models" })}</p>
+                        {connection?.base_url && <p className="truncate font-mono text-[10px] text-muted">{connection.base_url}</p>}
+                      </div>
+                      <span className={cn("flex items-center gap-1 text-[10px]", provider.credential_status === "configured" || provider.credential_status === "connected" ? "text-ok-text" : "text-muted")}>
+                        {(provider.credential_status === "configured" || provider.credential_status === "connected") && <Check size={10} />}
+                        {provider.credential_status}
+                      </span>
+                      <button type="button" aria-label={`${t("common.edit")} ${provider.name}`} onClick={() => (editingId === provider.id ? setEditingId(null) : startEdit(provider))} disabled={busy !== null} className="rounded-input p-1.5 text-muted hover:bg-surface-2 hover:text-text disabled:opacity-40"><Pencil size={12} /></button>
+                      <button type="button" aria-label={`${t("common.delete")} ${provider.name}`} onClick={() => void removeProvider(provider)} disabled={busy !== null} className="rounded-input p-1.5 text-error-text hover:bg-error/10 disabled:opacity-40"><Trash2 size={12} /></button>
+                    </div>
+                    {editingId === provider.id && (
+                      <div className="space-y-2 border-t border-faint px-3 py-2">
+                        <input value={editName} onChange={(event) => setEditName(event.target.value)} placeholder={t("settings.resources.name", { defaultValue: "Provider name" })} className="min-h-9 w-full rounded-input border border-border bg-bg px-3 py-2 text-xs text-text outline-none focus:border-accent" />
+                        <input value={editBaseUrl} onChange={(event) => setEditBaseUrl(event.target.value)} placeholder={t("settings.resources.baseUrl", { defaultValue: "Base URL" })} className="min-h-9 w-full rounded-input border border-border bg-bg px-3 py-2 font-mono text-xs text-text outline-none focus:border-accent" />
+                        <input type="password" value={editApiKey} onChange={(event) => setEditApiKey(event.target.value)} placeholder={t("settings.resources.editKeyPlaceholder", { defaultValue: "New API key (leave empty to keep)" })} className="min-h-9 w-full rounded-input border border-border bg-bg px-3 py-2 font-mono text-xs text-text outline-none focus:border-accent" />
+                        <div className="flex items-center gap-2">
+                          <button type="button" onClick={() => void saveEdit(provider.id)} disabled={busy !== null || !editName.trim() || !editBaseUrl.trim()} className="flex min-h-8 items-center justify-center gap-1.5 rounded-input bg-accent-fill px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40">
+                            {busy === `edit:${provider.id}` ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                            {t("common.save", { defaultValue: "Save" })}
+                          </button>
+                          <button type="button" onClick={() => setEditingId(null)} className="min-h-8 rounded-input px-3 py-1.5 text-xs text-muted hover:text-text">{t("common.cancel", { defaultValue: "Cancel" })}</button>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <span className={cn("flex items-center gap-1 text-[10px]", provider.credential_status === "configured" || provider.credential_status === "connected" ? "text-ok-text" : "text-muted")}>
-                    {(provider.credential_status === "configured" || provider.credential_status === "connected") && <Check size={10} />}
-                    {provider.credential_status}
-                  </span>
-                  <button type="button" aria-label={`${t("common.delete")} ${provider.name}`} onClick={() => void removeProvider(provider)} disabled={busy !== null} className="rounded-input p-1.5 text-error-text hover:bg-error/10 disabled:opacity-40"><Trash2 size={12} /></button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
