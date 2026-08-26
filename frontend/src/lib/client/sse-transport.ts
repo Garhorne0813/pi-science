@@ -75,7 +75,7 @@ export class SseTransport {
     if (lastEventId) params.set("lastEventId", lastEventId);
     const query = params.toString();
     const url = `${this.baseUrl}/api/sessions/${sessionId}/events${query ? `?${query}` : ""}`;
-    const source = new EventSource(url);
+    const source = new EventSource(url, { withCredentials: true });
     this.eventSource = source;
     this.emit({ type: "connection.connecting", sessionId });
     this.armConnectionWatchdog(source, generation, sessionId);

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resetThrottle, searchArxiv, searchGenBank, searchPubChem, searchPubMed, searchUniProt } from "./providers.js";
+import { resetThrottle, searchArxiv, searchGenBank, searchPubChem, searchPubMed, searchUniProt, throttle } from "./providers.js";
 
 vi.mock("node:dns/promises", () => ({
   lookup: vi.fn(async (hostname: string) => [{ address: "93.184.216.34", family: 4 }]),
@@ -71,11 +71,12 @@ const UNIPROT_JSON = JSON.stringify({
 let fetchMock: ReturnType<typeof vi.fn>;
 let currentUrl = "";
 
-function stubFetch(routes: Array<{ match: RegExp | string; body: string | Response }>) {
+function stubFetch(routes: Array<{ match: RegExp | string; body: string | Response }>, onRequest?: (url: string) => void) {
   currentUrl = "";
   fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = input instanceof URL ? input.toString() : String(input);
     currentUrl = url;
+    onRequest?.(url);
     const route = routes.find((entry) => (typeof entry.match === "string" ? url.includes(entry.match) : entry.match.test(url)));
     if (!route) return new Response("not found", { status: 404 });
     return typeof route.body === "string" ? new Response(route.body, { status: 200, headers: { "content-type": "application/json" } }) : route.body;
@@ -125,6 +126,24 @@ describe("searchPubMed", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("throttles every NCBI request across concurrent PubMed searches", async () => {
+    const startedAt: number[] = [];
+    stubFetch([
+      { match: "esearch.fcgi", body: PUBMED_SEARCH },
+      { match: "esummary.fcgi", body: PUBMED_SUMMARY },
+    ], () => startedAt.push(Date.now()));
+
+    await Promise.all([
+      searchPubMed("crispr first", { approved: false }),
+      searchPubMed("crispr second", { approved: false }),
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(startedAt).toHaveLength(4);
+    const gaps = startedAt.slice(1).map((timestamp, index) => timestamp - startedAt[index]!);
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(600);
+  });
+
   it("refuses to reach providers that resolve to private addresses", async () => {
     const { lookup } = await import("node:dns/promises");
     // The dns.lookup overload set makes vi.mocked infer the non-all signature;
@@ -133,6 +152,18 @@ describe("searchPubMed", () => {
     stubFetch([{ match: "esearch.fcgi", body: PUBMED_SEARCH }]);
     await expect(searchPubMed("crispr", { approved: false })).rejects.toThrow(/private or reserved/i);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("throttle", () => {
+  it("serializes concurrent calls within the same rate bucket", async () => {
+    const started: number[] = [];
+    await Promise.all([
+      throttle("test", 30).then(() => started.push(Date.now())),
+      throttle("test", 30).then(() => started.push(Date.now())),
+    ]);
+    expect(started).toHaveLength(2);
+    expect(Math.abs(started[1]! - started[0]!)).toBeGreaterThanOrEqual(25);
   });
 });
 

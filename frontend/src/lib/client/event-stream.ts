@@ -7,7 +7,7 @@ export interface JsonEventStreamOptions<T> {
 
 /** Open an unnamed-message SSE stream with consistent JSON/error handling. */
 export function openJsonEventStream<T>(url: string, options: JsonEventStreamOptions<T>): () => void {
-  const source = new EventSource(url);
+  const source = new EventSource(url, { withCredentials: true });
   let closed = false;
   const close = () => {
     if (closed) return;

@@ -7,8 +7,6 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
-      "@ai4s/shared": path.resolve(__dirname, "src/types/thread.ts"),
-      "@ai4s/sdk": path.resolve(__dirname, "src/types/thread.ts"),
     },
   },
   server: {
@@ -17,6 +15,9 @@ export default defineConfig({
       "/api": {
         target: process.env.PI_SCIENCE_BACKEND_URL || "http://127.0.0.1:8787",
         changeOrigin: true,
+        ...(process.env.PI_SCIENCE_INTERNAL_TOKEN
+          ? { headers: { "x-pi-science-internal-token": process.env.PI_SCIENCE_INTERNAL_TOKEN } }
+          : {}),
       },
     },
   },
@@ -24,6 +25,9 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
+          // Shared wire-schema validation is only needed by lazy data surfaces
+          // (Runs/provenance). Keep Zod out of the initial conversation bundle.
+          if (id.includes("node_modules/zod")) return "vendor-contracts";
           if (id.includes("node_modules/echarts") || id.includes("node_modules/zrender")) return "vendor-echarts";
           if (id.includes("node_modules/openchemlib")) return "vendor-openchemlib";
           if (id.includes("node_modules/three")) return "vendor-three";

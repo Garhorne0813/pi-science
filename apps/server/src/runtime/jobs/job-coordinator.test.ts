@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir, totalmem } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { JobCoordinator, type JobOwnership, type JobRecord, type JobStatus, restrictLocalJobEnvironment, restrictResearchEnvironment, windowsTaskkillArgs } from "./job-coordinator.js";
+import { JobCoordinator, parseCommand, type JobOwnership, type JobRecord, type JobStatus, restrictLocalJobEnvironment, restrictResearchEnvironment, windowsTaskkillArgs } from "./job-coordinator.js";
 
 const cleanup: string[] = [];
 const jobs: JobCoordinator[] = [];
@@ -58,6 +58,47 @@ async function linuxStartTicks(pid: number): Promise<string | null> {
 async function processExists(pid: number): Promise<boolean> { try { process.kill(pid, 0); return true; } catch { return false; } }
 
 describe("job coordinator", () => {
+  it("parses command strings without a backtracking regular expression", () => {
+    expect(parseCommand(`python -c "print('hello world')" --label='quoted value'`)).toEqual(["python", "-c", "print('hello world')", "--label=quoted value"]);
+    expect(parseCommand("node -e 'process.stdout.write(\\\"ok\\\")'" )).toEqual(["node", "-e", "process.stdout.write(\\\"ok\\\")"]);
+  });
+
+  it("reports host CPU and memory capacity instead of a hard-coded single CPU", () => {
+    const coordinator = jobCoordinator();
+    const result = coordinator.capabilities({ cpu: availableParallelism(), memory_mb: Math.floor(totalmem() / (1024 * 1024)) });
+    expect(result.status).toBe("ready");
+    expect(result.checks.cpu).toBe(availableParallelism());
+    expect(result.checks.memory_mb).toBe(Math.floor(totalmem() / (1024 * 1024)));
+  });
+
+  it("uses the workspace-bound environment revision and package set for capabilities", async () => {
+    const coordinator = new JobCoordinator({
+      environment: async () => ({ PATH: "" }),
+      status: async () => ({
+        ready: true,
+        workspace: "/tmp/pi-science-capabilities",
+        prefix: "/tmp/pi-science-capabilities/.envs/science",
+        python: "/tmp/pi-science-capabilities/.envs/science/bin/python",
+        pip: "/tmp/pi-science-capabilities/.envs/science/bin/pip",
+        revision_id: "rev_science_2",
+        environment_id: "env_science",
+        packages: ["python=3.12", "numpy"],
+        manager: "micromamba",
+        npm: { local_prefix: "/tmp/pi-science-capabilities", global_prefix: "/tmp/pi-science-capabilities/.npm", cache: "/tmp/pi-science-capabilities/.cache" },
+      }),
+    });
+    jobs.push(coordinator);
+
+    const report = await coordinator.capabilitiesForWorkspace("/tmp/pi-science-capabilities", {
+      environment_revision_id: "rev_science_2",
+      packages: ["numpy"],
+    });
+
+    expect(report.status).toBe("ready");
+    expect(report.checks.environment.revision_id).toBe("rev_science_2");
+    expect(report.checks.packages).toEqual({ numpy: true });
+  });
+
   it("heals orphaned pending/running records after a restart and unblocks hasActive", async () => {
     const cwd = await workspace();
     await writeStoredJob(cwd, "job_orphan0000000000", "running", new Date(Date.now() - 60_000).toISOString(), "earlier stderr");

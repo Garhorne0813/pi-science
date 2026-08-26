@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { artifactManifestSchema, createResearchLoopSchema, createSessionRequestSchema, executionEventSchema, executionRecordSchema, gatewayHealthSchema, jobRecordSchema, piRpcCommandSchema, researchLoopSchema, sessionEventSchema, sessionStatsSchema, skillContentSchema } from "./index.js";
+import { artifactManifestSchema, createResearchLoopSchema, createSessionRequestSchema, executionEventSchema, executionRecordSchema, gatewayHealthSchema, jobRecordSchema, piRpcCommandSchema, researchLoopSchema, sessionEventSchema, sessionMessagePageSchema, sessionStatsSchema, sessionUserMessageIndexSchema, skillContentSchema } from "./index.js";
 
 describe("gateway contracts", () => {
   it("accepts a healthy Node gateway response", () => {
@@ -69,6 +69,12 @@ describe("gateway contracts", () => {
     expect(() => sessionStatsSchema.parse({ ...stats, tokens: { input: 1 } })).toThrow();
     expect(() => sessionStatsSchema.parse({ ...stats, userMessages: -1 })).toThrow();
     expect(sessionEventSchema.parse({ type: "session.stats", sessionId: "s1", stats })).toMatchObject({ type: "session.stats" });
+  });
+
+  it("normalizes legacy session history payloads while rejecting malformed fields", () => {
+    expect(sessionMessagePageSchema.parse({ messages: [] })).toMatchObject({ next_cursor: null, has_more: false, snapshot_version: "" });
+    expect(sessionUserMessageIndexSchema.parse({ messages: [{ id: "u1", text: "hello", before: "cursor" }] })).toMatchObject({ snapshot_version: "" });
+    expect(() => sessionMessagePageSchema.parse({ messages: [], has_more: "yes" })).toThrow();
   });
 
   it("preserves research task types while defaulting legacy loops", () => {
