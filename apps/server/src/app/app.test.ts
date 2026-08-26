@@ -1,11 +1,13 @@
 import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { access, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./app.js";
 import { createServerModules } from "./server-modules.js";
 import type { ServerConfig } from "../config/config.js";
+import { InMemorySqliteStateStore } from "../storage/sqlite/state-store.js";
+import { FakeExecutor } from "../scheduled-tasks/executor.js";
 
 const openApps: Array<{ close(): Promise<unknown> }> = [];
 
@@ -378,5 +380,100 @@ describe("Node control plane", () => {
     });
     expect(escape.statusCode).toBe(403);
     await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it("serves the scheduled tasks API end-to-end when SQLite is enabled", async () => {
+    const previousFlag = process.env.PI_SCIENCE_SCHEDULED_TASKS;
+    process.env.PI_SCIENCE_SCHEDULED_TASKS = "1";
+    const workspace = await mkdtemp(join(tmpdir(), "pi-science-scheduled-app-"));
+    try {
+      const store = new InMemorySqliteStateStore();
+      await store.start();
+      const modules = createServerModules(config("http://127.0.0.1:1"), { sqliteEnabled: true, stateStore: store });
+      await modules.workspaces.rememberWorkspace(workspace);
+      // Hermetic swap: a claimed attempt must never reach providers or Pi from this test.
+      modules.scheduled.registry!.register(new FakeExecutor());
+      const app = buildApp(config("http://127.0.0.1:1"), modules);
+      openApps.push(app);
+      const cwd = encodeURIComponent(workspace);
+
+      const created = await app.inject({
+        method: "POST",
+        url: `/api/scheduled-tasks?cwd=${cwd}`,
+        payload: {
+          name: "Daily digest",
+          schedule: { type: "interval", every_seconds: 3600, anchor_at: "2026-01-01T00:00:00Z", timezone: "UTC" },
+          executor: { kind: "literature_digest", config: { query: "single-cell RNA sequencing quality control", providers: ["pubmed"], max_results: 30, language: "zh-CN" } },
+          output: { relative_root: "outputs/digest" },
+        },
+      });
+      expect(created.statusCode).toBe(201);
+      const taskId = created.json().task_id;
+
+      const listed = await app.inject({ method: "GET", url: `/api/scheduled-tasks?cwd=${cwd}` });
+      expect(listed.statusCode).toBe(200);
+      expect(listed.json().items.map((item: { task_id: string }) => item.task_id)).toEqual([taskId]);
+
+      const run = await app.inject({ method: "POST", url: `/api/scheduled-tasks/${taskId}/run?cwd=${cwd}` });
+      expect(run.statusCode).toBe(202);
+      expect(String(run.headers.location)).toContain(`/api/scheduled-tasks/${taskId}/runs/`);
+      const located = await app.inject({ method: "GET", url: String(run.headers.location) });
+      expect(located.statusCode).toBe(200);
+      expect(located.json()).toMatchObject({ task_id: taskId, trigger_source: "manual" });
+
+      const diagnostics = await app.inject({ method: "GET", url: "/internal/diagnostics" });
+      expect(diagnostics.json().scheduled_tasks).toMatchObject({ feature_enabled: true, sqlite_ready: true });
+    } finally {
+      if (previousFlag === undefined) delete process.env.PI_SCIENCE_SCHEDULED_TASKS;
+      else process.env.PI_SCIENCE_SCHEDULED_TASKS = previousFlag;
+      await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  }, 30_000);
+
+  it("settles scheduled runtimes before closing SQLite on shutdown (docs §11.5)", async () => {
+    const previousFlag = process.env.PI_SCIENCE_SCHEDULED_TASKS;
+    process.env.PI_SCIENCE_SCHEDULED_TASKS = "1";
+    try {
+      const store = new InMemorySqliteStateStore();
+      await store.start();
+      const modules = createServerModules(config("http://127.0.0.1:1"), { sqliteEnabled: true, stateStore: store });
+      const order: string[] = [];
+      const realSchedulerStop = modules.scheduled.scheduler!.stop.bind(modules.scheduled.scheduler!);
+      vi.spyOn(modules.scheduled.scheduler!, "stop").mockImplementation(async () => { order.push("scheduler.stop"); await realSchedulerStop(); });
+      const realDispatcherShutdown = modules.scheduled.dispatcher!.shutdown.bind(modules.scheduled.dispatcher!);
+      vi.spyOn(modules.scheduled.dispatcher!, "shutdown").mockImplementation(async () => { order.push("dispatcher.shutdown"); await realDispatcherShutdown(); });
+      const realStoreClose = modules.stateStore.close.bind(modules.stateStore);
+      vi.spyOn(modules.stateStore, "close").mockImplementation(async () => { order.push("stateStore.close"); await realStoreClose(); });
+      const app = buildApp(config("http://127.0.0.1:1"), modules);
+      openApps.push(app);
+      await app.inject({ method: "GET", url: "/internal/live" });
+      await app.close();
+      expect(order).toEqual(["scheduler.stop", "dispatcher.shutdown", "stateStore.close"]);
+    } finally {
+      if (previousFlag === undefined) delete process.env.PI_SCIENCE_SCHEDULED_TASKS;
+      else process.env.PI_SCIENCE_SCHEDULED_TASKS = previousFlag;
+    }
+  });
+
+  it("answers scheduled task routes with uniform 503s when SQLite is disabled", async () => {
+    const previousFlag = process.env.PI_SCIENCE_SCHEDULED_TASKS;
+    process.env.PI_SCIENCE_SCHEDULED_TASKS = "1";
+    try {
+      const modules = createServerModules(config("http://127.0.0.1:1"), { sqliteEnabled: false });
+      expect(modules.scheduled.scheduler).toBeNull();
+      const app = buildApp(config("http://127.0.0.1:1"), modules);
+      openApps.push(app);
+      const response = await app.inject({ method: "GET", url: "/api/scheduled-tasks?cwd=." });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ code: "SCHEDULED_TASKS_SQLITE_DISABLED", request_id: expect.any(String) });
+      // The feature flag alone also disables every route.
+      process.env.PI_SCIENCE_SCHEDULED_TASKS = "0";
+      const flaggedOff = await app.inject({ method: "GET", url: "/api/scheduled-tasks?cwd=." });
+      expect(flaggedOff.statusCode).toBe(503);
+      expect(flaggedOff.json().code).toBe("SCHEDULED_TASKS_DISABLED");
+    } finally {
+      if (previousFlag === undefined) delete process.env.PI_SCIENCE_SCHEDULED_TASKS;
+      else process.env.PI_SCIENCE_SCHEDULED_TASKS = previousFlag;
+    }
   });
 });

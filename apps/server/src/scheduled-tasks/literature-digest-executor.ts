@@ -69,8 +69,17 @@ export interface LiteratureDigestExecutorDeps {
   executions?: Pick<ExecutionRepository, "start" | "finish">;
   provenance?: { record(cwd: string, entry: Record<string, unknown>): Promise<unknown> };
   now?: () => number;
-  /** Previous successful Attempt's stable keys (docs §9.8). Null/throwing ⇒ baseline_unavailable. Production wiring lands in Phase 6. */
-  loadPreviousStableKeys?: () => Promise<string[] | null>;
+  /** Previous successful Attempt's stable keys (docs §9.8). Null/throwing ⇒ baseline_unavailable.
+   * The context identifies the current attempt so one production loader can serve every task. */
+  loadPreviousStableKeys?: (context: PreviousBaselineContext) => Promise<string[] | null>;
+}
+
+/** Identity of the running attempt, used to locate the delta baseline. */
+export interface PreviousBaselineContext {
+  task_id: string;
+  run_id: string;
+  attempt_id: string;
+  cwd: string;
 }
 
 /** Classified executor failure; `retryable` feeds the dispatcher backoff decision (docs §9.6). */
@@ -145,7 +154,7 @@ export class LiteratureDigestExecutor implements ScheduledTaskExecutor {
       }
 
       // (e) deterministic delta against the previous successful Attempt (docs §9.8).
-      const previousKeys = await this.loadBaseline();
+      const previousKeys = await this.loadBaseline(ctx);
       applyDelta(selected, previousKeys);
 
       // sources.json publishes right after retrieval so evidence survives a Pi failure (docs §9.10).
@@ -261,10 +270,10 @@ export class LiteratureDigestExecutor implements ScheduledTaskExecutor {
     writtenFiles.push({ path: `${attemptDirRelative}/${name}`, sha256: sha });
   }
 
-  private async loadBaseline(): Promise<string[] | null> {
+  private async loadBaseline(ctx: ExecutorContext): Promise<string[] | null> {
     if (!this.deps.loadPreviousStableKeys) return null;
     try {
-      const loaded = await this.deps.loadPreviousStableKeys();
+      const loaded = await this.deps.loadPreviousStableKeys({ task_id: ctx.run.snapshot.task_id, run_id: ctx.run.run_id, attempt_id: ctx.attempt.attempt_id, cwd: ctx.cwd });
       return Array.isArray(loaded) ? [...new Set(loaded)] : null;
     } catch {
       // Unreadable or tampered baseline ⇒ baseline_unavailable; every record counts as new (docs §9.8).

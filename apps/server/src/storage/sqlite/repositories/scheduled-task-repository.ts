@@ -23,6 +23,7 @@ import {
 } from "../../../scheduled-tasks/errors.js";
 import { businessDateFor, firstOccurrence, validateSchedule } from "../../../scheduled-tasks/schedule.js";
 import { computeApprovalScopeHash } from "../../../scheduled-tasks/approval.js";
+import { executionIdFor } from "../../../runtime/executions/execution-repository.js";
 import type {
   ScheduledTask,
   ScheduledTaskAttemptStatus,
@@ -210,6 +211,18 @@ export interface TaskListSummary {
 export interface Page<T> {
   items: T[];
   next_cursor: string | null;
+}
+
+/** Delta-baseline pointer for docs §9.8; consumed by the production
+ * loadPreviousStableKeys wiring in server-modules. */
+export interface PreviousSuccessfulAttemptInfo {
+  task_id: string;
+  run_id: string;
+  attempt_id: string;
+  /** Canonical workspace path of the task row. */
+  workspace_path: string;
+  /** Attempt output directory relative to the workspace, forward slashes. */
+  output_dir_relative: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -551,7 +564,9 @@ export class ScheduledTaskRepository {
     const task = await this.requireLiveTaskRow(taskId);
     const runId = newId("srun");
     const attemptId = newId("satt");
-    const executionId = newId("sexec");
+    // docs §9.11: every Attempt gets its deterministic Execution id at creation,
+    // manual runs included, so evidence reconciliation stays uniform.
+    const executionId = executionIdFor("scheduled-task-attempt", attemptId);
     const snapshot = buildSnapshotFromTask(toTaskDto(task), nowMs);
     const snapshotJson = JSON.stringify(snapshot);
     const contextJson = options.context_json ?? "{}";
@@ -1029,6 +1044,34 @@ export class ScheduledTaskRepository {
     return page(rows, limit, (last) => encodeCursor({ n: Number(last.attempt_no) }), toAttemptDto);
   }
 
+  /** Most recent succeeded Run with a succeeded Attempt — the delta baseline
+   * source for the literature digest executor (docs §9.8). beforeRunId excludes
+   * one Run (typically the just-finished current Run) so an attempt never
+   * becomes its own baseline. The directory layout matches the executor's
+   * [relative_root, task_id, business_date, run_id, attempt_id] scheme; file
+   * reads and hash verification stay outside SQL in the production loader. */
+  async getPreviousSuccessfulAttempt(taskId: string, beforeRunId?: string): Promise<PreviousSuccessfulAttemptInfo | null> {
+    const row = await this.store.get<PreviousSuccessfulAttemptRow>(
+      `SELECT r.run_id, a.attempt_id, r.business_date, r.snapshot_json, t.workspace_path
+         FROM scheduled_task_runs r
+         JOIN scheduled_task_run_attempts a ON a.run_id = r.run_id AND a.status = 'succeeded'
+         JOIN scheduled_tasks t ON t.task_id = r.task_id
+        WHERE r.task_id = ? AND r.status = 'succeeded' ${beforeRunId ? "AND r.run_id != ?" : ""}
+        ORDER BY r.created_at DESC, r.run_id DESC, a.attempt_no DESC
+        LIMIT 1`,
+      beforeRunId ? [taskId, beforeRunId] : [taskId],
+    );
+    if (!row) return null;
+    const snapshot = parseJson<ScheduledTaskSnapshot>(row.snapshot_json, undefined as never);
+    return {
+      task_id: taskId,
+      run_id: row.run_id,
+      attempt_id: row.attempt_id,
+      workspace_path: row.workspace_path,
+      output_dir_relative: [snapshot.output.relative_root, snapshot.task_id, row.business_date, row.run_id, row.attempt_id].join("/"),
+    };
+  }
+
   /** Keeps the scheduled_tasks FK satisfied for project ids created outside
    * SQLite (ensureProject manifest fallback path in the service). */
   async ensureProjectRow(projectId: string, name: string, now: number): Promise<void> {
@@ -1174,6 +1217,14 @@ interface ExpiredLeaseRow {
   project_id: string;
   workspace_path: string;
   retry_json: string;
+}
+
+interface PreviousSuccessfulAttemptRow {
+  run_id: string;
+  attempt_id: string;
+  business_date: string;
+  snapshot_json: string;
+  workspace_path: string;
 }
 
 type ExecutorKind = ScheduledTaskExecutor["kind"];
