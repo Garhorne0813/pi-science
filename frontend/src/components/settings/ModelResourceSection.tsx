@@ -39,7 +39,10 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
   const [confirmDelete, setConfirmDelete] = useState<ModelProvider | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [open, setOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState<string | null>(null);
+  // The section starts expanded: the header is a collapse toggle, not a
+  // required first click.
+  const [open, setOpen] = useState(true);
   const providersRead = useQuery({ queryKey: modelResourceKeys.providers, queryFn: modelResourcesApi.providers, staleTime: 0 });
   const endpointsRead = useQuery({ queryKey: modelResourceKeys.endpoints, queryFn: modelResourcesApi.endpoints, staleTime: 0 });
   const bindingsRead = useQuery({ queryKey: modelResourceKeys.bindings(), queryFn: () => modelResourcesApi.bindings(), staleTime: 0 });
@@ -298,26 +301,25 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
                           <Pencil size={11} />
                           {t("common.edit", { defaultValue: "Edit" })}
                         </button>
-                        <details className="relative">
-                          <summary className="flex min-h-8 cursor-pointer list-none items-center rounded-input px-2 text-[11px] text-muted hover:bg-surface-2 hover:text-text marker:content-none">
-                            {t("settings.resources.more", { defaultValue: "More" })}
-                          </summary>
-                          <div className="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-input border border-faint bg-surface-raised py-1 shadow-lg">
-                            <button type="button" onClick={() => void refreshModels(provider).then(() => undefined)} className="flex w-full items-center gap-2 px-3 py-1.5 text-[11px] text-text hover:bg-surface-2">
-                              <RefreshCw size={11} />
-                              {t("settings.resources.refreshModels", { defaultValue: "Refresh Models" })}
-                            </button>
-                            <button type="button" onClick={() => void setProviderEnabled(provider, !provider.enabled).then(() => undefined)} className="flex w-full items-center gap-2 px-3 py-1.5 text-[11px] text-text hover:bg-surface-2">
-                              <span className="block size-2.5 rounded border border-current" />
-                              {provider.enabled ? t("settings.resources.disableProvider", { defaultValue: "Disable Provider" }) : t("settings.resources.enableProvider", { defaultValue: "Enable Provider" })}
-                            </button>
-                            <button type="button" onClick={() => setConfirmDelete(provider)} className="flex w-full items-center gap-2 px-3 py-1.5 text-[11px] text-error-text hover:bg-error/10">
-                              <Trash2 size={11} />
-                              {t("common.deleteProvider", { defaultValue: "Delete Provider" })}
-                            </button>
-                          </div>
-                        </details>
+                        <button type="button" onClick={() => setMoreOpen(moreOpen === provider.id ? null : provider.id)} disabled={busy !== null} className="min-h-8 rounded-input px-2 text-[11px] text-muted hover:bg-surface-2 hover:text-text disabled:opacity-40">
+                          {t("settings.resources.more", { defaultValue: "More" })}
+                        </button>
                       </div>
+                      {moreOpen === provider.id && (
+                        <div className="flex flex-wrap items-center gap-1 border-t border-faint pt-2">
+                          <button type="button" onClick={() => { void refreshModels(provider); setMoreOpen(null); }} disabled={busy !== null} className="flex min-h-8 items-center gap-1 rounded-input border border-border px-2.5 py-1 text-[11px] text-text hover:bg-surface-2 disabled:opacity-40">
+                            <RefreshCw size={11} />
+                            {t("settings.resources.refreshModels", { defaultValue: "Refresh Models" })}
+                          </button>
+                          <button type="button" onClick={() => { void setProviderEnabled(provider, !provider.enabled); setMoreOpen(null); }} disabled={busy !== null} className="flex min-h-8 items-center gap-1 rounded-input border border-border px-2.5 py-1 text-[11px] text-text hover:bg-surface-2 disabled:opacity-40">
+                            {provider.enabled ? t("settings.resources.disableProvider", { defaultValue: "Disable Provider" }) : t("settings.resources.enableProvider", { defaultValue: "Enable Provider" })}
+                          </button>
+                          <button type="button" onClick={() => setConfirmDelete(provider)} disabled={busy !== null} className="flex min-h-8 items-center gap-1 rounded-input border border-error/30 px-2.5 py-1 text-[11px] text-error-text hover:bg-error/10 disabled:opacity-40">
+                            <Trash2 size={11} />
+                            {t("common.deleteProvider", { defaultValue: "Delete Provider" })}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
