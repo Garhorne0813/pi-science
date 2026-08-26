@@ -1,7 +1,7 @@
 /** REST calls against the pi-science control plane. Each function takes the
  *  client's base URL (empty string = relative URLs through the Vite proxy). */
 
-import { request, responseError } from "./http";
+import { request, responseError, RUNTIME_START_TIMEOUT_MS } from "./http";
 import { cacheMessages } from "./message-cache";
 import type { HistoryMessage, InteractionResponse, SessionInfo, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
 
@@ -10,6 +10,7 @@ export async function createSession(baseUrl: string, cwd: string, model?: string
   const res = await request(`${baseUrl}/api/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    timeoutMs: RUNTIME_START_TIMEOUT_MS,
     body: JSON.stringify({
       cwd,
       config,
@@ -93,6 +94,7 @@ export async function resumeSession(baseUrl: string, sessionId: string, cwd: str
   const params = new URLSearchParams({ cwd });
   const res = await request(`${baseUrl}/api/sessions/${sessionId}/resume?${params}`, {
     method: "POST",
+    timeoutMs: RUNTIME_START_TIMEOUT_MS,
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.ok === false) {
@@ -125,6 +127,7 @@ export async function forkSession(baseUrl: string, sessionId: string, cwd: strin
   const res = await request(`${baseUrl}/api/sessions/${sessionId}/fork?${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    timeoutMs: RUNTIME_START_TIMEOUT_MS,
     body: JSON.stringify(entryId ? { entry_id: entryId } : {}),
   });
   const data = await res.json().catch(() => ({}));
