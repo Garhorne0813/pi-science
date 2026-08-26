@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { lazy, Suspense, useState, useEffect, useRef } from "react";
-import { PanelLeft, Settings, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, FileText, Inbox, FlaskConical, type LucideIcon } from "lucide-react";
+import { PanelLeft, Settings, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, FileText, Inbox, FlaskConical, CalendarClock, type LucideIcon } from "lucide-react";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { InspectorTabs } from "../../components/inspector/InspectorTabs";
@@ -120,6 +120,7 @@ export function ProjectsLayout() {
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} icon={FileText} label={t("nav.files")} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/knowledge`} icon={Inbox} label={t("nav.knowledge")} />
               <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/research`} icon={FlaskConical} label={t("nav.research")} />
+              <CollapsedNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/scheduled-tasks`} icon={CalendarClock} label={t("nav.scheduledTasks")} />
             </>
           )}
           <div className="flex-1" />
@@ -157,6 +158,7 @@ export function ProjectsLayout() {
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/files`} label={t("nav.files")} icon={FileText} active={location.pathname.endsWith("/files")} />
                   <KnowledgeNavItem cwd={activeCwd!} active={location.pathname.endsWith("/knowledge")} />
                   <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/research`} label={t("nav.research")} icon={FlaskConical} active={location.pathname.endsWith("/research")} />
+                  <SidebarNavItem to={`/workspace/${encodeURIComponent(activeCwd!)}/scheduled-tasks`} label={t("nav.scheduledTasks")} icon={CalendarClock} active={location.pathname.endsWith("/scheduled-tasks")} />
                 </>
               )}
             </nav>

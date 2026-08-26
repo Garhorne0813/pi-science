@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  AlertTriangle, ArrowLeft, ArrowUpRight, Ban, Check, Circle, CircleDashed, Clock3,
+  AlertTriangle, ArrowLeft, ArrowUpRight, Ban, CalendarClock, Check, Circle, CircleDashed, Clock3,
   Braces, Copy, Crosshair, FileOutput, FileSearch, Loader2, MessageSquare, Play, RotateCcw, Search, X,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -24,7 +24,7 @@ type KindFilter = "all" | ExecutionRecord["kind"];
 type StatusFilter = "all" | ExecutionRecord["status"];
 interface DisplayLog { text: string; complete: boolean }
 
-const KINDS: ExecutionRecord["kind"][] = ["tool", "kernel_cell", "job", "research_agent", "research_evaluation"];
+const KINDS: ExecutionRecord["kind"][] = ["tool", "kernel_cell", "job", "research_agent", "research_evaluation", "scheduled_task"];
 const STATUSES: ExecutionRecord["status"][] = ["pending", "running", "succeeded", "failed", "timed_out", "cancelled", "interrupted", "lost"];
 const EMPTY_RUNS: ExecutionRecord[] = [];
 
@@ -132,6 +132,13 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
     navigate(run.correlation.session_id ? `${root}/session/${encodeURIComponent(run.correlation.session_id)}` : root);
   };
 
+  // Scheduled-task attempts jump back to their task page (docs §13.3).
+  const openScheduledTask = (run: ExecutionRecord) => {
+    const taskId = run.correlation.scheduled_task_id;
+    if (!taskId) return;
+    navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/scheduled-tasks?task=${encodeURIComponent(taskId)}`);
+  };
+
   const locateExecution = (run: ExecutionRecord) => {
     const toolCallId = run.correlation.tool_call_id;
     if (!toolCallId) return;
@@ -220,6 +227,7 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
                 onOpenFile={openFile}
                 onOpenArtifact={(artifact) => void openArtifact(artifact)}
                 onOpenSession={!sessionId && selected.correlation.session_id ? () => openSession(selected) : undefined}
+                onOpenScheduledTask={!sessionId && selected.kind === "scheduled_task" && selected.correlation.scheduled_task_id ? () => openScheduledTask(selected) : undefined}
                 onLocate={sessionId && selected.correlation.tool_call_id ? () => locateExecution(selected) : undefined}
                 onReproduce={() => reproduce(selected)}
                 log={logs[selected.execution_id]}
@@ -251,7 +259,7 @@ function ExecutionRow({ run, index, selected, onClick }: { run: ExecutionRecord;
   );
 }
 
-function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpenFile, onOpenArtifact, onOpenSession, onLocate, onReproduce, log, loadingLog }: {
+function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpenFile, onOpenArtifact, onOpenSession, onOpenScheduledTask, onLocate, onReproduce, log, loadingLog }: {
   run: ExecutionRecord;
   tab: DetailTab;
   onTabChange: (tab: DetailTab) => void;
@@ -260,6 +268,7 @@ function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpenFile, o
   onOpenFile: (path: string) => void;
   onOpenArtifact: (artifact: ExecutionRecord["artifacts"][number]) => void;
   onOpenSession?: () => void;
+  onOpenScheduledTask?: () => void;
   onLocate?: () => void;
   onReproduce: () => void;
   log?: DisplayLog;
@@ -291,6 +300,7 @@ function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpenFile, o
           <DetailAction icon={<RotateCcw size={12} />} label={t("runs.reproduce")} onClick={onReproduce} primary />
           {onLocate && <DetailAction icon={<Crosshair size={12} />} label={t("runs.locateExecution")} onClick={onLocate} />}
           {onOpenSession && <DetailAction icon={<MessageSquare size={12} />} label={t("runs.openSession")} onClick={onOpenSession} />}
+          {onOpenScheduledTask && <DetailAction icon={<CalendarClock size={12} />} label={t("runs.openScheduledTask")} onClick={onOpenScheduledTask} />}
           <DetailAction icon={<Copy size={12} />} label={t("runs.copyId")} onClick={() => onCopy(run.execution_id, t("runs.idCopied"))} />
           {executionCommandText(run) && <DetailAction icon={<Copy size={12} />} label={t("runs.copyCommand")} onClick={() => onCopy(executionCommandText(run), t("runs.commandCopied"))} />}
         </div>
@@ -358,6 +368,12 @@ function executionLabel(run: ExecutionRecord): string {
     const notebook = typeof run.request.notebook_id === "string" ? run.request.notebook_id : "default";
     const code = typeof run.request.code === "string" ? run.request.code.trim().split("\n")[0] : "";
     return `${notebook} · ${code || run.surface}`;
+  }
+  if (run.kind === "scheduled_task") {
+    // The ledger correlation carries ids only — show task id + attempt id.
+    const taskId = typeof run.correlation.scheduled_task_id === "string" ? run.correlation.scheduled_task_id : "";
+    const attemptId = typeof run.correlation.scheduled_task_attempt_id === "string" ? run.correlation.scheduled_task_attempt_id : "";
+    return [taskId ? `stask:${taskId}` : "", attemptId].filter(Boolean).join(" · ") || run.execution_id;
   }
   return run.request.command?.join(" ") || String(run.request.tool || run.execution_id);
 }
