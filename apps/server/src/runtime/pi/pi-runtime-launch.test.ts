@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildPiProcessOptions, loadDefaultPiConfig, resetWebRuntimeAllocation, runtimeExtensionStatus } from "./pi-runtime-launch.js";
+import { CredentialStore } from "../../model-resources/credential-store.js";
+import { ModelResourceRepository, emptyModelResourceState } from "../../model-resources/model-resource-repository.js";
+import { runtimeCredentialEnvName } from "../../model-resources/runtime-credential-env.js";
 
 const cleanup: string[] = [];
 const original = { home: process.env.PI_SCIENCE_HOME, userHome: process.env.HOME, userProfile: process.env.USERPROFILE, cli: process.env.PI_CLI_PATH, tsx: process.env.PI_TSX_PATH, tsconfig: process.env.PI_TSCONFIG_PATH, piMode: process.env.PI_SCIENCE_PI_MODE };
@@ -275,6 +278,30 @@ describe("Pi runtime custom provider materialization", () => {
         else process.env[name] = value;
       }
     }
+  });
+
+  it("passes generated runtime credentials into the Pi Orbit runtime env", async () => {
+    const credentials = new CredentialStore();
+    await credentials.put({ id: "cred-lab", kind: "api_key", backend: "managed", secret: "runtime-env-secret" });
+    const state = emptyModelResourceState();
+    state.migration = { version: 1, completed_at: new Date().toISOString() };
+    state.providers.push({ id: "user-lab", name: "Lab", kind: "user", adapter: "openai-compatible", enabled: true, catalog_mode: "hybrid", auth_kind: "api_key", source: "user" });
+    state.endpoints.push({ id: "ep-lab", name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", credential_ref: "cred-lab", enabled: true, health: "unknown", data_egress: "local" });
+    state.bindings.push({ id: "bind-lab", provider_id: "user-lab", endpoint_id: "ep-lab", enabled: true, priority: 1 });
+    state.models.push({ provider_id: "user-lab", model_id: "model-a", display_name: "Lab · model-a", enabled: true, capabilities: { reasoning: false, thinking_levels: ["off"], context_window: null, max_output_tokens: null }, capability_source: "manual" });
+    await new ModelResourceRepository().replace(state);
+
+    const cwd = join(tmpdir(), `pi-runtime-credential-env-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    const options = buildPiProcessOptions(cwd, { model: "user-lab/model-a", thinking: "low", skills: [], extensions: [] })!;
+    const variable = runtimeCredentialEnvName("cred-lab");
+    // The host env and the runtime creation request both carry the value:
+    // Pi Orbit creates the runtime child with the runtimeEnv exactly, so
+    // models.json $PI_RUNTIME_CREDENTIAL_* references must resolve there.
+    expect(options.env?.[variable]).toBe("runtime-env-secret");
+    expect(options.web?.runtime.runtimeEnv?.[variable]).toBe("runtime-env-secret");
+    expect(options.web?.runtime.model).toBe("user-lab/model-a");
   });
 
   it("strips outer Pi session variables injected through the workspace environment too", async () => {

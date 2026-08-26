@@ -166,10 +166,13 @@ export function buildPiProcessOptions(cwd: string, config: PiConfig = { skills: 
           ...(effectiveModel ? { model: effectiveModel } : {}),
           ...(effectiveModel && effectiveThinking ? { thinking: effectiveThinking } : {}),
           runtimeEnv: {
-            // Runtime-generated credential values stay in the host process
-            // environment. Do not copy them into the per-runtime descriptor,
-            // which is replayed through the host API and diagnostics.
+            // Runtime-generated credential values must reach the Pi Orbit
+            // runtime child: it is created with exactly this env and does not
+            // inherit the host process env. models.json references them as
+            // $PI_RUNTIME_CREDENTIAL_*, so the values travel with the runtime
+            // creation request; the host API never returns runtimeEnv.
             ...runtimeEnvSnapshot(env, projection.runtimeSecrets),
+            ...projection.runtimeSecrets,
             // The runtime child inherits the host env, so the host's own auth
             // token must never reach the agent: remove it (null) at the
             // runtime boundary. PI_SESSION_ID/PI_SESSION_FILE only exist once
