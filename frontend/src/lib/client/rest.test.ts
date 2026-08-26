@@ -92,4 +92,20 @@ describe("PiScienceClient REST calls", () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/sessions/session-a/messages/index?cwd=%2Fworkspace");
     expect(index.messages).toEqual([{ id: "u1", text: "first question", before: "cursor-u1" }]);
   });
+
+  it("rejects malformed wire payloads at the REST seam", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      messages: [{ id: "m1", role: "assistant", content: [] }],
+      next_cursor: null,
+      has_more: "yes",
+      snapshot_version: "456:789",
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })));
+    const client = new PiScienceClient();
+
+    await expect(client.getMessagesPage("session-a", "/workspace"))
+      .rejects.toThrow("Load messages failed: invalid response payload");
+  });
 });

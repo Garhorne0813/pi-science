@@ -4,7 +4,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
 import i18n from "../../i18n";
 import { queryClient } from "../../lib/client/query-client";
-import type { ExecutionRecord } from "../../types/thread";
+import type { ExecutionRecord } from "@pi-science/contracts";
 import { RunsPage } from "./RunsPage";
 
 const { toastMock, openInspectorMock, setDraftMock } = vi.hoisted(() => ({

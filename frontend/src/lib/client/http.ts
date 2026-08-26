@@ -12,7 +12,7 @@ export async function request(input: RequestInfo | URL, init?: RequestOptions): 
   const controller = new AbortController();
   const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(input, { ...fetchInit, signal: controller.signal });
+    return await fetch(input, { ...fetchInit, credentials: fetchInit.credentials ?? "include", signal: controller.signal });
   } catch (error) {
     if (controller.signal.aborted) {
       throw new Error("Request timed out while contacting the Pi-Science backend");

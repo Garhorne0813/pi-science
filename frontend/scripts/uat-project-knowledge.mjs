@@ -11,10 +11,17 @@ const chromePath = await resolveBrowserExecutable();
 const workspace = path.join(os.tmpdir(), `pi-science-knowledge-uat-${process.pid}`);
 const desktopScreenshot = path.join(os.tmpdir(), "pi-science-knowledge-uat-desktop.png");
 const mobileScreenshot = path.join(os.tmpdir(), "pi-science-knowledge-uat-mobile.png");
+const internalToken = process.env.PI_SCIENCE_INTERNAL_TOKEN;
+
+function authenticatedInit(init = {}) {
+  const headers = new Headers(init.headers);
+  if (internalToken) headers.set("x-pi-science-internal-token", internalToken);
+  return { ...init, headers };
+}
 
 
 async function api(endpoint, init) {
-  const response = await fetch(`${backend}${endpoint}`, init);
+  const response = await fetch(`${backend}${endpoint}`, authenticatedInit(init));
   if (!response.ok) throw new Error(`${endpoint}: ${response.status} ${await response.text()}`);
   return response.json();
 }

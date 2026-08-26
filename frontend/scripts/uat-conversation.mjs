@@ -11,10 +11,17 @@ const chromePath = await resolveBrowserExecutable();
 const workspace = path.join(os.tmpdir(), `pi-science-conversation-uat-${process.pid}`);
 const screenshot = path.join(os.tmpdir(), "pi-science-conversation-uat.png");
 const browserApiOrigins = new Set([new URL(frontend).origin, new URL(backend).origin]);
+const internalToken = process.env.PI_SCIENCE_INTERNAL_TOKEN;
+
+function authenticatedInit(init = {}) {
+  const headers = new Headers(init.headers);
+  if (internalToken) headers.set("x-pi-science-internal-token", internalToken);
+  return { ...init, headers };
+}
 
 
 async function api(endpoint, init, expectedRuntime = "node-control-plane") {
-  const response = await fetch(`${backend}${endpoint}`, init);
+  const response = await fetch(`${backend}${endpoint}`, authenticatedInit(init));
   if (!response.ok) throw new Error(`${endpoint}: ${response.status} ${await response.text()}`);
   const runtime = response.headers.get("x-pi-science-runtime");
   if (expectedRuntime && runtime !== expectedRuntime) {
@@ -173,9 +180,9 @@ async function run() {
     await browser.close();
     for (const sessionId of createdSessions) {
       const query = new URLSearchParams({ cwd: workspace });
-      await fetch(`${backend}/api/sessions/${encodeURIComponent(sessionId)}?${query}`, {
+      await fetch(`${backend}/api/sessions/${encodeURIComponent(sessionId)}?${query}`, authenticatedInit({
         method: "DELETE",
-      }).catch(() => undefined);
+      })).catch(() => undefined);
     }
     await rm(workspace, { recursive: true, force: true });
   }

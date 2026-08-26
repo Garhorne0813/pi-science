@@ -10,10 +10,17 @@ const backend = process.env.PI_SCIENCE_BACKEND_URL || "http://127.0.0.1:8787";
 const chromePath = await resolveBrowserExecutable();
 const workspace = path.join(os.tmpdir(), `pi-science-notebook-uat-${process.pid}`);
 const screenshot = path.join(os.tmpdir(), "pi-science-notebook-uat.png");
+const internalToken = process.env.PI_SCIENCE_INTERNAL_TOKEN;
+
+function authenticatedInit(init = {}) {
+  const headers = new Headers(init.headers);
+  if (internalToken) headers.set("x-pi-science-internal-token", internalToken);
+  return { ...init, headers };
+}
 
 
 async function api(endpoint, init) {
-  const response = await fetch(`${backend}${endpoint}`, init);
+  const response = await fetch(`${backend}${endpoint}`, authenticatedInit(init));
   if (!response.ok) throw new Error(`${endpoint}: ${response.status} ${await response.text()}`);
   return response.json();
 }

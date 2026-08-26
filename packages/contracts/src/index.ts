@@ -59,9 +59,19 @@ export const historyMessageSchema = z.object({
 
 export const sessionMessagePageSchema = z.object({
   messages: z.array(historyMessageSchema),
-  next_cursor: z.string().nullable(),
-  has_more: z.boolean(),
-  snapshot_version: z.string(),
+  next_cursor: z.string().nullable().default(null),
+  has_more: z.boolean().default(false),
+  snapshot_version: z.string().default(""),
+});
+
+export const sessionUserMessageIndexSchema = z.object({
+  messages: z.array(z.object({
+    id: z.string().min(1),
+    text: z.string(),
+    timestamp: z.string().nullable().optional(),
+    before: z.string(),
+  })),
+  snapshot_version: z.string().default(""),
 });
 
 export const workspaceInfoSchema = z.object({
@@ -266,6 +276,21 @@ export const executionEventSchema = z.object({
   payload: z.record(z.string(), z.unknown()).default({}),
 });
 
+const executionRequestSchema = z.object({
+  tool: z.string().optional(),
+  command: z.array(z.string()).optional(),
+  notebook_id: z.string().optional(),
+  code: z.string().optional(),
+}).passthrough().default({});
+
+const executionResultSchema = z.object({
+  stdout_preview: z.string().optional(),
+  stderr_preview: z.string().optional(),
+  output_preview: z.string().optional(),
+  error: z.string().optional(),
+  exit_code: z.number().int().nullable().optional(),
+}).passthrough().default({});
+
 export const executionRecordSchema = z.object({
   schema_version: z.literal(1),
   execution_id: z.string().min(1),
@@ -278,15 +303,27 @@ export const executionRecordSchema = z.object({
   ended_at: z.string().optional(),
   producer: z.string().min(1),
   correlation: executionCorrelationSchema,
-  request: z.record(z.string(), z.unknown()).default({}),
+  request: executionRequestSchema,
   runtime: z.record(z.string(), z.unknown()).default({}),
-  result: z.record(z.string(), z.unknown()).default({}),
+  result: executionResultSchema,
   files: z.object({
     read: z.array(executionFileEvidenceSchema).default([]),
     written: z.array(executionFileEvidenceSchema).default([]),
   }).default({ read: [], written: [] }),
   artifacts: z.array(executionArtifactRefSchema).default([]),
   usage: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const executionListResponseSchema = z.object({
+  executions: z.array(executionRecordSchema).default([]),
+});
+
+export const executionLogResponseSchema = z.object({
+  execution_id: z.string().min(1).optional(),
+  stdout: z.string().default(""),
+  stderr: z.string().default(""),
+  source: z.enum(["job", "preview"]).optional(),
+  complete: z.boolean().default(false),
 });
 
 export const artifactManifestSchema = z.object({
@@ -301,11 +338,33 @@ export const artifactManifestSchema = z.object({
 }).passthrough();
 
 export const provenanceRecordSchema = z.object({
-  id: z.string().min(1),
-  action: z.string().min(1),
-  actor: z.string().min(1),
-  created_at: z.string(),
+  path: z.string(),
+  version: z.number().int().nonnegative(),
+  ts: z.number().finite(),
+  tool: z.string(),
+  toolCallId: z.string().optional(),
+  sessionId: z.string(),
+  model: z.string().optional(),
+  contentHash: z.string().optional(),
+  content: z.string().nullable().optional(),
+  diff: z.string().optional(),
+  log: z.string().optional(),
+  executionId: z.string().optional(),
+  env: z.object({
+    python: z.string().optional(),
+    platform: z.string().optional(),
+    app: z.string().optional(),
+    packages: z.object({ hash: z.string(), count: z.number().int().nonnegative() }).optional(),
+    packages_hash: z.string().optional(),
+    package_count: z.number().int().nonnegative().optional(),
+    cpu_count: z.number().int().positive().optional(),
+  }).passthrough().optional(),
 }).passthrough();
+
+export const provenanceVersionsResponseSchema = z.object({
+  path: z.string(),
+  versions: z.array(provenanceRecordSchema).default([]),
+});
 
 export const scientificRuntimeHealthSchema = z.object({
   status: z.literal("ok"),
@@ -345,6 +404,7 @@ export type ExecutionEvent = z.infer<typeof executionEventSchema>;
 export type ExecutionRecord = z.infer<typeof executionRecordSchema>;
 export type ArtifactManifest = z.infer<typeof artifactManifestSchema>;
 export type ProvenanceRecord = z.infer<typeof provenanceRecordSchema>;
+export type ProvenanceEnvironment = NonNullable<ProvenanceRecord["env"]>;
 
 // ── Durable subagent research loops ────────────────────────────────
 

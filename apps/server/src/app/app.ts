@@ -1,4 +1,5 @@
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { gatewayHealthSchema } from "@pi-science/contracts";
@@ -26,6 +27,7 @@ import { serveFrontend } from "../http/frontend-static.js";
 import { validateWorkspaceCwd } from "../security/workspace-security.js";
 import { AiTitleService, PiTitleRuntimeFactory } from "../runtime/title/ai-title-service.js";
 import { importLegacyState } from "../storage/sqlite/legacy-state.js";
+import { internalAuthCookie, requestInternalToken, tokensMatch } from "../security/internal-auth.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
   const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, modelResources, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
@@ -46,6 +48,14 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   app.addHook("onRequest", async (request, reply) => {
     reply.header("x-request-id", request.id);
     const pathname = request.url.split("?")[0] ?? request.url;
+    const authEnabled = config.requireInternalToken !== false && Boolean(config.internalToken);
+    // CORS preflight must be answered before the application-token check; the
+    // actual request still has to carry the token or the HttpOnly cookie.
+    if (authEnabled && request.method !== "OPTIONS" && (pathname.startsWith("/api/") || pathname === "/internal/diagnostics")) {
+      if (!tokensMatch(config.internalToken!, requestInternalToken(request.headers))) {
+        return reply.code(401).send({ error: "control-plane authentication required" });
+      }
+    }
     const boundary = routeBoundary(pathname);
     if (request.url.startsWith("/api/") && !boundary) {
       return reply.code(404).send({ error: `Unknown API route: ${request.method} ${pathname}` });
@@ -79,7 +89,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     const statusCode = error.code === "FST_ERR_CTP_BODY_TOO_LARGE" ? 413 : error.statusCode ?? 500;
     app.log.error({ err: error, requestId: request.id, path: request.url }, "request failed");
     return reply.code(statusCode).send({
-      error: statusCode === 413 ? "request body too large" : "internal server error",
+      error: statusCode === 413 ? "request body too large" : statusCode === 429 ? "rate limit exceeded" : "internal server error",
       request_id: request.id,
     });
   });
@@ -126,7 +136,16 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeSse || config.nodePiManager) registerSseRoutes(app, nodeSessionService, events);
   if (config.nodeFiles) registerFileReadRoutes(app);
   if (config.nodePiManager) registerNodeSessionRoutes(app, nodeSessionService, sessionRepository, new AiTitleService(new PiTitleRuntimeFactory(piManager)));
-  if (config.nodeJobs !== false) registerJobRoutes(app, jobs);
+  if (config.nodeJobs !== false) {
+    // Keep command execution rate-limited without throttling read-only control
+    // plane routes. The child scope ensures the plugin's onRoute hook sees the
+    // job routes registered below while remaining isolated from the rest of
+    // the application.
+    void app.register(async (jobScope) => {
+      await jobScope.register(rateLimit, { global: false });
+      registerJobRoutes(jobScope, jobs);
+    });
+  }
   registerEnvironmentRoutes(app, environments);
   if (config.nodeArtifacts !== false) registerArtifactRoutes(app);
   if (config.nodeArtifacts !== false) registerTurnArtifactRoutes(app);
@@ -180,6 +199,9 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     }
     const served = await serveFrontend(new URL(request.url, "http://localhost").pathname);
     if ("error" in served) return reply.code(404).send({ error: served.error });
+    if (config.requireInternalToken !== false && config.internalToken && served.type.startsWith("text/html")) {
+      reply.header("set-cookie", internalAuthCookie(config.internalToken));
+    }
     return reply.type(served.type).send(served.stream);
   });
 
