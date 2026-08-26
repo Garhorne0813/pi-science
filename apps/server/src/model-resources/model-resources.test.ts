@@ -214,6 +214,28 @@ describe("resource service", () => {
     expect(state.bindings).toHaveLength(0);
   });
 
+  it("probes a prospective configuration without persisting anything", async () => {
+    const service = new ModelResourceService();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ data: [{ id: "model-a" }, { id: "model-b" }] }), { status: 200, headers: { "content-type": "application/json" } }));
+    const result = await service.testProviderConfiguration({ protocol: "openai", base_url: "http://127.0.0.1:8100/v1", auth: { kind: "api_key", secret: "probe-secret" } });
+    expect(result).toMatchObject({ ok: true, health: "ready" });
+    expect(result.models.map((model) => model.id)).toEqual(["model-a", "model-b"]);
+    const state = await service.repository.read();
+    expect(state.providers).toHaveLength(0);
+    expect(state.endpoints).toHaveLength(0);
+    expect(state.credentials).toBeUndefined();
+  });
+
+  it("honors the confirmed model selection on aggregate create", async () => {
+    const service = new ModelResourceService();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ data: [{ id: "model-a" }, { id: "model-b" }, { id: "model-c" }] }), { status: 200, headers: { "content-type": "application/json" } }));
+    const result = await service.createCustomProvider({ name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", auth: { kind: "api_key", secret: "select-secret" }, models: ["model-a", "model-c"] });
+    void result;
+    const models = await service.listModels({ provider_id: "user-lab" });
+    expect(models.filter((model) => model.enabled).map((model) => model.model_id).sort()).toEqual(["model-a", "model-c"]);
+    expect(models.filter((model) => !model.enabled).map((model) => model.model_id).sort()).toEqual(["model-b"]);
+  });
+
   it("deletes a custom provider with its owned endpoint and managed credential", async () => {
     const service = new ModelResourceService();
     const result = await service.createCustomProvider({ name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", auth: { kind: "api_key", secret: "delete-me-secret" } });

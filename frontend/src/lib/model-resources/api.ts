@@ -80,4 +80,16 @@ export const modelResourcesApi = {
   deleteCustomProvider(providerId: string): Promise<unknown> {
     return apiRequest(`/api/custom-providers/${encodeURIComponent(providerId)}`, { method: "DELETE" });
   },
+  testCustomProvider(body: { base_url: string; protocol: string; auth?: { kind: "api_key" | "none"; secret?: string } | null }): Promise<{ ok: true; health: "ready"; models: Array<{ id: string; display_name: string }> }> {
+    return apiRequest("/api/custom-providers/test", { ...json("POST", body) });
+  },
+  refreshCustomProviderModels(providerId: string): Promise<unknown> {
+    return apiRequest(`/api/custom-providers/${encodeURIComponent(providerId)}/refresh-models`, { method: "POST" });
+  },
+  setCustomProviderEnabled(providerId: string, enabled: boolean): Promise<unknown> {
+    return apiRequest(`/api/custom-providers/${encodeURIComponent(providerId)}/enabled?enabled=${enabled}`, { method: "PUT" });
+  },
+  updateCustomProviderModels(providerId: string, body: { enabled: string[] }): Promise<unknown> {
+    return apiRequest(`/api/custom-providers/${encodeURIComponent(providerId)}/models`, { ...json("PUT", body) });
+  },
 };

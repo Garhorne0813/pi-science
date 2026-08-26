@@ -178,7 +178,7 @@ async function readBoundedJson(response: Response, maxBytes = MAX_MODEL_DISCOVER
   try { return JSON.parse(text) as Record<string, unknown>; } catch { return text ? { message: text } : {}; }
 }
 
-function discoveryPath(endpoint: Endpoint): string {
+function discoveryPath(endpoint: Pick<Endpoint, "protocol" | "base_url">): string {
   if (endpoint.protocol === "ollama") return `${endpoint.base_url}/api/tags`;
   return `${endpoint.base_url}/models`;
 }
@@ -431,7 +431,7 @@ export class ModelResourceService {
   /** Custom-provider aggregate: create credential/endpoint/provider/binding as
    *  one use case. On failure every resource created here is compensated so
    *  the UI's single "Add provider" action cannot leave orphan data behind. */
-  async createCustomProvider(input: { name: string; base_url: string; protocol?: Endpoint["protocol"]; api?: Endpoint["api"]; data_egress?: Endpoint["data_egress"]; auth?: { kind: "api_key" | "none"; secret?: string } | null }): Promise<{ provider: Provider; endpoint: Endpoint; credential: CredentialMetadata | null; binding: ProviderEndpointBinding; discovery?: { model_count: number }; discovery_error?: string }> {
+  async createCustomProvider(input: { name: string; base_url: string; protocol?: Endpoint["protocol"]; api?: Endpoint["api"]; data_egress?: Endpoint["data_egress"]; auth?: { kind: "api_key" | "none"; secret?: string } | null; models?: string[] }): Promise<{ provider: Provider; endpoint: Endpoint; credential: CredentialMetadata | null; binding: ProviderEndpointBinding; discovery?: { model_count: number }; discovery_error?: string }> {
     await this.ensureMigrated();
     const providerId = ModelResourceRepository.providerId(input.name);
     if ((await this.repository.read()).providers.some((item) => item.id === providerId)) throw resourceError("provider_id_conflict", `Provider ID '${providerId}' already exists`);
@@ -468,6 +468,16 @@ export class ModelResourceService {
     }
     try {
       const discovered = await this.discover(provider.id, binding.id);
+      // The UI confirms a model selection after testing; persist that choice
+      // instead of leaving every discovered model enabled.
+      if (input.models) {
+        const selected = new Set(input.models);
+        await this.repository.update((current) => {
+          for (const model of current.models) {
+            if (model.provider_id === provider.id) model.enabled = selected.has(model.model_id);
+          }
+        });
+      }
       return { provider, endpoint, credential, binding, discovery: { model_count: discovered.models.length } };
     } catch (error) {
       return { provider, endpoint, credential, binding, discovery_error: error instanceof Error ? error.message : String(error) };
@@ -526,6 +536,30 @@ export class ModelResourceService {
       removedCredentials += 1;
     }
     return { id, removed_endpoints: removedEndpoints, removed_credentials: removedCredentials };
+  }
+
+  /** Probe a prospective provider configuration without persisting anything:
+   *  fetch its model list and report the rows. Used by the UI's
+   *  "Test & Discover" step before the aggregate create. */
+  async testProviderConfiguration(input: { protocol: Endpoint["protocol"]; base_url: string; api?: Endpoint["api"]; auth?: { kind: "api_key" | "none"; secret?: string } | null }): Promise<{ ok: true; health: "ready"; models: Array<{ id: string; display_name: string }> }> {
+    const protocol = normalizeProtocol(input.protocol);
+    const baseUrl = normalizeBaseUrl(input.base_url);
+    const endpoint = { protocol, base_url: baseUrl };
+    const secret = input.auth?.kind === "api_key" ? input.auth.secret : undefined;
+    const settings = await this.settings.read();
+    const allowPrivate = settings.allow_private_providers !== false && process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0";
+    const response = await safeConnectorFetch(discoveryPath(endpoint), {
+      allowPrivate,
+      maxRedirects: 3,
+      maxResponseBytes: MAX_MODEL_DISCOVERY_BYTES,
+      timeoutMs: 10_000,
+      headers: authHeaders(protocol, secret ?? null),
+    }).catch((error) => { throw resourceError("endpoint_probe_failed", error instanceof Error ? error.message : String(error)); });
+    const payload = await readBoundedJson(response).catch((error) => { throw resourceError("endpoint_probe_failed", error instanceof Error ? error.message : String(error)); });
+    if (!response.ok) throw resourceError("endpoint_probe_failed", redactSecret(String(payload.error ?? payload.message ?? `endpoint returned ${response.status}`), secret));
+    const rows = modelRows(payload);
+    if (rows.length === 0) throw resourceError("discovery_empty", "No models were returned by this endpoint");
+    return { ok: true, health: "ready", models: rows.map((row) => ({ id: row.id, display_name: row.id })) };
   }
 
   async listEndpoints(): Promise<Endpoint[]> {

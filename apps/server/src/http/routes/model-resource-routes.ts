@@ -163,8 +163,54 @@ export function registerModelResourceRoutes(app: FastifyInstance, resources: Mod
       if (authKind === null) return reply.code(400).send({ code: "invalid_resource", error: "auth.kind must be api_key or none" });
       const secret = auth?.secret && typeof auth.secret === "string" ? auth.secret : undefined;
       if (authKind === "api_key" && !secret) return reply.code(400).send({ code: "invalid_resource", error: "auth.secret is required for api_key auth" });
-      const result = await resources.createCustomProvider({ name, base_url: baseUrl, protocol: protocol as "openai" | "anthropic" | "ollama" | "native", api, data_egress: dataEgress, auth: { kind: authKind, ...(secret ? { secret } : {}) } });
+      const models = Array.isArray(body.models) ? body.models.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean) : undefined;
+      const result = await resources.createCustomProvider({ name, base_url: baseUrl, protocol: protocol as "openai" | "anthropic" | "ollama" | "native", api, data_egress: dataEgress, auth: { kind: authKind, ...(secret ? { secret } : {}) }, ...(models ? { models } : {}) });
       return await reload(nodeSessionService, reply, { ok: true, ...result });
+    } catch (error) { return routeError(reply, error); }
+  });
+
+  /** Probe a prospective configuration; nothing is persisted. */
+  app.post("/api/custom-providers/test", async (request, reply) => {
+    try {
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const baseUrl = String(body.base_url ?? "").trim();
+      if (!baseUrl) return reply.code(400).send({ code: "invalid_resource", error: "base_url is required" });
+      const protocol = body.protocol === "anthropic" || body.protocol === "ollama" || body.protocol === "native" ? body.protocol : "openai";
+      const api = body.api && typeof body.api === "string" ? body.api as "openai-completions" | "openai-responses" | "anthropic-messages" | "ollama" | "native" : undefined;
+      const auth = body.auth && typeof body.auth === "object" ? body.auth as Record<string, unknown> : null;
+      const authKind = auth?.kind === "none" ? "none" : auth?.kind === "api_key" ? "api_key" : null;
+      const secret = auth?.secret && typeof auth.secret === "string" ? auth.secret : undefined;
+      const result = await resources.testProviderConfiguration({ protocol: protocol as "openai" | "anthropic" | "ollama" | "native", base_url: baseUrl, api, auth: authKind ? { kind: authKind, ...(secret ? { secret } : {}) } : null });
+      return { ...result };
+    } catch (error) { return routeError(reply, error); }
+  });
+
+  app.post<{ Params: { provider_id: string } }>("/api/custom-providers/:provider_id/refresh-models", async (request, reply) => {
+    try {
+      const discovered = await resources.discover(request.params.provider_id);
+      return await reload(nodeSessionService, reply, { ok: true, model_count: discovered.models.length, models: discovered.models });
+    } catch (error) { return routeError(reply, error); }
+  });
+
+  app.put<{ Params: { provider_id: string } }>("/api/custom-providers/:provider_id/enabled", async (request, reply) => {
+    try {
+      const enabled = String((request.query as Record<string, unknown>).enabled ?? "") !== "false";
+      const provider = await resources.updateProvider(request.params.provider_id, { enabled });
+      return await reload(nodeSessionService, reply, { ok: true, provider });
+    } catch (error) { return routeError(reply, error); }
+  });
+
+  app.put<{ Params: { provider_id: string } }>("/api/custom-providers/:provider_id/models", async (request, reply) => {
+    try {
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const enabledSet = new Set(Array.isArray(body.enabled) ? body.enabled.filter((item): item is string => typeof item === "string") : []);
+      const state = await resources.repository.read();
+      const provider = state.providers.find((item) => item.id === request.params.provider_id);
+      if (!provider) return reply.code(404).send({ code: "resource_not_found", error: `Provider '${request.params.provider_id}' was not found` });
+      for (const model of state.models.filter((item) => item.provider_id === provider.id)) {
+        if (model.enabled !== enabledSet.has(model.model_id)) await resources.updateModel(provider.id, model.model_id, { enabled: enabledSet.has(model.model_id) });
+      }
+      return await reload(nodeSessionService, reply, { ok: true, models: await resources.listModels({ provider_id: provider.id }) });
     } catch (error) { return routeError(reply, error); }
   });
 
