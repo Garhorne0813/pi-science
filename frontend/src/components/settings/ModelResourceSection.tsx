@@ -40,9 +40,6 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [moreOpen, setMoreOpen] = useState<string | null>(null);
-  // The section starts expanded: the header is a collapse toggle, not a
-  // required first click.
-  const [open, setOpen] = useState(true);
   const providersRead = useQuery({ queryKey: modelResourceKeys.providers, queryFn: modelResourcesApi.providers, staleTime: 0 });
   const endpointsRead = useQuery({ queryKey: modelResourceKeys.endpoints, queryFn: modelResourcesApi.endpoints, staleTime: 0 });
   const bindingsRead = useQuery({ queryKey: modelResourceKeys.bindings(), queryFn: () => modelResourcesApi.bindings(), staleTime: 0 });
@@ -248,16 +245,14 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
 
   return (
     <section className="overflow-hidden rounded-card border border-faint bg-surface-2/40">
-      <button type="button" onClick={() => setOpen((value) => !value)} className="flex min-h-14 w-full items-center gap-3 px-4 py-2 text-left">
+      <div className="flex min-h-12 items-center gap-3 px-4 py-2">
         <div className="min-w-0 flex-1">
           <h2 className="text-[13px] font-semibold text-text">{t("settings.resources.title", { defaultValue: "Providers and API connections" })}</h2>
           <p className="mt-0.5 text-[11px] text-muted">{t("settings.resources.description", { defaultValue: "A provider is the model service; adding one creates its connection, key, and models." })}</p>
         </div>
         {(providers.length > 0 || endpoints.length > 0) && <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[10px] text-muted">{providers.length + endpoints.length}</span>}
-        <ChevronDown size={14} className={cn("shrink-0 text-muted transition-transform", open && "rotate-180")} />
-      </button>
-      {open && (
-        <div className="space-y-4 border-t border-faint px-4 py-3">
+      </div>
+      <div className="space-y-4 border-t border-faint px-4 py-3">
           {error && <p role="alert" className="rounded-input bg-error/10 px-3 py-2 text-[11px] text-error-text">{error}</p>}
 
           {providers.length === 0 ? (
@@ -357,8 +352,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
               </div>
             </div>
           </details>
-        </div>
-      )}
+      </div>
 
       {/* Add / Edit provider modal */}
       {modal && (
