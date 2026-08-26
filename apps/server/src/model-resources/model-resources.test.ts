@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -127,5 +127,23 @@ describe("resource service", () => {
     const state = await service.repository.read();
     expect(state.providers).toHaveLength(1);
     expect(state.endpoints[0]).not.toHaveProperty("secret");
+  });
+
+  it("accepts a model catalog response a little larger than two MiB", async () => {
+    const service = new ModelResourceService();
+    const provider = await service.createProvider({ name: "Large catalog", adapter: "openai-compatible", catalog_mode: "hybrid", auth_kind: "api_key", enabled: true });
+    const credential = await service.credentials.put({ kind: "api_key", backend: "managed", secret: "catalog-secret" });
+    const endpoint = await service.createEndpoint({ name: "Large catalog endpoint", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", credential_ref: credential.id, enabled: true, data_egress: "local" });
+    const binding = await service.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 1 });
+    const payload = JSON.stringify({ data: [{ id: "model-a", metadata: "x".repeat(2 * 1024 * 1024 + 4096) }] });
+    expect(Buffer.byteLength(payload)).toBeGreaterThan(2 * 1024 * 1024);
+    expect(Buffer.byteLength(payload)).toBeLessThan(8 * 1024 * 1024);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(payload, {
+      status: 200,
+      headers: { "content-type": "application/json", "content-length": String(Buffer.byteLength(payload)) },
+    }));
+
+    const result = await service.discover(provider.id, binding.id);
+    expect(result.models).toEqual(expect.arrayContaining([expect.objectContaining({ id: `${provider.id}/model-a` })]));
   });
 });

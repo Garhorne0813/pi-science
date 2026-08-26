@@ -167,7 +167,9 @@ function authHeaders(protocol: Endpoint["protocol"], secret: string | null): Rec
   return headers;
 }
 
-async function readBoundedJson(response: Response, maxBytes = 2 * 1024 * 1024): Promise<Record<string, unknown>> {
+const MAX_MODEL_DISCOVERY_BYTES = 8 * 1024 * 1024;
+
+async function readBoundedJson(response: Response, maxBytes = MAX_MODEL_DISCOVERY_BYTES): Promise<Record<string, unknown>> {
   const length = Number(response.headers.get("content-length") ?? 0);
   if (length > maxBytes) throw resourceError("endpoint_probe_failed", "endpoint response is too large");
   const text = await response.text();
@@ -522,7 +524,7 @@ export class ModelResourceService {
       const response = await safeConnectorFetch(discoveryPath(endpoint), {
         allowPrivate,
         maxRedirects: 3,
-        maxResponseBytes: 64 * 1024,
+        maxResponseBytes: MAX_MODEL_DISCOVERY_BYTES,
         timeoutMs: 8_000,
         headers: { ...authHeaders(endpoint.protocol, credential?.secret ?? null) },
       });
@@ -704,7 +706,7 @@ export class ModelResourceService {
     const response = await safeConnectorFetch(discoveryPath(endpoint), {
       allowPrivate,
       maxRedirects: 3,
-      maxResponseBytes: 2 * 1024 * 1024,
+      maxResponseBytes: MAX_MODEL_DISCOVERY_BYTES,
       timeoutMs: 10_000,
       headers: { ...authHeaders(endpoint.protocol, credential?.secret ?? null), ...(binding.headers_policy ?? {}) },
     }).catch((error) => { throw resourceError("endpoint_probe_failed", error instanceof Error ? error.message : String(error)); });

@@ -130,8 +130,8 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
     <section className="overflow-hidden rounded-card border border-faint bg-surface-2/40">
       <button type="button" onClick={() => setOpen((value) => !value)} className="flex min-h-14 w-full items-center gap-3 px-4 py-2 text-left">
         <div className="min-w-0 flex-1">
-          <h2 className="text-[13px] font-semibold text-text">{t("settings.resources.title", { defaultValue: "Providers and connections" })}</h2>
-          <p className="mt-0.5 text-[11px] text-muted">{t("settings.resources.description", { defaultValue: "Add a provider, store its credential safely, and discover its models." })}</p>
+          <h2 className="text-[13px] font-semibold text-text">{t("settings.resources.title", { defaultValue: "Providers and API connections" })}</h2>
+          <p className="mt-0.5 text-[11px] text-muted">{t("settings.resources.description", { defaultValue: "A provider is the model service; a connection is its API address. Adding a provider creates a connection and discovers models." })}</p>
         </div>
         {(providers.length > 0 || endpoints.length > 0) && <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[10px] text-muted">{providers.length + endpoints.length}</span>}
         <ChevronDown size={14} className={cn("shrink-0 text-muted transition-transform", open && "rotate-180")} />
@@ -142,7 +142,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <p className="text-xs font-medium text-text">{t("settings.resources.addTitle", { defaultValue: "Add provider" })}</p>
-              <span className="text-[10px] text-muted">{t("settings.resources.zeroEnv", { defaultValue: "Managed credentials need no shell environment variables." })}</span>
+              <span className="text-[10px] text-muted">{t("settings.resources.zeroEnv", { defaultValue: "Keys stored by Pi-Science need no environment variable." })}</span>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               <input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("settings.resources.name", { defaultValue: "Provider name" })} className="min-h-10 rounded-input border border-border bg-bg px-3 py-2 text-xs text-text outline-none focus:border-accent" />
@@ -165,7 +165,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
                 ariaLabel={t("settings.resources.auth", { defaultValue: "Authentication" })}
                 value={authKind}
                 options={[
-                  { value: "api_key", label: t("settings.resources.managedKey", { defaultValue: "Managed API key" }) },
+                  { value: "api_key", label: t("settings.resources.managedKey", { defaultValue: "API key stored by Pi-Science" }) },
                   { value: "none", label: t("settings.resources.noAuth", { defaultValue: "No authentication" }) },
                 ]}
                 onSelect={(value) => setAuthKind(value as typeof authKind)}
@@ -199,20 +199,23 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
 
           <details className="overflow-hidden rounded-input border border-faint">
             <summary className="flex min-h-10 cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-text marker:content-none">
-              <span className="flex-1">{t("settings.resources.connections", { defaultValue: "Connections (Advanced)" })}</span>
+              <span className="flex-1">{t("settings.resources.connections", { defaultValue: "API connections (Advanced)" })}</span>
               {endpoints.length > 0 && <span className="text-[10px] text-muted">{endpoints.length}</span>}
             </summary>
-            <div className="divide-y divide-faint border-t border-faint px-3">
-              {endpoints.length === 0 ? <p className="py-3 text-[11px] text-muted">{t("settings.resources.noConnections", { defaultValue: "No connections yet." })}</p> : endpoints.map((endpoint) => {
+            <div className="border-t border-faint px-3">
+              <p className="py-2 text-[11px] text-muted">{t("settings.resources.connectionsHelp", { defaultValue: "A connection is the API address. Adding a provider creates one automatically; check or disable it here." })}</p>
+              <div className="divide-y divide-faint">
+                {endpoints.length === 0 ? <p className="py-3 text-[11px] text-muted">{t("settings.resources.noConnections", { defaultValue: "No API connections yet." })}</p> : endpoints.map((endpoint) => {
                 const id = endpoint.id || endpoint.endpoint_id || "";
-                return <div key={id} className="flex min-h-11 items-center gap-2 py-2 text-[11px]">
-                  <span className="min-w-0 flex-1 truncate text-text"><span className="font-medium">{endpoint.name}</span><span className="ml-2 font-mono text-muted">{endpoint.base_url}</span></span>
-                  <span className={cn(endpoint.health === "ready" ? "text-ok-text" : endpoint.health === "error" || endpoint.health === "blocked" ? "text-error-text" : "text-muted")}>{endpoint.health}</span>
-                  <button type="button" aria-label={t("settings.resources.check", { defaultValue: "Check connection" })} onClick={() => void probeEndpoint(endpoint)} disabled={busy === `probe:${id}`} className="rounded-input p-1.5 text-muted hover:bg-surface-2 hover:text-text"><RefreshCw size={12} className={cn(busy === `probe:${id}` && "animate-spin")} /></button>
-                  <button type="button" aria-label={endpoint.enabled ? t("settings.actions.off") : t("settings.actions.on")} onClick={() => void toggleEndpoint(endpoint)} className={cn("rounded-input px-2 py-1", endpoint.enabled ? "bg-ok/10 text-ok-text" : "bg-surface-2 text-muted")}>{endpoint.enabled ? t("settings.actions.on") : t("settings.actions.off")}</button>
-                  <button type="button" aria-label={`${t("common.delete")} ${endpoint.name}`} onClick={() => void removeEndpoint(endpoint)} disabled={busy !== null} className="rounded-input p-1.5 text-error-text hover:bg-error/10 disabled:opacity-40"><Trash2 size={12} /></button>
-                </div>;
-              })}
+                  return <div key={id} className="flex min-h-11 items-center gap-2 py-2 text-[11px]">
+                    <span className="min-w-0 flex-1 truncate text-text"><span className="font-medium">{endpoint.name}</span><span className="ml-2 font-mono text-muted">{endpoint.base_url}</span></span>
+                    <span className={cn(endpoint.health === "ready" ? "text-ok-text" : endpoint.health === "error" || endpoint.health === "blocked" ? "text-error-text" : "text-muted")}>{endpoint.health}</span>
+                    <button type="button" aria-label={t("settings.resources.check", { defaultValue: "Check API connection" })} onClick={() => void probeEndpoint(endpoint)} disabled={busy === `probe:${id}`} className="rounded-input p-1.5 text-muted hover:bg-surface-2 hover:text-text"><RefreshCw size={12} className={cn(busy === `probe:${id}` && "animate-spin")} /></button>
+                    <button type="button" aria-label={endpoint.enabled ? t("settings.actions.off") : t("settings.actions.on")} onClick={() => void toggleEndpoint(endpoint)} className={cn("rounded-input px-2 py-1", endpoint.enabled ? "bg-ok/10 text-ok-text" : "bg-surface-2 text-muted")}>{endpoint.enabled ? t("settings.actions.on") : t("settings.actions.off")}</button>
+                    <button type="button" aria-label={`${t("common.delete")} ${endpoint.name}`} onClick={() => void removeEndpoint(endpoint)} disabled={busy !== null} className="rounded-input p-1.5 text-error-text hover:bg-error/10 disabled:opacity-40"><Trash2 size={12} /></button>
+                  </div>;
+                })}
+              </div>
             </div>
           </details>
         </div>
