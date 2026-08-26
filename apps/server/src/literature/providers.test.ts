@@ -71,11 +71,12 @@ const UNIPROT_JSON = JSON.stringify({
 let fetchMock: ReturnType<typeof vi.fn>;
 let currentUrl = "";
 
-function stubFetch(routes: Array<{ match: RegExp | string; body: string | Response }>) {
+function stubFetch(routes: Array<{ match: RegExp | string; body: string | Response }>, onRequest?: (url: string) => void) {
   currentUrl = "";
   fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = input instanceof URL ? input.toString() : String(input);
     currentUrl = url;
+    onRequest?.(url);
     const route = routes.find((entry) => (typeof entry.match === "string" ? url.includes(entry.match) : entry.match.test(url)));
     if (!route) return new Response("not found", { status: 404 });
     return typeof route.body === "string" ? new Response(route.body, { status: 200, headers: { "content-type": "application/json" } }) : route.body;
@@ -123,6 +124,24 @@ describe("searchPubMed", () => {
     expect(result.hitCount).toBe(0);
     expect(result.records).toEqual([]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("throttles every NCBI request across concurrent PubMed searches", async () => {
+    const startedAt: number[] = [];
+    stubFetch([
+      { match: "esearch.fcgi", body: PUBMED_SEARCH },
+      { match: "esummary.fcgi", body: PUBMED_SUMMARY },
+    ], () => startedAt.push(Date.now()));
+
+    await Promise.all([
+      searchPubMed("crispr first", { approved: false }),
+      searchPubMed("crispr second", { approved: false }),
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(startedAt).toHaveLength(4);
+    const gaps = startedAt.slice(1).map((timestamp, index) => timestamp - startedAt[index]!);
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(600);
   });
 
   it("refuses to reach providers that resolve to private addresses", async () => {
