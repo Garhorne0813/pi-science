@@ -10,6 +10,7 @@ import { PiManager, piManager } from "../pi/pi-manager.js";
 import { PiOrbitRequestError } from "../pi/pi-orbit-host.js";
 import type { PiProcess, PiProcessOptions, PiResult, RuntimeSkillPolicy } from "../pi/pi-process.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
+import { canonicalRuntimeModelRef } from "../pi/pi-runtime-projection.js";
 import type { ProjectReviewService } from "../../project-review/service.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { SessionRepository, invalidateSessionFileCache, sessionRepository } from "./session-repository.js";
@@ -20,6 +21,7 @@ import { diffWorkspaceSnapshots, previewKind, previewMime, snapshotWorkspace, ty
 import { turnArtifactRepository } from "../artifacts/turn-artifact-repository.js";
 import { readJsonLines, workspaceFile } from "../../storage/persistence.js";
 import { ensureProject } from "../../project/project-registry.js";
+import type { ModelResourceService } from "../../model-resources/model-resource-service.js";
 
 type RuntimeFailure = { error: string; code: string; diagnostics?: unknown };
 type ServiceFailure = RuntimeFailure & { success: false };
@@ -140,7 +142,8 @@ function failure(result: PiResult | Record<string, unknown>, fallback: string): 
 
 function effectiveConfig(requested?: Partial<PiConfig>): PiConfig {
   const defaults = loadDefaultPiConfig();
-  const model = requested?.model || defaults.model || null;
+  const rawModel = requested?.model || defaults.model || null;
+  const model = rawModel ? canonicalRuntimeModelRef(rawModel) : null;
   return {
     model,
     provider: requested?.provider || defaults.provider || null,
@@ -185,6 +188,7 @@ export class NodeSessionService {
     private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService(),
     private readonly projectReview: Pick<ProjectReviewService, "run"> | null = null,
     private readonly statsEventStore: StatsEventStore = durableEventStore,
+    private readonly modelResources: Pick<ModelResourceService, "ensureMigrated" | "isModelAvailable"> | null = null,
   ) {}
 
   configureLogging(log: (level: "info" | "warn" | "error", message: string) => void): void {
@@ -195,6 +199,8 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(body.cwd); }
     catch (error) { return { error: String(error), code: "workspace_invalid" }; }
+    const migration = await this.ensureModelResources();
+    if (migration) return migration;
     const project = await ensureProject(cwd);
     await mkdir(resolve(cwd, ".pi-science", "sessions"), { recursive: true });
     return this.withLock(`create:${cwd}`, async () => {
@@ -357,6 +363,12 @@ export class NodeSessionService {
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
     if (!model.includes("/")) return { success: false, code: "invalid_request", error: "model must use provider/model notation" };
+    if (this.modelResources) {
+      try { await this.modelResources.ensureMigrated(); }
+      catch (error) { return { success: false, code: "model_resources_migration_failed", error: `unable to migrate model resources: ${error instanceof Error ? error.message : String(error)}` }; }
+      model = canonicalRuntimeModelRef(model);
+      if (model.startsWith("user-") && !(await this.modelResources.isModelAvailable(model))) return { success: false, code: "no_routable_endpoint", error: `model is not routable: ${model}` };
+    }
     return this.withLock(`${cwd}\0${sessionId}`, async () => {
       const activated = await this.activateUnlocked(sessionId, cwd);
       if ("error" in activated) return activated;
@@ -367,7 +379,7 @@ export class NodeSessionService {
       const provider = model.slice(0, separator);
       const modelId = model.slice(separator + 1);
       const modelResult = await activated.process.sendCommand("set_model", { provider, modelId });
-      if (!modelResult.success && provider.startsWith("custom-")) {
+      if (!modelResult.success && (provider.startsWith("custom-") || provider.startsWith("user-"))) {
         const oldSessionId = activated.activeSessionId;
         const restarted = await this.restartRuntimeUnlocked(activated, { ...effectiveConfig(), model, thinking: thinking || previous.thinking });
         if ("error" in restarted) return restarted;
@@ -707,6 +719,16 @@ export class NodeSessionService {
   get activeCount(): number { return this.runtimes.size; }
   get processCount(): number { return this.manager.processCount; }
 
+  private async ensureModelResources(): Promise<RuntimeFailure | null> {
+    if (!this.modelResources) return null;
+    try {
+      await this.modelResources.ensureMigrated();
+      return null;
+    } catch (error) {
+      return { error: `unable to migrate model resources: ${error instanceof Error ? error.message : String(error)}`, code: "model_resources_migration_failed" };
+    }
+  }
+
   private async activateUnlocked(sessionId: string, cwd: string): Promise<RuntimeRecord | ServiceFailure> {
     const key = runtimeKey(cwd, sessionId);
     let runtime = this.runtimes.get(key);
@@ -721,6 +743,8 @@ export class NodeSessionService {
     }
     const sessionPath = await this.repository.findPath(cwd, sessionId);
     if (!sessionPath) return { success: false, code: "not_found", error: "session not found in this workspace" };
+    const migration = await this.ensureModelResources();
+    if (migration) return { success: false, ...migration };
     const config = effectiveConfig();
     const started = await this.startRuntime(cwd, config);
     if ("error" in started) return { success: false, ...started };
@@ -737,6 +761,11 @@ export class NodeSessionService {
   }
 
   private async startRuntime(cwd: string, config: PiConfig, sessionPath?: string, preparedOptions?: PiProcessOptions): Promise<RuntimeRecord | RuntimeFailure> {
+    const migration = await this.ensureModelResources();
+    if (migration) return migration;
+    if (this.modelResources && config.model && config.model.startsWith("user-") && !(await this.modelResources.isModelAvailable(config.model))) {
+      return { error: `model is not routable: ${config.model}`, code: "no_routable_endpoint" };
+    }
     let options: PiProcessOptions | null;
     if (preparedOptions) options = preparedOptions;
     else {

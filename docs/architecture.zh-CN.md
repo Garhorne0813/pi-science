@@ -191,6 +191,44 @@ Session Notebook 从当前对话内部打开，统一展示 Agent 与用户单�
 `.ipynb` 文件从“文件”打开，只有保存后才持久化。JupyterLab 使用一个应用级工具环境，
 并把项目绑定的 revision 注册为 kernelspec。
 
+## 模型资源域和运行时投影
+
+模型配置拆分为五类资源：
+
+```mermaid
+flowchart LR
+    P[Provider 提供方] --> M[Model 模型]
+    P --> B[ProviderEndpointBinding 绑定]
+    B --> E[Endpoint 端点]
+    E --> C[Credential 凭据引用]
+    S[模型偏好] --> R[RuntimeModelResolver]
+    P --> R
+    M --> R
+    B --> R
+    E --> R
+    C --> R
+    R --> X[PiRuntimeProjection]
+    X --> J[生成的 models.json / runtime 环境]
+```
+
+- `Provider` 描述模型由谁提供。系统提供方只读；用户提供方保存到
+  `model-resources.json`。
+- `Model` 保存标准 `<provider_id>/<model_id>` 和能力来源。运行时验证优先级最高，
+  其次是手工设置、发现结果、提供方元数据和保守回退。
+- `Endpoint` 只负责 URL、协议、健康状态、出站策略和 `credential_ref`。它不保存模型
+  能力，也不保存原始密钥。
+- `ProviderEndpointBinding` 把提供方连接到端点，并管理优先级、模型过滤、别名和非敏感
+  header。
+- `CredentialStore` 在单独的 0600 文件中保存托管密钥。普通 API 只返回元数据。环境凭据
+  只有在 Credential 明确写出变量名时才会读取。
+- `RuntimeModelResolver` 会排除禁用、blocked、不健康、被过滤和没有认证的路由，并按
+  优先级稳定排序。
+- `PiRuntimeProjection` 是唯一写入 Pi `models.json` 的适配器。托管密钥只用不可预测的
+  临时 runtime 变量注入，不会写入 runtime descriptor 或浏览器 API。
+
+旧的 `custom_providers`、提供方 API key 字段和 `model-endpoints.json` 只作为迁移输入或
+兼容投影。新写入统一使用模型资源服务。
+
 ## 信任与安全边界
 
 - Pi Orbit Host 只监听本机地址，控制面的每个请求都需要随机生成的 bearer token。

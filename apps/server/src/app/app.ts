@@ -13,6 +13,7 @@ import { registerArtifactRoutes } from "../http/routes/artifact-routes.js";
 import { registerTurnArtifactRoutes } from "../http/routes/turn-artifact-routes.js";
 import { registerSettingsRoutes } from "../http/routes/settings-routes.js";
 import { registerModelEndpointRoutes } from "../http/routes/model-endpoint-routes.js";
+import { registerModelResourceRoutes } from "../http/routes/model-resource-routes.js";
 import { registerExecutionRoutes } from "../http/routes/execution-routes.js";
 import { registerKernelExecutionRoutes } from "../http/routes/kernel-execution-routes.js";
 import { registerNotebookRoutes } from "../http/routes/notebook-routes.js";
@@ -27,7 +28,7 @@ import { AiTitleService, PiTitleRuntimeFactory } from "../runtime/title/ai-title
 import { importLegacyState } from "../storage/sqlite/legacy-state.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
-  const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
+  const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, modelResources, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
   let stateReady = !sqliteEnabled;
   let stateError: unknown;
   const app = Fastify({
@@ -105,7 +106,21 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     return { status: "ready", service: "pi-science-server", control_plane: "node", sqlite: sqliteEnabled ? diagnostics : { status: "disabled", schema_version: null, journal_mode: null, pending_requests: 0 } };
   });
 
-  app.get("/internal/diagnostics", async () => ({ sqlite: sqliteEnabled ? stateStore.diagnostics() : { status: "disabled" } }));
+  app.get("/internal/diagnostics", async () => {
+    const modelState = await modelResources.repository.read();
+    return {
+      sqlite: sqliteEnabled ? stateStore.diagnostics() : { status: "disabled" },
+      model_resources: {
+        schema_version: modelState.schema_version,
+        migration: modelState.migration ?? null,
+        provider_count: modelState.providers.length,
+        model_count: modelState.models.length,
+        endpoint_count: modelState.endpoints.length,
+        binding_count: modelState.bindings.length,
+        credential_ref_count: Object.keys(modelState.credential_refs).length,
+      },
+    };
+  });
 
   if (config.nodeSessions || config.nodePiManager) registerSessionReadRoutes(app, sessionRepository, nodeSessionService);
   if (config.nodeSse || config.nodePiManager) registerSseRoutes(app, nodeSessionService, events);
@@ -115,8 +130,11 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   registerEnvironmentRoutes(app, environments);
   if (config.nodeArtifacts !== false) registerArtifactRoutes(app);
   if (config.nodeArtifacts !== false) registerTurnArtifactRoutes(app);
-  if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings);
-  if (config.nodeSettings !== false) registerModelEndpointRoutes(app);
+  if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings, modelResources);
+  if (config.nodeSettings !== false) {
+    registerModelResourceRoutes(app, modelResources, nodeSessionService);
+    registerModelEndpointRoutes(app, { service: modelResources, nodeSessionService });
+  }
   if (config.nodeExecutions !== false) registerExecutionRoutes(app, jobs);
   if (config.nodeExecutions !== false) registerKernelExecutionRoutes(app, config, environments, kernels);
   registerNotebookRoutes(app, notebooks);
