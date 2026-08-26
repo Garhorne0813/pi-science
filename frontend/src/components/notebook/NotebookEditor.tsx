@@ -272,6 +272,7 @@ export function NotebookEditor({
 function resultOutputs(result: CellResult): NotebookOutput[] {
   const outputs: NotebookOutput[] = [];
   if (result.stdout) outputs.push({ output_type: "stream", name: "stdout", text: result.stdout });
+  if (result.stderr) outputs.push({ output_type: "stream", name: "stderr", text: result.stderr });
   if (result.result || Object.keys(result.mime || {}).length > 0) {
     outputs.push({
       output_type: "execute_result",

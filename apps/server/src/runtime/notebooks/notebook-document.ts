@@ -20,6 +20,12 @@ export type NotebookEditOperation =
   | { action: "insert_cell"; source: string; cell_type: string; cell_id?: string; before_cell_id?: string }
   | { cell_id: string; action: "delete_cell" };
 
+export interface NotebookExecutionOutput {
+  cell_id: string;
+  execution_count: number | null;
+  outputs: unknown[];
+}
+
 export interface AppliedNotebookEdits {
   document: NotebookDocument;
   changed_cell_ids: string[];
@@ -54,8 +60,9 @@ export function notebookSourceText(source: unknown): string {
 
 /**
  * Keep this hash in sync with frontend/src/components/notebook/notebook-model.ts.
- * It gives legacy cells a stable identity without rewriting a notebook merely
- * because an agent read it.
+ * Legacy notebooks have no persisted cell identity, so use the immutable
+ * notebook path and current cell position instead of mutable source text.
+ * Explicit nbformat cell ids remain the preferred identity and are preserved.
  */
 function stableHash(value: string): string {
   let hash = 2_166_136_261;
@@ -68,7 +75,7 @@ function stableHash(value: string): string {
 
 export function notebookCellId(path: string, cell: NotebookCellDocument, index: number): string {
   if (typeof cell.id === "string" && cell.id.trim()) return cell.id;
-  return `cell-${stableHash(`${path}\0${index}\0${cell.cell_type ?? "unknown"}\0${notebookSourceText(cell.source)}`)}`;
+  return `cell-${stableHash(`${path}\0${index}`)}`;
 }
 
 export function normalizeNotebookDocument(document: NotebookDocument, path: string): NotebookDocument {
@@ -150,4 +157,23 @@ export function applyNotebookEdits(document: NotebookDocument, operations: Noteb
     inserted_cell_ids: [...inserted],
     deleted_cell_ids: [...deleted],
   };
+}
+
+/**
+ * Applies the result of one kernel execution without exposing execution as a
+ * notebook edit operation. The caller must protect the write with the
+ * notebook revision returned by notebookSha256 so a concurrent source edit
+ * cannot receive output for the wrong cell contents.
+ */
+export function applyNotebookExecutionOutput(
+  document: NotebookDocument,
+  output: NotebookExecutionOutput,
+): NotebookDocument {
+  const index = document.cells.findIndex((cell) => cell.id === output.cell_id);
+  if (index < 0) throw new Error(`Notebook cell not found: ${output.cell_id}`);
+  const cells = document.cells.map((cell) => ({ ...cell }));
+  const cell = cells[index]!;
+  cell.execution_count = output.execution_count;
+  cell.outputs = output.outputs;
+  return { ...document, cells };
 }

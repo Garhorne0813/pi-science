@@ -90,6 +90,29 @@ describe("NodeKernelManager native execution", () => {
     }
   });
 
+  it.skipIf(python === null)("preserves stdout and stderr as separate notebook streams", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pi-science-native-kernel-streams-"));
+    cleanup.push(workspace);
+    const prefix = join(workspace, "env");
+    await createTestEnvironment(prefix);
+
+    const manager = new NodeKernelManager();
+    try {
+      const result = await manager.execute({
+        language: "python",
+        code: "import sys\nprint('stdout')\nprint('stderr', file=sys.stderr)",
+        cwd: workspace,
+        environment: status(workspace, prefix),
+        timeoutMs: 10_000,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.stdout).toBe("stdout\n");
+      expect(result.stderr).toBe("stderr\n");
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
   it.skipIf(python === null)("preserves namespace across cells in one session", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "pi-science-native-kernel-state-"));
     cleanup.push(workspace);
@@ -244,7 +267,7 @@ describe("NodeKernelManager platform interrupt semantics", () => {
       const request = JSON.parse(line) as { id: string };
       if (session.answered.has(request.id)) continue;
       session.answered.add(request.id);
-      (session.child.stdout as PassThrough).write(`${JSON.stringify({ id: request.id, type: "result", ok: true, stdout: "", result: "2", error: null, interrupted: false, ...overrides })}\n`);
+      (session.child.stdout as PassThrough).write(`${JSON.stringify({ id: request.id, type: "result", ok: true, stdout: "", stderr: "", result: "2", error: null, interrupted: false, ...overrides })}\n`);
     }
   }
 

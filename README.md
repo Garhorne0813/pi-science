@@ -168,7 +168,9 @@ and artifacts produced by that execution.
 Managed Pi sessions provide `notebook_read`, `notebook_edit`, and
 `notebook_run` for file-backed `.ipynb` notebooks. Cell edits are revision-safe,
 and selected cells run through the same persistent Python/R kernels used by the
-workbench.
+workbench. `notebook_run` writes bounded execution counts and outputs back to
+the notebook with the next revision, while execution and artifact provenance
+remain available through the control plane.
 
 ## Model Configuration
 

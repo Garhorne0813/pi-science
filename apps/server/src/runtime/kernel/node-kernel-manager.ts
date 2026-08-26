@@ -21,6 +21,7 @@ export interface KernelStreamEvent {
 export interface KernelResult {
   ok: boolean;
   stdout: string;
+  stderr: string;
   result?: string | null;
   error?: string | null;
   interrupted: boolean;
@@ -518,6 +519,7 @@ function normalizeResult(message: Record<string, unknown>): KernelResult {
   return {
     ok: message.ok === true,
     stdout: typeof message.stdout === "string" ? message.stdout : "",
+    stderr: typeof message.stderr === "string" ? message.stderr : "",
     result: message.result === null || message.result === undefined ? null : String(message.result),
     error: message.error === null || message.error === undefined ? null : String(message.error),
     interrupted: message.interrupted === true,

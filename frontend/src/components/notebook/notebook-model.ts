@@ -78,13 +78,13 @@ export function stableNotebookId(path: string): string {
 
 /**
  * Returns the persisted notebook cell id when present, and a deterministic id
- * for legacy cells that predate nbformat's `id` field. The editor persists the
- * derived id on the next save, so changing a cell's source does not change its
- * identity after the notebook has been opened.
+ * for legacy cells that predate nbformat's `id` field. Legacy ids intentionally
+ * exclude mutable source text so a source edit can still target the same cell
+ * before the notebook has been normalized and saved.
  */
 export function stableCellId(cell: NotebookCell, index: number, notebookPath = ""): string {
   if (typeof cell.id === "string" && cell.id.trim()) return cell.id;
-  const seed = `${notebookPath}\0${index}\0${cell.cell_type}\0${sourceText(cell.source)}`;
+  const seed = `${notebookPath}\0${index}`;
   let hash = 2166136261;
   for (let cursor = 0; cursor < seed.length; cursor += 1) {
     hash ^= seed.charCodeAt(cursor);

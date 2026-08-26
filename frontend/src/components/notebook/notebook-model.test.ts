@@ -58,6 +58,7 @@ describe("notebook model", () => {
     const first = stableCellId(legacy, 0, "analysis/demo.ipynb");
     expect(first).toBe(stableCellId(legacy, 0, "analysis/demo.ipynb"));
     expect(first).toMatch(/^cell-[0-9a-f]+$/);
+    expect(first).toBe(stableCellId({ ...legacy, source: "x = 2" }, 0, "analysis/demo.ipynb"));
     expect(first).not.toBe(stableCellId(legacy, 1, "analysis/demo.ipynb"));
     expect(newNotebookCellId()).not.toBe(newNotebookCellId());
   });

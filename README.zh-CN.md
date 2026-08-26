@@ -153,6 +153,12 @@ Pi-Science 托管的工作区默认信任 `.pi/skills/`；其中的项目内置 
 
 内核、Notebook 和智能体工具的执行都会记录在产生它们的对话会话中。执行状态会实时更新；在 Runs 视图中，可将执行定位到来源对话，也可打开该次执行生成的文件和产物。
 
+托管 Pi 会话为文件型 `.ipynb` 提供 `notebook_read`、`notebook_edit` 和
+`notebook_run`。编辑使用 Notebook 文件 SHA-256 做并发保护；运行选定的
+Python/R 代码块后，会把受限的执行次数、标准输出/错误、MIME 结果和错误输出
+原子写回 Notebook，并返回新的 revision。产物发布失败会作为执行告警保留，
+不会被静默忽略。
+
 ## 模型配置
 
 可以在 **Settings → LLM** 中配置提供商。Pi-Science 支持内置厂商、OpenAI-compatible、Anthropic-compatible，以及 Ollama、LM Studio 等可信的无 Key 本地服务。还可以在同一页面注册、启停并检查托管模型端点。健康检查是带超时和响应大小限制的出站请求；为支持本地模型服务，默认允许私网端点，可通过 `PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS=0` 禁用。

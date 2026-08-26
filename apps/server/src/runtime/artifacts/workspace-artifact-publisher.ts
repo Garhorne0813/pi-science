@@ -38,6 +38,25 @@ export interface PublishWorkspaceArtifactOptions {
   source?: string;
   notebookPath?: string | null;
   cellId?: string | null;
+  onFailure?: (failure: WorkspaceArtifactPublishFailure) => void;
+}
+
+export interface WorkspaceArtifactPublishFailure {
+  path: string;
+  error: string;
+  code?: string;
+}
+
+export interface DetailedWorkspaceArtifactPublishResult {
+  artifacts: PublishedWorkspaceArtifact[];
+  failures: WorkspaceArtifactPublishFailure[];
+}
+
+export class WorkspaceArtifactPublishError extends Error {
+  constructor(readonly failures: WorkspaceArtifactPublishFailure[]) {
+    super(`Failed to publish ${failures.length} workspace artifact${failures.length === 1 ? "" : "s"}`);
+    this.name = "WorkspaceArtifactPublishError";
+  }
 }
 
 async function hashFile(path: string): Promise<{ sha256: string; size: number }> {
@@ -62,12 +81,46 @@ export async function publishWorkspaceArtifacts(
   paths: string[],
   options: PublishWorkspaceArtifactOptions,
 ): Promise<PublishedWorkspaceArtifact[]> {
+  const result = await publishWorkspaceArtifactsDetailed(cwd, paths, options);
+  if (result.failures.length > 0) throw new WorkspaceArtifactPublishError(result.failures);
+  return result.artifacts;
+}
+
+/**
+ * Publishes a batch while retaining non-fatal failures for callers that can
+ * record a warning alongside an otherwise successful execution. A file that
+ * disappeared between the workspace snapshot and publication is the only
+ * expected skip; all other failures are returned to the caller.
+ */
+export async function publishWorkspaceArtifactsDetailed(
+  cwd: string,
+  paths: string[],
+  options: PublishWorkspaceArtifactOptions,
+): Promise<DetailedWorkspaceArtifactPublishResult> {
   const published: PublishedWorkspaceArtifact[] = [];
+  const failures: WorkspaceArtifactPublishFailure[] = [];
   for (const path of [...new Set(paths)]) {
-    const artifact = await publishWorkspaceArtifact(cwd, path, options).catch(() => null);
+    let artifact: PublishedWorkspaceArtifact | null;
+    try {
+      artifact = await publishWorkspaceArtifact(cwd, path, options);
+    } catch (error) {
+      const failure: WorkspaceArtifactPublishFailure = {
+        path,
+        error: error instanceof Error ? error.message : String(error),
+        ...((error as NodeJS.ErrnoException)?.code ? { code: (error as NodeJS.ErrnoException).code } : {}),
+      };
+      failures.push(failure);
+      options.onFailure?.(failure);
+      continue;
+    }
     if (artifact) published.push(artifact);
   }
-  return published;
+  return { artifacts: published, failures };
+}
+
+function isMissingFileError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 async function publishWorkspaceArtifact(
@@ -75,28 +128,24 @@ async function publishWorkspaceArtifact(
   requestedPath: string,
   options: PublishWorkspaceArtifactOptions,
 ): Promise<PublishedWorkspaceArtifact | null> {
-  let workspace: string;
-  let target: string;
-  try {
-    workspace = await validateWorkspaceCwd(cwd);
-    target = await resolveWorkspaceFile(workspace, requestedPath);
-  } catch {
-    return null;
-  }
+  const workspace = await validateWorkspaceCwd(cwd);
+  const target = await resolveWorkspaceFile(workspace, requestedPath);
 
   let metadata;
   try {
     metadata = await stat(target);
-  } catch {
-    return null;
+  } catch (error) {
+    if (isMissingFileError(error)) return null;
+    throw error;
   }
   if (!metadata.isFile()) return null;
 
   let digest: { sha256: string; size: number };
   try {
     digest = await hashFile(target);
-  } catch {
-    return null;
+  } catch (error) {
+    if (isMissingFileError(error)) return null;
+    throw error;
   }
 
   const path = relative(workspace, target).replaceAll("\\", "/");

@@ -33,8 +33,8 @@ function config(_pythonOrigin: string, overrides: Partial<ServerConfig> = {}): S
 const fakeKernels = {
   async execute(options: KernelExecuteOptions) {
     if (options.code === "write-output") await writeFile(join(options.cwd, "cell-output.csv"), "value\n42\n", "utf8");
-    if (options.code === "kernel-error") return { ok: false, stdout: "before failure\n", result: null, error: "cell failed", interrupted: false, mime: {} };
-    if (options.code === "kernel-interrupted") return { ok: false, stdout: "partial\n", result: null, error: "KeyboardInterrupt", interrupted: true, mime: {} };
+    if (options.code === "kernel-error") return { ok: false, stdout: "before failure\n", stderr: "", result: null, error: "cell failed", interrupted: false, mime: {} };
+    if (options.code === "kernel-interrupted") return { ok: false, stdout: "partial\n", stderr: "", result: null, error: "KeyboardInterrupt", interrupted: true, mime: {} };
     if (options.code === "stream-output" && options.onEvent) {
       options.onEvent({ type: "stream", stream: "stdout", text: "first\n" });
       options.onEvent({ type: "stream", stream: "stdout", text: "second\n" });
@@ -43,6 +43,7 @@ const fakeKernels = {
     return {
       ok: true,
       stdout: streaming ? "first\nsecond\n" : "",
+      stderr: "",
       result: "42",
       error: null,
       interrupted: false,
@@ -152,6 +153,25 @@ describe("Node control plane", () => {
       correlation: { session_id: "session-notebook" },
       files: { written: [{ path: "cell-output.csv", detection: "snapshot" }] },
     });
+    await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }, 30_000);
+
+  it("exposes artifact publication failures without hiding a successful kernel result", async () => {
+    const workspace = join(tmpdir(), `pi-science-kernel-artifact-warning-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await mkdir(join(workspace, ".pi-science", "artifacts.jsonl"), { recursive: true });
+    const app = buildApp(config("http://127.0.0.1:1"), kernelModules());
+    openApps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/kernels/execute?cwd=${encodeURIComponent(workspace)}`,
+      payload: { language: "python", code: "write-output" },
+    });
+    const execution = await app.inject({ method: "GET", url: `/api/executions/${response.json().execution_id}?cwd=${encodeURIComponent(workspace)}` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ ok: true, artifact_publish_errors: [{ path: "cell-output.csv", code: "EISDIR" }] });
+    expect(execution.json()).toMatchObject({ status: "succeeded", result: { artifact_publish_errors: [{ path: "cell-output.csv", code: "EISDIR" }] } });
     await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }, 30_000);
 

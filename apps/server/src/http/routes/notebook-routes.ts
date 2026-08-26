@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/workspace-security.js";
@@ -8,6 +8,7 @@ import { recordProvenance } from "./artifact-routes.js";
 import type { NotebookService } from "../../runtime/notebooks/notebook-service.js";
 import {
   applyNotebookEdits,
+  applyNotebookExecutionOutput,
   normalizeNotebookDocument,
   notebookSha256,
   notebookSourceText,
@@ -15,6 +16,7 @@ import {
   serializeNotebookDocument,
   type NotebookCellDocument,
   type NotebookEditOperation,
+  type NotebookExecutionOutput,
   type NotebookDocument,
 } from "../../runtime/notebooks/notebook-document.js";
 
@@ -51,6 +53,11 @@ function boundedNotebookOutput(output: unknown): unknown {
     bounded.data = Object.fromEntries(Object.entries(bounded.data as Record<string, unknown>).map(([key, value]) => [key, truncateOutput(notebookSourceText(value))]));
   }
   return bounded;
+}
+
+function boundedNotebookOutputs(value: unknown): unknown[] {
+  if (!Array.isArray(value)) throw new Error("outputs must be an array");
+  return value.slice(0, MAX_OUTPUTS_PER_CELL).map(boundedNotebookOutput);
 }
 
 function responseDocument(document: NotebookDocument, includeOutputs: boolean): NotebookDocument {
@@ -118,10 +125,11 @@ class NotebookRevisionConflict extends Error {
   }
 }
 
-async function writeNotebookAtomically(target: string, content: string): Promise<void> {
+async function writeNotebookAtomically(target: string, content: string, mode?: number): Promise<void> {
   const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, content, { encoding: "utf8", flag: "wx" });
+    if (mode !== undefined) await chmod(temporary, mode);
     await rename(temporary, target);
   } catch (error) {
     await unlink(temporary).catch(() => undefined);
@@ -183,7 +191,7 @@ export function registerNotebookRoutes(app: FastifyInstance, notebooks: Notebook
         const normalized = normalizeNotebookDocument(parseNotebookDocument(raw), relativeNotebookPath(root, target));
         const applied = applyNotebookEdits(normalized, operations);
         const serialized = serializeNotebookDocument(applied.document);
-        await writeNotebookAtomically(target, serialized);
+        await writeNotebookAtomically(target, serialized, metadata.mode & 0o7777);
         return { ...applied, path: relativeNotebookPath(root, target), sha256: notebookSha256(serialized), serialized };
       });
       await recordProvenance(root, {
@@ -201,6 +209,72 @@ export function registerNotebookRoutes(app: FastifyInstance, notebooks: Notebook
         stale_cell_ids: result.stale_cell_ids,
         inserted_cell_ids: result.inserted_cell_ids,
         deleted_cell_ids: result.deleted_cell_ids,
+      };
+    } catch (error) {
+      if (error instanceof NotebookRevisionConflict) {
+        return reply.code(409).send({ error: error.message, expected_sha256: error.expected, actual_sha256: error.actual });
+      }
+      if (error instanceof Error && /escapes the workspace|must be relative|metadata paths/i.test(error.message)) {
+        return reply.code(403).send({ error: error.message });
+      }
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return reply.code(404).send({ error: `Notebook not found: ${path}` });
+      return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post("/api/notebooks/output", async (request, reply) => {
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    let root: string;
+    let path: string;
+    let cellId: string;
+    let executionCount: number | null;
+    let outputs: unknown[];
+    try {
+      root = await cwdFromQuery(request.query as { cwd?: unknown });
+      path = notebookPath(body.path);
+      if (typeof body.cell_id !== "string" || !body.cell_id.trim()) throw new Error("cell_id is required");
+      cellId = body.cell_id;
+      if (body.execution_count === null) executionCount = null;
+      else if (typeof body.execution_count === "number" && Number.isInteger(body.execution_count) && body.execution_count >= 0) executionCount = body.execution_count;
+      else throw new Error("execution_count must be a non-negative integer or null");
+      outputs = boundedNotebookOutputs(body.outputs);
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+    const expectedSha = body.expected_sha256 === undefined ? undefined : String(body.expected_sha256);
+    if (expectedSha === undefined) return reply.code(400).send({ error: "expected_sha256 is required for notebook output updates" });
+    if (expectedSha !== undefined && !/^[0-9a-f]{64}$/i.test(expectedSha)) return reply.code(400).send({ error: "expected_sha256 must be a SHA-256 hex digest" });
+
+    try {
+      const target = await resolveWorkspaceFile(root, path);
+      const result = await withFileWriteLock(target, async () => {
+        const metadata = await stat(target);
+        if (!metadata.isFile()) throw new Error(`Notebook path is not a file: ${path}`);
+        if (metadata.size > MAX_NOTEBOOK_BYTES) throw new Error(`Notebook is too large to edit (${metadata.size} bytes)`);
+        const raw = await readFile(target, "utf8");
+        const actualSha = notebookSha256(raw);
+        if (expectedSha && expectedSha.toLowerCase() !== actualSha) throw new NotebookRevisionConflict(expectedSha, actualSha);
+        const normalized = normalizeNotebookDocument(parseNotebookDocument(raw), relativeNotebookPath(root, target));
+        const updated = applyNotebookExecutionOutput(normalized, { cell_id: cellId, execution_count: executionCount, outputs } satisfies NotebookExecutionOutput);
+        const serialized = serializeNotebookDocument(updated);
+        await writeNotebookAtomically(target, serialized, metadata.mode & 0o7777);
+        return { path: relativeNotebookPath(root, target), sha256: notebookSha256(serialized), serialized };
+      });
+      await recordProvenance(root, {
+        path: result.path,
+        tool: "notebook_run",
+        session_id: typeof body.session_id === "string" ? body.session_id : "",
+        ...(typeof body.execution_id === "string" ? { execution_id: body.execution_id } : {}),
+        content: result.serialized,
+        diff: `updated execution output for cell ${cellId}${typeof body.execution_id === "string" ? ` (${body.execution_id})` : ""}`,
+      });
+      return {
+        ok: true,
+        path: result.path,
+        sha256: result.sha256,
+        cell_id: cellId,
+        execution_count: executionCount,
+        output_count: outputs.length,
       };
     } catch (error) {
       if (error instanceof NotebookRevisionConflict) {

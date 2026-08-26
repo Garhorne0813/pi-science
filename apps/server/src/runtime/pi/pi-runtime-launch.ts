@@ -63,7 +63,6 @@ export function resetWebRuntimeAllocation(): void {
 }
 
 export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPath?: string, workspaceEnvironment: NodeJS.ProcessEnv = {}, sessionDirectory?: string): PiProcessOptions | null {
-  const includeBuiltInNotebook = config === undefined;
   config ??= { skills: [], extensions: [] };
   const cliPath = process.env.PI_CLI_PATH;
   if (!cliPath) return null;
@@ -113,8 +112,8 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
   if (effectiveThinking) args.push("--thinking", effectiveThinking);
   if (useRpcMode && sessionPath) args.push("--session", sessionPath);
   for (const skill of useRpcMode ? [...seededSkills, ...config.skills] : config.skills) args.push("--skill", skill);
-  const extensionPaths = ensureBrowserQuestionnaireAdapter(config.extensions);
-  for (const extension of includeBuiltInNotebook ? ensureNotebookExtension(extensionPaths) : extensionPaths) args.push("-e", extension);
+  const extensionPaths = ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(config.extensions));
+  for (const extension of extensionPaths) args.push("-e", extension);
   const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
   let agentDir = join(dataRoot, "pi-agent", useRpcMode ? workspaceKey : "web-host");
   try {

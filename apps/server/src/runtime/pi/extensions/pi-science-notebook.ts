@@ -141,7 +141,8 @@ async function requestJson<T>(path: string, init: RequestInit = {}, signal?: Abo
   if (!response.ok) {
     const message = isRecord(payload) && typeof payload.error === "string" ? payload.error : `${response.status} ${response.statusText}`;
     const failure = new Error(message);
-    (failure as Error & { status?: number }).status = response.status;
+    (failure as Error & { status?: number; payload?: unknown }).status = response.status;
+    (failure as Error & { status?: number; payload?: unknown }).payload = payload;
     throw failure;
   }
   return payload as T;
@@ -232,6 +233,37 @@ function executionFailed(result: Record<string, unknown>): boolean {
   return ["failed", "cancelled", "interrupted"].includes(text(execution.status).toLowerCase());
 }
 
+function notebookExecutionOutputs(result: Record<string, unknown>, executionCount: number): unknown[] {
+  const outputs: unknown[] = [];
+  const stdout = text(result.stdout);
+  if (stdout) outputs.push({ output_type: "stream", name: "stdout", text: truncate(stdout, MAX_OUTPUT_CHARS) });
+  const stderr = text(result.stderr);
+  if (stderr) outputs.push({ output_type: "stream", name: "stderr", text: truncate(stderr, MAX_OUTPUT_CHARS) });
+
+  const mime = isRecord(result.mime)
+    ? Object.fromEntries(Object.entries(result.mime).filter(([, value]) => typeof value === "string").map(([key, value]) => [key, truncate(String(value), MAX_OUTPUT_CHARS)]))
+    : {};
+  const value = result.result;
+  if (Object.keys(mime).length > 0 || (value !== null && value !== undefined && text(value))) {
+    outputs.push({
+      output_type: "execute_result",
+      execution_count: executionCount,
+      data: Object.keys(mime).length > 0 ? mime : { "text/plain": truncate(text(value), MAX_OUTPUT_CHARS) },
+    });
+  }
+
+  const error = text(result.error);
+  if (error) {
+    outputs.push({
+      output_type: "error",
+      ename: result.interrupted === true ? "KeyboardInterrupt" : "ExecutionError",
+      evalue: truncate(error, MAX_OUTPUT_CHARS),
+      traceback: [truncate(error, MAX_OUTPUT_CHARS)],
+    });
+  }
+  return outputs.slice(0, 20);
+}
+
 export default function registerPiScienceNotebook(pi: any) {
   pi.registerTool({
     name: "notebook_read",
@@ -303,11 +335,12 @@ export default function registerPiScienceNotebook(pi: any) {
   pi.registerTool({
     name: "notebook_run",
     label: "Run Notebook Cells",
-    description: "Execute selected code cells in order through the persistent Node-owned kernel and return execution and artifact evidence.",
+    description: "Execute selected code cells in order through the persistent Node-owned kernel, persist bounded outputs back to the .ipynb, and return execution and artifact evidence.",
     promptSnippet: "Run selected notebook code cells in order through the persistent kernel",
     promptGuidelines: [
       "Pass cell_ids in the intended execution order; use continue_on_error only when later cells are independent of a failure.",
       "Use clean_kernel when the run must start from a fresh namespace; otherwise the existing kernel state is intentionally reused.",
+      "Execution count, stdout/stderr, result MIME data, and errors are written back after each cell; reread the notebook if output persistence reports a revision conflict.",
     ],
     parameters: NOTEBOOK_RUN_SCHEMA,
     async execute(_toolCallId: string, params: unknown, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: any) {
@@ -329,22 +362,41 @@ export default function registerPiScienceNotebook(pi: any) {
           await requestJson(`/api/kernels/${encodeURIComponent(notebookId)}/shutdown?cwd=${encodeURIComponent(cwd)}&language=${language}`, { method: "POST" }, signal);
         }
         const results: Record<string, unknown>[] = [];
+        let notebookRevision: string | undefined = notebook.sha256;
+        let nextExecutionCount = params.clean_kernel === true
+          ? 1
+          : Math.max(0, ...notebook.document.cells.map((cell) => typeof cell.execution_count === "number" && Number.isInteger(cell.execution_count) ? cell.execution_count : 0)) + 1;
         for (const [index, cell] of cells.entries()) {
           const cellId = requestedIds[index]!;
-          const result = await requestJson<Record<string, unknown>>(`/api/kernels/execute?cwd=${encodeURIComponent(cwd)}`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              language,
-              code: sourceText(cell.source),
-              notebook_id: notebookId,
-              source: "agent",
-              notebook_path: notebook.path,
-              cell_id: cellId,
-              timeout_seconds: typeof params.timeout_seconds === "number" ? params.timeout_seconds : 120,
-              ...(sessionId(ctx) ? { session_id: sessionId(ctx) } : {}),
-            }),
-          }, signal);
+          let result: Record<string, unknown>;
+          try {
+            result = await requestJson<Record<string, unknown>>(`/api/kernels/execute?cwd=${encodeURIComponent(cwd)}`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                language,
+                code: sourceText(cell.source),
+                notebook_id: notebookId,
+                source: "agent",
+                notebook_path: notebook.path,
+                cell_id: cellId,
+                timeout_seconds: typeof params.timeout_seconds === "number" ? params.timeout_seconds : 120,
+                ...(sessionId(ctx) ? { session_id: sessionId(ctx) } : {}),
+              }),
+            }, signal);
+          } catch (error) {
+            if (error instanceof Error && error.name === "AbortError") throw error;
+            const rawPayload = (error as Error & { payload?: unknown }).payload;
+            const payload = isRecord(rawPayload) ? rawPayload : {};
+            result = {
+              ok: false,
+              status: (error as Error & { status?: number }).status === 504 ? "timed_out" : "failed",
+              error: error instanceof Error ? error.message : String(error),
+              ...(typeof payload.execution_id === "string" ? { execution_id: payload.execution_id } : {}),
+              interrupted: false,
+              mime: {},
+            };
+          }
           let execution = result;
           const executionId = typeof result.execution_id === "string" ? result.execution_id : undefined;
           if (executionId) {
@@ -352,11 +404,54 @@ export default function registerPiScienceNotebook(pi: any) {
             catch { /* The kernel response remains useful if the record read races persistence. */ }
           }
           const combined = { ...result, execution };
-          results.push({ cell_id: cellId, ...combined });
+          const executionCount = nextExecutionCount;
+          nextExecutionCount += 1;
+          let outputPersistenceError: string | undefined;
+          if (notebookRevision) {
+            try {
+              const persisted: Record<string, unknown> = await requestJson<Record<string, unknown>>(`/api/notebooks/output?cwd=${encodeURIComponent(cwd)}`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                  path: notebook.path,
+                  expected_sha256: notebookRevision,
+                  cell_id: cellId,
+                  execution_count: executionCount,
+                  outputs: notebookExecutionOutputs(result, executionCount),
+                  execution_id: executionId,
+                  ...(sessionId(ctx) ? { session_id: sessionId(ctx) } : {}),
+                }),
+              }, signal);
+              if (typeof persisted.sha256 !== "string" || !persisted.sha256) throw new Error("Control plane returned no notebook revision after output update");
+              notebookRevision = persisted.sha256;
+            } catch (error) {
+              outputPersistenceError = error instanceof Error ? error.message : String(error);
+              notebookRevision = undefined;
+            }
+          }
+          results.push({
+            ...combined,
+            cell_id: cellId,
+            execution_count: executionCount,
+            notebook_output_persisted: !outputPersistenceError,
+            ...(outputPersistenceError ? { notebook_output_persistence_error: outputPersistenceError } : {}),
+          });
+          if (outputPersistenceError) break;
           if (executionFailed(combined) && params.continue_on_error !== true) break;
         }
-        const message = [`Ran ${results.length}/${cells.length} cell(s) in ${notebook.path}.`, ...results.map((result) => executionText(result, text(result.cell_id)))].join("\n\n");
-        return buildToolResult(message, { path: notebook.path, notebook_id: notebookId, language, results });
+        const persistenceWarning = results.find((result) => typeof result.notebook_output_persistence_error === "string");
+        const message = [
+          `Ran ${results.length}/${cells.length} cell(s) in ${notebook.path}.`,
+          ...results.map((result) => executionText(result, text(result.cell_id))),
+          ...(persistenceWarning ? [`Notebook output was not fully persisted: ${text(persistenceWarning.notebook_output_persistence_error)}`] : []),
+        ].join("\n\n");
+        return buildToolResult(message, {
+          path: notebook.path,
+          notebook_id: notebookId,
+          language,
+          ...(notebookRevision ? { notebook_revision: notebookRevision } : {}),
+          results,
+        });
       } catch (error) {
         return errorToolResult(error);
       }

@@ -3,7 +3,10 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { publishWorkspaceArtifacts } from "./workspace-artifact-publisher.js";
+import {
+  publishWorkspaceArtifacts,
+  publishWorkspaceArtifactsDetailed,
+} from "./workspace-artifact-publisher.js";
 
 const workspaces: string[] = [];
 
@@ -58,5 +61,27 @@ describe("workspace artifact publisher", () => {
       executionId: "exec-cell-2",
     });
     expect(second[0]).toMatchObject({ artifact_id: firstArtifact.artifact_id, version: 2 });
+  });
+
+  it("ignores a disappeared file but surfaces artifact persistence failures", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-artifact-publisher-failure-"));
+    workspaces.push(cwd);
+    await mkdir(join(cwd, ".pi-science"), { recursive: true });
+    await mkdir(join(cwd, "outputs"), { recursive: true });
+
+    await expect(publishWorkspaceArtifacts(cwd, ["outputs/missing.csv"], { tool: "node-kernel-gateway" })).resolves.toEqual([]);
+
+    await writeFile(join(cwd, "outputs", "result.csv"), "value\n1\n", "utf8");
+    await mkdir(join(cwd, ".pi-science", "artifacts.jsonl"));
+    const failures: string[] = [];
+    const detailed = await publishWorkspaceArtifactsDetailed(cwd, ["outputs/result.csv"], {
+      tool: "node-kernel-gateway",
+      onFailure: (failure) => failures.push(failure.path),
+    });
+
+    expect(detailed.artifacts).toEqual([]);
+    expect(detailed.failures).toMatchObject([{ path: "outputs/result.csv", code: "EISDIR" }]);
+    expect(failures).toEqual(["outputs/result.csv"]);
+    await expect(publishWorkspaceArtifacts(cwd, ["outputs/result.csv"], { tool: "node-kernel-gateway" })).rejects.toThrow("Failed to publish 1 workspace artifact");
   });
 });
