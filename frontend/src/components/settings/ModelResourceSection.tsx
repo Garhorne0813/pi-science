@@ -302,7 +302,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
                           <summary className="flex min-h-8 cursor-pointer list-none items-center rounded-input px-2 text-[11px] text-muted hover:bg-surface-2 hover:text-text marker:content-none">
                             {t("settings.resources.more", { defaultValue: "More" })}
                           </summary>
-                          <div className="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-input border border-faint bg-surface-1 py-1 shadow-lg">
+                          <div className="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-input border border-faint bg-surface-raised py-1 shadow-lg">
                             <button type="button" onClick={() => void refreshModels(provider).then(() => undefined)} className="flex w-full items-center gap-2 px-3 py-1.5 text-[11px] text-text hover:bg-surface-2">
                               <RefreshCw size={11} />
                               {t("settings.resources.refreshModels", { defaultValue: "Refresh Models" })}
@@ -361,7 +361,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
       {/* Add / Edit provider modal */}
       {modal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
-          <div className="max-h-[85vh] w-full max-w-lg space-y-3 overflow-auto rounded-card border border-faint bg-surface-1 p-4">
+          <div className="max-h-[85vh] w-full max-w-lg space-y-3 overflow-auto rounded-card border border-faint bg-surface-raised p-4">
             <p className="text-sm font-semibold text-text">
               {modal.mode === "edit" ? t("settings.resources.editProviderTitle", { defaultValue: "Edit provider" }) : t("settings.resources.addProvider", { defaultValue: "Add Provider" })}
             </p>
@@ -483,7 +483,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
       {/* Delete confirmation */}
       {confirmDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="alertdialog" aria-modal="true">
-          <div className="w-full max-w-sm space-y-3 rounded-card border border-faint bg-surface-1 p-4">
+          <div className="w-full max-w-sm space-y-3 rounded-card border border-faint bg-surface-raised p-4">
             <p className="text-sm font-semibold text-text">{t("settings.resources.deleteTitle", { defaultValue: "Delete" })} "{confirmDelete.name}"?</p>
             <p className="text-[11px] leading-relaxed text-muted">
               {t("settings.resources.deleteBody", { defaultValue: "This will remove its models, its binding, its private API connection, and its managed API credential. Shared connections or credentials will not be removed." })}
