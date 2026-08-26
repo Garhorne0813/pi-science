@@ -71,6 +71,34 @@ describe("job coordinator", () => {
     expect(result.checks.memory_mb).toBe(Math.floor(totalmem() / (1024 * 1024)));
   });
 
+  it("uses the workspace-bound environment revision and package set for capabilities", async () => {
+    const coordinator = new JobCoordinator({
+      environment: async () => ({ PATH: "" }),
+      status: async () => ({
+        ready: true,
+        workspace: "/tmp/pi-science-capabilities",
+        prefix: "/tmp/pi-science-capabilities/.envs/science",
+        python: "/tmp/pi-science-capabilities/.envs/science/bin/python",
+        pip: "/tmp/pi-science-capabilities/.envs/science/bin/pip",
+        revision_id: "rev_science_2",
+        environment_id: "env_science",
+        packages: ["python=3.12", "numpy"],
+        manager: "micromamba",
+        npm: { local_prefix: "/tmp/pi-science-capabilities", global_prefix: "/tmp/pi-science-capabilities/.npm", cache: "/tmp/pi-science-capabilities/.cache" },
+      }),
+    });
+    jobs.push(coordinator);
+
+    const report = await coordinator.capabilitiesForWorkspace("/tmp/pi-science-capabilities", {
+      environment_revision_id: "rev_science_2",
+      packages: ["numpy"],
+    });
+
+    expect(report.status).toBe("ready");
+    expect(report.checks.environment.revision_id).toBe("rev_science_2");
+    expect(report.checks.packages).toEqual({ numpy: true });
+  });
+
   it("heals orphaned pending/running records after a restart and unblocks hasActive", async () => {
     const cwd = await workspace();
     await writeStoredJob(cwd, "job_orphan0000000000", "running", new Date(Date.now() - 60_000).toISOString(), "earlier stderr");

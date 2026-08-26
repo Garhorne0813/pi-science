@@ -39,6 +39,7 @@ export interface WorkspaceEnvironmentStatus {
   environment_id?: string;
   revision_id?: string;
   display_name?: string;
+  packages?: string[];
   manager?: "micromamba" | "legacy-venv";
   legacy?: boolean;
   npm: { local_prefix: string; global_prefix: string; cache: string };
@@ -389,7 +390,7 @@ export class WorkspaceEnvironmentService {
         if (current.join("\n") !== revision.integrity_snapshot.join("\n")) driftError = snapshotDriftError(revision.revision_id);
       }
       const ready = revision.status === "ready" && !driftError && await executable(runtimeExecutable);
-      return this.statusFor(workspace, revision.prefix, "micromamba", { ready, environment_id: revision.environment_id, revision_id: revision.revision_id, display_name: revision.display_name, ...(!ready ? { error: driftError ?? revision.failure?.message ?? (revision.status === "ready" ? `Environment executable is missing: ${runtimeExecutable}` : `Environment is ${revision.status}`) } : {}) });
+      return this.statusFor(workspace, revision.prefix, "micromamba", { ready, environment_id: revision.environment_id, revision_id: revision.revision_id, display_name: revision.display_name, packages: [...revision.packages], ...(!ready ? { error: driftError ?? revision.failure?.message ?? (revision.status === "ready" ? `Environment executable is missing: ${runtimeExecutable}` : `Environment is ${revision.status}`) } : {}) });
     }
     const legacy = environmentPaths(join(workspace, ".venv"));
     if (await exists(join(legacy.virtualEnv, "pyvenv.cfg")) && await executable(legacy.python)) return this.statusFor(workspace, legacy.virtualEnv, "legacy-venv", { ready: true, legacy: true });

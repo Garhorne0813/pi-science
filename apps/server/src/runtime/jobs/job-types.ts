@@ -6,6 +6,9 @@ export interface JobRequirement {
   gpu?: boolean;
   runtime?: string;
   packages?: string[];
+  environment_revision_id?: string;
+  /** Backward-compatible alias for clients that use the shorter field name. */
+  environment_revision?: string;
   timeout_seconds?: number;
   [key: string]: unknown;
 }

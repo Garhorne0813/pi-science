@@ -6,7 +6,7 @@ import { metadataRoot, readJson, withFileWriteLock, writeJsonAtomic } from "../.
 import type { JobRepository } from "../../storage/sqlite/repositories/job-repository.js";
 import { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
 import { executionIdFor, executionRepository, type ExecutionRepository } from "../executions/execution-repository.js";
-import { detectJobCapabilities } from "./job-capabilities.js";
+import { detectJobCapabilities, type JobCapabilityOptions, type JobCapabilityReport } from "./job-capabilities.js";
 import { restrictLocalJobEnvironment, restrictResearchEnvironment } from "./job-environment.js";
 import { JobLeaseManager } from "./job-lease-manager.js";
 import { ProcessSupervisor, type SpawnedJobProcess } from "./job-process-supervisor.js";
@@ -26,21 +26,39 @@ export class JobCoordinator {
   private readonly cancelled = new Set<string>();
   private readonly now: () => number;
 
-  constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService(), private readonly hooks: JobCoordinatorHooks = {}, private readonly executions: Pick<ExecutionRepository, "start" | "finish"> = executionRepository, private readonly repository?: JobRepository) {
+  constructor(private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> & Partial<Pick<WorkspaceEnvironmentService, "status">> = new WorkspaceEnvironmentService(), private readonly hooks: JobCoordinatorHooks = {}, private readonly executions: Pick<ExecutionRepository, "start" | "finish"> = executionRepository, private readonly repository?: JobRepository) {
     this.now = hooks.now ?? Date.now;
     this.processes = new ProcessSupervisor({ platform: hooks.platform, childStartIdentity: hooks.childStartIdentity });
     this.leases = new JobLeaseManager({ ...hooks, stopChild: (jobId) => this.processes.terminate(jobId) });
   }
 
-  capabilities(requirement: JobRequirement) { return detectJobCapabilities(requirement); }
+  capabilities(requirement: JobRequirement, options: JobCapabilityOptions = {}): JobCapabilityReport { return detectJobCapabilities(requirement, options); }
+
+  async capabilitiesForWorkspace(cwd: string, requirement: JobRequirement): Promise<JobCapabilityReport> {
+    if (!this.environments.status) return this.capabilities(requirement, { cwd });
+    const status = await this.environments.status(cwd);
+    return this.capabilities(requirement, {
+      cwd,
+      environment_revision_id: status.revision_id ?? null,
+      environment_ready: status.revision_id ? status.ready : null,
+      environment_prefix: status.prefix,
+      environment_packages: status.packages,
+    });
+  }
 
   async submit(cwd: string, body: Record<string, unknown>): Promise<JobRecord> {
     const command = parseCommand(body.command);
     if (!command.length) throw new Error("command is empty");
     const requirement = (body.requirement && typeof body.requirement === "object" ? body.requirement : {}) as JobRequirement;
-    const check = this.capabilities(requirement);
-    if (check.status === "blocked") throw new Error(check.reasons.join("; "));
     const baseEnvironment = await this.environments.environment(cwd);
+    const check = this.capabilities(requirement, {
+      cwd,
+      environment: baseEnvironment,
+      environment_revision_id: baseEnvironment.PI_SCIENCE_ENVIRONMENT_REVISION_ID ?? null,
+      environment_ready: baseEnvironment.PI_SCIENCE_ENVIRONMENT_REVISION_ID ? true : null,
+      environment_prefix: baseEnvironment.PI_SCIENCE_ENVIRONMENT_PREFIX ?? null,
+    });
+    if (check.status === "blocked") throw new Error(check.reasons.join("; "));
     const requestedEnvironment = body.env && typeof body.env === "object"
       ? Object.fromEntries(Object.entries(body.env as Record<string, unknown>)
         .filter((entry): entry is [string, string] => /^PI_SCIENCE_[A-Z0-9_]+$/.test(entry[0]) && typeof entry[1] === "string"))
