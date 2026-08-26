@@ -14,6 +14,7 @@ const JSON_ATOMIC_RENAME_RETRIES = 5;
 const JSON_ATOMIC_RENAME_RETRY_MS = 20;
 
 export interface FileLockHooks { unlink?: (path: string) => Promise<void>; sleep?: (ms: number) => Promise<void> }
+export interface WriteJsonAtomicOptions extends FileLockHooks { mode?: number }
 interface LockOwner { pid: number; acquired_at: string; token?: string }
 
 export function metadataRoot(workspace: string): string {
@@ -154,12 +155,29 @@ export async function readJson<T>(path: string, fallback: T): Promise<T> {
   try { return JSON.parse(await readFile(path, "utf8")) as T; } catch { return fallback; }
 }
 
-export async function writeJsonAtomic(path: string, value: unknown, hooks: FileLockHooks = {}): Promise<void> {
+async function writeJsonPayload(path: string, serialized: string, mode?: number): Promise<void> {
+  if (mode === undefined) {
+    await writeFile(path, serialized, "utf8");
+    return;
+  }
+  // Apply mode on create and chmod this inode before rename so a crash cannot
+  // leave the destination world-readable.
+  const handle = await open(path, "w", mode);
+  try {
+    await handle.writeFile(serialized, "utf8");
+    try { await handle.chmod(mode); } catch { /* Windows and non-POSIX volumes */ }
+  } finally {
+    await handle.close();
+  }
+}
+
+export async function writeJsonAtomic(path: string, value: unknown, options: WriteJsonAtomicOptions = {}): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
-  const sleep = hooks.sleep ?? ((ms: number) => new Promise<void>((resolveWait) => setTimeout(resolveWait, ms)));
-  const remove = hooks.unlink ?? unlink;
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolveWait) => setTimeout(resolveWait, ms)));
+  const remove = options.unlink ?? unlink;
+  const serialized = `${JSON.stringify(value, null, 2)}\n`;
+  await writeJsonPayload(temporary, serialized, options.mode);
   for (let attempt = 0; ; attempt += 1) {
     try { await rename(temporary, path); return; }
     catch (error) {
@@ -167,7 +185,7 @@ export async function writeJsonAtomic(path: string, value: unknown, hooks: FileL
       if (code === "ENOENT") {
         if (attempt >= JSON_ATOMIC_RENAME_RETRIES - 1) throw error;
         // Antivirus or a cleaner removed the temp file; rewrite and retry.
-        await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+        await writeJsonPayload(temporary, serialized, options.mode);
         await sleep(JSON_ATOMIC_RENAME_RETRY_MS * (attempt + 1));
         continue;
       }

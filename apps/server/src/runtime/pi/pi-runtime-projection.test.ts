@@ -48,4 +48,43 @@ describe("Pi runtime projection", () => {
     await writeFile(join(agentDir, "runtime-env.json"), JSON.stringify({ [variable]: env[variable] }), "utf8");
     expect(JSON.parse(await readFile(join(agentDir, "runtime-env.json"), "utf8"))[variable]).toBe("projection-secret");
   });
+
+  it("projects disjoint endpoint routes and model aliases onto separate runtime providers", async () => {
+    const repository = new ModelResourceRepository();
+    const credentials = new CredentialStore();
+    await credentials.put({ id: "cred-a", kind: "api_key", backend: "managed", secret: "secret-a" });
+    await credentials.put({ id: "cred-b", kind: "api_key", backend: "managed", secret: "secret-b" });
+    const state = emptyModelResourceState();
+    state.migration = { version: 1, completed_at: new Date().toISOString() };
+    state.providers.push({ id: "user-lab", name: "Lab", kind: "user", adapter: "openai-compatible", enabled: true, catalog_mode: "hybrid", auth_kind: "api_key", source: "user" });
+    state.endpoints.push(
+      { id: "ep-a", name: "A", base_url: "http://127.0.0.1:8001/v1", protocol: "openai", credential_ref: "cred-a", enabled: true, health: "unknown", data_egress: "local" },
+      { id: "ep-b", name: "B", base_url: "http://127.0.0.1:8002/v1", protocol: "openai", credential_ref: "cred-b", enabled: true, health: "unknown", data_egress: "remote" },
+    );
+    state.bindings.push(
+      { id: "bind-a", provider_id: "user-lab", endpoint_id: "ep-a", enabled: true, priority: 1, model_allowlist: ["model-a"], model_aliases: { "model-a": "remote-model-a" } },
+      { id: "bind-b", provider_id: "user-lab", endpoint_id: "ep-b", enabled: true, priority: 2, model_allowlist: ["model-b"] },
+    );
+    state.models.push(
+      { provider_id: "user-lab", model_id: "model-a", display_name: "Lab · model-a", enabled: true, capabilities: { reasoning: false, thinking_levels: ["off"], context_window: null, max_output_tokens: null }, capability_source: "manual" },
+      { provider_id: "user-lab", model_id: "model-b", display_name: "Lab · model-b", enabled: true, capabilities: { reasoning: false, thinking_levels: ["off"], context_window: null, max_output_tokens: null }, capability_source: "manual" },
+    );
+    await repository.replace(state);
+    const agentDir = join(process.env.PI_SCIENCE_HOME!, "agent");
+    await mkdir(agentDir, { recursive: true });
+    const env: NodeJS.ProcessEnv = {};
+    const result = projectPiRuntime(agentDir, process.env.PI_SCIENCE_HOME!, env);
+    const catalog = JSON.parse(await readFile(join(agentDir, "models.json"), "utf8")) as { providers: Record<string, { baseUrl: string; apiKey?: string; models: Array<{ id: string }> }> };
+    const variableA = runtimeCredentialEnvName("cred-a");
+    const variableB = runtimeCredentialEnvName("cred-b");
+    expect(result.providers["user-lab--ep-a"]).toMatchObject({ baseUrl: "http://127.0.0.1:8001/v1", apiKey: `$${variableA}` });
+    expect(result.providers["user-lab--ep-b"]).toMatchObject({ baseUrl: "http://127.0.0.1:8002/v1", apiKey: `$${variableB}` });
+    expect(catalog.providers["user-lab--ep-a"]?.models.map((model) => model.id)).toEqual(["remote-model-a"]);
+    expect(catalog.providers["user-lab--ep-b"]?.models.map((model) => model.id)).toEqual(["model-b"]);
+    expect(result.providers["user-lab"]).toBeUndefined();
+    expect(env[variableA]).toBe("secret-a");
+    expect(env[variableB]).toBe("secret-b");
+    expect(JSON.stringify(catalog)).not.toContain("secret-a");
+    expect(JSON.stringify(catalog)).not.toContain("secret-b");
+  });
 });

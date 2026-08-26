@@ -482,7 +482,12 @@ export class ModelResourceService {
       if (input.credential_ref !== undefined) endpoint.credential_ref = input.credential_ref;
       if (input.enabled !== undefined) {
         endpoint.enabled = input.enabled;
-        if (!input.enabled) endpoint.health = "blocked";
+        if (input.enabled) {
+          endpoint.health = "unknown";
+          endpoint.last_error = null;
+        } else {
+          endpoint.health = "blocked";
+        }
       }
       if (input.data_egress !== undefined) endpoint.data_egress = input.data_egress;
       if (input.rate_limit !== undefined) endpoint.rate_limit = input.rate_limit;

@@ -148,8 +148,9 @@ export class CredentialStore {
       const environmentVariable = input.environment_variable ?? existing?.metadata.environment_variable;
       if (backend === "environment" && !isEnvironmentName(environmentVariable)) throw new Error("environment_variable must be a valid environment variable name");
       if (backend === "environment" && requestedSecret) throw new Error("environment credentials store only the declared variable name");
-      const secret = backend === "environment" ? undefined : requestedSecret !== undefined ? requestedSecret : existing?.secret;
-      if (backend === "managed" && kind !== "none" && !secret && !existing?.secret) throw new Error("secret is required for a managed credential");
+      const storesSecret = kind !== "none" && (backend === "managed" || backend === "oauth");
+      const secret = storesSecret ? requestedSecret !== undefined ? requestedSecret : existing?.secret : undefined;
+      if (backend === "managed" && kind !== "none" && !secret) throw new Error("secret is required for a managed credential");
       const metadata = metadataFrom({
         id,
         kind,
@@ -234,7 +235,7 @@ export class CredentialStore {
     const pending = this.writes.catch(() => undefined).then(() => withFileWriteLock(path, async () => {
       const state = parseState(await readJson<unknown>(path, emptyState()));
       const result = await operation(state);
-      await writeJsonAtomic(path, state);
+      await writeJsonAtomic(path, state, { mode: 0o600 });
       try { chmodSync(path, 0o600); } catch { /* Windows and read-only volumes */ }
       return result;
     }));

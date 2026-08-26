@@ -134,6 +134,14 @@ describe("cross-process file lock", () => {
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ key: "updated" });
   });
 
+  it("creates the destination with the requested POSIX mode", async () => {
+    const cwd = await workspace();
+    const path = join(cwd, "secret.json");
+    await writeJsonAtomic(path, { key: "secret" }, { mode: 0o600 });
+    if (process.platform !== "win32") expect((await stat(path)).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ key: "secret" });
+  });
+
   it("leaves no orphaned temp files after a normal atomic write", async () => {
     const cwd = await workspace();
     const path = join(cwd, "no-temp.json");

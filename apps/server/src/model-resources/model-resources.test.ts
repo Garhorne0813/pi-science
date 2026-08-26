@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resolveCapabilities } from "./capability-resolver.js";
@@ -57,6 +57,30 @@ describe("credential store", () => {
     const persisted = await readFile(join(process.env.PI_SCIENCE_HOME!, "credentials.json"), "utf8");
     expect(persisted).not.toContain("environment-secret");
     delete process.env.PI_SCIENCE_EXPLICIT_KEY;
+  });
+
+  it("creates credentials.json with 0600 permissions on POSIX", async () => {
+    await new CredentialStore().put({ id: "cred-mode", kind: "api_key", backend: "managed", secret: "mode-secret" });
+    const mode = (await stat(join(process.env.PI_SCIENCE_HOME!, "credentials.json"))).mode & 0o777;
+    if (process.platform !== "win32") expect(mode).toBe(0o600);
+  });
+
+  it("drops persisted secrets when the backend no longer stores them", async () => {
+    const store = new CredentialStore();
+    const path = join(process.env.PI_SCIENCE_HOME!, "credentials.json");
+    await store.put({ id: "cred-switch", kind: "api_key", backend: "managed", secret: "stale-secret" });
+    expect(await readFile(path, "utf8")).toContain("stale-secret");
+
+    await store.put({ id: "cred-switch", backend: "external", external_ref: "vault/item" });
+    expect(await readFile(path, "utf8")).not.toContain("stale-secret");
+
+    await store.put({ id: "cred-switch", kind: "api_key", backend: "managed", secret: "stale-secret" });
+    await store.put({ id: "cred-switch", backend: "environment", environment_variable: "PI_SCIENCE_SWITCH_KEY" });
+    expect(await readFile(path, "utf8")).not.toContain("stale-secret");
+
+    await store.put({ id: "cred-switch", kind: "api_key", backend: "managed", secret: "stale-secret" });
+    await store.put({ id: "cred-switch", kind: "none" });
+    expect(await readFile(path, "utf8")).not.toContain("stale-secret");
   });
 });
 
@@ -127,6 +151,22 @@ describe("resource service", () => {
     const state = await service.repository.read();
     expect(state.providers).toHaveLength(1);
     expect(state.endpoints[0]).not.toHaveProperty("secret");
+  });
+
+  it("makes a disabled endpoint routable again after enable", async () => {
+    const service = new ModelResourceService();
+    const provider = await service.createProvider({ name: "Lab", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "none", enabled: true });
+    const endpoint = await service.createEndpoint({ name: "Lab endpoint", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", credential_ref: null, enabled: true, data_egress: "local" });
+    await service.createBinding({ provider_id: provider.id, endpoint_id: endpoint.id, enabled: true, priority: 1 });
+    await service.updateModel(provider.id, "model-a", { enabled: true });
+    await service.setEndpointEnabled(endpoint.id, false);
+    expect(await service.getEndpoint(endpoint.id)).toMatchObject({ enabled: false, health: "blocked" });
+    expect((await service.resolveAvailableModels()).find((model) => model.model_id === "model-a")).toMatchObject({ available: false, routes: [] });
+    await service.setEndpointEnabled(endpoint.id, true);
+    expect(await service.getEndpoint(endpoint.id)).toMatchObject({ enabled: true, health: "unknown", last_error: null });
+    const model = (await service.resolveAvailableModels()).find((item) => item.model_id === "model-a");
+    expect(model?.available).toBe(true);
+    expect(model?.routes[0]?.endpoint_id).toBe(endpoint.id);
   });
 
   it("accepts a model catalog response a little larger than two MiB", async () => {
