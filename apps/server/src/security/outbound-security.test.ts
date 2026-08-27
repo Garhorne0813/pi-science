@@ -112,6 +112,15 @@ describe("safeConnectorFetch", () => {
         }, 800);
         return;
       }
+      if (url.pathname === "/slow-body") {
+        response.writeHead(200, { "content-type": "text/plain" });
+        response.write("first");
+        setTimeout(() => {
+          if (response.destroyed) return;
+          try { response.end("late"); } catch { /* client already gone */ }
+        }, 800);
+        return;
+      }
       response.writeHead(404);
       response.end("not found");
     });
@@ -173,6 +182,11 @@ describe("safeConnectorFetch", () => {
 
   it("aborts when the total timeout elapses", async () => {
     await expect(safeConnectorFetch(`${baseUrl}/slow`, { allowPrivate: true, timeoutMs: 150 })).rejects.toThrow("timed out");
+  });
+
+  it("keeps the total timeout alive while the response body is streaming", async () => {
+    const response = await safeConnectorFetch(`${baseUrl}/slow-body`, { allowPrivate: true, timeoutMs: 150 });
+    await expect(response.text()).rejects.toThrow("timed out");
   });
 
   it("enforces content-length size caps before reading the body", async () => {

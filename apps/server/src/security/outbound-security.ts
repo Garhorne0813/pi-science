@@ -104,7 +104,9 @@ export async function safeConnectorFetch(raw: string, options: ConnectorFetchOpt
   const initialOrigin = current.origin;
   let redirects = 0;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error(`connector fetch timed out after ${timeoutMs}ms`)), timeoutMs);
+  const timeoutError = new Error(`connector fetch timed out after ${timeoutMs}ms`);
+  const timer = setTimeout(() => controller.abort(timeoutError), timeoutMs);
+  let timerOwnedByStream = false;
   try {
     for (;;) {
       // Sensitive headers (authorization, cookies, api keys) belong to the
@@ -139,24 +141,46 @@ export async function safeConnectorFetch(raw: string, options: ConnectorFetchOpt
       }
       if (!response.body) return response;
       const reader = response.body.getReader();
+      timerOwnedByStream = true;
+      let released = false;
+      const release = () => {
+        if (released) return;
+        released = true;
+        clearTimeout(timer);
+      };
       let received = 0;
       const bounded = new ReadableStream<Uint8Array>({
         async pull(stream) {
-          const { done, value } = await reader.read();
-          if (done) { stream.close(); return; }
-          received += value.byteLength;
-          if (received > maxBytes) {
-            await reader.cancel();
-            stream.error(new Error(`response exceeds size limit (max ${maxBytes} bytes)`));
-            return;
+          try {
+            const { done, value } = await reader.read();
+            if (done) {
+              release();
+              stream.close();
+              return;
+            }
+            received += value.byteLength;
+            if (received > maxBytes) {
+              try { await reader.cancel(); } catch { /* the upstream may already be closed */ }
+              release();
+              stream.error(new Error(`response exceeds size limit (max ${maxBytes} bytes)`));
+              return;
+            }
+            stream.enqueue(value);
+          } catch (error) {
+            release();
+            stream.error(controller.signal.aborted ? timeoutError : error);
           }
-          stream.enqueue(value);
         },
-        cancel() { return reader.cancel(); },
+        async cancel(reason) {
+          try { await reader.cancel(reason); }
+          finally { release(); }
+        },
       });
       return new Response(bounded, { status: response.status, statusText: response.statusText, headers: response.headers });
     }
   } finally {
-    clearTimeout(timer);
+    // A Response body is consumed after this function returns. Keep the same
+    // deadline alive until that stream reaches EOF, errors, or is cancelled.
+    if (!timerOwnedByStream) clearTimeout(timer);
   }
 }

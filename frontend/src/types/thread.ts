@@ -1,6 +1,8 @@
-/** ThreadBlock types — ported from @ai4s/shared.
- *  These are the data contracts for the conversation UI.
- *  Open-science's rendering components depend on these types. */
+/** ThreadBlock and inspector view models owned by the conversation UI. */
+
+// Source-compatibility re-export for older UI imports. Wire/domain contracts
+// live in @pi-science/contracts and are parsed at the client boundary.
+export type { ExecutionRecord, ProvenanceEnvironment, ProvenanceRecord } from "@pi-science/contracts";
 
 // ── Discriminated union of all block types ──
 
@@ -252,61 +254,3 @@ export interface PdfInspector {
 export type ArtifactTab = "code" | "environment" | "log" | "messages" | "review" | "provenance";
 
 export type FileRoot = "workspace" | "base";
-
-// ── Provenance ──
-
-export interface ProvenanceRecord {
-  path: string;
-  version: number;
-  ts: number;
-  tool: string;
-  toolCallId?: string;
-  sessionId: string;
-  model?: string;
-  contentHash?: string;
-  content?: string;
-  diff?: string;
-  log?: string;
-  executionId?: string;
-  env?: ProvenanceEnvironment;
-}
-
-export interface ProvenanceEnvironment {
-  python?: string;
-  platform?: string;
-  app?: string;
-  packages?: { hash: string; count: number };
-  packages_hash?: string;
-  package_count?: number;
-  cpu_count?: number;
-  [key: string]: unknown;
-}
-
-export interface ExecutionRecord {
-  schema_version: 1;
-  execution_id: string;
-  kind: "tool" | "kernel_cell" | "job" | "research_agent" | "research_evaluation";
-  surface: "pi" | "python" | "r" | "local" | "ssh" | "hpc" | "research";
-  status: "pending" | "running" | "succeeded" | "failed" | "cancelled" | "timed_out" | "interrupted" | "lost";
-  workspace_id: string;
-  created_at: string;
-  started_at?: string;
-  ended_at?: string;
-  producer: string;
-  correlation: {
-    session_id?: string;
-    tool_call_id?: string;
-    job_id?: string;
-    run_id?: string;
-    operation_id?: string;
-    [key: string]: string | undefined;
-  };
-  request: { tool?: string; command?: string[]; [key: string]: unknown };
-  runtime: Record<string, unknown>;
-  result: { stdout_preview?: string; stderr_preview?: string; output_preview?: string; error?: string; exit_code?: number | null; [key: string]: unknown };
-  files: {
-    read: Array<{ path: string; detection: string }>;
-    written: Array<{ path: string; detection: string }>;
-  };
-  artifacts: Array<{ artifact_id: string; version: number; relation: "input" | "output" }>;
-}

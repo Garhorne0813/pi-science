@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { randomBytes } from "node:crypto";
 
 const environmentSchema = z.object({
   PI_SCIENCE_HOST: z.string().default("127.0.0.1"),
@@ -7,6 +8,7 @@ const environmentSchema = z.object({
   PI_SCIENCE_MAX_BODY_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
   PI_SCIENCE_UPSTREAM_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   PI_SCIENCE_INTERNAL_TOKEN: z.string().optional(),
+  PI_SCIENCE_REQUIRE_INTERNAL_TOKEN: z.enum(["0", "1"]).default("1"),
   PI_SCIENCE_MICROMAMBA_EXECUTABLE: z.string().optional(),
   PI_SCIENCE_NODE_SESSIONS: z.enum(["0", "1"]).default("1"),
   PI_SCIENCE_NODE_SSE: z.enum(["0", "1"]).default("1"),
@@ -31,6 +33,7 @@ export interface ServerConfig {
   maxBodyBytes: number;
   upstreamTimeoutMs: number;
   internalToken?: string;
+  requireInternalToken?: boolean;
   micromambaExecutable?: string;
   nodeSessions: boolean;
   nodeSse: boolean;
@@ -56,7 +59,13 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Server
     corsOrigins: parsed.PI_SCIENCE_CORS.split(",").map((origin) => origin.trim()).filter(Boolean),
     maxBodyBytes: parsed.PI_SCIENCE_MAX_BODY_BYTES,
     upstreamTimeoutMs: parsed.PI_SCIENCE_UPSTREAM_TIMEOUT_MS,
-    internalToken: parsed.PI_SCIENCE_INTERNAL_TOKEN,
+    // Launch scripts provide this explicitly. Direct `main.ts` launches still
+    // get a per-process secret so a localhost listener never silently falls
+    // back to unauthenticated high-privilege APIs.
+    internalToken: parsed.PI_SCIENCE_REQUIRE_INTERNAL_TOKEN === "1"
+      ? (parsed.PI_SCIENCE_INTERNAL_TOKEN ?? randomBytes(32).toString("hex"))
+      : undefined,
+    requireInternalToken: parsed.PI_SCIENCE_REQUIRE_INTERNAL_TOKEN === "1",
     micromambaExecutable: parsed.PI_SCIENCE_MICROMAMBA_EXECUTABLE,
     nodeSessions: parsed.PI_SCIENCE_NODE_SESSIONS === "1",
     nodeSse: parsed.PI_SCIENCE_NODE_SSE === "1",

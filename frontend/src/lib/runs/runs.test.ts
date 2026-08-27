@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ExecutionRecord } from "../../types/thread";
+import type { ExecutionRecord } from "@pi-science/contracts";
 import { runsQuery, sessionRunsQuery } from "./runs";
 
 function record(status: ExecutionRecord["status"]): ExecutionRecord {
@@ -26,6 +26,8 @@ describe("runsQuery", () => {
 
   it("refreshes active executions quickly and idle ledgers quietly", () => {
     const interval = runsQuery("/workspace").refetchInterval;
+    expect(typeof interval).toBe("function");
+    if (typeof interval !== "function") return;
     expect(interval({ state: { data: [record("running")] } })).toBe(5_000);
     expect(interval({ state: { data: [record("succeeded")] } })).toBe(30_000);
     expect(interval({ state: {} })).toBe(30_000);

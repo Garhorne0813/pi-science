@@ -37,6 +37,13 @@ export PI_SCIENCE_WORKSPACES="$TEMP_DIR/workspaces"
 mkdir -p "$PI_SCIENCE_HOME" "$PI_SCIENCE_WORKSPACES"
 export PI_SCIENCE_INTERNAL_TOKEN="smoke-internal-token"
 export PI_SCIENCE_REQUIRE_INTERNAL_TOKEN=1
+
+# The control plane deliberately authenticates every /api request. Keep the
+# smoke script readable by attaching the per-process token at one boundary.
+curl() {
+    command curl -H "x-pi-science-internal-token: ${PI_SCIENCE_INTERNAL_TOKEN}" "$@"
+}
+
 SMOKE_WORKSPACE="$TEMP_DIR/workspace"
 mkdir -p "$SMOKE_WORKSPACE/.pi-science"
 printf 'smoke\n' > "$SMOKE_WORKSPACE/notes.txt"

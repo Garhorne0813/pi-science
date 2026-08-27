@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Loader2, MessageSquare, Package, RotateCcw, Terminal } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import type { ExecutionRecord, ProvenanceEnvironment, ProvenanceRecord } from "../../types/thread";
+import type { ExecutionRecord, ProvenanceEnvironment, ProvenanceRecord } from "@pi-science/contracts";
 import { listProvenance, readEnvLockfile } from "@/lib/provenance";
 import { listRuns, reproduceRunPrompt } from "@/lib/runs";
 import { useRuntimeStore } from "@/lib/agent-runtime";

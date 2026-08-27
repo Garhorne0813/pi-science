@@ -92,6 +92,32 @@ describe("Node control plane", () => {
     expect(response.json()).toEqual({ status: "ok", service: "pi-science-server", control_plane: "node", active_pi_processes: 0, active_kernels: 0 });
   });
 
+  it("protects the control-plane API when a per-launch token is configured", async () => {
+    const app = buildApp(config("http://127.0.0.1:1", { internalToken: "test-control-token", requireInternalToken: true }));
+    openApps.push(app);
+
+    expect((await app.inject({ method: "GET", url: "/api/health" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/api/health", headers: { "x-pi-science-internal-token": "test-control-token" } })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/health", headers: { cookie: "pi-science-internal=test-control-token" } })).statusCode).toBe(200);
+    expect((await app.inject({ method: "OPTIONS", url: "/api/health" })).statusCode).not.toBe(401);
+  });
+
+  it("rate-limits job submission before arbitrary commands are launched", async () => {
+    const app = buildApp(config("http://127.0.0.1:1"));
+    openApps.push(app);
+
+    const responses = [];
+    for (let index = 0; index < 31; index += 1) {
+      responses.push(await app.inject({
+        method: "POST",
+        url: "/api/jobs?cwd=.",
+        payload: { command: [] },
+      }));
+    }
+
+    expect(responses.filter((response) => response.statusCode === 429)).toHaveLength(1);
+  });
+
   it("stays healthy without any upstream runtime", async () => {
     const app = buildApp(config("http://127.0.0.1:1"));
     openApps.push(app);

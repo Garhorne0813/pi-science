@@ -45,6 +45,7 @@ export const notebookRuntime = {
     return apiRequest<CellResult>(`/api/kernels/execute?${query}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      credentials: "include",
       body: JSON.stringify({
         language,
         code,

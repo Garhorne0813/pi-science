@@ -31,6 +31,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
   });
   const [draftLanguage, setDraftLanguage] = useState<"python" | "r">("python");
   const [interrupting, setInterrupting] = useState(false);
+  const [liveConnected, setLiveConnected] = useState(false);
 
   // Check kernel availability on mount
   useEffect(() => {
@@ -40,7 +41,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
   }, []);
 
   const { data: executions = [] } = useQuery({
-    ...sessionRunsQuery(cwd || ".", sessionId || ""),
+    ...sessionRunsQuery(cwd || ".", sessionId || "", liveConnected),
     enabled: Boolean(sessionId && cwd),
   });
   const { data: environment } = useQuery({
@@ -51,7 +52,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
 
   useEffect(() => {
     if (!sessionId || !cwd) return;
-    return subscribeExecutionInvalidation(cwd);
+    return subscribeExecutionInvalidation(cwd, { onConnectionChange: setLiveConnected });
   }, [cwd, sessionId]);
 
   useEffect(() => {
