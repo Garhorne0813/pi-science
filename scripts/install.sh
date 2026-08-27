@@ -10,15 +10,12 @@ INSTALL_STATE_DIR="$PROJECT_DIR/.runtime/pi-science"
 INSTALL_STATE_FILE="$INSTALL_STATE_DIR/install.env"
 
 echo "==> Checking installation prerequisites..."
-if ! command -v node >/dev/null 2>&1; then
-  echo "Error: Node.js >=24.16.0 is required." >&2
+source "$SCRIPT_DIR/node-runtime.sh"
+if ! pi_science_prepare_node 1; then
+  pi_science_node_error
   exit 1
 fi
-NODE_PATH="$(node -p 'process.execPath')"
-if ! "$NODE_PATH" "$SCRIPT_DIR/check-node-version.mjs"; then
-  echo "Error: Node.js >=24.16.0 is required (found $("$NODE_PATH" --version))." >&2
-  exit 1
-fi
+NODE_PATH="$PI_SCIENCE_NODE_COMMAND"
 if ! command -v pnpm >/dev/null 2>&1; then
   echo "Error: pnpm is required. Enable it with: corepack enable pnpm" >&2
   exit 1

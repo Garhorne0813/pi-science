@@ -303,7 +303,10 @@ describe("Node session lifecycle", () => {
     for (const extension of defaults.extensions) expect(defaultExtensions).toContain(extension);
     expect(values(launches[1]!, "--skill")).toContain(explicitSkill);
     expect(values(launches[1]!, "--skill")).not.toContain(defaultSkill);
-    expect(values(launches[1]!, "-e")).toEqual([explicitExtension]);
+    expect(values(launches[1]!, "-e")).toEqual([
+      explicitExtension,
+      join(import.meta.dirname, "../pi/extensions/pi-science-notebook.ts"),
+    ]);
     await service.shutdownAll();
   });
 

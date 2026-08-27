@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { availableParallelism, totalmem } from "node:os";
 import { join } from "node:path";
-import { defaultPythonExecutable } from "../workspace/workspace-environment.js";
+import { defaultPythonExecutable, environmentPythonExecutable } from "../workspace/workspace-environment.js";
 import type { JobRequirement } from "./job-types.js";
 
 export type JobGpuProbeSource = "nvidia-smi" | "rocm-smi" | "rocminfo" | "system_profiler" | "powershell" | "visibility-env" | "none";
@@ -129,9 +129,10 @@ function requestedEnvironmentRevision(requirement: JobRequirement): string | nul
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function environmentRuntimeExecutable(prefix: string, runtime: "python" | "r", platform: NodeJS.Platform): string {
+export function environmentRuntimeExecutable(prefix: string, runtime: "python" | "r", platform: NodeJS.Platform): string {
+  if (runtime === "python") return environmentPythonExecutable(prefix, platform);
   const bin = platform === "win32" ? join(prefix, "Scripts") : join(prefix, "bin");
-  const executable = runtime === "r" ? "Rscript" : "python";
+  const executable = "Rscript";
   return join(bin, platform === "win32" ? `${executable}.exe` : executable);
 }
 

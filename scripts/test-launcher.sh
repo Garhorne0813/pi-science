@@ -7,6 +7,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 START_SCRIPT="$PROJECT_DIR/scripts/start.sh"
 COMMAND_SCRIPT="$PROJECT_DIR/scripts/pi-science.sh"
 NODE_CHECK_SCRIPT="$PROJECT_DIR/scripts/check-node-version.mjs"
+NODE_RUNTIME_SCRIPT="$PROJECT_DIR/scripts/node-runtime.sh"
 INSTALL_SCRIPT="$PROJECT_DIR/scripts/install.sh"
 WRITER_SCRIPT="$PROJECT_DIR/scripts/write-launcher.sh"
 TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/pi science launcher.XXXXXX")"
@@ -36,7 +37,8 @@ assert_contains "$START_SCRIPT" 'cd "$PROJECT_DIR/apps/server"'
 assert_contains "$START_SCRIPT" 'cd "$PROJECT_DIR/frontend"'
 assert_contains "$START_SCRIPT" 'Run: bash scripts/install.sh'
 assert_contains "$START_SCRIPT" 'PI_SCIENCE_STARTUP_TIMEOUT_SECONDS'
-assert_contains "$START_SCRIPT" 'check-node-version.mjs'
+assert_contains "$START_SCRIPT" 'node-runtime.sh'
+assert_contains "$NODE_RUNTIME_SCRIPT" 'check-node-version.mjs'
 assert_not_contains "$START_SCRIPT" 'npm run dev'
 assert_not_contains "$START_SCRIPT" 'pnpm --config.store-dir'
 assert_contains "$INSTALL_SCRIPT" 'write-launcher.sh'
@@ -48,6 +50,7 @@ CHECKOUT="$TEMP_ROOT/checkout with spaces"
 BIN_DIR="$TEMP_ROOT/bin with spaces"
 mkdir -p "$CHECKOUT/scripts" "$BIN_DIR"
 cp "$PROJECT_DIR/scripts/pi-science.sh" "$CHECKOUT/scripts/pi-science.sh"
+cp "$NODE_RUNTIME_SCRIPT" "$CHECKOUT/scripts/node-runtime.sh"
 bash "$WRITER_SCRIPT" "$CHECKOUT" "$BIN_DIR"
 LAUNCHER="$BIN_DIR/pi-science"
 [ -x "$LAUNCHER" ] || fail "generated launcher is not executable"
@@ -77,6 +80,7 @@ rm -rf "$LAUNCHER"
 OTHER_CHECKOUT="$TEMP_ROOT/other checkout"
 mkdir -p "$OTHER_CHECKOUT/scripts"
 cp "$PROJECT_DIR/scripts/pi-science.sh" "$OTHER_CHECKOUT/scripts/pi-science.sh"
+cp "$NODE_RUNTIME_SCRIPT" "$OTHER_CHECKOUT/scripts/node-runtime.sh"
 bash "$WRITER_SCRIPT" "$OTHER_CHECKOUT" "$BIN_DIR"
 if bash "$WRITER_SCRIPT" "$CHECKOUT" "$BIN_DIR" >"$TEMP_ROOT/other-checkout.log" 2>&1; then fail "another checkout's owned launcher was overwritten"; fi
 assert_contains "$TEMP_ROOT/other-checkout.log" 'refusing to overwrite unrelated launcher path'
@@ -135,6 +139,7 @@ mkdir -p "$FIXTURE/scripts" "$FIXTURE/apps/server/node_modules/tsx/dist" "$FIXTU
 cp "$START_SCRIPT" "$FIXTURE/scripts/start.sh"
 cp "$COMMAND_SCRIPT" "$FIXTURE/scripts/pi-science.sh"
 cp "$NODE_CHECK_SCRIPT" "$FIXTURE/scripts/check-node-version.mjs"
+cp "$NODE_RUNTIME_SCRIPT" "$FIXTURE/scripts/node-runtime.sh"
 printf '// fake Pi CLI\n' > "$FIXTURE/pi-cli.mjs"
 cat > "$FIXTURE/apps/server/node_modules/tsx/dist/cli.mjs" <<'EOF'
 import { spawn } from "node:child_process";

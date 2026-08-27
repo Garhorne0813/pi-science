@@ -90,6 +90,29 @@ describe("NodeKernelManager native execution", () => {
     }
   });
 
+  it.skipIf(python === null)("preserves stdout and stderr as separate notebook streams", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pi-science-native-kernel-streams-"));
+    cleanup.push(workspace);
+    const prefix = join(workspace, "env");
+    await createTestEnvironment(prefix);
+
+    const manager = new NodeKernelManager();
+    try {
+      const result = await manager.execute({
+        language: "python",
+        code: "import sys\nprint('stdout')\nprint('stderr', file=sys.stderr)",
+        cwd: workspace,
+        environment: status(workspace, prefix),
+        timeoutMs: 10_000,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.stdout).toBe("stdout\n");
+      expect(result.stderr).toBe("stderr\n");
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
   it.skipIf(python === null)("preserves namespace across cells in one session", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "pi-science-native-kernel-state-"));
     cleanup.push(workspace);
@@ -220,7 +243,7 @@ describe("NodeKernelManager platform interrupt semantics", () => {
   }
 
   function managerWithFake(platform: NodeJS.Platform) {
-    const spawned: { args: string[]; options?: SpawnOptions }[] = [];
+    const spawned: { command: string; args: string[]; options?: SpawnOptions }[] = [];
     const treeKills: number[] = [];
     const sessions: FakeSession[] = [];
     const manager = new NodeKernelManager({
@@ -228,7 +251,7 @@ describe("NodeKernelManager platform interrupt semantics", () => {
       workspaceEnvironmentVariables: () => ({}),
       interpreterAvailable: () => true,
       spawnProcess: ((command: string, args: readonly string[], options?: SpawnOptions) => {
-        spawned.push({ args: [...args], options });
+        spawned.push({ command, args: [...args], options });
         const session = fakeChild();
         sessions.push(session);
         return session.child;
@@ -244,7 +267,7 @@ describe("NodeKernelManager platform interrupt semantics", () => {
       const request = JSON.parse(line) as { id: string };
       if (session.answered.has(request.id)) continue;
       session.answered.add(request.id);
-      (session.child.stdout as PassThrough).write(`${JSON.stringify({ id: request.id, type: "result", ok: true, stdout: "", result: "2", error: null, interrupted: false, ...overrides })}\n`);
+      (session.child.stdout as PassThrough).write(`${JSON.stringify({ id: request.id, type: "result", ok: true, stdout: "", stderr: "", result: "2", error: null, interrupted: false, ...overrides })}\n`);
     }
   }
 
@@ -261,6 +284,25 @@ describe("NodeKernelManager platform interrupt semantics", () => {
     respondPending(sessions[0]!);
     return result;
   }
+
+  it("falls back to prefix-root python.exe on Windows when Scripts is absent", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-win32-python-root-"));
+    cleanup.push(cwd);
+    const prefix = join(cwd, "env");
+    await mkdir(prefix, { recursive: true });
+    const python = join(prefix, "python.exe");
+    await writeFile(python, "", "utf8");
+    const { manager, spawned, sessions } = managerWithFake("win32");
+    try {
+      const result = await driveExecute(manager, sessions, cwd, status(cwd, prefix), "1+1");
+      expect(result.ok).toBe(true);
+      expect(spawned[0]?.command).toBe(python);
+    } finally {
+      const stopping = manager.shutdownAll().catch(() => undefined);
+      for (const session of sessions) session.child.emit("close", 0);
+      await stopping;
+    }
+  });
 
   it("cancels a cold start before shutdownAll returns", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-kernel-start-shutdown-all-"));

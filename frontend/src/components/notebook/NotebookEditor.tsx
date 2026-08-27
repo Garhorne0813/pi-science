@@ -9,6 +9,7 @@ import {
   outputText,
   parseNotebookDocument,
   sourceText,
+  stableCellId,
   stableNotebookId,
   type NotebookCell,
   type NotebookDocument,
@@ -77,7 +78,7 @@ export function NotebookEditor({
         setLanguageLabel(kernel.label);
         setCells(notebook.cells.map((cell, index) => ({
           ...cell,
-          id: `cell-${index}`,
+          id: stableCellId(cell, index, path),
           code: sourceText(cell.source),
           running: false,
           liveResult: null,
@@ -95,10 +96,6 @@ export function NotebookEditor({
     };
   }, [cwd, path, root, t]);
 
-  useEffect(() => () => {
-    void notebookRuntime.release(notebookId, cwd).catch(() => undefined);
-  }, [cwd, notebookId]);
-
   const updateCode = (cellId: string, code: string) => {
     setDirty(true);
     setCells((current) => current.map((cell) => (
@@ -113,8 +110,9 @@ export function NotebookEditor({
     try {
       const next: NotebookDocument = {
         ...document,
-        cells: cells.map(({ id: _id, code, running: _running, liveResult, ...cell }) => ({
+        cells: cells.map(({ id, code, running: _running, liveResult, ...cell }) => ({
           ...cell,
+          id,
           source: code,
           ...(liveResult ? { outputs: resultOutputs(liveResult) } : {}),
         })),
@@ -274,6 +272,7 @@ export function NotebookEditor({
 function resultOutputs(result: CellResult): NotebookOutput[] {
   const outputs: NotebookOutput[] = [];
   if (result.stdout) outputs.push({ output_type: "stream", name: "stdout", text: result.stdout });
+  if (result.stderr) outputs.push({ output_type: "stream", name: "stderr", text: result.stderr });
   if (result.result || Object.keys(result.mime || {}).length > 0) {
     outputs.push({
       output_type: "execute_result",

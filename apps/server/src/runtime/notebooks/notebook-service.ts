@@ -5,7 +5,7 @@ import { access, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promi
 import { createServer } from "node:net";
 import { join, resolve, sep } from "node:path";
 import { configPath } from "../../storage/persistence.js";
-import type { EnvironmentRevision, WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
+import { environmentPythonExecutable, type EnvironmentRevision, type WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
 
 export interface NotebookFile {
   path: string;
@@ -300,7 +300,7 @@ export class NotebookService {
     const displayName = typeof revision.display_name === "string" ? revision.display_name : "Pi-Science Project";
     const executable = language === "r"
       ? join(binDir, this.platform === "win32" ? "R.exe" : "R")
-      : join(binDir, this.platform === "win32" ? "python.exe" : "python");
+      : environmentPythonExecutable(prefix, this.platform);
     if (!(await pathExists(executable))) return;
     const kernelDir = join(this.jupyterPrefix, "share", "jupyter", "kernels", `pi-science-${binding.revision_id.toLowerCase()}`);
     await mkdir(kernelDir, { recursive: true });
