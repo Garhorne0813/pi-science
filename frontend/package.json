@@ -38,7 +38,7 @@
     "exceljs": "^4.4.0",
     "highlight.js": "^11.11.1",
     "i18next": "^26.3.6",
-    "katex": "^0.16.47",
+    "katex": "^0.18.4",
     "lucide-react": "^1.24.0",
     "molstar": "^5.11.0",
     "openchemlib": "^9.24.0",
