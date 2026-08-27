@@ -4,15 +4,20 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 type CatalogModel = Record<string, unknown>;
 
-/** Load the pi-ai generated provider catalog without making it a compile-time
- * dependency of the control plane. Older installs simply use the legacy
- * fallback in settings-routes.ts. */
-export async function loadPiAiCatalog(): Promise<CatalogModel[]> {
-  // Resolve from this module, not process.cwd(). The server is launched from
-  // both the repository root and apps/server during development/tests.
+function generatedModelsCandidates(): string[] {
   const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
-  const generated = join(projectRoot, "runtime", "pi", "node_modules", "@earendil-works", "pi-ai", "dist", "models.generated.js");
-  if (!existsSync(generated)) return [];
+  const candidates: string[] = [];
+  try { candidates.push(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-ai"))), "models.generated.js")); }
+  catch { /* packaged server dependency is unavailable; try the legacy runtime layout */ }
+  candidates.push(join(projectRoot, "runtime", "pi", "node_modules", "@earendil-works", "pi-ai", "dist", "models.generated.js"));
+  return [...new Set(candidates)];
+}
+
+/** Load the pi-ai generated provider catalog. The server-owned pinned package
+ * is preferred; the legacy runtime layout stays a fallback for older installs. */
+export async function loadPiAiCatalog(): Promise<CatalogModel[]> {
+  const generated = generatedModelsCandidates().find((candidate) => existsSync(candidate));
+  if (!generated) return [];
   try {
     const module = await import(pathToFileURL(generated).href) as { MODELS?: Record<string, unknown> };
     const result: CatalogModel[] = [];
