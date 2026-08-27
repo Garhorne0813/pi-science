@@ -80,6 +80,10 @@ export class PiProcess extends EventEmitter {
   }
   private readonly runtimeId: string | undefined;
   private eventAbort: AbortController | undefined;
+  /** Highest Pi Orbit event sequence consumed for this runtime. Kept on the
+   *  process (rather than inside one response reader) so watchdog-driven
+   *  replacement streams resume from the correct cursor. */
+  private lastEventSequence = 0;
   private closed = false;
   private exitEmitted = false;
   private removeHostListeners: (() => void) | undefined;
@@ -335,8 +339,7 @@ export class PiProcess extends EventEmitter {
   private async startEventStream(): Promise<void> {
     const controller = new AbortController();
     this.eventAbort = controller;
-    const response = await this.webHost!.request("GET", `${this.runtimePath()}/events?after=0`, undefined, 0, controller.signal);
-    if (!response.ok || !response.body) throw new Error(await this.webHost!.responseError(response));
+    const response = await this.openEventStream(controller);
     this.eventStreamAlive = true;
     void this.consumeEventStream(response, controller).catch((error: unknown) => {
       this.eventStreamAlive = false;
@@ -344,8 +347,30 @@ export class PiProcess extends EventEmitter {
     });
   }
 
+  private async openEventStream(controller: AbortController): Promise<Response> {
+    let response = await this.requestEventStream(this.lastEventSequence, controller);
+    if (!response.ok) {
+      // A silent connection can outlive Orbit's bounded replay buffer. In
+      // that case the missing lifecycle is reconciled by get_state + the
+      // persisted session JSONL, but we must still reattach at the live edge
+      // to receive subsequent events instead of retrying a stale cursor.
+      const replayGap = await this.replayGap(response);
+      if (replayGap) {
+        this.lastEventSequence = replayGap.latestSequence;
+        this.emit(
+          "stderr",
+          `Pi Orbit event replay gap (${replayGap.oldestSequence}-${replayGap.latestSequence}); resuming from the live edge\n`,
+        );
+        response = await this.requestEventStream(this.lastEventSequence, controller);
+      }
+    }
+    if (!response.ok || !response.body) throw new Error(await this.webHost!.responseError(response));
+    return response;
+  }
+
   private async replaceEventStream(): Promise<void> {
     this.eventAbort?.abort();
+    this.eventStreamAlive = false;
     await this.startEventStream();
   }
 
@@ -360,7 +385,6 @@ export class PiProcess extends EventEmitter {
 
   private async consumeEventStream(initialResponse: Response, controller: AbortController): Promise<void> {
     let response = initialResponse;
-    let lastSequence = 0;
     while (!this.closed && !controller.signal.aborted) {
       if (!response.body) throw new Error("Pi Orbit event stream has no response body");
       const reader = response.body.getReader();
@@ -378,7 +402,7 @@ export class PiProcess extends EventEmitter {
           if (!data) continue;
           try {
             const payload = JSON.parse(data) as Record<string, unknown>;
-            if (typeof payload.sequence === "number") lastSequence = payload.sequence;
+            if (typeof payload.sequence === "number") this.lastEventSequence = payload.sequence;
             this.lastEventAt = Date.now();
             const event = payload.event && typeof payload.event === "object" ? payload.event as PiEvent : undefined;
             if (event?.type) {
@@ -397,10 +421,36 @@ export class PiProcess extends EventEmitter {
       if (this.closed || controller.signal.aborted) return;
       await new Promise((resolve) => setTimeout(resolve, 50));
       if (this.closed || controller.signal.aborted) return;
-      response = await this.webHost!.request("GET", `${this.runtimePath()}/events?after=${lastSequence}`, undefined, 0, controller.signal);
-      if (!response.ok) throw new Error(await this.webHost!.responseError(response));
+      response = await this.openEventStream(controller);
       this.eventStreamAlive = true;
     }
+  }
+
+  private requestEventStream(afterSequence: number, controller: AbortController): Promise<Response> {
+    return this.webHost!.request(
+      "GET",
+      `${this.runtimePath()}/events?after=${afterSequence}`,
+      undefined,
+      0,
+      controller.signal,
+    );
+  }
+
+  private async replayGap(response: Response): Promise<{ oldestSequence: number; latestSequence: number } | null> {
+    if (response.status !== 409) return null;
+    try {
+      const payload = await response.clone().json() as Record<string, unknown>;
+      if (
+        payload.code === "event_replay_gap"
+        && typeof payload.oldestSequence === "number"
+        && typeof payload.latestSequence === "number"
+      ) {
+        return { oldestSequence: payload.oldestSequence, latestSequence: payload.latestSequence };
+      }
+    } catch {
+      // Preserve the original response body for the normal error path.
+    }
+    return null;
   }
 
   private async webRequest(method: string, path: string, body?: Record<string, unknown>): Promise<PiResult> {

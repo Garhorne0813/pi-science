@@ -215,7 +215,12 @@ export function LiveSessionPage() {
     reviewingProject,
     setReviewNotice,
     research: { mode: research.mode, draft: research.draft, intent: research.intent },
-    onSend: scroll.startNewTurn,
+    onSend: () => {
+      // Follow-ups belong to the completed turn. Once the user continues the
+      // conversation they should not linger beneath the previous answer.
+      setSuggestions([]);
+      scroll.startNewTurn();
+    },
   });
   const modelControlsDisabled = working || interactionPending || reviewingProject || model.configuringModel;
   // The reviewer already runs on every settled turn when the workspace opted in, so the manual
@@ -271,6 +276,23 @@ export function LiveSessionPage() {
   const modePicker = thread.blocks.length === 0 && !research.draft && !research.activeLoop
     ? <ResearchModePicker className={showWelcome ? "px-0 pb-0" : undefined} selected={research.mode} disabled={working || interactionPending || reviewingProject || research.busy} onSelect={(mode, prompt) => { const selected = research.mode === mode ? null : mode; research.setMode(selected); research.setPrompt(selected ? prompt : t("conversation.defaultPrompt")); composer.inputRef.current?.focus(); }} />
     : null;
+  const suggestionAnchorBlockId = (() => {
+    if (suggestions.length === 0) return null;
+    const agentIndex = thread.blocks.findLastIndex((block) => block.kind === "agent");
+    if (agentIndex < 0) return null;
+    const agent = thread.blocks[agentIndex];
+    const followingBlock = thread.blocks[agentIndex + 1];
+    // turn.artifacts is folded immediately after the final assistant message.
+    // Anchor follow-ups to that block when present so generated-file cards
+    // appear before the suggestions; otherwise keep them under the message.
+    if (followingBlock?.kind === "artifact-summary") return followingBlock.id;
+    return agent?.id ?? null;
+  })();
+  const showSuggestions = suggestions.length > 0
+    && !working
+    && !research.draft
+    && !research.activeLoop
+    && !composer.input.trim();
 
   return (
     <div className="flex flex-col h-full">
@@ -362,6 +384,27 @@ export function LiveSessionPage() {
                   itemContent={(_index, group) => (
                     <div className="mx-auto w-full max-w-[calc(var(--conversation-content-width)+4rem)] px-8 pb-3">
                       {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock)}
+                      {showSuggestions && group.some((block) => block.id === suggestionAnchorBlockId) && (
+                        <div className="mt-3 flex flex-wrap gap-2" aria-label={t("conversation.suggestions")}>
+                          {suggestions.map((suggestion) => (
+                            <button
+                              key={suggestion}
+                              type="button"
+                              disabled={!model.selectedModel || reviewingProject}
+                              onClick={() => {
+                                // Fill the composer instead of sending immediately so
+                                // the user can edit the suggested follow-up first.
+                                setSuggestions([]);
+                                composer.setInput(suggestion);
+                                composer.inputRef.current?.focus();
+                              }}
+                              className="min-h-9 rounded-full border border-border bg-surface px-3 py-1 text-left text-xs text-muted transition-colors hover:text-text disabled:opacity-50"
+                            >
+                              {suggestion}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 />
@@ -409,9 +452,7 @@ export function LiveSessionPage() {
           composer={composer}
           model={model}
           research={research}
-          suggestions={suggestions}
           modePicker={modePicker}
-          onSuggestionsChange={setSuggestions}
           onScrollToBottom={scrollToBottom}
           onReview={() => void handleProjectReview()}
           onAbort={abort}

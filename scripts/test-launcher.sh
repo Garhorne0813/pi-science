@@ -148,6 +148,7 @@ import http from "node:http";
 writeFileSync(new URL("../../../../../control.cwd", import.meta.url), process.cwd());
 writeFileSync(new URL("../../../../../control.pid", import.meta.url), String(process.pid));
 writeFileSync(new URL("../../../../../control.argv", import.meta.url), JSON.stringify(process.argv.slice(2)));
+writeFileSync(new URL("../../../../../control.open-browser", import.meta.url), process.env.PI_SCIENCE_OPEN_BROWSER ?? "");
 const child = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
 writeFileSync(new URL("../../../../../control.child.pid", import.meta.url), String(child.pid));
 const server = http.createServer((req, res) => {
@@ -189,6 +190,7 @@ FIXTURE_CANONICAL="$(cd "$FIXTURE" && pwd -P)"
 [ "$(cat "$FIXTURE/control.cwd")" = "$FIXTURE_CANONICAL/apps/server" ] || fail "control plane CWD changed"
 [ "$(cat "$FIXTURE/frontend.cwd")" = "$FIXTURE_CANONICAL/frontend" ] || fail "frontend CWD changed"
 [ "$(cat "$FIXTURE/control.argv")" = '["src/app/main.ts"]' ] || fail "default control plane argv is not direct mode: $(cat "$FIXTURE/control.argv")"
+[ "$(cat "$FIXTURE/control.open-browser")" = '0' ] || fail "control plane inherited browser-open ownership from the frontend launcher"
 assert_contains "$LOG" 'control plane mode: stable'
 assert_not_contains "$LOG" 'control plane mode: watch'
 CONTROL_PID="$(cat "$FIXTURE/control.pid")"; CONTROL_CHILD_PID="$(cat "$FIXTURE/control.child.pid")"; FRONTEND_PID="$(cat "$FIXTURE/frontend.pid")"

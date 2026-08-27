@@ -911,6 +911,7 @@
   "molecule.styleFailed": "Failed to change representation",
   "molecule.noStructures": "No structures found",
   "molecule.loadFailed": "Failed to load structure — file may be empty or in an unsupported format",
+  "molecule.viewerFailed": "Failed to start the molecular viewer — refresh the page or restart the development server",
   "molecule.notChemical": "Not a chemical file",
   "molecule.viewerLabel": "3D molecule viewer",
   "molecule.resetView": "Reset view",

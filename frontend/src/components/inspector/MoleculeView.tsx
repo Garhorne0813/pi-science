@@ -47,8 +47,17 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
     setStyleBusy(false);
 
     void (async () => {
+      let handle: Awaited<ReturnType<typeof createMolstarViewer>>;
       try {
-        const handle = await createMolstarViewer(container);
+        handle = await createMolstarViewer(container);
+      } catch (cause) {
+        console.error("Failed to initialize Mol* viewer", cause);
+        if (!disposed && generation === generationRef.current) setError(t("molecule.viewerFailed"));
+        if (!disposed && generation === generationRef.current) setRendering(false);
+        return;
+      }
+
+      try {
         if (disposed || generation !== generationRef.current) {
           handle.dispose();
           return;
@@ -57,7 +66,8 @@ export function MoleculeView({ filename, text }: { filename: string; text: strin
         const next = await handle.load(filename, text);
         if (disposed || generation !== generationRef.current) return;
         setSummary(next);
-      } catch {
+      } catch (cause) {
+        console.error("Failed to load molecular structure", cause);
         if (!disposed && generation === generationRef.current) setError(t("molecule.loadFailed"));
       } finally {
         if (!disposed && generation === generationRef.current) setRendering(false);

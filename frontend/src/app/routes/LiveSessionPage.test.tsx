@@ -156,6 +156,16 @@ function publishedArtifactBlock(path: string): ThreadBlock {
   };
 }
 
+function turnArtifactSummaryBlock(agentId: string, path: string): ThreadBlock {
+  return {
+    kind: "artifact-summary",
+    id: `turn-artifacts-${agentId}`,
+    turnId: `turn-${agentId}`,
+    assistantMessageId: agentId,
+    artifacts: [{ path, kind: "image", mime: "image/png", size: 10 }],
+  };
+}
+
 /** IntersectionObserver stub that captures its callback so tests can drive
  *  the rail highlight logic manually (jsdom has no IO implementation). */
 class IOStub {
@@ -564,6 +574,56 @@ describe("turn-completion effects", () => {
     expect(document.activeElement).toBe(textarea());
     // Chips disappear after picking one.
     expect(screen.queryByLabelText("Suggested follow-ups")).toBeNull();
+  });
+
+  it("renders suggestions directly after the agent message and clears them when the conversation continues", async () => {
+    const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
+    useRuntimeStore.setState({ sendPrompt });
+    await renderReady();
+
+    act(() => { useRuntimeStore.setState({ working: true }); });
+    act(() => {
+      useRuntimeStore.setState({
+        working: false,
+        thread: {
+          blocks: [agentBlock("a1", "Answer body.\n<!--suggest: Continue analysis-->")],
+          index: { a1: 0 },
+          loaded: true,
+        },
+      });
+    });
+
+    const chips = await screen.findByLabelText("Suggested follow-ups");
+    expect(chips.previousElementSibling).not.toBeNull();
+    expect(chips.parentElement?.textContent).toContain("Answer body.");
+
+    act(() => { useRuntimeStore.getState().setDraft("My next question"); });
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    await waitFor(() => expect(sendPrompt).toHaveBeenCalledTimes(1));
+    expect(screen.queryByLabelText("Suggested follow-ups")).toBeNull();
+  });
+
+  it("renders generated-file cards before suggestions beneath the agent message", async () => {
+    await renderReady();
+
+    act(() => { useRuntimeStore.setState({ working: true }); });
+    act(() => {
+      useRuntimeStore.setState({
+        working: false,
+        thread: {
+          blocks: [
+            agentBlock("a1", "Created a plot.\n<!--suggest: Analyze the plot-->"),
+            turnArtifactSummaryBlock("a1", "outputs/plot.png"),
+          ],
+          index: { a1: 0, "turn-artifacts-a1": 1 },
+          loaded: true,
+        },
+      });
+    });
+
+    const generatedFiles = await screen.findByLabelText("Generated files");
+    const suggestions = await screen.findByLabelText("Suggested follow-ups");
+    expect(generatedFiles.compareDocumentPosition(suggestions) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   });
 });
 
@@ -1074,7 +1134,7 @@ describe("scroll and nav behavior (docs/markdown.md §3.16 a/b/d)", () => {
     expect(scroller.scrollTop).toBe(3000);
   });
 
-  it("renders suggestion chips above the research-mode picker", async () => {
+  it("does not render suggestion chips in the composer seat", async () => {
     await renderReady();
     act(() => { useRuntimeStore.setState({ working: true }); });
     act(() => {
@@ -1088,9 +1148,7 @@ describe("scroll and nav behavior (docs/markdown.md §3.16 a/b/d)", () => {
       });
     });
     const chips = await screen.findByLabelText("Suggested follow-ups");
-    // The chips container must be the first child of the picker column, i.e.
-    // rendered ABOVE the research-mode picker (docs §3.16 d).
-    expect(chips.parentElement?.firstElementChild).toBe(chips);
+    expect(chips.closest(".px-8.shrink-0")).toBeNull();
   });
 
   it("nav click scrolls the target into view via the fast path", async () => {

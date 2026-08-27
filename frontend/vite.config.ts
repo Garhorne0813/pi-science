@@ -4,9 +4,24 @@ import path from "path";
 
 export default defineConfig({
   plugins: [react()],
+  optimizeDeps: {
+    // Mol* has circular ESM dependencies between its plugin context and the
+    // built-in state behaviors. Vite's dependency pre-bundle can emit
+    // BuiltInPluginBehaviors before the State namespace is initialized, which
+    // makes PluginUIContext fail before a structure is parsed.
+    exclude: ["molstar"],
+    // Mol*'s viewer extension registry imports this legacy CommonJS package
+    // even when MP4 export is disabled. Pre-bundle only that leaf dependency
+    // so its `module.exports` wrapper is browser-compatible.
+    include: ["molstar > h264-mp4-encoder"],
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
+      // Mol* imports Mutative's CommonJS entry with a named ESM import. When
+      // Mol* stays unbundled in development, point that import at Mutative's
+      // equivalent native ESM build so browsers can resolve `create`.
+      "mutative/dist/index.js": "mutative/dist/mutative.esm.mjs",
     },
   },
   server: {
