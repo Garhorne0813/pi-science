@@ -39,6 +39,7 @@ async function fakeWebRuntime(
   deleteBusyTurns = 0,
   busyMs = 0,
   detachEventsOnResume = false,
+  replayGapOnReconnect = false,
 ): Promise<{
   cwd: string;
   command: string;
@@ -71,7 +72,8 @@ async function fakeWebRuntime(
     `const busyUntil = ${busyMs} > 0 ? Date.now() + ${busyMs} : 0;`,
     `const detachEventsOnResume = ${detachEventsOnResume};`,
     'let deleteCount = 0;',
-    'import { writeFileSync } from "node:fs";',
+    `const replayGapOnReconnect = ${replayGapOnReconnect};`,
+    'import { appendFileSync, writeFileSync } from "node:fs";',
     'function json(response, status, value) { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); }',
     'function event(runtimeId, value) { for (const response of clients.get(runtimeId) ?? []) response.write(`event: runtime_event\\nid: 1\\ndata: ${JSON.stringify({ sequence: 1, event: value })}\\n\\n`); }',
     'async function body(request) { const chunks = []; for await (const chunk of request) chunks.push(chunk); return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"); }',
@@ -87,7 +89,7 @@ async function fakeWebRuntime(
     '    const runtimeId = parts[3]; const suffix = parts.length > 4 ? `/${parts.slice(4).join("/")}` : ""; const runtime = runtimes.get(runtimeId);',
     '    if (!runtime) return json(response, 404, { error: "Runtime not found" });',
     '    if (!suffix && request.method === "GET") { const busy = busyGets > 0 || (busyUntil > 0 && Date.now() < busyUntil); if (busyGets > 0) busyGets -= 1; return json(response, 200, { ...runtime, busy }); }',
-    '    if (suffix === "/events") { response.writeHead(200, { "content-type": "text/event-stream" }); response.write(`event: connected\\ndata: ${JSON.stringify({ runtimeId })}\\n\\n`); const set = clients.get(runtimeId) ?? new Set(); set.add(response); clients.set(runtimeId, set); request.on("close", () => set.delete(response)); return; }',
+    '    if (suffix === "/events") { const after = parsed.searchParams.get("after") ?? ""; appendFileSync("event-after.log", `${after}\\n`); if (replayGapOnReconnect && after === "1") return json(response, 409, { error: "Requested event sequence is no longer buffered", code: "event_replay_gap", oldestSequence: 5, latestSequence: 7 }); response.writeHead(200, { "content-type": "text/event-stream" }); response.write(`event: connected\\ndata: ${JSON.stringify({ runtimeId })}\\n\\n`); const set = clients.get(runtimeId) ?? new Set(); set.add(response); clients.set(runtimeId, set); request.on("close", () => set.delete(response)); return; }',
     '    if (suffix === "/state") return json(response, 200, { piSessionId: runtime.piSessionId, isStreaming: false, pendingMessageCount: 0 });',
     '    if (suffix === "/commands") return json(response, 200, { commands: [{ name: "review", source: "skill" }] });',
     '    if (suffix === "/skills" && request.method === "GET") return json(response, 200, { policy: runtime.skillPolicy, skills: [{ name: "review", description: "Review", enabled: runtime.skillPolicy.mode !== "none" }], diagnostics: [] });',
@@ -271,13 +273,38 @@ describe("Node Pi Orbit adapter", () => {
     for (let attempt = 0; attempt < 50 && process.lastEventAt === 0; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    await process.reconnectEventStream();
-    expect(process.eventStreamAlive).toBe(true);
     await expect(manager.sendCommand("web-workspace-reconnect", "prompt", { message: "hello" })).resolves.toMatchObject({ success: true });
     for (let attempt = 0; attempt < 50 && !events.includes("agent_start"); attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     expect(events).toContain("agent_start");
+    await process.reconnectEventStream();
+    expect(process.eventStreamAlive).toBe(true);
+    expect((await readFile(join(runtime.cwd, "event-after.log"), "utf8")).trim().split("\n")).toEqual(["0", "1"]);
+    await manager.shutdownAll();
+    await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it("reattaches at the live edge when the saved event sequence has left Orbit's replay buffer", async () => {
+    const manager = new PiManager();
+    managers.push(manager);
+    const runtime = await fakeWebRuntime(false, null, 0, 0, 0, false, true);
+    const process = await manager.start("web-workspace-replay-gap", runtime);
+    const errors: string[] = [];
+    const events: string[] = [];
+    process.on("stderr", (text: string) => errors.push(text));
+    process.on("event", (event: { type: string }) => events.push(event.type));
+
+    await expect(manager.sendCommand("web-workspace-replay-gap", "prompt", { message: "hello" })).resolves.toMatchObject({ success: true });
+    for (let attempt = 0; attempt < 50 && !events.includes("agent_start"); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(events).toContain("agent_start");
+    await expect(process.reconnectEventStream()).resolves.toBeUndefined();
+
+    expect(process.eventStreamAlive).toBe(true);
+    expect((await readFile(join(runtime.cwd, "event-after.log"), "utf8")).trim().split("\n")).toEqual(["0", "1", "7"]);
+    expect(errors.join("\n")).toContain("event replay gap (5-7)");
     await manager.shutdownAll();
     await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });

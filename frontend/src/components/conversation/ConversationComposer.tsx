@@ -39,9 +39,7 @@ export interface ConversationComposerProps {
   composer: ComposerState;
   model: ModelState;
   research: ResearchState;
-  suggestions: string[];
   modePicker: ReactNode;
-  onSuggestionsChange: (suggestions: string[]) => void;
   onScrollToBottom: () => void;
   onReview: () => void;
   onAbort: () => Promise<unknown>;
@@ -50,37 +48,14 @@ export interface ConversationComposerProps {
 
 /** The composer seat is kept separate from the route so streamed transcript
  * updates do not make the page's orchestration code own every control detail. */
-export function ConversationComposer({ workspaceCwd, status, activeSessionId, sessionStats, contextTokens, contextWindow, contextPercent, compactionEnabled, compactionThresholdPercent, working, interactionPending, reviewingProject, reviewNotice, autoReviewOn, modelControlsDisabled, showWelcome, showScrollDown, composer, model, research, suggestions, modePicker, onSuggestionsChange, onScrollToBottom, onReview, onAbort, onRemoveWorkspaceReference }: ConversationComposerProps) {
+export function ConversationComposer({ workspaceCwd, status, activeSessionId, sessionStats, contextTokens, contextWindow, contextPercent, compactionEnabled, compactionThresholdPercent, working, interactionPending, reviewingProject, reviewNotice, autoReviewOn, modelControlsDisabled, showWelcome, showScrollDown, composer, model, research, modePicker, onScrollToBottom, onReview, onAbort, onRemoveWorkspaceReference }: ConversationComposerProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { input, setInput, files, setFiles, workspaceReferences } = composer;
-  const suggestionChips = suggestions.length > 0 && !showWelcome && !working && !research.draft && !research.activeLoop && !input.trim() ? (
-    <div className="mx-auto flex max-w-[var(--conversation-composer-width)] flex-wrap gap-2 px-1 pb-2" aria-label={t("conversation.suggestions")}>
-      {suggestions.map((suggestion) => (
-        <button
-          key={suggestion}
-          type="button"
-          disabled={!model.selectedModel || reviewingProject}
-          onClick={() => {
-            // Put the suggestion into the composer instead of sending it
-            // immediately: the user may want to tweak or append to it.
-            onSuggestionsChange([]);
-            setInput(suggestion);
-            composer.inputRef.current?.focus();
-          }}
-          className="min-h-9 rounded-full border border-border bg-surface px-3 py-1 text-left text-xs text-muted transition-colors hover:text-text disabled:opacity-50"
-        >
-          {suggestion}
-        </button>
-      ))}
-    </div>
-  ) : null;
-
   return (
     <div className={cn("px-8 shrink-0", showWelcome ? "py-0" : "pb-1 pt-1")}>
       {!showWelcome && (
         <div className="relative mx-auto max-w-[var(--conversation-composer-width)]">
-          {suggestionChips}
           {modePicker}
           {showScrollDown && (
             <button
@@ -101,10 +76,8 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
         {/* Fixed 36px fade band above the composer card (reference:
             ConversationRoot composer seat gradient). The card sits at the
             bottom of the column, so the band softens the transcript edge
-            scrolling into it. Rendered only when nothing (suggestion chips,
-            research mode picker) sits above the card: with such content the
-            band visually covers those controls. */}
-        {!modePicker && !suggestionChips && (
+            scrolling into it. */}
+        {!modePicker && (
           <div
             aria-hidden
             className="pointer-events-none absolute inset-x-0 bottom-full h-[var(--composer-fade-height)] bg-gradient-to-t from-[var(--bg)] to-transparent"

@@ -911,6 +911,7 @@
   "molecule.styleFailed": "切换显示样式失败",
   "molecule.noStructures": "未找到结构",
   "molecule.loadFailed": "结构加载失败——文件可能为空或格式不受支持",
+  "molecule.viewerFailed": "分子结构查看器启动失败，请刷新页面或重启开发服务",
   "molecule.notChemical": "不是化学结构文件",
   "molecule.viewerLabel": "三维分子查看器",
   "molecule.resetView": "重置视图",

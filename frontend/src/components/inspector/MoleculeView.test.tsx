@@ -116,4 +116,12 @@ describe("MoleculeView", () => {
 
     expect(await screen.findByText(/Failed to load structure/)).toBeInTheDocument();
   });
+
+  it("distinguishes viewer initialization failures from invalid structures", async () => {
+    viewerMocks.create.mockRejectedValueOnce(new Error("viewer init failed"));
+    render(<MoleculeView filename="protein.pdb" text="ATOM" />);
+
+    expect(await screen.findByText(/Failed to start the molecular viewer/)).toBeInTheDocument();
+    expect(viewerMocks.load).not.toHaveBeenCalled();
+  });
 });
