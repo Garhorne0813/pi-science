@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { hasEnvApiKey, loadPiAiProviderCatalog } from "./pi-ai-provider-catalog.js";
 
-// The real pi-ai runtime catalog is installed by scripts/fetch-pi.sh, which
-// CI does not run; without it the adapter returns an empty catalog and there
-// is nothing real to validate. Installed machines keep full coverage.
-const catalog = await loadPiAiProviderCatalog();
-const catalogAvailable = catalog.length > 0;
-
-describe.skipIf(!catalogAvailable)("pi-ai provider catalog adapter", () => {
+describe("pi-ai provider catalog adapter", () => {
   it("loads the real runtime catalog including the OpenCode Go provider with API-key auth and models", async () => {
     const catalog = await loadPiAiProviderCatalog();
     const opencodeGo = catalog.find((provider) => provider.id === "opencode-go");
