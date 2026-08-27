@@ -154,7 +154,9 @@ Pi-Science 托管的工作区默认信任 `.pi/skills/`；其中的项目内置 
 内核、Notebook 和智能体工具的执行都会记录在产生它们的对话会话中。执行状态会实时更新；在 Runs 视图中，可将执行定位到来源对话，也可打开该次执行生成的文件和产物。
 
 托管 Pi 会话为文件型 `.ipynb` 提供 `notebook_read`、`notebook_edit` 和
-`notebook_run`。编辑使用 Notebook 文件 SHA-256 做并发保护；运行选定的
+`notebook_run`。`notebook_read` 会返回每个 cell 的 revision；默认编辑使用
+Notebook 文件 SHA-256 做严格并发保护，也可用 `expected_cell_revisions`
+只保护本次修改的 cell，使无关 cell 的并发修改不会阻塞操作。运行选定的
 Python/R 代码块后，会把受限的执行次数、标准输出/错误、MIME 结果和错误输出
 原子写回 Notebook，并返回新的 revision。产物发布失败会作为执行告警保留，
 不会被静默忽略。

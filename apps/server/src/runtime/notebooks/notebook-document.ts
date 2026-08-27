@@ -3,6 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 export interface NotebookCellDocument {
   [key: string]: unknown;
   id?: string;
+  /** Response-only revision; never persisted into the .ipynb document. */
+  cell_revision?: string;
   cell_type?: string;
   source?: string | string[];
   execution_count?: number | null;
@@ -90,6 +92,15 @@ export function normalizeNotebookDocument(document: NotebookDocument, path: stri
 
 export function notebookSha256(raw: string): string {
   return createHash("sha256").update(raw, "utf8").digest("hex");
+}
+
+/**
+ * Returns the revision of one normalized cell. The control plane calculates
+ * this from the same normalized cell it returns to callers, so an unrelated
+ * cell can change without invalidating an edit that targets this cell.
+ */
+export function notebookCellSha256(cell: NotebookCellDocument): string {
+  return createHash("sha256").update(JSON.stringify(cell), "utf8").digest("hex");
 }
 
 export function serializeNotebookDocument(document: NotebookDocument): string {

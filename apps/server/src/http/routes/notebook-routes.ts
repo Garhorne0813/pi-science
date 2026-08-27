@@ -10,6 +10,7 @@ import {
   applyNotebookEdits,
   applyNotebookExecutionOutput,
   normalizeNotebookDocument,
+  notebookCellSha256,
   notebookSha256,
   notebookSourceText,
   parseNotebookDocument,
@@ -65,7 +66,7 @@ function responseDocument(document: NotebookDocument, includeOutputs: boolean): 
     ...document,
     cells: document.cells.map((cell) => {
       const outputs = Array.isArray(cell.outputs) ? cell.outputs : [];
-      const responseCell: NotebookCellDocument = { ...cell, output_count: outputs.length };
+      const responseCell: NotebookCellDocument = { ...cell, cell_revision: notebookCellSha256(cell), output_count: outputs.length };
       if (includeOutputs) responseCell.outputs = outputs.slice(0, MAX_OUTPUTS_PER_CELL).map(boundedNotebookOutput);
       else delete responseCell.outputs;
       return responseCell;
@@ -125,6 +126,55 @@ class NotebookRevisionConflict extends Error {
   }
 }
 
+class NotebookCellRevisionConflict extends Error {
+  constructor(readonly expected: Record<string, string>, readonly actual: Record<string, string | null>) {
+    super("One or more notebook cells changed since they were read");
+    this.name = "NotebookCellRevisionConflict";
+  }
+}
+
+function parseExpectedCellRevisions(value: unknown): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("expected_cell_revisions must be an object");
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 0) return undefined;
+  if (entries.length > 50) throw new Error("expected_cell_revisions may contain at most 50 cells");
+  const revisions: Record<string, string> = {};
+  for (const [cellId, revision] of entries) {
+    if (!cellId.trim()) throw new Error("expected_cell_revisions contains an empty cell id");
+    if (typeof revision !== "string" || !/^[0-9a-f]{64}$/i.test(revision)) {
+      throw new Error(`expected_cell_revisions.${cellId} must be a SHA-256 hex digest`);
+    }
+    revisions[cellId] = revision.toLowerCase();
+  }
+  return revisions;
+}
+
+function assertCellRevisions(document: NotebookDocument, expected: Record<string, string>): void {
+  const actual: Record<string, string | null> = {};
+  for (const cellId of Object.keys(expected)) {
+    const cell = document.cells.find((candidate) => candidate.id === cellId);
+    actual[cellId] = cell ? notebookCellSha256(cell) : null;
+  }
+  if (Object.entries(actual).some(([cellId, revision]) => revision !== expected[cellId])) {
+    throw new NotebookCellRevisionConflict(expected, actual);
+  }
+}
+
+function assertCellRevisionCoverage(document: NotebookDocument, operations: NotebookEditOperation[], expected: Record<string, string>): void {
+  const existing = new Set(document.cells.map((cell) => cell.id).filter((id): id is string => typeof id === "string"));
+  const required = new Set<string>();
+  for (const operation of operations) {
+    if (operation.action === "insert_cell") {
+      if (operation.before_cell_id) required.add(operation.before_cell_id);
+    } else {
+      required.add(operation.cell_id);
+    }
+  }
+  const missing = [...required].filter((cellId) => existing.has(cellId) && expected[cellId] === undefined);
+  if (missing.length > 0) throw new Error(`expected_cell_revisions must include edited cell(s): ${missing.join(", ")}`);
+}
+
 async function writeNotebookAtomically(target: string, content: string, mode?: number): Promise<void> {
   const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
   try {
@@ -178,6 +228,12 @@ export function registerNotebookRoutes(app: FastifyInstance, notebooks: Notebook
     }
     const expectedSha = body.expected_sha256 === undefined ? undefined : String(body.expected_sha256);
     if (expectedSha !== undefined && !/^[0-9a-f]{64}$/i.test(expectedSha)) return reply.code(400).send({ error: "expected_sha256 must be a SHA-256 hex digest" });
+    let expectedCellRevisions: Record<string, string> | undefined;
+    try {
+      expectedCellRevisions = parseExpectedCellRevisions(body.expected_cell_revisions);
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+    }
 
     try {
       const target = await resolveWorkspaceFile(root, path);
@@ -189,6 +245,10 @@ export function registerNotebookRoutes(app: FastifyInstance, notebooks: Notebook
         const actualSha = notebookSha256(raw);
         if (expectedSha && expectedSha.toLowerCase() !== actualSha) throw new NotebookRevisionConflict(expectedSha, actualSha);
         const normalized = normalizeNotebookDocument(parseNotebookDocument(raw), relativeNotebookPath(root, target));
+        if (expectedCellRevisions) {
+          assertCellRevisionCoverage(normalized, operations, expectedCellRevisions);
+          assertCellRevisions(normalized, expectedCellRevisions);
+        }
         const applied = applyNotebookEdits(normalized, operations);
         const serialized = serializeNotebookDocument(applied.document);
         await writeNotebookAtomically(target, serialized, metadata.mode & 0o7777);
@@ -213,6 +273,9 @@ export function registerNotebookRoutes(app: FastifyInstance, notebooks: Notebook
     } catch (error) {
       if (error instanceof NotebookRevisionConflict) {
         return reply.code(409).send({ error: error.message, expected_sha256: error.expected, actual_sha256: error.actual });
+      }
+      if (error instanceof NotebookCellRevisionConflict) {
+        return reply.code(409).send({ error: error.message, expected_cell_revisions: error.expected, actual_cell_revisions: error.actual });
       }
       if (error instanceof Error && /escapes the workspace|must be relative|metadata paths/i.test(error.message)) {
         return reply.code(403).send({ error: error.message });

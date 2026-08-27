@@ -121,13 +121,15 @@ environment; project kernelspecs point at the selected project revision.
 Managed Pi sessions also load the built-in `pi-science-notebook` extension. Its
 `notebook_read`, `notebook_edit`, and `notebook_run` tools call the Node notebook
 and kernel routes rather than reading files or spawning kernels themselves.
-Notebook edits use the file SHA-256 returned by `notebook_read` as an optimistic
-revision check; source edits clear stale outputs, and each `notebook_run` cell
-atomically writes bounded execution outputs back to the `.ipynb` while retaining
-the existing execution/artifact provenance chain. A failed artifact publication
-is surfaced as execution evidence rather than silently discarded. Legacy cells
-without an `id` use a deterministic path-and-position identity until a normal
-notebook write materializes the id.
+Notebook edits use the file SHA-256 returned by `notebook_read` as the strict
+optimistic revision check. The response also includes per-cell revisions, so a
+caller can use `expected_cell_revisions` to protect only the cells it edits and
+allow unrelated concurrent cell changes. Source edits clear stale outputs, and
+each `notebook_run` cell atomically writes bounded execution outputs back to the
+`.ipynb` while retaining the existing execution/artifact provenance chain. A
+failed artifact publication is surfaced as execution evidence rather than
+silently discarded. Legacy cells without an `id` use a deterministic
+path-and-position identity until a normal notebook write materializes the id.
 
 The default local topology is:
 

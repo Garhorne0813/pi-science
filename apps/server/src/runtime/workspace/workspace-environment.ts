@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { constants } from "node:fs";
+import { constants, existsSync } from "node:fs";
 import { access, chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { delimiter, join, resolve } from "node:path";
@@ -106,9 +106,21 @@ const MICROMAMBA_SHA256: Record<string, string> = {
   "osx-64": "d6542ddf80e0b81b8538f811dd64ad5804373206bc0128cbc4a8833efe67547b",
 };
 
+/**
+ * Micromamba layouts on Windows are not uniform: some builds place Python in
+ * Scripts, while others put python.exe directly under the environment prefix.
+ * Prefer the conventional Scripts location, but keep the prefix-root layout
+ * usable for health checks, kernels, jobs, and child-process PATH setup.
+ */
+export function environmentPythonExecutable(prefix: string, platform = process.platform): string {
+  if (platform !== "win32") return join(prefix, "bin", "python");
+  const scriptsPython = join(prefix, "Scripts", "python.exe");
+  return existsSync(scriptsPython) ? scriptsPython : join(prefix, "python.exe");
+}
+
 function environmentPaths(prefix: string, platform = process.platform) {
   const bin = platform === "win32" ? join(prefix, "Scripts") : join(prefix, "bin");
-  return { virtualEnv: prefix, bin, python: join(bin, platform === "win32" ? "python.exe" : "python"), pip: join(bin, platform === "win32" ? "pip.exe" : "pip") };
+  return { virtualEnv: prefix, bin, python: environmentPythonExecutable(prefix, platform), pip: join(bin, platform === "win32" ? "pip.exe" : "pip") };
 }
 
 function environmentExecutable(prefix: string, language: EnvironmentLanguage, platform = process.platform): string {
@@ -323,7 +335,7 @@ export function workspaceEnvironmentVariables(status: WorkspaceEnvironmentStatus
   const base = Object.fromEntries(Object.entries(inherited).filter(([key]) => key.toLowerCase() !== "path" && !isInheritedRuntimeState(key)));
   return {
     ...base,
-    PATH: [paths.bin, npmBin, pnpmHome, inheritedPath].filter(Boolean).join(platform === "win32" ? ";" : delimiter),
+    PATH: [paths.bin, ...(platform === "win32" ? [status.prefix] : []), npmBin, pnpmHome, inheritedPath].filter(Boolean).join(platform === "win32" ? ";" : delimiter),
     CONDA_PREFIX: status.manager === "micromamba" ? status.prefix : undefined,
     PI_SCIENCE_ENVIRONMENT_ID: status.environment_id,
     PI_SCIENCE_ENVIRONMENT_REVISION_ID: status.revision_id,

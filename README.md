@@ -166,11 +166,13 @@ the Runs view can locate an execution in its source conversation or open files
 and artifacts produced by that execution.
 
 Managed Pi sessions provide `notebook_read`, `notebook_edit`, and
-`notebook_run` for file-backed `.ipynb` notebooks. Cell edits are revision-safe,
-and selected cells run through the same persistent Python/R kernels used by the
-workbench. `notebook_run` writes bounded execution counts and outputs back to
-the notebook with the next revision, while execution and artifact provenance
-remain available through the control plane.
+`notebook_run` for file-backed `.ipynb` notebooks. Cell edits are revision-safe;
+`notebook_read` exposes per-cell revisions so `notebook_edit` can protect only
+the cells it changes when unrelated concurrent edits should be allowed. Selected
+cells run through the same persistent Python/R kernels used by the workbench.
+`notebook_run` writes bounded execution counts and outputs back to the notebook
+with the next revision, while execution and artifact provenance remain available
+through the control plane.
 
 ## Model Configuration
 

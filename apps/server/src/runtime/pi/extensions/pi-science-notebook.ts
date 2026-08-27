@@ -29,6 +29,12 @@ const NOTEBOOK_EDIT_SCHEMA = {
   properties: {
     path: { type: "string", description: "Workspace-relative path to a .ipynb file" },
     expected_sha256: { type: "string", description: "Revision returned by notebook_read; prevents overwriting a newer edit" },
+    expected_cell_revisions: {
+      type: "object",
+      maxProperties: MAX_CELLS_PER_CALL,
+      additionalProperties: { type: "string", pattern: "^[0-9a-fA-F]{64}$" },
+      description: "Optional cell revisions returned by notebook_read; protects only the targeted cells from concurrent edits",
+    },
     operations: {
       type: "array",
       minItems: 1,
@@ -192,6 +198,7 @@ function projectCell(cell: Record<string, unknown>, includeOutputs: boolean): Re
     cell_type: text(cell.cell_type),
     source: truncate(sourceText(cell.source), MAX_SOURCE_CHARS),
     execution_count: cell.execution_count ?? null,
+    ...(typeof cell.cell_revision === "string" ? { cell_revision: cell.cell_revision } : {}),
   };
   const outputs = Array.isArray(cell.outputs) ? cell.outputs : [];
   projected.output_count = outputs.length || (typeof cell.output_count === "number" ? cell.output_count : 0);
@@ -203,6 +210,7 @@ function formatRead(payload: { path: string; sha256: string; cells: Record<strin
   const lines = [`Notebook: ${payload.path}`, `Revision: ${payload.sha256}`, `Cells: ${payload.cells.length}`];
   for (const [index, cell] of payload.cells.entries()) {
     lines.push(`\n[${index}] ${text(cell.id)} (${text(cell.cell_type)})`);
+    if (typeof cell.cell_revision === "string") lines.push(`Cell revision: ${cell.cell_revision}`);
     lines.push(String(cell.source ?? ""));
     if (Array.isArray(cell.outputs) && cell.outputs.length > 0) lines.push(`Outputs: ${cell.outputs.length}`);
   }
@@ -301,7 +309,7 @@ export default function registerPiScienceNotebook(pi: any) {
     description: "Apply revision-checked source or structural edits to a file-backed .ipynb; never executes code.",
     promptSnippet: "Apply precise source edits to notebook cells with revision protection",
     promptGuidelines: [
-      "Pass the sha256 from notebook_read as expected_sha256; if the edit reports a conflict, reread before retrying.",
+      "Pass the sha256 from notebook_read as expected_sha256 for whole-notebook protection; use expected_cell_revisions when unrelated concurrent cell edits should not block this edit.",
       "Use insert_cell with an optional before_cell_id or delete_cell for structural edits; use stable ids returned by notebook_read.",
     ],
     parameters: NOTEBOOK_EDIT_SCHEMA,
@@ -310,13 +318,17 @@ export default function registerPiScienceNotebook(pi: any) {
         if (!isRecord(params) || typeof params.path !== "string" || !Array.isArray(params.operations)) throw new Error("path and operations are required");
         const cwd = workspaceCwd(ctx);
         let expectedSha = typeof params.expected_sha256 === "string" ? params.expected_sha256 : undefined;
-        if (!expectedSha) {
+        const expectedCellRevisions = isRecord(params.expected_cell_revisions) && Object.keys(params.expected_cell_revisions).length > 0
+          ? params.expected_cell_revisions
+          : undefined;
+        if (!expectedSha && !expectedCellRevisions) {
           const current = notebookDocument(await requestJson(`/api/notebooks/document?${documentQuery(cwd, params.path, false)}`, {}, signal));
           expectedSha = current.sha256;
         }
         const body = {
           path: params.path,
-          expected_sha256: expectedSha,
+          ...(expectedSha ? { expected_sha256: expectedSha } : {}),
+          ...(expectedCellRevisions ? { expected_cell_revisions: expectedCellRevisions } : {}),
           operations: params.operations,
           ...(sessionId(ctx) ? { session_id: sessionId(ctx) } : {}),
         };
@@ -325,7 +337,7 @@ export default function registerPiScienceNotebook(pi: any) {
         const stale = Array.isArray(result.stale_cell_ids) ? result.stale_cell_ids.map(text) : [];
         const inserted = Array.isArray(result.inserted_cell_ids) ? result.inserted_cell_ids.map(text) : [];
         const deleted = Array.isArray(result.deleted_cell_ids) ? result.deleted_cell_ids.map(text) : [];
-        return buildToolResult(`Edited ${text(result.path || params.path)}: ${changed.join(", ")}. New revision: ${text(result.sha256)}${inserted.length ? `\nInserted: ${inserted.join(", ")}` : ""}${deleted.length ? `\nDeleted: ${deleted.join(", ")}` : ""}${stale.length ? `\nCleared stale outputs: ${stale.join(", ")}` : ""}`, { ...result, expected_sha256: expectedSha });
+        return buildToolResult(`Edited ${text(result.path || params.path)}: ${changed.join(", ")}. New revision: ${text(result.sha256)}${inserted.length ? `\nInserted: ${inserted.join(", ")}` : ""}${deleted.length ? `\nDeleted: ${deleted.join(", ")}` : ""}${stale.length ? `\nCleared stale outputs: ${stale.join(", ")}` : ""}`, { ...result, ...(expectedSha ? { expected_sha256: expectedSha } : {}), ...(expectedCellRevisions ? { expected_cell_revisions: expectedCellRevisions } : {}) });
       } catch (error) {
         return errorToolResult(error);
       }

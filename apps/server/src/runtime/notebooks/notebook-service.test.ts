@@ -84,6 +84,34 @@ describe("NotebookService", () => {
     expect(kernel.argv).toEqual([python, "-m", "ipykernel_launcher", "-f", "{connection_file}"]);
   });
 
+  it("uses prefix-root python.exe for a Windows project kernelspec when Scripts is absent", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-jupyter-windows-root-python-"));
+    cleanup.push(cwd);
+    const prefix = join(cwd, "project-env");
+    const python = join(prefix, "python.exe");
+    await mkdir(join(cwd, ".pi-science", "environments"), { recursive: true });
+    await mkdir(prefix, { recursive: true });
+    await writeFile(python, "", "utf8");
+    await writeFile(join(cwd, ".pi-science", "environments", "registry.json"), JSON.stringify({
+      schema_version: 1,
+      revisions: [{
+        environment_id: "env_python", revision_id: "rev_windows_root", name: "python", display_name: "Python",
+        language: "python", status: "ready", prefix, packages: ["python=3.12", "pip", "ipykernel"],
+        platform: "win32-x64", created_at: new Date().toISOString(),
+      }],
+    }), "utf8");
+    await writeFile(join(cwd, ".pi-science", "environment.json"), JSON.stringify({
+      schema_version: 1, environment_id: "env_python", revision_id: "rev_windows_root", bound_at: new Date().toISOString(),
+    }), "utf8");
+
+    const service = new NotebookService({ configPath: (name) => join(cwd, ".pi-science", name), platform: "win32" });
+    const installKernelspec = (service as unknown as { installProjectKernelspec: (workspace: string) => Promise<void> }).installProjectKernelspec.bind(service);
+    await installKernelspec(cwd);
+
+    const kernel = JSON.parse(await readFile(join(service.jupyterPrefix, "share", "jupyter", "kernels", "pi-science-rev_windows_root", "kernel.json"), "utf8")) as { argv: string[] };
+    expect(kernel.argv).toEqual([python, "-m", "ipykernel_launcher", "-f", "{connection_file}"]);
+  });
+
   it("rejects a second setup while one is already running", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-jupyter-setup-race-"));
     cleanup.push(cwd);

@@ -1,7 +1,30 @@
-import { describe, expect, it } from "vitest";
-import { detectJobCapabilities } from "./job-capabilities.js";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { detectJobCapabilities, environmentRuntimeExecutable } from "./job-capabilities.js";
+
+const cleanup: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
 
 describe("job capability detection", () => {
+  it("uses the Windows prefix-root Python executable when Scripts/python.exe is absent", async () => {
+    const prefix = await mkdtemp(join(tmpdir(), "pi-science-job-python-layout-"));
+    cleanup.push(prefix);
+    const rootPython = join(prefix, "python.exe");
+    await writeFile(rootPython, "", "utf8");
+    expect(environmentRuntimeExecutable(prefix, "python", "win32")).toBe(rootPython);
+
+    await mkdir(join(prefix, "Scripts"), { recursive: true });
+    const scriptsPython = join(prefix, "Scripts", "python.exe");
+    await writeFile(scriptsPython, "", "utf8");
+    expect(environmentRuntimeExecutable(prefix, "python", "win32")).toBe(scriptsPython);
+    expect(environmentRuntimeExecutable(prefix, "r", "win32")).toBe(join(prefix, "Scripts", "Rscript.exe"));
+  });
+
   it("reports the selected environment revision and matches package specs", () => {
     const report = detectJobCapabilities(
       { packages: ["numpy>=2", "conda-forge::scipy"] },

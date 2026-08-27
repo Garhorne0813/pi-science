@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface, type Interface } from "node:readline";
 import {
+  environmentPythonExecutable,
   workspaceEnvironmentVariables,
   type WorkspaceEnvironmentStatus,
 } from "../workspace/workspace-environment.js";
@@ -421,7 +422,7 @@ class NodeKernelSession {
   private executablePath(): string {
     const bin = this.deps.platform === "win32" ? "Scripts" : "bin";
     if (this.options.language === "python") {
-      return join(this.options.environment.prefix, bin, this.deps.platform === "win32" ? "python.exe" : "python");
+      return environmentPythonExecutable(this.options.environment.prefix, this.deps.platform);
     }
     return join(this.options.environment.prefix, bin, this.deps.platform === "win32" ? "Rscript.exe" : "Rscript");
   }

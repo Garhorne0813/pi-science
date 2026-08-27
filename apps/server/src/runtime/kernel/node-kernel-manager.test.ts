@@ -243,7 +243,7 @@ describe("NodeKernelManager platform interrupt semantics", () => {
   }
 
   function managerWithFake(platform: NodeJS.Platform) {
-    const spawned: { args: string[]; options?: SpawnOptions }[] = [];
+    const spawned: { command: string; args: string[]; options?: SpawnOptions }[] = [];
     const treeKills: number[] = [];
     const sessions: FakeSession[] = [];
     const manager = new NodeKernelManager({
@@ -251,7 +251,7 @@ describe("NodeKernelManager platform interrupt semantics", () => {
       workspaceEnvironmentVariables: () => ({}),
       interpreterAvailable: () => true,
       spawnProcess: ((command: string, args: readonly string[], options?: SpawnOptions) => {
-        spawned.push({ args: [...args], options });
+        spawned.push({ command, args: [...args], options });
         const session = fakeChild();
         sessions.push(session);
         return session.child;
@@ -284,6 +284,25 @@ describe("NodeKernelManager platform interrupt semantics", () => {
     respondPending(sessions[0]!);
     return result;
   }
+
+  it("falls back to prefix-root python.exe on Windows when Scripts is absent", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-win32-python-root-"));
+    cleanup.push(cwd);
+    const prefix = join(cwd, "env");
+    await mkdir(prefix, { recursive: true });
+    const python = join(prefix, "python.exe");
+    await writeFile(python, "", "utf8");
+    const { manager, spawned, sessions } = managerWithFake("win32");
+    try {
+      const result = await driveExecute(manager, sessions, cwd, status(cwd, prefix), "1+1");
+      expect(result.ok).toBe(true);
+      expect(spawned[0]?.command).toBe(python);
+    } finally {
+      const stopping = manager.shutdownAll().catch(() => undefined);
+      for (const session of sessions) session.child.emit("close", 0);
+      await stopping;
+    }
+  });
 
   it("cancels a cold start before shutdownAll returns", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-kernel-start-shutdown-all-"));

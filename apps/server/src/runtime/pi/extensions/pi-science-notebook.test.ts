@@ -94,4 +94,31 @@ describe("Pi-Science notebook extension", () => {
     expect(result.content[0].text).toContain("Notebook output was not fully persisted");
     expect(result.details.results).toMatchObject([{ cell_id: "c1", notebook_output_persisted: false, notebook_output_persistence_error: "Notebook changed since it was read" }]);
   });
+
+  it("passes cell-level revisions without forcing a whole-notebook reread", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.includes("/api/notebooks/edit")) return new Response(JSON.stringify({ ok: true, path: "analysis/demo.ipynb", sha256: "b".repeat(64), changed_cell_ids: ["c1"], stale_cell_ids: ["c1"] }), { status: 200 });
+      throw new Error(`Unexpected URL: ${url}`);
+    }));
+
+    const tools = new Map<string, any>();
+    registerNotebook({ registerTool: (tool: any) => tools.set(tool.name, tool) });
+    const cellRevision = "d".repeat(64);
+    const result = await tools.get("notebook_edit").execute("edit-1", {
+      path: "analysis/demo.ipynb",
+      expected_cell_revisions: { c1: cellRevision },
+      operations: [{ cell_id: "c1", action: "replace_source", source: "x = 2\n" }],
+    }, undefined, undefined, { cwd: "/workspace" });
+
+    expect(result.content[0].text).toContain("New revision");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toContain("/api/notebooks/edit");
+    expect(JSON.parse(String(calls[0]!.init.body))).toMatchObject({
+      expected_cell_revisions: { c1: cellRevision },
+      operations: [{ cell_id: "c1", action: "replace_source" }],
+    });
+  });
 });

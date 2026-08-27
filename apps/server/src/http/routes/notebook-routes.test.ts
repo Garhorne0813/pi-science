@@ -80,4 +80,64 @@ describe("notebook document routes", () => {
     expect(conflict.statusCode).toBe(409);
     await app.close();
   });
+
+  it("allows cell-scoped edits when an unrelated cell changed, but rejects a stale targeted cell", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-notebook-cell-revisions-"));
+    cleanup.push(cwd);
+    await mkdir(join(cwd, ".pi-science"));
+    const path = "analysis/collaborative.ipynb";
+    await mkdir(join(cwd, "analysis"));
+    await writeFile(join(cwd, path), `${JSON.stringify({
+      metadata: { kernelspec: { language: "python" } },
+      cells: [
+        { id: "cell-a", cell_type: "code", source: "a = 1\n", execution_count: null, outputs: [] },
+        { id: "cell-b", cell_type: "code", source: "b = 1\n", execution_count: null, outputs: [] },
+      ],
+    }, null, 2)}\n`, "utf8");
+
+    const app = Fastify();
+    registerNotebookRoutes(app, new NotebookService({ configPath: (name) => join(cwd, ".pi-science", name) }));
+    const initial = await app.inject({ method: "GET", url: `/api/notebooks/document?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}` });
+    expect(initial.statusCode).toBe(200);
+    const initialBody = initial.json() as { document: { cells: Array<{ id: string; cell_revision: string }> } };
+    const cellARevision = initialBody.document.cells.find((cell) => cell.id === "cell-a")?.cell_revision;
+    expect(cellARevision).toMatch(/^[0-9a-f]{64}$/);
+
+    const changedExternally = JSON.parse(await readFile(join(cwd, path), "utf8")) as { cells: Array<{ id: string; source: string }> };
+    changedExternally.cells[1]!.source = "b = 2\n";
+    await writeFile(join(cwd, path), `${JSON.stringify(changedExternally, null, 2)}\n`, "utf8");
+
+    const unrelatedEdit = await app.inject({
+      method: "POST",
+      url: `/api/notebooks/edit?cwd=${encodeURIComponent(cwd)}`,
+      payload: {
+        path,
+        expected_cell_revisions: { "cell-a": cellARevision },
+        operations: [{ cell_id: "cell-a", action: "replace_source", source: "a = 2\n" }],
+      },
+    });
+    expect(unrelatedEdit.statusCode).toBe(200);
+    const storedAfterUnrelatedEdit = JSON.parse(await readFile(join(cwd, path), "utf8")) as { cells: Array<{ id: string; source: string }> };
+    expect(storedAfterUnrelatedEdit.cells).toEqual([
+      expect.objectContaining({ id: "cell-a", source: "a = 2\n" }),
+      expect.objectContaining({ id: "cell-b", source: "b = 2\n" }),
+    ]);
+
+    const staleEdit = await app.inject({
+      method: "POST",
+      url: `/api/notebooks/edit?cwd=${encodeURIComponent(cwd)}`,
+      payload: {
+        path,
+        expected_cell_revisions: { "cell-a": cellARevision },
+        operations: [{ cell_id: "cell-a", action: "replace_source", source: "a = 3\n" }],
+      },
+    });
+    expect(staleEdit.statusCode).toBe(409);
+    expect(staleEdit.json()).toMatchObject({
+      error: "One or more notebook cells changed since they were read",
+      expected_cell_revisions: { "cell-a": cellARevision },
+      actual_cell_revisions: { "cell-a": expect.stringMatching(/^[0-9a-f]{64}$/) },
+    });
+    await app.close();
+  });
 });
