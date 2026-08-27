@@ -2,13 +2,21 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_PACKAGES, DEFAULT_R_PACKAGES, defaultPythonExecutable, WorkspaceEnvironmentService, workspaceEnvironmentVariables, type EnvironmentRevision } from "./workspace-environment.js";
+import { DEFAULT_PACKAGES, DEFAULT_R_PACKAGES, defaultPythonExecutable, environmentPythonPath, WorkspaceEnvironmentService, workspaceEnvironmentVariables, type EnvironmentRevision } from "./workspace-environment.js";
 
 describe("workspace environment platform defaults", () => {
   it("uses the Windows Python launcher name when no override is configured", () => {
     expect(defaultPythonExecutable({}, "win32")).toBe("python");
     expect(defaultPythonExecutable({}, "linux")).toBe("python3");
     expect(defaultPythonExecutable({ PYTHON: "custom-python" }, "win32")).toBe("custom-python");
+  });
+
+  it("uses Scripts python for venvs and root python for micromamba on Windows", () => {
+    const prefix = join("C:\\envs", "rev_test");
+    const scriptsPython = join(prefix, "Scripts", "python.exe");
+    expect(environmentPythonPath(prefix, "win32", (path) => path === scriptsPython)).toBe(scriptsPython);
+    expect(environmentPythonPath(prefix, "win32", () => false)).toBe(join(prefix, "python.exe"));
+    expect(environmentPythonPath(prefix, "linux", () => false)).toBe(join(prefix, "bin", "python"));
   });
 
   it("preserves a Windows Path-only value under one canonical PATH key", () => {
@@ -32,6 +40,7 @@ describe("workspace environment platform defaults", () => {
       PI_SCIENCE_PYTHON_EXECUTABLE: "C:\\old-python.exe",
     }, "win32");
 
+    expect(environment.PATH?.split(";").slice(0, 2)).toEqual([join(workspace, ".venv", "Scripts"), join(workspace, ".venv")]);
     expect(environment.PATH?.split(";").at(-1)).toBe("C:\\Windows\\System32");
     expect(Object.keys(environment).filter((key) => key.toLowerCase() === "path")).toEqual(["PATH"]);
     expect(environment.TEMP).toBe("C:\\Temp");
@@ -69,6 +78,49 @@ describe("workspace environment package mutation", () => {
 
   afterEach(async () => {
     await Promise.all(tempDirs.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+  });
+
+  it("bounds workspace provisioning while keeping one shared in-flight operation", async () => {
+    const previous = process.env.PI_SCIENCE_ENVIRONMENT_PROVISION_TIMEOUT_MS;
+    process.env.PI_SCIENCE_ENVIRONMENT_PROVISION_TIMEOUT_MS = "20";
+    try {
+      const service = new WorkspaceEnvironmentService();
+      const provision = vi.fn(() => new Promise<never>(() => undefined));
+      (service as unknown as { provision: typeof provision }).provision = provision;
+
+      await expect(service.ensure("/workspace-timeout")).rejects.toMatchObject({ code: "environment_provision_timeout" });
+      await expect(service.ensure("/workspace-timeout")).rejects.toMatchObject({ code: "environment_provision_timeout" });
+      expect(provision).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previous === undefined) delete process.env.PI_SCIENCE_ENVIRONMENT_PROVISION_TIMEOUT_MS;
+      else process.env.PI_SCIENCE_ENVIRONMENT_PROVISION_TIMEOUT_MS = previous;
+    }
+  });
+
+  it("deletes only failed or archived revisions from the managed environment root", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-science-env-delete-"));
+    tempDirs.push(root);
+    process.env.PI_SCIENCE_HOME = root;
+    const failedPrefix = join(root, "micromamba", "envs", "rev_failed");
+    const readyPrefix = join(root, "micromamba", "envs", "rev_ready");
+    await mkdir(failedPrefix, { recursive: true });
+    await mkdir(readyPrefix, { recursive: true });
+    await writeFile(join(failedPrefix, "partial.txt"), "partial", "utf8");
+    await mkdir(join(root, "environments"), { recursive: true });
+    await writeFile(join(root, "environments", "registry.json"), JSON.stringify({
+      schema_version: 1,
+      revisions: [
+        { environment_id: "env_test", revision_id: "rev_failed", name: "failed", display_name: "Failed", language: "python", status: "failed", prefix: failedPrefix, packages: [], platform: "test", created_at: new Date().toISOString(), failure: { stage: "create", message: "failed" } },
+        { environment_id: "env_test", revision_id: "rev_ready", name: "ready", display_name: "Ready", language: "python", status: "ready", prefix: readyPrefix, packages: [], platform: "test", created_at: new Date().toISOString() },
+      ],
+    }), "utf8");
+    const service = new WorkspaceEnvironmentService();
+
+    await expect(service.deleteRevision("missing")).resolves.toBeNull();
+    await expect(service.deleteRevision("rev_ready")).rejects.toThrow("Only failed or archived");
+    await expect(service.deleteRevision("rev_failed")).resolves.toMatchObject({ revision_id: "rev_failed" });
+    await expect(service.list()).resolves.toEqual([expect.objectContaining({ revision_id: "rev_ready" })]);
+    await expect(rm(failedPrefix)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("rejects option-like package specs after trimming during create", async () => {
