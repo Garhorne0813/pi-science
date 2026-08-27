@@ -3,6 +3,7 @@ import { NodeSessionService } from "../runtime/node/node-session-service.js";
 import { PiManager } from "../runtime/pi/pi-manager.js";
 import { SessionRepository } from "../runtime/node/session-repository.js";
 import { SettingsStore } from "../storage/settings-store.js";
+import { ModelResourceService } from "../model-resources/model-resource-service.js";
 import { JobCoordinator } from "../runtime/jobs/job-coordinator.js";
 import type { ServerConfig } from "../config/config.js";
 import { WorkspaceEnvironmentService } from "../runtime/workspace/workspace-environment.js";
@@ -24,6 +25,7 @@ export interface ServerModules {
   readonly sessionRepository: SessionRepository;
   readonly piManager: PiManager;
   readonly settings: SettingsStore;
+  readonly modelResources: ModelResourceService;
   readonly jobs: JobCoordinator;
   readonly environments: WorkspaceEnvironmentService;
   readonly kernels: NodeKernelManager;
@@ -57,10 +59,11 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
   const environments = new WorkspaceEnvironmentService(undefined, config?.micromambaExecutable, sqliteEnabled ? environmentRepository : undefined);
   const kernels = new NodeKernelManager();
   const notebooks = new NotebookService({ micromambaExecutable: config?.micromambaExecutable, environments });
-  const projectReview = new ProjectReviewService(new PiReviewSubagentRunner(environments, piManager), sessionRepository);
-  const sessions = new NodeSessionService(events, piManager, sessionRepository, environments, projectReview);
   const settings = new SettingsStore();
+  const modelResources = new ModelResourceService({ settings });
+  const projectReview = new ProjectReviewService(new PiReviewSubagentRunner(environments, piManager), sessionRepository);
+  const sessions = new NodeSessionService(events, piManager, sessionRepository, environments, projectReview, undefined, modelResources);
   const jobs = new JobCoordinator(environments, {}, undefined, sqliteEnabled ? jobRepository : undefined);
   const research = new ResearchLoopCoordinator(jobs, new PiResearchSubagentRunner(environments, piManager));
-  return { sessions, events, sessionRepository, piManager, settings, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled };
+  return { sessions, events, sessionRepository, piManager, settings, modelResources, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled };
 }

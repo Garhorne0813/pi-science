@@ -1,6 +1,6 @@
-/** DTOs for the `/api/settings`, `/api/endpoints`, `/api/agent-profiles` and `/api/mcp`
- *  routes. `packages/contracts` is server-owned and carries no settings schema, so the
- *  shapes the settings UI reads live here once instead of once per component file. */
+/** Legacy settings DTOs plus unrelated settings-page resources. The canonical
+ *  model domain lives under `lib/model-resources`; legacy fields remain only
+ *  for migration responses consumed by older clients. */
 
 export type ProviderAuthKind = "api_key" | "oauth" | "api_key_or_oauth";
 export type ProviderCredentialStatus = "configured" | "connected" | "needs_key" | "needs_login";
@@ -24,6 +24,7 @@ export interface Provider {
   enabled?: boolean;
 }
 
+/** @deprecated Legacy response shape. New UI uses `lib/model-resources`. */
 export interface CustomProvider {
   id: string;
   name: string;
@@ -53,23 +54,13 @@ export interface SettingsConfig {
   model: string;
   thinking: string;
   providers: Provider[];
+  /** @deprecated Compatibility projection only. */
   custom_providers: CustomProvider[];
   available_models: AvailableModel[];
   model_catalog_source?: "pi" | "fallback";
   compaction_enabled: boolean;
   compaction_threshold_percent: number;
   model_context_window?: number | null;
-}
-
-export interface ModelEndpoint {
-  endpoint_id: string;
-  name: string;
-  base_url: string;
-  protocol: string;
-  enabled: boolean;
-  health: string;
-  data_egress: string;
-  error?: string | null;
 }
 
 export interface RuntimeExtension {

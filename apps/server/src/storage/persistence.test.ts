@@ -81,6 +81,27 @@ describe("cross-process file lock", () => {
     await release();
   });
 
+  it("bounds the in-process queue without poisoning later writers", async () => {
+    const cwd = await workspace();
+    const path = join(cwd, "records.jsonl");
+    let finishFirst!: () => void;
+    const first = withFileWriteLock(path, () => new Promise<void>((resolveFirst) => { finishFirst = resolveFirst; }));
+    for (let attempt = 0; attempt < 20 && !finishFirst; attempt += 1) await delay(5);
+
+    await expect(withFileWriteLock(path, async () => undefined, { timeoutMs: 20 })).rejects.toMatchObject({ code: "file_lock_timeout" });
+    finishFirst();
+    await first;
+    await expect(withFileWriteLock(path, async () => "next", { timeoutMs: 100 })).resolves.toBe("next");
+  });
+
+  it("fails with a clear error when a live lock exceeds the wait limit", async () => {
+    const cwd = await workspace();
+    const path = join(cwd, "records.jsonl");
+    await writeFile(`${path}.lock`, JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString() }), "utf8");
+
+    await expect(acquireFileLock(path, { timeoutMs: 20 })).rejects.toMatchObject({ code: "file_lock_timeout" });
+  });
+
   it("blocks withFileWriteLock while another process holds the lockfile", async () => {
     const cwd = await workspace();
     const path = join(cwd, "records.jsonl");
@@ -132,6 +153,14 @@ describe("cross-process file lock", () => {
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ key: "value" });
     await writeJsonAtomic(path, { key: "updated" });
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ key: "updated" });
+  });
+
+  it("creates the destination with the requested POSIX mode", async () => {
+    const cwd = await workspace();
+    const path = join(cwd, "secret.json");
+    await writeJsonAtomic(path, { key: "secret" }, { mode: 0o600 });
+    if (process.platform !== "win32") expect((await stat(path)).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ key: "secret" });
   });
 
   it("leaves no orphaned temp files after a normal atomic write", async () => {

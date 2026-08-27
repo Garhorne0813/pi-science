@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { configPath } from "../../storage/persistence.js";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import { runtimeExtensionStatus } from "../../runtime/pi/pi-runtime-launch.js";
-import { validateOutboundHttpUrl } from "../../security/outbound-security.js";
+import { safeConnectorFetch, validateOutboundHttpUrl } from "../../security/outbound-security.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { SettingsStore, type SettingsData as Settings } from "../../storage/settings-store.js";
 import { loadPiAiCatalog } from "../../config/model-catalog-fallback.js";
@@ -21,6 +21,7 @@ import {
 } from "../../catalog/project-skill-service.js";
 import { knownWorkspacePaths } from "./catalog-routes.js";
 import type { RuntimeSkillPolicy } from "../../runtime/pi/pi-process.js";
+import type { ModelResourceService } from "../../model-resources/model-resource-service.js";
 const BUILTIN_SUBAGENTS = [
   ["context-builder", "Builds grounded context for a later agent."],
   ["delegate", "Handles a focused delegated task."],
@@ -67,7 +68,10 @@ const FALLBACK_MODEL_HINTS: Record<string, { contextWindow: number; thinkingLeve
 };
 async function respondWithRuntimeReload<T extends Record<string, unknown>>(nodeSessionService: NodeSessionService, reply: FastifyReply, payload: T): Promise<(T & { session_replacements: Array<{ cwd: string; oldId: string; newId: string }> }) | FastifyReply> {
   try { return { ...payload, session_replacements: await nodeSessionService.reloadConfiguration() }; }
-  catch (error) { return reply.code(502).send({ ok: false, error: `Settings were saved, but Pi runtime reload failed: ${String(error)}` }); }
+  catch (error) {
+    reply.code(502).send({ ok: false, error: `Settings were saved, but Pi runtime reload failed: ${String(error)}` });
+    return reply;
+  }
 }
 function storedSkillPolicy(config: Settings): RuntimeSkillPolicy {
   const policy = config.skill_policy;
@@ -126,12 +130,15 @@ function customModels(config: Settings): Array<Record<string, unknown>> {
 /** Boolean credential presence (stored Pi-Science key or environment key) for
  *  every builtin pi-ai provider. Environment detection delegates to pi-ai's
  *  own env map (shared OPENCODE_API_KEY etc.) and never exposes key values. */
-async function providerCredentialMap(config: Settings): Promise<Record<string, boolean>> {
+async function providerCredentialMap(config: Settings, modelResources?: ModelResourceService): Promise<Record<string, boolean>> {
   const providers = await loadPiAiProviderCatalog();
   const result: Record<string, boolean> = {};
+  const resourceState = modelResources?.repository.readSync();
   for (const provider of providers) {
+    const ref = resourceState?.credential_refs[provider.id];
+    const managed = ref && modelResources ? Boolean((await modelResources.credentials.getForRuntime(ref))?.secret) : false;
     const stored = typeof config.api_keys?.[provider.id] === "string" && config.api_keys[provider.id] !== "";
-    result[provider.id] = stored || await hasEnvApiKey(provider.id);
+    result[provider.id] = managed || stored || await hasEnvApiKey(provider.id);
   }
   return result;
 }
@@ -225,8 +232,8 @@ function mergeModelCatalog(primary: Array<Record<string, unknown>>, overlay: Arr
   }
   return [...byId.values()];
 }
-async function modelCatalog(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string): Promise<{ available: Array<Record<string, unknown>>; source: "pi" | "fallback" }> {
-  const credential = await providerCredentialMap(config);
+async function modelCatalog(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, modelResources?: ModelResourceService): Promise<{ available: Array<Record<string, unknown>>; source: "pi" | "fallback" }> {
+  const credential = await providerCredentialMap(config, modelResources);
   if (cwdValue) {
     const result = await nodeSessionService.availableModels(cwdValue);
     const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
@@ -292,7 +299,7 @@ type ProviderInventoryEntry = {
  *  runtime lists them (per-provider), pi-ai model ids otherwise. Credential
  *  status distinguishes API-key providers (stored/env key) from OAuth-only
  *  subscription providers (needs_login until the runtime has them). */
-async function providerInventory(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string): Promise<ProviderInventoryEntry[]> {
+async function providerInventory(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, modelResources?: ModelResourceService): Promise<ProviderInventoryEntry[]> {
   const providers = await loadPiAiProviderCatalog();
   if (providers.length === 0) return [];
   let orbitModels: Record<string, string[]> | null = null;
@@ -312,9 +319,11 @@ async function providerInventory(nodeSessionService: NodeSessionService, config:
   }
   const entries: ProviderInventoryEntry[] = [];
   for (const provider of providers) {
+    const ref = modelResources?.repository.readSync().credential_refs[provider.id];
+    const managed = ref && modelResources ? Boolean((await modelResources.credentials.getForRuntime(ref))?.secret) : false;
     const stored = typeof config.api_keys?.[provider.id] === "string" && config.api_keys[provider.id] !== "";
     const env = await hasEnvApiKey(provider.id);
-    const hasKey = provider.apiKeySupported && (stored || env);
+    const hasKey = provider.apiKeySupported && (managed || stored || env);
     let credential_status: ProviderInventoryEntry["credential_status"];
     if (hasKey) credential_status = "configured";
     else if (!provider.apiKeySupported && provider.oauthSupported) credential_status = orbitModels && orbitModels[provider.id] ? "connected" : "needs_login";
@@ -336,7 +345,7 @@ async function providerInventory(nodeSessionService: NodeSessionService, config:
   }
   return entries;
 }
-function publicCustom(item: NonNullable<Settings["custom_providers"]>[number]): Record<string, unknown> { return { id: item.id, name: item.name, base_url: item.base_url, api: item.api, models: item.models, has_key: Boolean(item.api_key), reasoning: item.reasoning, context_window: item.context_window, model_hints: item.model_hints }; }
+function publicCustom(item: NonNullable<Settings["custom_providers"]>[number] & { has_key?: boolean }): Record<string, unknown> { return { id: item.id, name: item.name, base_url: item.base_url, api: item.api, models: item.models, has_key: Boolean(item.api_key) || item.has_key === true, reasoning: item.reasoning, context_window: item.context_window, model_hints: item.model_hints }; }
 function slug(value: string): string { return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "custom-api"; }
 function query(request: { query: unknown }, name: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[name]; return typeof value === "string" && value ? value : fallback; }
 function compactionThreshold(config: Settings, available: Array<Record<string, unknown>>, configured: string): number { if (typeof config.compaction_threshold_percent === "number") return config.compaction_threshold_percent; const contextWindow = Number(available.find((item) => item.id === configured)?.context_window ?? config.model_context_window ?? 0); return contextWindow > 16384 ? Math.min(95, Math.max(50, Math.round((1 - 16384 / contextWindow) * 100))) : 85; }
@@ -426,9 +435,17 @@ function completeHint(hint: ModelHint | undefined): boolean {
   return Boolean(hint?.context_window && typeof hint?.reasoning === "boolean");
 }
 
-async function fetchCapability(url: string, init: RequestInit, source: string): Promise<ModelHint> {
+async function fetchCapability(url: string, init: RequestInit, source: string, allowPrivate: boolean, timeoutMs: number): Promise<ModelHint> {
   try {
-    const response = await fetch(url, { ...init, redirect: "error" });
+    const response = await safeConnectorFetch(url, {
+      allowPrivate,
+      timeoutMs,
+      maxRedirects: 0,
+      maxResponseBytes: 2 * 1024 * 1024,
+      method: init.method,
+      headers: init.headers as Record<string, string> | undefined,
+      body: init.body,
+    });
     const payload = await readBoundedJson(response, 2 * 1024 * 1024);
     const hint = capabilitiesFromPayload(payload);
     return usefulHint(hint) ? { ...hint, source } : { source: "fallback" };
@@ -437,15 +454,15 @@ async function fetchCapability(url: string, init: RequestInit, source: string): 
   }
 }
 
-async function probeModelProtocol(baseUrl: string, model: string, apiKey: string, api: string, signal: AbortSignal): Promise<ModelHint> {
+async function probeModelProtocol(baseUrl: string, model: string, apiKey: string, api: string, allowPrivate: boolean, timeoutMs: number): Promise<ModelHint> {
   const headers = { ...authHeaders(apiKey, api), "content-type": "application/json" };
   if (api === "anthropic-messages") {
-    return fetchCapability(`${baseUrl}/messages`, { method: "POST", headers, signal, body: JSON.stringify({ model, max_tokens: 1_000_000_000, messages: [{ role: "user", content: "ping" }] }) }, "anthropic-probe");
+    return fetchCapability(`${baseUrl}/messages`, { method: "POST", headers, body: JSON.stringify({ model, max_tokens: 1_000_000_000, messages: [{ role: "user", content: "ping" }] }) }, "anthropic-probe", allowPrivate, timeoutMs);
   }
   if (api === "openai-responses") {
-    return fetchCapability(`${baseUrl}/responses`, { method: "POST", headers, signal, body: JSON.stringify({ model, input: "ping", max_output_tokens: 1_000_000_000 }) }, "openai-responses-probe");
+    return fetchCapability(`${baseUrl}/responses`, { method: "POST", headers, body: JSON.stringify({ model, input: "ping", max_output_tokens: 1_000_000_000 }) }, "openai-responses-probe", allowPrivate, timeoutMs);
   }
-  return fetchCapability(`${baseUrl}/chat/completions`, { method: "POST", headers, signal, body: JSON.stringify({ model, messages: [{ role: "user", content: "ping" }], max_tokens: 1_000_000_000, stream: false }) }, "openai-chat-probe");
+  return fetchCapability(`${baseUrl}/chat/completions`, { method: "POST", headers, body: JSON.stringify({ model, messages: [{ role: "user", content: "ping" }], max_tokens: 1_000_000_000, stream: false }) }, "openai-chat-probe", allowPrivate, timeoutMs);
 }
 
 async function forEachConcurrent<T>(items: T[], limit: number, task: (item: T) => Promise<void>): Promise<void> {
@@ -462,8 +479,13 @@ async function forEachConcurrent<T>(items: T[], limit: number, task: (item: T) =
 async function discoverProvider(baseUrl: string, apiKey: string, api: string, allowPrivate: boolean, timeoutMs: number): Promise<ProviderDiscovery> {
   const safeUrl = await validateOutboundHttpUrl(baseUrl, { allowPrivate });
   const normalizedBase = safeUrl.toString().replace(/\/$/, "");
-  const signal = AbortSignal.timeout(timeoutMs);
-  const response = await fetch(`${normalizedBase}/models`, { headers: authHeaders(apiKey, api), redirect: "error", signal });
+  const response = await safeConnectorFetch(`${normalizedBase}/models`, {
+    allowPrivate,
+    timeoutMs,
+    maxRedirects: 0,
+    maxResponseBytes: 2 * 1024 * 1024,
+    headers: authHeaders(apiKey, api),
+  });
   const payload = await readBoundedJson(response, 2 * 1024 * 1024);
   if (!response.ok) throw new Error(String(payload.error ?? payload.message ?? `Model discovery returned ${response.status}`));
   const rows = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : [];
@@ -479,10 +501,10 @@ async function discoverProvider(baseUrl: string, apiKey: string, api: string, al
     const inlineHint = capabilitiesFromPayload(rowById.get(model));
     let hint: ModelHint = usefulHint(inlineHint) ? { ...inlineHint, source: "models" } : { source: "fallback" };
     if (!hint.context_window || typeof hint.reasoning !== "boolean") {
-      const detail = await fetchCapability(`${normalizedBase}/models/${encodeURIComponent(model)}`, { headers: authHeaders(apiKey, api), signal }, "model-detail");
+      const detail = await fetchCapability(`${normalizedBase}/models/${encodeURIComponent(model)}`, { headers: authHeaders(apiKey, api) }, "model-detail", allowPrivate, timeoutMs);
       hint = mergeHint(hint, detail);
     }
-    if (!hint.context_window || typeof hint.reasoning !== "boolean") hint = mergeHint(hint, await probeModelProtocol(normalizedBase, model, apiKey, api, signal));
+    if (!hint.context_window || typeof hint.reasoning !== "boolean") hint = mergeHint(hint, await probeModelProtocol(normalizedBase, model, apiKey, api, allowPrivate, timeoutMs));
     const pi = piModels.find((candidate) => String(candidate.id ?? "") === model);
     if (pi) hint = mergeHint(hint, { ...capabilitiesFromPayload(pi), source: "pi-ai" });
     if (usefulHint(hint)) modelHints[model] = hint;
@@ -490,7 +512,7 @@ async function discoverProvider(baseUrl: string, apiKey: string, api: string, al
   return { safeUrl, models, modelHints };
 }
 
-export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService: NodeSessionService, settingsStore: SettingsStore): void {
+export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService: NodeSessionService, settingsStore: SettingsStore, modelResources?: ModelResourceService): void {
   const load = () => settingsStore.read();
   const mutate = <T>(operation: (config: Settings) => T | Promise<T>) => settingsStore.update(operation);
   // Direct API clients may save without calling the discovery endpoint first.
@@ -521,12 +543,33 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       ? respondWithRuntimeReload(first as NodeSessionService, second as FastifyReply, third)
       : respondWithRuntimeReload(nodeSessionService, first as FastifyReply, second as T);
   }
-  app.get("/api/settings/providers", async () => { const config = await load(); return { providers: await providerInventory(nodeSessionService, config, "") }; });
+  app.get("/api/settings/providers", async () => { const config = await load(); return { providers: await providerInventory(nodeSessionService, config, "", modelResources) }; });
   app.get("/api/settings/config", async (request) => {
     const config = await load();
     const cwdValue = query(request, "cwd", "");
-    const catalog = await modelCatalog(nodeSessionService, config, cwdValue);
-    const available = catalog.available;
+    const catalog = await modelCatalog(nodeSessionService, config, cwdValue, modelResources);
+    let available = catalog.available;
+    const canonicalState = modelResources?.repository.readSync();
+    const hasCanonicalResources = Boolean(canonicalState && (canonicalState.migration || canonicalState.providers.length > 0 || canonicalState.models.length > 0));
+    if (modelResources && hasCanonicalResources) {
+      const resourceModels = await modelResources.listModels();
+      const projected = resourceModels
+        .filter((item) => item.provider_id.startsWith("user-") && item.available)
+        .map((item) => ({
+          id: item.id,
+          provider: item.provider_id,
+          model: item.model_id,
+          label: item.display_name,
+          custom: true,
+          reasoning: item.capabilities.reasoning,
+          thinking_levels: item.capabilities.thinking_levels,
+          context_window: item.capabilities.context_window,
+          capability_source: item.capability_source,
+          available: item.available,
+          availability_reason: item.availability_reason,
+        }));
+      available = mergeModelCatalog(available, projected);
+    }
     const configured = typeof config.model === "string" && available.some((item) => item.id === config.model) ? config.model : "";
     let thinking = configured ? String(config.thinking ?? "high") : "off";
     let runtimeLevelsApplied = false;
@@ -560,34 +603,42 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       if (Number.isInteger(runtimeContextWindow) && runtimeContextWindow >= 4096) {
         const provider = String(selected.provider ?? "");
         const modelName = String(selected.model ?? "");
-        const providerId = provider.startsWith("custom-") ? provider.slice("custom-".length) : "";
-        const entry = providerId && modelName ? (config.custom_providers ?? []).find((candidate) => candidate.id === providerId) : undefined;
-        const storedHint = entry?.model_hints?.[modelName] as Record<string, unknown> | undefined;
-        const hintNeedsWrite = Boolean(entry) && (
-          storedHint?.context_window !== runtimeContextWindow
-          || (runtimeLevelsApplied && (storedHint?.reasoning !== (selected.reasoning === true) || storedHint?.source !== "pi-runtime" || !sameLevelList(storedHint?.thinking_levels, selected.thinking_levels)))
-        );
-        if (Number(config.model_context_window ?? 0) !== runtimeContextWindow || hintNeedsWrite) {
-          await mutate((current) => {
-            if (String(current.model ?? "") !== configured) return;
-            if (Number(current.model_context_window ?? 0) !== runtimeContextWindow) current.model_context_window = runtimeContextWindow;
-            const currentEntry = providerId && modelName ? (current.custom_providers ?? []).find((candidate) => candidate.id === providerId) : undefined;
-            if (currentEntry) {
-              const hints: Record<string, unknown> = { ...(currentEntry.model_hints?.[modelName] ?? {}) };
-              hints.context_window = runtimeContextWindow;
-              if (runtimeLevelsApplied) {
-                hints.reasoning = selected.reasoning === true;
-                hints.thinking_levels = Array.isArray(selected.thinking_levels) ? [...selected.thinking_levels] : [];
-                hints.source = "pi-runtime";
-              }
-              currentEntry.model_hints = { ...(currentEntry.model_hints ?? {}), [modelName]: hints } as NonNullable<Settings["custom_providers"]>[number]["model_hints"];
-            }
+        if (modelResources && provider.startsWith("user-") && modelName) {
+          await modelResources.applyRuntimeCapabilities(provider, modelName, {
+            ...(Number.isInteger(runtimeContextWindow) && runtimeContextWindow >= 4096 ? { context_window: runtimeContextWindow } : {}),
+            ...(runtimeLevelsApplied ? { reasoning: selected.reasoning === true, thinking_levels: Array.isArray(selected.thinking_levels) ? [...selected.thinking_levels] : [] } : {}),
           });
           config.model_context_window = runtimeContextWindow;
+        } else {
+          const providerId = provider.startsWith("custom-") ? provider.slice("custom-".length) : "";
+          const entry = providerId && modelName ? (config.custom_providers ?? []).find((candidate) => candidate.id === providerId) : undefined;
+          const storedHint = entry?.model_hints?.[modelName] as Record<string, unknown> | undefined;
+          const hintNeedsWrite = Boolean(entry) && (
+            storedHint?.context_window !== runtimeContextWindow
+            || (runtimeLevelsApplied && (storedHint?.reasoning !== (selected.reasoning === true) || storedHint?.source !== "pi-runtime" || !sameLevelList(storedHint?.thinking_levels, selected.thinking_levels)))
+          );
+          if (Number(config.model_context_window ?? 0) !== runtimeContextWindow || hintNeedsWrite) {
+            await mutate((current) => {
+              if (String(current.model ?? "") !== configured) return;
+              if (Number(current.model_context_window ?? 0) !== runtimeContextWindow) current.model_context_window = runtimeContextWindow;
+              const currentEntry = providerId && modelName ? (current.custom_providers ?? []).find((candidate) => candidate.id === providerId) : undefined;
+              if (currentEntry) {
+                const hints: Record<string, unknown> = { ...(currentEntry.model_hints?.[modelName] ?? {}) };
+                hints.context_window = runtimeContextWindow;
+                if (runtimeLevelsApplied) {
+                  hints.reasoning = selected.reasoning === true;
+                  hints.thinking_levels = Array.isArray(selected.thinking_levels) ? [...selected.thinking_levels] : [];
+                  hints.source = "pi-runtime";
+                }
+                currentEntry.model_hints = { ...(currentEntry.model_hints ?? {}), [modelName]: hints } as NonNullable<Settings["custom_providers"]>[number]["model_hints"];
+              }
+            });
+            config.model_context_window = runtimeContextWindow;
+          }
         }
       }
     }
-    const providers = await providerInventory(nodeSessionService, config, cwdValue);
+    const providers = await providerInventory(nodeSessionService, config, cwdValue, modelResources);
     const apiKeys = Object.fromEntries(providers.map((provider) => [provider.id, provider.has_key]));
     // Without the pi-ai runtime there is no provider inventory to derive
     // key presence from; surface stored keys so persistence stays observable
@@ -595,15 +646,81 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
     if (providers.length === 0 && config.api_keys) {
       for (const [id, key] of Object.entries(config.api_keys)) if (typeof key === "string" && key) apiKeys[id] = true;
     }
+    if (modelResources) {
+      const resourceState = modelResources.repository.readSync();
+      for (const [id, ref] of Object.entries(resourceState.credential_refs)) if (modelResources.credentials.readSync(ref)?.secret) apiKeys[id] = true;
+    }
     return { api_keys: apiKeys, model: configured, thinking, model_context_window: config.model_context_window ?? null, compaction_enabled: config.compaction_enabled !== false, compaction_threshold_percent: compactionThreshold(config, available, configured), allow_private_providers: config.allow_private_providers !== false, providers, custom_providers: (config.custom_providers ?? []).map(publicCustom), available_models: available, model_catalog_source: catalog.source };
   });
   app.put("/api/settings/private-providers", async (request, reply) => { const body = (request.body ?? {}) as { enabled?: unknown }; const enabled = body.enabled !== false; await mutate((config) => { config.allow_private_providers = enabled; }); return respondWithReload(nodeSessionService, reply, { ok: true, allow_private_providers: enabled }); });
-  app.put("/api/settings/api-key", async (request, reply) => { const body = (request.body ?? {}) as { provider?: unknown; api_key?: unknown }; const provider = String(body.provider ?? ""); const catalog = await loadPiAiProviderCatalog(); // Without the pi-ai runtime installed there is no catalog to validate
+  app.put("/api/settings/api-key", async (request, reply) => { const body = (request.body ?? {}) as { provider?: unknown; api_key?: unknown }; const provider = String(body.provider ?? ""); const apiKey = String(body.api_key ?? ""); const catalog = await loadPiAiProviderCatalog(); // Without the pi-ai runtime installed there is no catalog to validate
     // against; accept the key (it stays inert until a runtime exists) so
     // smoke tests and headless installs can still persist settings.
-    if (catalog.length > 0) { const entry = catalog.find((candidate) => candidate.id === provider); if (!entry) return reply.code(400).send({ error: `Unknown provider: ${provider}` }); if (!entry.apiKeySupported) return reply.code(400).send({ code: "provider_requires_login", error: `${provider} uses subscription login instead of an API key` }); } await mutate((config) => { config.api_keys = { ...(config.api_keys ?? {}), [provider]: String(body.api_key ?? "") }; }); return respondWithReload(nodeSessionService, reply, { ok: true, provider }); });
-  app.delete<{ Params: { provider: string } }>("/api/settings/api-key/:provider", async (request, reply) => { await mutate((config) => { if (config.api_keys) delete config.api_keys[request.params.provider]; if (String(config.model ?? "").startsWith(`${request.params.provider}/`)) config.model = ""; }); return respondWithReload(nodeSessionService, reply, { ok: true, provider: request.params.provider }); });
-  app.put("/api/settings/model", async (request, reply) => { const body = (request.body ?? {}) as { model?: unknown; thinking?: unknown }; const model = String(body.model ?? ""); const requestedThinking = String(body.thinking ?? "high"); const cwdValue = query(request, "cwd", ""); const current = await load(); const catalog = await modelCatalog(nodeSessionService, current, cwdValue); const selected = catalog.available.find((item) => item.id === model); if (model && !selected) return reply.code(400).send({ error: "Model is not available from a configured provider" }); // Never persist a thinking level the model does not support. Clamp to the
+    if (catalog.length > 0) { const entry = catalog.find((candidate) => candidate.id === provider); if (!entry) return reply.code(400).send({ error: `Unknown provider: ${provider}` }); if (!entry.apiKeySupported) return reply.code(400).send({ code: "provider_requires_login", error: `${provider} uses subscription login instead of an API key` }); }
+    if (modelResources) {
+      await modelResources.ensureMigrated();
+      const credentialId = `cred_system_${provider.toLowerCase().replace(/[^a-z0-9_-]/g, "-")}`;
+      await modelResources.credentials.putRaw(credentialId, { kind: "api_key", backend: "managed", label: `${provider} API key` }, apiKey);
+      await modelResources.repository.update((state) => { state.credential_refs[provider] = credentialId; });
+    } else await mutate((config) => { config.api_keys = { ...(config.api_keys ?? {}), [provider]: apiKey }; });
+    return respondWithReload(nodeSessionService, reply, { ok: true, provider }); });
+  app.delete<{ Params: { provider: string } }>("/api/settings/api-key/:provider", async (request, reply) => {
+    if (modelResources) {
+      await modelResources.ensureMigrated();
+      const state = await modelResources.repository.read();
+      const ref = state.credential_refs[request.params.provider];
+      if (ref) await modelResources.credentials.remove(ref);
+      await modelResources.repository.update((current) => { delete current.credential_refs[request.params.provider]; });
+      await mutate((config) => { if (String(config.model ?? "").startsWith(`${request.params.provider}/`)) config.model = ""; });
+    } else await mutate((config) => { if (config.api_keys) delete config.api_keys[request.params.provider]; if (String(config.model ?? "").startsWith(`${request.params.provider}/`)) config.model = ""; });
+    return respondWithReload(nodeSessionService, reply, { ok: true, provider: request.params.provider }); });
+  app.put("/api/settings/model", async (request, reply) => { const body = (request.body ?? {}) as { model?: unknown; thinking?: unknown }; const model = String(body.model ?? ""); const requestedThinking = String(body.thinking ?? "high"); const cwdValue = query(request, "cwd", ""); const current = await load(); const canonicalState = modelResources?.repository.readSync(); const useCanonicalResources = Boolean(modelResources && (canonicalState?.migration || canonicalState?.providers?.length || canonicalState?.models?.length));
+    if (useCanonicalResources && modelResources) {
+      const canonicalModel = canonicalState?.aliases[model] ?? model;
+      const selected = (await modelResources.listModels({ available: true })).find((item) => item.id === canonicalModel);
+      if (model && !selected) return reply.code(422).send({ code: "no_routable_endpoint", error: "Model is not available from a configured provider" });
+      let levels = normalizeThinkingLevels(selected?.capabilities.thinking_levels);
+      let runtimeLevelsVerified = false;
+      if (cwdValue && canonicalModel) {
+        const actual = await nodeSessionService.availableThinkingLevels(cwdValue, canonicalModel).catch(() => null);
+        if (actual?.success && actual.data && typeof actual.data === "object") {
+          const data = actual.data as Record<string, unknown>;
+          const runtimeLevels = normalizeThinkingLevels(data.levels);
+          if (runtimeLevels && data.model === canonicalModel) {
+            levels = runtimeLevels;
+            runtimeLevelsVerified = true;
+          }
+        }
+      }
+      const thinking = clampThinking(requestedThinking, levels ?? ["off"]);
+      await mutate((config) => { config.model = canonicalModel; config.thinking = thinking; const contextWindow = Number(selected?.capabilities.context_window ?? 0); if (contextWindow > 0) config.model_context_window = contextWindow; });
+      if (runtimeLevelsVerified && canonicalModel.startsWith("user-") && selected) {
+        const separator = canonicalModel.indexOf("/");
+        if (separator > 0) await modelResources.applyRuntimeCapabilities(canonicalModel.slice(0, separator), canonicalModel.slice(separator + 1), { reasoning: selected.capabilities.reasoning, thinking_levels: levels ?? selected.capabilities.thinking_levels });
+      }
+      const reloaded = await respondWithRuntimeReload(nodeSessionService, reply, { ok: true, model: canonicalModel, thinking });
+      if ("send" in reloaded) return reloaded;
+      if (cwdValue && canonicalModel) {
+        const actual = await nodeSessionService.availableThinkingLevels(cwdValue, canonicalModel).catch(() => null);
+        if (actual?.success && actual.data && typeof actual.data === "object") {
+          const data = actual.data as Record<string, unknown>;
+          const runtimeLevels = normalizeThinkingLevels(data.levels);
+          if (runtimeLevels && data.model === canonicalModel) {
+            if (canonicalModel.startsWith("user-") && selected) {
+              const separator = canonicalModel.indexOf("/");
+              if (separator > 0) await modelResources.applyRuntimeCapabilities(canonicalModel.slice(0, separator), canonicalModel.slice(separator + 1), { reasoning: selected.capabilities.reasoning, thinking_levels: runtimeLevels });
+            }
+            const effective = clampThinking(requestedThinking, runtimeLevels);
+            if (effective !== thinking) {
+              await mutate((config) => { if (String(config.model ?? "") === canonicalModel) config.thinking = effective; });
+              reloaded.thinking = effective;
+            }
+          }
+        }
+      }
+      return reloaded;
+    }
+    const catalog = await modelCatalog(nodeSessionService, current, cwdValue, modelResources); const selected = catalog.available.find((item) => item.id === model); if (model && !selected) return reply.code(400).send({ error: "Model is not available from a configured provider" }); // Never persist a thinking level the model does not support. Clamp to the
     // catalog levels for the selected model; when the levels are unknown,
     // fall back to "off" instead of inventing a level.
     const levels = normalizeThinkingLevels(selected?.thinking_levels);
@@ -633,10 +750,43 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
     }
     return reloaded; });
   app.put("/api/settings/compaction", async (request, reply) => { const body = (request.body ?? {}) as { enabled?: unknown; threshold_percent?: unknown }; const threshold = body.threshold_percent === undefined ? undefined : Number(body.threshold_percent); if (threshold !== undefined && (!Number.isFinite(threshold) || threshold < 50 || threshold > 95)) return reply.code(400).send({ error: "Compaction threshold must be between 50 and 95 percent" }); const stored = await mutate((config) => { config.compaction_enabled = body.enabled !== false; if (threshold !== undefined) config.compaction_threshold_percent = threshold; return config.compaction_threshold_percent; }); return respondWithReload(nodeSessionService, reply, { ok: true, compaction_enabled: body.enabled !== false, compaction_threshold_percent: threshold ?? stored }); });
-  app.get("/api/settings/custom-providers", async () => ({ providers: (await load()).custom_providers?.map(publicCustom) ?? [] }));
-  app.post("/api/settings/custom-providers/discover", async (request, reply) => { const body = (request.body ?? {}) as Record<string, unknown>; const baseUrl = String(body.base_url ?? "").replace(/\/$/, ""); const api = String(body.api ?? "openai-completions"); let discovered: ProviderDiscovery; try { const config = await load(); discovered = await discoverProvider(baseUrl, String(body.api_key ?? ""), api, config.allow_private_providers !== false && process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0", 10_000); } catch (error) { const message = error instanceof Error ? error.message : String(error); const status = /private|reserved|invalid|absolute/i.test(message) ? 400 : 502; return reply.code(status).send({ error: `Model discovery failed: ${message}` }); } if (!discovered.models.length) return reply.code(422).send({ error: "No models were returned by this provider" }); const id = slug(String(body.name ?? discovered.safeUrl.hostname)); return { provider: { id, name: String(body.name ?? "Custom API"), base_url: baseUrl, api, models: discovered.models, model_hints: discovered.modelHints } }; });
-  app.put<{ Params: { provider_id: string } }>("/api/settings/custom-providers/:provider_id", async (request, reply) => { const body = (request.body ?? {}) as Record<string, unknown>; const baseUrl = String(body.base_url ?? "").replace(/\/$/, ""); if (!/^https?:\/\//.test(baseUrl)) return reply.code(400).send({ error: "base_url must be an absolute http(s) URL" }); const modelList = Array.isArray(body.models) ? [...new Set(body.models.map(String).map((item) => item.trim()).filter(Boolean))] : []; if (!modelList.length) return reply.code(400).send({ error: "At least one model is required" }); const contextWindow = Number(body.context_window ?? 128000); if (!Number.isInteger(contextWindow) || contextWindow < 4096) return reply.code(400).send({ error: "context_window must be at least 4096 tokens" }); const requestedId = request.params.provider_id; const id = slug(requestedId); const result = await mutate((config) => { const old = config.custom_providers?.find((item) => item.id === id); if (old && requestedId !== old.id) return { conflict: true as const }; const requestedKey = String(body.api_key ?? ""); const next = { id, name: String(body.name ?? "Custom API"), base_url: baseUrl, api: String(body.api ?? "openai-completions"), models: modelList, api_key: requestedKey || old?.api_key || "", reasoning: typeof body.reasoning === "boolean" ? body.reasoning : old?.reasoning, context_window: contextWindow, model_hints: body.model_hints && typeof body.model_hints === "object" ? body.model_hints as NonNullable<Settings["custom_providers"]>[number]["model_hints"] : old?.model_hints }; config.custom_providers = [...(config.custom_providers ?? []).filter((item) => item.id !== id), next]; return { conflict: false as const, provider: next }; }); if (result.conflict) return reply.code(409).send({ error: `Provider ID '${requestedId}' conflicts with existing provider '${id}'` }); return respondWithReload(reply, { ok: true, provider: publicCustom(result.provider) }); });
-  app.delete<{ Params: { provider_id: string } }>("/api/settings/custom-providers/:provider_id", async (request, reply) => { const id = slug(request.params.provider_id); await mutate((config) => { config.custom_providers = (config.custom_providers ?? []).filter((item) => item.id !== id); if (String(config.model ?? "").startsWith(`custom-${id}/`)) config.model = ""; }); return respondWithReload(reply, { ok: true, id }); });
+  app.get("/api/settings/custom-providers", async () => {
+    const config = await load();
+    const legacy = [...(config.custom_providers ?? [])];
+    if (modelResources) {
+      await modelResources.ensureMigrated();
+      const state = await modelResources.repository.read();
+      const existingIds = new Set(legacy.map((item) => item.id));
+      for (const provider of state.providers.filter((item) => item.kind === "user")) {
+        const legacyId = provider.id.startsWith("user-") ? provider.id.slice("user-".length) : provider.id;
+        if (existingIds.has(legacyId)) continue;
+        const binding = state.bindings.filter((item) => item.provider_id === provider.id && item.enabled).sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id))[0];
+        const endpoint = binding ? state.endpoints.find((item) => item.id === binding.endpoint_id) : undefined;
+        const models = state.models.filter((item) => item.provider_id === provider.id);
+        const key = endpoint?.credential_ref ? await modelResources.credentials.getForRuntime(endpoint.credential_ref) : null;
+        legacy.push({
+          id: legacyId,
+          name: provider.name,
+          base_url: endpoint?.base_url ?? "",
+          api: endpoint?.api ?? (endpoint?.protocol === "anthropic" ? "anthropic-messages" : endpoint?.protocol === "ollama" ? "ollama" : "openai-completions"),
+          models: models.map((item) => item.model_id),
+          has_key: Boolean(key?.secret),
+          model_hints: Object.fromEntries(models.map((item) => [item.model_id, { ...item.capabilities, source: item.capability_source }])),
+        } as NonNullable<Settings["custom_providers"]>[number] & { has_key?: boolean });
+      }
+    }
+    return { providers: legacy.map(publicCustom) };
+  });
+  app.post("/api/settings/custom-providers/discover", async (request, reply) => { const body = (request.body ?? {}) as Record<string, unknown>; const baseUrl = String(body.base_url ?? "").replace(/\/$/, ""); const api = String(body.api ?? "openai-completions"); let discovered: ProviderDiscovery; try { const config = await load(); discovered = await discoverProvider(baseUrl, String(body.api_key ?? ""), api, config.allow_private_providers !== false && process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0", 10_000); } catch (error) { const message = error instanceof Error ? error.message : String(error); const secret = String(body.api_key ?? ""); const safeMessage = secret ? message.replaceAll(secret, "[redacted]") : message; const status = /private|reserved|invalid|absolute/i.test(message) ? 400 : 502; return reply.code(status).send({ error: `Model discovery failed: ${safeMessage}` }); } if (!discovered.models.length) return reply.code(422).send({ error: "No models were returned by this provider" }); const id = slug(String(body.name ?? discovered.safeUrl.hostname)); return { provider: { id, name: String(body.name ?? "Custom API"), base_url: baseUrl, api, models: discovered.models, model_hints: discovered.modelHints } }; });
+  app.put<{ Params: { provider_id: string } }>("/api/settings/custom-providers/:provider_id", async (request, reply) => { const body = (request.body ?? {}) as Record<string, unknown>; const baseUrl = String(body.base_url ?? "").replace(/\/$/, ""); if (!/^https?:\/\//.test(baseUrl)) return reply.code(400).send({ error: "base_url must be an absolute http(s) URL" }); const modelList = Array.isArray(body.models) ? [...new Set(body.models.map(String).map((item) => item.trim()).filter(Boolean))] : []; if (!modelList.length) return reply.code(400).send({ error: "At least one model is required" }); const contextWindow = Number(body.context_window ?? 128000); if (!Number.isInteger(contextWindow) || contextWindow < 4096) return reply.code(400).send({ error: "context_window must be at least 4096 tokens" }); const requestedId = request.params.provider_id; const id = slug(requestedId); const currentConfig = await load(); const old = currentConfig.custom_providers?.find((item) => item.id === id); if (old && requestedId !== old.id) return reply.code(409).send({ error: `Provider ID '${requestedId}' conflicts with existing provider '${id}'` });
+    if (modelResources) {
+      const result = await modelResources.upsertLegacyProvider({ id, name: String(body.name ?? "Custom API"), base_url: baseUrl, api: String(body.api ?? "openai-completions"), models: modelList, ...(String(body.api_key ?? "") ? { api_key: String(body.api_key) } : {}), ...(typeof body.reasoning === "boolean" ? { reasoning: body.reasoning } : {}), context_window: contextWindow, ...(body.model_hints && typeof body.model_hints === "object" ? { model_hints: body.model_hints as Record<string, { context_window?: number; reasoning?: boolean; thinking_levels?: string[]; source?: string }> } : {}) });
+      const compatibility = { id, name: result.provider.name, base_url: result.endpoint.base_url, api: String(body.api ?? "openai-completions"), models: modelList, reasoning: typeof body.reasoning === "boolean" ? body.reasoning : undefined, context_window: contextWindow, model_hints: body.model_hints && typeof body.model_hints === "object" ? body.model_hints as NonNullable<Settings["custom_providers"]>[number]["model_hints"] : old?.model_hints };
+      await mutate((config) => { config.custom_providers = [...(config.custom_providers ?? []).filter((item) => item.id !== id), compatibility]; });
+      return respondWithReload(reply, { ok: true, provider: publicCustom(compatibility) });
+    }
+    const result = await mutate((config) => { const requestedKey = String(body.api_key ?? ""); const next = { id, name: String(body.name ?? "Custom API"), base_url: baseUrl, api: String(body.api ?? "openai-completions"), models: modelList, api_key: requestedKey || old?.api_key || "", reasoning: typeof body.reasoning === "boolean" ? body.reasoning : old?.reasoning, context_window: contextWindow, model_hints: body.model_hints && typeof body.model_hints === "object" ? body.model_hints as NonNullable<Settings["custom_providers"]>[number]["model_hints"] : old?.model_hints }; config.custom_providers = [...(config.custom_providers ?? []).filter((item) => item.id !== id), next]; return next; }); return respondWithReload(reply, { ok: true, provider: publicCustom(result) }); });
+  app.delete<{ Params: { provider_id: string } }>("/api/settings/custom-providers/:provider_id", async (request, reply) => { const id = slug(request.params.provider_id); if (modelResources) { await modelResources.deleteProvider(`user-${id}`, true).catch((error) => { if (!(error instanceof Error) || !String(error.message).includes("was not found")) throw error; }); } await mutate((config) => { config.custom_providers = (config.custom_providers ?? []).filter((item) => item.id !== id); if (String(config.model ?? "").startsWith(`custom-${id}/`) || String(config.model ?? "").startsWith(`user-${id}/`)) config.model = ""; }); return respondWithReload(reply, { ok: true, id }); });
   app.get("/api/settings/web-access", async () => { const config = await load(); const web = config.web_access ?? {}; const stored = typeof web.api_keys === "object" && web.api_keys ? web.api_keys as Record<string, string> : {}; return { provider: typeof web.provider === "string" ? web.provider : "auto", workflow: typeof web.workflow === "string" ? web.workflow : "none", providers: Object.entries({ openai: "OPENAI_API_KEY", exa: "EXA_API_KEY", brave: "BRAVE_API_KEY", parallel: "PARALLEL_API_KEY", tavily: "TAVILY_API_KEY", perplexity: "PERPLEXITY_API_KEY", gemini: "GEMINI_API_KEY" }).map(([id, env]) => ({ id, has_key: Boolean(stored[id] || process.env[env]), key_source: stored[id] ? "web-access" : process.env[env] ? "environment" : null, env })) }; });
   app.put("/api/settings/web-access", async (request, reply) => { const body = (request.body ?? {}) as { provider?: unknown; workflow?: unknown; api_keys?: unknown; remove_keys?: unknown }; const supported = ["openai", "exa", "brave", "parallel", "tavily", "perplexity", "gemini"]; if (body.api_keys && typeof body.api_keys === "object") for (const key of Object.keys(body.api_keys as Record<string, unknown>)) if (!supported.includes(key)) return reply.code(400).send({ error: `Unknown web search provider: ${key}` }); await mutate((config) => { const web = config.web_access ?? {}; web.provider = String(body.provider ?? "auto"); web.workflow = String(body.workflow ?? "none"); const stored = typeof web.api_keys === "object" && web.api_keys ? web.api_keys as Record<string, string> : {}; if (body.api_keys && typeof body.api_keys === "object") for (const [key, value] of Object.entries(body.api_keys as Record<string, unknown>)) if (String(value).trim()) stored[key] = String(value).trim(); if (Array.isArray(body.remove_keys)) for (const key of body.remove_keys.map(String)) delete stored[key]; web.api_keys = stored; config.web_access = web; }); const response = await app.inject({ method: "GET", url: "/api/settings/web-access" }); return respondWithReload(reply, { ok: true, ...(response.json() as Record<string, unknown>) }); });
   app.get("/api/settings/mcp", async () => { const config = await load(); const source = typeof config.mcp_config_path === "string" ? config.mcp_config_path : configPath("mcp.json"); let definitions: Record<string, unknown> = {}; try { const payload = JSON.parse(await readFile(source, "utf8")) as { mcpServers?: unknown }; definitions = payload.mcpServers && typeof payload.mcpServers === "object" ? payload.mcpServers as Record<string, unknown> : {}; } catch { /* empty catalog */ } const configured = Object.keys(definitions); const enabled = Array.isArray(config.mcp_servers) ? config.mcp_servers.filter((id) => configured.includes(id)) : configured; return { servers: enabled, configured, config_path: source }; });

@@ -5,8 +5,7 @@ import { cn } from "../../lib/ui";
 import { clampThinkingLevel } from "../../lib/client/pi-science-client";
 import type { AvailableModel, Provider, ProviderCredentialStatus, SettingsConfig } from "../../lib/settings";
 import { ContextManagementSection } from "./ContextManagementSection";
-import { CustomApiSection } from "./CustomApiSection";
-import { ModelEndpointSection } from "./ModelEndpointSection";
+import { ModelResourceSection } from "./ModelResourceSection";
 import { SettingsSelectMenu } from "./SettingsSelectMenu";
 
 export interface LLMTabProps {
@@ -27,8 +26,7 @@ export function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKe
   const { t } = useTranslation();
   const [providerToAdd, setProviderToAdd] = useState("");
   const [showVendorPicker, setShowVendorPicker] = useState(false);
-  const [providerView, setProviderView] = useState<"vendors" | "custom">("vendors");
-  const [showCustomForm, setShowCustomForm] = useState(false);
+  const [providerView, setProviderView] = useState<"vendors" | "resources">("vendors");
   if (!config)
     return (
       <div className="text-sm text-muted py-4">
@@ -117,9 +115,9 @@ export function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKe
         <div className="flex border-y border-faint px-4" role="tablist" aria-label={t("settings.provider.views")}>
             {[
               { id: "vendors", label: t("settings.provider.vendors") },
-              { id: "custom", label: t("settings.provider.custom") },
+              { id: "resources", label: t("settings.provider.resources", { defaultValue: "Providers" }) },
             ].map((view) => (
-              <button key={view.id} type="button" role="tab" aria-selected={providerView === view.id} aria-controls={`${providerSectionId}-${view.id}`} onClick={() => setProviderView(view.id as "vendors" | "custom")} className={cn("-mb-px min-h-9 border-b-2 px-3 text-[11px] font-medium", providerView === view.id ? "border-accent text-text" : "border-transparent text-muted hover:text-text")}>
+              <button key={view.id} type="button" role="tab" aria-selected={providerView === view.id} aria-controls={`${providerSectionId}-${view.id}`} onClick={() => setProviderView(view.id as "vendors" | "resources")} className={cn("-mb-px min-h-9 border-b-2 px-3 text-[11px] font-medium", providerView === view.id ? "border-accent text-text" : "border-transparent text-muted hover:text-text")}>
                 {view.label}
               </button>
             ))}
@@ -241,13 +239,12 @@ export function LLMTab({ config, apiKeyInput, setApiKeyInput, showKey, setShowKe
               )}
             </div>
           ) : (
-            <div id={`${providerSectionId}-custom`} role="tabpanel" aria-label={t("settings.provider.customProviders")}>
-              <CustomApiSection providers={config.custom_providers || []} onConfigReload={onConfigReload} isOpen={showCustomForm} onOpen={() => setShowCustomForm(true)} onClose={() => setShowCustomForm(false)} />
+            <div id={`${providerSectionId}-resources`} role="tabpanel" aria-label={t("settings.provider.resources", { defaultValue: "Providers" })}>
+              <ModelResourceSection onConfigReload={onConfigReload} />
             </div>
           )}
         </div>
       </section>
-      <ModelEndpointSection />
     </div>
   );
 }

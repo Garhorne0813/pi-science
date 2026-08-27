@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, Loader2, Plus } from "lucide-react";
+import { Check, Loader2, Plus, Trash2 } from "lucide-react";
 import { apiRequest } from "../../lib/client/api";
 
 interface EnvironmentRevision {
@@ -37,6 +37,15 @@ export function EnvironmentSettings({ workspaceCwd }: { workspaceCwd: string | n
     finally { setBusy(null); }
   };
 
+  const remove = async (revisionId: string) => {
+    setBusy(revisionId); setError(null);
+    try {
+      await apiRequest(`/api/environments/${encodeURIComponent(revisionId)}`, { method: "DELETE" });
+      await load();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setBusy(null); }
+  };
+
   const bind = async (revisionId: string) => {
     if (!workspaceCwd) return;
     setBusy(revisionId); setError(null);
@@ -58,7 +67,7 @@ export function EnvironmentSettings({ workspaceCwd }: { workspaceCwd: string | n
           const active = binding?.revision_id === environment.revision_id;
           return <div key={environment.revision_id} className="flex items-center gap-3 border-b border-faint p-3 last:border-b-0">
             <div className="min-w-0 flex-1"><div className="flex items-center gap-2 text-sm text-text">{environment.display_name}<span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-muted">{environment.language}</span></div><p className="mt-1 truncate font-mono text-[10px] text-muted">{environment.revision_id} · {environment.packages.join(" ")}</p>{environment.failure && <p className="mt-1 text-xs text-error">{environment.failure.message}</p>}</div>
-            {active ? <span className="flex items-center gap-1 text-xs text-ok"><Check size={13} /> Active</span> : workspaceCwd && environment.status === "ready" ? <button type="button" disabled={busy !== null} onClick={() => void bind(environment.revision_id)} className="rounded-input border border-border px-3 py-1.5 text-xs text-text hover:bg-surface-2 disabled:opacity-50">{busy === environment.revision_id ? "Switching…" : "Use"}</button> : <span className="text-xs text-muted">{environment.status}</span>}
+            {active ? <span className="flex items-center gap-1 text-xs text-ok"><Check size={13} /> Active</span> : workspaceCwd && environment.status === "ready" ? <button type="button" disabled={busy !== null} onClick={() => void bind(environment.revision_id)} className="rounded-input border border-border px-3 py-1.5 text-xs text-text hover:bg-surface-2 disabled:opacity-50">{busy === environment.revision_id ? "Switching…" : "Use"}</button> : environment.status === "failed" || environment.status === "archived" ? <button type="button" disabled={busy !== null} onClick={() => void remove(environment.revision_id)} className="flex items-center gap-1 rounded-input border border-error/30 px-2.5 py-1.5 text-xs text-error hover:bg-error/10 disabled:opacity-50">{busy === environment.revision_id ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />} Delete</button> : <span className="text-xs text-muted">{environment.status}</span>}
           </div>;
         })}
       </div>

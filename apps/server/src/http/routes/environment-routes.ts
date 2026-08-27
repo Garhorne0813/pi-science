@@ -30,6 +30,17 @@ export function registerEnvironmentRoutes(app: FastifyInstance, environments: Wo
 
   app.get("/api/environments/presets", async () => ({ presets: environments.listPresets() }));
 
+  app.delete<{ Params: { revision_id: string } }>("/api/environments/:revision_id", async (request, reply) => {
+    try {
+      const revision = await environments.deleteRevision(request.params.revision_id);
+      if (!revision) return reply.code(404).send({ error: `Environment revision not found: ${request.params.revision_id}` });
+      return { ok: true, revision_id: revision.revision_id };
+    } catch (error) {
+      const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
+      return reply.code(code === "environment_not_deletable" ? 409 : 500).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   app.post("/api/environments", async (request, reply) => {
     const parsed = createEnvironmentSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid environment request" });

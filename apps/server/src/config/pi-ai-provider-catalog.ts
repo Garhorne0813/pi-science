@@ -11,25 +11,31 @@ export type PiAiProviderCatalogEntry = {
   modelIds: string[];
 };
 
-/** Load the pi-ai runtime provider catalog without making it a compile-time
- *  dependency of the control plane. The runtime shipped under
- *  `runtime/pi/node_modules/@earendil-works/pi-ai` is the current Pi Orbit
- *  companion; older installs simply yield an empty catalog and callers fall
- *  back to custom providers only. Environment credential detection is a
- *  boolean only — keys are never exposed. */
-export async function loadPiAiProviderCatalog(): Promise<PiAiProviderCatalogEntry[]> {
-  // Resolve from this module, not process.cwd(). The server is launched from
-  // both the repository root and apps/server during development/tests.
+function piAiDistCandidates(): string[] {
   const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
-  const dist = join(projectRoot, "runtime", "pi", "node_modules", "@earendil-works", "pi-ai", "dist");
-  const providersModule = join(dist, "providers", "all.js");
-  const envKeysModule = join(dist, "env-api-keys.js");
-  if (!existsSync(providersModule) || !existsSync(envKeysModule)) return [];
+  const candidates: string[] = [];
+  try { candidates.push(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-ai")))); }
+  catch { /* packaged server dependency is unavailable; try the legacy runtime layout */ }
+  candidates.push(join(projectRoot, "runtime", "pi", "node_modules", "@earendil-works", "pi-ai", "dist"));
+  return [...new Set(candidates)];
+}
+
+function piAiModules(): { providersModule: string; envKeysModule: string } | null {
+  for (const dist of piAiDistCandidates()) {
+    const providersModule = join(dist, "providers", "all.js");
+    const envKeysModule = join(dist, "env-api-keys.js");
+    if (existsSync(providersModule) && existsSync(envKeysModule)) return { providersModule, envKeysModule };
+  }
+  return null;
+}
+
+/** Load the provider catalog from the server-owned, pinned pi-ai package. The
+ * runtime/pi path remains a fallback for older installations. */
+export async function loadPiAiProviderCatalog(): Promise<PiAiProviderCatalogEntry[]> {
+  const modules = piAiModules();
+  if (!modules) return [];
   try {
-    const [{ builtinProviders }, { getEnvApiKey }] = await Promise.all([
-      import(pathToFileURL(providersModule).href),
-      import(pathToFileURL(envKeysModule).href),
-    ]);
+    const { builtinProviders } = await import(pathToFileURL(modules.providersModule).href);
     const providers = typeof builtinProviders === "function" ? builtinProviders() : [];
     const result: PiAiProviderCatalogEntry[] = [];
     for (const provider of providers) {
@@ -74,11 +80,10 @@ export async function loadPiAiProviderCatalog(): Promise<PiAiProviderCatalogEntr
  *  providers; OAuth tokens are never stored in the process environment by
  *  Pi-Science). Never leaks the key value. */
 export async function hasEnvApiKey(providerId: string): Promise<boolean> {
-  const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
-  const envKeysModule = join(projectRoot, "runtime", "pi", "node_modules", "@earendil-works", "pi-ai", "dist", "env-api-keys.js");
-  if (!existsSync(envKeysModule)) return false;
+  const modules = piAiModules();
+  if (!modules) return false;
   try {
-    const { getEnvApiKey } = await import(pathToFileURL(envKeysModule).href) as { getEnvApiKey?: (provider: string, env: NodeJS.ProcessEnv) => string | undefined };
+    const { getEnvApiKey } = await import(pathToFileURL(modules.envKeysModule).href) as { getEnvApiKey?: (provider: string, env: NodeJS.ProcessEnv) => string | undefined };
     if (typeof getEnvApiKey !== "function") return false;
     const value = getEnvApiKey(providerId, process.env);
     return typeof value === "string" && value.length > 0;

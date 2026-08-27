@@ -10,11 +10,25 @@ const LOCK_RETRY_MIN_MS = 5;
 const LOCK_RETRY_MAX_MS = 100;
 const LOCK_RELEASE_RETRIES = 5;
 const LOCK_RELEASE_RETRY_MS = 20;
+const DEFAULT_LOCK_WAIT_TIMEOUT_MS = 5 * 60_000;
 const JSON_ATOMIC_RENAME_RETRIES = 5;
 const JSON_ATOMIC_RENAME_RETRY_MS = 20;
 
-export interface FileLockHooks { unlink?: (path: string) => Promise<void>; sleep?: (ms: number) => Promise<void> }
+export interface FileLockHooks { unlink?: (path: string) => Promise<void>; sleep?: (ms: number) => Promise<void>; timeoutMs?: number }
+export interface WriteJsonAtomicOptions extends FileLockHooks { mode?: number }
 interface LockOwner { pid: number; acquired_at: string; token?: string }
+
+function fileLockTimeoutMs(hooks: FileLockHooks): number {
+  const configured = Number(process.env.PI_SCIENCE_FILE_LOCK_TIMEOUT_MS ?? 0);
+  return hooks.timeoutMs ?? (configured > 0 ? configured : DEFAULT_LOCK_WAIT_TIMEOUT_MS);
+}
+
+function waitForWriteQueue(operation: Promise<void>, timeoutMs: number, path: string): Promise<void> {
+  return new Promise<void>((resolveWait, rejectWait) => {
+    const timer = setTimeout(() => rejectWait(Object.assign(new Error(`Timed out after ${timeoutMs}ms waiting for in-process write queue: ${path}`), { code: "file_lock_timeout" })), timeoutMs);
+    operation.then(resolveWait, rejectWait).finally(() => clearTimeout(timer));
+  });
+}
 
 export function metadataRoot(workspace: string): string {
   return join(resolve(workspace), ".pi-science");
@@ -48,8 +62,8 @@ export async function withFileWriteLock<T>(path: string, operation: () => Promis
   const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
   const pending = previous.then(() => gate);
   writeQueues.set(key, pending);
-  await previous;
   try {
+    await waitForWriteQueue(previous, fileLockTimeoutMs(hooks), key);
     const unlock = await acquireFileLock(key, hooks);
     try { return await operation(); } finally { await unlock(); }
   } finally { release(); if (writeQueues.get(key) === pending) writeQueues.delete(key); }
@@ -61,6 +75,9 @@ export async function withFileWriteLock<T>(path: string, operation: () => Promis
 export async function acquireFileLock(path: string, hooks: FileLockHooks = {}): Promise<() => Promise<void>> {
   const lockPath = `${resolve(path)}.lock`;
   const token = randomUUID();
+  const timeoutMs = fileLockTimeoutMs(hooks);
+  const deadline = Date.now() + timeoutMs;
+  const sleep = hooks.sleep ?? ((ms: number) => new Promise<void>((resolveWait) => setTimeout(resolveWait, ms)));
   await mkdir(dirname(lockPath), { recursive: true });
   for (let wait = LOCK_RETRY_MIN_MS; ; wait = Math.min(wait * 2, LOCK_RETRY_MAX_MS)) {
     try {
@@ -70,7 +87,9 @@ export async function acquireFileLock(path: string, hooks: FileLockHooks = {}): 
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       await breakStaleLock(lockPath);
-      await new Promise((resolveWait) => setTimeout(resolveWait, wait));
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw Object.assign(new Error(`Timed out after ${timeoutMs}ms waiting for file lock: ${lockPath}`), { code: "file_lock_timeout" });
+      await sleep(Math.min(wait, remaining));
     }
   }
 }
@@ -154,12 +173,29 @@ export async function readJson<T>(path: string, fallback: T): Promise<T> {
   try { return JSON.parse(await readFile(path, "utf8")) as T; } catch { return fallback; }
 }
 
-export async function writeJsonAtomic(path: string, value: unknown, hooks: FileLockHooks = {}): Promise<void> {
+async function writeJsonPayload(path: string, serialized: string, mode?: number): Promise<void> {
+  if (mode === undefined) {
+    await writeFile(path, serialized, "utf8");
+    return;
+  }
+  // Apply mode on create and chmod this inode before rename so a crash cannot
+  // leave the destination world-readable.
+  const handle = await open(path, "w", mode);
+  try {
+    await handle.writeFile(serialized, "utf8");
+    try { await handle.chmod(mode); } catch { /* Windows and non-POSIX volumes */ }
+  } finally {
+    await handle.close();
+  }
+}
+
+export async function writeJsonAtomic(path: string, value: unknown, options: WriteJsonAtomicOptions = {}): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
-  const sleep = hooks.sleep ?? ((ms: number) => new Promise<void>((resolveWait) => setTimeout(resolveWait, ms)));
-  const remove = hooks.unlink ?? unlink;
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolveWait) => setTimeout(resolveWait, ms)));
+  const remove = options.unlink ?? unlink;
+  const serialized = `${JSON.stringify(value, null, 2)}\n`;
+  await writeJsonPayload(temporary, serialized, options.mode);
   for (let attempt = 0; ; attempt += 1) {
     try { await rename(temporary, path); return; }
     catch (error) {
@@ -167,7 +203,7 @@ export async function writeJsonAtomic(path: string, value: unknown, hooks: FileL
       if (code === "ENOENT") {
         if (attempt >= JSON_ATOMIC_RENAME_RETRIES - 1) throw error;
         // Antivirus or a cleaner removed the temp file; rewrite and retry.
-        await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+        await writeJsonPayload(temporary, serialized, options.mode);
         await sleep(JSON_ATOMIC_RENAME_RETRY_MS * (attempt + 1));
         continue;
       }

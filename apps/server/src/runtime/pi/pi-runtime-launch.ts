@@ -6,6 +6,7 @@ import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, read
 import type { PiConfig } from "@pi-science/contracts";
 import type { PiProcessOptions, RuntimeSkillPolicy } from "./pi-process.js";
 import { configRoot } from "../../storage/persistence.js";
+import { canonicalRuntimeModelRef, projectedRuntimeModelRef, projectPiRuntime } from "./pi-runtime-projection.js";
 
 // The Pi Orbit host is a singleton per control plane: one port + one auth
 // token are allocated on the first buildPiProcessOptions call and reused by
@@ -70,7 +71,11 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
   const dataRoot = configRoot();
   const settings = readSettings(dataRoot);
   const skillPolicy = globalSkillPolicy(settings);
-  const effectiveModel = config.model || (typeof settings.model === "string" ? settings.model : "");
+  const configuredModel = config.model ?? (typeof settings.model === "string" ? settings.model : "");
+  // The projection decides the runtime provider split and the model aliases.
+  // Pass the projected runtime ref to Pi; the canonical ref stays in settings
+  // and on the session API.
+  const effectiveModel = configuredModel ? projectedRuntimeModelRef(configuredModel) : "";
   const effectiveThinking = config.thinking || (typeof settings.thinking === "string" ? settings.thinking : "high");
   // The workspace model identity the agent can observe through the bash tool
   // environment (PI_PROVIDER/PI_MODEL), derived from the same effectiveModel
@@ -150,8 +155,9 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
   // authoritative workspace values and removes the per-session identity that
   // is only known once the runtime exists.
   for (const key of OUTER_SESSION_ENV_KEYS) delete env[key];
-  if (storedKeys && typeof storedKeys === "object") materializeApiKeysAuth(agentDir, storedKeys as Record<string, unknown>);
-  materializeCustomProviders(agentDir, settings.custom_providers, env);
+  const projection = projectPiRuntime(agentDir, dataRoot, env);
+  const projectionKeys = { ...(storedKeys && typeof storedKeys === "object" ? storedKeys as Record<string, unknown> : {}), ...projection.systemApiKeys };
+  materializeApiKeysAuth(agentDir, projectionKeys);
   materializeRuntimeSettings(agentDir, settings, config);
   materializeFollowUpGuidance(agentDir);
   // Pi-Science's research contract is an application-level prompt, not a
@@ -176,7 +182,13 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
           ...(effectiveModel ? { model: effectiveModel } : {}),
           ...(effectiveModel && effectiveThinking ? { thinking: effectiveThinking } : {}),
           runtimeEnv: {
-            ...Object.fromEntries(Object.entries(env).map(([key, value]) => [key, value ?? null])),
+            // Runtime-generated credential values must reach the Pi Orbit
+            // runtime child: it is created with exactly this env and does not
+            // inherit the host process env. models.json references them as
+            // $PI_RUNTIME_CREDENTIAL_*, so the values travel with the runtime
+            // creation request; the host API never returns runtimeEnv.
+            ...runtimeEnvSnapshot(env, projection.runtimeSecrets),
+            ...projection.runtimeSecrets,
             // The runtime child inherits the host env, so the host's own auth
             // token must never reach the agent: remove it (null) at the
             // runtime boundary. PI_SESSION_ID/PI_SESSION_FILE only exist once
@@ -522,46 +534,6 @@ function materializeApiKeysAuth(agentDir: string, storedKeys: Record<string, unk
   try { chmodSync(path, 0o600); } catch { /* permissions are best-effort (e.g. Windows) */ }
 }
 
-function materializeCustomProviders(agentDir: string, raw: unknown, env: NodeJS.ProcessEnv): void {
-  const path = join(agentDir, "models.json");
-  if (!Array.isArray(raw) || raw.length === 0) {
-    try { unlinkSync(path); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    return;
-  }
-  const providers: Record<string, unknown> = {};
-  for (const item of raw) {
-    if (!item || typeof item !== "object") continue;
-    const provider = item as Record<string, unknown>;
-    const id = slug(String(provider.id ?? provider.name ?? "custom-api"));
-    const providerId = `custom-${id}`;
-    const models = Array.isArray(provider.models) ? provider.models.map(String).filter(Boolean) : [];
-    const configuredReasoning = typeof provider.reasoning === "boolean" ? provider.reasoning : undefined;
-    const configuredContextWindow = positiveInteger(provider.context_window) ?? 128000;
-    const hints = provider.model_hints && typeof provider.model_hints === "object" ? provider.model_hints as Record<string, any> : {};
-    const envName = `PI_SCIENCE_CUSTOM_${id.toUpperCase().replaceAll("-", "_")}_API_KEY`;
-    const modelDefinitions = models.map((model) => {
-      const hint = hints[model] ?? {};
-      const reasoning = typeof hint.reasoning === "boolean" ? hint.reasoning : configuredReasoning ?? /gpt-5|thinking|reasoning|qwen3|deepseek-r1|deepseek-v4/i.test(model);
-      return {
-        id: model, name: model, reasoning,
-        input: ["text"], contextWindow: positiveInteger(hint.context_window) ?? configuredContextWindow, maxTokens: 16384,
-        ...(reasoning ? { thinkingLevelMap: Object.fromEntries((Array.isArray(hint.thinking_levels) ? hint.thinking_levels : ["off", "minimal", "low", "medium", "high", "xhigh"]).map((level: string) => [level, level])) } : {}),
-      };
-    });
-    const apiKey = typeof provider.api_key === "string" ? provider.api_key : "";
-    if (apiKey) env[envName] = apiKey;
-    providers[providerId] = {
-      name: String(provider.name ?? "Custom API"), baseUrl: String(provider.base_url ?? ""),
-      api: String(provider.api ?? "openai-completions"), models: modelDefinitions,
-      ...(apiKey ? { apiKey: `$${envName}` } : {}),
-    };
-  }
-  writeFileSync(path, `${JSON.stringify({ providers }, null, 2)}\n`, "utf8");
-}
-
 function materializeRuntimeSettings(agentDir: string, settings: Record<string, any>, config: PiConfig): void {
   const path = join(agentDir, "settings.json");
   let current: Record<string, unknown> = {};
@@ -593,6 +565,11 @@ function materializeFollowUpGuidance(agentDir: string): void {
   writeFileSync(join(agentDir, "APPEND_SYSTEM.md"), `${FOLLOW_UP_GUIDANCE}${TODO_GUIDANCE}`, "utf8");
 }
 
+function runtimeEnvSnapshot(env: NodeJS.ProcessEnv, generatedSecrets: Record<string, string>): Record<string, string | null> {
+  const isSecretName = (key: string): boolean => Object.hasOwn(generatedSecrets, key) || /(?:API_KEY|TOKEN|PASSWORD|SECRET|PRIVATE_KEY)$/i.test(key);
+  return Object.fromEntries(Object.entries(env).filter(([key]) => !isSecretName(key)).map(([key, value]) => [key, value ?? null]));
+}
+
 function positiveInteger(value: unknown): number | undefined {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
@@ -601,8 +578,4 @@ function positiveInteger(value: unknown): number | undefined {
 function validThreshold(value: unknown): number | undefined {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 50 && parsed <= 95 ? parsed : undefined;
-}
-
-function slug(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "custom-api";
 }

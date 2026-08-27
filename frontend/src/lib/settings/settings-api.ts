@@ -1,7 +1,7 @@
 import { applySessionReplacements, type SessionReplacement } from "../agent-runtime";
 import { apiRequest } from "../client/api";
 import { queryClient } from "../client/query-client";
-import type { AgentProfile, CustomProvider, McpServer, ModelEndpoint, ProjectSubagent, RuntimeExtension, WebAccessConfig } from "./settings-types";
+import type { AgentProfile, McpServer, ProjectSubagent, RuntimeExtension, WebAccessConfig } from "./settings-types";
 
 export const settingsKey = (...selector: Array<string | null>) => ["settings", ...selector];
 
@@ -75,13 +75,6 @@ export const webAccessQuery = (errorFallback: string) => ({
   staleTime: 0,
 });
 
-export const modelEndpointsKey = ["model-endpoints"];
-export const modelEndpointsQuery = (errorFallback: string) => ({
-  queryKey: modelEndpointsKey,
-  queryFn: () => apiRequest<{ endpoints?: ModelEndpoint[] }>("/api/endpoints", { errorFallback }),
-  staleTime: 0,
-});
-
 export const agentProfilesKey = ["agent-profiles"];
 export const agentProfilesQuery = (errorFallback: string) => ({
   queryKey: agentProfilesKey,
@@ -136,22 +129,6 @@ export const settingsApi = {
     return result;
   },
 
-  /* ── Custom API providers ── */
-
-  discoverCustomProvider(input: { name: string; base_url: string; api_key: string; api: string }, fallback: string) {
-    return writeSettings<{ provider: CustomProvider }>("/api/settings/custom-providers/discover", json("POST", input), fallback);
-  },
-
-  async saveCustomProvider(id: string, body: Record<string, unknown>, fallback: string): Promise<void> {
-    await writeSettings(`/api/settings/custom-providers/${encodeURIComponent(id)}`, json("PUT", body), fallback);
-    invalidateSettings();
-  },
-
-  async deleteCustomProvider(id: string, fallback: string): Promise<void> {
-    await writeSettings(`/api/settings/custom-providers/${encodeURIComponent(id)}`, { method: "DELETE" }, fallback);
-    invalidateSettings();
-  },
-
   /* ── Web access ── */
 
   saveWebAccess(body: { provider: string; workflow: string; api_keys: Record<string, string>; remove_keys: string[] }, fallback: string) {
@@ -176,24 +153,6 @@ export const settingsApi = {
 
   setMcpEnabled(id: string, enabled: boolean, fallback: string) {
     return writeSettings(`/api/settings/mcp/${id}?enabled=${enabled}`, { method: "PUT" }, fallback);
-  },
-
-  /* ── Model endpoints ── */
-
-  async registerEndpoint(body: { name: string; base_url: string; protocol: string; data_egress: string }, fallback: string): Promise<void> {
-    await apiRequest("/api/endpoints", { ...json("POST", body), errorFallback: fallback });
-    void queryClient.invalidateQueries({ queryKey: modelEndpointsKey });
-  },
-
-  /** The two toggles never checked their response before A6; they still don't. */
-  async checkEndpointHealth(endpointId: string): Promise<void> {
-    await apiRequest(`/api/endpoints/${encodeURIComponent(endpointId)}/health`, { method: "POST" }).catch(() => undefined);
-    void queryClient.invalidateQueries({ queryKey: modelEndpointsKey });
-  },
-
-  async setEndpointEnabled(endpointId: string, enabled: boolean): Promise<void> {
-    await apiRequest(`/api/endpoints/${encodeURIComponent(endpointId)}/enabled?enabled=${enabled}`, { method: "PUT" }).catch(() => undefined);
-    void queryClient.invalidateQueries({ queryKey: modelEndpointsKey });
   },
 
   /* ── Agent profiles ── */

@@ -4,5 +4,7 @@ packages:
   - frontend
 
 allowBuilds:
+  '@google/genai': false
   '@scarf/scarf': false
   esbuild: true
+  protobufjs: false

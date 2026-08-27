@@ -10,6 +10,7 @@ import { PiManager, piManager } from "../pi/pi-manager.js";
 import { PiOrbitRequestError } from "../pi/pi-orbit-host.js";
 import type { PiProcess, PiProcessOptions, PiResult, RuntimeSkillPolicy } from "../pi/pi-process.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "../pi/pi-runtime-launch.js";
+import { canonicalFromRuntimeModelRef, canonicalRuntimeModelRef, projectedRuntimeModelRef } from "../pi/pi-runtime-projection.js";
 import type { ProjectReviewService } from "../../project-review/service.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { SessionRepository, invalidateSessionFileCache, sessionRepository } from "./session-repository.js";
@@ -20,6 +21,7 @@ import { diffWorkspaceSnapshots, previewKind, previewMime, snapshotWorkspace, ty
 import { turnArtifactRepository } from "../artifacts/turn-artifact-repository.js";
 import { readJsonLines, workspaceFile } from "../../storage/persistence.js";
 import { ensureProject } from "../../project/project-registry.js";
+import type { ModelResourceService } from "../../model-resources/model-resource-service.js";
 
 type RuntimeFailure = { error: string; code: string; diagnostics?: unknown };
 type ServiceFailure = RuntimeFailure & { success: false };
@@ -140,7 +142,8 @@ function failure(result: PiResult | Record<string, unknown>, fallback: string): 
 
 function effectiveConfig(requested?: Partial<PiConfig>): PiConfig {
   const defaults = loadDefaultPiConfig();
-  const model = requested?.model || defaults.model || null;
+  const rawModel = requested?.model || defaults.model || null;
+  const model = rawModel ? canonicalRuntimeModelRef(rawModel) : null;
   return {
     model,
     provider: requested?.provider || defaults.provider || null,
@@ -176,6 +179,7 @@ export class NodeSessionService {
   /** Whole-session wall-clock timing (LLM/TTFT/decode/tool durations) folded
    *  from the raw Pi event stream; persisted via the stats checkpoint. */
   private readonly statsProjector = new SessionStatsProjector();
+  private hostReloadPending = false;
   private log: (level: "info" | "warn" | "error", message: string) => void = () => {};
 
   constructor(
@@ -185,6 +189,7 @@ export class NodeSessionService {
     private readonly environments: Pick<WorkspaceEnvironmentService, "environment"> = new WorkspaceEnvironmentService(),
     private readonly projectReview: Pick<ProjectReviewService, "run"> | null = null,
     private readonly statsEventStore: StatsEventStore = durableEventStore,
+    private readonly modelResources: Pick<ModelResourceService, "ensureMigrated" | "isModelAvailable"> | null = null,
   ) {}
 
   configureLogging(log: (level: "info" | "warn" | "error", message: string) => void): void {
@@ -195,6 +200,8 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(body.cwd); }
     catch (error) { return { error: String(error), code: "workspace_invalid" }; }
+    const migration = await this.ensureModelResources();
+    if (migration) return migration;
     const project = await ensureProject(cwd);
     await mkdir(resolve(cwd, ".pi-science", "sessions"), { recursive: true });
     return this.withLock(`create:${cwd}`, async () => {
@@ -357,6 +364,15 @@ export class NodeSessionService {
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
     if (!model.includes("/")) return { success: false, code: "invalid_request", error: "model must use provider/model notation" };
+    if (this.modelResources) {
+      try { await this.modelResources.ensureMigrated(); }
+      catch (error) { return { success: false, code: "model_resources_migration_failed", error: `unable to migrate model resources: ${error instanceof Error ? error.message : String(error)}` }; }
+      model = canonicalRuntimeModelRef(model);
+      if (model.startsWith("user-") && !(await this.modelResources.isModelAvailable(model))) return { success: false, code: "no_routable_endpoint", error: `model is not routable: ${model}` };
+      // Pi only knows the projected runtime identity (split provider per
+      // endpoint, aliased model id). The canonical ref stays user-facing.
+      model = projectedRuntimeModelRef(model);
+    }
     return this.withLock(`${cwd}\0${sessionId}`, async () => {
       const activated = await this.activateUnlocked(sessionId, cwd);
       if ("error" in activated) return activated;
@@ -367,7 +383,7 @@ export class NodeSessionService {
       const provider = model.slice(0, separator);
       const modelId = model.slice(separator + 1);
       const modelResult = await activated.process.sendCommand("set_model", { provider, modelId });
-      if (!modelResult.success && provider.startsWith("custom-")) {
+      if (!modelResult.success && (provider.startsWith("custom-") || provider.startsWith("user-"))) {
         const oldSessionId = activated.activeSessionId;
         const restarted = await this.restartRuntimeUnlocked(activated, { ...effectiveConfig(), model, thinking: thinking || previous.thinking });
         if ("error" in restarted) return restarted;
@@ -437,13 +453,12 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
-    // The levels a model supports are a property of that model, so the result
-    // must never come from a different runtime than the configured model.
-    // Without an expectation the first healthy runtime wins (legacy callers);
-    // with an expectation only a runtime whose config model matches is usable.
+    const expectedCanonical = expectedModel ? canonicalRuntimeModelRef(expectedModel) : null;
+    // Runtime state uses projected provider/model IDs. Compare canonical IDs so
+    // split providers and model aliases still match the saved settings model.
     const candidates = [...this.runtimes.values()]
       .filter((candidate) => candidate.cwd === cwd && !candidate.closing && candidate.activeSessionId)
-      .filter((candidate) => !expectedModel || candidate.config.model === expectedModel);
+      .filter((candidate) => !expectedCanonical || canonicalFromRuntimeModelRef(candidate.config.model ?? "") === expectedCanonical);
     const runtime = candidates[0];
     if (!runtime) {
       return { success: false, code: expectedModel ? "model_mismatch" : "not_found", error: expectedModel ? "no runtime is using the requested model" : "pi process not found" };
@@ -453,13 +468,11 @@ export class NodeSessionService {
       if (this.runtimes.get(key) !== runtime || runtime.closing) {
         return { success: false, code: "not_found", error: "pi process not found" };
       }
-      // Refresh state inside the lock so the model identity we verify is the
-      // same one the runtime reports right now, not a stale config snapshot.
       const state = await this.refreshState(runtime);
       if (!state.success || !state.data || typeof state.data !== "object") return state;
-      const actualModel = runtime.config.model ?? null;
-      if (expectedModel && actualModel !== expectedModel) {
-        return { success: false, code: "model_mismatch", error: `runtime is using ${actualModel ?? "unknown"} instead of ${expectedModel}` };
+      const actualModel = runtime.config.model ? canonicalFromRuntimeModelRef(runtime.config.model) : null;
+      if (expectedCanonical && actualModel !== expectedCanonical) {
+        return { success: false, code: "model_mismatch", error: `runtime is using ${actualModel ?? "unknown"} instead of ${expectedCanonical}` };
       }
       this.scheduleIdleCleanup(runtime);
       const result = await runtime.process.sendCommand("get_available_thinking_levels");
@@ -640,34 +653,46 @@ export class NodeSessionService {
   }
 
   async reloadConfiguration(): Promise<Array<{ cwd: string; oldId: string; newId: string }>> {
-    const replacements: Array<{ cwd: string; oldId: string; newId: string }> = [];
-    const failures: Array<{ cwd: string; code: string; error: string }> = [];
-    for (const [key, snapshot] of [...this.runtimes.entries()]) {
-      const cwd = snapshot.cwd;
-      const result = await this.withLock(key, async () => {
-        const current = this.runtimes.get(key);
-        if (current !== snapshot) return {};
-        const runtime = current;
-        if (!runtime) return {};
-        if (runtime.busy) {
-          runtime.restartPending = true;
+    return this.withLock("\0configuration-reload", async () => {
+      const runtimes = [...new Set(this.runtimes.values())];
+      if (this.manager.hostProcessCount > 0) this.hostReloadPending = true;
+      if (this.hostReloadPending && runtimes.some((runtime) => runtime.busy)) {
+        for (const runtime of runtimes) runtime.restartPending = true;
+        return [];
+      }
+      if (this.hostReloadPending) {
+        await this.manager.recycleWebHost();
+        this.hostReloadPending = false;
+      }
+      const replacements: Array<{ cwd: string; oldId: string; newId: string }> = [];
+      const failures: Array<{ cwd: string; code: string; error: string }> = [];
+      for (const [key, snapshot] of [...this.runtimes.entries()]) {
+        const cwd = snapshot.cwd;
+        const result = await this.withLock(key, async () => {
+          const current = this.runtimes.get(key);
+          if (current !== snapshot) return {};
+          const runtime = current;
+          if (!runtime) return {};
+          if (runtime.busy) {
+            runtime.restartPending = true;
+            return {};
+          }
+          const oldId = runtime.activeSessionId;
+          const restarted = await this.restartRuntimeUnlocked(runtime, effectiveConfig());
+          if ("error" in restarted) return { failure: { cwd, code: restarted.code, error: restarted.error } };
+          if (oldId && restarted.activeSessionId !== oldId) {
+            return { replacement: { cwd, oldId, newId: restarted.activeSessionId } };
+          }
           return {};
-        }
-        const oldId = runtime.activeSessionId;
-        const restarted = await this.restartRuntimeUnlocked(runtime, effectiveConfig());
-        if ("error" in restarted) return { failure: { cwd, code: restarted.code, error: restarted.error } };
-        if (oldId && restarted.activeSessionId !== oldId) {
-          return { replacement: { cwd, oldId, newId: restarted.activeSessionId } };
-        }
-        return {};
-      });
-      if (result.replacement) replacements.push(result.replacement);
-      if (result.failure) failures.push(result.failure);
-    }
-    if (failures.length) {
-      throw new Error(failures.map((item) => `${item.cwd}: ${item.code}: ${item.error}`).join("; "));
-    }
-    return replacements;
+        });
+        if (result.replacement) replacements.push(result.replacement);
+        if (result.failure) failures.push(result.failure);
+      }
+      if (failures.length) {
+        throw new Error(failures.map((item) => `${item.cwd}: ${item.code}: ${item.error}`).join("; "));
+      }
+      return replacements;
+    });
   }
 
   async setGlobalSkillPolicy(policy: RuntimeSkillPolicy): Promise<void> {
@@ -707,6 +732,16 @@ export class NodeSessionService {
   get activeCount(): number { return this.runtimes.size; }
   get processCount(): number { return this.manager.processCount; }
 
+  private async ensureModelResources(): Promise<RuntimeFailure | null> {
+    if (!this.modelResources) return null;
+    try {
+      await this.modelResources.ensureMigrated();
+      return null;
+    } catch (error) {
+      return { error: `unable to migrate model resources: ${error instanceof Error ? error.message : String(error)}`, code: "model_resources_migration_failed" };
+    }
+  }
+
   private async activateUnlocked(sessionId: string, cwd: string): Promise<RuntimeRecord | ServiceFailure> {
     const key = runtimeKey(cwd, sessionId);
     let runtime = this.runtimes.get(key);
@@ -721,6 +756,8 @@ export class NodeSessionService {
     }
     const sessionPath = await this.repository.findPath(cwd, sessionId);
     if (!sessionPath) return { success: false, code: "not_found", error: "session not found in this workspace" };
+    const migration = await this.ensureModelResources();
+    if (migration) return { success: false, ...migration };
     const config = effectiveConfig();
     const started = await this.startRuntime(cwd, config);
     if ("error" in started) return { success: false, ...started };
@@ -737,6 +774,11 @@ export class NodeSessionService {
   }
 
   private async startRuntime(cwd: string, config: PiConfig, sessionPath?: string, preparedOptions?: PiProcessOptions): Promise<RuntimeRecord | RuntimeFailure> {
+    const migration = await this.ensureModelResources();
+    if (migration) return migration;
+    if (this.modelResources && config.model && config.model.startsWith("user-") && !(await this.modelResources.isModelAvailable(config.model))) {
+      return { error: `model is not routable: ${config.model}`, code: "no_routable_endpoint" };
+    }
     let options: PiProcessOptions | null;
     if (preparedOptions) options = preparedOptions;
     else {
@@ -841,6 +883,14 @@ export class NodeSessionService {
   }
 
   private async reloadRuntimeAfterTurn(runtime: RuntimeRecord): Promise<void> {
+    if (this.hostReloadPending) {
+      if ([...new Set(this.runtimes.values())].some((candidate) => candidate.busy)) return;
+      try { await this.reloadConfiguration(); }
+      catch (error) {
+        if (runtime.activeSessionId) await this.eventHub.publish(runtime.cwd, runtime.activeSessionId, { type: "error", sessionId: runtime.activeSessionId, message: `Failed to reload Pi runtime after settings changed: ${error instanceof Error ? error.message : String(error)}` });
+      }
+      return;
+    }
     await this.withLock(runtimeKey(runtime.cwd, runtime.activeSessionId), async () => {
       if (this.runtimes.get(runtimeKey(runtime.cwd, runtime.activeSessionId)) !== runtime || runtime.busy) return;
       const oldId = runtime.activeSessionId;
@@ -1268,11 +1318,12 @@ export class NodeSessionService {
    *  Fails fast on the first rejected step (after transient busy retries) and
    *  leaves the runtime untouched. */
   private async replaySessionConfig(process: PiProcess, config: PiConfig): Promise<PiResult> {
-    if (config.model?.includes("/")) {
-      const separator = config.model.indexOf("/");
+    const model = config.model ? projectedRuntimeModelRef(config.model) : null;
+    if (model?.includes("/")) {
+      const separator = model.indexOf("/");
       const result = await this.sendRecoveryCommand(process, "set_model", {
-        provider: config.model.slice(0, separator),
-        modelId: config.model.slice(separator + 1),
+        provider: model.slice(0, separator),
+        modelId: model.slice(separator + 1),
       });
       if (!result.success) return result;
     }
@@ -1367,17 +1418,19 @@ export class NodeSessionService {
   }
 
   private configMatches(runtime: RuntimeRecord, model?: string | null, thinking?: string | null): boolean {
-    return (!model || runtime.config.model === model) && (!thinking || runtime.config.thinking === thinking);
+    const runtimeModel = model ? projectedRuntimeModelRef(model) : null;
+    return (!runtimeModel || runtime.config.model === runtimeModel) && (!thinking || runtime.config.thinking === thinking);
   }
 
   private async rollbackConfig(runtime: RuntimeRecord, previous: PiConfig): Promise<PiResult> {
     if (previous.model?.includes("/")) {
-      const separator = previous.model.indexOf("/");
-      const model = await runtime.process.sendCommand("set_model", {
-        provider: previous.model.slice(0, separator),
-        modelId: previous.model.slice(separator + 1),
+      const model = projectedRuntimeModelRef(previous.model);
+      const separator = model.indexOf("/");
+      const result = await runtime.process.sendCommand("set_model", {
+        provider: model.slice(0, separator),
+        modelId: model.slice(separator + 1),
       });
-      if (!model.success) return { success: false, code: "rollback_failed", error: `unable to roll back model configuration: ${String(model.error ?? "runtime rejected rollback")}` };
+      if (!result.success) return { success: false, code: "rollback_failed", error: `unable to roll back model configuration: ${String(result.error ?? "runtime rejected rollback")}` };
     }
     if (previous.thinking) {
       const thinking = await runtime.process.sendCommand("set_thinking_level", { level: previous.thinking });
@@ -1519,7 +1572,7 @@ export class NodeSessionService {
       is_streaming: runtime.busy || Boolean(data.isStreaming),
       is_compacting: Boolean(data.isCompacting),
       pending_message_count: Number(data.pendingMessageCount ?? 0),
-      model: model?.provider && model.id ? `${model.provider}/${model.id}` : runtime.config.model ?? null,
+      model: model?.provider && model.id ? canonicalFromRuntimeModelRef(`${model.provider}/${model.id}`) : runtime.config.model ? canonicalFromRuntimeModelRef(runtime.config.model) : null,
       thinking: typeof data.thinkingLevel === "string" ? data.thinkingLevel : runtime.config.thinking ?? null,
       context_tokens: contextTokens === null || Number.isFinite(contextTokens) ? contextTokens : null,
       context_window: Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : null,

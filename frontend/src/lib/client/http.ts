@@ -1,12 +1,18 @@
 /** Fetch wrapper with a request timeout, plus backend error extraction. */
 
-export const REQUEST_TIMEOUT_MS = 45_000;
+type RequestOptions = RequestInit & { timeoutMs?: number };
 
-export async function request(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+export const REQUEST_TIMEOUT_MS = 45_000;
+/** Runtime startup can include a cold Pi Orbit host launch. Keep that wait
+ * longer than normal REST calls so the first conversation is not abandoned. */
+export const RUNTIME_START_TIMEOUT_MS = 180_000;
+
+export async function request(input: RequestInfo | URL, init?: RequestOptions): Promise<Response> {
+  const { timeoutMs = REQUEST_TIMEOUT_MS, ...fetchInit } = init ?? {};
   const controller = new AbortController();
-  const timer = globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(input, { ...init, credentials: init?.credentials ?? "include", signal: controller.signal });
+    return await fetch(input, { ...fetchInit, credentials: fetchInit.credentials ?? "include", signal: controller.signal });
   } catch (error) {
     if (controller.signal.aborted) {
       throw new Error("Request timed out while contacting the Pi-Science backend");

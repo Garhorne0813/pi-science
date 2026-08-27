@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { constants, existsSync } from "node:fs";
 import { access, chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
-import { delimiter, join, resolve } from "node:path";
+import { delimiter, join, resolve, sep } from "node:path";
 import { configPath, readJson, withFileWriteLock, withWorkspaceWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
 import type { EnvironmentRepository } from "../../storage/sqlite/repositories/environment-repository.js";
 
@@ -99,6 +99,7 @@ export const ENVIRONMENT_PRESETS = {
 export type EnvironmentPresetId = keyof typeof ENVIRONMENT_PRESETS;
 
 const MICROMAMBA_VERSION = "2.5.0-2";
+const DEFAULT_ENVIRONMENT_PROVISION_TIMEOUT_MS = 21 * 60_000;
 const MICROMAMBA_SHA256: Record<string, string> = {
   "linux-64": "c04571cfb0750e5432d530a3068b8fcd232ebed3133358e056e59a90b9852b00",
   "linux-aarch64": "a64db0d7a82107c8d64357cf035fb8f9dbbe2fc48f48b302cbc8ba1590974e20",
@@ -112,10 +113,22 @@ const MICROMAMBA_SHA256: Record<string, string> = {
  * Prefer the conventional Scripts location, but keep the prefix-root layout
  * usable for health checks, kernels, jobs, and child-process PATH setup.
  */
-export function environmentPythonExecutable(prefix: string, platform = process.platform): string {
+export function environmentPythonExecutable(prefix: string, platform = process.platform, exists: (path: string) => boolean = existsSync): string {
   if (platform !== "win32") return join(prefix, "bin", "python");
   const scriptsPython = join(prefix, "Scripts", "python.exe");
-  return existsSync(scriptsPython) ? scriptsPython : join(prefix, "python.exe");
+  return exists(scriptsPython) ? scriptsPython : join(prefix, "python.exe");
+}
+
+function environmentProvisionTimeoutMs(): number {
+  const configured = Number(process.env.PI_SCIENCE_ENVIRONMENT_PROVISION_TIMEOUT_MS ?? 0);
+  return configured > 0 ? configured : DEFAULT_ENVIRONMENT_PROVISION_TIMEOUT_MS;
+}
+
+function withOperationTimeout<T>(operation: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolveOperation, rejectOperation) => {
+    const timer = setTimeout(() => rejectOperation(Object.assign(new Error(`${label} timed out after ${timeoutMs}ms`), { code: "environment_provision_timeout" })), timeoutMs);
+    operation.then(resolveOperation, rejectOperation).finally(() => clearTimeout(timer));
+  });
 }
 
 function environmentPaths(prefix: string, platform = process.platform) {
@@ -362,6 +375,27 @@ export class WorkspaceEnvironmentService {
     return (await this.registry()).revisions.slice().sort((a, b) => b.created_at.localeCompare(a.created_at));
   }
 
+  async deleteRevision(revisionId: string): Promise<EnvironmentRevision | null> {
+    const revision = (await this.list()).find((item) => item.revision_id === revisionId);
+    if (!revision) return null;
+    if (revision.status !== "failed" && revision.status !== "archived") {
+      throw Object.assign(new Error(`Only failed or archived environment revisions can be deleted: ${revisionId}`), { code: "environment_not_deletable" });
+    }
+    const root = resolve(environmentRoot());
+    const prefix = resolve(revision.prefix);
+    if (!prefix.startsWith(`${root}${sep}`)) throw new Error(`Environment prefix is outside the managed root: ${revision.prefix}`);
+    await rm(prefix, { recursive: true, force: true });
+    if (this.environmentRepository) await this.environmentRepository.remove(revisionId);
+    else {
+      const path = registryPath();
+      await withFileWriteLock(path, async () => {
+        const registry = await this.registry();
+        await writeJsonAtomic(path, { schema_version: 1, revisions: registry.revisions.filter((item) => item.revision_id !== revisionId) } satisfies EnvironmentRegistry);
+      });
+    }
+    return revision;
+  }
+
   listPresets(): EnvironmentPreset[] {
     return (Object.keys(ENVIRONMENT_PRESETS) as EnvironmentPresetId[]).map((id) => ({
       id,
@@ -415,11 +449,12 @@ export class WorkspaceEnvironmentService {
 
   async ensure(cwdValue: string): Promise<WorkspaceEnvironmentStatus> {
     const cwd = resolve(cwdValue);
-    const current = this.provisioning.get(cwd);
-    if (current) return current;
-    const operation = this.provision(cwd).finally(() => this.provisioning.delete(cwd));
-    this.provisioning.set(cwd, operation);
-    return operation;
+    let operation = this.provisioning.get(cwd);
+    if (!operation) {
+      operation = this.provision(cwd).finally(() => this.provisioning.delete(cwd));
+      this.provisioning.set(cwd, operation);
+    }
+    return withOperationTimeout(operation, environmentProvisionTimeoutMs(), `Workspace environment provisioning for ${cwd}`);
   }
 
   async nodeStatus(cwdValue: string): Promise<NodeWorkspaceStatus> {
@@ -682,12 +717,15 @@ export class WorkspaceEnvironmentService {
   }
 
   private async run(command: string, args: string[], timeout: number, env: NodeJS.ProcessEnv = process.env): Promise<void> {
-    const result = await new Promise<{ code: number | null; output: string }>((done, reject) => {
+    const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; output: string }>((done, reject) => {
       const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"], timeout, killSignal: "SIGKILL" });
       const output: Buffer[] = [];
       child.stdout.on("data", (chunk: Buffer) => output.push(chunk)); child.stderr.on("data", (chunk: Buffer) => output.push(chunk));
-      child.once("error", reject); child.once("close", (code) => done({ code, output: Buffer.concat(output).toString("utf8") }));
+      child.once("error", reject); child.once("close", (code, signal) => done({ code, signal, output: Buffer.concat(output).toString("utf8") }));
     });
-    if (result.code !== 0) throw new Error(`${command} failed: ${result.output || `exit ${result.code}`}`);
+    if (result.code !== 0) {
+      if (result.code === null && result.signal === "SIGKILL") throw new Error(`${command} timed out after ${timeout}ms`);
+      throw new Error(`${command} failed: ${result.output || `exit ${result.code}`}`);
+    }
   }
 }

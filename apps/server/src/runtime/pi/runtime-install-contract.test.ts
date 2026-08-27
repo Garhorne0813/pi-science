@@ -13,6 +13,8 @@ describe("Pi runtime installation contract", () => {
     expect(fetchScript).toContain('curl --fail --location --silent --show-error');
     expect(fetchScript).toContain('actual="$(shasum -a 256');
     expect(fetchScript).toContain('printf \'%s\\n\' "$pi_cli" > "$CLI_MARKER"');
+    expect(fetchScript).toContain('PI_AI_VERSION="${PI_AI_VERSION:-0.84.3}"');
+    expect(fetchScript).toContain('@earendil-works/pi-ai@$PI_AI_VERSION');
     expect(fetchScript).toContain('pi-mcp-adapter@$PI_MCP_ADAPTER_VERSION');
     expect(fetchScript).toContain('pi-subagents@$PI_SUBAGENTS_VERSION');
     expect(fetchScript).toContain('pi-web-access@$PI_WEB_ACCESS_VERSION');
@@ -21,5 +23,8 @@ describe("Pi runtime installation contract", () => {
     expect(fetchScript).toContain('@juicesharp/rpiv-todo@$RPIV_TODO_VERSION');
     expect(fetchScript).toContain('--no-save');
     expect(installScript).toContain('PI_CLI="$(cat "$PI_CLI_MARKER")"');
+    const windowsFetchScript = await readFile(resolve(projectRoot, "scripts/fetch-pi.ps1"), "utf8");
+    expect(windowsFetchScript).toContain('$piAiVersion = Get-Setting "PI_AI_VERSION" "0.84.3"');
+    expect(windowsFetchScript).toContain('"@earendil-works/pi-ai@$piAiVersion"');
   });
 });

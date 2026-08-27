@@ -112,6 +112,9 @@ export async function safeConnectorFetch(raw: string, options: ConnectorFetchOpt
       // Sensitive headers (authorization, cookies, api keys) belong to the
       // original connector origin only; cross-origin hops must not receive them.
       const hopHeaders = current.origin === initialOrigin ? options.headers : stripSensitiveHeaders(options.headers);
+      // Every URL reaches this sink only after DNS-aware validation above, and
+      // every redirect is independently revalidated before the next request.
+      // lgtm[js/request-forgery]
       const response = await fetch(current, { method: options.method ?? "GET", headers: hopHeaders, body: options.body, redirect: "manual", signal: controller.signal });
       const location = response.headers.get("location");
       if (response.status >= 300 && response.status < 400 && location) {

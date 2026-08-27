@@ -62,6 +62,11 @@ export class EnvironmentRepository {
     return this.get(revisionId);
   }
 
+  async remove(revisionId: string): Promise<boolean> {
+    const result = await this.store.run("DELETE FROM environment_revisions WHERE revision_id = ?", [revisionId]);
+    return Number(result.changes) > 0;
+  }
+
   async importLegacy(revisions: EnvironmentRevision[], fingerprint: string): Promise<{ rows: number; skipped: boolean }> {
     if (await importAlreadyApplied(this.store, "environment-registry", fingerprint)) return { rows: 0, skipped: true };
     const sorted = revisions.slice().sort((a, b) => a.created_at.localeCompare(b.created_at));

@@ -230,6 +230,48 @@ execution history for Agent and user cells. Disk `.ipynb` files are opened from
 Files and persist only when saved. JupyterLab uses one app-managed tooling
 environment and registers the project's bound revision as a kernelspec.
 
+## Model resource domain and runtime projection
+
+Model configuration is split into five canonical resources:
+
+```mermaid
+flowchart LR
+    P[Provider] --> M[Model]
+    P --> B[ProviderEndpointBinding]
+    B --> E[Endpoint]
+    E --> C[Credential reference]
+    S[Model preferences] --> R[RuntimeModelResolver]
+    P --> R
+    M --> R
+    B --> R
+    E --> R
+    C --> R
+    R --> X[PiRuntimeProjection]
+    X --> J[Generated models.json / runtime env]
+```
+
+- `Provider` describes who owns a model catalog. System providers are read-only;
+  user providers are stored in `model-resources.json`.
+- `Model` stores the canonical `<provider_id>/<model_id>` and capability
+  provenance. Runtime verification has higher priority than manual, discovery,
+  provider metadata, and fallback values.
+- `Endpoint` owns URL, protocol, health, egress policy, and `credential_ref`.
+  It does not store model capability or a raw key.
+- `ProviderEndpointBinding` connects one provider to one endpoint and controls
+  priority, allowlists, aliases, and non-secret headers.
+- `CredentialStore` stores managed values in a separate mode-0600 file. The
+  normal API returns metadata only. Environment credentials work only when a
+  resource explicitly names the variable.
+- `RuntimeModelResolver` removes disabled, blocked, unhealthy, filtered, and
+  unauthenticated routes. It returns deterministic priority-ordered routes.
+- `PiRuntimeProjection` is the only adapter that writes Pi's generated
+  `models.json`. Managed secrets are injected under opaque, temporary runtime
+  variable names and are not copied into the runtime descriptor or browser API.
+
+Legacy `custom_providers`, provider-specific API-key fields, and
+`model-endpoints.json` are migration inputs or compatibility projections only;
+new writes use the canonical resource services.
+
 ## Trust and security boundaries
 
 - The Pi Orbit host listens only on loopback and requires a generated bearer
