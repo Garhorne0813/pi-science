@@ -174,8 +174,11 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
       }
       let insertAt = -1;
       const assistantMessageId = block.assistantMessageId;
-      if (assistantMessageId && index[assistantMessageId] !== undefined) {
-        insertAt = index[assistantMessageId] + 1;
+      if (assistantMessageId) {
+        // assistantMessageId identifies the TURN, not the insertion point:
+        // the strip lands after the turn's final assistant message even when
+        // the id points at an intermediate message of a multi-message turn.
+        insertAt = afterAssistantTurnEnd(blocks, assistantMessageId, index);
       }
       if (insertAt < 0 && _turnLastAgentIndex >= 0) {
         // Live fold: anchor at the END of the current turn (after its last
@@ -450,6 +453,37 @@ function afterTurnEndedAt(blocks: ThreadBlock[], endedAt: string): number {
   return lastAgent >= 0 ? lastAgent + 1 : -1;
 }
 
+/** Position right after the LAST agent block of the user-delimited turn that
+ *  contains `assistantMessageId`. The id is a turn anchor, NOT an insertion
+ *  position: an intermediate assistant message of a multi-message turn must
+ *  still land the strip after the turn's final assistant message (PRD
+ *  artifact-card turn-end placement). A tool-only turn (no agent block in the
+ *  span) anchors at its own span end. Returns -1 when the anchor block is not
+ *  present (paged history has not loaded it yet). */
+function afterAssistantTurnEnd(blocks: ThreadBlock[], assistantMessageId: string, index: Record<string, number>): number {
+  const anchor = index[assistantMessageId];
+  if (anchor === undefined) return -1;
+  let spanStart = 0;
+  for (let i = anchor; i >= 0; i -= 1) {
+    if (blocks[i]?.kind === "user") {
+      spanStart = i + 1;
+      break;
+    }
+  }
+  let spanEnd = blocks.length;
+  for (let i = anchor + 1; i < blocks.length; i += 1) {
+    if (blocks[i].kind === "user") {
+      spanEnd = i;
+      break;
+    }
+  }
+  let lastAgent = -1;
+  for (let i = spanStart; i < spanEnd; i += 1) {
+    if (blocks[i].kind === "agent") lastAgent = i;
+  }
+  return lastAgent >= 0 ? lastAgent + 1 : spanEnd;
+}
+
 /** Attach persisted per-turn artifact summaries to a history-built thread.
  *  Idempotent per turn id: when the strip is already present it is updated in
  *  place when its position is correct, otherwise it is repositioned to the
@@ -490,7 +524,12 @@ export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): 
     const assistantMessageId = turn.assistant_message_id ?? null;
     const ordinal = Number(turn.turn_ordinal);
     let insertAt = -1;
-    if (assistantMessageId && index[assistantMessageId] !== undefined) insertAt = index[assistantMessageId] + 1;
+    if (assistantMessageId) {
+      // Same placement semantics as the live fold (FR-05): the persisted id
+      // anchors the containing turn; the strip goes after that turn's LAST
+      // assistant message, not right after an intermediate id.
+      insertAt = afterAssistantTurnEnd(blocks, assistantMessageId, index);
+    }
     if (insertAt < 0 && typeof turn.ended_at === "string" && turn.ended_at) {
       // Primary fallback: anchor by the turn's end time. Independent of
       // ordinals, so legacy duplicate ordinals and record-less turns both

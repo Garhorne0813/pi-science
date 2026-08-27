@@ -119,7 +119,7 @@ describe("foldEvent turn.artifacts", () => {
     expect(state.blocks[6]).toMatchObject({ turnId: "turn-2" });
   });
 
-  it("prefers an exact assistant message id over the live turn-end anchor", () => {
+  it("treats an exact assistant message id as a turn anchor, not as an insertion position (FR-02)", () => {
     let state = threadWith([
       { kind: "user", id: "user-1", text: "x" },
       { kind: "agent", id: "exact", parts: [{ id: "exact", text: "matched" }] },
@@ -127,8 +127,33 @@ describe("foldEvent turn.artifacts", () => {
     // A later live text block moves the turn-end anchor away from "exact".
     state = foldEvent(state, { type: "text.updated", sessionId: "s", partId: "live-part", text: "live text" });
     state = foldEvent(state, { type: "turn.artifacts", sessionId: "s", turnId: "turn-1", assistantMessageId: "exact", artifacts: [{ path: "a.png", kind: "image", mime: "image/png", size: 1 }] });
+    // The strip lands after the turn's FINAL assistant message ("live-part"),
+    // not right after "exact".
+    expect(state.index["turn-artifacts-turn-1"]).toBe(3);
+    expect(state.blocks[2]).toMatchObject({ id: "live-part" });
+  });
+
+  it("anchors after the final assistant message when the exact id is intermediate (T02)", () => {
+    let state = threadWith([
+      { kind: "user", id: "user-1", text: "analyze" },
+      { kind: "agent", id: "agent-1", parts: [{ id: "agent-1", text: "narration" }] },
+      { kind: "agent", id: "agent-2", parts: [{ id: "agent-2", text: "final answer" }] },
+    ]);
+    state = foldEvent(state, { type: "turn.artifacts", sessionId: "s", turnId: "turn-1", assistantMessageId: "agent-1", artifacts: [{ path: "result.csv", kind: "table", mime: "text/csv", size: 128 }] });
+    expect(state.blocks.map((block) => block.kind)).toEqual(["user", "agent", "agent", "artifact-summary"]);
+    expect(state.index["turn-artifacts-turn-1"]).toBe(3);
+  });
+
+  it("inserts a delayed artifact back into its own turn after the next user message (T04)", () => {
+    let state = threadWith([
+      { kind: "user", id: "user-1", text: "a" },
+      { kind: "agent", id: "agent-1", parts: [{ id: "agent-1", text: "r1" }] },
+      { kind: "user", id: "user-2", text: "b" },
+      { kind: "agent", id: "agent-2", parts: [{ id: "agent-2", text: "r2" }] },
+    ]);
+    state = foldEvent(state, { type: "turn.artifacts", sessionId: "s", turnId: "turn-1", assistantMessageId: "agent-1", artifacts: [{ path: "x.csv", kind: "table", mime: "text/csv", size: 2 }] });
+    expect(state.blocks.map((block) => block.kind)).toEqual(["user", "agent", "artifact-summary", "user", "agent"]);
     expect(state.index["turn-artifacts-turn-1"]).toBe(2);
-    expect(state.blocks[1]).toMatchObject({ id: "exact" });
   });
 
   it("appends to the thread end for a tool-only turn without agent blocks", () => {
@@ -154,6 +179,19 @@ describe("attachTurnArtifacts (history restore)", () => {
       { turn_id: "turn-2", session_id: "s", assistant_message_id: "agent-2", turn_ordinal: null, ended_at: "t", artifacts: [{ path: "y.csv", kind: "table", mime: "text/csv", size: 2 }] },
     ]);
     expect(next.blocks.map((block) => block.kind)).toEqual(["user", "agent", "artifact-summary", "user", "agent", "artifact-summary"]);
+  });
+
+  it("repositions a persisted intermediate assistant id to the turn's final message (T05)", () => {
+    const thread = threadWith([
+      { kind: "user", id: "u1", text: "a" },
+      { kind: "agent", id: "msg-1", parts: [{ id: "msg-1", text: "narration" }] },
+      { kind: "agent", id: "msg-2", parts: [{ id: "msg-2", text: "final" }] },
+    ]);
+    const next = attachTurnArtifacts(thread, [
+      { turn_id: "turn-1", session_id: "s", assistant_message_id: "msg-1", turn_ordinal: null, ended_at: "t", artifacts: [{ path: "x.png", kind: "image", mime: "image/png", size: 1 }] },
+    ]);
+    expect(next.blocks.map((block) => block.kind)).toEqual(["user", "agent", "agent", "artifact-summary"]);
+    expect(next.index["turn-artifacts-turn-1"]).toBe(3);
   });
 
   it("is idempotent across repeated calls and skips already-attached turns", () => {
