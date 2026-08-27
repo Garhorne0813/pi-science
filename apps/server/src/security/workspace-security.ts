@@ -1,18 +1,20 @@
 import { realpath, stat } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathIsInside } from "../support/platform-utils.js";
 
-async function canonicalizeForContainment(path: string): Promise<string> {
-  // The caller validates the canonical result against the workspace before it
-  // is used. CodeQL cannot follow that containment proof through this helper.
-  try {
-    // codeql[js/path-injection] The canonical result is checked against the validated workspace before use.
-    return await realpath(path);
+async function canonicalizeForContainment(root: string, path: string): Promise<string> {
+  const pathFromRoot = relative(root, path);
+  if (isAbsolute(pathFromRoot)) throw new Error("Artifact path escapes the workspace");
+  if (pathFromRoot === ".." || pathFromRoot.startsWith(`..${sep}`)) {
+    throw new Error("Artifact path escapes the workspace");
   }
+  // The lexical check above prevents traversal before canonicalization; the
+  // caller validates the canonical result against the workspace before use.
+  try { return await realpath(path); }
   catch {
     const parent = dirname(path);
-    if (parent === path) return resolve(path);
-    return join(await canonicalizeForContainment(parent), basename(path));
+    if (parent === path) return path;
+    return join(await canonicalizeForContainment(root, parent), basename(path));
   }
 }
 
@@ -41,9 +43,13 @@ export async function resolveWorkspaceFile(workspace: string, relativePath: stri
   if (!relativePath || isAbsolute(relativePath)) throw new Error("Artifact path must be relative to the workspace");
   const root = await validateWorkspaceCwd(workspace);
   const candidate = resolve(root, relativePath);
-  const canonicalCandidate = await canonicalizeForContainment(candidate);
+  const canonicalCandidate = await canonicalizeForContainment(root, candidate);
   const relativePathFromRoot = relative(root, canonicalCandidate);
-  if (!pathIsInside(root, canonicalCandidate, true)) {
+  if (
+    isAbsolute(relativePathFromRoot) ||
+    relativePathFromRoot === ".." ||
+    relativePathFromRoot.startsWith(`..${sep}`)
+  ) {
     throw new Error("Artifact path escapes the workspace");
   }
   const includesMetadata = relativePathFromRoot.split(/[\\/]/).some((part) => part.toLowerCase() === ".pi-science");
