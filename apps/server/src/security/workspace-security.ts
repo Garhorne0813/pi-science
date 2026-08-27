@@ -5,8 +5,10 @@ import { pathIsInside } from "../support/platform-utils.js";
 async function canonicalizeForContainment(path: string): Promise<string> {
   // The caller validates the canonical result against the workspace before it
   // is used. CodeQL cannot follow that containment proof through this helper.
-  // codeql[js/path-injection] The canonical result is checked against the validated workspace before use.
-  try { return await realpath(path); }
+  try {
+    // codeql[js/path-injection] The canonical result is checked against the validated workspace before use.
+    return await realpath(path);
+  }
   catch {
     const parent = dirname(path);
     if (parent === path) return resolve(path);
