@@ -114,7 +114,8 @@ export async function safeConnectorFetch(raw: string, options: ConnectorFetchOpt
       const hopHeaders = current.origin === initialOrigin ? options.headers : stripSensitiveHeaders(options.headers);
       // Every URL reaches this sink only after DNS-aware validation above, and
       // every redirect is independently revalidated before the next request.
-      const response = await fetch(current, { method: options.method ?? "GET", headers: hopHeaders, body: options.body, redirect: "manual", signal: controller.signal }); // lgtm[js/request-forgery]
+      // lgtm[js/request-forgery]
+      const response = await fetch(current, { method: options.method ?? "GET", headers: hopHeaders, body: options.body, redirect: "manual", signal: controller.signal });
       const location = response.headers.get("location");
       if (response.status >= 300 && response.status < 400 && location) {
         response.body?.cancel();

@@ -122,7 +122,8 @@ function registerCanonicalEndpointRoutes(app: FastifyInstance, service: ModelRes
     try {
       const body = (request.body ?? {}) as Record<string, unknown>;
       const protocol = canonicalProtocol(body.protocol);
-      const baseUrl = String(body.base_url ?? "").trim().replace(/\/+$/, "");
+      let baseUrl = String(body.base_url ?? "").trim();
+      while (baseUrl.endsWith("/")) baseUrl = baseUrl.slice(0, -1);
       const existing = (await service.listEndpoints()).find((item) => item.name === String(body.name ?? "").trim() && item.base_url === baseUrl && item.protocol === protocol);
       const endpoint = existing ?? await service.createEndpoint({
         id: typeof body.id === "string" ? body.id : undefined,
