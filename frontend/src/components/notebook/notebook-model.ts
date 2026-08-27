@@ -9,6 +9,8 @@ export interface NotebookOutput {
 }
 
 export interface NotebookCell {
+  /** nbformat 4.5+ cell identity; legacy notebooks may omit it. */
+  id?: string;
   cell_type: "markdown" | "code" | "raw" | string;
   source?: string | string[];
   execution_count?: number | null;
@@ -72,6 +74,31 @@ export function stableNotebookId(path: string): string {
     hash = Math.imul(hash, 16777619);
   }
   return `file-${(hash >>> 0).toString(16)}`;
+}
+
+/**
+ * Returns the persisted notebook cell id when present, and a deterministic id
+ * for legacy cells that predate nbformat's `id` field. Legacy ids intentionally
+ * exclude mutable source text so a source edit can still target the same cell
+ * before the notebook has been normalized and saved.
+ */
+export function stableCellId(cell: NotebookCell, index: number, notebookPath = ""): string {
+  if (typeof cell.id === "string" && cell.id.trim()) return cell.id;
+  const seed = `${notebookPath}\0${index}`;
+  let hash = 2166136261;
+  for (let cursor = 0; cursor < seed.length; cursor += 1) {
+    hash ^= seed.charCodeAt(cursor);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `cell-${(hash >>> 0).toString(16)}`;
+}
+
+/** Creates a stable identity for a newly-created in-memory session cell. */
+export function newNotebookCellId(): string {
+  const randomUuid = globalThis.crypto?.randomUUID?.();
+  return randomUuid
+    ? `cell-${randomUuid}`
+    : `cell-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 export function kernelShutdownUrl(notebookId: string, cwd: string): string {

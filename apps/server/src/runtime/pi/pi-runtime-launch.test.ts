@@ -501,6 +501,15 @@ describe("Pi runtime custom provider materialization", () => {
     expect(extensions).not.toContain(upstream);
   });
 
+  it("loads the built-in notebook tools into the managed default host", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-notebook-extension-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    const options = buildPiProcessOptions(cwd)!;
+    const extensions = options.args.flatMap((arg, index) => arg === "-e" ? [options.args[index + 1]] : []);
+    expect(extensions).toContain(join(import.meta.dirname, "extensions", "pi-science-notebook.ts"));
+  });
+
   it("runs a source TypeScript CLI through the adjacent tsx runtime", async () => {
     const piRoot = join(tmpdir(), `pi-source-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(piRoot);

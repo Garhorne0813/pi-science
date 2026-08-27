@@ -107,7 +107,13 @@ const MICROMAMBA_SHA256: Record<string, string> = {
   "osx-64": "d6542ddf80e0b81b8538f811dd64ad5804373206bc0128cbc4a8833efe67547b",
 };
 
-export function environmentPythonPath(prefix: string, platform = process.platform, exists: (path: string) => boolean = existsSync): string {
+/**
+ * Micromamba layouts on Windows are not uniform: some builds place Python in
+ * Scripts, while others put python.exe directly under the environment prefix.
+ * Prefer the conventional Scripts location, but keep the prefix-root layout
+ * usable for health checks, kernels, jobs, and child-process PATH setup.
+ */
+export function environmentPythonExecutable(prefix: string, platform = process.platform, exists: (path: string) => boolean = existsSync): string {
   if (platform !== "win32") return join(prefix, "bin", "python");
   const scriptsPython = join(prefix, "Scripts", "python.exe");
   return exists(scriptsPython) ? scriptsPython : join(prefix, "python.exe");
@@ -127,7 +133,7 @@ function withOperationTimeout<T>(operation: Promise<T>, timeoutMs: number, label
 
 function environmentPaths(prefix: string, platform = process.platform) {
   const bin = platform === "win32" ? join(prefix, "Scripts") : join(prefix, "bin");
-  return { virtualEnv: prefix, bin, python: environmentPythonPath(prefix, platform), pip: join(bin, platform === "win32" ? "pip.exe" : "pip") };
+  return { virtualEnv: prefix, bin, python: environmentPythonExecutable(prefix, platform), pip: join(bin, platform === "win32" ? "pip.exe" : "pip") };
 }
 
 function environmentExecutable(prefix: string, language: EnvironmentLanguage, platform = process.platform): string {
@@ -340,10 +346,9 @@ export function workspaceEnvironmentVariables(status: WorkspaceEnvironmentStatus
   const corepackHome = corepackHomeFor(status.workspace);
   const inheritedPath = platform === "win32" ? Object.entries(inherited).find(([key]) => key.toLowerCase() === "path")?.[1] ?? "" : inherited.PATH ?? "";
   const base = Object.fromEntries(Object.entries(inherited).filter(([key]) => key.toLowerCase() !== "path" && !isInheritedRuntimeState(key)));
-  const environmentBins = platform === "win32" ? [paths.bin, status.prefix] : [paths.bin];
   return {
     ...base,
-    PATH: [...new Set([...environmentBins, npmBin, pnpmHome, inheritedPath].filter(Boolean))].join(platform === "win32" ? ";" : delimiter),
+    PATH: [paths.bin, ...(platform === "win32" ? [status.prefix] : []), npmBin, pnpmHome, inheritedPath].filter(Boolean).join(platform === "win32" ? ";" : delimiter),
     CONDA_PREFIX: status.manager === "micromamba" ? status.prefix : undefined,
     PI_SCIENCE_ENVIRONMENT_ID: status.environment_id,
     PI_SCIENCE_ENVIRONMENT_REVISION_ID: status.revision_id,

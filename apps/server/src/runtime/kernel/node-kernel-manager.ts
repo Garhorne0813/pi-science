@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface, type Interface } from "node:readline";
 import {
+  environmentPythonExecutable,
   workspaceEnvironmentVariables,
   type WorkspaceEnvironmentStatus,
 } from "../workspace/workspace-environment.js";
@@ -21,6 +22,7 @@ export interface KernelStreamEvent {
 export interface KernelResult {
   ok: boolean;
   stdout: string;
+  stderr: string;
   result?: string | null;
   error?: string | null;
   interrupted: boolean;
@@ -420,7 +422,7 @@ class NodeKernelSession {
   private executablePath(): string {
     const bin = this.deps.platform === "win32" ? "Scripts" : "bin";
     if (this.options.language === "python") {
-      return join(this.options.environment.prefix, bin, this.deps.platform === "win32" ? "python.exe" : "python");
+      return environmentPythonExecutable(this.options.environment.prefix, this.deps.platform);
     }
     return join(this.options.environment.prefix, bin, this.deps.platform === "win32" ? "Rscript.exe" : "Rscript");
   }
@@ -518,6 +520,7 @@ function normalizeResult(message: Record<string, unknown>): KernelResult {
   return {
     ok: message.ok === true,
     stdout: typeof message.stdout === "string" ? message.stdout : "",
+    stderr: typeof message.stderr === "string" ? message.stderr : "",
     result: message.result === null || message.result === undefined ? null : String(message.result),
     error: message.error === null || message.error === undefined ? null : String(message.error),
     interrupted: message.interrupted === true,

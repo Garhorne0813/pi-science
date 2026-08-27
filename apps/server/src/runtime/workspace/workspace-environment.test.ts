@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_PACKAGES, DEFAULT_R_PACKAGES, defaultPythonExecutable, environmentPythonPath, WorkspaceEnvironmentService, workspaceEnvironmentVariables, type EnvironmentRevision } from "./workspace-environment.js";
+import { DEFAULT_PACKAGES, DEFAULT_R_PACKAGES, defaultPythonExecutable, environmentPythonExecutable, WorkspaceEnvironmentService, workspaceEnvironmentVariables, type EnvironmentRevision } from "./workspace-environment.js";
 
 describe("workspace environment platform defaults", () => {
   it("uses the Windows Python launcher name when no override is configured", () => {
@@ -11,12 +11,21 @@ describe("workspace environment platform defaults", () => {
     expect(defaultPythonExecutable({ PYTHON: "custom-python" }, "win32")).toBe("custom-python");
   });
 
-  it("uses Scripts python for venvs and root python for micromamba on Windows", () => {
-    const prefix = join("C:\\envs", "rev_test");
-    const scriptsPython = join(prefix, "Scripts", "python.exe");
-    expect(environmentPythonPath(prefix, "win32", (path) => path === scriptsPython)).toBe(scriptsPython);
-    expect(environmentPythonPath(prefix, "win32", () => false)).toBe(join(prefix, "python.exe"));
-    expect(environmentPythonPath(prefix, "linux", () => false)).toBe(join(prefix, "bin", "python"));
+  it("prefers Windows Scripts/python.exe and falls back to prefix-root python.exe", async () => {
+    const prefix = await mkdtemp(join(tmpdir(), "pi-science-python-layout-"));
+    try {
+      const rootPython = join(prefix, "python.exe");
+      const scriptsPython = join(prefix, "Scripts", "python.exe");
+      await writeFile(rootPython, "", "utf8");
+      expect(environmentPythonExecutable(prefix, "win32")).toBe(rootPython);
+
+      await mkdir(join(prefix, "Scripts"), { recursive: true });
+      await writeFile(scriptsPython, "", "utf8");
+      expect(environmentPythonExecutable(prefix, "win32")).toBe(scriptsPython);
+      expect(environmentPythonExecutable(prefix, "linux")).toBe(join(prefix, "bin", "python"));
+    } finally {
+      await rm(prefix, { recursive: true, force: true });
+    }
   });
 
   it("preserves a Windows Path-only value under one canonical PATH key", () => {
@@ -40,7 +49,7 @@ describe("workspace environment platform defaults", () => {
       PI_SCIENCE_PYTHON_EXECUTABLE: "C:\\old-python.exe",
     }, "win32");
 
-    expect(environment.PATH?.split(";").slice(0, 2)).toEqual([join(workspace, ".venv", "Scripts"), join(workspace, ".venv")]);
+    expect(environment.PATH?.split(";").slice(0, 2)).toEqual([join(status.prefix, "Scripts"), status.prefix]);
     expect(environment.PATH?.split(";").at(-1)).toBe("C:\\Windows\\System32");
     expect(Object.keys(environment).filter((key) => key.toLowerCase() === "path")).toEqual(["PATH"]);
     expect(environment.TEMP).toBe("C:\\Temp");

@@ -134,6 +134,12 @@ describe("resolveWorkspaceFile", () => {
     await expect(resolveWorkspaceFile(workspace, "..results.json")).resolves.toBe(join(workspace, "..results.json"));
   });
 
+  it("rejects lexical traversal outside a workspace", async () => {
+    const workspace = join(root, "marked");
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    await expect(resolveWorkspaceFile(workspace, join("..", "outside.txt"))).rejects.toThrow(/escapes the workspace/);
+  });
+
   it.each(["linux", "darwin", "win32"])("rejects case variants of the metadata directory on %s", async (platform) => {
     const workspace = join(root, "marked");
     await mkdir(join(workspace, ".pi-science"), { recursive: true });

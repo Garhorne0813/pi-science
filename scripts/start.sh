@@ -12,17 +12,20 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 INSTALL_STATE_FILE="$PROJECT_DIR/.runtime/pi-science/install.env"
+source "$SCRIPT_DIR/node-runtime.sh"
 if [ -f "$INSTALL_STATE_FILE" ]; then
   # shellcheck disable=SC1090
   source "$INSTALL_STATE_FILE"
 fi
 
 PI_CLI="${PI_CLI_PATH:-${PI_SCIENCE_INSTALL_PI_CLI:-}}"
-NODE_COMMAND="$(command -v node || true)"
 [ -f "$PI_CLI" ] || { echo "Error: Pi runtime is not installed. Run: bash scripts/install.sh" >&2; exit 1; }
-[ -n "$NODE_COMMAND" ] || { echo "Error: Node.js >=24.16.0 is required. Run: bash scripts/install.sh" >&2; exit 1; }
-PI_NODE_PATH="$("$NODE_COMMAND" -p 'process.execPath')"
-"$PI_NODE_PATH" "$SCRIPT_DIR/check-node-version.mjs" || { echo "Error: Node.js >=24.16.0 is required (found $("$PI_NODE_PATH" --version)). Run: bash scripts/install.sh" >&2; exit 1; }
+if ! pi_science_prepare_node 0; then
+  pi_science_node_error
+  exit 1
+fi
+NODE_COMMAND="$PI_SCIENCE_NODE_COMMAND"
+PI_NODE_PATH="$PI_SCIENCE_NODE_COMMAND"
 CONTROL_PLANE_CLI="$PROJECT_DIR/apps/server/node_modules/tsx/dist/cli.mjs"
 VITE_BIN="$PROJECT_DIR/frontend/node_modules/.bin/vite"
 [ -f "$CONTROL_PLANE_CLI" ] || { echo "Error: server dependencies are not installed. Run: bash scripts/install.sh" >&2; exit 1; }

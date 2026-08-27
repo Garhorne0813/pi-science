@@ -5,7 +5,7 @@ A persistent process that holds one namespace across cells (shared state, like a
 Jupyter kernel) and speaks a line-delimited JSON protocol over stdin/stdout:
 
     request : {"id": "<str>", "code": "<str>"}\\n
-    response: {"id","ok","stdout","result","error"}\\n
+    response: {"id","ok","stdout","stderr","result","error"}\\n
 
 Standard library only — no ipykernel/ZMQ — so it runs against whatever Python the
 user has, offline, with no model key. `result` mirrors Jupyter: the repr of the
@@ -68,13 +68,13 @@ def rich_mime(value) -> dict[str, str]:
 
 
 def run_cell(ns: dict, code: str, emit=lambda _stream, _text: None):
-    """Execute code and return stdout, result, error, interrupted and MIME data."""
+    """Execute code and return stdout, stderr, result, error, interrupted and MIME data."""
     out = StreamCapture("stdout", emit)
     err_out = StreamCapture("stderr", emit)
     try:
         parsed = ast.parse(code, mode="exec")
     except SyntaxError:
-        return "", None, traceback.format_exc(limit=1), False, {}
+        return "", "", None, traceback.format_exc(limit=1), False, {}
 
     body = parsed.body
     result = None
@@ -96,11 +96,11 @@ def run_cell(ns: dict, code: str, emit=lambda _stream, _text: None):
                     result = repr(value)
                     mime = rich_mime(value)
     except KeyboardInterrupt:
-        return out.getvalue() + err_out.getvalue(), None, "KeyboardInterrupt", True, {}
+        return out.getvalue(), err_out.getvalue(), None, "KeyboardInterrupt", True, {}
     except Exception:  # surface the traceback to the notebook, like a kernel does
-        return out.getvalue() + err_out.getvalue(), None, traceback.format_exc(), False, {}
+        return out.getvalue(), err_out.getvalue(), None, traceback.format_exc(), False, {}
 
-    return out.getvalue() + err_out.getvalue(), result, None, False, mime
+    return out.getvalue(), err_out.getvalue(), result, None, False, mime
 
 
 def main() -> None:
@@ -142,12 +142,13 @@ def main() -> None:
         def emit(stream: str, text: str):
             protocol_out.write(json.dumps({"id": req_id, "type": "stream", "stream": stream, "text": text}) + "\n")
             protocol_out.flush()
-        stdout, result, error, interrupted, mime = run_cell(ns, req.get("code", ""), emit)
+        stdout, stderr, result, error, interrupted, mime = run_cell(ns, req.get("code", ""), emit)
         resp = {
             "id": req_id,
             "type": "result",
             "ok": error is None,
             "stdout": stdout,
+            "stderr": stderr,
             "result": result,
             "error": error,
             "interrupted": interrupted,
