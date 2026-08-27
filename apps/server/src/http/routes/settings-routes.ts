@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { configPath } from "../../storage/persistence.js";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import { runtimeExtensionStatus } from "../../runtime/pi/pi-runtime-launch.js";
-import { validateOutboundHttpUrl } from "../../security/outbound-security.js";
+import { safeConnectorFetch, validateOutboundHttpUrl } from "../../security/outbound-security.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { SettingsStore, type SettingsData as Settings } from "../../storage/settings-store.js";
 import { loadPiAiCatalog } from "../../config/model-catalog-fallback.js";
@@ -435,9 +435,17 @@ function completeHint(hint: ModelHint | undefined): boolean {
   return Boolean(hint?.context_window && typeof hint?.reasoning === "boolean");
 }
 
-async function fetchCapability(url: string, init: RequestInit, source: string): Promise<ModelHint> {
+async function fetchCapability(url: string, init: RequestInit, source: string, allowPrivate: boolean, timeoutMs: number): Promise<ModelHint> {
   try {
-    const response = await fetch(url, { ...init, redirect: "error" });
+    const response = await safeConnectorFetch(url, {
+      allowPrivate,
+      timeoutMs,
+      maxRedirects: 0,
+      maxResponseBytes: 2 * 1024 * 1024,
+      method: init.method,
+      headers: init.headers as Record<string, string> | undefined,
+      body: init.body,
+    });
     const payload = await readBoundedJson(response, 2 * 1024 * 1024);
     const hint = capabilitiesFromPayload(payload);
     return usefulHint(hint) ? { ...hint, source } : { source: "fallback" };
@@ -446,15 +454,15 @@ async function fetchCapability(url: string, init: RequestInit, source: string): 
   }
 }
 
-async function probeModelProtocol(baseUrl: string, model: string, apiKey: string, api: string, signal: AbortSignal): Promise<ModelHint> {
+async function probeModelProtocol(baseUrl: string, model: string, apiKey: string, api: string, allowPrivate: boolean, timeoutMs: number): Promise<ModelHint> {
   const headers = { ...authHeaders(apiKey, api), "content-type": "application/json" };
   if (api === "anthropic-messages") {
-    return fetchCapability(`${baseUrl}/messages`, { method: "POST", headers, signal, body: JSON.stringify({ model, max_tokens: 1_000_000_000, messages: [{ role: "user", content: "ping" }] }) }, "anthropic-probe");
+    return fetchCapability(`${baseUrl}/messages`, { method: "POST", headers, body: JSON.stringify({ model, max_tokens: 1_000_000_000, messages: [{ role: "user", content: "ping" }] }) }, "anthropic-probe", allowPrivate, timeoutMs);
   }
   if (api === "openai-responses") {
-    return fetchCapability(`${baseUrl}/responses`, { method: "POST", headers, signal, body: JSON.stringify({ model, input: "ping", max_output_tokens: 1_000_000_000 }) }, "openai-responses-probe");
+    return fetchCapability(`${baseUrl}/responses`, { method: "POST", headers, body: JSON.stringify({ model, input: "ping", max_output_tokens: 1_000_000_000 }) }, "openai-responses-probe", allowPrivate, timeoutMs);
   }
-  return fetchCapability(`${baseUrl}/chat/completions`, { method: "POST", headers, signal, body: JSON.stringify({ model, messages: [{ role: "user", content: "ping" }], max_tokens: 1_000_000_000, stream: false }) }, "openai-chat-probe");
+  return fetchCapability(`${baseUrl}/chat/completions`, { method: "POST", headers, body: JSON.stringify({ model, messages: [{ role: "user", content: "ping" }], max_tokens: 1_000_000_000, stream: false }) }, "openai-chat-probe", allowPrivate, timeoutMs);
 }
 
 async function forEachConcurrent<T>(items: T[], limit: number, task: (item: T) => Promise<void>): Promise<void> {
@@ -471,8 +479,13 @@ async function forEachConcurrent<T>(items: T[], limit: number, task: (item: T) =
 async function discoverProvider(baseUrl: string, apiKey: string, api: string, allowPrivate: boolean, timeoutMs: number): Promise<ProviderDiscovery> {
   const safeUrl = await validateOutboundHttpUrl(baseUrl, { allowPrivate });
   const normalizedBase = safeUrl.toString().replace(/\/$/, "");
-  const signal = AbortSignal.timeout(timeoutMs);
-  const response = await fetch(`${normalizedBase}/models`, { headers: authHeaders(apiKey, api), redirect: "error", signal });
+  const response = await safeConnectorFetch(`${normalizedBase}/models`, {
+    allowPrivate,
+    timeoutMs,
+    maxRedirects: 0,
+    maxResponseBytes: 2 * 1024 * 1024,
+    headers: authHeaders(apiKey, api),
+  });
   const payload = await readBoundedJson(response, 2 * 1024 * 1024);
   if (!response.ok) throw new Error(String(payload.error ?? payload.message ?? `Model discovery returned ${response.status}`));
   const rows = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : [];
@@ -488,10 +501,10 @@ async function discoverProvider(baseUrl: string, apiKey: string, api: string, al
     const inlineHint = capabilitiesFromPayload(rowById.get(model));
     let hint: ModelHint = usefulHint(inlineHint) ? { ...inlineHint, source: "models" } : { source: "fallback" };
     if (!hint.context_window || typeof hint.reasoning !== "boolean") {
-      const detail = await fetchCapability(`${normalizedBase}/models/${encodeURIComponent(model)}`, { headers: authHeaders(apiKey, api), signal }, "model-detail");
+      const detail = await fetchCapability(`${normalizedBase}/models/${encodeURIComponent(model)}`, { headers: authHeaders(apiKey, api) }, "model-detail", allowPrivate, timeoutMs);
       hint = mergeHint(hint, detail);
     }
-    if (!hint.context_window || typeof hint.reasoning !== "boolean") hint = mergeHint(hint, await probeModelProtocol(normalizedBase, model, apiKey, api, signal));
+    if (!hint.context_window || typeof hint.reasoning !== "boolean") hint = mergeHint(hint, await probeModelProtocol(normalizedBase, model, apiKey, api, allowPrivate, timeoutMs));
     const pi = piModels.find((candidate) => String(candidate.id ?? "") === model);
     if (pi) hint = mergeHint(hint, { ...capabilitiesFromPayload(pi), source: "pi-ai" });
     if (usefulHint(hint)) modelHints[model] = hint;

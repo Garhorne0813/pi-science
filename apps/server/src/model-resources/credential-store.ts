@@ -42,11 +42,19 @@ function isEnvironmentName(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
 }
 
+function isCredentialId(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value)
+    && value !== "constructor"
+    && value !== "prototype"
+    && value !== "__proto__";
+}
+
 function parseState(value: unknown): CredentialState {
   const source = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const raw = source.credentials && typeof source.credentials === "object" ? source.credentials as Record<string, unknown> : {};
-  const credentials: Record<string, StoredCredential> = {};
+  const credentials: Record<string, StoredCredential> = Object.create(null) as Record<string, StoredCredential>;
   for (const [id, candidate] of Object.entries(raw)) {
+    if (!isCredentialId(id)) continue;
     if (!candidate || typeof candidate !== "object") continue;
     const item = candidate as Record<string, unknown>;
     const metadata = credentialMetadataSchema.safeParse(item.metadata);
@@ -142,7 +150,7 @@ export class CredentialStore {
   async put(input: Partial<CreateCredentialRequest> & { id?: string }): Promise<CredentialMetadata> {
     return this.update((state) => {
       const id = input.id || `cred_${randomUUID().replaceAll("-", "")}`;
-      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) throw new Error("Credential ID must be URL-safe");
+      if (!isCredentialId(id)) throw new Error("Credential ID must be URL-safe");
       const existing = state.credentials[id];
       const kind = input.kind ?? existing?.metadata.kind ?? "api_key";
       const backend = input.backend ?? existing?.metadata.backend ?? "managed";
@@ -193,6 +201,7 @@ export class CredentialStore {
   /** Test and migration hook. Writes are still atomic and the raw value is not
    * part of the returned object. */
   async putRaw(id: string, metadata: Omit<CredentialMetadata, "id" | "status" | "created_at" | "updated_at">, secret?: string): Promise<CredentialMetadata> {
+    if (!isCredentialId(id)) throw new Error("Credential ID must be URL-safe");
     return this.update((state) => {
       const existing = state.credentials[id];
       const nextMetadata = metadataFrom({

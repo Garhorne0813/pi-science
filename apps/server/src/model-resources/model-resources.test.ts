@@ -82,6 +82,13 @@ describe("credential store", () => {
     await store.put({ id: "cred-switch", kind: "none" });
     expect(await readFile(path, "utf8")).not.toContain("stale-secret");
   });
+
+  it("rejects prototype-polluting credential IDs", async () => {
+    const store = new CredentialStore();
+    await expect(store.put({ id: "__proto__", kind: "api_key", backend: "managed", secret: "secret" })).rejects.toThrow("URL-safe");
+    await expect(store.putRaw("constructor", { kind: "api_key", backend: "managed" }, "secret")).rejects.toThrow("URL-safe");
+    expect(Object.prototype).not.toHaveProperty("metadata");
+  });
 });
 
 describe("runtime model resolver", () => {

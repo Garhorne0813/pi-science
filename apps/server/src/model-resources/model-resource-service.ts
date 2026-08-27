@@ -71,13 +71,15 @@ function adapterForEndpoint(protocol: Endpoint["protocol"]): Provider["adapter"]
 }
 
 function normalizeBaseUrl(value: unknown): string {
-  const raw = String(value ?? "").trim().replace(/\/+$/, "");
+  const raw = String(value ?? "").trim();
   if (!raw) throw resourceError("invalid_resource", "base_url is required");
   let url: URL;
   try { url = new URL(raw); } catch { throw resourceError("invalid_resource", "base_url must be a valid absolute URL"); }
   if (!(["http:", "https:"] as string[]).includes(url.protocol)) throw resourceError("invalid_resource", "only http(s) endpoint URLs are allowed");
   if (url.username || url.password) throw resourceError("invalid_resource", "URL credentials are not allowed");
-  return url.toString().replace(/\/$/, "");
+  let normalized = url.toString();
+  while (normalized.endsWith("/")) normalized = normalized.slice(0, -1);
+  return normalized;
 }
 
 function secureHeaderPolicy(value: unknown): Record<string, string> | undefined {
