@@ -1189,16 +1189,11 @@ export class NodeSessionService {
     if (changed.length === 0) return;
     const items = await this.toTurnArtifactItems(runtime.cwd, changed);
     if (items.length === 0) return;
-    // The tracked last assistant message id of this turn is the most accurate
-    // anchor (PRD: artifact cards must land after the turn's FINAL assistant
-    // message). A settled event's own ids may point to an earlier message of
-    // a multi-message turn, so they are consulted only as secondary fallbacks.
-    const assistantMessageId = runtime.turnAssistantPartId
-      ?? (typeof event.assistantMessageId === "string"
+    const assistantMessageId = typeof event.messageId === "string"
+      ? event.messageId
+      : typeof event.assistantMessageId === "string"
         ? event.assistantMessageId
-        : typeof event.messageId === "string"
-          ? event.messageId
-          : null);
+        : runtime.turnAssistantPartId ?? null;
     const turnOrdinal = runtime.turnOrdinal ?? null;
     const record = {
       turn_id: turnId,
