@@ -45,7 +45,7 @@ export class ExperimentExecutor implements ResearchExperimentExecutor {
     const bash = await findBashExecutable();
     if (!bash) throw new Error("Auto Research experiments require bash");
     const job = await this.jobs.submit(cwd, {
-      command: [bash, entrypoint],
+      command: entrypointCommand(entrypoint, bash),
       execution_cwd: work,
       surface: "research-graph",
       env: {
@@ -87,6 +87,13 @@ export class ExperimentExecutor implements ResearchExperimentExecutor {
   }
 
   async cancel(cwd: string, handle: ExperimentExecutionHandle): Promise<void> { await this.jobs.cancel(cwd, handle.job_id); }
+}
+
+/** Choose the interpreter for a candidate entrypoint. Python candidates are
+ *  executed with python3 so their script source is not (mis)interpreted by
+ *  bash; everything else keeps the legacy bash invocation. */
+export function entrypointCommand(entrypointPath: string, bash: string, python = "python3"): string[] {
+  return entrypointPath.endsWith(".py") ? [python, entrypointPath] : [bash, entrypointPath];
 }
 
 async function makeWritable(path: string): Promise<void> {

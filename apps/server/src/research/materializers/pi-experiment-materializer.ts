@@ -3,10 +3,25 @@ import { candidateProposalSchema, type AutoResearchSnapshot, type CandidatePropo
 import { z } from "zod";
 import { PiManagedResearchRuntime } from "../runtimes/pi-managed-runtime.js";
 
-const materializedSchema = candidateProposalSchema.omit({ parent_candidate_ids: true }).extend({
+// Candidate details returned by the materializer runtime. Duplicated from
+// candidateProposalSchema (minus parent_candidate_ids) because zod v4 does not
+// allow .omit() on a refined schema; the entrypoint-in-files rule is repeated
+// so materialization retries (not the executor) catch broken candidates.
+const materializedSchema = z.object({
+  approach_summary: z.string().min(1).max(4000),
+  rationale: z.string().max(8000).default(""),
+  files: z.record(z.string(), z.string()).refine(
+    (files) => Object.keys(files).length > 0 && Object.keys(files).length <= 100,
+    "files must contain 1-100 entries",
+  ),
+  entrypoint: z.string().min(1).max(500).default("solve.sh"),
+  expected_artifacts: z.array(z.object({ path: z.string(), kind: z.string().default("data") })).default([]),
   research_id: z.string(),
   node_id: z.string(),
-});
+}).refine(
+  (candidate) => Object.keys(candidate.files).includes(candidate.entrypoint),
+  "entrypoint must be included in candidate files",
+);
 
 /** Default wall-clock budget for one experiment materialization. Model
  *  sessions that write, run, and debug an executable candidate routinely
@@ -64,6 +79,7 @@ export class PiExperimentMaterializer implements ExperimentMaterializer {
             "Inspect the workspace as needed. Finish by calling research_materialize exactly once; do not print JSON.",
             "The entrypoint must write result.json and every expected artifact beneath PI_SCIENCE_OUTPUT_DIR. Do not change the formal expected metrics.",
             "research_materialize details must include research_id and node_id copied verbatim from the experiment node below.",
+            "candidate files must contain the entrypoint: the entrypoint value MUST be one of the files keys, exactly as written (no path prefix, no extension mismatch).",
             ...(attempt > 1 && lastError
               ? [`Your previous materialization was rejected:\n${String(lastError)}\nFix the returned details (especially research_id and node_id, copied verbatim) and call research_materialize again.`]
               : []),

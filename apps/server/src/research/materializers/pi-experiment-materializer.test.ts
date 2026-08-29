@@ -71,6 +71,19 @@ describe("PiExperimentMaterializer", () => {
     expect(secondPrompt).toContain("copied verbatim");
   });
 
+  it("retries a proposal whose entrypoint is not among the candidate files", async () => {
+    const badDetails = { ...validDetails, entrypoint: "missing.py" };
+    const runtime = runtimeWith([
+      async () => ({ details: badDetails, model_tokens: 1, cost_usd: 0 }),
+      async () => ({ details: validDetails, model_tokens: 1, cost_usd: 0 }),
+    ]);
+    const materializer = new PiExperimentMaterializer(runtime);
+    const result = await materializer.materialize("cwd", snapshot, "node-2222222222222222");
+    expect(result.proposal.entrypoint).toBe("solve.py");
+    expect(runtime.run).toHaveBeenCalledTimes(2);
+    expect(runtime.calls[1]).toContain("entrypoint");
+  });
+
   it("throws MaterializationError with the accumulated spend when all attempts fail", async () => {
     const runtime = runtimeWith([
       async () => { throw Object.assign(new Error("identity mismatch"), { model_tokens: 10_000, cost_usd: 0.003 }); },

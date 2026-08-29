@@ -495,7 +495,10 @@ export const candidateProposalSchema = z.object({
   entrypoint: z.string().min(1).max(500).default("solve.sh"),
   parent_candidate_ids: z.array(z.string()).max(100).default([]),
   expected_artifacts: z.array(z.object({ path: z.string(), kind: z.string().default("data") })).default([]),
-});
+}).refine(
+  (candidate) => Object.keys(candidate.files).includes(candidate.entrypoint),
+  "entrypoint must be included in candidate files",
+);
 
 export const metricValueSchema = z.object({
   value: z.number().finite(),
