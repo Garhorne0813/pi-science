@@ -113,6 +113,7 @@ const toolUpdatedEventSchema = z.object({
   title: z.string().optional(),
   input: z.record(z.string(), z.unknown()).optional(),
   output: z.string().optional(),
+  details: z.unknown().optional(),
   partialOutput: z.string().optional(),
   diff: z.string().optional(),
   startedAt: z.string().optional(),

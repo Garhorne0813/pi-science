@@ -326,6 +326,35 @@ describe("central conversation event hub", () => {
     expect(received.filter((event) => event.type === "error")).toEqual([]);
   });
 
+  it("publishes activity titles and preserves tool result details", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub();
+    const process = new EventEmitter() as PiProcess;
+    const received: Array<Record<string, unknown>> = [];
+    hub.bind(cwd, process, { activeSessionId: () => "session-presentation", onBusy: () => undefined, onExit: () => undefined });
+    await hub.subscribe(cwd, "session-presentation", undefined, (record) => received.push(JSON.parse(record.data)));
+
+    process.emit("event", { type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: { path: "frontend/src/ConversationBlocks.tsx" } });
+    process.emit("event", { type: "tool_execution_end", toolCallId: "read-1", toolName: "read", result: "done", details: { source: "workspace" } });
+    await eventually(() => received.filter((event) => event.type === "tool.updated").length === 2);
+
+    expect(received.find((event) => event.type === "tool.updated" && event.status === "running")).toMatchObject({ title: "Reading ConversationBlocks.tsx" });
+    expect(received.find((event) => event.type === "tool.updated" && event.status === "done")).toMatchObject({ details: { source: "workspace" } });
+  });
+
+  it("does not generate an activity title for todo", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub();
+    const process = new EventEmitter() as PiProcess;
+    const received: Array<Record<string, unknown>> = [];
+    hub.bind(cwd, process, { activeSessionId: () => "session-todo-title", onBusy: () => undefined, onExit: () => undefined });
+    await hub.subscribe(cwd, "session-todo-title", undefined, (record) => received.push(JSON.parse(record.data)));
+
+    process.emit("event", { type: "tool_execution_start", toolCallId: "todo-1", toolName: "todo", args: { action: "update" } });
+    await eventually(() => received.some((event) => event.type === "tool.updated"));
+    expect(received.find((event) => event.type === "tool.updated")).not.toHaveProperty("title");
+  });
+
   it("publishes a structured questionnaire and marks its browser response request", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();
