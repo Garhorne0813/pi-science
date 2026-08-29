@@ -5,6 +5,7 @@ import i18n from "../../i18n";
 import type { CodeRunner } from "../markdown-viewer/MarkdownViewer";
 import type { ThreadBlock } from "../../types/thread";
 import { useRuntimeStore } from "../../lib/agent-runtime";
+import { todoViewModel } from "../../lib/conversation/todos";
 
 const codeRunner: CodeRunner = { cwd: "proj", sessionId: "s1" };
 
@@ -43,6 +44,19 @@ describe("groupBlocks", () => {
     expect(groupBlocks(undefined as unknown as ThreadBlock[])).toEqual([]);
     expect(groupBlocks("garbage" as unknown as ThreadBlock[])).toEqual([]);
   });
+
+  it("omits todo-only presentation groups without deleting todo state", () => {
+    const blocks: ThreadBlock[] = [
+      { kind: "tool", id: "todo-1", callId: "todo-1", tool: "todo", status: "done", details: { tasks: [{ id: 1, subject: "Implement", status: "in_progress" }], nextId: 2 } },
+    ];
+    expect(groupBlocks(blocks)).toEqual([]);
+    expect(todoViewModel(blocks)?.activeTask?.subject).toBe("Implement");
+  });
+
+  it("keeps execution tools together when todo events are interleaved", () => {
+    const blocks = [tool("read", "read"), tool("todo", "todo"), tool("search", "grep")];
+    expect(groupBlocks(blocks)).toEqual([blocks]);
+  });
 });
 
 describe("renderBlocks", () => {
@@ -72,6 +86,18 @@ describe("renderBlocks", () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
       "Let me check that for you.\n\nHere is the final answer.",
     );
+  });
+
+  it("renders execution activity instead of raw tool cards and excludes todo", () => {
+    render(<>{renderBlocks([
+      tool("read", "read"),
+      tool("todo", "todo"),
+      tool("search", "grep"),
+    ], codeRunner)}</>);
+
+    expect(screen.getByText("Completed · 2 operations")).toBeInTheDocument();
+    expect(screen.queryByText("todo")).not.toBeInTheDocument();
+    expect(screen.queryByText("2/3 done")).not.toBeInTheDocument();
   });
 
   it("hides the copy action when the turn ends on a tool call with no final assistant answer", () => {

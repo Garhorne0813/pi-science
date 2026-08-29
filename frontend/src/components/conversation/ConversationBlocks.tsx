@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2, File, FolderOpen } from "lucide-react";
 import { cn } from "../../lib/ui";
@@ -13,8 +12,10 @@ import { agentActionTextByBlock } from "../../lib/conversation";
 import { extractCitations } from "../../lib/citations";
 import { parseSuggestions } from "../../lib/conversation";
 import { MessageActions } from "./MessageActions";
+import { isVisibleActivity } from "../../lib/conversation/activity-policy";
+import { AgentActivity } from "./AgentActivity";
 
-/** Render blocks, grouping consecutive tool cards together. */
+/** Group consecutive tool events into one activity trace. */
 export function groupBlocks(blocks: ThreadBlock[]): ThreadBlock[][] {
   // Defensive: a transient store state (e.g. mid-recovery) must never crash
   // the whole conversation render with "blocks is not iterable".
@@ -22,7 +23,7 @@ export function groupBlocks(blocks: ThreadBlock[]): ThreadBlock[][] {
   const groups: ThreadBlock[][] = [];
   let toolGroup: ToolCallBlock[] = [];
   const flushTools = () => {
-    if (toolGroup.length > 0) groups.push(toolGroup);
+    if (toolGroup.some(isVisibleActivity)) groups.push(toolGroup);
     toolGroup = [];
   };
   for (const block of blocks) {
@@ -45,8 +46,7 @@ export function renderBlockGroup(blocks: ThreadBlock[], codeRunner: CodeRunner, 
   // so every agent block would wrongly get a copy button.
   const effectiveActionText = actionTextByBlock ?? agentActionTextByBlock(blocks);
   if (blocks.every((block): block is ToolCallBlock => block.kind === "tool")) {
-    if (blocks.length > 1) result.push(<ToolGroup key={blocks[0].id} blocks={blocks} />);
-    else if (blocks[0]) result.push(<ToolCard key={blocks[0].id} block={blocks[0]} />);
+    if (blocks[0]) result.push(<AgentActivity key={blocks[0].id} blocks={blocks} />);
     return result;
   }
   for (const block of blocks) {
@@ -67,41 +67,11 @@ function BlockRenderer({ block, actionText, codeRunner }: { block: ThreadBlock; 
   switch (block.kind) {
     case "user": return <UserMessage id={block.id} text={block.text} timestamp={block.timestamp} />;
     case "agent": return <AgentMessage parts={block.parts} partial={block.partial} timestamp={block.timestamp} actionText={actionText} codeRunner={codeRunner} />;
-    case "tool": return <ToolCard block={block} />;
+    case "tool": return <AgentActivity blocks={[block]} />;
     case "status-line": return <StatusLine block={block} />;
     case "artifact-summary": return <TurnArtifactStrip artifacts={block.artifacts} cwd={codeRunner?.cwd} />;
     default: return null;
   }
-}
-
-/** Group consecutive tool blocks into one stable-height summary. */
-function ToolGroup({ blocks }: { blocks: ToolCallBlock[] }) {
-  const [expanded, setExpanded] = useState(false);
-  if (blocks.length <= 1) return <ToolCard block={blocks[0]} />;
-
-  const allDone = blocks.every((block) => block.status === "done" || block.status === "error");
-  const doneCount = blocks.filter((block) => block.status === "done").length;
-  const tools = [...new Set(blocks.map((block) => block.tool))].join(", ");
-  return (
-    <div data-thread-block-ids={blocks.map((block) => block.id).join(" ")} className="ui-card-flat animate-fadeIn overflow-hidden rounded-input scroll-mt-4">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 w-full px-3 py-2 text-left text-[12.5px] text-muted hover:bg-surface-2"
-      >
-        <span className="text-xs">{expanded ? "▼" : "▶"}</span>
-        <span>{tools}</span>
-        <span className="ml-auto flex items-center gap-1.5 text-[10px]">
-          {!allDone && <Loader2 size={11} className="animate-spin text-accent" />}
-          {doneCount}/{blocks.length} done
-        </span>
-      </button>
-      {expanded && (
-        <div className="border-t border-faint">
-          {blocks.map((b) => <ToolCard key={b.id} block={b} />)}
-        </div>
-      )}
-    </div>
-  );
 }
 
 function UserMessage({ id, text, timestamp }: { id: string; text: string; timestamp?: string }) {
@@ -166,44 +136,6 @@ function AgentMessage({ parts, partial, timestamp, actionText, codeRunner }: { p
 
 function shortCitationId(id: string): string {
   return id.length <= 24 ? id : `${id.slice(0, 14)}…${id.slice(-8)}`;
-}
-
-function ToolCard({ block }: { block: ToolCallBlock }) {
-  const [expanded, setExpanded] = useState(false);
-  const tool = block.tool;
-  const status = block.status;
-  const output = block.output || block.partialOutput;
-
-  const statusIcon = status === "running" ? (
-    <Loader2 size={13} className="animate-spin text-accent" />
-  ) : status === "error" ? (
-    <span className="text-error-text text-xs">✕</span>
-  ) : status === "done" ? (
-    <span className="text-ok-text text-xs">✓</span>
-  ) : (
-    <span className="text-muted text-xs">○</span>
-  );
-
-  return (
-    <div id={`thread-block-${block.id}`} data-thread-block-ids={block.id} className={cn(
-      "rounded-input px-3 py-2 scroll-mt-4",
-      status === "error" ? "border border-error/30 bg-error/5" : "ui-card-inset",
-    )}>
-      <button
-        onClick={() => output && setExpanded(!expanded)}
-        className="flex w-full items-center gap-2 text-left text-[12.5px] text-muted"
-      >
-        {statusIcon}
-        <span className="font-mono text-xs">{tool}</span>
-        <span className="ml-auto text-[10px] uppercase tracking-wider">{status}</span>
-      </button>
-      {expanded && output && (
-        <pre className="mt-2 whitespace-pre-wrap break-all rounded-input bg-surface-2 px-3 py-2 font-mono text-xs leading-5 text-text max-h-48 overflow-y-auto">
-          {output.slice(0, 8000)}
-        </pre>
-      )}
-    </div>
-  );
 }
 
 function StatusLine({ block }: { block: { kind: "status-line"; text: string; level: string; artifactId?: string; path?: string } }) {
