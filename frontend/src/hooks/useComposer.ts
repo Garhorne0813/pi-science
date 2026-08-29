@@ -11,7 +11,7 @@ import { injectSubagentMentions, type SubagentMention } from "../lib/conversatio
 
 /**
  * Composer state and send pipeline: attachments, drag-and-drop, IME guards,
- * slash-command dispatch, and the research-intent detour before a normal send.
+ * slash-command dispatch, and research setup alongside a normal send.
  */
 export function useComposer(params: {
   cwd: string;
@@ -24,9 +24,8 @@ export function useComposer(params: {
     draft: ResearchLoopDraft | null;
     intent: (text: string) => Promise<{ kind: "draft" } | { kind: "conversation"; message: string } | null>;
   };
-  /** Fired right before a real message is dispatched (after slash-command and
-   *  research-draft branches, so /compact, /export and draft detours never
-   *  trigger it). */
+  /** Fired right before a real message is dispatched (after slash-command
+   *  handling, so /compact and /export never trigger it). */
   onSend?: () => void;
 }) {
   const { cwd, conversationKey = null, selectedModel, reviewingProject, setReviewNotice, research, onSend } = params;
@@ -120,8 +119,10 @@ export function useComposer(params: {
     if (research.mode && !research.draft && text) {
       const prepared = await research.intent(text);
       if (!prepared) return;
-      if (prepared.kind === "draft") { setInput(""); setMentions([]); return; }
-      workflowMessage = prepared.message;
+      // Research is an enhancement to the conversation, not a separate send
+      // path. A prepared setup is rendered beside the transcript while the
+      // original user message continues through the normal runtime.
+      if (prepared.kind === "conversation") workflowMessage = prepared.message;
     }
 
     if (text.startsWith("/") && mentions.length === 0 && files.length === 0 && workspaceReferences.length === 0 && await runSlashCommand(text)) {

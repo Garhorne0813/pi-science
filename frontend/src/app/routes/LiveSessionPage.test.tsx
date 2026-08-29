@@ -374,7 +374,7 @@ describe("composer send-failure restore", () => {
 });
 
 describe("conversation research workflows", () => {
-  it("turns compare into an Auto Research Graph setup", async () => {
+  it("sends compare as a normal message and adds an Auto Research setup form", async () => {
     const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sendPrompt });
 
@@ -388,7 +388,7 @@ describe("conversation research workflows", () => {
     expect(await screen.findByText("Auto Research setup")).toBeInTheDocument();
     expect(screen.getByText("Compare method A and method B")).toBeInTheDocument();
     expect(screen.getByText("12")).toBeInTheDocument();
-    expect(sendPrompt).not.toHaveBeenCalled();
+    expect(sendPrompt).toHaveBeenCalledWith(expect.stringContaining("Compare method A and method B"));
   });
 
   it("hides workflow starters after a conversation has already begun", async () => {
@@ -406,7 +406,7 @@ describe("conversation research workflows", () => {
     expect(screen.queryByRole("button", { name: "Reproduce experiment" })).toBeNull();
   });
 
-  it("turns optimize into a bounded Auto Research Graph setup", async () => {
+  it("sends optimize as a normal message and adds a bounded Auto Research form", async () => {
     const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sendPrompt });
 
@@ -421,7 +421,7 @@ describe("conversation research workflows", () => {
     expect(screen.getByText("20")).toBeInTheDocument();
     expect(screen.getByText("2")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create and start" })).toBeEnabled();
-    expect(sendPrompt).not.toHaveBeenCalled();
+    expect(sendPrompt).toHaveBeenCalledWith("Minimize model latency");
   });
 });
 
