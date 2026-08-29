@@ -37,6 +37,16 @@ describe("MarkdownViewer mathematics", () => {
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("\\frac{a}{b} = c"));
   });
+
+  it("keeps display formulas borderless without a vertical scrollbar", () => {
+    const { container } = render(<MarkdownViewer>{"$$x^2$$"}</MarkdownViewer>);
+    const display = container.querySelector(".katex-display");
+    const copyButton = display?.querySelector("button");
+
+    expect(display).toHaveClass("overflow-x-auto", "overflow-y-hidden");
+    expect(display).not.toHaveClass("border", "rounded-lg", "px-4", "pb-3");
+    expect(copyButton).not.toHaveClass("border");
+  });
 });
 
 describe("MarkdownViewer code blocks", () => {

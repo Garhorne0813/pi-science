@@ -63,7 +63,11 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
   const piManager = new PiManager();
   const environments = new WorkspaceEnvironmentService(undefined, config?.micromambaExecutable, sqliteEnabled ? environmentRepository : undefined);
   const kernels = new NodeKernelManager();
-  const notebooks = new NotebookService({ micromambaExecutable: config?.micromambaExecutable, environments });
+  const notebooks = new NotebookService({
+    micromambaExecutable: config?.micromambaExecutable,
+    micromambaResolver: () => environments.ensureMicromambaExecutable(),
+    environments,
+  });
   const settings = new SettingsStore();
   const modelResources = new ModelResourceService({ settings });
   const projectReview = new ProjectReviewService(new PiReviewSubagentRunner(environments, piManager), sessionRepository);

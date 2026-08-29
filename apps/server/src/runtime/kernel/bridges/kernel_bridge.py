@@ -5,21 +5,26 @@ A persistent process that holds one namespace across cells (shared state, like a
 Jupyter kernel) and speaks a line-delimited JSON protocol over stdin/stdout:
 
     request : {"id": "<str>", "code": "<str>"}\\n
-    response: {"id","ok","stdout","stderr","result","error"}\\n
+    response: {"id","ok","stdout","stderr","result","error","mime","outputs"}\\n
 
 Standard library only — no ipykernel/ZMQ — so it runs against whatever Python the
 user has, offline, with no model key. `result` mirrors Jupyter: the repr of the
-final expression when a cell ends in one, else null.
+final expression when a cell ends in one, else null. Explicit `display()` calls and
+common matplotlib `show()` calls are returned as display outputs.
 """
 import ast
 import base64
 import io
 import json
 import os
+import re
 import signal
 import sys
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
+
+
+MAX_DISPLAY_OUTPUTS = 20
 
 
 class StreamCapture(io.StringIO):
@@ -67,14 +72,59 @@ def rich_mime(value) -> dict[str, str]:
     return bundle
 
 
+def display_mime(value) -> dict[str, str]:
+    bundle = rich_mime(value)
+    bundle.setdefault("text/plain", repr(value))
+    return bundle
+
+
+def capture_matplotlib_figures(outputs: list[dict], displayed_figures: set[int]) -> None:
+    """Capture figures after code calls show(), without requiring IPython."""
+    try:
+        import matplotlib.pyplot as plt
+    except Exception:
+        return
+    for number in plt.get_fignums():
+        if len(outputs) >= MAX_DISPLAY_OUTPUTS:
+            break
+        figure = plt.figure(number)
+        identity = id(figure)
+        if identity in displayed_figures:
+            continue
+        try:
+            figure.canvas.draw()
+            buffer = io.BytesIO()
+            figure.savefig(buffer, format="png")
+            outputs.append({
+                "output_type": "display_data",
+                "data": {"image/png": base64.b64encode(buffer.getvalue()).decode("ascii")},
+            })
+            displayed_figures.add(identity)
+        except Exception:
+            pass
+
+
 def run_cell(ns: dict, code: str, emit=lambda _stream, _text: None):
-    """Execute code and return stdout, stderr, result, error, interrupted and MIME data."""
+    """Execute code and return streams, result, MIME data, and display outputs."""
     out = StreamCapture("stdout", emit)
     err_out = StreamCapture("stderr", emit)
+    display_outputs: list[dict] = []
+    displayed_figures: set[int] = set()
+
+    def display(*values) -> None:
+        for value in values:
+            if len(display_outputs) >= MAX_DISPLAY_OUTPUTS:
+                break
+            display_outputs.append({"output_type": "display_data", "data": display_mime(value)})
+            if hasattr(value, "savefig") and hasattr(value, "canvas"):
+                displayed_figures.add(id(value))
+
+    # Keep a fresh collector for each cell while preserving the shared namespace.
+    ns["display"] = display
     try:
         parsed = ast.parse(code, mode="exec")
     except SyntaxError:
-        return "", "", None, traceback.format_exc(limit=1), False, {}
+        return "", "", None, traceback.format_exc(limit=1), False, {}, []
 
     body = parsed.body
     result = None
@@ -95,12 +145,22 @@ def run_cell(ns: dict, code: str, emit=lambda _stream, _text: None):
                 if value is not None:
                     result = repr(value)
                     mime = rich_mime(value)
+                    if len(display_outputs) >= MAX_DISPLAY_OUTPUTS:
+                        display_outputs.pop()
+                    display_outputs.append({
+                        "output_type": "execute_result",
+                        "data": {"text/plain": result, **mime},
+                    })
+                    if hasattr(value, "savefig") and hasattr(value, "canvas"):
+                        displayed_figures.add(id(value))
+            if re.search(r"\bshow\s*\(", code):
+                capture_matplotlib_figures(display_outputs, displayed_figures)
     except KeyboardInterrupt:
-        return out.getvalue(), err_out.getvalue(), None, "KeyboardInterrupt", True, {}
+        return out.getvalue(), err_out.getvalue(), None, "KeyboardInterrupt", True, {}, display_outputs
     except Exception:  # surface the traceback to the notebook, like a kernel does
-        return out.getvalue(), err_out.getvalue(), None, traceback.format_exc(), False, {}
+        return out.getvalue(), err_out.getvalue(), None, traceback.format_exc(), False, {}, display_outputs
 
-    return out.getvalue(), err_out.getvalue(), result, None, False, mime
+    return out.getvalue(), err_out.getvalue(), result, None, False, mime, display_outputs
 
 
 def main() -> None:
@@ -142,7 +202,7 @@ def main() -> None:
         def emit(stream: str, text: str):
             protocol_out.write(json.dumps({"id": req_id, "type": "stream", "stream": stream, "text": text}) + "\n")
             protocol_out.flush()
-        stdout, stderr, result, error, interrupted, mime = run_cell(ns, req.get("code", ""), emit)
+        stdout, stderr, result, error, interrupted, mime, outputs = run_cell(ns, req.get("code", ""), emit)
         resp = {
             "id": req_id,
             "type": "result",
@@ -153,6 +213,7 @@ def main() -> None:
             "error": error,
             "interrupted": interrupted,
             "mime": mime,
+            "outputs": outputs,
         }
         protocol_out.write(json.dumps(resp) + "\n")
         protocol_out.flush()

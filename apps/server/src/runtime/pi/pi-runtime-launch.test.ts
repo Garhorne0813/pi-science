@@ -280,6 +280,22 @@ describe("Pi runtime custom provider materialization", () => {
     }
   });
 
+  it("keeps the control-plane token in the host env but out of the runtime env", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-control-token-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    const previous = process.env.PI_SCIENCE_INTERNAL_TOKEN;
+    process.env.PI_SCIENCE_INTERNAL_TOKEN = "control-plane-token";
+    try {
+      const options = buildPiProcessOptions(cwd, { model: "openrouter/openai/gpt-5.1", thinking: "high", skills: [], extensions: [] })!;
+      expect(options.env?.PI_SCIENCE_INTERNAL_TOKEN).toBe("control-plane-token");
+      expect(options.web?.runtime.runtimeEnv?.PI_SCIENCE_INTERNAL_TOKEN).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.PI_SCIENCE_INTERNAL_TOKEN;
+      else process.env.PI_SCIENCE_INTERNAL_TOKEN = previous;
+    }
+  });
+
   it("passes generated runtime credentials into the Pi Orbit runtime env", async () => {
     const credentials = new CredentialStore();
     await credentials.put({ id: "cred-lab", kind: "api_key", backend: "managed", secret: "runtime-env-secret" });

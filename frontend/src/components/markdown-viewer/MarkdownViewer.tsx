@@ -119,14 +119,7 @@ function MathBlock({ children, variant }: { children?: React.ReactNode; variant:
   };
 
   return (
-    <div
-      className={cn(
-        "katex-display group relative my-4 overflow-x-auto rounded-lg border px-4 pb-3 pt-7",
-        variant === "chat"
-          ? "border-border bg-[color-mix(in_srgb,var(--surface-2)_50%,transparent)]"
-          : "border-[var(--doc-hr)] bg-[var(--doc-pre-bg)]",
-      )}
-    >
+    <div className="katex-display group relative my-4 overflow-x-auto overflow-y-hidden pt-7">
       <button
         type="button"
         onClick={() => void copy()}
@@ -134,10 +127,10 @@ function MathBlock({ children, variant }: { children?: React.ReactNode; variant:
         aria-label={copied ? t("conversation.copied") : t("conversation.copy")}
         title={copied ? t("conversation.copied") : t("conversation.copy")}
         className={cn(
-          "absolute right-2 top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded border opacity-70 transition-opacity hover:opacity-100 disabled:cursor-default disabled:opacity-40",
+          "absolute right-2 top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded opacity-70 transition-opacity hover:opacity-100 disabled:cursor-default disabled:opacity-40",
           variant === "chat"
-            ? "border-border bg-surface text-muted hover:text-text"
-            : "border-[var(--doc-table-head-line)] bg-[var(--doc-paper)] text-[var(--doc-ink-muted)] hover:text-[var(--doc-accent)]",
+            ? "bg-surface text-muted hover:text-text"
+            : "bg-[var(--doc-paper)] text-[var(--doc-ink-muted)] hover:text-[var(--doc-accent)]",
         )}
       >
         {copied ? <Check size={12} /> : <Copy size={12} />}

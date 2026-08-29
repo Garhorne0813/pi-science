@@ -100,6 +100,8 @@ export const ENVIRONMENT_PRESETS = {
 export type EnvironmentPresetId = keyof typeof ENVIRONMENT_PRESETS;
 
 const MICROMAMBA_VERSION = "2.5.0-2";
+const MICROMAMBA_DOWNLOAD_ATTEMPTS = 3;
+const MICROMAMBA_RETRY_DELAY_MS = 500;
 const DEFAULT_ENVIRONMENT_PROVISION_TIMEOUT_MS = 21 * 60_000;
 const MICROMAMBA_SHA256: Record<string, string> = {
   "linux-64": "c04571cfb0750e5432d530a3068b8fcd232ebed3133358e056e59a90b9852b00",
@@ -107,6 +109,10 @@ const MICROMAMBA_SHA256: Record<string, string> = {
   "osx-arm64": "22953898e3cfd63c680d696a204c7858ce7f10a10c271bda7e6defd63370ee41",
   "osx-64": "d6542ddf80e0b81b8538f811dd64ad5804373206bc0128cbc4a8833efe67547b",
 };
+
+export function micromambaDownloadUrl(platform: string): string {
+  return `https://github.com/mamba-org/micromamba-releases/releases/download/${MICROMAMBA_VERSION}/micromamba-${platform}`;
+}
 
 /**
  * Micromamba layouts on Windows are not uniform: some builds place Python in
@@ -194,6 +200,7 @@ async function dirSize(target: string): Promise<number | null> {
 
 async function exists(path: string): Promise<boolean> { try { await access(path); return true; } catch { return false; } }
 async function executable(path: string): Promise<boolean> { try { await access(path, constants.X_OK); return true; } catch { return false; } }
+function delay(ms: number): Promise<void> { return new Promise((resolveDelay) => setTimeout(resolveDelay, ms)); }
 
 const INTEGRITY_SNAPSHOT_VERSION = "v2";
 
@@ -420,6 +427,10 @@ export class WorkspaceEnvironmentService {
       return this.statusFor(workspace, legacy.virtualEnv, "legacy-venv", { error: info.isDirectory() ? "The workspace .venv is incomplete. Remove or repair it before migration." : "The workspace .venv path exists but is not a directory." });
     }
     return this.statusFor(workspace, environmentRoot(), "micromamba", { ready: false });
+  }
+
+  async ensureMicromambaExecutable(): Promise<string> {
+    return this.ensureMicromamba();
   }
 
   async ensure(cwdValue: string): Promise<WorkspaceEnvironmentStatus> {
@@ -651,29 +662,63 @@ export class WorkspaceEnvironmentService {
   }
 
   private async ensureMicromamba(): Promise<string> {
+    const runtimeEnvironment = this.micromambaEnvironment();
     if (this.micromambaExecutable !== "micromamba") return this.micromambaExecutable;
-    try { await this.run("micromamba", ["--version"], 10_000, this.micromambaEnvironment()); return "micromamba"; } catch { /* install pinned binary */ }
+    try { await this.run("micromamba", ["--version"], 10_000, runtimeEnvironment); return "micromamba"; } catch { /* install pinned binary */ }
     const platform = process.platform === "darwin"
       ? process.arch === "arm64" ? "osx-arm64" : "osx-64"
       : process.platform === "linux" ? process.arch === "arm64" ? "linux-aarch64" : "linux-64" : null;
     if (!platform || !MICROMAMBA_SHA256[platform]) throw new Error(`Micromamba auto-install is unsupported on ${process.platform}-${process.arch}`);
     const target = configPath(join("micromamba", "bin", process.platform === "win32" ? "micromamba.exe" : "micromamba"));
-    if (await executable(target)) return target;
+    const usable = async (path: string): Promise<boolean> => {
+      if (!await executable(path)) return false;
+      try {
+        await this.run(path, ["--version"], 10_000, runtimeEnvironment);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    if (await usable(target)) return target;
     const lock = `${target}.install`;
     return withFileWriteLock(lock, async () => {
-      if (await executable(target)) return target;
-      const url = `https://github.com/mamba-org/micromamba-releases/releases/download/${MICROMAMBA_VERSION}/micromamba-${platform}`;
-      const response = await fetch(url, { signal: AbortSignal.timeout(120_000) });
-      if (!response.ok) throw new Error(`Micromamba download failed: HTTP ${response.status}`);
-      const data = Buffer.from(await response.arrayBuffer());
+      if (await usable(target)) return target;
+      await rm(target, { force: true });
+      const url = micromambaDownloadUrl(platform);
+      let data: Buffer | null = null;
+      let lastError: Error | null = null;
+      for (let attempt = 0; attempt < MICROMAMBA_DOWNLOAD_ATTEMPTS; attempt += 1) {
+        try {
+          const response = await fetch(url, { signal: AbortSignal.timeout(120_000) });
+          if (response.ok) {
+            data = Buffer.from(await response.arrayBuffer());
+            break;
+          }
+          lastError = new Error(`HTTP ${response.status}`);
+          // A new release asset can briefly return 404 while GitHub's CDN
+          // propagates it. Retry 404 and transient server failures only.
+          if (response.status !== 404 && response.status < 500) break;
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error(String(error));
+        }
+        if (attempt + 1 < MICROMAMBA_DOWNLOAD_ATTEMPTS) await delay(MICROMAMBA_RETRY_DELAY_MS * (attempt + 1));
+      }
+      if (!data) throw new Error(`Micromamba download failed after ${MICROMAMBA_DOWNLOAD_ATTEMPTS} attempts: ${lastError?.message ?? "unknown error"}`);
       const actual = createHash("sha256").update(data).digest("hex");
       if (actual !== MICROMAMBA_SHA256[platform]) throw new Error(`Micromamba SHA-256 mismatch: expected ${MICROMAMBA_SHA256[platform]}, got ${actual}`);
       await mkdir(join(configPath("micromamba"), "bin"), { recursive: true });
       const temporary = `${target}.${process.pid}.tmp`;
-      await writeFile(temporary, data);
-      await chmod(temporary, 0o755);
-      await rename(temporary, target);
-      return target;
+      let installed = false;
+      try {
+        await writeFile(temporary, data);
+        await chmod(temporary, 0o755);
+        if (!await usable(temporary)) throw new Error("Downloaded micromamba is not executable");
+        await rename(temporary, target);
+        installed = true;
+        return target;
+      } finally {
+        if (!installed) await rm(temporary, { force: true });
+      }
     });
   }
 

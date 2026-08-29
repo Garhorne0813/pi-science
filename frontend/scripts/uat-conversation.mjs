@@ -90,7 +90,7 @@ async function run() {
       await modelTrigger.waitFor({ timeout: 20_000 });
       await modelTrigger.click();
       await page.getByRole("menuitem", { name: /^Model/ }).click();
-      const modelItems = page.getByRole("menuitem");
+      const modelItems = page.getByRole("menuitemradio");
       const checkedModel = modelItems.filter({ has: page.locator(".lucide-check") });
       await checkedModel.first().waitFor({ timeout: 10_000 });
       const selectedLabel = (await checkedModel.first().textContent())?.trim();
@@ -102,7 +102,8 @@ async function run() {
       await composer.fill("请先使用 bash 工具执行 sleep 2，然后只回复 CHAT_BROWSER_UAT_OK");
       await page.getByRole("button", { name: "Send message" }).click();
       // The first prompt lazily creates the session and lands on /session/:id.
-      await page.waitForURL(/\/session\//, { timeout: 30_000 });
+      // Runtime startup can take up to the control-plane start timeout.
+      await page.waitForURL(/\/session\//, { timeout: 120_000 });
       firstSession = sessionIdFromUrl(page.url());
       if (!firstSession) throw new Error(`No session ID after the first prompt: ${page.url()}`);
       createdSessions.push(firstSession);
@@ -133,7 +134,7 @@ async function run() {
       await modelTrigger.waitFor({ timeout: 20_000 });
       await composer.fill("second lazy session prompt");
       await page.getByRole("button", { name: "Send message" }).click();
-      await page.waitForURL(/\/session\//, { timeout: 30_000 });
+      await page.waitForURL(/\/session\//, { timeout: 120_000 });
       secondSession = sessionIdFromUrl(page.url());
       if (!secondSession || secondSession === firstSession) {
         throw new Error(`New conversation reused the old ID: ${firstSession}`);

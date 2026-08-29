@@ -3,7 +3,7 @@
 # set PI_ORBIT_REPO to opt into running a local source checkout.
 set -euo pipefail
 
-PI_ORBIT_VERSION="${PI_ORBIT_VERSION:-0.3.0}"
+PI_ORBIT_VERSION="${PI_ORBIT_VERSION:-0.3.1}"
 PI_ORBIT_RELEASE_REPO="${PI_ORBIT_RELEASE_REPO:-Garhorne0813/pi-orbit}"
 PI_AI_VERSION="${PI_AI_VERSION:-0.84.3}"
 PI_MCP_ADAPTER_VERSION="${PI_MCP_ADAPTER_VERSION:-2.18.0}"

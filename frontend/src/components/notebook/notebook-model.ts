@@ -1,5 +1,6 @@
 export interface NotebookOutput {
   output_type?: string;
+  execution_count?: number | null;
   name?: string;
   text?: string | string[];
   data?: Record<string, string | string[]>;

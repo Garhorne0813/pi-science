@@ -23,6 +23,7 @@ import {
 
 const MAX_NOTEBOOK_BYTES = 50 * 1024 * 1024;
 const MAX_OUTPUT_PREVIEW_CHARS = 16 * 1024;
+const MAX_BINARY_OUTPUT_CHARS = 4 * 1024 * 1024;
 const MAX_OUTPUTS_PER_CELL = 20;
 
 async function cwdFromQuery(query: { cwd?: unknown }, fallback = "."): Promise<string> {
@@ -45,13 +46,23 @@ function truncateOutput(value: string): string {
   return value.length <= MAX_OUTPUT_PREVIEW_CHARS ? value : `${value.slice(0, MAX_OUTPUT_PREVIEW_CHARS)}\n… [truncated]`;
 }
 
+function boundedOutputValue(key: string, value: unknown): string | undefined {
+  const text = notebookSourceText(value);
+  if (key.startsWith("image/")) return text.length <= MAX_BINARY_OUTPUT_CHARS ? text : undefined;
+  return truncateOutput(text);
+}
+
 function boundedNotebookOutput(output: unknown): unknown {
   if (typeof output !== "object" || output === null || Array.isArray(output)) return typeof output === "string" ? truncateOutput(output) : output;
   const bounded = { ...(output as Record<string, unknown>) };
   if (bounded.text !== undefined) bounded.text = truncateOutput(notebookSourceText(bounded.text));
   if (Array.isArray(bounded.traceback)) bounded.traceback = [truncateOutput(bounded.traceback.map(String).join("\n"))];
   if (bounded.data && typeof bounded.data === "object" && !Array.isArray(bounded.data)) {
-    bounded.data = Object.fromEntries(Object.entries(bounded.data as Record<string, unknown>).map(([key, value]) => [key, truncateOutput(notebookSourceText(value))]));
+    bounded.data = Object.fromEntries(
+      Object.entries(bounded.data as Record<string, unknown>)
+        .map(([key, value]) => [key, boundedOutputValue(key, value)] as const)
+        .filter((entry): entry is [string, string] => entry[1] !== undefined),
+    );
   }
   return bounded;
 }
