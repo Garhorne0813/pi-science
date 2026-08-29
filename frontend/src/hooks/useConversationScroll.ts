@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import { groupBlocks } from "../components/conversation/ConversationBlocks";
-import type { ConversationNavItem } from "../components/conversation/ConversationNavRail";
 import { useRuntimeStore } from "../lib/agent-runtime";
 import type { ThreadBlock } from "../types/thread";
 
@@ -14,12 +13,7 @@ export interface ConversationScrollOptions {
   showRuns: boolean;
   working: boolean;
   blocks: ThreadBlock[];
-  blockGroups: ThreadBlock[][];
-  userNavItems: ConversationNavItem[];
-  historyHasMore: boolean;
-  historyLoading: boolean;
   loadOlderMessages: () => Promise<number>;
-  loadMessagesForNavigation: (before: string) => Promise<number>;
 }
 
 export interface ConversationScrollController {
@@ -27,6 +21,7 @@ export interface ConversationScrollController {
   virtuosoRef: RefObject<VirtuosoHandle | null>;
   showScrollDown: boolean;
   virtualFirstItemIndex: number;
+  navigationLoading: boolean;
   attachScroller: (element: Window | HTMLElement | null) => void;
   handleLoadOlder: () => Promise<void>;
   handleNavSelect: (id: string) => void;
@@ -49,20 +44,18 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
     showRuns,
     working,
     blocks,
-    blockGroups,
-    userNavItems,
-    historyHasMore,
-    historyLoading,
     loadOlderMessages,
-    loadMessagesForNavigation,
   } = options;
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const followOutputRef = useRef(true);
   const [showScrollDown, setShowScrollDown] = useState(false);
   const [virtualFirstItemIndex, setVirtualFirstItemIndex] = useState(100_000);
+  const [navigationLoading, setNavigationLoading] = useState(false);
   const scrollTimersRef = useRef<number[]>([]);
   const followOutputCancelRef = useRef<(() => void) | null>(null);
+  const historyLoadInFlightRef = useRef<{ key: string; promise: Promise<number> } | null>(null);
+  const navigationGenerationRef = useRef(0);
   const sessionRef = useRef(sessionId);
   const locatedFocusRef = useRef<string | null>(null);
 
@@ -72,6 +65,7 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
 
   useEffect(() => {
     return () => {
+      navigationGenerationRef.current += 1;
       for (const handle of scrollTimersRef.current) window.clearTimeout(handle);
       scrollTimersRef.current = [];
     };
@@ -80,8 +74,10 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
   // A new session (or a reconnect) starts at the bottom: never inherit the
   // "user scrolled up" state of the previous session on this route.
   useEffect(() => {
+    navigationGenerationRef.current += 1;
     followOutputRef.current = true;
     setShowScrollDown(false);
+    setNavigationLoading(false);
     setVirtualFirstItemIndex(100_000);
   }, [sessionId, workspaceCwd]);
 
@@ -150,15 +146,45 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
     wasWorking.current = working;
   }, [working]);
 
+  // One anchor transaction owns each in-flight prepend. Both Virtuoso's
+  // startReached callback and navigation can request the same page; sharing
+  // this promise prevents them from decrementing firstItemIndex twice.
+  const loadOlderAndAnchor = useCallback(async (): Promise<number> => {
+    const initial = useRuntimeStore.getState();
+    if (!initial.activeSessionId || !initial.historyHasMore || !initial.historyCursor) return 0;
+    const sessionIdAtStart = initial.activeSessionId;
+    const cwdAtStart = initial.cwd;
+    const cursorAtStart = initial.historyCursor;
+    const key = `${cwdAtStart}\u0000${sessionIdAtStart}\u0000${cursorAtStart}`;
+    const existing = historyLoadInFlightRef.current;
+    if (existing?.key === key) return existing.promise;
+
+    const previousGroups = groupBlocks(initial.thread.blocks);
+    const previousBlockIds = new Set(initial.thread.blocks.map((block) => block.id));
+    const promise = (async () => {
+      const loadedMessages = await loadOlderMessages();
+      const current = useRuntimeStore.getState();
+      if (current.cwd === cwdAtStart && current.activeSessionId === sessionIdAtStart) {
+        const nextGroups = groupBlocks(current.thread.blocks);
+        const firstExistingGroup = nextGroups.findIndex((group) => group.some((block) => previousBlockIds.has(block.id)));
+        const addedGroups = firstExistingGroup >= 0
+          ? firstExistingGroup
+          : Math.max(0, nextGroups.length - previousGroups.length);
+        if (addedGroups > 0) setVirtualFirstItemIndex((value) => value - addedGroups);
+      }
+      return loadedMessages;
+    })();
+    historyLoadInFlightRef.current = { key, promise };
+    try {
+      return await promise;
+    } finally {
+      if (historyLoadInFlightRef.current?.promise === promise) historyLoadInFlightRef.current = null;
+    }
+  }, [loadOlderMessages]);
+
   const handleLoadOlder = useCallback(async () => {
-    if (!historyHasMore || historyLoading) return;
-    const previousGroupCount = blockGroups.length;
-    const loadedMessages = await loadOlderMessages();
-    if (!loadedMessages) return;
-    const nextGroupCount = groupBlocks(useRuntimeStore.getState().thread.blocks).length;
-    const addedGroups = Math.max(0, nextGroupCount - previousGroupCount);
-    if (addedGroups > 0) setVirtualFirstItemIndex((current) => current - addedGroups);
-  }, [blockGroups.length, historyHasMore, historyLoading, loadOlderMessages]);
+    await loadOlderAndAnchor();
+  }, [loadOlderAndAnchor]);
 
   const smoothScroll = useCallback(() => !window.matchMedia("(prefers-reduced-motion: reduce)").matches, []);
 
@@ -239,21 +265,55 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
     }
   }, [highlightThreadBlock, scheduleSessionScoped, threadBlockElement]);
 
-  const handleNavSelect = useCallback((id: string) => {
-    // Stop the follow-output effect from yanking the viewport back to the bottom.
+  const locateBlock = useCallback(async (id: string, options: { highlight?: boolean } = {}): Promise<boolean> => {
+    const token = ++navigationGenerationRef.current;
     followOutputRef.current = false;
-    // A new navigation supersedes any pending correction timers from a
-    // previous one (rapid consecutive clicks, session switch).
     cancelPendingScrollTimers();
-    const target = userNavItems.find((item) => item.id === id);
-    if (target?.before) {
-      void loadMessagesForNavigation(target.before).then((loadedMessages) => {
-        if (loadedMessages > 0) scheduleSessionScoped(() => scrollToLoadedTarget(id), 0);
-      });
-      return;
+    const expectedSessionId = activeSessionId ?? sessionId ?? null;
+    let state = useRuntimeStore.getState();
+    if (state.cwd !== workspaceCwd || (expectedSessionId && state.activeSessionId !== expectedSessionId)) {
+      setNavigationLoading(false);
+      return false;
     }
-    scrollToLoadedTarget(id);
-  }, [cancelPendingScrollTimers, loadMessagesForNavigation, scheduleSessionScoped, scrollToLoadedTarget, userNavItems]);
+
+    try {
+      if (state.thread.blocks.some((block) => block.id === id)) {
+        scrollToLoadedTarget(id, options.highlight ?? false);
+        return true;
+      }
+      setNavigationLoading(true);
+      while (token === navigationGenerationRef.current) {
+        state = useRuntimeStore.getState();
+        if (state.cwd !== workspaceCwd || (expectedSessionId && state.activeSessionId !== expectedSessionId)) return false;
+        if (state.thread.blocks.some((block) => block.id === id)) break;
+        if (!state.historyHasMore) break;
+        const loadedMessages = await loadOlderAndAnchor();
+        if (token !== navigationGenerationRef.current) return false;
+        state = useRuntimeStore.getState();
+        if (state.cwd !== workspaceCwd || (expectedSessionId && state.activeSessionId !== expectedSessionId)) return false;
+        if (loadedMessages === 0) break;
+      }
+
+      if (token !== navigationGenerationRef.current || !state.thread.blocks.some((block) => block.id === id)) return false;
+      scheduleSessionScoped(() => {
+        if (navigationGenerationRef.current === token) scrollToLoadedTarget(id, options.highlight ?? false);
+      }, 0);
+      return true;
+    } finally {
+      if (navigationGenerationRef.current === token) setNavigationLoading(false);
+    }
+  }, [activeSessionId, cancelPendingScrollTimers, loadOlderAndAnchor, scheduleSessionScoped, scrollToLoadedTarget, sessionId, workspaceCwd]);
+
+  const handleNavSelect = useCallback((id: string) => {
+    void locateBlock(id);
+  }, [locateBlock]);
+
+  useEffect(() => {
+    if (!showRuns) return;
+    navigationGenerationRef.current += 1;
+    cancelPendingScrollTimers();
+    setNavigationLoading(false);
+  }, [cancelPendingScrollTimers, showRuns]);
 
   useEffect(() => {
     if (!focusedBlockId) {
@@ -265,40 +325,32 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
     if (locatedFocusRef.current === focusKey) return;
     let cancelled = false;
 
-    const locate = async () => {
-      followOutputRef.current = false;
+    void locateBlock(focusedBlockId, { highlight: true }).then((located) => {
+      if (!cancelled && located) locatedFocusRef.current = focusKey;
+    });
+    return () => {
+      cancelled = true;
+      navigationGenerationRef.current += 1;
       cancelPendingScrollTimers();
-      let previousGroupCount = groupBlocks(useRuntimeStore.getState().thread.blocks).length;
-      let state = useRuntimeStore.getState();
-      while (!state.thread.blocks.some((block) => block.id === focusedBlockId) && state.historyHasMore) {
-        const loadedMessages = await state.loadOlderMessages();
-        if (cancelled || loadedMessages === 0) return;
-        const nextGroupCount = groupBlocks(useRuntimeStore.getState().thread.blocks).length;
-        const addedGroups = Math.max(0, nextGroupCount - previousGroupCount);
-        if (addedGroups > 0) setVirtualFirstItemIndex((current) => current - addedGroups);
-        previousGroupCount = nextGroupCount;
-        state = useRuntimeStore.getState();
-      }
-      if (cancelled || !state.thread.blocks.some((block) => block.id === focusedBlockId)) return;
-      locatedFocusRef.current = focusKey;
-      scheduleSessionScoped(() => scrollToLoadedTarget(focusedBlockId, true), 0);
     };
-
-    void locate();
-    return () => { cancelled = true; };
-  }, [activeSessionId, cancelPendingScrollTimers, focusedBlockId, scheduleSessionScoped, scrollToLoadedTarget, showRuns, blocks]);
+  }, [activeSessionId, cancelPendingScrollTimers, focusedBlockId, locateBlock, showRuns]);
 
   const scrollToBottom = useCallback(() => {
+    navigationGenerationRef.current += 1;
+    setNavigationLoading(false);
     followOutputRef.current = true;
+    cancelPendingScrollTimers();
     const scroller = scrollRef.current;
     if (scroller) {
       scroller.scrollTo({ top: scroller.scrollHeight, behavior: smoothScroll() ? "smooth" : "auto" });
       scroller.scrollTop = scroller.scrollHeight;
     }
     virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: smoothScroll() ? "smooth" : "auto" });
-  }, [smoothScroll]);
+  }, [cancelPendingScrollTimers, smoothScroll]);
 
   const startNewTurn = useCallback(() => {
+    navigationGenerationRef.current += 1;
+    setNavigationLoading(false);
     followOutputRef.current = true;
     setShowScrollDown(false);
     cancelPendingScrollTimers();
@@ -314,5 +366,5 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
     scheduleSessionScoped(snapToBottom, 200);
   }, [cancelPendingScrollTimers, scheduleSessionScoped]);
 
-  return { scrollRef, virtuosoRef, showScrollDown, virtualFirstItemIndex, attachScroller, handleLoadOlder, handleNavSelect, scrollToBottom, startNewTurn };
+  return { scrollRef, virtuosoRef, showScrollDown, virtualFirstItemIndex, navigationLoading, attachScroller, handleLoadOlder, handleNavSelect, scrollToBottom, startNewTurn };
 }

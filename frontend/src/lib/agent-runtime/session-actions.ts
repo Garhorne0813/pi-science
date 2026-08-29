@@ -28,7 +28,9 @@ type GetState = StoreApi<RuntimeState>["getState"];
  *  (or a StrictMode double effect) share one backend session instead of
  *  racing two. Owned by `createNewSession`, which also clears each entry. */
 const _createSessionPromises = new Map<string, Promise<string>>();
+const _historyPagePromises = new Map<string, Promise<number>>();
 function connectionKey(cwd: string, sessionId?: string): string { return `${cwd}\u0000${sessionId ?? ""}`; }
+function historyPageKey(cwd: string, sessionId: string, before: string): string { return `${connectionKey(cwd, sessionId)}\u0000${before}`; }
 
 export function createRuntimeActions(set: SetState, get: GetState) {
   /** React StrictMode can replay the route effect while the first session
@@ -46,6 +48,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       turnState.errored = false;
       const state = get();
       const targetChanged = state.cwd !== cwd || state.activeSessionId !== (sessionId ?? null);
+      if (targetChanged) _historyPagePromises.clear();
       if (targetChanged) {
         set({
           thread: emptyThread(),
@@ -133,24 +136,10 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         // `is_streaming: false` (or a transient state-read error).
         const liveActivityArrived = generations.activity !== connectActivityGeneration;
         if (messagesResult.status === "fulfilled") {
-          let historyPage = messagesResult.value;
-          const liveHasUser = get().thread.blocks.some((block) => block.kind === "user");
-          if (!historyPage.messages.some((message) => message.role === "user") && !liveHasUser && historyPage.has_more) {
-            // A tail page can contain only assistant/tool messages. Load the
-            // page around the newest omitted user message so a direct session
-            // link still shows the request that started the visible thread.
-            try {
-              const userIndex = await client.getUserMessageIndex(targetSessionId, cwd);
-              const currentIds = new Set(historyPage.messages.map((message) => message.id));
-              const omittedUser = [...userIndex.messages].reverse().find((entry) => !currentIds.has(entry.id));
-              if (omittedUser) {
-                const contextPage = await client.getMessagesPage(targetSessionId, cwd, { before: omittedUser.before });
-                historyPage = { ...contextPage, messages: [...contextPage.messages, ...historyPage.messages] };
-              }
-            } catch {
-              // Keep the tail page when the optional context read fails.
-            }
-          }
+          // Keep the initial page as one continuous tail. A user-message index
+          // can locate a target, but its cursor must never be merged into the
+          // current history window as an arbitrary prepend.
+          const historyPage = messagesResult.value;
           nextState.thread = await attachPersistedTurnArtifacts(
             mergeHistoryWithLive(
               threadFromMessages(historyPage.messages),
@@ -306,6 +295,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
 
     disconnect: () => {
       connectPromises.clear();
+      _historyPagePromises.clear();
       ++generations.connection;
       ++generations.promptMonitor;
       const { client, activeSessionId, cwd } = get();
@@ -577,14 +567,19 @@ export function createRuntimeActions(set: SetState, get: GetState) {
 
     loadOlderMessages: async () => {
       const state = get();
-      if (!state.activeSessionId || !state.historyHasMore || !state.historyCursor || state.historyLoading) return 0;
-      return loadHistoryPage(state.activeSessionId, state.cwd, state.historyCursor);
-    },
-
-    loadMessagesForNavigation: async (before: string) => {
-      const state = get();
-      if (!state.activeSessionId || !before || state.historyLoading) return 0;
-      return loadHistoryPage(state.activeSessionId, state.cwd, before);
+      if (!state.activeSessionId || !state.historyHasMore || !state.historyCursor) return 0;
+      const before = state.historyCursor;
+      const key = historyPageKey(state.cwd, state.activeSessionId, before);
+      const existing = _historyPagePromises.get(key);
+      if (existing) return existing;
+      if (state.historyLoading) return 0;
+      const promise = loadHistoryPage(state.activeSessionId, state.cwd, before);
+      _historyPagePromises.set(key, promise);
+      try {
+        return await promise;
+      } finally {
+        if (_historyPagePromises.get(key) === promise) _historyPagePromises.delete(key);
+      }
     },
 
     forkSession: async (sessionId: string) => {

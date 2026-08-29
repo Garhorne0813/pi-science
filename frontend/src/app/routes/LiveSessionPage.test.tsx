@@ -235,6 +235,7 @@ beforeEach(() => {
   vi.stubGlobal("IntersectionObserver", IOStub);
   Element.prototype.scrollIntoView = vi.fn();
   Element.prototype.scrollTo = vi.fn();
+  Element.prototype.scrollBy = vi.fn();
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: false,
     media: query,
@@ -262,6 +263,10 @@ beforeEach(() => {
     activeSessionId: SESSION_ID,
     cwd: CWD,
     thread: { blocks: [], index: {}, loaded: true },
+    historyCursor: null,
+    historyHasMore: false,
+    historyLoading: false,
+    historySnapshotVersion: "",
     working: false,
     model: "prov/m1",
     thinking: "high",
@@ -867,11 +872,12 @@ describe("conversation nav rail and scroll-to-latest", () => {
     expect(screen.getByRole("button", { name: "Second question about data" })).toBeInTheDocument();
   });
 
-  it("shows indexed older user messages and loads their page when selected", async () => {
+  it("loads indexed older user messages through sequential history pages", async () => {
     threadWith([
       userBlock("u-latest", "Latest question"),
       agentBlock("a-latest", "latest reply"),
     ]);
+    useRuntimeStore.setState({ historyCursor: "cursor-latest", historyHasMore: true, historyLoading: false });
     overrides.push((url) => {
       if (url.startsWith("/api/sessions/s1/messages/index")) {
         return Promise.resolve(jsonResponse({
@@ -882,6 +888,17 @@ describe("conversation nav rail and scroll-to-latest", () => {
           snapshot_version: "1:1",
         }));
       }
+      if (url.includes("/api/sessions/s1/messages?") && url.includes("before=cursor-latest")) {
+        return Promise.resolve(jsonResponse({
+          messages: [
+            { id: "u-middle", role: "user", content: [{ type: "text", text: "Middle question" }] },
+            { id: "a-middle", role: "assistant", content: [{ type: "text", text: "middle reply" }] },
+          ],
+          next_cursor: "cursor-old",
+          has_more: true,
+          snapshot_version: "2:2",
+        }));
+      }
       if (url.includes("/api/sessions/s1/messages?") && url.includes("before=cursor-old")) {
         return Promise.resolve(jsonResponse({
           messages: [
@@ -890,7 +907,7 @@ describe("conversation nav rail and scroll-to-latest", () => {
           ],
           next_cursor: null,
           has_more: false,
-          snapshot_version: "2:2",
+          snapshot_version: "3:3",
         }));
       }
       return null;
@@ -901,8 +918,18 @@ describe("conversation nav rail and scroll-to-latest", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Old question" }));
 
-    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/sessions/s1/messages?cwd=proj&before=cursor-old"))).toBe(true));
     await waitFor(() => expect(document.getElementById("user-msg-u-old")).toBeInTheDocument());
+    const historyCalls = fetchMock.mock.calls
+      .map(([url]) => String(url))
+      .filter((url) => url.includes("/api/sessions/s1/messages?"));
+    expect(historyCalls).toEqual([
+      "/api/sessions/s1/messages?cwd=proj&before=cursor-latest",
+      "/api/sessions/s1/messages?cwd=proj&before=cursor-old",
+    ]);
+    expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual([
+      "u-old", "a-old", "u-middle", "a-middle", "u-latest", "a-latest",
+    ]);
+    await waitFor(() => expect(virtuosoProps.at(-1)?.firstItemIndex).toBe(99_996));
   });
 
   it("jumps to the selected user message on click", async () => {
