@@ -425,8 +425,9 @@ function afterTurnEnd(blocks: ThreadBlock[], turnIndex: number): number {
  *  timestamp is <= endedAt; the turn span runs from there to the next user
  *  block. This is robust against BOTH duplicate ordinals from legacy records
  *  AND turns that produced no artifact record (the ended_at timestamp still
- *  identifies the correct turn). Returns -1 when the thread carries no
- *  timestamped user block (paged history) or the turn has no agent block. */
+ *  identifies the correct turn). If a paged history has no user boundary,
+ *  anchor after the latest timestamped agent block at or before `endedAt`.
+ *  Returns -1 when no matching agent block is available. */
 function afterTurnEndedAt(blocks: ThreadBlock[], endedAt: string): number {
   // The turn's user message is the timestamped user block with the LATEST
   // timestamp that is still <= endedAt. Position is not reliable: the JSONL
@@ -441,11 +442,24 @@ function afterTurnEndedAt(blocks: ThreadBlock[], endedAt: string): number {
       lastUserTime = block.timestamp;
     }
   }
-  if (lastUser < 0) return -1;
   let lastAgent = -1;
-  for (let i = lastUser + 1; i < blocks.length; i += 1) {
-    if (blocks[i].kind === "user") break;
-    if (blocks[i].kind === "agent") lastAgent = i;
+  if (lastUser >= 0) {
+    for (let i = lastUser + 1; i < blocks.length; i += 1) {
+      if (blocks[i].kind === "user") break;
+      if (blocks[i].kind === "agent") lastAgent = i;
+    }
+  } else {
+    // A tail page can omit the turn's opening user message. Use the end time
+    // to find the latest agent block that belongs to the turn. Compare times,
+    // not positions, because JSONL write order is not always chronological.
+    let lastAgentTime = "";
+    for (let i = 0; i < blocks.length; i += 1) {
+      const block = blocks[i];
+      if (block.kind === "agent" && typeof block.timestamp === "string" && block.timestamp <= endedAt && block.timestamp >= lastAgentTime) {
+        lastAgent = i;
+        lastAgentTime = block.timestamp;
+      }
+    }
   }
   return lastAgent >= 0 ? lastAgent + 1 : -1;
 }
@@ -461,18 +475,18 @@ function afterTurnEndedAt(blocks: ThreadBlock[], endedAt: string): number {
  *  messages) → turn_ordinal (end of the n-th turn) → record order fallback
  *  → end of thread. Turns spanning several assistant messages anchor after
  *  the LAST one (Pi emits anonymous part ids without a message id); when
- *  user boundaries are unavailable (paged history) it falls back to the n-th
- *  agent block approximation.
+ *  user boundaries are unavailable (paged history), the timestamp path uses
+ *  the last matching agent block or falls back to the n-th agent block.
  *
  *  Legacy-data compatibility: records persisted before turn ordinals were
  *  derived from the persisted log (runtime rebuilds used to reset the
  *  counter) can carry duplicate ordinals (e.g. two records with
  *  turn_ordinal=1). The ended_at anchor is independent of ordinals, so mixed
  *  sequences such as [1,1,2] with an intervening record-less turn still land
- *  every strip in its own turn; ordinals are only consulted when no
- *  timestamped user boundary exists. When an ordinal repeats, every LATER
- *  record falls back to its record position (the M-th record anchors the
- *  M-th turn). */
+ *  every strip in its own turn; ordinals are only consulted when timestamp
+ *  anchoring cannot find a matching agent block. When an ordinal repeats,
+ *  every LATER record falls back to its record position (the M-th record
+ *  anchors the M-th turn). */
 export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): Thread {
   if (!turns || turns.length === 0) return thread;
   let blocks = thread.blocks;
