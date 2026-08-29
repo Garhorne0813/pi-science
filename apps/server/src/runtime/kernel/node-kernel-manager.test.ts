@@ -18,6 +18,7 @@ function systemPython(): string | null {
 }
 
 const python = systemPython();
+const hasMatplotlib = python !== null && spawnSync(python, ["-c", "import matplotlib"], { encoding: "utf8" }).status === 0;
 function systemRscript(): string | null {
   // Windows is excluded at the R bridge test below: a copied or linked
   // Rscript.exe derives R_HOME from its own module path, which points into the
@@ -115,7 +116,7 @@ describe("NodeKernelManager native execution", () => {
     }
   });
 
-  it.skipIf(python === null)("captures matplotlib figures when show is called", async () => {
+  it.skipIf(python === null || !hasMatplotlib)("captures matplotlib figures when show is called", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "pi-science-native-kernel-matplotlib-"));
     cleanup.push(workspace);
     const prefix = join(workspace, "env");

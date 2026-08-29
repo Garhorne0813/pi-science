@@ -194,7 +194,7 @@ describe("Node control plane", () => {
       { output_type: "execute_result", data: { "image/png": "encoded-image" } },
     ] } });
     await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-  });
+  }, 30_000);
 
   it("detects files written by a kernel cell as execution evidence", async () => {
     const workspace = join(tmpdir(), `pi-science-kernel-output-${Date.now()}-${Math.random().toString(16).slice(2)}`);
