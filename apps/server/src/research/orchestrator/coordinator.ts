@@ -125,7 +125,7 @@ export class ResearchOrchestrator {
         await this.store.update(cwd, researchId, "research.mutated", () => ({ nodes_updated: declarative.map((node) => ({ ...node, status: "succeeded", updated_at: new Date().toISOString() })) }));
         continue;
       }
-      const reason = stopReason(snapshot);
+      const reason = stopReason(snapshot) ?? failureRateStopReason(snapshot);
       if (reason && this.activeCount(cwd, snapshot) === 0) {
         if (!snapshot.nodes.some((node) => node.kind === "synthesis" && node.status === "succeeded")) {
           if (!snapshot.nodes.some((node) => node.kind === "synthesis" && ["ready", "running"].includes(node.status))) {
@@ -336,6 +336,16 @@ function stopReason(snapshot: AutoResearchSnapshot): string | null {
     const value = Number(metrics[name]); return Number.isFinite(value) && (target.direction === "maximize" ? value >= target.value : value <= target.value);
   })) return "target_metrics_reached";
   return null;
+}
+
+/** Stop-loss: when experiments keep failing with zero completions the
+ *  supervisor would otherwise keep proposing similar candidates and burn the
+ *  model budget. After 4 consecutive failures the research terminates instead
+ *  of proposing again. */
+function failureRateStopReason(snapshot: AutoResearchSnapshot): string | null {
+  const failed = snapshot.nodes.filter((node) => node.kind === "experiment" && node.status === "failed").length;
+  if (failed < 4 || snapshot.usage.experiments_completed > 0) return null;
+  return "experiment_failure_rate_exhausted";
 }
 
 function delay(ms: number) { return new Promise((resolve) => setTimeout(resolve, ms)); }

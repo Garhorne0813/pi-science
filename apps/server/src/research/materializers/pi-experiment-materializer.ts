@@ -80,6 +80,7 @@ export class PiExperimentMaterializer implements ExperimentMaterializer {
             "The entrypoint must write result.json and every expected artifact beneath PI_SCIENCE_OUTPUT_DIR. Do not change the formal expected metrics.",
             "research_materialize details must include research_id and node_id copied verbatim from the experiment node below.",
             "candidate files must contain the entrypoint: the entrypoint value MUST be one of the files keys, exactly as written (no path prefix, no extension mismatch).",
+            "result.json MUST include every expected metric from the experiment spec as a JSON number field (e.g. {\"count_hits\": 12}). Never write strings, lists, or paths for a metric; an experiment with non-numeric metric values is rejected as invalid.",
             ...(attempt > 1 && lastError
               ? [`Your previous materialization was rejected:\n${String(lastError)}\nFix the returned details (especially research_id and node_id, copied verbatim) and call research_materialize again.`]
               : []),

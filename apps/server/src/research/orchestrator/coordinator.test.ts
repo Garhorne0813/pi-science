@@ -156,3 +156,55 @@ it("accounts the spend of a failed experiment materialization", async () => {
   expect(final?.nodes.find((node) => node.kind === "experiment")?.status).toBe("failed");
   await orchestrator.shutdown();
 }, 15_000);
+
+it("terminates research after four consecutive experiment failures with zero completions", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "research-stop-loss-"));
+  let decisions = 0;
+  const supervisor: ResearchSupervisor = {
+    async decide(_cwd, snapshot) {
+      decisions += 1;
+      if (decisions === 1) return { model_tokens: 10, cost_usd: 0.01, commit: {
+        research_id: snapshot.research_id, base_revision: snapshot.revision, rationale: "start one experiment",
+        actions: [
+          { action_id: "h1", type: "hypothesis.add", statement: "H", assumptions: [], parent_refs: [{ node_id: snapshot.nodes[0]!.node_id }] },
+          { action_id: "e1", type: "experiment.propose", hypothesis_ref: { action_id: "h1" }, spec: { objective: "run", expected_metrics: ["score"], constraints: [], materialization: "pi_candidate" }, priority: 1 },
+        ],
+      } };
+      // Keep proposing the same failing experiment so only the stop-loss can
+      // end the research. Reference the persisted hypothesis node (action ids
+      // only resolve within their own commit batch).
+      const hypothesis = snapshot.nodes.find((node) => node.kind === "hypothesis");
+      return { model_tokens: 2, cost_usd: 0, commit: {
+        research_id: snapshot.research_id, base_revision: snapshot.revision, rationale: "another try",
+        actions: [
+          { action_id: "e", type: "experiment.propose", hypothesis_ref: { node_id: hypothesis!.node_id }, spec: { objective: "run", expected_metrics: ["score"], constraints: [], materialization: "pi_candidate" }, priority: 1 },
+        ],
+      } };
+    },
+    async cancel() {}, async cancelResearch() {}, async shutdown() {},
+  };
+  const materializer: ExperimentMaterializer = {
+    async materialize() { throw Object.assign(new Error("invalid metric"), { model_tokens: 100, cost_usd: 0.01 }); },
+    async cancelResearch() {}, async shutdown() {},
+  };
+  const experiments: ResearchExperimentExecutor = {
+    async start() { throw new Error("unused"); },
+    async reconcile() { throw new Error("unused"); },
+    async cancel() {},
+  };
+  const workers: ResearchWorker = {
+    async run(_cwd, snapshot, node) {
+      if (node.kind !== "synthesis") throw new Error("unused");
+      return { research_id: snapshot.research_id, node_id: node.node_id, kind: "synthesis", summary: "synth", findings: [], claims: [], model_tokens: 1, cost_usd: 0 };
+    },
+    async cancelResearch() {}, async shutdown() {},
+  };
+  const orchestrator = new ResearchOrchestrator(new ResearchGraphStore(), supervisor, materializer, experiments, workers);
+  const created = await orchestrator.create(cwd, { title: "R", objective: "run" });
+  await orchestrator.start(cwd, created.research_id);
+  const final = await waitFor(async () => orchestrator.detail(cwd, created.research_id), (snapshot) => !!snapshot && ["completed", "failed"].includes(snapshot.status));
+  expect(final?.stop_reason).toBe("experiment_failure_rate_exhausted");
+  const failed = (final?.nodes ?? []).filter((node) => node.kind === "experiment" && node.status === "failed").length;
+  expect(failed).toBeGreaterThanOrEqual(4);
+  await orchestrator.shutdown();
+}, 20_000);
