@@ -83,6 +83,35 @@ describe("runtime session actions", () => {
     await connecting;
   });
 
+  it("loads an omitted user message for a tail-only history page", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages/index")) {
+        return jsonResponse({ messages: [{ id: "user-old", text: "original prompt", timestamp: "2026-01-01T00:00:00Z", before: "cursor-user" }], snapshot_version: "v1" });
+      }
+      if (url.includes("/messages?")) {
+        if (url.includes("before=cursor-user")) {
+          return jsonResponse({ messages: [
+            { id: "user-old", role: "user", content: [{ type: "text", text: "original prompt" }] },
+          ], next_cursor: null, has_more: false, snapshot_version: "v1" });
+        }
+        return jsonResponse({ messages: [{ id: "agent-old", role: "assistant", content: [{ type: "text", text: "tail answer" }] }], next_cursor: "tail-cursor", has_more: true, snapshot_version: "v1" });
+      }
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+
+    expect(useRuntimeStore.getState().thread.blocks).toEqual([
+      { kind: "user", id: "user-old", text: "original prompt", timestamp: undefined },
+      { kind: "agent", id: "agent-old", parts: [{ id: "agent-old", text: "tail answer" }], timestamp: undefined },
+    ]);
+    expect(fetch).toHaveBeenCalledWith("/api/sessions/session-a/messages/index?cwd=%2Fworkspace", expect.anything());
+    expect(fetch).toHaveBeenCalledWith("/api/sessions/session-a/messages?cwd=%2Fworkspace&before=cursor-user", expect.anything());
+  });
+
   it("restores authoritative running, model, thinking and history state", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

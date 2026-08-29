@@ -261,12 +261,13 @@ export function LiveSessionPage() {
     }
   };
 
-  const hasUserMessage = thread.blocks.some((block) => block.kind === "user");
   // Empty new conversation: welcome copy sits directly above a vertically centered composer.
   const showWelcome = thread.blocks.length === 0 && !working && status !== "connecting" && !research.draft && !research.activeLoop;
   const activeSession = sessions.find((session) => session.id === activeSessionId);
-  const isNewSession = !hasUserMessage && (activeSession?.name === "New Session" || thread.loaded);
-  const title = isNewSession || !activeSessionId
+  // A paged history can be loaded without its user messages. `thread.loaded`
+  // only means that a page arrived; it does not mean this is a new session.
+  const isNewSession = !activeSessionId || (thread.blocks.length === 0 && (!activeSession || activeSession.name === "New Session"));
+  const title = isNewSession
     ? t("conversation.newSession")
     : getSessionName(workspaceCwd, activeSessionId) || activeSession?.name || activeSessionId.slice(0, 8);
 

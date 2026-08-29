@@ -1,4 +1,5 @@
 import { kernelShutdownUrl } from "../../components/notebook/notebook-model";
+import type { NotebookOutput } from "../../components/notebook/notebook-model";
 import { apiRequest } from "../client/api";
 import { queryClient } from "../client/query-client";
 
@@ -10,6 +11,7 @@ export interface CellResult {
   error: string | null;
   interrupted?: boolean;
   mime?: Record<string, string>;
+  outputs?: NotebookOutput[];
   execution_id?: string;
 }
 

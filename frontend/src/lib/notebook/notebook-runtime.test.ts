@@ -55,7 +55,7 @@ describe("notebook runtime", () => {
       JSON.stringify({ type: "started", execution_id: "exec-stream" }),
       JSON.stringify({ type: "stream", stream: "stdout", text: "step 1\n" }),
       JSON.stringify({ type: "stream", stream: "stderr", text: "warning\n" }),
-      JSON.stringify({ type: "result", ok: true, stdout: "step 1\nwarning\n", result: "2", error: null, mime: { "application/json": "2" }, execution_id: "exec-stream" }),
+      JSON.stringify({ type: "result", ok: true, stdout: "step 1\nwarning\n", result: "2", error: null, mime: { "application/json": "2" }, outputs: [{ output_type: "display_data", data: { "text/plain": "shown" } }], execution_id: "exec-stream" }),
     ].join("\n") + "\n";
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 200, headers: { "Content-Type": "application/x-ndjson" } })));
     const onEvent = vi.fn();
@@ -65,6 +65,6 @@ describe("notebook runtime", () => {
     expect(onEvent).toHaveBeenNthCalledWith(1, { type: "started", execution_id: "exec-stream" });
     expect(onEvent).toHaveBeenNthCalledWith(2, { type: "stream", stream: "stdout", text: "step 1\n" });
     expect(onEvent).toHaveBeenNthCalledWith(3, { type: "stream", stream: "stderr", text: "warning\n" });
-    expect(result).toMatchObject({ ok: true, result: "2", execution_id: "exec-stream", mime: { "application/json": "2" } });
+    expect(result).toMatchObject({ ok: true, result: "2", execution_id: "exec-stream", mime: { "application/json": "2" }, outputs: [{ output_type: "display_data", data: { "text/plain": "shown" } }] });
   });
 });

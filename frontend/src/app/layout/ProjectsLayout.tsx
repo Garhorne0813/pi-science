@@ -264,10 +264,11 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
   useEffect(() => {
     let cancelled = false;
 
-    // Session lists belong to the workspace landing only. In particular, do
-    // not reload them for ordinary navigation between files, runs, settings,
-    // or a conversation route.
-    if (!isWorkspaceRoot) return () => { cancelled = true; };
+    // Load metadata for a direct conversation link when the store starts
+    // empty. Do not reload the list for files, runs, settings, or a session
+    // route that already has session metadata.
+    const isConversationRoute = location.pathname.startsWith(`${workspaceRoot}/session/`);
+    if (!isWorkspaceRoot && (!isConversationRoute || sessions.length > 0)) return () => { cancelled = true; };
 
     // Consume suppression only for the intentional root landing that set it.
     // A stale marker from an interrupted/other-workspace navigation is cleared,
@@ -284,7 +285,7 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
         if (cancelled) return;
         // Auto-load most recent session if none active
         const state = useRuntimeStore.getState();
-        if (merged.length > 0 && !state.activeSessionId) {
+        if (isWorkspaceRoot && merged.length > 0 && !state.activeSessionId) {
           const latest = merged[0];
           navigate(`/workspace/${encodeURIComponent(cwd)}/session/${latest.id}`);
         }
@@ -293,7 +294,7 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
         if (!cancelled) toast(error instanceof Error ? error.message : "Unable to load workspace sessions", "error");
       });
     return () => { cancelled = true; };
-  }, [cwd, intentionalRootLanding, isWorkspaceRoot, loadSessions, navigate, toast]);
+  }, [cwd, intentionalRootLanding, isWorkspaceRoot, loadSessions, location.pathname, navigate, sessions.length, toast, workspaceRoot]);
 
   const handleDelete = async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();

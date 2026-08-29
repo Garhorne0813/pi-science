@@ -58,14 +58,16 @@ describe("notebook document routes", () => {
         outputs: [
           { output_type: "stream", name: "stdout", text: "value\n" },
           { output_type: "execute_result", execution_count: 2, data: { "text/plain": "2" } },
+          { output_type: "display_data", data: { "image/png": "x".repeat(20_000) } },
           { output_type: "error", ename: "ExampleError", evalue: "ignored preview" },
         ],
       },
     });
     expect(output.statusCode).toBe(200);
-    expect(output.json()).toMatchObject({ ok: true, cell_id: cellId, execution_count: 2, output_count: 3 });
-    const afterOutput = JSON.parse(await readFile(join(cwd, path), "utf8")) as { cells: Array<{ execution_count: number | null; outputs: unknown[] }> };
+    expect(output.json()).toMatchObject({ ok: true, cell_id: cellId, execution_count: 2, output_count: 4 });
+    const afterOutput = JSON.parse(await readFile(join(cwd, path), "utf8")) as { cells: Array<{ execution_count: number | null; outputs: Array<{ output_type?: string; name?: string; text?: string; data?: Record<string, string> }> }> };
     expect(afterOutput.cells[0]).toMatchObject({ execution_count: 2, outputs: expect.arrayContaining([{ output_type: "stream", name: "stdout", text: "value\n" }]) });
+    expect(afterOutput.cells[0]!.outputs.find((item) => item.output_type === "display_data")?.data?.["image/png"]).toHaveLength(20_000);
     if (process.platform !== "win32") {
       expect((await stat(join(cwd, path))).mode & 0o7777).toBe(0o600);
     }

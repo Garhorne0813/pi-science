@@ -102,7 +102,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         // return can prevent the list (and its persisted title) from loading at
         // all. Stale-list protection in loadSessionsInternal keeps this safe
         // when the user switches workspaces/sessions while the request runs.
-        void loadSessionsInternal(cwd);
+        const sessionsPromise = loadSessionsInternal(cwd);
 
         // Optimistic render: if we have a cached message snapshot for this
         // session, render it immediately so the user sees the conversation
@@ -115,9 +115,10 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         }
 
         client.connect(targetSessionId, cwd);
-        const [messagesResult, runtimeStateResult] = await Promise.allSettled([
+        const [messagesResult, runtimeStateResult, sessionsResult] = await Promise.allSettled([
           client.getMessagesPage(targetSessionId, cwd),
           client.getSessionState(targetSessionId, cwd),
+          sessionsPromise,
         ]);
         if (generation !== generations.connection) return;
         // A prompt/model action may have started while the initial history/state
@@ -132,17 +133,38 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         // `is_streaming: false` (or a transient state-read error).
         const liveActivityArrived = generations.activity !== connectActivityGeneration;
         if (messagesResult.status === "fulfilled") {
+          let historyPage = messagesResult.value;
+          const liveHasUser = get().thread.blocks.some((block) => block.kind === "user");
+          if (!historyPage.messages.some((message) => message.role === "user") && !liveHasUser && historyPage.has_more) {
+            // A tail page can contain only assistant/tool messages. Load the
+            // page around the newest omitted user message so a direct session
+            // link still shows the request that started the visible thread.
+            try {
+              const userIndex = await client.getUserMessageIndex(targetSessionId, cwd);
+              const currentIds = new Set(historyPage.messages.map((message) => message.id));
+              const omittedUser = [...userIndex.messages].reverse().find((entry) => !currentIds.has(entry.id));
+              if (omittedUser) {
+                const contextPage = await client.getMessagesPage(targetSessionId, cwd, { before: omittedUser.before });
+                historyPage = { ...contextPage, messages: [...contextPage.messages, ...historyPage.messages] };
+              }
+            } catch {
+              // Keep the tail page when the optional context read fails.
+            }
+          }
           nextState.thread = await attachPersistedTurnArtifacts(
             mergeHistoryWithLive(
-              threadFromMessages(messagesResult.value.messages),
+              threadFromMessages(historyPage.messages),
               get().thread,
             ),
             targetSessionId,
             cwd,
           );
-          nextState.historyCursor = messagesResult.value.next_cursor;
-          nextState.historyHasMore = messagesResult.value.has_more;
-          nextState.historySnapshotVersion = messagesResult.value.snapshot_version;
+          nextState.historyCursor = historyPage.next_cursor;
+          nextState.historyHasMore = historyPage.has_more;
+          nextState.historySnapshotVersion = historyPage.snapshot_version;
+        }
+        if (sessionsResult.status === "fulfilled" && sessionsResult.value.length > 0) {
+          nextState.sessions = sessionsResult.value;
         }
         if (runtimeStateResult.status === "fulfilled") {
           const runtimeState = runtimeStateResult.value;

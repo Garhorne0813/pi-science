@@ -302,6 +302,16 @@ describe("composer send-failure restore", () => {
     expect(screen.getByRole("banner")).toHaveClass("h-11");
   });
 
+  it("keeps the persisted title when a paged tail has no user block", async () => {
+    useRuntimeStore.setState({
+      sessions: [{ id: SESSION_ID, cwd: CWD, name: "Persisted experiment title" }],
+      thread: { blocks: [agentBlock("agent-tail", "tail output")], index: { "agent-tail": 0 }, loaded: true },
+    });
+    await renderReady();
+
+    expect(screen.getByRole("heading", { name: "Persisted experiment title" })).toBeInTheDocument();
+  });
+
   it("uses compact spacing for the composer toolbar", async () => {
     await renderReady();
     const toolbar = screen.getByLabelText("Send message").parentElement?.parentElement;

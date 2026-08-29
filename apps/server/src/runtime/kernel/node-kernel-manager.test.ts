@@ -90,6 +90,53 @@ describe("NodeKernelManager native execution", () => {
     }
   });
 
+  it.skipIf(python === null)("captures explicit display outputs in order", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pi-science-native-kernel-display-"));
+    cleanup.push(workspace);
+    const prefix = join(workspace, "env");
+    await createTestEnvironment(prefix);
+
+    const manager = new NodeKernelManager();
+    try {
+      const result = await manager.execute({
+        language: "python",
+        code: "display({'value': 1})\ndisplay('done')",
+        cwd: workspace,
+        environment: status(workspace, prefix),
+        timeoutMs: 10_000,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.outputs).toMatchObject([
+        { output_type: "display_data", data: { "application/json": '{"value": 1}', "text/plain": "{'value': 1}" } },
+        { output_type: "display_data", data: { "text/plain": "'done'" } },
+      ]);
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
+  it.skipIf(python === null)("captures matplotlib figures when show is called", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pi-science-native-kernel-matplotlib-"));
+    cleanup.push(workspace);
+    const prefix = join(workspace, "env");
+    await createTestEnvironment(prefix);
+
+    const manager = new NodeKernelManager();
+    try {
+      const result = await manager.execute({
+        language: "python",
+        code: "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\nplt.plot([1, 2], [3, 4])\nplt.show()",
+        cwd: workspace,
+        environment: status(workspace, prefix),
+        timeoutMs: 30_000,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.outputs?.some((output) => Boolean(output.data["image/png"]))).toBe(true);
+    } finally {
+      await manager.shutdownAll();
+    }
+  });
+
   it.skipIf(python === null)("preserves stdout and stderr as separate notebook streams", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "pi-science-native-kernel-streams-"));
     cleanup.push(workspace);

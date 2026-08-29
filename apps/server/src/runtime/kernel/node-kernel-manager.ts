@@ -19,6 +19,11 @@ export interface KernelStreamEvent {
   text: string;
 }
 
+export interface KernelOutput {
+  output_type: string;
+  data: Record<string, string>;
+}
+
 export interface KernelResult {
   ok: boolean;
   stdout: string;
@@ -27,6 +32,7 @@ export interface KernelResult {
   error?: string | null;
   interrupted: boolean;
   mime: Record<string, string>;
+  outputs?: KernelOutput[];
 }
 
 export interface KernelExecuteOptions {
@@ -517,6 +523,18 @@ class NodeKernelSession {
 }
 
 function normalizeResult(message: Record<string, unknown>): KernelResult {
+  const outputs = Array.isArray(message.outputs)
+    ? message.outputs.flatMap((value): KernelOutput[] => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+      const output = value as Record<string, unknown>;
+      if (typeof output.output_type !== "string" || !output.data || typeof output.data !== "object" || Array.isArray(output.data)) return [];
+      const data: Record<string, string> = {};
+      for (const [key, item] of Object.entries(output.data as Record<string, unknown>)) {
+        if (typeof item === "string") data[key] = item;
+      }
+      return [{ output_type: output.output_type, data }];
+    })
+    : [];
   return {
     ok: message.ok === true,
     stdout: typeof message.stdout === "string" ? message.stdout : "",
@@ -527,5 +545,6 @@ function normalizeResult(message: Record<string, unknown>): KernelResult {
     mime: message.mime !== null && typeof message.mime === "object" && !Array.isArray(message.mime)
       ? message.mime as Record<string, string>
       : {},
+    outputs,
   };
 }

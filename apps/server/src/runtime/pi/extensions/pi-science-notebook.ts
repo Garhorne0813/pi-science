@@ -10,6 +10,8 @@
 const MAX_CELLS_PER_CALL = 50;
 const MAX_SOURCE_CHARS = 30_000;
 const MAX_OUTPUT_CHARS = 12_000;
+const MAX_IMAGE_OUTPUT_CHARS = 4_000_000;
+const INTERNAL_TOKEN_HEADER = "x-pi-science-internal-token";
 
 const NOTEBOOK_READ_SCHEMA = {
   type: "object",
@@ -119,7 +121,7 @@ function buildToolResult(message: string, details: Record<string, unknown>) {
 
 function errorToolResult(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  return buildToolResult(`Notebook tool error: ${message}`, { error: message });
+  return { ...buildToolResult(`Notebook tool error: ${message}`, { error: message }), isError: true };
 }
 
 function backendBaseUrl(): string {
@@ -138,7 +140,12 @@ function sessionId(ctx: any): string | undefined {
 }
 
 async function requestJson<T>(path: string, init: RequestInit = {}, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(`${backendBaseUrl()}${path}`, { ...init, signal: signal ?? init.signal });
+  // Agent runtimes do not have the browser's HttpOnly cookie, so forward the
+  // control-plane token through the server-provided runtime environment.
+  const headers = new Headers(init.headers);
+  const token = process.env.PI_SCIENCE_INTERNAL_TOKEN;
+  if (token) headers.set(INTERNAL_TOKEN_HEADER, token);
+  const response = await fetch(`${backendBaseUrl()}${path}`, { ...init, headers, signal: signal ?? init.signal });
   const raw = await response.text();
   let payload: unknown = {};
   if (raw) {
@@ -241,6 +248,26 @@ function executionFailed(result: Record<string, unknown>): boolean {
   return ["failed", "cancelled", "interrupted"].includes(text(execution.status).toLowerCase());
 }
 
+function boundedMimeValue(key: string, value: string): string {
+  if (key.startsWith("image/")) return value.length <= MAX_IMAGE_OUTPUT_CHARS ? value : "";
+  return truncate(value, MAX_OUTPUT_CHARS);
+}
+
+function kernelOutputs(result: Record<string, unknown>, executionCount: number): unknown[] {
+  if (!Array.isArray(result.outputs)) return [];
+  return result.outputs.flatMap((value) => {
+    if (!isRecord(value) || (value.output_type !== "display_data" && value.output_type !== "execute_result") || !isRecord(value.data)) return [];
+    const data: Record<string, string> = {};
+    for (const [key, item] of Object.entries(value.data)) {
+      if (typeof item !== "string") continue;
+      const bounded = boundedMimeValue(key, item);
+      if (bounded) data[key] = bounded;
+    }
+    if (Object.keys(data).length === 0) return [];
+    return [{ output_type: value.output_type, ...(value.output_type === "execute_result" ? { execution_count: executionCount } : {}), data }];
+  });
+}
+
 function notebookExecutionOutputs(result: Record<string, unknown>, executionCount: number): unknown[] {
   const outputs: unknown[] = [];
   const stdout = text(result.stdout);
@@ -248,16 +275,26 @@ function notebookExecutionOutputs(result: Record<string, unknown>, executionCoun
   const stderr = text(result.stderr);
   if (stderr) outputs.push({ output_type: "stream", name: "stderr", text: truncate(stderr, MAX_OUTPUT_CHARS) });
 
-  const mime = isRecord(result.mime)
-    ? Object.fromEntries(Object.entries(result.mime).filter(([, value]) => typeof value === "string").map(([key, value]) => [key, truncate(String(value), MAX_OUTPUT_CHARS)]))
-    : {};
-  const value = result.result;
-  if (Object.keys(mime).length > 0 || (value !== null && value !== undefined && text(value))) {
-    outputs.push({
-      output_type: "execute_result",
-      execution_count: executionCount,
-      data: Object.keys(mime).length > 0 ? mime : { "text/plain": truncate(text(value), MAX_OUTPUT_CHARS) },
-    });
+  const richOutputs = kernelOutputs(result, executionCount);
+  if (richOutputs.length > 0) {
+    outputs.push(...richOutputs);
+  } else {
+    const mime: Record<string, string> = {};
+    if (isRecord(result.mime)) {
+      for (const [key, value] of Object.entries(result.mime)) {
+        if (typeof value !== "string") continue;
+        const bounded = boundedMimeValue(key, value);
+        if (bounded) mime[key] = bounded;
+      }
+    }
+    const value = result.result;
+    if (Object.keys(mime).length > 0 || (value !== null && value !== undefined && text(value))) {
+      outputs.push({
+        output_type: "execute_result",
+        execution_count: executionCount,
+        data: Object.keys(mime).length > 0 ? mime : { "text/plain": truncate(text(value), MAX_OUTPUT_CHARS) },
+      });
+    }
   }
 
   const error = text(result.error);

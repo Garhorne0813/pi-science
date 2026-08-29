@@ -2,13 +2,17 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_PACKAGES, DEFAULT_R_PACKAGES, defaultPythonExecutable, environmentPythonExecutable, WorkspaceEnvironmentService, workspaceEnvironmentVariables, type EnvironmentRevision } from "./workspace-environment.js";
+import { DEFAULT_PACKAGES, DEFAULT_R_PACKAGES, defaultPythonExecutable, environmentPythonExecutable, micromambaDownloadUrl, WorkspaceEnvironmentService, workspaceEnvironmentVariables, type EnvironmentRevision } from "./workspace-environment.js";
 
 describe("workspace environment platform defaults", () => {
   it("uses the Windows Python launcher name when no override is configured", () => {
     expect(defaultPythonExecutable({}, "win32")).toBe("python");
     expect(defaultPythonExecutable({}, "linux")).toBe("python3");
     expect(defaultPythonExecutable({ PYTHON: "custom-python" }, "win32")).toBe("custom-python");
+  });
+
+  it("builds the pinned micromamba asset URL for macOS arm64", () => {
+    expect(micromambaDownloadUrl("osx-arm64")).toBe("https://github.com/mamba-org/micromamba-releases/releases/download/2.5.0-2/micromamba-osx-arm64");
   });
 
   it("prefers Windows Scripts/python.exe and falls back to prefix-root python.exe", async () => {

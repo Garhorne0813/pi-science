@@ -35,6 +35,19 @@ describe("NotebookService", () => {
     expect(service.status()).toMatchObject({ running: false, port: null, url: null });
   });
 
+  it.skipIf(process.platform === "win32")("uses the shared environment service to resolve micromamba", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-jupyter-micromamba-"));
+    cleanup.push(cwd);
+    const micromambaResolver = vi.fn(async () => "true");
+    const service = new NotebookService({
+      configPath: (name) => join(cwd, ".pi-science", name),
+      micromambaResolver,
+    });
+
+    await expect(service.setup(cwd)).resolves.toMatchObject({ status: "done" });
+    expect(micromambaResolver).toHaveBeenCalledOnce();
+  });
+
   it("installs the project kernel dependency before writing a kernelspec", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-science-jupyter-kernelspec-"));
     cleanup.push(cwd);
