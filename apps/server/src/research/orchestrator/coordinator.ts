@@ -7,6 +7,7 @@ import { ResearchGraphStore } from "../graph/store.js";
 import { StaleResearchGraphError } from "../graph/validator.js";
 import type { ExperimentMaterializer } from "../materializers/pi-experiment-materializer.js";
 import type { ResearchSupervisor } from "../supervisors/pi-supervisor-runner.js";
+import { writeResearchReport } from "../report.js";
 
 const terminalResearch = new Set(["completed", "failed", "cancelled"]);
 const executableKinds = new Set(["literature", "experiment", "analysis", "verification", "synthesis"]);
@@ -253,8 +254,17 @@ export class ResearchOrchestrator {
 
   private async complete(cwd: string, snapshot: AutoResearchSnapshot, reason: string): Promise<void> {
     const activeWallMs = snapshot.started_at ? Math.max(snapshot.usage.active_wall_ms, Date.now() - Date.parse(snapshot.started_at)) : snapshot.usage.active_wall_ms;
-    const completed = await this.store.mutate(cwd, snapshot.research_id, "research.completed", { status: "completed", stop_reason: reason, completed_at: new Date().toISOString(), current_activity: null, usage: { ...snapshot.usage, active_wall_ms: activeWallMs } });
-    emitResearchEvent(cwd, completed, "research.completed", { reason, snapshot: completed });
+    const completedAt = new Date().toISOString();
+    let reportPath: string;
+    try {
+      reportPath = await writeResearchReport(cwd, snapshot, reason, completedAt);
+    } catch (error) {
+      const failed = await this.store.mutate(cwd, snapshot.research_id, "research.failed", { status: "failed", stop_reason: `report_generation_failed: ${String(error)}`, completed_at: completedAt, current_activity: null });
+      emitResearchEvent(cwd, failed, "research.failed", { error: failed.stop_reason });
+      return;
+    }
+    const completed = await this.store.mutate(cwd, snapshot.research_id, "research.completed", { status: "completed", stop_reason: reason, report_path: reportPath, completed_at: completedAt, current_activity: null, usage: { ...snapshot.usage, active_wall_ms: activeWallMs } });
+    emitResearchEvent(cwd, completed, "research.completed", { reason, report_path: reportPath, snapshot: completed });
   }
 
   private async ensureSynthesis(cwd: string, snapshot: AutoResearchSnapshot, reason: string): Promise<void> {

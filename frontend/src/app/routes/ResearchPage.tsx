@@ -57,12 +57,12 @@ export function ResearchPage() {
     {error && <div className="mt-4 rounded-input border border-error/30 bg-error/5 px-3 py-2 text-sm text-error-text">{error}</div>}
     <div className="mt-6 grid gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
       <aside className="space-y-2">{listRead.isFetching && !graphs.length ? <div className="py-8 text-center text-sm text-muted"><Loader2 className="mx-auto mb-2 animate-spin" />{t("common.loading")}</div> : !graphs.length ? <div className="ui-card-flat rounded-card border-dashed p-6 text-center text-sm text-muted"><FlaskConical className="mx-auto mb-2" />{t("research.empty")}</div> : graphs.map((graph) => <button key={graph.research_id} onClick={() => setPick(graph.research_id)} className={cn("w-full rounded-input border p-3 text-left", selected === graph.research_id ? "border-accent bg-accent/5" : "border-border bg-surface")}><div className="text-sm font-medium text-text">{graph.title}</div><div className="mt-1 text-xs text-muted">{graph.status} · rev {graph.revision} · {graph.nodes.length} nodes</div></button>)}</aside>
-      <main>{detail && <ResearchGraphDetail graph={detail} busy={busy} onAction={(action) => void act(action)} onResolve={(nodeId, resolution) => void resolve(nodeId, resolution)} />}</main>
+      <main>{detail && <ResearchGraphDetail graph={detail} cwd={cwd} busy={busy} onAction={(action) => void act(action)} onResolve={(nodeId, resolution) => void resolve(nodeId, resolution)} />}</main>
     </div>
   </WorkspacePage>;
 }
 
-function ResearchGraphDetail({ graph, busy, onAction, onResolve }: { graph: AutoResearchSnapshot; busy: boolean; onAction: (action: "pause" | "resume" | "cancel") => void; onResolve: (nodeId: string, resolution: string) => void }) {
+function ResearchGraphDetail({ graph, cwd, busy, onAction, onResolve }: { graph: AutoResearchSnapshot; cwd: string; busy: boolean; onAction: (action: "pause" | "resume" | "cancel") => void; onResolve: (nodeId: string, resolution: string) => void }) {
   const grouped = useMemo(() => {
     const result = new Map<ResearchNode["kind"], ResearchNode[]>();
     graph.nodes.forEach((node) => result.set(node.kind, [...(result.get(node.kind) ?? []), node]));
@@ -75,7 +75,7 @@ function ResearchGraphDetail({ graph, busy, onAction, onResolve }: { graph: Auto
       {graph.current_activity && <p className="mt-3 text-xs text-muted">Current activity: {graph.current_activity}</p>}
       <div className="mt-4 flex flex-wrap gap-2">{graph.status === "running" && <ResearchAction onClick={() => onAction("pause")} disabled={busy}><Pause size={12} /> Pause</ResearchAction>}{graph.status === "paused" && <ResearchAction onClick={() => onAction("resume")} disabled={busy}><Play size={12} /> Resume</ResearchAction>}{!terminal.has(graph.status) && <ResearchAction onClick={() => onAction("cancel")} disabled={busy} danger><X size={12} /> Cancel</ResearchAction>}</div>
       {decision && <ResearchDecisionCard node={decision} busy={busy} onResolve={(resolution) => onResolve(decision.node_id, resolution)} />}
-      {terminal.has(graph.status) && <ResearchResultCard research={graph} />}
+      {terminal.has(graph.status) && <ResearchResultCard research={graph} cwd={cwd} />}
     </section>
     <section className="ui-card-flat rounded-card p-5"><div className="flex items-center justify-between"><h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Research graph</h3><span className="text-[10px] text-muted">{graph.nodes.length} nodes · {graph.edges.length} edges</span></div>
       <div className="mt-3 space-y-5">{Array.from(grouped.entries()).map(([kind, nodes]) => <div key={kind}><div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-accent">{kind}</div><div className="grid gap-2 xl:grid-cols-2">{nodes.map((node) => <NodeCard key={node.node_id} node={node} incoming={graph.edges.filter((edge) => edge.to === node.node_id).map((edge) => edge.relation)} />)}</div></div>)}</div>

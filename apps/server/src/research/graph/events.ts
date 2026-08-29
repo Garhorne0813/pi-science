@@ -32,6 +32,7 @@ export interface ResearchMutationPayload {
   status?: ResearchGraphStatus;
   current_activity?: string | null;
   best_result?: Record<string, unknown> | null;
+  report_path?: string | null;
   usage?: Partial<AutoResearchUsage>;
   stop_reason?: string | null;
   started_at?: string | null;

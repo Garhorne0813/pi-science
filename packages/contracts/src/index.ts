@@ -759,6 +759,7 @@ export const autoResearchSnapshotSchema = z.object({
   claim_evidence: z.array(claimEvidenceSchema),
   current_activity: z.string().nullable(),
   best_result: z.record(z.string(), z.unknown()).nullable(),
+  report_path: z.string().nullable().default(null),
   stop_reason: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),

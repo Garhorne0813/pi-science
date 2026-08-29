@@ -96,6 +96,7 @@
   "research.maxRuntime": "Maximum runtime (minutes)",
   "research.createStart": "Create and start",
   "research.refresh": "Refresh research loop",
+  "research.openReport": "Open report",
   "research.pausingHint": "Pausing after the current execution finishes.",
   "research.needsAttention": "The orchestrator needs attention: {{reason}}",
   "research.candidates": "Candidates",

@@ -96,6 +96,7 @@
   "research.maxRuntime": "最长运行时间（分钟）",
   "research.createStart": "创建并启动",
   "research.refresh": "刷新研究循环",
+  "research.openReport": "打开报告",
   "research.pausingHint": "当前执行结束后将暂停。",
   "research.needsAttention": "编排器需要处理：{{reason}}",
   "research.candidates": "候选方案",

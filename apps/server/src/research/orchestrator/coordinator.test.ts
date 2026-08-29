@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -59,6 +59,12 @@ describe("ResearchOrchestrator", () => {
     expect(completed?.claims.some((claim) => claim.statement === "Score improved")).toBe(true);
     expect(completed?.usage).toMatchObject({ experiments_started: 1, experiments_completed: 1, model_tokens: 22 });
     expect(completed?.stop_reason).toContain("supervisor_recommended");
+    expect(completed?.report_path).toBe(`research-reports/${created.research_id}.md`);
+    const report = await readFile(join(cwd, "research-reports", `${created.research_id}.md`), "utf8");
+    expect(report).toContain("# Research");
+    expect(report).toContain("Final synthesis");
+    expect(report).toContain("Score improved");
+    expect(report).toContain('"score": 0.9');
     await orchestrator.shutdown();
   });
 

@@ -255,6 +255,7 @@ export function LiveSessionPage() {
       {research.activeLoop && (
         <ResearchLoopStatusCard
           loop={research.activeLoop}
+          cwd={workspaceCwd}
           busy={research.busy}
           onRefresh={() => void research.refresh(research.activeLoop!.research_id)}
           onAction={(action) => void research.action(action)}

@@ -1,8 +1,10 @@
 import { useState } from "react";
 import type { AutoResearchSnapshot, ResearchNode } from "@pi-science/contracts";
-import { BarChart3, Check, FlaskConical, GitBranch, Loader2, Pause, Play, RotateCcw, X } from "lucide-react";
+import { BarChart3, Check, FileText, FlaskConical, GitBranch, Loader2, Pause, Play, RotateCcw, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/ui";
+import { useUiStore } from "../../lib/ui";
+import { fileInspectorForPath } from "../../lib/artifacts";
 
 export type ResearchStarter = "research_loop" | "optimize" | "compare" | "evaluate" | "reproduce";
 const modes: ResearchStarter[] = ["research_loop", "optimize", "compare", "evaluate", "reproduce"];
@@ -44,13 +46,16 @@ export function ResearchDecisionCard({ node, busy, onResolve }: { node: Extract<
   </div>;
 }
 
-export function ResearchResultCard({ research }: { research: AutoResearchSnapshot }) {
+export function ResearchResultCard({ research, cwd }: { research: AutoResearchSnapshot; cwd: string }) {
+  const { t } = useTranslation();
+  const openInspector = useUiStore((state) => state.openInspector);
   const synthesis = research.nodes.findLast((node) => node.kind === "synthesis" && node.status === "succeeded");
   const summary = synthesis?.kind === "synthesis" ? synthesis.summary : research.stop_reason;
-  return <div className="mt-3 rounded-input border border-ok/30 bg-ok/5 p-3"><div className="text-xs font-semibold text-text">Research result</div>{summary && <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-muted">{summary}</p>}{research.best_result && <pre className="mt-2 max-h-36 overflow-auto text-[11px] text-muted">{JSON.stringify(research.best_result, null, 2)}</pre>}<div className="mt-2 text-[10px] text-muted">{research.claims.length} claims · {research.evidence.length} evidence records</div></div>;
+  const reportPath = research.report_path;
+  return <div className="mt-3 rounded-input border border-ok/30 bg-ok/5 p-3"><div className="flex items-center justify-between gap-2"><div className="text-xs font-semibold text-text">Research result</div>{reportPath && <button type="button" onClick={() => openInspector(fileInspectorForPath(reportPath, reportPath.split("/").pop(), undefined, cwd))} className="flex min-h-8 items-center gap-1.5 rounded-input border border-ok/30 bg-surface px-2.5 text-xs text-ok-text hover:bg-ok/10"><FileText size={13} /> {t("research.openReport")}</button>}</div>{summary && <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-muted">{summary}</p>}{research.best_result && <pre className="mt-2 max-h-36 overflow-auto text-[11px] text-muted">{JSON.stringify(research.best_result, null, 2)}</pre>}<div className="mt-2 text-[10px] text-muted">{research.claims.length} claims · {research.evidence.length} evidence records</div></div>;
 }
 
-export function ResearchLoopStatusCard({ loop, busy, onRefresh, onAction, onResolveInput, onOpenDetails }: { loop: AutoResearchSnapshot; busy: boolean; onRefresh: () => void; onAction: (action: "pause" | "resume" | "cancel") => void; onResolveInput?: (nodeId: string, resolution: string) => void; onOpenDetails: () => void }) {
+export function ResearchLoopStatusCard({ loop, cwd, busy, onRefresh, onAction, onResolveInput, onOpenDetails }: { loop: AutoResearchSnapshot; cwd: string; busy: boolean; onRefresh: () => void; onAction: (action: "pause" | "resume" | "cancel") => void; onResolveInput?: (nodeId: string, resolution: string) => void; onOpenDetails: () => void }) {
   const { t } = useTranslation();
   const running = loop.nodes.filter((node) => node.status === "running");
   const resolved = loop.nodes.filter((node) => ["succeeded", "verified"].includes(node.status));
@@ -59,7 +64,7 @@ export function ResearchLoopStatusCard({ loop, busy, onRefresh, onAction, onReso
     <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><GitBranch size={15} className="text-accent" /><h3 className="text-sm font-semibold text-text">{loop.title}</h3><span className="rounded-full bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-muted">{loop.status}</span></div><p className="mt-1 text-xs leading-5 text-muted">{loop.objective}</p></div><button type="button" onClick={onRefresh} disabled={busy} aria-label={t("research.refresh")} className="min-h-9 min-w-9 text-muted hover:text-text"><RotateCcw size={14} className={busy ? "animate-spin" : ""} /></button></div>
     <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4"><Status label="Graph nodes" value={String(loop.nodes.length)} /><Status label="Resolved" value={String(resolved.length)} /><Status label="Experiments" value={`${loop.usage.experiments_started}/${loop.budget.max_experiments}`} /><Status label="Active" value={running.length ? running.map((node) => node.kind).join(", ") : loop.current_activity ?? "—"} /></div>
     {decision && onResolveInput && <ResearchDecisionCard node={decision} busy={busy} onResolve={(resolution) => onResolveInput(decision.node_id, resolution)} />}
-    {["completed", "failed"].includes(loop.status) && <ResearchResultCard research={loop} />}
+    {["completed", "failed"].includes(loop.status) && <ResearchResultCard research={loop} cwd={cwd} />}
     <div className="mt-3 flex flex-wrap gap-2">{loop.status === "running" && <Action onClick={() => onAction("pause")} disabled={busy}><Pause size={12} /> Pause</Action>}{["paused", "input_required"].includes(loop.status) && <Action onClick={() => onAction("resume")} disabled={busy || loop.status === "input_required"}><Play size={12} /> Resume</Action>}{!["completed", "failed", "cancelled"].includes(loop.status) && <button type="button" disabled={busy} onClick={() => onAction("cancel")} className="flex min-h-9 items-center gap-1 rounded-input border border-error/30 px-2.5 text-xs text-error-text"><X size={12} /> {t("common.cancel")}</button>}<Action onClick={onOpenDetails}><BarChart3 size={12} /> {t("research.details")}</Action></div>
   </section>;
 }
