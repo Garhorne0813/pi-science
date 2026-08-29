@@ -16,19 +16,31 @@ export interface ResearchSupervisor {
 }
 
 export class PiResearchSupervisor implements ResearchSupervisor {
-  constructor(private readonly runtime: PiManagedResearchRuntime) {}
+  constructor(private readonly runtime: PiManagedResearchRuntime, private readonly maxCommitAttempts = 3) {}
 
   async decide(cwd: string, snapshot: AutoResearchSnapshot): Promise<SupervisorDecision> {
-    const operationId = `supervisor-${randomUUID().replaceAll("-", "").slice(0, 16)}`;
-    const result = await this.runtime.run({
-      cwd,
-      research_id: snapshot.research_id,
-      operation_id: operationId,
-      role: "supervisor",
-      expected_tool: "research_commit",
-      prompt: supervisorPrompt(snapshot),
-    });
-    return { commit: researchCommitSchema.parse(result.details), model_tokens: result.model_tokens, cost_usd: result.cost_usd };
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= this.maxCommitAttempts; attempt += 1) {
+      const operationId = `supervisor-${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+      try {
+        const result = await this.runtime.run({
+          cwd,
+          research_id: snapshot.research_id,
+          operation_id: operationId,
+          role: "supervisor",
+          expected_tool: "research_commit",
+          prompt: supervisorPrompt(snapshot, attempt, lastError),
+        });
+        return { commit: researchCommitSchema.parse(result.details), model_tokens: result.model_tokens, cost_usd: result.cost_usd };
+      } catch (error) {
+        // A model-generated commit can be schema-invalid (e.g. fabricated node
+        // ids). A single bad plan must not sink the whole research: retry with
+        // the validation error fed back, fail only after exhausting attempts.
+        lastError = error;
+        if (attempt === this.maxCommitAttempts) throw error;
+      }
+    }
+    throw lastError;
   }
 
   cancel(operationId: string) { return this.runtime.cancel(operationId); }
@@ -36,7 +48,7 @@ export class PiResearchSupervisor implements ResearchSupervisor {
   shutdown() { return this.runtime.shutdown(); }
 }
 
-function supervisorPrompt(snapshot: AutoResearchSnapshot): string {
+function supervisorPrompt(snapshot: AutoResearchSnapshot, attempt = 1, lastError?: unknown): string {
   const compact = {
     research_id: snapshot.research_id,
     revision: snapshot.revision,
@@ -56,7 +68,11 @@ function supervisorPrompt(snapshot: AutoResearchSnapshot): string {
     "You may use pi-subagents for bounded planner, literature-scout, hypothesis-generator, critic, reviewer, methodologist, or claim-verifier work. Their output is advisory and must return to you.",
     "Finish by calling research_commit exactly once. Do not print JSON. Use the supplied research_id and base_revision unchanged.",
     "Prefer a small coherent batch. Create hypotheses before experiments and use action_id references within the batch. Request verification for material claims. Ask for user input only when a material choice cannot be inferred.",
+    "Node id rules: every node reference (hypothesis parent_refs, experiment.propose, verification.request target_node_id, synthesis.request target_node_ids, input.request target_node_id) MUST be copied verbatim from the snapshot nodes array. Never invent, shorten, reformat, or guess node ids. If a referenced node is not in the snapshot, omit the action instead of fabricating an id.",
     "Before recommending stop, request a synthesis node over the material completed nodes in the same commit unless a completed synthesis already exists. Recommend stopping only when targets are reached, the frontier is exhausted, or remaining work has low value. Node retains final stop authority.",
+    ...(attempt > 1 && lastError
+      ? [`Your previous commit was rejected by validation:\n${String(lastError)}\nFix the referenced node ids (copy them verbatim from the snapshot) and produce a valid commit.`]
+      : []),
     `Research snapshot:\n${JSON.stringify(compact, null, 2)}`,
   ].join("\n\n");
 }
