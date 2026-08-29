@@ -24,13 +24,22 @@ export function isPrivateOrReservedAddress(address: string): boolean {
   return family === 4 ? ipv4IsBlocked(address) : family === 6 ? ipv6IsBlocked(address) : true;
 }
 
+/** Private-network provider access is opt-in. The environment variable is an
+ * explicit administrator override; "0" remains a hard deny switch. */
+export function privateProviderAccessEnabled(setting?: unknown): boolean {
+  const override = process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS;
+  if (override === "0") return false;
+  if (override === "1") return true;
+  return setting === true;
+}
+
 export async function validateOutboundHttpUrl(raw: string, options: { allowPrivate?: boolean } = {}): Promise<URL> {
   let url: URL;
   try { url = new URL(raw); } catch { throw new Error("base_url must be a valid absolute URL"); }
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("only http(s) URLs are allowed");
   if (url.username || url.password) throw new Error("URL credentials are not allowed");
   if (!url.hostname) throw new Error("URL hostname is required");
-  const allowPrivate = options.allowPrivate ?? process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0";
+  const allowPrivate = options.allowPrivate ?? privateProviderAccessEnabled();
   // URL.hostname keeps the brackets for IPv6 literals ("[::1]"); strip them
   // so isIP can classify the address without a DNS round-trip.
   const hostname = url.hostname.replace(/^\[|\]$/g, "");
@@ -46,18 +55,15 @@ export async function validateOutboundHttpUrl(raw: string, options: { allowPriva
  * hostnames that resolve into private ranges are rejected (DNS rebinding
  * baseline).
  *
- * NOTE: the private-range guard is RELAXED BY DEFAULT — when
- * allowPrivate is omitted (or PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0")
- * loopback/private destinations pass. Callers handling untrusted input MUST
- * pass `allowPrivate: false` explicitly; treat this function as permissive
- * unless the caller opts into strictness.
+ * Private and loopback destinations are rejected unless the caller opts in or
+ * PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS=1 is set explicitly.
  */
 export async function validateConnectorOutboundUrl(raw: string, options: { allowPrivate?: boolean } = {}): Promise<URL> {
   return validateOutboundHttpUrl(raw, options);
 }
 
 export type ConnectorFetchOptions = {
-  /** Allow loopback/private destinations (tests, local tooling). Default: PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0". */
+  /** Allow loopback/private destinations (tests, local tooling). Default: false. */
   allowPrivate?: boolean;
   /** Maximum redirects followed manually; each hop is re-validated. Default 3. */
   maxRedirects?: number;
@@ -95,7 +101,7 @@ function stripSensitiveHeaders(headers?: Record<string, string>): Record<string,
  * parse-then-connect gap for hostnames that resolve to private ranges.
  */
 export async function safeConnectorFetch(raw: string, options: ConnectorFetchOptions = {}): Promise<Response> {
-  const allowPrivate = options.allowPrivate ?? process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0";
+  const allowPrivate = options.allowPrivate ?? privateProviderAccessEnabled();
   const maxRedirects = options.maxRedirects ?? 3;
   const maxBytes = options.maxResponseBytes ?? 10 * 1024 * 1024;
   const allowedTypes = options.allowedContentTypes ?? null;

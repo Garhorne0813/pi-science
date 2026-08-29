@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { delimiter, join, resolve, sep } from "node:path";
 import { configPath, readJson, withFileWriteLock, withWorkspaceWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
 import type { EnvironmentRepository } from "../../storage/sqlite/repositories/environment-repository.js";
+import { sanitizeRuntimeEnvironment } from "./runtime-environment.js";
 
 export type EnvironmentLanguage = "python" | "r";
 export type EnvironmentStatus = "creating" | "ready" | "failed" | "archived";
@@ -296,32 +297,6 @@ function bindingPath(cwd: string): string { return join(resolve(cwd), ".pi-scien
 function registryPath(): string { return configPath(join("environments", "registry.json")); }
 function environmentRoot(): string { return configPath(join("micromamba", "envs")); }
 
-function isInheritedRuntimeState(key: string): boolean {
-  const normalized = key.toUpperCase();
-  return normalized === "VIRTUAL_ENV"
-    || normalized === "UV_PROJECT_ENVIRONMENT"
-    || normalized === "PIP_REQUIRE_VIRTUALENV"
-    || normalized === "PI_SCIENCE_PYTHON_EXECUTABLE"
-    || normalized === "PYTHONHOME"
-    || normalized === "PIP_PREFIX"
-    || normalized === "CONDA_DEFAULT_ENV"
-    || normalized === "CONDA_EXE"
-    || normalized === "CONDA_PYTHON_EXE"
-    || normalized === "CONDA_SHLVL"
-    || normalized === "CONDA_PROMPT_MODIFIER"
-    || normalized === "CONDARC"
-    || normalized === "CONDA_CHANNELS"
-    || normalized === "CONDA_DEFAULT_CHANNELS"
-    || normalized === "CONDA_SUBDIR"
-    || normalized === "CONDA_PKGS_DIRS"
-    || normalized === "CONDA_BLD_PATH"
-    || normalized === "MAMBA_ROOT_PREFIX"
-    || normalized === "MAMBA_EXE"
-    || normalized === "MAMBA_NO_RC"
-    || normalized === "MAMBARC"
-    || /^CONDA_PREFIX(?:_\d+)?$/.test(normalized);
-}
-
 function safeName(value: string): string {
   const name = value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
   if (!name || name.length > 64) throw new Error("Environment name must contain 1-64 letters, digits, dots, dashes, or underscores");
@@ -345,7 +320,7 @@ export function workspaceEnvironmentVariables(status: WorkspaceEnvironmentStatus
   const pnpmHome = pnpmHomeFor(status.workspace);
   const corepackHome = corepackHomeFor(status.workspace);
   const inheritedPath = platform === "win32" ? Object.entries(inherited).find(([key]) => key.toLowerCase() === "path")?.[1] ?? "" : inherited.PATH ?? "";
-  const base = Object.fromEntries(Object.entries(inherited).filter(([key]) => key.toLowerCase() !== "path" && !isInheritedRuntimeState(key)));
+  const base = Object.fromEntries(Object.entries(sanitizeRuntimeEnvironment(inherited)).filter(([key]) => key.toLowerCase() !== "path"));
   return {
     ...base,
     PATH: [paths.bin, ...(platform === "win32" ? [status.prefix] : []), npmBin, pnpmHome, inheritedPath].filter(Boolean).join(platform === "win32" ? ";" : delimiter),
@@ -710,7 +685,7 @@ export class WorkspaceEnvironmentService {
   }
 
   private micromambaEnvironment(): NodeJS.ProcessEnv {
-    const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !isInheritedRuntimeState(key)));
+    const environment = sanitizeRuntimeEnvironment();
     environment.MAMBA_ROOT_PREFIX = configPath("micromamba");
     environment.MAMBA_NO_RC = "true";
     return environment;

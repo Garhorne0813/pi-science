@@ -73,6 +73,7 @@ export interface ModelEndpointResource {
   enabled: boolean;
   health: "unknown" | "ready" | "degraded" | "error" | "blocked" | string;
   data_egress: "local" | "remote" | string;
+  network_policy?: { allow_private?: boolean };
   last_checked_at?: string | null;
   last_error?: string | null;
   error?: string | null;

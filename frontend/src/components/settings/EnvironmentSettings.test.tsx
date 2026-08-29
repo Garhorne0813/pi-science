@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { EnvironmentSettings } from "./EnvironmentSettings";
+import { queryClient } from "../../lib/client/query-client";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -29,6 +31,7 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
 
 beforeEach(() => {
   cleanup();
+  queryClient.clear();
   environments = [{ environment_id: "env_test", revision_id: "rev_failed", display_name: "Failed environment", language: "python", status: "failed", packages: ["python=3.12"], failure: { message: "Python executable is missing" } }];
   fetchMock.mockClear();
   vi.stubGlobal("fetch", fetchMock);
@@ -40,7 +43,7 @@ afterEach(() => {
 
 describe("EnvironmentSettings", () => {
   it("deletes a failed environment revision", async () => {
-    render(<EnvironmentSettings workspaceCwd={null} />);
+    render(<QueryClientProvider client={queryClient}><EnvironmentSettings workspaceCwd={null} /></QueryClientProvider>);
     expect(await screen.findByText("Failed environment")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));

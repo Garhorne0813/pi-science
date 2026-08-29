@@ -12,16 +12,20 @@ import { SettingsStore } from "../storage/settings-store.js";
 
 const roots: string[] = [];
 const originalHome = process.env.PI_SCIENCE_HOME;
+const originalAllowPrivate = process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS;
 
 beforeEach(async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-science-model-resources-"));
   roots.push(root);
   process.env.PI_SCIENCE_HOME = root;
+  process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS = "1";
 });
 
 afterEach(async () => {
   if (originalHome === undefined) delete process.env.PI_SCIENCE_HOME;
   else process.env.PI_SCIENCE_HOME = originalHome;
+  if (originalAllowPrivate === undefined) delete process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS;
+  else process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS = originalAllowPrivate;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
 });
 
@@ -197,7 +201,7 @@ describe("resource service", () => {
   it("creates a custom provider aggregate and discovers its models", async () => {
     const service = new ModelResourceService();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ data: [{ id: "model-a" }, { id: "model-b" }] }), { status: 200, headers: { "content-type": "application/json" } }));
-    const result = await service.createCustomProvider({ name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", auth: { kind: "api_key", secret: "aggregate-secret" } });
+    const result = await service.createCustomProvider({ name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", allow_private: true, auth: { kind: "api_key", secret: "aggregate-secret" } });
     expect(result.provider).toMatchObject({ id: "user-lab", auth_kind: "api_key" });
     expect(result.endpoint).toMatchObject({ owner_provider_id: "user-lab", credential_ref: result.credential?.id ?? null });
     expect(result.credential?.owner_provider_id).toBe("user-lab");
@@ -235,7 +239,7 @@ describe("resource service", () => {
   it("honors the confirmed model selection on aggregate create", async () => {
     const service = new ModelResourceService();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ data: [{ id: "model-a" }, { id: "model-b" }, { id: "model-c" }] }), { status: 200, headers: { "content-type": "application/json" } }));
-    const result = await service.createCustomProvider({ name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", auth: { kind: "api_key", secret: "select-secret" }, models: ["model-a", "model-c"] });
+    const result = await service.createCustomProvider({ name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", allow_private: true, auth: { kind: "api_key", secret: "select-secret" }, models: ["model-a", "model-c"] });
     void result;
     const models = await service.listModels({ provider_id: "user-lab" });
     expect(models.filter((model) => model.enabled).map((model) => model.model_id).sort()).toEqual(["model-a", "model-c"]);

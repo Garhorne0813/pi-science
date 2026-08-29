@@ -5,6 +5,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 .cache/
+apps/desktop/.stage/
+apps/desktop/out/
+apps/desktop/release/
 
 # Python
 __pycache__/

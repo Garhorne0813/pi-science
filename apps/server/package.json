@@ -8,6 +8,7 @@
     "dev": "tsx watch src/app/main.ts",
     "start": "node dist/app/main.js",
     "test": "vitest run",
+    "lint": "oxlint src",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

@@ -1,57 +1,45 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Check, Loader2, Plus, Trash2 } from "lucide-react";
 import { apiRequest } from "../../lib/client/api";
-
-interface EnvironmentRevision {
-  environment_id: string;
-  revision_id: string;
-  display_name: string;
-  language: "python" | "r";
-  status: "creating" | "ready" | "failed" | "archived";
-  packages: string[];
-  failure?: { message: string };
-}
-
-interface Binding { revision_id?: string; display_name?: string; ready: boolean }
+import { queryClient } from "../../lib/client/query-client";
+import { environmentsQuery, workspaceEnvironmentQuery, type WorkspaceEnvironment } from "../../lib/environments";
 
 export function EnvironmentSettings({ workspaceCwd }: { workspaceCwd: string | null }) {
-  const [environments, setEnvironments] = useState<EnvironmentRevision[]>([]);
-  const [binding, setBinding] = useState<Binding | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = async () => {
-    const list = await apiRequest<{ environments: EnvironmentRevision[] }>("/api/environments");
-    setEnvironments(list.environments);
-    if (workspaceCwd) setBinding(await apiRequest<Binding>(`/api/environments/workspace?cwd=${encodeURIComponent(workspaceCwd)}`));
-  };
-
-  useEffect(() => { void load().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }, [workspaceCwd]);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const environmentsResult = useQuery(environmentsQuery());
+  const bindingResult = useQuery({ ...workspaceEnvironmentQuery(workspaceCwd ?? "."), enabled: Boolean(workspaceCwd) });
+  const environments = environmentsResult.data?.environments ?? [];
+  const binding = bindingResult.data ?? null;
+  const queryError = environmentsResult.error ?? bindingResult.error;
+  const error = actionError ?? (queryError instanceof Error ? queryError.message : queryError ? String(queryError) : null);
 
   const create = async () => {
-    setBusy("create"); setError(null);
+    setBusy("create"); setActionError(null);
     try {
       await apiRequest("/api/environments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: `analysis-${Date.now()}`, display_name: "Analysis", language: "python" }) });
-      await load();
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+      await queryClient.invalidateQueries({ queryKey: environmentsQuery().queryKey });
+    } catch (cause) { setActionError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(null); }
   };
 
   const remove = async (revisionId: string) => {
-    setBusy(revisionId); setError(null);
+    setBusy(revisionId); setActionError(null);
     try {
       await apiRequest(`/api/environments/${encodeURIComponent(revisionId)}`, { method: "DELETE" });
-      await load();
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+      await queryClient.invalidateQueries({ queryKey: environmentsQuery().queryKey });
+    } catch (cause) { setActionError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(null); }
   };
 
   const bind = async (revisionId: string) => {
     if (!workspaceCwd) return;
-    setBusy(revisionId); setError(null);
+    setBusy(revisionId); setActionError(null);
     try {
-      setBinding(await apiRequest<Binding>(`/api/environments/workspace?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision_id: revisionId }) }));
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+      const next = await apiRequest<WorkspaceEnvironment>(`/api/environments/workspace?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision_id: revisionId }) });
+      queryClient.setQueryData(workspaceEnvironmentQuery(workspaceCwd).queryKey, next);
+    } catch (cause) { setActionError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(null); }
   };
 

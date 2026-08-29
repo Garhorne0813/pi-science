@@ -267,7 +267,6 @@ export function ProjectsPage() {
             <input
               ref={dirInputRef}
               type="file"
-              // @ts-ignore webkitdirectory is widely supported
               {...{ webkitdirectory: "", directory: "" }}
               className="hidden"
               onChange={handleFolderPicked}

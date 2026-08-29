@@ -1,5 +1,6 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { EventEmitter } from "node:events";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NotebookService } from "./notebook-service.js";
@@ -169,11 +170,30 @@ describe("NotebookService", () => {
 
     const start = service.start(cwd);
     await entered;
-    service.stop();
+    await service.stop();
     release();
 
     await expect(start).rejects.toThrow("Jupyter start cancelled");
     expect(service.status()).toMatchObject({ running: false, port: null, url: null });
+  });
+
+  it("lets Jupyter exit on SIGTERM without escalating to SIGKILL", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-science-jupyter-graceful-stop-"));
+    cleanup.push(cwd);
+    const service = new NotebookService({ configPath: (name) => join(cwd, ".pi-science", name), jupyterStopGraceMs: 50 });
+    const child = new EventEmitter() as EventEmitter & { exitCode: number | null; kill: ReturnType<typeof vi.fn> };
+    child.exitCode = null;
+    child.kill = vi.fn((signal: NodeJS.Signals) => {
+      if (signal === "SIGTERM") queueMicrotask(() => { child.exitCode = 0; child.emit("exit", 0, null); });
+      return true;
+    });
+    (service as unknown as { jupyterProcess: typeof child; jupyterCwd: string }).jupyterProcess = child;
+    (service as unknown as { jupyterProcess: typeof child; jupyterCwd: string }).jupyterCwd = resolve(cwd);
+
+    await service.stop(cwd);
+
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
   // The shim records Jupyter argv through a Node script, which cannot be
@@ -201,9 +221,9 @@ describe("NotebookService", () => {
     expect(service.status(other)).toMatchObject({ running: true, matches_workspace: false });
     expect(service.status(cwd)).toMatchObject({ running: true, matches_workspace: true });
     await expect(service.start(other)).rejects.toThrow("already running for another workspace");
-    expect(() => service.stop(other)).toThrowError("Cannot stop Jupyter Lab owned by another workspace");
+    await expect(service.stop(other)).rejects.toThrowError("Cannot stop Jupyter Lab owned by another workspace");
 
-    expect(service.stop(cwd).running).toBe(false);
+    expect((await service.stop(cwd)).running).toBe(false);
     expect(service.status()).toMatchObject({ running: false, port: null, url: null });
   });
 });

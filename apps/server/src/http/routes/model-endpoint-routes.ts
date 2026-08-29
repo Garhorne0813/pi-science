@@ -4,7 +4,7 @@ import type { NodeSessionService } from "../../runtime/node/node-session-service
 import { ModelResourceService } from "../../model-resources/model-resource-service.js";
 import type { CreateEndpointRequest, Endpoint, UpdateEndpointRequest } from "@pi-science/contracts";
 import { egressAuditEnabled, recordEgress } from "../../security/egress-audit.js";
-import { safeConnectorFetch } from "../../security/outbound-security.js";
+import { privateProviderAccessEnabled, safeConnectorFetch } from "../../security/outbound-security.js";
 import { configPath, readJson, withFileWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
 
 type LegacyEndpoint = {
@@ -56,7 +56,7 @@ function parseBaseUrl(value: unknown): string | null {
 async function defaultProbeHealth(url: string): Promise<{ ok: boolean }> {
   const settings = await readJson<{ allow_private_providers?: unknown }>(configPath("config.json"), {});
   const response = await safeConnectorFetch(url, {
-    allowPrivate: settings.allow_private_providers !== false && process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0",
+    allowPrivate: privateProviderAccessEnabled(settings.allow_private_providers),
     maxRedirects: 3,
     maxResponseBytes: 64 * 1024,
     timeoutMs: 8_000,

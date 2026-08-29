@@ -1,13 +1,15 @@
-import { mkdtemp } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { candidateProposalSchema, type AutoResearchSnapshot, type ResearchNode } from "@pi-science/contracts";
-import type { ResearchExperimentExecutor } from "../executors/experiment-executor.js";
+import { candidateProposalSchema } from "@pi-science/contracts";
+import { ExperimentExecutor, type ResearchExperimentExecutor } from "../executors/experiment-executor.js";
 import type { ResearchWorker } from "../executors/pi-research-worker.js";
 import { ResearchGraphStore } from "../graph/store.js";
-import type { ExperimentMaterializer } from "../materializers/pi-experiment-materializer.js";
+import { PiExperimentMaterializer, type ExperimentMaterializer } from "../materializers/pi-experiment-materializer.js";
+import type { PiManagedResearchRuntime } from "../runtimes/pi-managed-runtime.js";
 import type { ResearchSupervisor } from "../supervisors/pi-supervisor-runner.js";
+import { JobCoordinator } from "../../runtime/jobs/job-coordinator.js";
 import { ResearchOrchestrator } from "./coordinator.js";
 
 describe("ResearchOrchestrator", () => {
@@ -98,6 +100,73 @@ describe("ResearchOrchestrator", () => {
     expect(completed?.stop_reason).toBe("experiment_budget_exhausted");
     await orchestrator.shutdown();
   });
+
+  it.skipIf(process.platform === "win32")("runs a materialized Python candidate through the real job executor", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "research-python-pipeline-"));
+    const jobs = new JobCoordinator({ environment: async () => ({ ...process.env, HOME: cwd }) });
+    let decisions = 0;
+    const supervisor: ResearchSupervisor = {
+      async decide(_cwd, snapshot) {
+        decisions += 1;
+        if (decisions === 1) return { model_tokens: 1, cost_usd: 0, commit: {
+          research_id: snapshot.research_id, base_revision: snapshot.revision, rationale: "execute Python candidate",
+          actions: [
+            { action_id: "h1", type: "hypothesis.add", statement: "Python execution works", assumptions: [], parent_refs: [{ node_id: snapshot.nodes[0]!.node_id }] },
+            { action_id: "e1", type: "experiment.propose", hypothesis_ref: { action_id: "h1" }, spec: { objective: "emit score", expected_metrics: ["score"], constraints: [], materialization: "pi_candidate" }, priority: 1 },
+          ],
+        } };
+        const experiment = snapshot.nodes.find((node) => node.kind === "experiment");
+        return { model_tokens: 1, cost_usd: 0, commit: {
+          research_id: snapshot.research_id, base_revision: snapshot.revision, rationale: "synthesize executed result",
+          actions: [
+            { action_id: "s1", type: "synthesis.request", target_node_ids: experiment ? [experiment.node_id] : [], priority: 1 },
+            { action_id: "stop", type: "research.stop_recommended", reason: "pipeline verified" },
+          ],
+        } };
+      },
+      async cancel() {}, async cancelResearch() {}, async shutdown() {},
+    };
+    const runtime = {
+      async run(input: { research_id: string; role: string }) {
+        const nodeId = input.role.replace(/^materializer-/, "");
+        return {
+          details: {
+            research_id: input.research_id,
+            node_id: nodeId,
+            approach_summary: "Write a deterministic Python result",
+            rationale: "integration fixture",
+            files: {
+              "solve.py": "import json, os\nfrom pathlib import Path\nout = Path(os.environ['PI_SCIENCE_OUTPUT_DIR'])\nout.mkdir(parents=True, exist_ok=True)\n(out / 'result.json').write_text(json.dumps({'score': 0.91}))\n",
+            },
+            entrypoint: "solve.py",
+            expected_artifacts: [],
+          },
+          model_tokens: 2,
+          cost_usd: 0,
+        };
+      },
+      async cancelResearch() {}, async shutdown() {},
+    } as unknown as PiManagedResearchRuntime;
+    const materializer = new PiExperimentMaterializer(runtime, 1);
+    const workers: ResearchWorker = {
+      async run(_cwd, snapshot, node) { return { research_id: snapshot.research_id, node_id: node.node_id, kind: "synthesis", summary: "Python pipeline completed", findings: [], claims: [], model_tokens: 1, cost_usd: 0 }; },
+      async cancelResearch() {}, async shutdown() {},
+    };
+    const orchestrator = new ResearchOrchestrator(new ResearchGraphStore(), supervisor, materializer, new ExperimentExecutor(jobs), workers);
+
+    try {
+      const created = await orchestrator.create(cwd, { title: "Python pipeline", objective: "Run one candidate" });
+      await orchestrator.start(cwd, created.research_id);
+      const completed = await waitFor(async () => orchestrator.detail(cwd, created.research_id), (snapshot) => snapshot?.status === "completed");
+      expect(completed?.best_result).toMatchObject({ metrics: { score: 0.91 } });
+      expect(completed?.usage).toMatchObject({ experiments_started: 1, experiments_completed: 1 });
+    } finally {
+      await orchestrator.shutdown();
+      await jobs.shutdown();
+      await makeTreeWritable(cwd);
+      await rm(cwd, { recursive: true, force: true });
+    }
+  }, 20_000);
 });
 
 async function waitFor<T>(read: () => Promise<T>, done: (value: T) => boolean): Promise<T> {
@@ -107,6 +176,15 @@ async function waitFor<T>(read: () => Promise<T>, done: (value: T) => boolean): 
     if (done(value)) return value;
     if (Date.now() >= deadline) throw new Error("timed out waiting for research state");
     await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+async function makeTreeWritable(path: string): Promise<void> {
+  const info = await stat(path).catch(() => null);
+  if (!info) return;
+  await chmod(path, info.isDirectory() ? 0o755 : 0o644);
+  if (info.isDirectory()) {
+    for (const name of await readdir(path)) await makeTreeWritable(join(path, name));
   }
 }
 

@@ -23,7 +23,8 @@ import { ApiError } from "./api";
  *   ["provenance", cwd, "versions" | "env", path | hash]
  *   ["artifact-file", cwd, root, path, maxBytes]
  *   ["slash-commands", cwd, sessionId]
- *   ["notebooks", cwd] / ["notebooks", "jupyter", cwd] / ["environments", cwd]
+ *   ["notebooks", cwd] / ["notebooks", "jupyter", cwd]
+ *   ["environments", "list"] / ["environments", "workspace", cwd]
  *   ["workspaces"] / ["workspaces", "pinned"]
  *
  * ── Defaults ────────────────────────────────────────────────────────────────

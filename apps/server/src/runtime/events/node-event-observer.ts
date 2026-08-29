@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import { extname, relative, resolve } from "node:path";
 import { appendJsonLine, readJsonLines, workspaceFile } from "../../storage/persistence.js";
 import type { PiEvent } from "../pi/pi-process.js";
@@ -89,6 +90,12 @@ export async function observeNodePiEvent(
 
 interface ObservedArtifact { path: string; sha256: string; artifactId: string; version: number }
 
+async function sha256File(path: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
+  return hash.digest("hex");
+}
+
 async function observeWrittenArtifact(cwd: string, model: string | null, event: PiEvent, sessionId: string, publish: Publish): Promise<ObservedArtifact | null> {
   const tool = String(event.toolName ?? "");
   if (tool !== "write" && tool !== "edit") return null;
@@ -100,17 +107,16 @@ async function observeWrittenArtifact(cwd: string, model: string | null, event: 
   const path = relative(workspace, absolute).replaceAll("\\", "/");
   if (!path || path.startsWith("../") || path === "..") return null;
   let metadata;
-  let bytes: Buffer;
+  let sha256: string;
   try {
     metadata = await stat(absolute);
     if (!metadata.isFile() || metadata.size > 2 * 1024 * 1024 * 1024) return null;
-    bytes = await readFile(absolute);
+    sha256 = await sha256File(absolute);
   } catch {
     return null;
   }
   let observed: ObservedArtifact | null = null;
   await serialized(workspaceFile(cwd, "artifacts.jsonl"), async () => {
-    const sha256 = createHash("sha256").update(bytes).digest("hex");
     const artifactId = createHash("sha256").update(`${workspace}:${path}`).digest("hex").slice(0, 24);
     const artifacts = await readJsonLines<Record<string, unknown>>(workspaceFile(cwd, "artifacts.jsonl"));
     const previous = artifacts.filter((item) => item.artifact_id === artifactId).at(-1);

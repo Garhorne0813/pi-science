@@ -271,6 +271,8 @@
   "settings.resources.managedKey": "API key stored by Pi-Science",
   "settings.resources.noAuth": "No authentication",
   "settings.resources.apiKey": "API key",
+  "settings.resources.allowPrivate": "Allow this provider to access localhost and private-network addresses",
+  "settings.resources.allowPrivateHelp": "Enable only for a provider you trust, such as a local Ollama or vLLM server.",
   "settings.resources.add": "Add provider",
   "settings.resources.addProvider": "Add provider",
   "settings.resources.providers": "Providers",

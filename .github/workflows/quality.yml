@@ -33,8 +33,8 @@ jobs:
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Lint frontend
-        run: pnpm --filter frontend lint
+      - name: Lint contracts, control plane and frontend
+        run: pnpm lint
 
       - name: Test POSIX launcher lifecycle
         if: runner.os != 'Windows'

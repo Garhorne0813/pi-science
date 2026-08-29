@@ -271,6 +271,8 @@
   "settings.resources.managedKey": "本机保存的 API 密钥",
   "settings.resources.noAuth": "无认证",
   "settings.resources.apiKey": "API 密钥",
+  "settings.resources.allowPrivate": "允许此提供方访问本机和私有网络地址",
+  "settings.resources.allowPrivateHelp": "仅对可信提供方启用，例如本机 Ollama 或 vLLM 服务。",
   "settings.resources.add": "添加提供方",
   "settings.resources.addProvider": "添加提供方",
   "settings.resources.providers": "提供方",

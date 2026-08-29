@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -48,7 +49,7 @@ describe("node Pi execution evidence", () => {
       correlation: { session_id: sessionId, tool_call_id: toolCallId },
       request: { tool: "write", input: { api_key: "[redacted]" } },
     });
-    expect(execution?.files.written).toEqual([expect.objectContaining({ path, artifact_id: expect.any(String), artifact_version: 1 })]);
+    expect(execution?.files.written).toEqual([expect.objectContaining({ path, sha256: createHash("sha256").update("result").digest("hex"), artifact_id: expect.any(String), artifact_version: 1 })]);
     expect(execution?.artifacts).toEqual([expect.objectContaining({ relation: "output", version: 1 })]);
   });
 });

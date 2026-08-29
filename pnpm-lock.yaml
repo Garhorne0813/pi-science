@@ -6,7 +6,11 @@ settings:
 
 importers:
 
-  .: {}
+  .:
+    devDependencies:
+      oxlint:
+        specifier: ^1.75.0
+        version: 1.75.0
 
   apps/server:
     dependencies:
