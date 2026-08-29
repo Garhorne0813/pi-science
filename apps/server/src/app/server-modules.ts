@@ -9,8 +9,13 @@ import type { ServerConfig } from "../config/config.js";
 import { WorkspaceEnvironmentService } from "../runtime/workspace/workspace-environment.js";
 import { NodeKernelManager } from "../runtime/kernel/node-kernel-manager.js";
 import { NotebookService } from "../runtime/notebooks/notebook-service.js";
-import { ResearchLoopCoordinator } from "../research-loop/coordinator.js";
-import { PiResearchSubagentRunner } from "../research-loop/subagent-runner.js";
+import { ResearchGraphStore } from "../research/graph/store.js";
+import { PiManagedResearchRuntime } from "../research/runtimes/pi-managed-runtime.js";
+import { PiResearchSupervisor } from "../research/supervisors/pi-supervisor-runner.js";
+import { PiExperimentMaterializer } from "../research/materializers/pi-experiment-materializer.js";
+import { ExperimentExecutor } from "../research/executors/experiment-executor.js";
+import { PiResearchWorker } from "../research/executors/pi-research-worker.js";
+import { ResearchOrchestrator } from "../research/orchestrator/coordinator.js";
 import { ProjectReviewService } from "../project-review/service.js";
 import { PiReviewSubagentRunner } from "../project-review/subagent-runner.js";
 import { configPath } from "../storage/persistence.js";
@@ -30,7 +35,7 @@ export interface ServerModules {
   readonly environments: WorkspaceEnvironmentService;
   readonly kernels: NodeKernelManager;
   readonly notebooks: NotebookService;
-  readonly research: ResearchLoopCoordinator;
+  readonly research: ResearchOrchestrator;
   readonly projectReview: ProjectReviewService;
   readonly stateStore: SqliteStateStore;
   readonly workspaces: WorkspaceRepository;
@@ -64,6 +69,12 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
   const projectReview = new ProjectReviewService(new PiReviewSubagentRunner(environments, piManager), sessionRepository);
   const sessions = new NodeSessionService(events, piManager, sessionRepository, environments, projectReview, undefined, modelResources);
   const jobs = new JobCoordinator(environments, {}, undefined, sqliteEnabled ? jobRepository : undefined);
-  const research = new ResearchLoopCoordinator(jobs, new PiResearchSubagentRunner(environments, piManager));
+  const research = new ResearchOrchestrator(
+    new ResearchGraphStore(),
+    new PiResearchSupervisor(new PiManagedResearchRuntime(environments, piManager)),
+    new PiExperimentMaterializer(new PiManagedResearchRuntime(environments, piManager)),
+    new ExperimentExecutor(jobs),
+    new PiResearchWorker(new PiManagedResearchRuntime(environments, piManager)),
+  );
   return { sessions, events, sessionRepository, piManager, settings, modelResources, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled };
 }

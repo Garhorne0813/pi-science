@@ -6,9 +6,6 @@ import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { ProjectReviewBusyError, type ProjectReviewService } from "../../project-review/service.js";
 import { ensureKnowledgeItem, mutateProjectState, readProjectState as state, timestamp as now, type ProjectState } from "../../project-review/project-state.js";
 import { subscribeProjectKnowledgeEvents } from "../../project-review/events.js";
-import type { ResearchLoopCoordinator } from "../../research-loop/coordinator.js";
-import { subscribeResearchEvents } from "../../research-loop/events.js";
-import { compileResearchIntent } from "../../research-loop/intent.js";
 
 function q(request: { query: unknown }, key: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[key]; return typeof value === "string" && value ? value : fallback; }
 async function ws(request: { query: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): Promise<string | null> { try { return await validateWorkspaceCwd(q(request, "cwd")); } catch (error) { reply.code(403).send({ error: String(error) }); return null; } }
@@ -27,16 +24,7 @@ function mutationFailure(reply: { code: (status: number) => { send: (body: unkno
   throw error;
 }
 
-function researchFailure(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  const lower = message.toLowerCase();
-  const status = lower.includes("not found") ? 404
-    : lower.includes("already") || lower.includes("invalid loop transition") || lower.includes("cannot") || lower.includes("not running") ? 409
-    : 400;
-  return reply.code(status).send({ error: message });
-}
-
-export function registerProjectRoutes(app: FastifyInstance, research: ResearchLoopCoordinator, review: ProjectReviewService): void {
+export function registerProjectRoutes(app: FastifyInstance, review: ProjectReviewService): void {
   // The ✨ Review button posts cwd in the body; the query form stays accepted so
   // the route matches the rest of this file.
   app.post("/api/project-knowledge/review", async (request, reply) => {
@@ -80,33 +68,7 @@ export function registerProjectRoutes(app: FastifyInstance, research: ResearchLo
   app.get("/api/project-knowledge/files/views", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; return { updated_at: now(), files: [], by_type: {}, by_topic: {}, by_month: {} }; });
   app.post<{ Params: { history_id: string } }>("/api/project-knowledge/file-operations/:history_id/undo", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); return current.history.some((item) => item.id === request.params.history_id) ? { ok: true, undo: { id: request.params.history_id, status: "not_required" } } : reply.code(404).send({ error: "File operation history not found" }); });
 
-  app.get("/api/project-memory/overview", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; await research.reconcile(cwd); const current = await state(cwd); const repository = research.repository(cwd); const rows = await repository.records(); const researchLoops = await repository.loops(); const details = await Promise.all(researchLoops.map((loop) => research.detail(cwd, loop.loop_id))); const candidates = details.flatMap((detail) => detail?.candidates ?? []); return { workspace: cwd, project_file: "PROJECT.md", pending_count: current.proposals.filter((item) => item.status === "pending").length, knowledge_count: current.items.length, auto_review: current.policy.auto_review, run_count: candidates.filter((item) => Object.keys(item.execution).length).length, artifact_count: candidates.reduce((sum, item) => sum + (item.evaluation?.artifact_refs.length ?? 0), 0), result_review_count: candidates.filter((item) => item.evaluation).length, research_record_count: rows.length, research_loop_count: researchLoops.length, active_research_loop_count: researchLoops.filter((item) => ["ready", "running", "pausing", "paused", "cancelling", "needs_attention"].includes(item.status)).length }; });
-  app.get("/api/project-memory/timeline", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; return { timeline: (await research.repository(cwd).records()).reverse().slice(0, Number((request.query as { limit?: string }).limit ?? 200)) }; });
-  app.post("/api/project-memory/index/rebuild", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const count = (await research.repository(cwd).records()).length; return { ok: true, indexed_at: now(), records: count }; });
-  app.get("/api/project-memory/research-events", async (request, reply) => {
-    const cwd = await ws(request, reply); if (!cwd) return;
-    // Lossy invalidation channel: clients refetch full state on every signal, so
-    // no replay or backpressure buffering is needed (compare sse-routes.ts).
-    reply.hijack();
-    reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-    const push = (text: string) => { if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.write(text); };
-    push(": connected\n\n");
-    const unsubscribe = subscribeResearchEvents(cwd, (event) => push(`data: ${JSON.stringify(event)}\n\n`));
-    const heartbeat = setInterval(() => push(": ping\n\n"), 15_000);
-    let closed = false;
-    const cleanup = () => { if (closed) return; closed = true; clearInterval(heartbeat); unsubscribe(); };
-    request.raw.once("close", cleanup);
-    reply.raw.once("close", cleanup);
-  });
-  app.post("/api/project-memory/research-loop-intents", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; try { return compileResearchIntent(request.body); } catch (error) { return researchFailure(reply, error); } });
-  app.get("/api/project-memory/research-loops", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; await research.reconcile(cwd); return { loops: await research.list(cwd) }; });
-  app.post("/api/project-memory/research-loops", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; try { return await research.create(cwd, request.body); } catch (error) { return researchFailure(reply, error); } });
-  app.get<{ Params: { loop_id: string } }>("/api/project-memory/research-loops/:loop_id", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; research.resume(cwd, request.params.loop_id); return await research.detail(cwd, request.params.loop_id) ?? reply.code(404).send({ error: "Research loop not found" }); });
-  app.post<{ Params: { loop_id: string } }>("/api/project-memory/research-loops/:loop_id/preflight", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; try { return await research.preflight(cwd, request.params.loop_id); } catch (error) { return researchFailure(reply, error); } });
-  app.post<{ Params: { loop_id: string; action: string } }>("/api/project-memory/research-loops/:loop_id/:action", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; try { return await research.action(cwd, request.params.loop_id, request.params.action); } catch (error) { return researchFailure(reply, error); } });
-  app.get("/api/project-memory/experiences", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const loopId = String((request.query as { loop_id?: string }).loop_id ?? ""); if (loopId) return { experiences: (await research.detail(cwd, loopId))?.candidates ?? [] }; const loops = await research.list(cwd); const details = await Promise.all(loops.map((loop) => research.detail(cwd, loop.loop_id))); return { experiences: details.flatMap((detail) => detail?.candidates ?? []) }; });
-  app.get<{ Params: { loop_id: string } }>("/api/project-memory/research-loops/:loop_id/frontier", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const detail = await research.detail(cwd, request.params.loop_id); return detail ? { frontier: detail.frontier } : reply.code(404).send({ error: "Research loop not found" }); });
-  app.get("/api/project-memory/evaluators", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; return { evaluators: await research.evaluators(cwd) }; });
-  app.post("/api/project-memory/evaluators", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; try { return await research.registerEvaluator(cwd, request.body); } catch (error) { return researchFailure(reply, error); } });
-  app.get<{ Params: { evaluator_id: string; version: string } }>("/api/project-memory/evaluators/:evaluator_id/versions/:version", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const evaluator = (await research.evaluators(cwd)).find((item) => item.evaluator_id === request.params.evaluator_id && item.version === Number(request.params.version)); return evaluator ?? reply.code(404).send({ error: "Evaluator version not found" }); });
+  app.get("/api/project-memory/overview", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); return { workspace: cwd, project_file: "PROJECT.md", pending_count: current.proposals.filter((item) => item.status === "pending").length, knowledge_count: current.items.length, auto_review: current.policy.auto_review, run_count: 0, artifact_count: 0, result_review_count: 0, research_record_count: 0, research_loop_count: 0, active_research_loop_count: 0 }; });
+  app.get("/api/project-memory/timeline", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); return { timeline: [...current.decisions].reverse().slice(0, Number((request.query as { limit?: string }).limit ?? 200)) }; });
+  app.post("/api/project-memory/index/rebuild", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const current = await state(cwd); return { ok: true, indexed_at: now(), records: current.items.length }; });
 }

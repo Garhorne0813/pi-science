@@ -207,7 +207,7 @@ export function LiveSessionPage() {
     }
   }, [activeSessionId, workspaceCwd]);
 
-  const research = useResearchLoop(workspaceCwd);
+  const research = useResearchLoop(workspaceCwd, sessionId ?? activeSessionId ?? undefined);
   const composer = useComposer({
     cwd: workspaceCwd,
     conversationKey: sessionId ?? null,
@@ -375,7 +375,7 @@ export function LiveSessionPage() {
                           </div>
                         )}
                         {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
-                        {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
+                        {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.research_id)} onAction={(action) => void research.action(action)} onResolveInput={(nodeId, resolution) => void research.resolveInput(nodeId, resolution)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
                         {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{research.error}</div>}
                       </div>
                     ),
@@ -412,7 +412,7 @@ export function LiveSessionPage() {
             ) : (
               <>
                 {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
-                {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
+                {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.research_id)} onAction={(action) => void research.action(action)} onResolveInput={(nodeId, resolution) => void research.resolveInput(nodeId, resolution)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
                 {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{research.error}</div>}
                 {renderInteractionPrompt()}
                 {working && !pendingInteraction && (

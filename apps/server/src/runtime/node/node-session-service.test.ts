@@ -308,6 +308,7 @@ describe("Node session lifecycle", () => {
     expect(values(launches[1]!, "-e")).toEqual([
       explicitExtension,
       join(import.meta.dirname, "../pi/extensions/pi-science-notebook.ts"),
+      join(import.meta.dirname, "../pi/extensions/pi-science-research.ts"),
     ]);
     await service.shutdownAll();
   });

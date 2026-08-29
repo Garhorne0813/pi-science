@@ -117,7 +117,7 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
     } }));
   }
   if (url.includes("/commands?")) return Promise.resolve(jsonResponse({ commands: [] }));
-  if (url.startsWith("/api/project-memory/research-loops")) return Promise.resolve(jsonResponse({ loops: [] }));
+  if (method === "GET" && url.startsWith("/api/research?")) return Promise.resolve(jsonResponse({ research: [] }));
   if (method === "PUT" && url.startsWith("/api/settings/model")) {
     return Promise.resolve(jsonResponse({ ok: true, model: "prov/m2", thinking: "medium" }));
   }
@@ -374,23 +374,9 @@ describe("composer send-failure restore", () => {
 });
 
 describe("conversation research workflows", () => {
-  it("sends compare as a structured conversation task instead of creating a loop", async () => {
+  it("turns compare into an Auto Research Graph setup", async () => {
     const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sendPrompt });
-    overrides.push((url, init) => {
-      if ((init.method || "GET").toUpperCase() !== "POST" || !url.startsWith("/api/project-memory/research-loop-intents")) return null;
-      expect(JSON.parse(String(init.body))).toEqual({ mode: "compare", objective: "Compare method A and method B" });
-      return Promise.resolve(jsonResponse({
-        requires_confirmation: false,
-        missing_fields: [],
-        draft: {
-          task_type: "compare", execution_kind: "conversation", title: "Compare method A and method B", objective: "Compare method A and method B",
-          metric: null, direction: "maximize", budget: { max_candidates: 6, max_wall_seconds: 7200, max_parallel: 1 },
-          success_criterion: null, plan_steps: [], stop_conditions: { target_metrics: {}, patience: 3, min_improvement: 0 }, instructions: [],
-          conversation_prompt: "[Workflow: compare]\nObjective: Compare method A and method B\n\nRequired process:\n1. Return a comparison table.",
-        },
-      }));
-    });
 
     useUiStore.getState().addWorkspaceReference({ cwd: CWD, path: "methods/results.csv", name: "results.csv", isDir: false });
     renderWorkspaceLanding();
@@ -399,9 +385,10 @@ describe("conversation research workflows", () => {
     act(() => { useRuntimeStore.getState().setDraft("Compare method A and method B"); });
     fireEvent.click(sendButton());
 
-    await waitFor(() => expect(sendPrompt).toHaveBeenCalledWith(expect.stringContaining("[Workflow: compare]")));
-    expect(sendPrompt.mock.calls[0][0]).toContain("methods/results.csv");
-    expect(screen.queryByText("Confirm Compare approaches")).toBeNull();
+    expect(await screen.findByText("Auto Research setup")).toBeInTheDocument();
+    expect(screen.getByText("Compare method A and method B")).toBeInTheDocument();
+    expect(screen.getByText("12")).toBeInTheDocument();
+    expect(sendPrompt).not.toHaveBeenCalled();
   });
 
   it("hides workflow starters after a conversation has already begun", async () => {
@@ -419,23 +406,9 @@ describe("conversation research workflows", () => {
     expect(screen.queryByRole("button", { name: "Reproduce experiment" })).toBeNull();
   });
 
-  it("turns optimize into an editable loop draft and infers a deterministic metric", async () => {
+  it("turns optimize into a bounded Auto Research Graph setup", async () => {
     const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ sendPrompt });
-    overrides.push((url, init) => {
-      if ((init.method || "GET").toUpperCase() !== "POST" || !url.startsWith("/api/project-memory/research-loop-intents")) return null;
-      return Promise.resolve(jsonResponse({
-        requires_confirmation: true,
-        missing_fields: [],
-        draft: {
-          task_type: "optimize", execution_kind: "iterative", title: "Minimize model latency", objective: "Minimize model latency",
-          metric: "latency", direction: "minimize", budget: { max_candidates: 10, max_wall_seconds: 7200, max_parallel: 1 },
-          success_criterion: "Reduce latency with reproducible measurements while preserving required checks.",
-          plan_steps: ["Establish a reproducible baseline.", "Measure one change per round."],
-          stop_conditions: { target_metrics: {}, patience: 3, min_improvement: 0 }, instructions: [], conversation_prompt: null,
-        },
-      }));
-    });
 
     renderWorkspaceLanding();
     await screen.findByTestId("model-control");
@@ -443,10 +416,10 @@ describe("conversation research workflows", () => {
     act(() => { useRuntimeStore.getState().setDraft("Minimize model latency"); });
     fireEvent.click(sendButton());
 
-    expect(await screen.findByText("Confirm Optimize")).toBeInTheDocument();
-    expect(screen.getByText("Reduce latency with reproducible measurements while preserving required checks.")).toBeInTheDocument();
-    expect(screen.getByText("Establish a reproducible baseline.")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Metric")).toBeNull();
+    expect(await screen.findByText("Auto Research setup")).toBeInTheDocument();
+    expect(screen.getByText("Minimize model latency")).toBeInTheDocument();
+    expect(screen.getByText("20")).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create and start" })).toBeEnabled();
     expect(sendPrompt).not.toHaveBeenCalled();
   });

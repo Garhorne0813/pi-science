@@ -11,7 +11,6 @@ import { sessionRepository } from "../../runtime/node/session-repository.js";
 import { catalog as skillCatalog, getSkillContent, getSkillInfo, validateDirectory as validateSkillDir } from "../../catalog/skill-catalog.js";
 import { probeRequirements } from "../../catalog/skill-requirements.js";
 import type { JobCoordinator } from "../../runtime/jobs/job-coordinator.js";
-import type { ResearchLoopCoordinator } from "../../research-loop/coordinator.js";
 import type { WorkspaceRepository } from "../../storage/sqlite/repositories/workspace-repository.js";
 import { findExecutable, pathIsInside, userHome } from "../../support/platform-utils.js";
 import { defaultPythonExecutable } from "../../runtime/workspace/workspace-environment.js";
@@ -234,7 +233,7 @@ const DEMOS: Record<string, { source: string; workspace: string }> = {
   climate: { source: "demos/climate-trends", workspace: "Climate Trends" },
 };
 
-export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinator, research?: ResearchLoopCoordinator, workspaceRepository?: WorkspaceRepository): void {
+export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinator, research?: { hasActive(cwd: string): Promise<boolean> }, workspaceRepository?: WorkspaceRepository): void {
   // ── Skills (delegated to skill-catalog service) ──
   app.get("/api/skills", async (request, reply) => {
     const root = await ws(request, reply);

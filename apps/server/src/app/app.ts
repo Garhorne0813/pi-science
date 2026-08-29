@@ -20,6 +20,7 @@ import { registerKernelExecutionRoutes } from "../http/routes/kernel-execution-r
 import { registerNotebookRoutes } from "../http/routes/notebook-routes.js";
 import { knownWorkspacePaths, registerCatalogRoutes, rootDir } from "../http/routes/catalog-routes.js";
 import { registerProjectRoutes } from "../http/routes/project-routes.js";
+import { registerResearchRoutes } from "../http/routes/research-routes.js";
 import { registerLiteratureRoutes } from "../http/routes/literature-routes.js";
 import { createServerModules, type ServerModules } from "./server-modules.js";
 import { registerEnvironmentRoutes } from "../http/routes/environment-routes.js";
@@ -158,7 +159,10 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeExecutions !== false) registerKernelExecutionRoutes(app, config, environments, kernels);
   registerNotebookRoutes(app, notebooks);
   if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, research, sqliteEnabled ? workspaces : undefined);
-  if (config.nodeProject !== false) registerProjectRoutes(app, research, projectReview);
+  if (config.nodeProject !== false) {
+    registerProjectRoutes(app, projectReview);
+    registerResearchRoutes(app, research);
+  }
   if (config.nodeLiterature !== false) registerLiteratureRoutes(app);
   app.addHook("onReady", async () => {
     if (sqliteEnabled) {
@@ -173,7 +177,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     }
     const recoveryRepository = sqliteEnabled && stateReady ? workspaces : undefined;
     const results = await Promise.allSettled((await knownWorkspacePaths(recoveryRepository)).map((cwd) => research.reconcile(cwd)));
-    for (const result of results) if (result.status === "rejected") app.log.error({ err: result.reason }, "research loop recovery failed");
+    for (const result of results) if (result.status === "rejected") app.log.error({ err: result.reason }, "research graph recovery failed");
   });
   if (config.nodePiManager) app.addHook("onClose", async () => nodeSessionService.shutdownAll());
   // Unconditional: research/review subagent runtimes use the same shared

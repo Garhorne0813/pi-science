@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { buildApp } from "../../app/app.js";
 import type { ServerConfig } from "../../config/config.js";
 import { nodeSessionService } from "../../runtime/node/node-session-service.js";
-import { ResearchRepository } from "../../research-loop/repository.js";
 import { createServerModules } from "../../app/server-modules.js";
 import { loadPiAiProviderCatalog } from "../../config/pi-ai-provider-catalog.js";
 
@@ -855,7 +854,7 @@ describe("native control-plane business routes", () => {
     ]));
   });
 
-  it("supports atomic file writes and research-loop state transitions", async () => {
+  it("supports atomic file writes and Research Graph state transitions", async () => {
     const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
     const upload = await app.inject({ method: "POST", url: `/api/files/upload?cwd=${encodeURIComponent(cwd)}`, payload: { filename: "uploaded.txt", content: "hello" } });
     expect(upload.statusCode).toBe(200);
@@ -866,57 +865,28 @@ describe("native control-plane business routes", () => {
     expect(remove.statusCode).toBe(200);
     await expect(stat(join(cwd, "renamed.txt"))).rejects.toThrow();
 
-    const loop = await app.inject({ method: "POST", url: `/api/project-memory/research-loops?cwd=${encodeURIComponent(cwd)}`, payload: { title: "Smoke loop", objective: "Verify state", task_type: "optimize" } });
-    expect(loop.statusCode).toBe(200);
-    const loopId = loop.json().loop_id as string;
-    expect((await app.inject({ method: "POST", url: `/api/project-memory/research-loops/${loopId}/start?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(409);
-    expect((await app.inject({ method: "POST", url: `/api/project-memory/research-loops/${loopId}/cancel?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(200);
-    const listed = await app.inject({ method: "GET", url: `/api/project-memory/research-loops?cwd=${encodeURIComponent(cwd)}` });
-    expect(listed.json().loops[0]).toMatchObject({ loop_id: loopId, status: "cancelled", task_type: "optimize" });
+    const research = await app.inject({ method: "POST", url: `/api/research?cwd=${encodeURIComponent(cwd)}`, payload: { title: "Smoke research", objective: "Verify graph state", budget: { max_parallel: 2 } } });
+    expect(research.statusCode).toBe(200);
+    const researchId = research.json().research_id as string;
+    expect(research.json()).toMatchObject({ research_id: researchId, status: "draft", revision: 0, budget: { max_parallel: 2 } });
+    expect((await app.inject({ method: "POST", url: `/api/research/${researchId}/cancel?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(200);
+    const listed = await app.inject({ method: "GET", url: `/api/research?cwd=${encodeURIComponent(cwd)}` });
+    expect(listed.json().research[0]).toMatchObject({ research_id: researchId, status: "cancelled" });
   });
 
-  it("compiles conversation research modes into distinct execution plans", async () => {
+  it("validates durable conversation-native Research Graph setup", async () => {
     const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
-
-    const optimize = await app.inject({ method: "POST", url: `/api/project-memory/research-loop-intents?cwd=${encodeURIComponent(cwd)}`, payload: { mode: "optimize", objective: "Minimize model latency" } });
-    expect(optimize.statusCode).toBe(200);
-    expect(optimize.json()).toMatchObject({
-      requires_confirmation: true,
-      missing_fields: [],
-      draft: { task_type: "optimize", execution_kind: "iterative", metric: "latency", direction: "minimize", conversation_prompt: null },
-    });
-
-    const naturalLanguage = await app.inject({ method: "POST", url: `/api/project-memory/research-loop-intents?cwd=${encodeURIComponent(cwd)}`, payload: { mode: "optimize", objective: "降低模型首 token 时间，同时保持回答质量" } });
-    expect(naturalLanguage.statusCode).toBe(200);
-    expect(naturalLanguage.json()).toMatchObject({
-      requires_confirmation: true,
-      missing_fields: [],
-      draft: { metric: "time_to_first_token", direction: "minimize" },
-    });
-    expect(naturalLanguage.json().draft.success_criterion).toContain("降低");
-    expect(naturalLanguage.json().draft.plan_steps).toHaveLength(3);
-
-    const exploratory = await app.inject({ method: "POST", url: `/api/project-memory/research-loop-intents?cwd=${encodeURIComponent(cwd)}`, payload: { mode: "research_loop", objective: "探索这种材料为什么在潮湿环境中失效" } });
-    expect(exploratory.statusCode).toBe(200);
-    expect(exploratory.json()).toMatchObject({
-      requires_confirmation: true,
-      missing_fields: [],
-      draft: { metric: "evidence_quality", direction: "maximize" },
-    });
-
-    const compare = await app.inject({ method: "POST", url: `/api/project-memory/research-loop-intents?cwd=${encodeURIComponent(cwd)}`, payload: { mode: "compare", objective: "Compare method A with method B" } });
-    expect(compare.statusCode).toBe(200);
-    expect(compare.json()).toMatchObject({ requires_confirmation: false, draft: { task_type: "compare", execution_kind: "conversation" } });
-    expect(compare.json().draft.conversation_prompt).toContain("[Workflow: compare]");
-    expect(compare.json().draft.conversation_prompt).toContain("comparison table");
-
-    const invalid = await app.inject({ method: "POST", url: `/api/project-memory/research-loop-intents?cwd=${encodeURIComponent(cwd)}`, payload: { mode: "unknown", objective: "Anything" } });
+    const created = await app.inject({ method: "POST", url: `/api/research?cwd=${encodeURIComponent(cwd)}`, payload: { title: "Latency research", objective: "降低模型首 token 时间，同时保持回答质量", project_id: "project-1", origin_session_id: "session-1", origin_message_id: "message-1", constraints: ["保持质量"], target_metrics: { time_to_first_token: { value: 0.2, direction: "minimize" } }, budget: { max_experiments: 8, max_parallel: 3 } } });
+    expect(created.statusCode).toBe(200);
+    expect(created.json()).toMatchObject({ project_id: "project-1", origin_session_id: "session-1", origin_message_id: "message-1", revision: 0, constraints: ["保持质量"], budget: { max_experiments: 8, max_parallel: 3 }, target_metrics: { time_to_first_token: { value: 0.2, direction: "minimize" } } });
+    expect(created.json().nodes).toEqual([expect.objectContaining({ kind: "question", question: "降低模型首 token 时间，同时保持回答质量", status: "ready" })]);
+    const invalid = await app.inject({ method: "POST", url: `/api/research?cwd=${encodeURIComponent(cwd)}`, payload: { title: "", objective: "" } });
     expect(invalid.statusCode).toBe(400);
   });
 
-  it("streams research record invalidation events over SSE", async () => {
+  it("streams revisioned Research Graph product events over SSE", async () => {
     const cwd = await workspace(); const app = buildApp(config()); apps.push(app);
-    const response = await app.inject({ method: "GET", url: `/api/project-memory/research-events?cwd=${encodeURIComponent(cwd)}`, payloadAsStream: true });
+    const response = await app.inject({ method: "GET", url: `/api/research-events?cwd=${encodeURIComponent(cwd)}`, payloadAsStream: true });
     try {
       expect(response.statusCode).toBe(200);
       expect(response.headers["content-type"]).toBe("text/event-stream");
@@ -931,11 +901,12 @@ describe("native control-plane business routes", () => {
         return text;
       };
       await readUntil(": connected\n\n");
-      // The route subscribes under the realpath'd workspace (validateWorkspaceCwd),
-      // so emit through a repository keyed the same way.
-      await new ResearchRepository(await realpath(cwd)).append("loop.created", { title: "SSE smoke" }, { loop_id: "loop-sse" });
-      const received = await readUntil("research.record");
-      expect(received).toContain(`data: ${JSON.stringify({ type: "research.record", loop_id: "loop-sse", record_type: "loop.created" })}\n\n`);
+      const created = await app.inject({ method: "POST", url: `/api/research?cwd=${encodeURIComponent(cwd)}`, payload: { title: "SSE", objective: "Observe" } });
+      expect(created.statusCode).toBe(200);
+      const received = await readUntil("research.created");
+      expect(received).toContain(`event: research.created`);
+      expect(received).toContain(`\"research_id\":\"${created.json().research_id}\"`);
+      expect(received).toContain(`\"revision\":0`);
     } finally {
       response.raw.res.destroy();
     }
