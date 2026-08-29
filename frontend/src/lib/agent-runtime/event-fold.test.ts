@@ -84,6 +84,7 @@ describe("transport event folding", () => {
       callId: "call-1",
       tool: "bash",
       status: "running",
+      title: "Running conversation tests",
     });
     source.emit("tool.updated", {
       type: "tool.updated",
@@ -91,10 +92,11 @@ describe("transport event folding", () => {
       callId: "call-1",
       tool: "",
       status: "done",
+      details: { exitCode: 0 },
     });
 
     expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
-      expect.objectContaining({ kind: "tool", callId: "call-1", tool: "bash", status: "done" }),
+      expect.objectContaining({ kind: "tool", callId: "call-1", tool: "bash", status: "done", title: "Running conversation tests", details: { exitCode: 0 } }),
     );
   });
 

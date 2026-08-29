@@ -69,6 +69,15 @@ export interface ToolCallBlock {
 
 export type ToolStatus = "running" | "done" | "error" | "waiting-approval";
 
+export type ActivityPlane = "execution" | "plan-control" | "interaction" | "system";
+
+export interface ToolPresentationPolicy {
+  plane: ActivityPlane;
+  visibleInCurrentActivity: boolean;
+  visibleInExecutionTrace: boolean;
+  countsAsOperation: boolean;
+}
+
 export interface ReviewerBlock {
   kind: "reviewer";
   id: string;

@@ -18,6 +18,7 @@ import { ConversationWelcome } from "../../components/conversation/ConversationW
 import { InteractionPrompt } from "../../components/conversation/InteractionPrompt";
 import { QuestionnairePrompt } from "../../components/conversation/QuestionnairePrompt";
 import { groupBlocks, renderBlockGroup } from "../../components/conversation/ConversationBlocks";
+import { selectCurrentActivity } from "../../lib/conversation/activity-policy";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
 import { SessionExecutionButton } from "../../components/conversation/SessionExecutionButton";
 import { visibleUserMessage } from "../../lib/files";
@@ -48,10 +49,15 @@ const SessionRunsPage = lazy(() => import("./RunsPage").then((m) => ({ default: 
  * its local answer state.
  */
 export function ConversationFooter() {
+  const { t } = useTranslation();
   const pendingInteraction = useRuntimeStore((s) => s.pendingInteraction);
   const pendingQuestionnaire = useRuntimeStore((s) => s.pendingQuestionnaire);
   const working = useRuntimeStore((s) => s.working);
   const respondToInteraction = useRuntimeStore((s) => s.respondToInteraction);
+  const blocks = useRuntimeStore((s) => s.thread.blocks);
+  const lastUserIndex = blocks.findLastIndex((block) => block.kind === "user");
+  const currentTurnTools = blocks.slice(lastUserIndex + 1).filter((block): block is Extract<ThreadBlock, { kind: "tool" }> => block.kind === "tool");
+  const hasCurrentActivity = selectCurrentActivity(currentTurnTools) !== null;
 
   return (
     <div className="mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-6 pt-2">
@@ -67,10 +73,10 @@ export function ConversationFooter() {
           onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
         />
       ) : null}
-      {working && !pendingInteraction && (
-        <div className="flex items-center gap-2 py-4 text-sm text-muted">
+      {working && !pendingInteraction && !hasCurrentActivity && (
+        <div className="flex items-center gap-2 py-4 text-sm text-muted" aria-live="polite">
           <Loader2 size={14} className="animate-spin text-accent" />
-          Working…
+          {t("conversation.activity.continuing")}
         </div>
       )}
     </div>
@@ -412,7 +418,7 @@ export function LiveSessionPage() {
                 {working && !pendingInteraction && (
                   <div className="flex items-center gap-2 py-4 text-sm text-muted">
                     <Loader2 size={14} className="animate-spin text-accent" />
-                    Working…
+                    {t("conversation.activity.continuing")}
                   </div>
                 )}
               </>

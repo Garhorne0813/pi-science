@@ -129,6 +129,7 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
         title: (event.title as string | undefined) ?? previous?.title,
         input: (event.input as Record<string, unknown> | undefined) ?? previous?.input,
         output: (event.output as string | undefined) ?? previous?.output,
+        details: event.details ?? previous?.details,
         partialOutput: (event.partialOutput as string | undefined) ?? previous?.partialOutput,
         diff: (event.diff as string | undefined) ?? previous?.diff,
         startedAt: (event.startedAt as string | undefined) ?? previous?.startedAt,
