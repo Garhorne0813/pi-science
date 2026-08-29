@@ -149,6 +149,7 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
           stderr_preview: preview(result.stderr),
           output_preview: preview(result.result),
           mime: result.mime,
+          outputs: result.outputs ?? [],
           ...(error ? { error } : {}),
           ...(outputEvidence.failures.length > 0 ? { artifact_publish_errors: outputEvidence.failures } : {}),
         },
@@ -241,7 +242,7 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
         producer: "node-kernel-gateway",
         result: {
           ok: result.ok, http_status: 200, stdout_preview: preview(result.stdout), stderr_preview: preview(result.stderr), output_preview: preview(result.result),
-          mime: result.mime, ...(error ? { error } : {}),
+          mime: result.mime, outputs: result.outputs ?? [], ...(error ? { error } : {}),
           ...(outputEvidence.failures.length > 0 ? { artifact_publish_errors: outputEvidence.failures } : {}),
         },
         files: { written: outputEvidence.written },

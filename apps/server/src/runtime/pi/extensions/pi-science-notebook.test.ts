@@ -3,10 +3,12 @@ import registerNotebook from "./pi-science-notebook.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("Pi-Science notebook extension", () => {
   it("reads, edits, and runs through the Node control plane", async () => {
+    vi.stubEnv("PI_SCIENCE_INTERNAL_TOKEN", "test-control-token");
     const calls: Array<{ url: string; init: RequestInit }> = [];
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL, init: RequestInit = {}) => {
       const url = String(input);
@@ -69,6 +71,63 @@ describe("Pi-Science notebook extension", () => {
     });
     expect(JSON.parse(String(outputCalls[1]!.init.body))).toMatchObject({ expected_sha256: "c".repeat(64), cell_id: "c2", execution_count: 2 });
     expect(run.details).toMatchObject({ notebook_revision: "c".repeat(64) });
+    expect(calls.every((call) => new Headers(call.init.headers).get("x-pi-science-internal-token") === "test-control-token")).toBe(true);
+  });
+
+  it("marks control-plane failures as tool errors", async () => {
+    vi.stubEnv("PI_SCIENCE_INTERNAL_TOKEN", "test-control-token");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "control-plane authentication required" }), { status: 401 })));
+
+    const tools = new Map<string, any>();
+    registerNotebook({ registerTool: (tool: any) => tools.set(tool.name, tool) });
+    const result = await tools.get("notebook_read").execute("read-1", { path: "analysis/demo.ipynb" }, undefined, undefined, { cwd: "/workspace" });
+
+    expect(result).toMatchObject({ isError: true });
+    expect(result.content[0].text).toContain("control-plane authentication required");
+  });
+
+  it("persists multiple rich outputs without truncating image data", async () => {
+    vi.stubEnv("PI_SCIENCE_INTERNAL_TOKEN", "test-control-token");
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.includes("/api/notebooks/document")) {
+        return new Response(JSON.stringify({
+          path: "analysis/demo.ipynb",
+          sha256: "a".repeat(64),
+          document: { metadata: { kernelspec: { language: "python" } }, cells: [{ id: "c1", cell_type: "code", source: "display('hello')\n", execution_count: null, outputs: [] }] },
+        }), { status: 200 });
+      }
+      if (url.includes("/api/kernels/execute")) {
+        return new Response(JSON.stringify({
+          ok: true,
+          execution_id: "exec-1",
+          status: "succeeded",
+          result: "figure",
+          mime: {},
+          outputs: [
+            { output_type: "display_data", data: { "text/plain": "'shown'" } },
+            { output_type: "execute_result", data: { "image/png": "x".repeat(20_000), "text/plain": "figure" } },
+          ],
+        }), { status: 200 });
+      }
+      if (url.includes("/api/executions/exec-1")) return new Response(JSON.stringify({ execution_id: "exec-1", status: "succeeded" }), { status: 200 });
+      if (url.includes("/api/notebooks/output")) return new Response(JSON.stringify({ ok: true, path: "analysis/demo.ipynb", sha256: "b".repeat(64) }), { status: 200 });
+      throw new Error(`Unexpected URL: ${url}`);
+    }));
+
+    const tools = new Map<string, any>();
+    registerNotebook({ registerTool: (tool: any) => tools.set(tool.name, tool) });
+    await tools.get("notebook_run").execute("run-1", { path: "analysis/demo.ipynb", cell_ids: ["c1"] }, undefined, undefined, { cwd: "/workspace" });
+
+    const outputRequest = calls.find((call) => call.url.includes("/api/notebooks/output"));
+    const body = JSON.parse(String(outputRequest?.init.body));
+    expect(body.outputs).toMatchObject([
+      { output_type: "display_data", data: { "text/plain": "'shown'" } },
+      { output_type: "execute_result", execution_count: 1, data: { "text/plain": "figure" } },
+    ]);
+    expect(body.outputs[1].data["image/png"]).toHaveLength(20_000);
   });
 
   it("reports an output persistence conflict after the kernel result is available", async () => {

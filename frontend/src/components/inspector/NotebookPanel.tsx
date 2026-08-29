@@ -8,7 +8,8 @@ import { apiRequest } from "../../lib/client/api";
 import { Braces, ChevronDown, Loader2, Pencil, Play, Square, TerminalSquare, Trash2, X } from "lucide-react";
 import { NotebookCodePreview } from "../notebook/NotebookCodePreview";
 import { NotebookMimeOutput } from "../notebook/NotebookMimeOutput";
-import { newNotebookCellId } from "../notebook/notebook-model";
+import { newNotebookCellId, type NotebookOutput } from "../notebook/notebook-model";
+import { StoredOutputs } from "../notebook/NotebookOutputs";
 import { cn } from "../../lib/ui";
 
 interface Cell {
@@ -172,7 +173,10 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
             const interrupted = run.status === "interrupted";
             const failed = run.status === "failed" || (!interrupted && Boolean(run.result.error));
             const mime = mimeBundle(run.result.mime);
-            const output = `${String(run.result.stdout_preview || "")}${Object.keys(mime).length > 0 ? "" : String(run.result.output_preview || "")}${String(run.result.error || "")}`;
+            const storedOutputs = Array.isArray((run.result as Record<string, unknown>).outputs)
+              ? (run.result as Record<string, unknown>).outputs as NotebookOutput[]
+              : [];
+            const output = `${String(run.result.stdout_preview || "")}${storedOutputs.length > 0 || Object.keys(mime).length > 0 ? "" : String(run.result.output_preview || "")}${String(run.result.error || "")}`;
             return (
               <section key={run.execution_id} className="px-4 py-4 transition-colors hover:bg-[color-mix(in_srgb,var(--surface-2)_28%,transparent)]">
                 <div className="mb-2 flex items-center justify-between gap-3 text-[11px] text-muted">
@@ -194,7 +198,8 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
                     <pre className={cn("mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap rounded-lg border-l-2 bg-[var(--surface-inset)] px-3 py-2 font-mono text-xs leading-5", failed ? "border-error text-error" : interrupted ? "border-border text-muted" : "border-border text-text")}>{output}</pre>
                   </details>
                 )}
-                {Object.keys(mime).length > 0 && <div className="mt-2"><NotebookMimeOutput mime={mime} label={t("notebook.output", { index: historicalCells.length - index })} /></div>}
+                {storedOutputs.length > 0 && <div className="mt-2"><StoredOutputs outputs={storedOutputs} /></div>}
+                {storedOutputs.length === 0 && Object.keys(mime).length > 0 && <div className="mt-2"><NotebookMimeOutput mime={mime} label={t("notebook.output", { index: historicalCells.length - index })} /></div>}
                 {run.files.written.length > 0 && <div className="mt-2 text-[11px] text-muted">{t("notebook.wroteFiles", { files: run.files.written.map((file) => file.path.split("/").pop()).join(", ") })}</div>}
               </section>
             );
@@ -235,15 +240,16 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
                 />
               ) : <NotebookCodePreview code={cell.code} language={cell.language} className="rounded-lg border border-faint" />}
 
-              {cell.result && (cell.result.stdout || cell.result.stderr || cell.result.result || cell.result.error) && (
+              {cell.result && (cell.result.stdout || cell.result.stderr || cell.result.result || cell.result.error || cell.result.outputs?.length) && (
                 <div className={cn("mt-2 max-h-56 overflow-auto rounded-lg border-l-2 bg-[var(--surface-inset)] px-3 py-2 font-mono text-xs leading-5", cell.result.error && !cell.result.interrupted ? "border-error text-error" : cell.result.interrupted ? "border-border text-muted" : "border-border text-text")}>
                   {cell.result.stdout && <pre className="whitespace-pre-wrap">{cell.result.stdout}</pre>}
                   {cell.result.stderr && <pre className="whitespace-pre-wrap text-warn">{cell.result.stderr}</pre>}
-                  {cell.result.result && Object.keys(cell.result.mime || {}).length === 0 && <pre className="whitespace-pre-wrap text-accent">{cell.result.result}</pre>}
+                  {cell.result.outputs?.length ? <StoredOutputs outputs={cell.result.outputs} /> : null}
+                  {!cell.result.outputs?.length && cell.result.result && Object.keys(cell.result.mime || {}).length === 0 && <pre className="whitespace-pre-wrap text-accent">{cell.result.result}</pre>}
                   {cell.result.error && <pre className="whitespace-pre-wrap">{cell.result.error}</pre>}
                 </div>
               )}
-              {cell.result?.mime && Object.keys(cell.result.mime).length > 0 && <div className="mt-2"><NotebookMimeOutput mime={cell.result.mime} label={t("notebook.output", { index: index + 1 })} /></div>}
+              {!cell.result?.outputs?.length && cell.result?.mime && Object.keys(cell.result.mime).length > 0 && <div className="mt-2"><NotebookMimeOutput mime={cell.result.mime} label={t("notebook.output", { index: index + 1 })} /></div>}
             </section>
           ))}
         </div>

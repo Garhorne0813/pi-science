@@ -39,6 +39,7 @@ export interface NotebookServiceDependencies {
   configPath?: typeof configPath;
   platform?: NodeJS.Platform;
   micromambaExecutable?: string;
+  micromambaResolver?: () => Promise<string>;
   environments?: Pick<WorkspaceEnvironmentService, "installPackages"> & Partial<Pick<WorkspaceEnvironmentService, "list">>;
   now?: () => Date;
 }
@@ -73,6 +74,8 @@ export class NotebookService {
   private readonly configPath: (name: string) => string;
   private readonly platform: NodeJS.Platform;
   private readonly micromamba?: string;
+  private readonly micromambaConfigured: boolean;
+  private readonly micromambaResolver?: () => Promise<string>;
   private readonly environments?: Pick<WorkspaceEnvironmentService, "installPackages"> & Partial<Pick<WorkspaceEnvironmentService, "list">>;
   readonly jupyterPrefix: string;
   readonly jupyterBin: string;
@@ -88,11 +91,14 @@ export class NotebookService {
     this.configPath = deps.configPath ?? configPath;
     this.platform = deps.platform ?? process.platform;
     this.environments = deps.environments;
+    this.micromambaResolver = deps.micromambaResolver;
+    const configuredMicromamba = deps.micromambaExecutable ?? process.env.PI_SCIENCE_MICROMAMBA_EXECUTABLE;
+    this.micromambaConfigured = Boolean(configuredMicromamba);
     const prefix = this.configPath(join("micromamba", "envs", "pi-science-jupyter-runtime"));
     this.jupyterPrefix = prefix;
     const binDir = join(prefix, this.platform === "win32" ? "Scripts" : "bin");
     this.jupyterBin = join(binDir, this.platform === "win32" ? "jupyter-lab.exe" : "jupyter-lab");
-    this.micromamba = deps.micromambaExecutable ?? process.env.PI_SCIENCE_MICROMAMBA_EXECUTABLE ?? this.managedMicromamba() ?? "micromamba";
+    this.micromamba = configuredMicromamba ?? this.managedMicromamba() ?? "micromamba";
   }
 
   private managedMicromamba(): string | undefined {
@@ -145,8 +151,11 @@ export class NotebookService {
         onEvent?.(event);
       };
       emit("progress", "Creating application Jupyter runtime...");
+      const resolvedMicromamba = !this.micromambaConfigured && this.micromambaResolver
+        ? await this.micromambaResolver()
+        : micromamba;
       const result = await this.run(
-        micromamba,
+        resolvedMicromamba,
         ["create", "--yes", "--prefix", prefix, "--channel", "conda-forge", "--strict-channel-priority", "python=3.12", "jupyterlab"],
         15 * 60_000,
         this.micromambaEnvironment(),

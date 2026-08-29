@@ -6,7 +6,6 @@ import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
 import { cn } from "../../lib/ui";
 import {
   notebookKernel,
-  outputText,
   parseNotebookDocument,
   sourceText,
   stableCellId,
@@ -21,6 +20,7 @@ import { apiRequest } from "../../lib/client/api";
 import { openJsonEventStream } from "../../lib/client/event-stream";
 import { NotebookCodePreview } from "./NotebookCodePreview";
 import { NotebookMimeOutput } from "./NotebookMimeOutput";
+import { StoredOutputs } from "./NotebookOutputs";
 
 interface EditableCell extends NotebookCell {
   id: string;
@@ -273,7 +273,9 @@ function resultOutputs(result: CellResult): NotebookOutput[] {
   const outputs: NotebookOutput[] = [];
   if (result.stdout) outputs.push({ output_type: "stream", name: "stdout", text: result.stdout });
   if (result.stderr) outputs.push({ output_type: "stream", name: "stderr", text: result.stderr });
-  if (result.result || Object.keys(result.mime || {}).length > 0) {
+  if (result.outputs?.length) {
+    outputs.push(...result.outputs);
+  } else if (result.result || Object.keys(result.mime || {}).length > 0) {
     outputs.push({
       output_type: "execute_result",
       data: {
@@ -397,51 +399,15 @@ function NotebookCellView({
 }
 
 function LiveResult({ result }: { result: CellResult }) {
-  if (!result.stdout && !result.stderr && !result.result && !result.error && !Object.keys(result.mime || {}).length) return null;
+  if (!result.stdout && !result.stderr && !result.result && !result.error && !Object.keys(result.mime || {}).length && !result.outputs?.length) return null;
   return (
     <div className="space-y-2 border-t border-faint px-4 py-3 font-mono text-xs leading-5">
       {result.stdout && <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-text">{result.stdout}</pre>}
       {result.stderr && <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-warn">{result.stderr}</pre>}
-      {result.result && Object.keys(result.mime || {}).length === 0 && <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-accent">{result.result}</pre>}
+      {result.outputs?.length ? <StoredOutputs outputs={result.outputs} /> : null}
+      {!result.outputs?.length && result.result && Object.keys(result.mime || {}).length === 0 && <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-accent">{result.result}</pre>}
       {result.error && <pre role="alert" className={cn("max-h-64 overflow-auto whitespace-pre-wrap", result.interrupted ? "text-muted" : "text-error")}>{result.error}</pre>}
-      {result.mime && Object.keys(result.mime).length > 0 && <NotebookMimeOutput mime={result.mime} label="Cell output" />}
+      {!result.outputs?.length && result.mime && Object.keys(result.mime).length > 0 && <NotebookMimeOutput mime={result.mime} label="Cell output" />}
     </div>
   );
-}
-
-function StoredOutputs({ outputs }: { outputs: NotebookOutput[] }) {
-  const { t } = useTranslation();
-  if (outputs.length === 0) return null;
-  return (
-    <div className="space-y-2 border-t border-faint px-4 py-3 font-mono text-xs leading-5">
-      {outputs.map((output, index) => {
-        const png = mimeValue(output, "image/png");
-        const jpeg = mimeValue(output, "image/jpeg");
-        const svg = mimeValue(output, "image/svg+xml");
-        const html = mimeValue(output, "text/html");
-        const json = mimeValue(output, "application/json");
-        const rich = Boolean(png || jpeg || svg || html || json);
-        const text = rich && output.output_type !== "error" ? "" : outputText(output);
-        const mime = Object.fromEntries(Object.entries({ "image/png": png, "image/jpeg": jpeg, "image/svg+xml": svg, "text/html": html, "application/json": json }).filter((entry): entry is [string, string] => Boolean(entry[1])));
-        return (
-          <div key={index} className="space-y-2">
-            {text && (
-              <pre className={cn(
-                "max-h-64 overflow-auto whitespace-pre-wrap",
-                output.output_type === "error" ? "text-error-text" : "text-text",
-              )}>
-                {text}
-              </pre>
-            )}
-            {rich && <NotebookMimeOutput mime={mime} label={t("notebook.output", { index: index + 1 })} />}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function mimeValue(output: NotebookOutput, mime: string): string {
-  const value = output.data?.[mime];
-  return Array.isArray(value) ? value.join("") : value || "";
 }

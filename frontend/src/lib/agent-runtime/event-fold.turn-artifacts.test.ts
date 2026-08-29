@@ -359,6 +359,31 @@ describe("attachTurnArtifacts (history restore)", () => {
     expect(next.index["turn-artifacts-turn-2"]).toBe(5);
   });
 
+  it("anchors at the turn end when only a tail history page is loaded", () => {
+    const thread = threadWith([
+      { kind: "agent", id: "msg-1", parts: [{ id: "msg-1", text: "earlier" }], timestamp: "2026-08-28T03:28:09.000Z" },
+      { kind: "tool", id: "tool-1", callId: "call-1", tool: "bash", status: "done" },
+      { kind: "agent", id: "msg-2", parts: [{ id: "msg-2", text: "final" }], timestamp: "2026-08-28T03:33:10.000Z" },
+    ]);
+    const next = attachTurnArtifacts(thread, [
+      { turn_id: "turn-1", session_id: "s", assistant_message_id: null, turn_ordinal: 1, ended_at: "2026-08-28T03:33:17.479Z", artifacts: [{ path: "result.csv", kind: "table", mime: "text/csv", size: 1 }] },
+    ]);
+    expect(next.index["turn-artifacts-turn-1"]).toBe(3);
+    expect(next.blocks.at(-1)).toMatchObject({ turnId: "turn-1" });
+  });
+
+  it("uses agent timestamps when tail history is out of write order", () => {
+    const thread = threadWith([
+      { kind: "agent", id: "msg-late", parts: [{ id: "msg-late", text: "target" }], timestamp: "2026-08-28T03:33:10.000Z" },
+      { kind: "agent", id: "msg-early", parts: [{ id: "msg-early", text: "older" }], timestamp: "2026-08-28T03:28:09.000Z" },
+    ]);
+    const next = attachTurnArtifacts(thread, [
+      { turn_id: "turn-1", session_id: "s", assistant_message_id: null, turn_ordinal: 1, ended_at: "2026-08-28T03:33:17.479Z", artifacts: [{ path: "result.csv", kind: "table", mime: "text/csv", size: 1 }] },
+    ]);
+    expect(next.index["turn-artifacts-turn-1"]).toBe(1);
+    expect(next.blocks[0]).toMatchObject({ id: "msg-late" });
+  });
+
   it("anchors by turn_ordinal to the END of a multi-message turn", () => {
     // Turn 1 spans two assistant messages (anonymous part ids, no message id)
     // — the strip must land after the LAST one, not between them.

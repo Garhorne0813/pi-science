@@ -48,6 +48,43 @@ describe("runtime session actions", () => {
     expect(FakeEventSource.instances).toHaveLength(1);
   });
 
+  it("shares concurrent older-page loads and advances the current cursor", async () => {
+    useRuntimeStore.setState({
+      activeSessionId: "session-a",
+      cwd: "/workspace",
+      thread: {
+        blocks: [{ kind: "agent", id: "agent-new", parts: [{ id: "agent-new", text: "newest" }] }],
+        index: { "agent-new": 0 },
+        loaded: true,
+      },
+      historyCursor: "cursor-newest",
+      historyHasMore: true,
+      historyLoading: false,
+    });
+    let resolvePage!: (response: Response) => void;
+    const page = new Promise<Response>((resolve) => { resolvePage = resolve; });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages?")) return page;
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = useRuntimeStore.getState().loadOlderMessages();
+    const second = useRuntimeStore.getState().loadOlderMessages();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    resolvePage(jsonResponse({ messages: [
+      { id: "user-old", role: "user", content: [{ type: "text", text: "older prompt" }] },
+      { id: "agent-old", role: "assistant", content: [{ type: "text", text: "older answer" }] },
+    ], next_cursor: "cursor-older", has_more: true, snapshot_version: "v2" }));
+
+    await expect(Promise.all([first, second])).resolves.toEqual([2, 2]);
+    expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session-a/messages?cwd=%2Fworkspace&before=cursor-newest", expect.anything());
+    expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual(["user-old", "agent-old", "agent-new"]);
+    expect(useRuntimeStore.getState().historyCursor).toBe("cursor-older");
+    expect(useRuntimeStore.getState().historyHasMore).toBe(true);
+  });
+
   it("restores persisted session titles before slow session activation finishes", async () => {
     let resolveMessages!: (response: Response) => void;
     let resolveState!: (response: Response) => void;
@@ -81,6 +118,27 @@ describe("runtime session actions", () => {
     resolveMessages(jsonResponse({ messages: [] }));
     resolveState(jsonResponse(state("session-a")));
     await connecting;
+  });
+
+  it("keeps a tail-only history page contiguous until older pagination runs", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) {
+        return jsonResponse({ messages: [{ id: "agent-old", role: "assistant", content: [{ type: "text", text: "tail answer" }] }], next_cursor: "tail-cursor", has_more: true, snapshot_version: "v1" });
+      }
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+
+    expect(useRuntimeStore.getState().thread.blocks).toEqual([
+      { kind: "agent", id: "agent-old", parts: [{ id: "agent-old", text: "tail answer" }], timestamp: undefined },
+    ]);
+    expect(useRuntimeStore.getState().historyCursor).toBe("tail-cursor");
+    expect(useRuntimeStore.getState().historyHasMore).toBe(true);
+    expect(fetch).not.toHaveBeenCalledWith("/api/sessions/session-a/messages/index?cwd=%2Fworkspace", expect.anything());
   });
 
   it("restores authoritative running, model, thinking and history state", async () => {

@@ -10,6 +10,7 @@ import { ApiError, apiRequest } from "../../lib/client/api";
 import { queryClient } from "../../lib/client/query-client";
 import { timeAgo } from "../../lib/shared";
 import { workspacePathLeaf } from "../../lib/workspace";
+import { randomIdSuffix } from "../../lib/research";
 
 interface Workspace {
   name: string;
@@ -82,7 +83,7 @@ export function ProjectsPage() {
   const handleCreate = async () => {
     setCreating(true); setDropdownOpen(false);
     try {
-      const name = `Untitled Workspace ${crypto.randomUUID().slice(0, 8)}`;
+      const name = `Untitled Workspace ${randomIdSuffix(8)}`;
       await apiRequest("/api/workspaces", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }),
       });
@@ -203,7 +204,7 @@ export function ProjectsPage() {
     });
     setImportingFolder(true);
     try {
-      let workspaceName = folderName || `Imported Workspace ${crypto.randomUUID().slice(0, 6)}`;
+      let workspaceName = folderName || `Imported Workspace ${randomIdSuffix(6)}`;
       let suffix = 2;
       let w: Workspace | null = null;
       while (!w) {

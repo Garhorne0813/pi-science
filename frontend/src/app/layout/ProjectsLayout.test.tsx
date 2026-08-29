@@ -132,6 +132,15 @@ describe("WorkspaceSessionList", () => {
     expect(loadSessions).not.toHaveBeenCalled();
   });
 
+  it("loads sessions for a direct conversation route when the list is empty", async () => {
+    const loadSessions = vi.fn(async () => [session("s1", "Session A")]);
+    useRuntimeStore.setState({ sessions: [], activeSessionId: "s1", loadSessions });
+    renderList("/workspace/proj/session/s1");
+
+    await waitFor(() => expect(loadSessions).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/session/s1");
+  });
+
   it("does not reload sessions when navigating from the root to a workspace page", async () => {
     const loadSessions = vi.fn(async () => []);
     useRuntimeStore.setState({ loadSessions });

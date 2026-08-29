@@ -98,7 +98,7 @@ Windows 启动器在两个服务健康后写入 `.runtime/pi-science/run.state`�
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 ```
 
-安装器默认下载 Pi Orbit 0.3.0。可通过 `PI_ORBIT_VERSION` 选择其他兼容版本，或通过 `PI_ORBIT_REPO` 使用本地 Pi Orbit 源码仓库。
+安装器默认下载 Pi Orbit 0.3.1。Pi Orbit Web Mode 提供 `GET /api/catalog`，用于读取完整的 Provider / Model 运行时目录；现有 `GET /api/models` 仍只表示当前可用模型。可通过 `PI_ORBIT_VERSION` 选择其他兼容版本，或通过 `PI_ORBIT_REPO` 使用本地 Pi Orbit 源码仓库。
 
 启动后进入 **Settings → LLM**，配置提供商和默认模型即可开始使用。已安装及从工作区发现的 skills 可在 **Settings → Skills** 中启用、禁用或重置。
 

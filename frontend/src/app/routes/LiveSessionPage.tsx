@@ -97,10 +97,8 @@ export function LiveSessionPage() {
     : { blocks: [] as ThreadBlock[], index: {} as Record<string, number>, loaded: true };
   const sessions = useRuntimeStore((s) => s.sessions);
   const working = useRuntimeStore((s) => s.working);
-  const historyHasMore = useRuntimeStore((s) => s.historyHasMore);
   const historyLoading = useRuntimeStore((s) => s.historyLoading);
   const loadOlderMessages = useRuntimeStore((s) => s.loadOlderMessages);
-  const loadMessagesForNavigation = useRuntimeStore((s) => s.loadMessagesForNavigation);
   const connect = useRuntimeStore((s) => s.connect);
   const disconnect = useRuntimeStore((s) => s.disconnect);
   const abort = useRuntimeStore((s) => s.abort);
@@ -149,14 +147,14 @@ export function LiveSessionPage() {
     const loadedUsers = thread.blocks.filter((block): block is Extract<ThreadBlock, { kind: "user" }> => block.kind === "user");
     const loadedById = new Map(loadedUsers.map((block) => [block.id, block]));
     const seen = new Set<string>();
-    const toItem = (id: string, text: string, before?: string): ConversationNavItem => {
+    const toItem = (id: string, text: string): ConversationNavItem => {
       const visible = visibleUserMessage(text);
-      return { id, label: (visible || t("conversation.attachment")).slice(0, 120), full: text, before };
+      return { id, label: (visible || t("conversation.attachment")).slice(0, 120), full: text };
     };
     const indexed = (messageIndexQuery.data?.messages ?? []).map((entry) => {
       const loaded = loadedById.get(entry.id);
       seen.add(entry.id);
-      return toItem(entry.id, loaded?.text ?? entry.text, loaded ? undefined : entry.before);
+      return toItem(entry.id, loaded?.text ?? entry.text);
     });
     const live = loadedUsers
       .filter((block) => !seen.has(block.id))
@@ -172,14 +170,9 @@ export function LiveSessionPage() {
     showRuns,
     working,
     blocks: thread.blocks,
-    blockGroups,
-    userNavItems,
-    historyHasMore,
-    historyLoading,
     loadOlderMessages,
-    loadMessagesForNavigation,
   });
-  const { scrollRef, virtuosoRef, showScrollDown, virtualFirstItemIndex, attachScroller, handleLoadOlder, handleNavSelect, scrollToBottom } = scroll;
+  const { scrollRef, virtuosoRef, showScrollDown, virtualFirstItemIndex, navigationLoading, attachScroller, handleLoadOlder, handleNavSelect, scrollToBottom } = scroll;
 
   const model = useModelConfig(workspaceCwd, sessionId);
 
@@ -261,12 +254,13 @@ export function LiveSessionPage() {
     }
   };
 
-  const hasUserMessage = thread.blocks.some((block) => block.kind === "user");
   // Empty new conversation: welcome copy sits directly above a vertically centered composer.
   const showWelcome = thread.blocks.length === 0 && !working && status !== "connecting" && !research.draft && !research.activeLoop;
   const activeSession = sessions.find((session) => session.id === activeSessionId);
-  const isNewSession = !hasUserMessage && (activeSession?.name === "New Session" || thread.loaded);
-  const title = isNewSession || !activeSessionId
+  // A paged history can be loaded without its user messages. `thread.loaded`
+  // only means that a page arrived; it does not mean this is a new session.
+  const isNewSession = !activeSessionId || (thread.blocks.length === 0 && (!activeSession || activeSession.name === "New Session"));
+  const title = isNewSession
     ? t("conversation.newSession")
     : getSessionName(workspaceCwd, activeSessionId) || activeSession?.name || activeSessionId.slice(0, 8);
 
@@ -368,10 +362,10 @@ export function LiveSessionPage() {
                   components={{
                     Header: () => (
                       <div className="mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-2 pt-6">
-                        {historyLoading && (
+                        {(historyLoading || navigationLoading) && (
                           <div className="flex items-center gap-2 text-xs text-muted" role="status">
                             <Loader2 size={13} className="animate-spin text-accent" />
-                            Loading earlier messages…
+                            {navigationLoading ? "Locating message…" : "Loading earlier messages…"}
                           </div>
                         )}
                         {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}

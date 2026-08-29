@@ -7,8 +7,6 @@ export interface ConversationNavItem {
   label: string;
   /** Full message text retained for accessibility and native fallback text. */
   full?: string;
-  /** Cursor for a user message that is indexed but not loaded in the thread yet. */
-  before?: string;
 }
 
 type Preview = { id: string; top: number };
@@ -24,7 +22,7 @@ function indicatorWidth(distance: number): number {
 
 /** Compact conversation minimap: one line per user query. The current query
  *  and its neighbours form a length gradient; hover/focus reveals only that
- *  query's preview, and clicking keeps the existing jump/load behaviour. */
+ *  query's preview, and clicking locates the target in the loaded thread. */
 export function ConversationNavRail({
   items,
   rootRef,

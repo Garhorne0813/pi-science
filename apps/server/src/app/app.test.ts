@@ -39,6 +39,21 @@ const fakeKernels = {
       options.onEvent({ type: "stream", stream: "stdout", text: "first\n" });
       options.onEvent({ type: "stream", stream: "stdout", text: "second\n" });
     }
+    if (options.code === "rich-output") {
+      return {
+        ok: true,
+        stdout: "",
+        stderr: "",
+        result: "figure",
+        error: null,
+        interrupted: false,
+        mime: {},
+        outputs: [
+          { output_type: "display_data", data: { "text/plain": "shown" } },
+          { output_type: "execute_result", data: { "image/png": "encoded-image", "text/plain": "figure" } },
+        ],
+      };
+    }
     const streaming = options.code === "stream-output";
     return {
       ok: true,
@@ -153,6 +168,31 @@ describe("Node control plane", () => {
         request: expect.objectContaining({ code: "1+1", notebook_id: "default" }),
       }),
     ]);
+    await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }, 30_000);
+
+  it("returns and records rich kernel outputs", async () => {
+    const workspace = join(tmpdir(), `pi-science-kernel-rich-output-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    const app = buildApp(config("http://127.0.0.1:1"), kernelModules());
+    openApps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/kernels/execute?cwd=${encodeURIComponent(workspace)}`,
+      payload: { language: "python", code: "rich-output", notebook_id: "rich-notebook", session_id: "session-rich" },
+    });
+    const execution = await app.inject({ method: "GET", url: `/api/executions/${response.json().execution_id}?cwd=${encodeURIComponent(workspace)}` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ outputs: [
+      { output_type: "display_data", data: { "text/plain": "shown" } },
+      { output_type: "execute_result", data: { "image/png": "encoded-image" } },
+    ] });
+    expect(execution.json()).toMatchObject({ result: { outputs: [
+      { output_type: "display_data", data: { "text/plain": "shown" } },
+      { output_type: "execute_result", data: { "image/png": "encoded-image" } },
+    ] } });
     await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }, 30_000);
 

@@ -28,7 +28,9 @@ type GetState = StoreApi<RuntimeState>["getState"];
  *  (or a StrictMode double effect) share one backend session instead of
  *  racing two. Owned by `createNewSession`, which also clears each entry. */
 const _createSessionPromises = new Map<string, Promise<string>>();
+const _historyPagePromises = new Map<string, Promise<number>>();
 function connectionKey(cwd: string, sessionId?: string): string { return `${cwd}\u0000${sessionId ?? ""}`; }
+function historyPageKey(cwd: string, sessionId: string, before: string): string { return `${connectionKey(cwd, sessionId)}\u0000${before}`; }
 
 export function createRuntimeActions(set: SetState, get: GetState) {
   /** React StrictMode can replay the route effect while the first session
@@ -46,6 +48,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       turnState.errored = false;
       const state = get();
       const targetChanged = state.cwd !== cwd || state.activeSessionId !== (sessionId ?? null);
+      if (targetChanged) _historyPagePromises.clear();
       if (targetChanged) {
         set({
           thread: emptyThread(),
@@ -102,7 +105,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         // return can prevent the list (and its persisted title) from loading at
         // all. Stale-list protection in loadSessionsInternal keeps this safe
         // when the user switches workspaces/sessions while the request runs.
-        void loadSessionsInternal(cwd);
+        const sessionsPromise = loadSessionsInternal(cwd);
 
         // Optimistic render: if we have a cached message snapshot for this
         // session, render it immediately so the user sees the conversation
@@ -115,9 +118,10 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         }
 
         client.connect(targetSessionId, cwd);
-        const [messagesResult, runtimeStateResult] = await Promise.allSettled([
+        const [messagesResult, runtimeStateResult, sessionsResult] = await Promise.allSettled([
           client.getMessagesPage(targetSessionId, cwd),
           client.getSessionState(targetSessionId, cwd),
+          sessionsPromise,
         ]);
         if (generation !== generations.connection) return;
         // A prompt/model action may have started while the initial history/state
@@ -132,17 +136,24 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         // `is_streaming: false` (or a transient state-read error).
         const liveActivityArrived = generations.activity !== connectActivityGeneration;
         if (messagesResult.status === "fulfilled") {
+          // Keep the initial page as one continuous tail. A user-message index
+          // can locate a target, but its cursor must never be merged into the
+          // current history window as an arbitrary prepend.
+          const historyPage = messagesResult.value;
           nextState.thread = await attachPersistedTurnArtifacts(
             mergeHistoryWithLive(
-              threadFromMessages(messagesResult.value.messages),
+              threadFromMessages(historyPage.messages),
               get().thread,
             ),
             targetSessionId,
             cwd,
           );
-          nextState.historyCursor = messagesResult.value.next_cursor;
-          nextState.historyHasMore = messagesResult.value.has_more;
-          nextState.historySnapshotVersion = messagesResult.value.snapshot_version;
+          nextState.historyCursor = historyPage.next_cursor;
+          nextState.historyHasMore = historyPage.has_more;
+          nextState.historySnapshotVersion = historyPage.snapshot_version;
+        }
+        if (sessionsResult.status === "fulfilled" && sessionsResult.value.length > 0) {
+          nextState.sessions = sessionsResult.value;
         }
         if (runtimeStateResult.status === "fulfilled") {
           const runtimeState = runtimeStateResult.value;
@@ -284,6 +295,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
 
     disconnect: () => {
       connectPromises.clear();
+      _historyPagePromises.clear();
       ++generations.connection;
       ++generations.promptMonitor;
       const { client, activeSessionId, cwd } = get();
@@ -555,14 +567,19 @@ export function createRuntimeActions(set: SetState, get: GetState) {
 
     loadOlderMessages: async () => {
       const state = get();
-      if (!state.activeSessionId || !state.historyHasMore || !state.historyCursor || state.historyLoading) return 0;
-      return loadHistoryPage(state.activeSessionId, state.cwd, state.historyCursor);
-    },
-
-    loadMessagesForNavigation: async (before: string) => {
-      const state = get();
-      if (!state.activeSessionId || !before || state.historyLoading) return 0;
-      return loadHistoryPage(state.activeSessionId, state.cwd, before);
+      if (!state.activeSessionId || !state.historyHasMore || !state.historyCursor) return 0;
+      const before = state.historyCursor;
+      const key = historyPageKey(state.cwd, state.activeSessionId, before);
+      const existing = _historyPagePromises.get(key);
+      if (existing) return existing;
+      if (state.historyLoading) return 0;
+      const promise = loadHistoryPage(state.activeSessionId, state.cwd, before);
+      _historyPagePromises.set(key, promise);
+      try {
+        return await promise;
+      } finally {
+        if (_historyPagePromises.get(key) === promise) _historyPagePromises.delete(key);
+      }
     },
 
     forkSession: async (sessionId: string) => {
