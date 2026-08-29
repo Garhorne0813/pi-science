@@ -8,6 +8,19 @@ const materializedSchema = candidateProposalSchema.omit({ parent_candidate_ids: 
   node_id: z.string(),
 });
 
+/** Default wall-clock budget for one experiment materialization. Model
+ *  sessions that write, run, and debug an executable candidate routinely
+ *  exceed ten minutes, so the shared runtime default is not enough here. */
+const MATERIALIZATION_TIMEOUT_MS = Number(process.env.PI_SCIENCE_EXPERIMENT_MATERIALIZATION_TIMEOUT_MS ?? 30 * 60_000);
+
+/** Materialization failure that also carries the tokens/cost consumed by all
+ *  attempts, so the research can still account the spend. */
+export class MaterializationError extends Error {
+  constructor(message: string, readonly model_tokens: number, readonly cost_usd: number) {
+    super(message);
+  }
+}
+
 export interface MaterializedExperiment {
   proposal: CandidateProposal;
   model_tokens: number;
@@ -20,41 +33,68 @@ export interface ExperimentMaterializer {
   cancelResearch(researchId: string): Promise<void>;
 }
 
+function failedUsage(error: unknown): { model_tokens: number; cost_usd: number } {
+  const record = error && typeof error === "object" ? error as { model_tokens?: unknown; cost_usd?: unknown } : {};
+  return {
+    model_tokens: typeof record.model_tokens === "number" ? record.model_tokens : 0,
+    cost_usd: typeof record.cost_usd === "number" ? record.cost_usd : 0,
+  };
+}
+
 export class PiExperimentMaterializer implements ExperimentMaterializer {
-  constructor(private readonly runtime: PiManagedResearchRuntime) {}
+  constructor(private readonly runtime: PiManagedResearchRuntime, private readonly maxMaterializeAttempts = 3) {}
 
   async materialize(cwd: string, snapshot: AutoResearchSnapshot, nodeId: string): Promise<MaterializedExperiment> {
     const node = snapshot.nodes.find((candidate) => candidate.node_id === nodeId);
     if (!node || node.kind !== "experiment") throw new Error("experiment node is unavailable for materialization");
-    const result = await this.runtime.run({
-      cwd,
-      research_id: snapshot.research_id,
-      operation_id: `materialize-${randomUUID().replaceAll("-", "").slice(0, 16)}`,
-      role: `materializer-${nodeId}`,
-      expected_tool: "research_materialize",
-      prompt: [
-        "You are a Node-managed Experiment Materializer Runtime. Turn the approved experiment spec into a conservative, self-contained executable candidate.",
-        "Inspect the workspace as needed. Finish by calling research_materialize exactly once; do not print JSON.",
-        "The entrypoint must write result.json and every expected artifact beneath PI_SCIENCE_OUTPUT_DIR. Do not change the formal expected metrics.",
-        `Research objective: ${snapshot.objective}`,
-        `Constraints: ${JSON.stringify(snapshot.constraints)}`,
-        `Experiment node: ${JSON.stringify(node, null, 2)}`,
-      ].join("\n\n"),
-    });
-    const parsed = materializedSchema.parse(result.details);
-    if (parsed.research_id !== snapshot.research_id || parsed.node_id !== nodeId) throw new Error("materializer result identity mismatch");
-    return {
-      proposal: candidateProposalSchema.parse({
-        approach_summary: parsed.approach_summary,
-        rationale: parsed.rationale,
-        files: parsed.files,
-        entrypoint: parsed.entrypoint,
-        parent_candidate_ids: [],
-        expected_artifacts: parsed.expected_artifacts,
-      }),
-      model_tokens: result.model_tokens,
-      cost_usd: result.cost_usd,
-    };
+    let lastError: unknown;
+    let failedTokens = 0;
+    let failedCost = 0;
+    for (let attempt = 1; attempt <= this.maxMaterializeAttempts; attempt += 1) {
+      try {
+        const result = await this.runtime.run({
+          cwd,
+          research_id: snapshot.research_id,
+          operation_id: `materialize-${randomUUID().replaceAll("-", "").slice(0, 16)}`,
+          role: `materializer-${nodeId}`,
+          expected_tool: "research_materialize",
+          timeout_ms: MATERIALIZATION_TIMEOUT_MS,
+          prompt: [
+            "You are a Node-managed Experiment Materializer Runtime. Turn the approved experiment spec into a conservative, self-contained executable candidate.",
+            "Inspect the workspace as needed. Finish by calling research_materialize exactly once; do not print JSON.",
+            "The entrypoint must write result.json and every expected artifact beneath PI_SCIENCE_OUTPUT_DIR. Do not change the formal expected metrics.",
+            "research_materialize details must include research_id and node_id copied verbatim from the experiment node below.",
+            ...(attempt > 1 && lastError
+              ? [`Your previous materialization was rejected:\n${String(lastError)}\nFix the returned details (especially research_id and node_id, copied verbatim) and call research_materialize again.`]
+              : []),
+            `Research objective: ${snapshot.objective}`,
+            `Constraints: ${JSON.stringify(snapshot.constraints)}`,
+            `Experiment node: ${JSON.stringify(node, null, 2)}`,
+          ].join("\n\n"),
+        });
+        const parsed = materializedSchema.parse(result.details);
+        if (parsed.research_id !== snapshot.research_id || parsed.node_id !== nodeId) throw new Error("materializer result identity mismatch");
+        return {
+          proposal: candidateProposalSchema.parse({
+            approach_summary: parsed.approach_summary,
+            rationale: parsed.rationale,
+            files: parsed.files,
+            entrypoint: parsed.entrypoint,
+            parent_candidate_ids: [],
+            expected_artifacts: parsed.expected_artifacts,
+          }),
+          model_tokens: failedTokens + result.model_tokens,
+          cost_usd: failedCost + result.cost_usd,
+        };
+      } catch (error) {
+        const usage = failedUsage(error);
+        failedTokens += usage.model_tokens;
+        failedCost += usage.cost_usd;
+        lastError = error;
+        if (attempt === this.maxMaterializeAttempts) break;
+      }
+    }
+    throw new MaterializationError(String(lastError), failedTokens, failedCost);
   }
 
   shutdown() { return this.runtime.shutdown(); }

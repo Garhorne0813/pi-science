@@ -238,7 +238,15 @@ export class ResearchOrchestrator {
   private async failNode(cwd: string, researchId: string, nodeId: string, error: unknown): Promise<void> {
     const snapshot = await this.store.update(cwd, researchId, "research.mutated", (current) => {
       const node = requireNode(current, nodeId);
-      return { nodes_updated: [{ ...node, status: "failed", updated_at: new Date().toISOString(), ...(node.kind === "experiment" ? { result: { error: String(error) } } : {}) }], current_activity: `${node.kind} node failed: ${String(error)}` };
+      // A failed runtime (timeout, identity mismatch, worker error) still
+      // consumed model tokens; carry its spend into the research usage so
+      // budgets reflect what actually ran.
+      const usage = errorUsageDelta(error);
+      return {
+        nodes_updated: [{ ...node, status: "failed", updated_at: new Date().toISOString(), ...(node.kind === "experiment" ? { result: { error: String(error) } } : {}) }],
+        usage: usage ? addUsage(current, usage.model_tokens, usage.cost_usd) : current.usage,
+        current_activity: `${node.kind} node failed: ${String(error)}`,
+      };
     });
     emitResearchEvent(cwd, snapshot, "research.progress.updated", { error: String(error) }, { node_id: nodeId });
   }
@@ -331,3 +339,16 @@ function stopReason(snapshot: AutoResearchSnapshot): string | null {
 }
 
 function delay(ms: number) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+/** Extract model spend attached to a failed research operation (runtime
+ *  failures carry { model_tokens, cost_usd }). Returns null when the error
+ *  does not report usage, so accounting stays additive and opt-in. */
+function errorUsageDelta(error: unknown): { model_tokens: number; cost_usd: number } | null {
+  if (!error || typeof error !== "object") return null;
+  const record = error as { model_tokens?: unknown; cost_usd?: unknown };
+  if (typeof record.model_tokens !== "number" && typeof record.cost_usd !== "number") return null;
+  return {
+    model_tokens: typeof record.model_tokens === "number" ? record.model_tokens : 0,
+    cost_usd: typeof record.cost_usd === "number" ? record.cost_usd : 0,
+  };
+}

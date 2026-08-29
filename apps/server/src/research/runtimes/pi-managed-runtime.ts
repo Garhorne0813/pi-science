@@ -36,6 +36,17 @@ export class PiManagedResearchRuntime {
     let captures = 0;
     let modelTokens = 0;
     let costUsd = 0;
+    // Errors escaping this runtime carry the tokens/cost consumed so far, so
+    // callers can still account a failed operation (e.g. a materializer that
+    // timed out after a long model session) instead of losing the spend.
+    const withUsage = (error: unknown): Error => {
+      const e = error instanceof Error ? error : new Error(String(error));
+      const record = e as { model_tokens?: unknown; cost_usd?: unknown };
+      const tokens = typeof record.model_tokens === "number" ? record.model_tokens : 0;
+      const cost = typeof record.cost_usd === "number" ? record.cost_usd : 0;
+      Object.assign(e, { model_tokens: tokens + modelTokens, cost_usd: cost + costUsd });
+      return e;
+    };
     process.on("event", (event: PiEvent) => {
       if (event.type === "message_end") {
         const message = asRecord(event.message);
@@ -46,18 +57,18 @@ export class PiManagedResearchRuntime {
       if (event.type === "tool_execution_end" && event.toolName === input.expected_tool && event.isError !== true) {
         captures += 1;
         captured = asRecord(event.result)?.details;
-        if (captures > 1) rejected?.(new Error(`${input.role} called ${input.expected_tool} more than once`));
+        if (captures > 1) rejected?.(withUsage(new Error(`${input.role} called ${input.expected_tool} more than once`)));
       }
       if (event.type === "agent_settled") settled?.();
     });
-    process.once("exit", () => rejected?.(new Error(`${input.role} runtime exited before completing`)));
+    process.once("exit", () => rejected?.(withUsage(new Error(`${input.role} runtime exited before completing`))));
 
     try {
       const state = await process.sendCommand("get_state");
-      if (!state.success) throw new Error(String(state.error ?? `unable to initialize ${input.role} runtime`));
+      if (!state.success) throw withUsage(new Error(String(state.error ?? `unable to initialize ${input.role} runtime`)));
       const sessionId = typeof asRecord(state.data)?.sessionId === "string" ? String(asRecord(state.data)!.sessionId) : undefined;
       const completed = new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error(`${input.role} runtime timed out`)), input.timeout_ms ?? 10 * 60_000);
+        const timeout = setTimeout(() => reject(withUsage(new Error(`${input.role} runtime timed out`))), input.timeout_ms ?? 20 * 60_000);
         let done = false;
         const finish = (error?: Error) => {
           if (done) return;
@@ -67,9 +78,9 @@ export class PiManagedResearchRuntime {
         settled = () => finish(); rejected = (error) => finish(error);
       });
       const response = await process.sendCommand("prompt", { message: input.prompt });
-      if (!response.success) (rejected as ((error: Error) => void) | null)?.(new Error(String(response.error ?? `${input.role} runtime rejected prompt`)));
+      if (!response.success) (rejected as ((error: Error) => void) | null)?.(withUsage(new Error(String(response.error ?? `${input.role} runtime rejected prompt`))));
       await completed;
-      if (captures !== 1 || captured === undefined) throw new Error(`${input.role} did not return exactly one ${input.expected_tool} result`);
+      if (captures !== 1 || captured === undefined) throw withUsage(new Error(`${input.role} did not return exactly one ${input.expected_tool} result`));
       return { details: captured, model_tokens: modelTokens, cost_usd: costUsd, ...(sessionId ? { session_id: sessionId } : {}) };
     } finally {
       process.removeAllListeners("event"); process.removeAllListeners("exit");

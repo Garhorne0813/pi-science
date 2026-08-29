@@ -101,7 +101,7 @@ describe("ResearchOrchestrator", () => {
 });
 
 async function waitFor<T>(read: () => Promise<T>, done: (value: T) => boolean): Promise<T> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + 10_000;
   for (;;) {
     const value = await read();
     if (done(value)) return value;
@@ -109,3 +109,50 @@ async function waitFor<T>(read: () => Promise<T>, done: (value: T) => boolean): 
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
+
+it("accounts the spend of a failed experiment materialization", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "research-failed-usage-"));
+  let decisions = 0;
+  const supervisor: ResearchSupervisor = {
+    async decide(_cwd, snapshot) {
+      decisions += 1;
+      if (decisions === 1) return { model_tokens: 10, cost_usd: 0.01, commit: {
+        research_id: snapshot.research_id, base_revision: snapshot.revision, rationale: "one experiment",
+        actions: [
+          { action_id: "h1", type: "hypothesis.add", statement: "H", assumptions: [], parent_refs: [{ node_id: snapshot.nodes[0]!.node_id }] },
+          { action_id: "e1", type: "experiment.propose", hypothesis_ref: { action_id: "h1" }, spec: { objective: "run", expected_metrics: ["score"], constraints: [], materialization: "pi_candidate" }, priority: 1 },
+        ],
+      } };
+      return { model_tokens: 5, cost_usd: 0, commit: {
+        research_id: snapshot.research_id, base_revision: snapshot.revision, rationale: "stop",
+        actions: [{ action_id: "stop", type: "research.stop_recommended", reason: "scope exhausted" }],
+      } };
+    },
+    async cancel() {}, async cancelResearch() {}, async shutdown() {},
+  };
+  const materializer: ExperimentMaterializer = {
+    async materialize() { throw Object.assign(new Error("materializer runtime timed out"), { model_tokens: 5_000, cost_usd: 0.01 }); },
+    async cancelResearch() {}, async shutdown() {},
+  };
+  const experiments: ResearchExperimentExecutor = {
+    async start() { throw new Error("unused"); },
+    async reconcile() { throw new Error("unused"); },
+    async cancel() {},
+  };
+  const workers: ResearchWorker = {
+    async run(_cwd, snapshot, node) {
+      if (node.kind !== "synthesis") throw new Error("unused");
+      return { research_id: snapshot.research_id, node_id: node.node_id, kind: "synthesis", summary: "synth", findings: [], claims: [], model_tokens: 1, cost_usd: 0 };
+    },
+    async cancelResearch() {}, async shutdown() {},
+  };
+  const orchestrator = new ResearchOrchestrator(new ResearchGraphStore(), supervisor, materializer, experiments, workers);
+  const created = await orchestrator.create(cwd, { title: "R", objective: "run" });
+  await orchestrator.start(cwd, created.research_id);
+  const final = await waitFor(async () => orchestrator.detail(cwd, created.research_id), (snapshot) => !!snapshot && ["completed", "failed"].includes(snapshot.status));
+  // The failed materialization's spend is reflected in the research usage.
+  expect(final?.usage.model_tokens).toBeGreaterThanOrEqual(5_000);
+  expect(final?.usage.cost_usd).toBeGreaterThanOrEqual(0.01);
+  expect(final?.nodes.find((node) => node.kind === "experiment")?.status).toBe("failed");
+  await orchestrator.shutdown();
+}, 15_000);
