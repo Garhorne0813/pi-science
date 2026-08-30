@@ -111,7 +111,7 @@ describe("SettingsContent", () => {
     // Every nav item uses a different outline icon (distinct svg content).
     const icons = screen.getAllByRole("tab").map((tab) => tab.querySelector("svg")?.innerHTML ?? null);
     expect(icons.every(Boolean)).toBe(true);
-    expect(new Set(icons).size).toBe(7);
+    expect(new Set(icons).size).toBe(8);
   });
 
   it("moves the close control into the content header, outside the sidebar", async () => {

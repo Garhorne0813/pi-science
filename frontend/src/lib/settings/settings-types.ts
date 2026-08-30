@@ -1,3 +1,5 @@
+import type { ProgressAppearance } from "@pi-science/contracts";
+
 /** Legacy settings DTOs plus unrelated settings-page resources. The canonical
  *  model domain lives under `lib/model-resources`; legacy fields remain only
  *  for migration responses consumed by older clients. */
@@ -61,6 +63,7 @@ export interface SettingsConfig {
   compaction_enabled: boolean;
   compaction_threshold_percent: number;
   model_context_window?: number | null;
+  progress_appearance?: ProgressAppearance;
 }
 
 export interface RuntimeExtension {

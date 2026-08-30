@@ -229,3 +229,18 @@ owner should confirm or revise them:
 - Do not copy upstream source files wholesale; only parameter values and
   interaction patterns (collapse motion, sticky code banner) are in scope.
 - Pi-Science keeps its own product name and "Pi" identity.
+
+## Progress pattern proposal
+
+The progress-pattern layer uses bundled MIT-licensed primitives from
+[Generative Loaders](https://generativeloaders.com/docs) v0.1.1. It exposes only
+allowlisted variants through `ProgressPatternCatalog.ts`; remote pages and
+runtime CDN assets are never loaded. AICSS free components remain a visual
+reference for agent states and may be copied only under its MIT terms; licensed
+AICSS components are excluded until a commercial license is recorded.
+
+The imported loader stylesheet owns only the internal animation geometry. The
+application owns layout, semantic colors, typography, radii, accessibility
+labels, reduced-motion behavior, and the settings contract. Current Activity
+keeps its narrative text outside the loader so the animation cannot replace
+meaning or affect Markdown and KaTeX rendering.

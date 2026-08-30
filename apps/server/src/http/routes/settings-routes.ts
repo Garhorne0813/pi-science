@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { defaultProgressAppearance, progressAppearanceSchema } from "@pi-science/contracts";
 import { configPath } from "../../storage/persistence.js";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import { runtimeExtensionStatus } from "../../runtime/pi/pi-runtime-launch.js";
@@ -638,6 +639,8 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
         }
       }
     }
+    const progressAppearance = progressAppearanceSchema.safeParse(config.progress_appearance ?? {});
+    const effectiveProgressAppearance = progressAppearance.success ? progressAppearance.data : defaultProgressAppearance;
     const providers = await providerInventory(nodeSessionService, config, cwdValue, modelResources);
     const apiKeys = Object.fromEntries(providers.map((provider) => [provider.id, provider.has_key]));
     // Without the pi-ai runtime there is no provider inventory to derive
@@ -650,7 +653,13 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       const resourceState = modelResources.repository.readSync();
       for (const [id, ref] of Object.entries(resourceState.credential_refs)) if (modelResources.credentials.readSync(ref)?.secret) apiKeys[id] = true;
     }
-    return { api_keys: apiKeys, model: configured, thinking, model_context_window: config.model_context_window ?? null, compaction_enabled: config.compaction_enabled !== false, compaction_threshold_percent: compactionThreshold(config, available, configured), allow_private_providers: config.allow_private_providers !== false, providers, custom_providers: (config.custom_providers ?? []).map(publicCustom), available_models: available, model_catalog_source: catalog.source };
+    return { api_keys: apiKeys, model: configured, thinking, model_context_window: config.model_context_window ?? null, progress_appearance: effectiveProgressAppearance, compaction_enabled: config.compaction_enabled !== false, compaction_threshold_percent: compactionThreshold(config, available, configured), allow_private_providers: config.allow_private_providers !== false, providers, custom_providers: (config.custom_providers ?? []).map(publicCustom), available_models: available, model_catalog_source: catalog.source };
+  });
+  app.put("/api/settings/progress", async (request, reply) => {
+    const parsed = progressAppearanceSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid progress appearance settings", details: parsed.error.flatten() });
+    await mutate((config) => { config.progress_appearance = parsed.data; });
+    return respondWithReload(nodeSessionService, reply, { ok: true, progress_appearance: parsed.data });
   });
   app.put("/api/settings/private-providers", async (request, reply) => { const body = (request.body ?? {}) as { enabled?: unknown }; const enabled = body.enabled !== false; await mutate((config) => { config.allow_private_providers = enabled; }); return respondWithReload(nodeSessionService, reply, { ok: true, allow_private_providers: enabled }); });
   app.put("/api/settings/api-key", async (request, reply) => { const body = (request.body ?? {}) as { provider?: unknown; api_key?: unknown }; const provider = String(body.provider ?? ""); const apiKey = String(body.api_key ?? ""); const catalog = await loadPiAiProviderCatalog(); // Without the pi-ai runtime installed there is no catalog to validate

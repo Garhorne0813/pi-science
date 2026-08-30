@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Blocks, Boxes, BrainCircuit, Loader2, ServerCog, Settings2, Unplug, WandSparkles, X, type LucideIcon } from "lucide-react";
+import { Blocks, Boxes, BrainCircuit, Loader2, ServerCog, Settings2, Unplug, WandSparkles, Activity, X, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/ui";
 import { settingsApi } from "../../lib/settings";
@@ -12,12 +12,14 @@ import { MCPTab } from "./MCPTab";
 import { SkillsTab } from "./SkillsTab";
 import { Icon, IconButton } from "../ui/Icon";
 import { EnvironmentSettings } from "./EnvironmentSettings";
+import { ProgressTab } from "./ProgressTab";
 
-type Tab = "general" | "llm" | "skills" | "extensions" | "mcp" | "compute" | "environments";
+type Tab = "general" | "progress" | "llm" | "skills" | "extensions" | "mcp" | "compute" | "environments";
 
 const TABS: { id: Tab; labelKey: string; titleKey: string; icon: LucideIcon }[] = [
   { id: "general", labelKey: "settings.general", titleKey: "settings.general", icon: Settings2 },
   { id: "llm", labelKey: "settings.llm", titleKey: "settings.model.pageTitle", icon: BrainCircuit },
+  { id: "progress", labelKey: "settings.progress.nav", titleKey: "settings.progress.nav", icon: Activity },
   { id: "skills", labelKey: "skills.title", titleKey: "skills.title", icon: WandSparkles },
   { id: "environments", labelKey: "settings.environments", titleKey: "settings.environments", icon: Boxes },
   { id: "extensions", labelKey: "settings.extensions", titleKey: "settings.extensions", icon: Blocks },
@@ -143,6 +145,19 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
     }
   };
 
+  const saveProgress = async (progress: import("@pi-science/contracts").ProgressAppearance) => {
+    setSaving("progress");
+    setError(null);
+    try {
+      await settingsApi.saveProgress(progress);
+      await loadConfig();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(null);
+    }
+  };
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       {/* Settings navigation: a light rail on mobile (56px icon column) and a
@@ -202,6 +217,7 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
               <>
                 {error && <p role="alert" className="mb-card rounded-input bg-error/10 px-panel py-2 text-ui-caption text-error-text">{error}</p>}
                 {tab === "general" && <GeneralTab />}
+                {tab === "progress" && config && <ProgressTab config={config} saving={saving === "progress"} onSave={saveProgress} />}
                 {tab === "llm" && <LLMTab config={config} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} saveModel={saveModel} saveCompaction={saveCompaction} onConfigReload={loadConfig} />}
                 {tab === "skills" && <SkillsTab workspaceCwd={scope} />}
                 {tab === "extensions" && <ExtensionsTab workspaceCwd={scope} />}

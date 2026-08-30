@@ -59,6 +59,35 @@ export const toolPresentationSchema = z.object({
 });
 export type ToolPresentation = z.infer<typeof toolPresentationSchema>;
 
+export const progressPatternIdSchema = z.enum([
+  "static-check", "inline-signal", "inline-spark", "inline-ripple",
+  "text-decode", "text-cascade", "text-skeleton", "image-scan", "image-tiles",
+]);
+export const progressAppearanceSchema = z.object({
+  version: z.literal(1).default(1),
+  preset: z.enum(["quiet", "research", "science", "custom"]).default("quiet"),
+  motion: z.enum(["system", "full", "off"]).default("system"),
+  speed: z.number().min(0.5).max(2).default(1),
+  colorMode: z.enum(["semantic", "custom"]).default("semantic"),
+  customColor: z.string().nullable().default(null),
+  patterns: z.object({
+    thinking: progressPatternIdSchema.default("static-check"),
+    currentActivity: progressPatternIdSchema.default("inline-signal"),
+    streamingAnswer: progressPatternIdSchema.default("text-decode"),
+    imageGeneration: progressPatternIdSchema.default("image-scan"),
+    waiting: progressPatternIdSchema.default("static-check"),
+    completed: progressPatternIdSchema.default("static-check"),
+  }).default({
+    thinking: "static-check",
+    currentActivity: "inline-signal",
+    streamingAnswer: "text-decode",
+    imageGeneration: "image-scan",
+    waiting: "static-check",
+    completed: "static-check",
+  }),
+});
+export type ProgressAppearance = z.infer<typeof progressAppearanceSchema>;
+export const defaultProgressAppearance: ProgressAppearance = progressAppearanceSchema.parse({});
 export const historyMessageSchema = z.object({
   id: z.string().min(1),
   role: z.string(),

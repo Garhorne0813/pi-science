@@ -1,4 +1,5 @@
 import { configPath, readJson, writeJsonAtomic } from "./persistence.js";
+import type { ProgressAppearance } from "@pi-science/contracts";
 import type { RuntimeSkillPolicy } from "../runtime/pi/pi-process.js";
 
 export type SettingsData = {
@@ -15,6 +16,7 @@ export type SettingsData = {
   skills_configured?: boolean;
   skill_paths?: string[];
   skill_policy?: RuntimeSkillPolicy;
+  progress_appearance?: ProgressAppearance;
   /** Legacy workspace-scoped policies from the initial 0.2.0 integration. */
   skill_policies?: Record<string, RuntimeSkillPolicy>;
   model_endpoints?: unknown[];

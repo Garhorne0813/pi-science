@@ -7,10 +7,12 @@ import { ACTIVITY_SWITCH_DEBOUNCE_MS, MIN_ACTIVITY_VISIBLE_MS, selectDisplayedAc
 import type { PresentedActivity } from "../../lib/conversation/activity-narrative";
 import type { TurnLifecycle } from "../../lib/conversation/turn-presentation";
 import { presentToolActivity } from "../../lib/conversation/activity-presenters";
+import { ProgressVisual, useProgressAppearance } from "../progress/ProgressVisual";
 import { cn } from "../../lib/ui";
 
 export function AgentActivity({ blocks, lifecycle = "active" }: { blocks: ToolCallBlock[]; lifecycle?: TurnLifecycle }) {
   const { t } = useTranslation();
+  const progressAppearance = useProgressAppearance();
   const [expanded, setExpanded] = useState(false);
   const activities = useMemo(() => executionActivities(blocks), [blocks]);
   const count = useMemo(() => executionOperationCount(blocks), [blocks]);
@@ -36,7 +38,7 @@ export function AgentActivity({ blocks, lifecycle = "active" }: { blocks: ToolCa
 
   return <div id={blocks.length === 1 ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} className={cn("overflow-hidden scroll-mt-4", !traceOnly && "rounded-input border border-faint bg-surface")}>
     <button type="button" aria-expanded={canExpand ? expanded : undefined} onClick={() => canExpand && setExpanded((value) => !value)} className={cn("flex w-full items-center gap-2 text-left text-xs text-muted transition-colors", canExpand && "hover:bg-surface-2", traceOnly ? "px-1 py-1" : "px-3 py-2")}>
-      {!traceOnly && <ActivityIcon state={state} />}
+      {!traceOnly && <ActivityIcon state={state} config={progressAppearance} label={label} />}
       <span {...(!traceOnly ? { "aria-live": "polite", "aria-atomic": "true" } : {})} className={cn("min-w-0 flex-1 truncate", state === "error" && "text-error-text")}>{label}</span>
       {lifecycle === "settled" && <span className="shrink-0 font-mono text-[10px] text-muted/60" aria-label={t("conversation.activity.operationCount", { count })}>{count}</span>}
       {canExpand && <ChevronRight size={13} aria-hidden className={cn("shrink-0 text-muted/60 transition-transform", expanded && "rotate-90")} />}
@@ -88,11 +90,12 @@ function narrativeLabel(activity: PresentedActivity, t: (key: string) => string)
   return translated === domainKey ? t(`conversation.activity.narrative.${activity.state}`) : translated;
 }
 
-function ActivityIcon({ state }: { state: "waiting" | "running" | "error" | "stopped" | "completed" }) {
-  if (state === "running") return <Loader2 size={13} aria-hidden className="shrink-0 animate-spin text-accent" />;
+function ActivityIcon({ state, config, label }: { state: "waiting" | "running" | "error" | "stopped" | "completed"; config: import("@pi-science/contracts").ProgressAppearance; label: string }) {
+  if (state === "running") return <ProgressVisual slot="currentActivity" config={config} text={label} />;
+  if (state === "waiting") return <ProgressVisual slot="waiting" config={config} state="waiting" text={label} />;
+  if (state === "completed") return <ProgressVisual slot="completed" config={config} state="completed" text={label} />;
   if (state === "error" || state === "stopped") return <CircleX size={13} aria-hidden className={cn("shrink-0", state === "error" ? "text-error-text" : "text-muted")} />;
-  if (state === "waiting") return <span aria-hidden className="shrink-0 text-warn">!</span>;
-  return <CircleCheck size={13} aria-hidden className="shrink-0 text-ok-text" />;
+  return <span aria-hidden className="shrink-0 text-warn">!</span>;
 }
 
 function TraceItem({ block }: { block: ToolCallBlock }) {
