@@ -8,6 +8,7 @@ export const piConfigSchema = z.object({
   compaction_enabled: z.boolean().optional(),
   compaction_threshold_percent: z.number().min(50).max(95).optional(),
   model_context_window: z.number().int().positive().optional(),
+  model_max_output_tokens: z.number().int().positive().optional(),
   skills: z.array(z.string()).default([]),
   extensions: z.array(z.string()).default([]),
 });

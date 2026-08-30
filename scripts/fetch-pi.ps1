@@ -51,7 +51,6 @@ function Install-RuntimeExtensions {
         throw "npm is required to install Pi runtime extensions."
     }
 
-    $piAiVersion = Get-Setting "PI_AI_VERSION" "0.84.3"
     $piMcpAdapterVersion = Get-Setting "PI_MCP_ADAPTER_VERSION" "2.18.0"
     $piSubagentsVersion = Get-Setting "PI_SUBAGENTS_VERSION" "0.40.0"
     $piWebAccessVersion = Get-Setting "PI_WEB_ACCESS_VERSION" "0.18.0"
@@ -65,7 +64,6 @@ function Install-RuntimeExtensions {
         "--no-package-lock",
         "--omit=dev",
         "--cache", (Join-Path $RuntimeDir ".npm-cache"),
-        "@earendil-works/pi-ai@$piAiVersion",
         "pi-mcp-adapter@$piMcpAdapterVersion",
         "pi-subagents@$piSubagentsVersion",
         "pi-web-access@$piWebAccessVersion",

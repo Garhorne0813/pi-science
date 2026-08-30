@@ -15,8 +15,7 @@ import {
   type UpdateEndpointRequest,
   type UpdateProviderRequest,
 } from "@pi-science/contracts";
-import { loadPiAiCatalog } from "../config/model-catalog-fallback.js";
-import { hasEnvApiKey, loadPiAiProviderCatalog } from "../config/pi-ai-provider-catalog.js";
+import type { PiOrbitCatalogService } from "../runtime/pi/pi-orbit-catalog.js";
 import { egressAuditEnabled, recordEgress } from "../security/egress-audit.js";
 import { safeConnectorFetch, validateOutboundHttpUrl } from "../security/outbound-security.js";
 import { SettingsStore } from "../storage/settings-store.js";
@@ -189,12 +188,14 @@ export class ModelResourceService {
   readonly repository: ModelResourceRepository;
   readonly credentials: CredentialStore;
   private readonly settings: SettingsStore;
+  private readonly runtimeCatalog?: Pick<PiOrbitCatalogService, "getCatalog">;
   private migrationPromise: Promise<MigrationResult> | undefined;
 
-  constructor(options: { repository?: ModelResourceRepository; credentials?: CredentialStore; settings?: SettingsStore } = {}) {
+  constructor(options: { repository?: ModelResourceRepository; credentials?: CredentialStore; settings?: SettingsStore; runtimeCatalog?: Pick<PiOrbitCatalogService, "getCatalog"> } = {}) {
     this.repository = options.repository ?? new ModelResourceRepository();
     this.credentials = options.credentials ?? new CredentialStore();
     this.settings = options.settings ?? new SettingsStore();
+    this.runtimeCatalog = options.runtimeCatalog;
   }
 
   async ensureMigrated(): Promise<MigrationResult> {
@@ -227,24 +228,23 @@ export class ModelResourceService {
     await this.ensureMigrated();
     const state = await this.repository.read();
     const result: ProviderRead[] = [];
-    const systemCatalog = await loadPiAiProviderCatalog();
-    for (const entry of systemCatalog) {
+    const catalog = await this.readRuntimeCatalog();
+    for (const entry of catalog.providers) {
       const ref = state.credential_refs[entry.id];
       const credential = ref ? await this.credentials.getForRuntime(ref) : null;
-      const hasKey = Boolean(credential?.secret) || (entry.apiKeySupported && await hasEnvApiKey(entry.id));
-      const connected = Boolean(credential?.metadata.status === "connected");
-      const status = hasKey ? "configured" : connected ? "connected" : !entry.apiKeySupported && entry.oauthSupported ? "needs_login" : entry.apiKeySupported ? "needs_key" : "connected";
+      const configured = Boolean(credential?.secret) || entry.auth.configured;
+      const status = configured ? credential?.secret ? "configured" : "connected" : !entry.auth.apiKey && entry.auth.oauth ? "needs_login" : entry.auth.apiKey ? "needs_key" : "connected";
       result.push({
         id: entry.id,
         name: entry.name,
         kind: "system",
         adapter: "pi-ai",
-        enabled: hasKey || connected,
+        enabled: configured,
         catalog_mode: "runtime",
-        auth_kind: entry.apiKeySupported && entry.oauthSupported ? "api_key_or_oauth" : entry.oauthSupported ? "oauth" : entry.apiKeySupported ? "api_key" : "none",
+        auth_kind: entry.auth.apiKey && entry.auth.oauth ? "api_key_or_oauth" : entry.auth.oauth ? "oauth" : entry.auth.apiKey ? "api_key" : "none",
         source: "pi-ai",
-        models: entry.modelIds,
-        has_key: hasKey,
+        models: entry.models.map((model) => model.id),
+        has_key: Boolean(credential?.secret),
         credential_status: status,
         routes: 0,
       });
@@ -787,7 +787,7 @@ export class ModelResourceService {
       .map((model) => resolvedModelToRead(resolved.find((item) => item.id === canonicalModelRef(model.provider_id, model.model_id)) ?? {
         id: canonicalModelRef(model.provider_id, model.model_id), provider_id: model.provider_id, model_id: model.model_id, display_name: model.display_name, available: false, capabilities: model.capabilities, capability_source: model.capability_source, routes: [], availability_reason: "no_routable_endpoint",
       }, model));
-    const systemProviderIds = new Set((await loadPiAiProviderCatalog()).map((provider) => provider.id));
+    const systemProviderIds = new Set((await this.readRuntimeCatalog()).providers.map((provider) => provider.id));
     const systemModels = filters.provider_id && !systemProviderIds.has(filters.provider_id)
       ? []
       : await this.systemModelReads();
@@ -941,31 +941,38 @@ export class ModelResourceService {
     };
   }
 
+  private async readRuntimeCatalog() {
+    if (!this.runtimeCatalog) return { schemaVersion: 1 as const, providers: [] };
+    try { return await this.runtimeCatalog.getCatalog(); }
+    catch (error) {
+      if (process.env.NODE_ENV !== "test" && process.env.PI_CLI_PATH) throw error;
+      return { schemaVersion: 1 as const, providers: [] };
+    }
+  }
+
   private async systemModelReads(): Promise<ModelRead[]> {
     const state = await this.repository.read();
-    const providers = await loadPiAiProviderCatalog();
-    const catalog = await loadPiAiCatalog();
+    const catalog = await this.readRuntimeCatalog();
     const result: ModelRead[] = [];
-    for (const provider of providers) {
-      const hasCredential = Boolean(state.credential_refs[provider.id] && await this.credentials.getForRuntime(state.credential_refs[provider.id]!).then((value) => value?.secret)) || (provider.apiKeySupported && await hasEnvApiKey(provider.id));
-      const available = hasCredential || (!provider.apiKeySupported && !provider.oauthSupported);
-      const entries = catalog.filter((entry) => String(entry.provider) === provider.id);
-      for (const entry of entries) {
-        const modelId = String(entry.id ?? "");
-        if (!modelId) continue;
-        const resolved = resolveCapabilities(modelId, [{ ...capabilityPatchFromPayload(entry), source: "provider" }]);
+    for (const provider of catalog.providers) {
+      const ref = state.credential_refs[provider.id];
+      const hasCredential = Boolean(ref && await this.credentials.getForRuntime(ref)?.then((value) => value?.secret)) || provider.auth.configured;
+      const available = hasCredential || (!provider.auth.apiKey && !provider.auth.oauth);
+      for (const entry of provider.models) {
+        const modelId = entry.id;
+        const capabilities = resolveCapabilities(modelId, [{ reasoning: entry.reasoning, thinking_levels: entry.reasoning ? ["off", "minimal", "low", "medium", "high"] : ["off"], context_window: entry.contextWindow || null, max_output_tokens: entry.maxTokens || null, vision: entry.input.includes("image"), source: "provider" }]);
         result.push({
           provider_id: provider.id,
           model_id: modelId,
-          display_name: `${provider.name} · ${String(entry.name ?? modelId)}`,
+          display_name: `${provider.name} · ${entry.name}`,
           enabled: available,
-          capabilities: resolved.capabilities,
-          capability_source: resolved.capability_source,
+          capabilities: capabilities.capabilities,
+          capability_source: capabilities.capability_source,
           verified_at: null,
           discovered_at: null,
           id: canonicalModelRef(provider.id, modelId),
           available,
-          ...(available ? {} : { availability_reason: provider.oauthSupported && !provider.apiKeySupported ? "needs_login" : "missing_credential" }),
+          ...(available ? {} : { availability_reason: provider.auth.oauth && !provider.auth.apiKey ? "needs_login" : "missing_credential" }),
           routes: [],
         });
       }
