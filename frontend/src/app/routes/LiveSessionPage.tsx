@@ -366,6 +366,7 @@ export function LiveSessionPage() {
                   scrollerRef={attachScroller}
                   firstItemIndex={virtualFirstItemIndex}
                   data={turns}
+                  computeItemKey={(_index, turn) => turn.id}
                   initialItemCount={Math.min(turns.length, 20)}
                   startReached={() => void handleLoadOlder()}
                   increaseViewportBy={{ top: 600, bottom: 800 }}
