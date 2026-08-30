@@ -32,11 +32,11 @@ export function ProgressVisual({ slot, config, state = "running", text = "Genera
   const speed = Number.isFinite(config.speed) && config.speed > 0 ? config.speed : 1;
 
   const visualText = compact ? text.slice(0, 3) : text;
-  if (state === "completed") return <Check size={compact ? 14 : 16} aria-hidden className="shrink-0 text-ok-text" />;
-  if (definition.kind === "static") return <span className={compact ? "h-1.5 w-1.5 shrink-0 rounded-full bg-accent" : "h-2 w-2 shrink-0 rounded-full bg-accent"} aria-hidden />;
+  if (state === "completed") return <Check size={14} aria-hidden className="shrink-0 text-ok-text" />;
+  if (definition.kind === "static") return <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" aria-hidden />;
   if (definition.kind === "inline") {
     const variant = INLINE_VARIANTS[definition.id as keyof typeof INLINE_VARIANTS];
-    return variant ? <InlineLoader variant={variant} size={compact ? "1rem" : "1.3rem"} speed={speed} color={color} paused={paused} label={slot === "waiting" ? text : undefined} /> : null;
+    return variant ? <InlineLoader variant={variant} size={compact ? "1rem" : "1.15rem"} speed={speed} color={color} paused={paused} label={slot === "waiting" ? text : undefined} /> : null;
   }
   if (definition.kind === "text") {
     const variant = TEXT_VARIANTS[definition.id as keyof typeof TEXT_VARIANTS];

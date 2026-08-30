@@ -37,7 +37,7 @@ export function AgentActivity({ blocks, lifecycle = "active" }: { blocks: ToolCa
   const visualSlot = state === "waiting" ? "waiting" : shown ? "currentActivity" : "thinking";
 
   return <div id={blocks.length === 1 ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} className="overflow-hidden scroll-mt-4 rounded-card border border-faint">
-    <button type="button" aria-expanded={canExpand ? expanded : undefined} onClick={() => canExpand && setExpanded((value) => !value)} className={cn("flex w-full items-center gap-2 rounded-card px-3 py-2.5 text-left text-sm text-muted transition-colors", canExpand && "hover:bg-surface-2")}>
+    <button type="button" aria-expanded={canExpand ? expanded : undefined} onClick={() => canExpand && setExpanded((value) => !value)} className={cn("flex w-full items-center gap-2 rounded-card px-3 py-2.5 text-left text-xs text-muted transition-colors", canExpand && "hover:bg-surface-2")}>
       <ActivityIcon state={state} slot={visualSlot} config={progressAppearance} label={label} />
       <span aria-live="polite" aria-atomic="true" className={cn("min-w-0 flex-1 truncate", state === "error" && "text-error-text")}>{!progressPatternShowsText(visualSlot, progressAppearance) && label}</span>
       {lifecycle === "settled" && <span className="shrink-0 font-mono text-[10px] text-muted/60" aria-label={t("conversation.activity.operationCount", { count })}>{count}</span>}
@@ -94,8 +94,8 @@ function ActivityIcon({ state, slot, config, label }: { state: "waiting" | "runn
   if (state === "running") return <ProgressVisual slot={slot} config={config} text={label} />;
   if (state === "waiting") return <ProgressVisual slot="waiting" config={config} state="waiting" text={label} />;
   if (state === "completed") return <ProgressVisual slot="completed" config={config} state="completed" text={label} />;
-  if (state === "error" || state === "stopped") return <CircleX size={16} aria-hidden className={cn("shrink-0", state === "error" ? "text-error-text" : "text-muted")} />;
-  return <span aria-hidden className="shrink-0 text-base font-medium text-warn">!</span>;
+  if (state === "error" || state === "stopped") return <CircleX size={14} aria-hidden className={cn("shrink-0", state === "error" ? "text-error-text" : "text-muted")} />;
+  return <span aria-hidden className="shrink-0 text-sm font-medium text-warn">!</span>;
 }
 
 function TraceItem({ block }: { block: ToolCallBlock }) {
