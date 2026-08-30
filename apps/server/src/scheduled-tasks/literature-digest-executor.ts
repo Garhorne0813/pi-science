@@ -198,8 +198,22 @@ export class LiteratureDigestExecutor implements ScheduledTaskExecutor {
       // (h) terminal execution evidence.
       await this.finishExecution(ctx, "succeeded", writtenFiles, usage, { source_count: selected.length, new_count: newCount, provider_failure_count: providerFailures.length }, null, nowMs());
 
-      // (i)
-      return { status: "succeeded", outputPaths: writtenFiles.map((file) => resolve(ctx.cwd, file.path)), usage };
+      // (i) Product outcome is independent from execution success. A stable
+      // literature monitor is a successful no-change run and stays quiet by default.
+      const importantNewCount = digest.important_records.filter((index) => selected.some((entry) => entry.source_index === index && entry.isNew)).length;
+      const runOutcome = newCount > 0 && importantNewCount > 0 ? "new_information" as const : "no_change" as const;
+      return {
+        status: "succeeded",
+        outcome: runOutcome,
+        summary: {
+          title: runOutcome === "new_information" ? `${importantNewCount} important new paper${importantNewCount === 1 ? "" : "s"}` : "No meaningful updates",
+          text: digest.executive_summary.trim() || (runOutcome === "no_change" ? "No new relevant literature was found." : "New relevant literature was found."),
+          item_count: importantNewCount,
+        },
+        recommendNotify: runOutcome === "new_information",
+        outputPaths: writtenFiles.map((file) => resolve(ctx.cwd, file.path)),
+        usage,
+      };
     } catch (error) {
       return await this.fail(ctx, error instanceof Error ? error : new Error(String(error)), { attemptDirRelative, scopeHash, providerFailures, writtenFiles, startedAtMs, nowMs });
     }
@@ -314,6 +328,9 @@ export class LiteratureDigestExecutor implements ScheduledTaskExecutor {
 
     return {
       status: "failed",
+      outcome: "needs_attention",
+      summary: { title: "Couldn’t complete the latest run", text: classified.message },
+      recommendNotify: true,
       retryable,
       errorCode: code,
       errorMessage: classified.message,

@@ -6,6 +6,9 @@ import type { CodeRunner } from "../markdown-viewer/MarkdownViewer";
 import type { ThreadBlock } from "../../types/thread";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 
+vi.mock("react-router-dom", async (importOriginal) => ({ ...await importOriginal<typeof import("react-router-dom")>(), useNavigate: () => vi.fn() }));
+vi.mock("../feedback/feedback-context", () => ({ useFeedback: () => ({ toast: vi.fn() }) }));
+
 const codeRunner: CodeRunner = { cwd: "proj", sessionId: "s1" };
 
 function user(id: string, text: string): ThreadBlock {
@@ -84,6 +87,16 @@ describe("renderBlocks", () => {
     // Only the user message has a copy button; the tool-call narration does not.
     const copyButtons = screen.getAllByRole("button", { name: "Copy" });
     expect(copyButtons).toHaveLength(1);
+  });
+
+  it("renders a scheduled-task proposal fence as a confirmation card", () => {
+    const proposal = `I prepared this task.\n\n\`\`\`scheduled-task-proposal\n{"proposal_id":"p1","title":"CRISPR watch","task_kind":"literature_monitor","description":"Watch papers","schedule":{"display_text":"Every weekday · 09:00 · UTC","canonical":{"type":"cron","expression":"0 9 * * 1-5","timezone":"UTC"}},"action_summary":"Track CRISPR papers","delivery_policy":"only_when_relevant","query":"CRISPR screening","providers":["pubmed"]}\n\`\`\``;
+    render(<>{renderBlocks([agent("a1", proposal)], codeRunner)}</>);
+
+    expect(screen.getByText("I prepared this task.")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Scheduled task proposal" })).toHaveTextContent("CRISPR watch");
+    expect(screen.getByRole("button", { name: "Schedule & run now" })).toBeInTheDocument();
+    expect(screen.queryByText(/proposal_id/)).not.toBeInTheDocument();
   });
 
   it("does not make an unconfirmed planned path clickable", () => {

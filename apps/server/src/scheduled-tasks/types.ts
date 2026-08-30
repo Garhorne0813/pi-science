@@ -7,7 +7,13 @@ import type {
   MisfirePolicy,
   RetryPolicy,
   ScheduledTaskBudget,
+  ScheduledTaskDeliveryPolicy,
+  ScheduledTaskDisplay,
   ScheduledTaskExecutor,
+  ScheduledTaskOrigin,
+  ScheduledTaskRunDelivery,
+  ScheduledTaskRunOutcome,
+  ScheduledTaskRunSummary,
   ScheduledTaskSchedule,
 } from "@pi-science/contracts";
 
@@ -53,6 +59,9 @@ export interface ScheduledTask {
   /** User-defined revision; scheduler advancement of next_run_at must not bump it. */
   revision: number;
   name: string;
+  display: ScheduledTaskDisplay;
+  origin: ScheduledTaskOrigin;
+  delivery_policy: ScheduledTaskDeliveryPolicy;
   lifecycle_status: ScheduledTaskLifecycleStatus;
   schedule: ScheduledTaskSchedule;
   executor: ScheduledTaskExecutor;
@@ -78,6 +87,9 @@ export interface ScheduledTaskSnapshot {
   workspace_path_at_claim: string;
   revision: number;
   name: string;
+  display: ScheduledTaskDisplay;
+  origin: ScheduledTaskOrigin;
+  delivery_policy: ScheduledTaskDeliveryPolicy;
   schedule: ScheduledTaskSchedule;
   executor: ScheduledTaskExecutor;
   output: { relative_root: string };
@@ -105,6 +117,9 @@ export interface ScheduledTaskRun {
   business_date: string;
   occurrence_key: string;
   status: ScheduledTaskRunStatus;
+  outcome: ScheduledTaskRunOutcome | null;
+  summary: ScheduledTaskRunSummary;
+  delivery: ScheduledTaskRunDelivery | null;
   snapshot: ScheduledTaskSnapshot;
   snapshot_sha256: string;
   latest_attempt_id: string | null;

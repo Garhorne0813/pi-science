@@ -80,9 +80,30 @@ describe("scheduled-tasks skill content", () => {
     expect(body).not.toMatch(/"kind"\s*:\s*"(?!literature_digest)/);
   });
 
+  it("requires proposal-first creation with natural-language schedules and quiet delivery", async () => {
+    const body = await readFile(SKILL_MD, "utf8");
+    expect(body).toMatch(/proposal before any durable write/i);
+    expect(body).toContain("[Schedule] [Edit]");
+    expect(body).toContain("```scheduled-task-proposal");
+    expect(body).toMatch(/Do not call the create API in the same turn/);
+    expect(body).toMatch(/Wait for an explicit `Schedule` confirmation/);
+    expect(body).toMatch(/Never ask the user for cron/);
+    expect(body).toContain("only_when_relevant");
+    expect(body).toMatch(/safe executor supports literature monitoring only/i);
+    expect(body).toMatch(/do not create a disguised literature task/i);
+    expect(body).toContain("origin.session_id");
+    expect(body).toMatch(/deleting the\s+conversation must not delete it/i);
+    expect(body).toContain("Schedule & run now");
+    expect(body).toContain("outcome=no_change");
+    expect(body).toContain("delivery.delivered=false");
+  });
+
   it("contains a complete create request example with approval follow-up", async () => {
     const body = await readFile(SKILL_MD, "utf8");
     expect(body).toContain('"kind": "literature_digest"');
+    expect(body).toContain('"display"');
+    expect(body).toContain('"origin"');
+    expect(body).toContain('"delivery_policy"');
     expect(body).toContain('"misfire_policy"');
     expect(body).toContain("approval_status");
     expect(body).toContain("expected_revision");

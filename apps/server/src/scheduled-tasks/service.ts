@@ -9,12 +9,18 @@ import { ZodError } from "zod";
 import {
   retryPolicySchema,
   scheduledTaskBudgetSchema,
+  scheduledTaskDeliveryPolicySchema,
+  scheduledTaskDisplaySchema,
   scheduledTaskExecutorSchema,
+  scheduledTaskOriginSchema,
   type ConcurrencyPolicy,
   type MisfirePolicy,
   type RetryPolicy,
   type ScheduledTaskBudget,
+  type ScheduledTaskDeliveryPolicy,
+  type ScheduledTaskDisplay,
   type ScheduledTaskExecutor,
+  type ScheduledTaskOrigin,
   type ScheduledTaskSchedule,
 } from "@pi-science/contracts";
 import { cronPreview, MIN_INTERVAL_SECONDS, validateSchedule } from "./schedule.js";
@@ -129,6 +135,9 @@ export function buildSnapshot(task: ScheduledTask, claimedAtMs: number): Snapsho
     workspace_path_at_claim: task.workspace_path,
     revision: task.revision,
     name: task.name,
+    display: task.display,
+    origin: task.origin,
+    delivery_policy: task.delivery_policy,
     schedule: task.schedule,
     executor: task.executor,
     output: task.output,
@@ -191,6 +200,9 @@ export type RuntimeDiagnosticsInput = Omit<ScheduledTasksDiagnostics, "feature_e
 
 export interface CreateScheduledTaskRequest {
   name: string;
+  display?: ScheduledTaskDisplay;
+  origin?: ScheduledTaskOrigin;
+  delivery_policy?: ScheduledTaskDeliveryPolicy;
   schedule: unknown;
   executor: ScheduledTaskExecutor;
   output: { relative_root: string };
@@ -257,6 +269,9 @@ export class ScheduledTaskService {
       assertSafeOutputRoot(request.output.relative_root);
       const retry = this.parseWith(retryPolicySchema, request.retry ?? {});
       const budget = this.parseWith(scheduledTaskBudgetSchema, request.budget ?? {});
+      const display = this.parseWith(scheduledTaskDisplaySchema, request.display ?? {});
+      const origin = this.parseWith(scheduledTaskOriginSchema, request.origin ?? {});
+      const deliveryPolicy = this.parseWith(scheduledTaskDeliveryPolicySchema, request.delivery_policy ?? "only_when_relevant");
       const projectId = await this.resolveProjectId(workspacePath);
 
       const activeCount = await this.repository.countActiveTasksByWorkspace(resolve(workspacePath));
@@ -274,6 +289,9 @@ export class ScheduledTaskService {
         project_id: projectId,
         workspace_path: resolve(workspacePath),
         name: request.name,
+        display,
+        origin,
+        delivery_policy: deliveryPolicy,
         schedule,
         executor,
         output: request.output,
@@ -307,7 +325,13 @@ export class ScheduledTaskService {
     if (!isScheduledTasksEnabled()) return fail(scheduledTasksDisabled());
     try {
       await this.requireTaskInWorkspace(taskId, workspacePath);
-      return ok(await this.repository.patchTask(taskId, expectedRevision, patch, this.now()));
+      const normalized: PatchScheduledTaskInput = {
+        ...patch,
+        ...(patch.display === undefined ? {} : { display: this.parseWith(scheduledTaskDisplaySchema, patch.display) }),
+        ...(patch.origin === undefined ? {} : { origin: this.parseWith(scheduledTaskOriginSchema, patch.origin) }),
+        ...(patch.delivery_policy === undefined ? {} : { delivery_policy: this.parseWith(scheduledTaskDeliveryPolicySchema, patch.delivery_policy) }),
+      };
+      return ok(await this.repository.patchTask(taskId, expectedRevision, normalized, this.now()));
     } catch (error) {
       return fail(error);
     }

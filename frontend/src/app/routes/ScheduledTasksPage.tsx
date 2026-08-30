@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle, CalendarClock, ChevronDown, ChevronRight, Clock3, ExternalLink,
-  Loader2, Pause, Play, Plus, ShieldAlert, Trash2, X,
+  Loader2, MoreHorizontal, Pause, Play, Plus, ShieldAlert, Sparkles, Trash2, X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn, useUiStore } from "../../lib/ui";
@@ -20,9 +20,11 @@ import {
   timezoneOptions,
 } from "../../lib/scheduled-tasks";
 import type {
-  LiteratureProvider, MisfirePolicy, PreviewItem, RetryPolicy, RunRowView, ScheduledSchedule,
+  DeliveryPolicy, LiteratureProvider, MisfirePolicy, PreviewItem, RetryPolicy, RunRowView, ScheduledSchedule,
   ScheduledTaskAttempt, ScheduledTaskView, TaskListSummary,
 } from "../../lib/scheduled-tasks";
+import { deliveryLabel, humanSchedule, interpretScheduledTask, type ScheduledTaskProposal } from "../../features/scheduled/model";
+import { TaskProposalCard } from "../../features/scheduled/TaskProposalCard";
 
 type ScheduleType = ScheduledSchedule["type"];
 
@@ -42,6 +44,7 @@ interface FormState {
   retry: RetryPolicy;
   misfirePolicy: MisfirePolicy;
   wallTime: number;
+  deliveryPolicy: DeliveryPolicy;
 }
 
 const DEFAULT_FORM: FormState = {
@@ -60,6 +63,7 @@ const DEFAULT_FORM: FormState = {
   retry: { max_attempts: 3, initial_backoff_seconds: 30, multiplier: 4, max_backoff_seconds: 600 },
   misfirePolicy: "coalesce_latest",
   wallTime: 900,
+  deliveryPolicy: "only_when_relevant",
 };
 
 export function ScheduledTasksPage() {
@@ -80,12 +84,16 @@ export function ScheduledTasksPage() {
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(() => searchParams.get("task"));
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [formTarget, setFormTarget] = useState<ScheduledTaskView | "create" | null>(null);
+  const [composerText, setComposerText] = useState("");
+  const [proposal, setProposal] = useState<ScheduledTaskProposal | null>(null);
+  const [proposalSaving, setProposalSaving] = useState(false);
   const [armedDeleteId, setArmedDeleteId] = useState<string | null>(null);
 
   const detailResult = useQuery({ ...taskDetailQuery(workspaceCwd, expandedTaskId ?? ""), enabled: Boolean(expandedTaskId) });
   const runsResult = useQuery({ ...taskRunsQuery(workspaceCwd, expandedTaskId ?? ""), enabled: Boolean(expandedTaskId) });
   const attemptsResult = useQuery(runAttemptsQuery(workspaceCwd, expandedTaskId ?? "", selectedRunId));
   const expandedSummary = tasks.find((task) => task.task_id === expandedTaskId) ?? null;
+  const orderedTasks = useMemo(() => [...tasks].sort((left, right) => taskGroupRank(left) - taskGroupRank(right)), [tasks]);
 
   useEffect(() => {
     const error = tasksResult.error;
@@ -151,6 +159,45 @@ export function ScheduledTasksPage() {
     }
   };
 
+  const createProposal = (seed = composerText) => {
+    if (!seed.trim()) return;
+    const next = interpretScheduledTask(seed, Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+    if (next.task_kind !== "literature_monitor") {
+      toast(t("st.unsupportedTaskKind"), "error");
+      return;
+    }
+    setComposerText(seed);
+    setProposal(next);
+  };
+
+  const confirmProposal = async (runImmediately: boolean) => {
+    if (!proposal) return;
+    setProposalSaving(true);
+    try {
+      const saved = await createScheduledTask(workspaceCwd, {
+        name: proposal.title,
+        display: { title: proposal.title, schedule_text: proposal.schedule.display_text, action_summary: proposal.action_summary },
+        delivery_policy: proposal.delivery_policy,
+        schedule: proposal.schedule.canonical,
+        executor: { kind: "literature_digest", config: { query: proposal.query, providers: proposal.providers, instructions: proposal.focus, max_results: 30, language: "zh-CN" } },
+        output: { relative_root: "outputs/scheduled" },
+        retry: DEFAULT_FORM.retry,
+        budget: { max_wall_time_seconds: DEFAULT_FORM.wallTime },
+        misfire_policy: DEFAULT_FORM.misfirePolicy,
+      });
+      if (runImmediately && saved.approval.status !== "pending") await runScheduledTaskNow(saved.task_id, workspaceCwd);
+      setProposal(null);
+      setComposerText("");
+      setExpandedTaskId(saved.task_id);
+      invalidateScheduledTasks(workspaceCwd, saved.task_id);
+      toast(t(runImmediately ? "st.createdAndRunning" : "st.created"), "success");
+    } catch (error) {
+      toastActionError(error, t("st.saveError"), toast);
+    } finally {
+      setProposalSaving(false);
+    }
+  };
+
   const openEdit = (taskId: string) => {
     void queryClient.fetchQuery(taskDetailQuery(workspaceCwd, taskId))
       .then((task) => setFormTarget(task))
@@ -170,7 +217,7 @@ export function ScheduledTasksPage() {
             title={degraded ? t("st.degradedBanner") : undefined}
             className="flex min-h-9 items-center gap-1.5 rounded-input bg-accent-fill px-3 text-xs font-medium text-accent-fg transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <Plus size={14} /> {t("st.create")}
+            <Plus size={14} /> {t("st.configureManually")}
           </button>
           <WorkspacePageRefreshButton label={t("common.refresh")} loading={tasksResult.isFetching} onClick={() => void tasksResult.refetch()} />
         </>}
@@ -182,6 +229,37 @@ export function ScheduledTasksPage() {
           <span>{statusResult.data && !statusResult.isError ? t("st.degradedDetail") : t("st.degradedBanner")}</span>
         </div>
       )}
+
+      <section aria-label={t("st.aiComposerTitle")} className="mt-4 rounded-composer border border-border bg-surface-raised p-4">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-input bg-accent-soft text-accent"><Sparkles size={16} /></div>
+          <div className="min-w-0 flex-1">
+            <label htmlFor="scheduled-composer" className="text-sm font-medium text-text">{t("st.aiComposerTitle")}</label>
+            <textarea
+              id="scheduled-composer"
+              value={composerText}
+              onChange={(event) => setComposerText(event.target.value)}
+              rows={3}
+              disabled={degraded}
+              placeholder={t("st.aiComposerPlaceholder")}
+              className="mt-2 w-full resize-none bg-transparent text-sm leading-6 text-text outline-none placeholder:text-muted"
+            />
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  ["st.templatePapers", "Every morning at 09:00, check PubMed for important new papers and only tell me when the results are meaningful.", true],
+                  ["st.templateWeekly", "Every Friday at 17:00, summarize this research project.", false],
+                  ["st.templateData", "Every day at 09:00, monitor this dataset and tell me only when it changes.", false],
+                  ["st.templateReminder", "Remind me tomorrow at 09:00 to continue this analysis.", false],
+                ].map(([label, seed, supported]) => <button key={String(label)} type="button" onClick={() => supported && createProposal(String(seed))} disabled={degraded || !supported} title={!supported ? t("st.comingSoon") : undefined} className="rounded-input border border-border px-2.5 py-1 text-[11px] text-muted transition-colors hover:bg-surface-hover hover:text-text disabled:opacity-50">{t(String(label))}</button>)}
+              </div>
+              <button type="button" onClick={() => createProposal()} disabled={degraded || !composerText.trim()} className="flex min-h-8 items-center gap-1.5 rounded-input bg-accent-fill px-3 text-xs font-medium text-accent-fg disabled:opacity-50"><Sparkles size={13} />{t("st.createWithAi")}</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {proposal && <TaskProposalCard proposal={proposal} saving={proposalSaving} onChange={setProposal} onCancel={() => setProposal(null)} onConfirm={(runNow) => void confirmProposal(runNow)} />}
 
       {(formTarget !== null) && (
         <TaskFormSection
@@ -196,55 +274,52 @@ export function ScheduledTasksPage() {
         />
       )}
 
-      <div className="mt-4 overflow-hidden rounded-card border border-border bg-surface">
+      <div className="mt-6">
+        {!tasksResult.isLoading && <p className="mb-2 text-right text-[11px] text-muted">{t("st.taskCount", { count: tasks.filter((task) => task.lifecycle_status !== "completed").length, limit: 20 })}</p>}
         {tasksResult.isLoading && tasks.length === 0 ? (
           <div className="py-10 text-center text-sm text-muted"><Loader2 size={18} className="mx-auto mb-2 animate-spin" />{t("common.loading")}</div>
         ) : tasks.length === 0 ? (
-          <p className="py-10 text-center text-sm text-muted">{degraded ? t("st.emptyDegraded") : t("st.empty")}</p>
+          <div className="rounded-card border border-border bg-surface px-5 py-10 text-center">
+            <CalendarClock size={22} className="mx-auto mb-3 text-muted" />
+            <h2 className="text-sm font-medium text-text">{t("st.emptyTitle")}</h2>
+            <p className="mx-auto mt-1 max-w-md text-xs leading-5 text-muted">{degraded ? t("st.emptyDegraded") : t("st.emptyDescription")}</p>
+          </div>
         ) : (
-          <ul data-testid="scheduled-task-list" className="divide-y divide-faint">
-            {tasks.map((task) => (
-              <li key={task.task_id}>
-                <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2.5", expandedTaskId === task.task_id && "bg-surface-selected/60")}>
-                  <button
-                    type="button"
-                    aria-expanded={expandedTaskId === task.task_id}
-                    onClick={() => toggleExpanded(task.task_id)}
-                    className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                  >
-                    {expandedTaskId === task.task_id ? <ChevronDown size={14} className="shrink-0 text-muted" /> : <ChevronRight size={14} className="shrink-0 text-muted" />}
-                    <span className="min-w-0 truncate text-sm font-medium text-text">{task.name}</span>
-                    <StatusBadge tone={lifecycleTone(task.lifecycle_status)} label={t(`st.lifecycle.${task.lifecycle_status}`)} />
-                    <StatusBadge tone={approvalTone(task.approval_status)} label={t(`st.approvalShort.${task.approval_status}`)} />
-                  </button>
-                  <span className="font-mono text-[10px] text-muted">{scheduleSummary(task.schedule)}</span>
-                  <span className="font-mono text-[10px] tabular-nums text-muted">{task.next_run_at ? formatTimestamp(task.next_run_at) : "—"}</span>
-                  {task.latest_run && <StatusDot status={task.latest_run.status} label={t(`st.runStatus.${task.latest_run.status}`)} />}
-                  <div className="flex items-center gap-1">
-                    <ActionButton icon={<Play size={12} />} label={t("st.runNow")} disabled={degraded} onClick={() => void runNow(task)} />
-                    <ActionButton icon={task.lifecycle_status === "paused" ? <Play size={12} /> : <Pause size={12} />} label={task.lifecycle_status === "paused" ? t("st.resume") : t("st.pause")} onClick={() => void togglePause(task)} />
-                    <ActionButton icon={<CalendarClock size={12} />} label={t("common.edit")} onClick={() => openEdit(task.task_id)} />
-                    <ActionButton icon={<Trash2 size={12} />} label={armedDeleteId === task.task_id ? t("st.confirmDelete") : t("common.delete")} danger={armedDeleteId === task.task_id} onClick={() => void deleteTask(task)} />
-                  </div>
-                </div>
-                {expandedTaskId === task.task_id && (
-                  <TaskExpansion
-                    summary={expandedSummary}
-                    detail={detailResult.data ?? null}
-                    detailLoading={detailResult.isLoading}
-                    runs={runsResult.data ?? []}
-                    runsLoading={runsResult.isLoading}
-                    selectedRunId={selectedRunId}
-                    onSelectRun={setSelectedRunId}
-                    attempts={attemptsResult.data ?? []}
-                    attemptsLoading={attemptsResult.isLoading && Boolean(selectedRunId)}
-                    onOpenExecution={(executionId) => navigate(executionDeepLink(workspaceCwd, executionId))}
-                    onOpenFile={openFile}
-                    onRefresh={() => invalidateScheduledTasks(workspaceCwd, task.task_id)}
-                  />
-                )}
-              </li>
-            ))}
+          <ul data-testid="scheduled-task-list" className="space-y-3">
+            {orderedTasks.map((task, index) => {
+              const group = taskGroup(task);
+              const previous = index > 0 ? taskGroup(orderedTasks[index - 1]!) : null;
+              return (
+                <Fragment key={task.task_id}>
+                  {group !== previous && <li className="pt-2 text-xs font-medium text-muted">{t(`st.group.${group}`)}</li>}
+                  <li className={cn("overflow-hidden rounded-card border bg-surface transition-colors", group === "attention" ? "border-warn/40" : "border-border", expandedTaskId === task.task_id && "border-accent-border")}>
+                    <div className="flex flex-wrap items-center gap-3 p-4">
+                      <button type="button" aria-expanded={expandedTaskId === task.task_id} onClick={() => toggleExpanded(task.task_id)} className="min-w-0 flex-1 text-left">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-sm font-medium text-text">{task.display.title ?? task.name}</span>
+                          <StatusBadge tone={lifecycleTone(task.lifecycle_status)} label={t(`st.lifecycle.${task.lifecycle_status}`)} />
+                          {group === "attention" && <StatusBadge tone="warn" label={t("st.needsAttention")} />}
+                        </div>
+                        <p className="mt-1 text-xs text-muted">{task.display.schedule_text ?? humanSchedule(task.schedule)}</p>
+                        <p className={cn("mt-2 text-xs", task.latest_run?.outcome === "needs_attention" ? "text-error-text" : "text-text")}>
+                          {task.latest_run?.summary.title ?? (task.latest_run ? t(`st.runStatus.${task.latest_run.status}`) : t("st.noRuns"))}
+                        </p>
+                        <p className="mt-1 text-[11px] text-muted">{task.next_run_at ? t("st.nextRun", { time: formatTimestamp(task.next_run_at) }) : t("st.noNextRun")}</p>
+                      </button>
+                      <div className="flex items-center gap-1">
+                        <ActionButton icon={<Play size={12} />} label={t("st.runNow")} disabled={degraded} onClick={() => void runNow(task)} />
+                        <ActionButton icon={task.lifecycle_status === "paused" ? <Play size={12} /> : <Pause size={12} />} label={task.lifecycle_status === "paused" ? t("st.resume") : t("st.pause")} onClick={() => void togglePause(task)} />
+                        <ActionButton icon={<CalendarClock size={12} />} label={t("common.edit")} onClick={() => openEdit(task.task_id)} />
+                        <ActionButton icon={armedDeleteId === task.task_id ? <Trash2 size={12} /> : <MoreHorizontal size={12} />} label={armedDeleteId === task.task_id ? t("st.confirmDelete") : t("common.delete")} danger={armedDeleteId === task.task_id} onClick={() => void deleteTask(task)} />
+                      </div>
+                    </div>
+                    {expandedTaskId === task.task_id && (
+                      <TaskExpansion summary={expandedSummary} detail={detailResult.data ?? null} detailLoading={detailResult.isLoading} runs={runsResult.data ?? []} runsLoading={runsResult.isLoading} selectedRunId={selectedRunId} onSelectRun={setSelectedRunId} attempts={attemptsResult.data ?? []} attemptsLoading={attemptsResult.isLoading && Boolean(selectedRunId)} onOpenExecution={(executionId) => navigate(executionDeepLink(workspaceCwd, executionId))} onOpenFile={openFile} onRefresh={() => invalidateScheduledTasks(workspaceCwd, task.task_id)} />
+                    )}
+                  </li>
+                </Fragment>
+              );
+            })}
           </ul>
         )}
       </div>
@@ -271,7 +346,9 @@ function TaskExpansion({ summary, detail, detailLoading, runs, runsLoading, sele
   onRefresh: () => void;
 }) {
   const { t } = useTranslation();
+  const [technicalOpen, setTechnicalOpen] = useState(false);
   const selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? null;
+  useEffect(() => setTechnicalOpen(false), [selectedRunId]);
   return (
     <div className="border-t border-faint bg-bg/40 px-4 py-3" data-testid={`task-expansion-${summary?.task_id ?? "unknown"}`}>
       {!detail && detailLoading && <p className="flex items-center gap-2 py-1 text-xs text-muted"><Loader2 size={13} className="animate-spin" />{t("common.loading")}</p>}
@@ -286,11 +363,10 @@ function TaskExpansion({ summary, detail, detailLoading, runs, runsLoading, sele
           <table className="w-full text-left text-xs">
             <thead>
               <tr className="border-b border-border bg-surface-2/60 text-[10px] uppercase tracking-wide text-muted">
-                <th scope="col" className="px-3 py-1.5 font-semibold">{t("runs.field.status")}</th>
                 <th scope="col" className="px-3 py-1.5 font-semibold">{t("st.scheduledFor")}</th>
-                <th scope="col" className="px-3 py-1.5 font-semibold">{t("st.businessDate")}</th>
-                <th scope="col" className="px-3 py-1.5 font-semibold">{t("st.attempts")}</th>
-                <th scope="col" className="px-3 py-1.5 font-semibold">{t("st.errorCode")}</th>
+                <th scope="col" className="px-3 py-1.5 font-semibold">{t("st.outcome")}</th>
+                <th scope="col" className="px-3 py-1.5 font-semibold">{t("st.result")}</th>
+                <th scope="col" className="px-3 py-1.5 font-semibold">{t("st.notification")}</th>
               </tr>
             </thead>
             <tbody>
@@ -301,11 +377,10 @@ function TaskExpansion({ summary, detail, detailLoading, runs, runsLoading, sele
                   aria-selected={selectedRunId === run.run_id}
                   className={cn("cursor-pointer border-b border-faint last:border-b-0 hover:bg-surface-hover", selectedRunId === run.run_id && "bg-surface-selected/60")}
                 >
-                  <td className="px-3 py-1.5"><StatusDot status={run.status} label={t(`st.runStatus.${run.status}`)} /></td>
-                  <td className="px-3 py-1.5 font-mono text-[11px] tabular-nums text-text">{formatTimestamp(run.scheduled_for)}</td>
-                  <td className="px-3 py-1.5 font-mono text-[11px] text-muted">{run.business_date}</td>
-                  <td className="px-3 py-1.5 tabular-nums text-muted">{run.attempt_count}</td>
-                  <td className="px-3 py-1.5 font-mono text-[11px] text-error-text">{run.error_code ?? "—"}</td>
+                  <td className="px-3 py-1.5 text-[11px] tabular-nums text-text">{formatTimestamp(run.scheduled_for)}</td>
+                  <td className="px-3 py-1.5"><StatusDot status={run.status} label={run.outcome ? t(`st.outcomeValue.${run.outcome}`) : t(`st.runStatus.${run.status}`)} /></td>
+                  <td className="px-3 py-1.5 text-text">{run.summary.title ?? (run.error_code ? t("st.runFailedFriendly") : "—")}</td>
+                  <td className="px-3 py-1.5 text-muted">{run.delivery ? (run.delivery.delivered ? t("st.delivered") : t("st.suppressed")) : "—"}</td>
                 </tr>
               ))}
             </tbody>
@@ -315,11 +390,16 @@ function TaskExpansion({ summary, detail, detailLoading, runs, runsLoading, sele
 
       {selectedRun && (
         <div className="mt-3 space-y-3 rounded-input border border-border bg-surface p-3">
-          <div className="flex flex-wrap items-center gap-2">
+          <div>
+            <h4 className="text-sm font-medium text-text">{selectedRun.summary.title ?? t(`st.runStatus.${selectedRun.status}`)}</h4>
+            {selectedRun.summary.text && <p className="mt-1 text-xs leading-5 text-muted">{selectedRun.summary.text}</p>}
+          </div>
+          <button type="button" onClick={() => setTechnicalOpen((value) => !value)} className="flex items-center gap-1 text-xs text-muted hover:text-text">{technicalOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{t("st.technicalDetails")}</button>
+          {technicalOpen && <div className="flex flex-wrap items-center gap-2">
             <h4 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">{t("st.attemptList")}</h4>
             {attemptsLoading && <Loader2 size={12} className="animate-spin text-muted" />}
-          </div>
-          {attempts.length === 0 && !attemptsLoading ? (
+          </div>}
+          {technicalOpen && (attempts.length === 0 && !attemptsLoading ? (
             <p className="text-xs text-muted">{t("st.noAttempts")}</p>
           ) : (
             <ul className="space-y-1">
@@ -338,8 +418,8 @@ function TaskExpansion({ summary, detail, detailLoading, runs, runsLoading, sele
                 </li>
               ))}
             </ul>
-          )}
-          {selectedRun.output_paths.length > 0 && (
+          ))}
+          {technicalOpen && selectedRun.output_paths.length > 0 && (
             <div>
               <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">{t("st.outputs")}</h4>
               <ul className="space-y-1">
@@ -422,6 +502,7 @@ function TaskFormSection({ cwd, target, onClose, onSaved }: { cwd: string; targe
   const [previewing, setPreviewing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const editing = target !== "create";
   const canSubmit = Boolean(form.name.trim()) && Boolean(form.query.trim()) && form.providers.length > 0 && (form.scheduleType !== "once" || Boolean(form.onceAt));
 
@@ -445,11 +526,13 @@ function TaskFormSection({ cwd, target, onClose, onSaved }: { cwd: string; targe
     }
   };
 
-  const save = async () => {
+  const save = async (runImmediately = false) => {
     setSaving(true);
     setConflict(false);
     const body = {
       name: form.name.trim(),
+      display: { title: form.name.trim(), schedule_text: humanSchedule(schedule()), action_summary: form.instructions.trim() || `Track ${form.query.trim()}` },
+      delivery_policy: form.deliveryPolicy,
       schedule: schedule(),
       executor: {
         kind: "literature_digest" as const,
@@ -470,7 +553,8 @@ function TaskFormSection({ cwd, target, onClose, onSaved }: { cwd: string; targe
       const saved = target === "create"
         ? await createScheduledTask(cwd, body)
         : await patchScheduledTask(target.task_id, cwd, target.revision, body);
-      toast(t(editing ? "st.saved" : "st.created"), "success");
+      if (!editing && runImmediately && saved.approval.status !== "pending") await runScheduledTaskNow(saved.task_id, cwd);
+      toast(t(editing ? "st.saved" : runImmediately ? "st.createdAndRunning" : "st.created"), "success");
       onSaved(saved.task_id);
     } catch (error) {
       if (isConflict(error)) {
@@ -503,34 +587,22 @@ function TaskFormSection({ cwd, target, onClose, onSaved }: { cwd: string; targe
         <Field label={t("st.field.name")}>
           <input value={form.name} onChange={(event) => update("name", event.target.value)} className={inputClass} />
         </Field>
-        <Field label={t("st.field.scheduleType")}>
-          <select value={form.scheduleType} onChange={(event) => update("scheduleType", event.target.value as ScheduleType)} className={inputClass}>
-            <option value="once">{t("st.schedule.once")}</option>
-            <option value="interval">{t("st.schedule.interval")}</option>
-            <option value="cron">{t("st.schedule.cron")}</option>
+        <Field label={t("st.frequency")}>
+          <select value={friendlyFrequency(form)} onChange={(event) => setFriendlyFrequency(event.target.value, form, setForm)} className={inputClass}>
+            <option value="daily">{t("st.frequencyValue.daily")}</option>
+            <option value="weekdays">{t("st.frequencyValue.weekdays")}</option>
+            <option value="weekly">{t("st.frequencyValue.weekly")}</option>
+            <option value="hourly">{t("st.frequencyValue.hourly")}</option>
+            <option value="once">{t("st.frequencyValue.once")}</option>
+            <option value="custom">{t("st.frequencyValue.custom")}</option>
           </select>
         </Field>
-        {form.scheduleType === "once" && (
-          <Field label={t("st.schedule.onceAt")} hint={t("st.schedule.onceAtHint")}>
-            <input type="datetime-local" value={form.onceAt} onChange={(event) => update("onceAt", event.target.value)} className={inputClass} />
-          </Field>
-        )}
-        {form.scheduleType === "interval" && (
-          <Field label={t("st.schedule.everySeconds")} hint={t("st.schedule.intervalMin")}>
-            <input type="number" min={300} value={form.intervalSeconds} onChange={(event) => update("intervalSeconds", Number(event.target.value))} className={inputClass} />
-          </Field>
-        )}
-        {form.scheduleType === "cron" && (
-          <Field label={t("st.field.cronExpression")} hint={t("st.schedule.cronHint")}>
-            <input value={form.cronExpression} onChange={(event) => update("cronExpression", event.target.value)} className={`${inputClass} font-mono`} placeholder="0 9 * * *" />
-          </Field>
-        )}
-        <Field label={t("st.field.timezone")}>
-          <select value={form.timezone} onChange={(event) => update("timezone", event.target.value)} className={inputClass}>
-            {!zones.includes(form.timezone) && <option value={form.timezone}>{form.timezone}</option>}
-            {zones.map((zone) => <option key={zone} value={zone}>{zone}</option>)}
-          </select>
-        </Field>
+        {form.scheduleType === "once" ? (
+          <Field label={t("st.schedule.onceAt")} hint={t("st.schedule.onceAtHint")}><input aria-label={t("st.schedule.onceAt")} type="datetime-local" value={form.onceAt} onChange={(event) => update("onceAt", event.target.value)} className={inputClass} /></Field>
+        ) : form.scheduleType === "cron" ? (
+          <Field label={t("st.field.time")}><input aria-label={t("st.field.time")} type="time" value={cronClock(form.cronExpression)} onChange={(event) => update("cronExpression", cronWithClock(form.cronExpression, event.target.value))} className={inputClass} /></Field>
+        ) : null}
+        <Field label={t("st.field.timezone")}><select value={form.timezone} onChange={(event) => update("timezone", event.target.value)} className={inputClass}>{!zones.includes(form.timezone) && <option value={form.timezone}>{form.timezone}</option>}{zones.map((zone) => <option key={zone} value={zone}>{zone}</option>)}</select></Field>
 
         <Field label={t("st.field.query")}>
           <input value={form.query} onChange={(event) => update("query", event.target.value)} className={inputClass} />
@@ -556,6 +628,7 @@ function TaskFormSection({ cwd, target, onClose, onSaved }: { cwd: string; targe
         <Field label={t("st.field.instructions")}>
           <textarea value={form.instructions} onChange={(event) => update("instructions", event.target.value)} rows={2} className={inputClass} />
         </Field>
+        <Field label={t("st.notifyWhen")}><select value={form.deliveryPolicy} onChange={(event) => update("deliveryPolicy", event.target.value as DeliveryPolicy)} className={inputClass}><option value="always">{deliveryLabel("always")}</option><option value="only_when_relevant">{deliveryLabel("only_when_relevant")}</option><option value="only_on_change">{deliveryLabel("only_on_change")}</option><option value="only_on_failure">{deliveryLabel("only_on_failure")}</option></select></Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label={t("st.field.maxResults")}>
             <input type="number" min={1} max={100} value={form.maxResults} onChange={(event) => update("maxResults", Number(event.target.value))} className={inputClass} />
@@ -567,30 +640,27 @@ function TaskFormSection({ cwd, target, onClose, onSaved }: { cwd: string; targe
             </select>
           </Field>
         </div>
-
-        <Field label={t("st.field.outputRoot")}>
-          <input value={form.relativeRoot} onChange={(event) => update("relativeRoot", event.target.value)} className={`${inputClass} font-mono`} />
-        </Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label={t("st.retry.maxAttempts")}>
-            <input type="number" min={1} max={5} value={form.retry.max_attempts} onChange={(event) => update("retry", { ...form.retry, max_attempts: Number(event.target.value) })} className={inputClass} />
-          </Field>
-          <Field label={t("st.misfirePolicy")}>
-            <select value={form.misfirePolicy} onChange={(event) => update("misfirePolicy", event.target.value as MisfirePolicy)} className={inputClass}>
-              <option value="coalesce_latest">{t("st.misfire.coalesce_latest")}</option>
-              <option value="skip">{t("st.misfire.skip")}</option>
-            </select>
-          </Field>
-        </div>
       </div>
+
+      <button type="button" onClick={() => setAdvancedOpen((value) => !value)} className="mt-4 flex items-center gap-1 text-xs text-muted hover:text-text">{advancedOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{t("st.advanced")}</button>
+      {advancedOpen && <div className="mt-3 grid gap-3 rounded-input border border-border bg-surface-2 p-3 md:grid-cols-2">
+        <Field label={t("st.field.scheduleType")}><select value={form.scheduleType} onChange={(event) => update("scheduleType", event.target.value as ScheduleType)} className={inputClass}><option value="once">{t("st.schedule.once")}</option><option value="interval">{t("st.schedule.interval")}</option><option value="cron">{t("st.schedule.cron")}</option></select></Field>
+        {form.scheduleType === "cron" && <Field label={t("st.field.cronExpression")} hint={t("st.schedule.cronHint")}><input value={form.cronExpression} onChange={(event) => update("cronExpression", event.target.value)} className={`${inputClass} font-mono`} placeholder="0 9 * * *" /></Field>}
+        {form.scheduleType === "interval" && <Field label={t("st.schedule.everySeconds")} hint={t("st.schedule.intervalMin")}><input type="number" min={300} value={form.intervalSeconds} onChange={(event) => update("intervalSeconds", Number(event.target.value))} className={inputClass} /></Field>}
+        <Field label={t("st.field.outputRoot")}><input value={form.relativeRoot} onChange={(event) => update("relativeRoot", event.target.value)} className={`${inputClass} font-mono`} /></Field>
+        <Field label={t("st.retry.maxAttempts")}><input type="number" min={1} max={5} value={form.retry.max_attempts} onChange={(event) => update("retry", { ...form.retry, max_attempts: Number(event.target.value) })} className={inputClass} /></Field>
+        <Field label={t("st.misfirePolicy")}><select value={form.misfirePolicy} onChange={(event) => update("misfirePolicy", event.target.value as MisfirePolicy)} className={inputClass}><option value="coalesce_latest">{t("st.misfire.coalesce_latest")}</option><option value="skip">{t("st.misfire.skip")}</option></select></Field>
+        <Field label={t("st.field.maxRuntime")}><input type="number" min={60} max={3600} value={form.wallTime} onChange={(event) => update("wallTime", Number(event.target.value))} className={inputClass} /></Field>
+      </div>}
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button type="button" onClick={() => void runPreview()} disabled={previewing || !canSubmit} className="flex min-h-8 items-center gap-1.5 rounded-input border border-border bg-surface px-3 text-xs text-text transition-colors hover:border-accent-border hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-50">
           {previewing ? <Loader2 size={12} className="animate-spin" /> : <Clock3 size={12} />} {t("st.preview")}
         </button>
-        <button type="button" onClick={() => void save()} disabled={saving || !canSubmit} className="flex min-h-8 items-center gap-1.5 rounded-input bg-accent-fill px-3 text-xs font-medium text-accent-fg transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
-          {saving ? t("st.saving") : t("common.save")}
+        <button type="button" onClick={() => void save(!editing)} disabled={saving || !canSubmit} className="flex min-h-8 items-center gap-1.5 rounded-input bg-accent-fill px-3 text-xs font-medium text-accent-fg transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
+          {saving ? t("st.saving") : editing ? t("common.save") : t("st.scheduleAndRun")}
         </button>
+        {!editing && <button type="button" onClick={() => void save(false)} disabled={saving || !canSubmit} className="min-h-8 rounded-input border border-border px-3 text-xs text-text disabled:opacity-50">{t("st.scheduleOnly")}</button>}
         <button type="button" onClick={onClose} className="min-h-8 rounded-input border border-border px-3 text-xs text-muted transition-colors hover:text-text">{t("common.cancel")}</button>
       </div>
 
@@ -672,16 +742,52 @@ function lifecycleTone(status: TaskListSummary["lifecycle_status"]): "ok" | "mut
   return "muted";
 }
 
-function approvalTone(status: TaskListSummary["approval_status"]): "ok" | "muted" | "warn" {
-  if (status === "approved") return "ok";
-  if (status === "pending") return "warn";
-  return "muted";
+function taskGroup(task: TaskListSummary): "attention" | "active" | "paused" | "completed" {
+  if (task.approval_status === "pending" || task.latest_run?.outcome === "needs_attention") return "attention";
+  if (task.lifecycle_status === "paused") return "paused";
+  if (task.lifecycle_status === "completed") return "completed";
+  return "active";
 }
 
-function scheduleSummary(schedule: ScheduledSchedule): string {
-  if (schedule.type === "once") return `${formatTimestamp(schedule.at)} · ${schedule.timezone}`;
-  if (schedule.type === "interval") return `every ${Math.round(schedule.every_seconds / 60)}m · ${schedule.timezone}`;
-  return `${schedule.expression} · ${schedule.timezone}`;
+function taskGroupRank(task: TaskListSummary): number {
+  return { attention: 0, active: 1, paused: 2, completed: 3 }[taskGroup(task)];
+}
+
+function friendlyFrequency(form: FormState): string {
+  if (form.scheduleType === "once") return "once";
+  if (form.scheduleType === "interval") return form.intervalSeconds === 3600 ? "hourly" : "custom";
+  const day = form.cronExpression.trim().split(/\s+/)[4];
+  if (day === "*") return "daily";
+  if (day === "1-5") return "weekdays";
+  if (/^[0-6]$/.test(day ?? "")) return "weekly";
+  return "custom";
+}
+
+function setFriendlyFrequency(value: string, form: FormState, setForm: (updater: (current: FormState) => FormState) => void): void {
+  const clock = cronClock(form.cronExpression);
+  const [hour, minute] = clock.split(":");
+  setForm((current) => {
+    if (value === "once") return { ...current, scheduleType: "once", onceAt: current.onceAt || new Date(Date.now() + 86_400_000).toISOString().slice(0, 16) };
+    if (value === "hourly") return { ...current, scheduleType: "interval", intervalSeconds: 3600 };
+    if (value === "weekdays") return { ...current, scheduleType: "cron", cronExpression: `${Number(minute)} ${Number(hour)} * * 1-5` };
+    if (value === "weekly") return { ...current, scheduleType: "cron", cronExpression: `${Number(minute)} ${Number(hour)} * * 5` };
+    if (value === "daily") return { ...current, scheduleType: "cron", cronExpression: `${Number(minute)} ${Number(hour)} * * *` };
+    return current;
+  });
+}
+
+function cronClock(expression: string): string {
+  const [minute = "0", hour = "9"] = expression.trim().split(/\s+/);
+  return `${String(Number(hour)).padStart(2, "0")}:${String(Number(minute)).padStart(2, "0")}`;
+}
+
+function cronWithClock(expression: string, clock: string): string {
+  const fields = expression.trim().split(/\s+/);
+  while (fields.length < 5) fields.push("*");
+  const [hour, minute] = clock.split(":");
+  fields[0] = String(Number(minute));
+  fields[1] = String(Number(hour));
+  return fields.slice(0, 5).join(" ");
 }
 
 function formatTimestamp(value?: string | null): string {
@@ -713,6 +819,7 @@ function formFromTask(task: ScheduledTaskView): FormState {
     retry: { ...task.retry },
     misfirePolicy: task.misfire_policy,
     wallTime: task.budget.max_wall_time_seconds,
+    deliveryPolicy: task.delivery_policy,
   };
 }
 

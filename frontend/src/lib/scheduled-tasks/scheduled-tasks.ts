@@ -15,6 +15,12 @@ export type ScheduledRunStatus = "pending" | "skipped" | "running" | "succeeded"
 export type ScheduledAttemptStatus = "pending" | "running" | "succeeded" | "failed" | "timed_out" | "cancelled" | "interrupted";
 export type LiteratureProvider = "pubmed" | "genbank" | "arxiv" | "pubchem" | "uniprot";
 export type MisfirePolicy = "coalesce_latest" | "skip";
+export type DeliveryPolicy = "always" | "only_when_relevant" | "only_on_change" | "only_on_failure";
+export type RunOutcome = "new_information" | "no_change" | "threshold_triggered" | "completed" | "needs_attention";
+export interface TaskDisplay { title?: string; schedule_text?: string; action_summary?: string }
+export interface TaskOrigin { session_id?: string; message_id?: string }
+export interface RunSummary { title?: string; text?: string; item_count?: number }
+export interface RunDelivery { policy: DeliveryPolicy; delivered: boolean; suppressed_reason?: string }
 
 export const LITERATURE_PROVIDERS: LiteratureProvider[] = ["pubmed", "genbank", "arxiv", "pubchem", "uniprot"];
 
@@ -51,6 +57,9 @@ export interface ScheduledTaskView {
   schema_version: 1;
   revision: number;
   name: string;
+  display: TaskDisplay;
+  origin: TaskOrigin;
+  delivery_policy: DeliveryPolicy;
   lifecycle_status: ScheduledLifecycleStatus;
   schedule: ScheduledSchedule;
   executor: ScheduledExecutor;
@@ -74,6 +83,8 @@ export interface TaskListSummary {
   task_id: string;
   revision: number;
   name: string;
+  display: TaskDisplay;
+  delivery_policy: DeliveryPolicy;
   lifecycle_status: ScheduledLifecycleStatus;
   schedule: ScheduledSchedule;
   approval_status: "none" | "pending" | "approved";
@@ -81,6 +92,9 @@ export interface TaskListSummary {
   latest_run: null | {
     run_id: string;
     status: ScheduledRunStatus;
+    outcome: RunOutcome | null;
+    summary: RunSummary;
+    delivery: RunDelivery | null;
     scheduled_for: string;
     ended_at: string | null;
     latest_attempt_id: string | null;
@@ -97,6 +111,9 @@ export interface ScheduledTaskRun {
   business_date: string;
   occurrence_key: string;
   status: ScheduledRunStatus;
+  outcome: RunOutcome | null;
+  summary: RunSummary;
+  delivery: RunDelivery | null;
   snapshot: { name: string; [key: string]: unknown };
   snapshot_sha256: string;
   latest_attempt_id: string | null;
@@ -163,15 +180,18 @@ export interface RunRowView {
   attempt_count: number;
   error_code: string | null;
   output_paths: string[];
+  outcome: RunOutcome | null;
+  summary: RunSummary;
+  delivery: RunDelivery | null;
 }
 
 export function toRunRow(run: ScheduledTaskRun): RunRowView {
-  return { run_id: run.run_id, status: run.status, trigger_source: run.trigger_source, scheduled_for: run.scheduled_for, business_date: run.business_date, attempt_count: run.attempt_count, error_code: run.error_code, output_paths: run.output_paths };
+  return { run_id: run.run_id, status: run.status, trigger_source: run.trigger_source, scheduled_for: run.scheduled_for, business_date: run.business_date, attempt_count: run.attempt_count, error_code: run.error_code, output_paths: run.output_paths, outcome: run.outcome, summary: run.summary, delivery: run.delivery };
 }
 
 /** Optimistic row for a 202 manual run — pending until the next poll confirms. */
 export function manualRunToRow(view: ManualRunView): RunRowView {
-  return { run_id: view.run_id, status: view.status, trigger_source: view.trigger_source, scheduled_for: new Date().toISOString(), business_date: new Date().toISOString().slice(0, 10), attempt_count: view.latest_attempt ? 1 : 0, error_code: null, output_paths: [] };
+  return { run_id: view.run_id, status: view.status, trigger_source: view.trigger_source, scheduled_for: new Date().toISOString(), business_date: new Date().toISOString().slice(0, 10), attempt_count: view.latest_attempt ? 1 : 0, error_code: null, output_paths: [], outcome: null, summary: {}, delivery: null };
 }
 
 // ── Client ───────────────────────────────────────────────────────────────────
@@ -215,6 +235,9 @@ export async function getScheduledTask(taskId: string, cwd: string): Promise<Sch
 
 export interface CreateTaskBody {
   name: string;
+  display?: TaskDisplay;
+  origin?: TaskOrigin;
+  delivery_policy?: DeliveryPolicy;
   schedule: ScheduledSchedule;
   executor: ScheduledExecutor;
   output: { relative_root: string };

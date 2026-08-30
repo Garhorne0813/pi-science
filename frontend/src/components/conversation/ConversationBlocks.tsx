@@ -13,6 +13,8 @@ import { agentActionTextByBlock } from "../../lib/conversation";
 import { extractCitations } from "../../lib/citations";
 import { parseSuggestions } from "../../lib/conversation";
 import { MessageActions } from "./MessageActions";
+import { extractScheduledProposal } from "../../features/scheduled/model";
+import { ConversationScheduledProposal } from "../../features/scheduled/ConversationScheduledProposal";
 
 /** Render blocks, grouping consecutive tool cards together. */
 export function groupBlocks(blocks: ThreadBlock[]): ThreadBlock[][] {
@@ -136,12 +138,15 @@ function AgentMessage({ parts, partial, timestamp, actionText, codeRunner }: { p
   if (!rawText && partial) return null;
   if (!rawText) return null;
 
-  const text = parseSuggestions(rawText).clean;
+  const suggested = parseSuggestions(rawText).clean;
+  const scheduled = extractScheduledProposal(suggested);
+  const text = scheduled.text;
   const citations = extractCitations(text);
 
   return (
-    <div className="group/message">
-      <MarkdownViewer variant="chat" codeRunner={codeRunner}>{text}</MarkdownViewer>
+    <div className="group/message space-y-3">
+      {text && <MarkdownViewer variant="chat" codeRunner={codeRunner}>{text}</MarkdownViewer>}
+      {scheduled.proposal && codeRunner?.cwd && <ConversationScheduledProposal initial={scheduled.proposal} cwd={codeRunner.cwd} />}
       {citations.length > 0 && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           <span className="text-[10px] text-muted">{t("conversation.sources")} ({citations.length})</span>

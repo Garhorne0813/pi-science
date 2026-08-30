@@ -3,7 +3,7 @@
 // run, server preview {local, utc} display, approval confirmation and the
 // SQLite-degraded disabled state. All fetches are stubbed — no real network.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import i18n from "../../i18n";
@@ -42,6 +42,8 @@ const summaries: TaskListSummary[] = Array.from({ length: 50 }, (_, index) => ({
   task_id: `stask_${index + 1}`,
   revision: index === 0 ? 3 : 1,
   name: index === 0 ? "Daily digest" : `Task ${index + 1}`,
+  display: { title: index === 0 ? "Daily digest" : `Task ${index + 1}`, schedule_text: "Every day · 09:00 · Asia/Shanghai" },
+  delivery_policy: "only_when_relevant",
   lifecycle_status: "active",
   schedule: { type: "cron", expression: "0 9 * * *", timezone: "Asia/Shanghai" },
   approval_status: "none",
@@ -56,6 +58,9 @@ const detail: ScheduledTaskView = {
   schema_version: 1,
   revision: 3,
   name: "Daily digest",
+  display: { title: "Daily digest", schedule_text: "Every day · 09:00 · Asia/Shanghai", action_summary: "Track single-cell RNA sequencing" },
+  origin: { session_id: "session_1", message_id: "message_1" },
+  delivery_policy: "only_when_relevant",
   lifecycle_status: "active",
   schedule: { type: "cron", expression: "0 9 * * *", timezone: "Asia/Shanghai" },
   executor: { kind: "literature_digest", config: { query: "single-cell RNA sequencing", providers: ["pubmed"], max_results: 30, language: "zh-CN" } },
@@ -83,6 +88,9 @@ const runsPage = {
     business_date: "2026-08-26",
     occurrence_key: "occ_1",
     status: "succeeded",
+    outcome: "new_information",
+    summary: { title: "3 new relevant papers", text: "Three important papers were found.", item_count: 3 },
+    delivery: { policy: "only_when_relevant", delivered: true },
     snapshot: {},
     snapshot_sha256: "aa",
     latest_attempt_id: "satt_1",
@@ -123,6 +131,7 @@ let patchStatus = 409;
 const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
   if (url.startsWith("/api/scheduled-tasks/status")) return jsonResponse(STATUS_OK);
+  if (url.startsWith("/api/scheduled-tasks?") && init?.method === "POST") return jsonResponse({ ...detail, approval: { ...detail.approval, status: "none" } }, 201);
   if (url.startsWith("/api/scheduled-tasks?")) return jsonResponse({ items: summaries, next_cursor: null });
   if (/\/api\/scheduled-tasks\/stask_\d+\?/.test(url)) {
     if (init?.method === "PATCH") {
@@ -200,7 +209,8 @@ describe("ScheduledTasksPage", () => {
     renderPage("/workspace/proj/scheduled-tasks?task=stask_1");
 
     await screen.findByText("Run history");
-    fireEvent.click(await screen.findByText("2026-08-26"));
+    fireEvent.click(await screen.findByText("3 new relevant papers"));
+    fireEvent.click(await screen.findByRole("button", { name: "Technical details" }));
     expect(await screen.findByText("exec_a2")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /exec_a2/ }));
@@ -229,7 +239,7 @@ describe("ScheduledTasksPage", () => {
     await screen.findByText("Daily digest");
 
     fireEvent.click(screen.getByRole("button", { name: /Daily digest/ }));
-    await screen.findByText(/Succeeded/);
+    await screen.findByText("3 new relevant papers");
 
     fireEvent.click(screen.getAllByTitle("Run now")[0]);
     const pendingRow = await screen.findByText("Pending");
@@ -263,7 +273,7 @@ describe("ScheduledTasksPage", () => {
     renderPage();
     await screen.findByText("Daily digest");
 
-    fireEvent.click(screen.getByRole("button", { name: "New task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Configure manually" }));
     fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "Weekly digest" } });
     fireEvent.change(screen.getByLabelText("Query"), { target: { value: "CRISPR review" } });
 
@@ -272,6 +282,29 @@ describe("ScheduledTasksPage", () => {
     expect(preview).toHaveTextContent("2026-08-26 09:00");
     expect(preview).toHaveTextContent("2026-08-26 01:00 UTC");
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/scheduled-tasks/preview"), expect.anything());
+  });
+
+  it("turns natural language into an editable proposal and persists only after confirmation", async () => {
+    renderPage();
+    await screen.findByText("Daily digest");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "What should Pi-Science do automatically?" }), { target: { value: "Every weekday at 09:00 check PubMed for new CRISPR screening papers and only tell me when results are meaningful." } });
+    fireEvent.click(screen.getByRole("button", { name: "Create with AI" }));
+
+    const proposal = await screen.findByRole("region", { name: "Scheduled task proposal" });
+    expect(proposal).toHaveTextContent("Every weekday");
+    expect(proposal).toHaveTextContent("Only when meaningful results are found");
+    expect(proposal).not.toHaveTextContent("0 9 * * 1-5");
+
+    fireEvent.click(within(proposal).getByRole("button", { name: "Edit" }));
+    fireEvent.change(within(proposal).getByLabelText("Time"), { target: { value: "10:30" } });
+    fireEvent.click(within(proposal).getByRole("button", { name: "Schedule" }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some((call) => String(call[0]).startsWith("/api/scheduled-tasks?") && (call[1] as RequestInit | undefined)?.method === "POST")).toBe(true));
+    const [, init] = fetchMock.mock.calls.find((call) => String(call[0]).startsWith("/api/scheduled-tasks?") && (call[1] as RequestInit | undefined)?.method === "POST") as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.schedule).toMatchObject({ type: "cron", expression: "30 10 * * 1-5" });
+    expect(body.delivery_policy).toBe("only_when_relevant");
   });
 
   it("disables creation while the SQLite-backed scheduler is unavailable (503 status)", async () => {
@@ -283,6 +316,6 @@ describe("ScheduledTasksPage", () => {
     renderPage();
 
     expect(await screen.findByRole("alert")).toHaveTextContent("unavailable");
-    expect(screen.getByRole("button", { name: "New task" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Configure manually" })).toBeDisabled();
   });
 });

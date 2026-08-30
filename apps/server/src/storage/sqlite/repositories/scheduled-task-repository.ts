@@ -8,7 +8,12 @@ import type {
   MisfirePolicy,
   RetryPolicy,
   ScheduledTaskBudget,
+  ScheduledTaskDeliveryPolicy,
+  ScheduledTaskDisplay,
   ScheduledTaskExecutor,
+  ScheduledTaskOrigin,
+  ScheduledTaskRunOutcome,
+  ScheduledTaskRunSummary,
   ScheduledTaskSchedule,
 } from "@pi-science/contracts";
 import {
@@ -48,6 +53,9 @@ export interface InsertScheduledTaskInput {
   project_id: string;
   workspace_path: string;
   name: string;
+  display?: ScheduledTaskDisplay;
+  origin?: ScheduledTaskOrigin;
+  delivery_policy?: ScheduledTaskDeliveryPolicy;
   /** Raw schedule value; validated + normalized via validateSchedule before persisting. */
   schedule: unknown;
   executor: ScheduledTaskExecutor;
@@ -63,6 +71,9 @@ export interface InsertScheduledTaskInput {
  * changes reset approval; schedule changes recompute the future next_run_at. */
 export interface PatchScheduledTaskInput {
   name?: string;
+  display?: ScheduledTaskDisplay;
+  origin?: ScheduledTaskOrigin;
+  delivery_policy?: ScheduledTaskDeliveryPolicy;
   schedule?: unknown;
   executor?: ScheduledTaskExecutor;
   output?: { relative_root: string };
@@ -145,6 +156,9 @@ export interface FinishAttemptTerminal {
   output_paths?: string[];
   usage?: Record<string, unknown>;
   retryable?: boolean | null;
+  outcome?: ScheduledTaskRunOutcome;
+  summary?: ScheduledTaskRunSummary;
+  recommend_notify?: boolean;
 }
 
 export interface RetryAttemptPlan {
@@ -194,6 +208,8 @@ export interface TaskListSummary {
   task_id: string;
   revision: number;
   name: string;
+  display: ScheduledTaskDisplay;
+  delivery_policy: ScheduledTaskDeliveryPolicy;
   lifecycle_status: ScheduledTaskLifecycleStatus;
   schedule: ScheduledTaskSchedule;
   approval_status: "none" | "pending" | "approved";
@@ -201,6 +217,9 @@ export interface TaskListSummary {
   latest_run: null | {
     run_id: string;
     status: ScheduledTaskRunStatus;
+    outcome: ScheduledTaskRunOutcome | null;
+    summary: ScheduledTaskRunSummary;
+    delivery: ScheduledTaskRun["delivery"];
     scheduled_for: string;
     ended_at: string | null;
     latest_attempt_id: string | null;
@@ -243,6 +262,9 @@ export class ScheduledTaskRepository {
     const nextRunAt = firstOccurrence(schedule, input.now);
     const misfire = input.misfire_policy ?? "coalesce_latest";
     const concurrency = input.concurrency_policy ?? "forbid";
+    const display = input.display ?? {};
+    const origin = input.origin ?? {};
+    const deliveryPolicy = input.delivery_policy ?? "only_when_relevant";
     await this.store.batch([
       {
         sql: `INSERT INTO scheduled_tasks
@@ -250,13 +272,14 @@ export class ScheduledTaskRepository {
                schedule_json, executor_kind, config_json, output_json,
                approval_status, approval_scope_hash, approval_revision, approval_categories_json, approval_terms_json, approval_updated_at,
                retry_json, budget_json, misfire_policy, concurrency_policy,
-               next_run_at, last_scheduled_at, last_run_id, created_at, updated_at)
-              VALUES (?, ?, ?, 1, 1, ?, 'active', NULL, ?, ?, ?, ?, 'none', ?, NULL, '[]', '[]', NULL, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+               next_run_at, last_scheduled_at, last_run_id, created_at, updated_at,
+               display_json, origin_json, delivery_policy)
+              VALUES (?, ?, ?, 1, 1, ?, 'active', NULL, ?, ?, ?, ?, 'none', ?, NULL, '[]', '[]', NULL, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
         params: [
           taskId, input.project_id, input.workspace_path, input.name,
           JSON.stringify(schedule), input.executor.kind, JSON.stringify(input.executor.config), JSON.stringify(input.output),
           scopeHash, JSON.stringify(input.retry), JSON.stringify(input.budget), misfire, concurrency,
-          nextRunAt, input.now, input.now,
+          nextRunAt, input.now, input.now, JSON.stringify(display), JSON.stringify(origin), deliveryPolicy,
         ],
         expectChanges: 1,
       },
@@ -283,14 +306,16 @@ export class ScheduledTaskRepository {
     params.push(limit + 1);
     const rows = await this.store.all<ListTasksRow>(
       `WITH ranked AS (
-         SELECT r.task_id, r.run_id, r.status, r.scheduled_for, r.ended_at, r.latest_attempt_id,
+         SELECT r.task_id, r.run_id, r.status, r.outcome, r.summary_json, r.delivery_json,
+                r.scheduled_for, r.ended_at, r.latest_attempt_id,
                 ROW_NUMBER() OVER (PARTITION BY r.task_id ORDER BY r.created_at DESC, r.run_id DESC) AS rn
            FROM scheduled_task_runs r
        )
-       SELECT st.task_id, st.revision, st.name, st.lifecycle_status, st.schedule_json,
+       SELECT st.task_id, st.revision, st.name, st.display_json, st.delivery_policy, st.lifecycle_status, st.schedule_json,
               st.approval_status, st.next_run_at, st.created_at,
-              rr.run_id AS lr_run_id, rr.status AS lr_status, rr.scheduled_for AS lr_scheduled_for,
-              rr.ended_at AS lr_ended_at, rr.latest_attempt_id AS lr_latest_attempt_id,
+              rr.run_id AS lr_run_id, rr.status AS lr_status, rr.outcome AS lr_outcome,
+              rr.summary_json AS lr_summary_json, rr.delivery_json AS lr_delivery_json,
+              rr.scheduled_for AS lr_scheduled_for, rr.ended_at AS lr_ended_at, rr.latest_attempt_id AS lr_latest_attempt_id,
               ea.execution_id AS lr_execution_id
          FROM scheduled_tasks st
          LEFT JOIN ranked rr ON rr.task_id = st.task_id AND rr.rn = 1
@@ -316,6 +341,9 @@ export class ScheduledTaskRepository {
   async patchTask(taskId: string, expectedRevision: number, patch: PatchScheduledTaskInput, nowMs: number): Promise<ScheduledTask> {
     const current = await this.requireLiveTaskRow(taskId, expectedRevision);
     const name = patch.name ?? current.name;
+    const display = patch.display ?? parseJson<ScheduledTaskDisplay>(current.display_json, {});
+    const origin = patch.origin ?? parseJson<ScheduledTaskOrigin>(current.origin_json, {});
+    const deliveryPolicy = patch.delivery_policy ?? current.delivery_policy as ScheduledTaskDeliveryPolicy;
     const scheduleChanged = patch.schedule !== undefined;
     const schedule = scheduleChanged ? validateSchedule(patch.schedule) : parseJson<ScheduledTaskSchedule>(current.schedule_json, undefined as never);
     const executor: ScheduledTaskExecutor = patch.executor
@@ -339,6 +367,7 @@ export class ScheduledTaskRepository {
                   approval_status = ?, approval_scope_hash = ?, approval_revision = ?,
                   approval_categories_json = ?, approval_terms_json = ?, approval_updated_at = ?,
                   retry_json = ?, budget_json = ?, misfire_policy = ?, next_run_at = ?,
+                  display_json = ?, origin_json = ?, delivery_policy = ?,
                   revision = revision + 1, updated_at = ?
             WHERE task_id = ? AND revision = ?`,
       params: [
@@ -346,6 +375,7 @@ export class ScheduledTaskRepository {
         scopeChanged ? "none" : current.approval_status, scopeHash, scopeChanged ? null : current.approval_revision,
         scopeChanged ? "[]" : current.approval_categories_json, scopeChanged ? "[]" : current.approval_terms_json, scopeChanged ? nowMs : current.approval_updated_at,
         JSON.stringify(retry), JSON.stringify(budget), patch.misfire_policy ?? current.misfire_policy, nextRunAt,
+        JSON.stringify(display), JSON.stringify(origin), deliveryPolicy,
         nowMs, taskId, expectedRevision,
       ],
       expectChanges: 1,
@@ -670,6 +700,14 @@ export class ScheduledTaskRepository {
   async finishAttempt(attemptId: string, ownerToken: string, ownerGeneration: number, terminal: FinishAttemptTerminal, nowMs: number): Promise<ScheduledTaskRunAttempt | null> {
     const outputPathsJson = JSON.stringify(terminal.output_paths ?? []);
     const usageJson = JSON.stringify(terminal.usage ?? {});
+    const runRow = await this.store.get<Pick<RunRow, "snapshot_json">>(
+      "SELECT r.snapshot_json FROM scheduled_task_runs r JOIN scheduled_task_run_attempts a ON a.run_id = r.run_id WHERE a.attempt_id = ?",
+      [attemptId],
+    );
+    const snapshot = runRow ? parseJson<ScheduledTaskSnapshot>(runRow.snapshot_json, undefined as never) : null;
+    const outcome = terminal.outcome ?? (terminal.status === "succeeded" ? "completed" : "needs_attention");
+    const summary = terminal.summary ?? {};
+    const delivery = snapshot ? deliveryFor(snapshot.delivery_policy, terminal.status, outcome, terminal.recommend_notify) : null;
     try {
       await this.store.batch([
         {
@@ -686,11 +724,11 @@ export class ScheduledTaskRepository {
         },
         {
           sql: `UPDATE scheduled_task_runs
-                  SET status = ?, output_paths_json = ?, error_code = ?, error_message = ?,
+                  SET status = ?, outcome = ?, summary_json = ?, delivery_json = ?, output_paths_json = ?, error_code = ?, error_message = ?,
                       ended_at = ?, active_slot = NULL, updated_at = ?
                 WHERE run_id = (SELECT run_id FROM scheduled_task_run_attempts WHERE attempt_id = ?)
                   AND status IN ('pending', 'running') AND active_slot = 1`,
-          params: [terminal.status, outputPathsJson, terminal.error_code ?? null, terminal.error_message ?? null, nowMs, nowMs, attemptId],
+          params: [terminal.status, outcome, JSON.stringify(summary), JSON.stringify(delivery ?? {}), outputPathsJson, terminal.error_code ?? null, terminal.error_message ?? null, nowMs, nowMs, attemptId],
           expectChanges: 1,
         },
       ]);
@@ -756,7 +794,8 @@ export class ScheduledTaskRepository {
       },
       {
         sql: `UPDATE scheduled_task_runs
-                SET status = 'pending', active_slot = 1, latest_attempt_id = ?, attempt_count = attempt_count + 1, ended_at = NULL, updated_at = ?
+                SET status = 'pending', outcome = NULL, summary_json = '{}', delivery_json = '{}',
+                    active_slot = 1, latest_attempt_id = ?, attempt_count = attempt_count + 1, ended_at = NULL, updated_at = ?
               WHERE run_id = ? AND active_slot IS NULL AND status NOT IN ('pending', 'running')
                 AND NOT EXISTS (
                   SELECT 1 FROM scheduled_task_runs other
@@ -867,7 +906,12 @@ export class ScheduledTaskRepository {
           expectChanges: 1,
         },
         {
-          sql: "UPDATE scheduled_task_runs SET status = 'interrupted', active_slot = NULL, ended_at = COALESCE(ended_at, ?), updated_at = ? WHERE run_id = ? AND status = 'running' AND active_slot = 1",
+          sql: `UPDATE scheduled_task_runs
+                  SET status = 'interrupted', outcome = 'needs_attention',
+                      summary_json = '{"title":"This task needs your attention","text":"The run was interrupted after its worker lease expired."}',
+                      delivery_json = json_object('policy', COALESCE(json_extract(snapshot_json, '$.delivery_policy'), 'only_when_relevant'), 'delivered', json('true')),
+                      active_slot = NULL, ended_at = COALESCE(ended_at, ?), updated_at = ?
+                WHERE run_id = ? AND status = 'running' AND active_slot = 1`,
           params: [nowMs, nowMs, runId],
           expectChanges: 1,
         },
@@ -898,7 +942,8 @@ export class ScheduledTaskRepository {
         },
         {
           sql: `UPDATE scheduled_task_runs
-                  SET status = 'pending', active_slot = 1, latest_attempt_id = ?, attempt_count = attempt_count + 1, ended_at = NULL, updated_at = ?
+                  SET status = 'pending', outcome = NULL, summary_json = '{}', delivery_json = '{}',
+                      active_slot = 1, latest_attempt_id = ?, attempt_count = attempt_count + 1, ended_at = NULL, updated_at = ?
                 WHERE run_id = ? AND status = 'running' AND active_slot = 1`,
           params: [newAttemptId, nowMs, runId],
           expectChanges: 1,
@@ -1125,6 +1170,9 @@ interface TaskRow {
   schema_version: number;
   revision: number;
   name: string;
+  display_json: string;
+  origin_json: string;
+  delivery_policy: string;
   lifecycle_status: string;
   deleted_at: number | null;
   schedule_json: string;
@@ -1157,6 +1205,9 @@ interface RunRow {
   business_date: string;
   occurrence_key: string;
   status: string;
+  outcome: string | null;
+  summary_json: string;
+  delivery_json: string;
   active_slot: number | null;
   snapshot_json: string;
   snapshot_sha256: string;
@@ -1198,9 +1249,12 @@ interface AttemptRow {
   updated_at: number;
 }
 
-interface ListTasksRow extends Pick<TaskRow, "task_id" | "revision" | "name" | "lifecycle_status" | "schedule_json" | "approval_status" | "next_run_at" | "created_at"> {
+interface ListTasksRow extends Pick<TaskRow, "task_id" | "revision" | "name" | "display_json" | "delivery_policy" | "lifecycle_status" | "schedule_json" | "approval_status" | "next_run_at" | "created_at"> {
   lr_run_id: string | null;
   lr_status: string | null;
+  lr_outcome: string | null;
+  lr_summary_json: string | null;
+  lr_delivery_json: string | null;
   lr_scheduled_for: number | null;
   lr_ended_at: number | null;
   lr_latest_attempt_id: string | null;
@@ -1242,6 +1296,9 @@ function toTaskDto(row: TaskRow): ScheduledTask {
     schema_version: 1,
     revision: Number(row.revision),
     name: row.name,
+    display: parseJson<ScheduledTaskDisplay>(row.display_json, {}),
+    origin: parseJson<ScheduledTaskOrigin>(row.origin_json, {}),
+    delivery_policy: row.delivery_policy as ScheduledTaskDeliveryPolicy,
     lifecycle_status: row.lifecycle_status as ScheduledTaskLifecycleStatus,
     schedule: parseJson<ScheduledTaskSchedule>(row.schedule_json, undefined as never),
     executor,
@@ -1272,6 +1329,8 @@ function toTaskListSummary(row: ListTasksRow): TaskListSummary {
     task_id: row.task_id,
     revision: Number(row.revision),
     name: row.name,
+    display: parseJson<ScheduledTaskDisplay>(row.display_json, {}),
+    delivery_policy: row.delivery_policy as ScheduledTaskDeliveryPolicy,
     lifecycle_status: row.lifecycle_status as ScheduledTaskLifecycleStatus,
     schedule: parseJson<ScheduledTaskSchedule>(row.schedule_json, undefined as never),
     approval_status: row.approval_status as TaskListSummary["approval_status"],
@@ -1279,6 +1338,9 @@ function toTaskListSummary(row: ListTasksRow): TaskListSummary {
     latest_run: row.lr_run_id === null ? null : {
       run_id: row.lr_run_id,
       status: String(row.lr_status) as ScheduledTaskRunStatus,
+      outcome: row.lr_outcome as ScheduledTaskRunOutcome | null,
+      summary: parseJson<ScheduledTaskRunSummary>(row.lr_summary_json ?? "{}", {}),
+      delivery: parseDelivery(row.lr_delivery_json),
       scheduled_for: iso(row.lr_scheduled_for)!,
       ended_at: iso(row.lr_ended_at),
       latest_attempt_id: row.lr_latest_attempt_id,
@@ -1297,6 +1359,9 @@ function toRunDto(row: RunRow): ScheduledTaskRun {
     business_date: row.business_date,
     occurrence_key: row.occurrence_key,
     status: row.status as ScheduledTaskRunStatus,
+    outcome: row.outcome as ScheduledTaskRunOutcome | null,
+    summary: parseJson<ScheduledTaskRunSummary>(row.summary_json, {}),
+    delivery: parseDelivery(row.delivery_json),
     snapshot: parseJson<ScheduledTaskSnapshot>(row.snapshot_json, undefined as never),
     snapshot_sha256: row.snapshot_sha256,
     latest_attempt_id: row.latest_attempt_id,
@@ -1346,6 +1411,9 @@ function buildSnapshotFromTask(task: ScheduledTask, nowMs: number): ScheduledTas
     workspace_path_at_claim: task.workspace_path,
     revision: task.revision,
     name: task.name,
+    display: task.display,
+    origin: task.origin,
+    delivery_policy: task.delivery_policy,
     schedule: task.schedule,
     executor: task.executor,
     output: task.output,
@@ -1472,8 +1540,33 @@ function iso(value: number | null | undefined): string | null {
   return value === null || value === undefined ? null : new Date(Number(value)).toISOString();
 }
 
+function deliveryFor(
+  policy: ScheduledTaskDeliveryPolicy,
+  status: FinishAttemptTerminal["status"],
+  outcome: ScheduledTaskRunOutcome,
+  recommendNotify?: boolean,
+): ScheduledTaskRun["delivery"] {
+  const failed = status !== "succeeded";
+  const relevant = recommendNotify ?? (outcome === "new_information" || outcome === "threshold_triggered" || outcome === "needs_attention");
+  const changed = outcome === "new_information" || outcome === "threshold_triggered";
+  const delivered = policy === "always" || (policy === "only_on_failure" ? failed : policy === "only_on_change" ? changed : relevant);
+  return {
+    policy,
+    delivered,
+    ...(delivered ? {} : { suppressed_reason: outcome === "no_change" ? "no_meaningful_change" : failed ? "policy_excludes_failure" : "policy_suppressed" }),
+  };
+}
+
 function boolParam(value: boolean | null | undefined): SqlValue {
   return value === null || value === undefined ? null : value ? 1 : 0;
+}
+
+function parseDelivery(value: string | null | undefined): ScheduledTaskRun["delivery"] {
+  if (!value) return null;
+  const parsed = parseJson<Record<string, unknown>>(value, {});
+  return typeof parsed.policy === "string" && typeof parsed.delivered === "boolean"
+    ? parsed as unknown as NonNullable<ScheduledTaskRun["delivery"]>
+    : null;
 }
 
 function parseJson<T>(value: string, fallback: T): T {

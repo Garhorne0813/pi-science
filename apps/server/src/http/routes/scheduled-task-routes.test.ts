@@ -77,6 +77,9 @@ const EXECUTOR = { kind: "literature_digest" as const, config: { query: "single-
 function createBody(overrides: Record<string, unknown> = {}) {
   return {
     name: "Daily digest",
+    display: { title: "Daily research update", schedule_text: "Every hour", action_summary: "Track new literature" },
+    origin: { session_id: "session-1", message_id: "message-1" },
+    delivery_policy: "only_when_relevant",
     schedule: SCHEDULE,
     executor: EXECUTOR,
     output: { relative_root: "outputs/digest" },
@@ -91,7 +94,15 @@ describe("scheduled task routes", () => {
     const h = await harness();
     const created = await h.app.inject({ method: "POST", url: `/api/scheduled-tasks?cwd=${encodeURIComponent(h.wsA)}`, payload: createBody() });
     expect(created.statusCode).toBe(201);
-    expect(created.json()).toMatchObject({ task_id: expect.stringMatching(/^stask_/), revision: 1, lifecycle_status: "active", approval: { status: "none" } });
+    expect(created.json()).toMatchObject({
+      task_id: expect.stringMatching(/^stask_/),
+      revision: 1,
+      display: { title: "Daily research update", schedule_text: "Every hour", action_summary: "Track new literature" },
+      origin: { session_id: "session-1", message_id: "message-1" },
+      delivery_policy: "only_when_relevant",
+      lifecycle_status: "active",
+      approval: { status: "none" },
+    });
 
     const got = await h.app.inject({ method: "GET", url: `/api/scheduled-tasks/${created.json().task_id}?cwd=${encodeURIComponent(h.wsA)}` });
     expect(got.statusCode).toBe(200);

@@ -7,7 +7,7 @@ import type {
   ScheduledTaskRun,
   ScheduledTaskRunAttempt,
 } from "./types.js";
-import type { ScheduledTaskExecutor as ScheduledTaskExecutorConfig } from "@pi-science/contracts";
+import type { ScheduledTaskExecutor as ScheduledTaskExecutorConfig, ScheduledTaskRunOutcome, ScheduledTaskRunSummary } from "@pi-science/contracts";
 
 export interface ExecutorContext {
   task: ScheduledTask;
@@ -27,6 +27,9 @@ export interface ExecutorResult {
   errorMessage?: string | null;
   outputPaths?: string[];
   usage?: Record<string, unknown>;
+  outcome?: ScheduledTaskRunOutcome;
+  summary?: ScheduledTaskRunSummary;
+  recommendNotify?: boolean;
 }
 
 /** Runtime executor for one attempt. Named after docs §6 `LiteratureDigestExecutor`;

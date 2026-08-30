@@ -233,7 +233,7 @@ export class ScheduledTaskDispatcher {
     if (lostLease) return; // stale owner must not touch state (docs §8.6)
 
     const terminal: FinishAttemptTerminal = cancelRequested
-      ? { status: "cancelled", error_code: "CANCELLED", error_message: "cancel was requested while the attempt was running" }
+      ? { status: "cancelled", outcome: "completed", summary: { title: "Run cancelled" }, recommend_notify: false, error_code: "CANCELLED", error_message: "cancel was requested while the attempt was running" }
       : {
           status: outcome!.status,
           retryable: outcome!.retryable ?? null,
@@ -241,6 +241,9 @@ export class ScheduledTaskDispatcher {
           error_message: outcome!.errorMessage ?? null,
           output_paths: outcome!.outputPaths ?? [],
           usage: outcome!.usage ?? {},
+          outcome: outcome!.outcome,
+          summary: outcome!.summary,
+          recommend_notify: outcome!.recommendNotify,
         };
 
     // Owner-fenced terminal write; null ⇒ we lost the lease meanwhile and must
@@ -283,6 +286,9 @@ function snapshotToTaskView(snapshot: ScheduledTaskSnapshot): ScheduledTask {
     schema_version: 1,
     revision: snapshot.revision,
     name: snapshot.name,
+    display: snapshot.display,
+    origin: snapshot.origin,
+    delivery_policy: snapshot.delivery_policy,
     lifecycle_status: "active",
     schedule: snapshot.schedule,
     executor: snapshot.executor,

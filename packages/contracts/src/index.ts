@@ -666,6 +666,29 @@ export const scheduledTaskBudgetSchema = z.object({
 export const misfirePolicySchema = z.enum(["coalesce_latest", "skip"]);
 export const concurrencyPolicySchema = z.enum(["forbid"]);
 
+/** Product-layer notification semantics. Execution success and delivery relevance are independent. */
+export const scheduledTaskDeliveryPolicySchema = z.enum(["always", "only_when_relevant", "only_on_change", "only_on_failure"]);
+export const scheduledTaskRunOutcomeSchema = z.enum(["new_information", "no_change", "threshold_triggered", "completed", "needs_attention"]);
+export const scheduledTaskDisplaySchema = z.object({
+  title: z.string().min(1).max(200).optional(),
+  schedule_text: z.string().min(1).max(500).optional(),
+  action_summary: z.string().min(1).max(2000).optional(),
+}).default({});
+export const scheduledTaskOriginSchema = z.object({
+  session_id: z.string().min(1).max(200).optional(),
+  message_id: z.string().min(1).max(200).optional(),
+}).default({});
+export const scheduledTaskRunSummarySchema = z.object({
+  title: z.string().max(500).optional(),
+  text: z.string().max(8000).optional(),
+  item_count: z.number().int().nonnegative().optional(),
+}).default({});
+export const scheduledTaskRunDeliverySchema = z.object({
+  policy: scheduledTaskDeliveryPolicySchema,
+  delivered: z.boolean(),
+  suppressed_reason: z.string().max(1000).optional(),
+});
+
 /** Canonical approval-scope payload hashed by the server (docs §9.4); fixed key order is enforced by the hash builder, not JSON parsing. */
 export const approvalScopeHashPayloadSchema = z.object({
   executor_kind: z.literal("literature_digest"),
@@ -697,5 +720,11 @@ export type RetryPolicy = z.infer<typeof retryPolicySchema>;
 export type ScheduledTaskBudget = z.infer<typeof scheduledTaskBudgetSchema>;
 export type MisfirePolicy = z.infer<typeof misfirePolicySchema>;
 export type ConcurrencyPolicy = z.infer<typeof concurrencyPolicySchema>;
+export type ScheduledTaskDeliveryPolicy = z.infer<typeof scheduledTaskDeliveryPolicySchema>;
+export type ScheduledTaskRunOutcome = z.infer<typeof scheduledTaskRunOutcomeSchema>;
+export type ScheduledTaskDisplay = z.infer<typeof scheduledTaskDisplaySchema>;
+export type ScheduledTaskOrigin = z.infer<typeof scheduledTaskOriginSchema>;
+export type ScheduledTaskRunSummary = z.infer<typeof scheduledTaskRunSummarySchema>;
+export type ScheduledTaskRunDelivery = z.infer<typeof scheduledTaskRunDeliverySchema>;
 export type ApprovalScopeHashPayload = z.infer<typeof approvalScopeHashPayloadSchema>;
 export type ScheduledTaskApproval = z.infer<typeof scheduledTaskApprovalSchema>;

@@ -86,6 +86,9 @@ function snapshotFor(task: Awaited<ReturnType<ScheduledTaskRepository["getTask"]
     workspace_path_at_claim: task.workspace_path,
     revision: task.revision,
     name: task.name,
+    display: task.display,
+    origin: task.origin,
+    delivery_policy: task.delivery_policy,
     schedule: task.schedule,
     executor: task.executor,
     output: task.output,
@@ -144,7 +147,7 @@ async function count(store: SqliteStateStore, sql: string, params: string[] = []
 describe("scheduled tasks migration 0002", () => {
   it("creates the three tables with indexes and enforces CHECK/FK constraints", async () => {
     const state = await memStore();
-    expect((await loadMigrations()).at(-1)?.name).toBe("0002_scheduled_tasks.sql");
+    expect((await loadMigrations()).at(-1)?.name).toBe("0003_scheduled_tasks_product_layer.sql");
     const indexRows = await state.all<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'scheduled_task%' ORDER BY name",
     );
@@ -423,13 +426,43 @@ describe("scheduled task repository", () => {
     expect(stillRunning!.status).toBe("running");
     expect(stillRunning!.owner_token).toBe(lease.owner_token);
 
-    const finished = await repoB.finishAttempt(attemptId, lease.owner_token, lease.owner_generation, { status: "failed", error_code: "PROVIDER_FAILURE", output_paths: ["out/a.json"], usage: { tokens: 12 }, retryable: true }, NOW + 3_000);
+    const finished = await repoB.finishAttempt(attemptId, lease.owner_token, lease.owner_generation, {
+      status: "failed",
+      outcome: "needs_attention",
+      summary: { title: "Couldn’t complete the latest run", text: "Provider failed" },
+      recommend_notify: true,
+      error_code: "PROVIDER_FAILURE",
+      output_paths: ["out/a.json"],
+      usage: { tokens: 12 },
+      retryable: true,
+    }, NOW + 3_000);
     expect(finished!.status).toBe("failed");
     expect(finished!.ended_at).toBe(new Date(NOW + 3_000).toISOString());
     const runAfterFinish = await repoB.getRun(manual.run.run_id);
-    expect(runAfterFinish).toMatchObject({ status: "failed", error_code: "PROVIDER_FAILURE" });
+    expect(runAfterFinish).toMatchObject({
+      status: "failed",
+      outcome: "needs_attention",
+      summary: { title: "Couldn’t complete the latest run", text: "Provider failed" },
+      delivery: { policy: "only_when_relevant", delivered: true },
+      error_code: "PROVIDER_FAILURE",
+    });
     expect(runAfterFinish!.output_paths).toEqual(["out/a.json"]);
     expect(runAfterFinish!.latest_attempt_id).toBe(attemptId);
+
+    const quietManual = await repoA.createManualRun(task.task_id, NOW + 4_000);
+    const quietLease = await repoA.claimAttempt(quietManual.attempt!.attempt_id, "instance-a", NOW + 4_000, 30_000);
+    await repoA.finishAttempt(quietManual.attempt!.attempt_id, quietLease!.owner_token, quietLease!.owner_generation, {
+      status: "succeeded",
+      outcome: "no_change",
+      summary: { title: "No meaningful updates", item_count: 0 },
+      recommend_notify: false,
+    }, NOW + 5_000);
+    expect(await repoA.getRun(quietManual.run.run_id)).toMatchObject({
+      status: "succeeded",
+      outcome: "no_change",
+      summary: { title: "No meaningful updates", item_count: 0 },
+      delivery: { policy: "only_when_relevant", delivered: false, suppressed_reason: "no_meaningful_change" },
+    });
   });
 
   it("recovers expired leases into interrupted+retry or cancelled depending on cancel request and policy", async () => {
@@ -457,7 +490,7 @@ describe("scheduled task repository", () => {
     const retryAttempt = await repo.getAttempt(recovered[0]!.new_attempt_id!);
     expect(retryAttempt).toMatchObject({ status: "pending", attempt_no: 2, recovery_of_attempt_id: oldAttempt!.attempt_id, execution_id: "sexec_retry_one", available_at: new Date(NOW + 2_500).toISOString() });
     const retriedRun = await repo.getRun(manualOne.run.run_id);
-    expect(retriedRun).toMatchObject({ status: "pending" });
+    expect(retriedRun).toMatchObject({ status: "pending", outcome: null, summary: {}, delivery: null });
     expect(retriedRun!.snapshot_sha256).toBe(snapshotShaBefore); // same snapshot across retries
     expect(retriedRun!.latest_attempt_id).toBe(retryAttempt!.attempt_id);
 

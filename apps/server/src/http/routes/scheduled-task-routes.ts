@@ -164,6 +164,9 @@ export function registerScheduledTaskRoutes(app: FastifyInstance, deps: Schedule
     const body = (request.body ?? {}) as Record<string, unknown>;
     const outcome = await service.createTask(cwd, {
       name: String(body.name ?? ""),
+      display: body.display as never,
+      origin: body.origin as never,
+      delivery_policy: body.delivery_policy as never,
       schedule: body.schedule,
       executor: body.executor as never,
       output: (body.output ?? { relative_root: "" }) as { relative_root: string },
