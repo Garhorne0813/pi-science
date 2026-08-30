@@ -127,7 +127,7 @@ function fromToolPresentation(presentation: ToolCallBlock["presentation"]): Tool
 }
 
 function narrativeFor(block: ToolCallBlock, presentation: ToolActivityPresentation, implementationSeen: boolean): PresentedActivity | null {
-  if (block.status === "error") return activity("error", presentation.domain, block, true);
+  if (block.status === "error") return null;
   if (presentation.kind === "interaction") return activity("interaction", presentation.domain, block, true);
   if (presentation.kind === "recover") return activity("recover", presentation.domain, block, true);
   if (presentation.narrativeHint) {

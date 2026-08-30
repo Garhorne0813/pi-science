@@ -20,10 +20,8 @@ const PROGRESS_SELECT_CLASS = "max-w-none border-transparent focus-visible:borde
 const SLOTS: Array<{ id: ProgressSlot; labelKey: string; sample: string }> = [
   { id: "thinking", labelKey: "settings.progress.slot.thinking", sample: "Thinking" },
   { id: "currentActivity", labelKey: "settings.progress.slot.activity", sample: "Reviewing related content" },
-  { id: "streamingAnswer", labelKey: "settings.progress.slot.streaming", sample: "Analyzing the latest results" },
-  { id: "imageGeneration", labelKey: "settings.progress.slot.image", sample: "Generating image" },
+  { id: "streamingAnswer", labelKey: "settings.progress.slot.streaming", sample: "AI" },
   { id: "waiting", labelKey: "settings.progress.slot.waiting", sample: "Needs your input" },
-  { id: "completed", labelKey: "settings.progress.slot.completed", sample: "Complete" },
 ];
 
 function configFrom(input: ProgressAppearance | undefined): ProgressAppearance {

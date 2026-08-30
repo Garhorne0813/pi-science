@@ -22,6 +22,7 @@ import { isVisibleActivity } from "../../lib/conversation/activity-policy";
 import { buildTurnPresentations, type TurnPresentation } from "../../lib/conversation/turn-presentation";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
 import { SessionExecutionButton } from "../../components/conversation/SessionExecutionButton";
+import { ProgressVisual, useProgressAppearance } from "../../components/progress/ProgressVisual";
 import { visibleUserMessage } from "../../lib/files";
 import { useTranslation } from "react-i18next";
 import { ResearchLoopDraftCard, ResearchLoopStatusCard, ResearchModePicker } from "../../components/conversation/ResearchLoopControls";
@@ -54,6 +55,7 @@ export function ConversationFooter() {
   const pendingInteraction = useRuntimeStore((s) => s.pendingInteraction);
   const pendingQuestionnaire = useRuntimeStore((s) => s.pendingQuestionnaire);
   const working = useRuntimeStore((s) => s.working);
+  const progressAppearance = useProgressAppearance();
   const respondToInteraction = useRuntimeStore((s) => s.respondToInteraction);
   const blocks = useRuntimeStore((s) => s.thread.blocks);
   const lastUserIndex = blocks.findLastIndex((block) => block.kind === "user");
@@ -76,7 +78,7 @@ export function ConversationFooter() {
       ) : null}
       {working && !pendingInteraction && !hasTurnActivity && (
         <div className="flex items-center gap-2 py-4 text-sm text-muted" aria-live="polite">
-          <Loader2 size={14} className="animate-spin text-accent" />
+          <ProgressVisual slot="thinking" config={progressAppearance} text={t("conversation.activity.continuing")} />
           {t("conversation.activity.continuing")}
         </div>
       )}

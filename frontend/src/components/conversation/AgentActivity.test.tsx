@@ -85,6 +85,11 @@ describe("AgentActivity", () => {
     expect(container.querySelector(".lucide-chevron-right")).toBeNull();
   });
 
+  it("keeps progress copy neutral for a recoverable tool error", () => {
+    render(<AgentActivity blocks={[tool("edit", "edit"), tool("failed", "bash", "error", { description: "Run tests" }), tool("next", "edit", "running")]} />);
+    expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
+    expect(screen.queryByText("Encountered a problem")).not.toBeInTheDocument();
+  });
   it("shows interaction, failure, and abort lifecycle copy", () => {
     const { rerender } = render(<AgentActivity lifecycle="waiting" blocks={[tool("read", "read"), tool("ask", "ask_user_question", "waiting-approval")]} />);
     expect(screen.getByText("Needs your input")).toBeInTheDocument();
