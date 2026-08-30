@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { Check } from "lucide-react";
 import { ImageLoader, InlineLoader, TextLoader } from "generative-loaders";
+import { Orb } from "./aicss/orbs";
 import type { ProgressAppearance } from "@pi-science/contracts";
 import { hydrateProgressAppearance, subscribeProgressAppearance, getProgressAppearance } from "./progress-settings-store";
 import type { ProgressSlot } from "./ProgressPatternCatalog";
@@ -11,6 +12,8 @@ export function useProgressAppearance(): ProgressAppearance {
   useEffect(() => { void hydrateProgressAppearance(); }, []);
   return useSyncExternalStore(subscribeProgressAppearance, getProgressAppearance, getProgressAppearance);
 }
+const AICSS_ORB_VARIANTS = Object.fromEntries(["S1", "S2", "S3", "S4", "S5", "B1", "B2", "B3", "B4", "B5", "C1", "C2", "C3", "C4", "C5", "G1", "G2", "G3", "G4", "G5", "M1", "M2", "M3", "M4", "M5"].map((name) => [`aicss-orb-${name}`, name])) as Record<string, "S1" | "S2" | "S3" | "S4" | "S5" | "B1" | "B2" | "B3" | "B4" | "B5" | "C1" | "C2" | "C3" | "C4" | "C5" | "G1" | "G2" | "G3" | "G4" | "G5" | "M1" | "M2" | "M3" | "M4" | "M5">;
+
 const INLINE_VARIANTS = {
   "inline-glyph": "glyph", "inline-matrix": "matrix", "inline-orbit": "orbit", "inline-ripple": "ripple", "inline-signal": "signal", "inline-spark": "spark", "inline-rotor": "rotor", "inline-pixel-drift": "pixel-drift", "inline-chomp": "chomp", "inline-snake": "snake", "inline-fold": "fold", "inline-gravity": "gravity", "inline-domino": "domino", "inline-aperture": "aperture",
 } as const;
@@ -36,6 +39,10 @@ export function ProgressVisual({ slot, config, state = "running", text = "Genera
   const visualText = compact ? text.slice(0, 3) : text;
   if (state === "completed") return <Check size={14} aria-hidden className="shrink-0 text-ok-text" />;
   if (definition.kind === "static") return <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" aria-hidden />;
+  if (definition.kind === "orb") {
+    const variant = AICSS_ORB_VARIANTS[definition.id];
+    return variant ? <Orb variant={variant} size={compact ? 16 : 20} /> : null;
+  }
   if (definition.kind === "inline") {
     const variant = INLINE_VARIANTS[definition.id as keyof typeof INLINE_VARIANTS];
     return variant ? <InlineLoader variant={variant} size={compact ? "1rem" : "1.15rem"} speed={speed} color={color} paused={paused} label={slot === "waiting" ? text : undefined} /> : null;

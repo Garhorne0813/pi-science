@@ -27,10 +27,15 @@ describe("ProgressVisual", () => {
   });
 
   it("exposes every bundled loader family", () => {
-    expect(patternsForSlot("currentActivity")).toHaveLength(14);
+    expect(patternsForSlot("currentActivity")).toHaveLength(39);
     expect(patternsForSlot("streamingAnswer")).toHaveLength(16);
     expect(patternsForSlot("imageGeneration")).toHaveLength(9);
-    expect(PROGRESS_PATTERN_CATALOG).toHaveLength(40);
+    expect(PROGRESS_PATTERN_CATALOG).toHaveLength(65);
+  });
+  it("renders an internalized AICSS orb", () => {
+    const config = { ...defaultProgressAppearance, patterns: { ...defaultProgressAppearance.patterns, currentActivity: "aicss-orb-S1" as const } };
+    render(<ProgressVisual slot="currentActivity" config={config} text="Working" />);
+    expect(document.querySelector('[role="img"]')).toBeInTheDocument();
   });
   it("falls back to an inline thinking pattern for old text-only settings", () => {
     const normalized = normalizeProgressAppearance({ ...defaultProgressAppearance, patterns: { ...defaultProgressAppearance.patterns, thinking: "text-skeleton" } });

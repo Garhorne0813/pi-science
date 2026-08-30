@@ -237,7 +237,11 @@ The progress-pattern layer uses bundled MIT-licensed primitives from
 allowlisted variants through `ProgressPatternCatalog.ts`; remote pages and
 runtime CDN assets are never loaded. AICSS free components remain a visual
 reference for agent states and may be copied only under its MIT terms; licensed
-AICSS components are excluded until a commercial license is recorded.
+AICSS components are excluded until a commercial license is recorded. The public
+AICSS React package is vendored at commit `4556a918fd8c9358d42d2b24a3866301b8ea10a2`
+under `frontend/src/components/progress/aicss/`; Activity uses the MIT-licensed
+`packages/react/src/orbs/Orb.tsx` component and its CSS module. Website-only and
+Pro components are not copied.
 
 The imported loader stylesheet owns only the internal animation geometry. The
 application owns layout, semantic colors, typography, radii, accessibility

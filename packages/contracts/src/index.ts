@@ -61,6 +61,7 @@ export type ToolPresentation = z.infer<typeof toolPresentationSchema>;
 
 export const progressPatternIdSchema = z.enum([
   "static-check",
+  "aicss-orb-S1", "aicss-orb-S2", "aicss-orb-S3", "aicss-orb-S4", "aicss-orb-S5", "aicss-orb-B1", "aicss-orb-B2", "aicss-orb-B3", "aicss-orb-B4", "aicss-orb-B5", "aicss-orb-C1", "aicss-orb-C2", "aicss-orb-C3", "aicss-orb-C4", "aicss-orb-C5", "aicss-orb-G1", "aicss-orb-G2", "aicss-orb-G3", "aicss-orb-G4", "aicss-orb-G5", "aicss-orb-M1", "aicss-orb-M2", "aicss-orb-M3", "aicss-orb-M4", "aicss-orb-M5",
   "inline-glyph", "inline-matrix", "inline-orbit", "inline-ripple", "inline-signal", "inline-spark", "inline-rotor", "inline-pixel-drift", "inline-chomp", "inline-snake", "inline-fold", "inline-gravity", "inline-domino", "inline-aperture",
   "text-decode", "text-typewriter", "text-skeleton", "text-cascade", "text-focus", "text-wipe", "text-flip", "text-redact", "text-line", "text-terminal", "text-wave", "text-dissolve", "text-slice", "text-tracking", "text-coalesce", "text-fragments",
   "image-skeleton", "image-bands", "image-tiles", "image-scan", "image-pixel-grid", "image-resolution", "image-focus", "image-shutter", "image-contour",
