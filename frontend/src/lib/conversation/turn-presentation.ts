@@ -2,6 +2,8 @@ import type { AgentMessageBlock, ThreadBlock, ToolCallBlock, TurnArtifactSummary
 import { activityPolicy, isVisibleActivity } from "./activity-policy";
 import { finalAgentInCompletedTurn, intermediateAgentsInTurn, provisionalAgentInActiveTurn } from "./turn-analysis";
 
+export type TurnLifecycle = "active" | "waiting" | "settled" | "aborted" | "failed";
+
 export interface TurnPresentation {
   id: string;
   user: UserMessageBlock | null;
@@ -19,12 +21,14 @@ export interface TurnPresentation {
   /** Confirmed answer. Always null while the turn is still active. */
   finalAgent: AgentMessageBlock | null;
   artifacts: TurnArtifactSummaryBlock[];
+  /** Explicit terminal state prevents abort/failure text from becoming final. */
+  lifecycle: TurnLifecycle;
   /** True while the agent is still working inside this turn. */
   active: boolean;
   completed: boolean;
 }
 
-export function buildTurnPresentations(blocks: ThreadBlock[], opts: { lastTurnActive?: boolean } = {}): TurnPresentation[] {
+export function buildTurnPresentations(blocks: ThreadBlock[], opts: { lastTurnLifecycle?: TurnLifecycle } = {}): TurnPresentation[] {
   if (!Array.isArray(blocks)) return [];
   const turns: ThreadBlock[][] = [];
   let current: ThreadBlock[] = [];
@@ -37,14 +41,19 @@ export function buildTurnPresentations(blocks: ThreadBlock[], opts: { lastTurnAc
     current.push(block);
   }
   flush();
-  return turns.map((span, index) => buildTurnPresentation(span, index === turns.length - 1 && opts.lastTurnActive === true));
+  return turns.map((span, index) => {
+    const isLast = index === turns.length - 1;
+    const lifecycle = isLast ? opts.lastTurnLifecycle ?? "settled" : "settled";
+    return buildTurnPresentation(span, lifecycle);
+  });
 }
 
 export function turnBlockIds(turn: TurnPresentation): string[] {
   return turn.blocks.map((block) => block.id);
 }
 
-function buildTurnPresentation(blocks: ThreadBlock[], active: boolean): TurnPresentation {
+function buildTurnPresentation(blocks: ThreadBlock[], lifecycle: TurnLifecycle): TurnPresentation {
+  const active = lifecycle === "active" || lifecycle === "waiting";
   const user = blocks[0]?.kind === "user" ? blocks[0] : null;
   const tools = blocks.filter((block): block is ToolCallBlock => block.kind === "tool");
   const executionTools = tools.filter((block) => activityPolicy(block).plane === "execution");
@@ -52,7 +61,7 @@ function buildTurnPresentation(blocks: ThreadBlock[], active: boolean): TurnPres
   const interactionTools = tools.filter((block) => activityPolicy(block).plane === "interaction");
   const activityTools = tools.filter(isVisibleActivity);
   const artifacts = blocks.filter((block): block is TurnArtifactSummaryBlock => block.kind === "artifact-summary");
-  const finalAgent = active ? null : finalAgentInCompletedTurn(blocks);
+  const finalAgent = lifecycle === "settled" ? finalAgentInCompletedTurn(blocks) : null;
   const provisionalAgent = active ? provisionalAgentInActiveTurn(blocks) : null;
   const systemBlocks = blocks.filter((block) => block.kind !== "user" && block.kind !== "agent" && block.kind !== "artifact-summary" && (block.kind !== "tool" || activityPolicy(block).plane === "system"));
   const settled = activityTools.length > 0 && activityTools.every((block) => block.status === "done" || block.status === "error");
@@ -69,7 +78,8 @@ function buildTurnPresentation(blocks: ThreadBlock[], active: boolean): TurnPres
     provisionalAgent,
     finalAgent,
     artifacts,
+    lifecycle,
     active,
-    completed: !active && (finalAgent !== null || settled),
+    completed: lifecycle === "settled" && (finalAgent !== null || settled),
   };
 }

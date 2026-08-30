@@ -104,6 +104,7 @@ export function LiveSessionPage() {
     : { blocks: [] as ThreadBlock[], index: {} as Record<string, number>, loaded: true };
   const sessions = useRuntimeStore((s) => s.sessions);
   const working = useRuntimeStore((s) => s.working);
+  const turnLifecycle = useRuntimeStore((s) => s.turnLifecycle);
   const historyLoading = useRuntimeStore((s) => s.historyLoading);
   const loadOlderMessages = useRuntimeStore((s) => s.loadOlderMessages);
   const connect = useRuntimeStore((s) => s.connect);
@@ -141,7 +142,7 @@ export function LiveSessionPage() {
     };
   }, [sessionId, workspaceCwd, connect, disconnect]);
 
-  const turns = useMemo(() => buildTurnPresentations(thread.blocks, { lastTurnActive: working }), [thread.blocks, working]);
+  const turns = useMemo(() => buildTurnPresentations(thread.blocks, { lastTurnLifecycle: turnLifecycle }), [thread.blocks, turnLifecycle]);
   // Copy-button eligibility computed across the WHOLE thread (not per group):
   // agentActionTextByBlock needs the trailing tool blocks after an agent block
   // to decide whether it is the final answer. A per-group computation would

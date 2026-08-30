@@ -85,6 +85,7 @@ export function applySessionReplacements(replacements: SessionReplacement[]): st
     client,
     thread: emptyThread(),
     working: false,
+    turnLifecycle: "settled",
     status: "connecting",
     pendingInteraction: null,
     pendingQuestionnaire: null,

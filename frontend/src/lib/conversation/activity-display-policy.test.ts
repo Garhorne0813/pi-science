@@ -5,69 +5,68 @@ import { selectDisplayedActivity } from "./activity-display-policy";
 const tool = (name: string, id = name, status: ToolCallBlock["status"] = "done", extra: Partial<ToolCallBlock> = {}): ToolCallBlock =>
   ({ kind: "tool", id, callId: `${id}-call`, tool: name, status, ...extra });
 
-/** Visible transition count: replay the prefix fold and count label changes. */
 function transitions(blocks: ToolCallBlock[]): string[] {
   const keys: string[] = [];
   for (let i = 1; i <= blocks.length; i += 1) {
-    const state = selectDisplayedActivity(blocks.slice(0, i));
-    const key = state?.mergeKey ?? null;
-    if (keys[keys.length - 1] !== key) keys.push(key ?? "none");
+    const key = selectDisplayedActivity(blocks.slice(0, i))?.mergeKey;
+    if (key && keys.at(-1) !== key) keys.push(key);
   }
-  return keys.filter((key) => key !== "none");
+  return keys;
 }
 
-describe("selectDisplayedActivity", () => {
-  it("merges read/search bursts into one inspect phase", () => {
-    const blocks = [tool("read"), tool("read", "r2"), tool("grep", "g1"), tool("find", "f1"), tool("read", "r3", "running")];
-    expect(selectDisplayedActivity(blocks)?.mergeKey).toBe("inspect");
-    expect(transitions(blocks)).toEqual(["inspect"]);
-  });
-
-  it("switches only on significant phase changes", () => {
+describe("Narrative Progress reducer", () => {
+  it("folds a coding edit/test loop into one implementation epoch", () => {
     const blocks = [
-      ...Array.from({ length: 8 }, (_, i) => tool("read", `read-${i}`)),
-      ...Array.from({ length: 4 }, (_, i) => tool("grep", `grep-${i}`)),
-      tool("todo", "todo-1"),
-      ...Array.from({ length: 3 }, (_, i) => tool("edit", `edit-${i}`)),
-      ...Array.from({ length: 3 }, (_, i) => tool("bash", `test-${i}`, "done", { input: { description: `运行测试 ${i}` } })),
-      tool("todo", "todo-2"),
+      ...Array.from({ length: 4 }, (_, i) => tool("read", `read-${i}`)),
+      tool("grep", "grep-1"),
+      tool("edit", "edit-1"),
+      tool("bash", "test-1", "error", { input: { description: "Run conversation tests" } }),
+      tool("read", "corrective-read"),
+      tool("edit", "edit-2"),
+      tool("bash", "typecheck", "done", { input: { description: "Check TypeScript types" } }),
     ];
-    expect(transitions(blocks)).toEqual(["inspect", "edit", "verify"]);
+    expect(transitions(blocks)).toEqual(["explore:code", "implementation:code", "error:code", "implementation:code"]);
+    expect(selectDisplayedActivity(blocks)).toMatchObject({ state: "implementation", domain: "code" });
   });
 
-  it("never lets micro ops override a significant phase", () => {
-    const blocks = [tool("bash", "b", "running", { input: { command: "pnpm build" } }), tool("read", "r", "running")];
-    expect(selectDisplayedActivity(blocks)?.mergeKey).toBe("verify");
+  it("keeps successful verification inside an implementation epoch", () => {
+    const blocks = [tool("read"), tool("edit"), tool("bash", "test", "done", { input: { description: "Run tests" } }), tool("read", "corrective"), tool("edit", "edit-2")];
+    expect(transitions(blocks)).toEqual(["explore:code", "implementation:code"]);
   });
 
-  it("infers bash phases from descriptions deterministically", () => {
-    expect(selectDisplayedActivity([tool("bash", "b", "running", { input: { command: "pnpm vitest run", description: "Run tests" } })])?.phase).toBe("verify");
-    expect(selectDisplayedActivity([tool("bash", "b", "running", { input: { command: "python simulate.py" } })])?.phase).toBe("compute");
-    expect(selectDisplayedActivity([tool("bash", "b", "running", { input: { command: "git push" } })])?.phase).toBe("execute");
+  it("allows a sustained inspect burst to leave a finished implementation epoch", () => {
+    const blocks = [tool("edit"), tool("read", "r1"), tool("grep", "r2"), tool("find", "r3")];
+    expect(selectDisplayedActivity(blocks)).toMatchObject({ state: "explore", domain: "code" });
   });
 
-  it("keeps research burst in one phase", () => {
-    const blocks = [tool("web_search", "s1"), tool("read", "open", "done", { input: { path: "cache" } }), tool("web_search", "s2", "running")];
-    // read is micro: cannot override research
-    expect(selectDisplayedActivity(blocks)?.mergeKey).toBe("research");
+  it("keeps research support reads quiet and then moves to analysis", () => {
+    const blocks = [tool("web_search", "s1"), tool("web_fetch", "f1"), tool("read", "r1"), tool("python", "p1", "running", { input: { description: "Analyze key findings" } })];
+    expect(transitions(blocks)).toEqual(["research:research", "analyze:generic"]);
   });
 
-  it("surfaces waiting interactions and errors immediately as forced states", () => {
-    const waiting = selectDisplayedActivity([tool("read"), tool("ask_user_question", "a", "waiting-approval")]);
-    expect(waiting).toMatchObject({ phase: "wait", forced: true });
-    const failed = selectDisplayedActivity([tool("read"), tool("bash", "b", "error")]);
-    expect(failed).toMatchObject({ phase: "error", forced: true });
+  it("supports notebook read/edit/run without generic fallbacks", () => {
+    const blocks = [tool("notebook_read", "r1"), tool("notebook_edit", "e1"), tool("notebook_run", "n1"), tool("notebook_read", "r2"), tool("notebook_edit", "e2"), tool("notebook_run", "n2")];
+    expect(transitions(blocks)).toEqual(["explore:science", "implementation:science"]);
   });
 
-  it("drops a stale error when later work continues", () => {
-    expect(selectDisplayedActivity([tool("bash", "b", "error"), tool("read", "r", "running")])?.mergeKey).toBe("inspect");
+  it("uses standalone verify when no mutation epoch exists", () => {
+    expect(selectDisplayedActivity([tool("bash", "b", "running", { input: { description: "Run tests" } })])).toMatchObject({ state: "verify", domain: "code" });
   });
 
-  it("ignores answered interactions", () => {
-    expect(selectDisplayedActivity([tool("read", "r", "done"), tool("ask_user_question", "a", "done")])?.mergeKey).toBe("inspect");
+  it("does not change Current Activity for opaque or unknown tools without semantics", () => {
+    expect(selectDisplayedActivity([tool("bash", "b", "running", { input: { command: "git status" } })])).toBeNull();
+    expect(selectDisplayedActivity([tool("future_extension", "x", "running")])).toBeNull();
+    expect(selectDisplayedActivity([tool("read"), tool("future_extension", "x", "running")])?.state).toBe("explore");
   });
 
-  it("returns null for todo-only blocks", () => {
+  it("surfaces interactions, errors, and recovery as forced states", () => {
+    expect(selectDisplayedActivity([tool("read"), tool("ask_user_question", "a", "waiting-approval")])).toMatchObject({ state: "interaction", forced: true });
+    expect(selectDisplayedActivity([tool("read"), tool("bash", "b", "error")])).toMatchObject({ state: "error", forced: true });
+    expect(selectDisplayedActivity([tool("runtime_recovery", "rr", "running")])).toMatchObject({ state: "recover", forced: true });
+  });
+
+  it("ignores todo and answered interactions", () => {
     expect(selectDisplayedActivity([tool("todo", "t1"), tool("todo", "t2")])).toBeNull();
+    expect(selectDisplayedActivity([tool("read"), tool("ask_user_question", "a", "done")])?.state).toBe("explore");
   });
 });

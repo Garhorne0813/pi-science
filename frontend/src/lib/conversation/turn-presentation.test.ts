@@ -66,7 +66,7 @@ describe("buildTurnPresentations", () => {
 
   it("demotes the active turn's answer to provisional while the turn streams", () => {
     const blocks = [user("user-1"), agent("agent-a"), tool("tool-1"), agent("answer")];
-    const active = buildTurnPresentations(blocks, { lastTurnActive: true })[0];
+    const active = buildTurnPresentations(blocks, { lastTurnLifecycle: "active" })[0];
     expect(active.finalAgent).toBeNull();
     expect(active.provisionalAgent?.id).toBe("answer");
     expect(active.completed).toBe(false);
@@ -77,8 +77,26 @@ describe("buildTurnPresentations", () => {
   });
 
   it("never marks earlier turns active even when the store is working", () => {
-    const turns = buildTurnPresentations([user("u1"), agent("a1"), user("u2"), agent("a2")], { lastTurnActive: true });
+    const turns = buildTurnPresentations([user("u1"), agent("a1"), user("u2"), agent("a2")], { lastTurnLifecycle: "active" });
     expect(turns[0].active).toBe(false);
     expect(turns[1].active).toBe(true);
+  });
+
+  it("does not promote provisional narration after abort or terminal failure", () => {
+    const blocks = [user("u1"), agent("narration"), tool("tool-1"), agent("provisional")];
+    for (const lifecycle of ["aborted", "failed"] as const) {
+      const turn = buildTurnPresentations(blocks, { lastTurnLifecycle: lifecycle })[0];
+      expect(turn.lifecycle).toBe(lifecycle);
+      expect(turn.finalAgent).toBeNull();
+      expect(turn.provisionalAgent).toBeNull();
+      expect(turn.completed).toBe(false);
+    }
+  });
+
+  it("does not promote narration in a todo-only failed turn", () => {
+    const turn = buildTurnPresentations([user("u1"), agent("planning"), tool("todo", "todo")], { lastTurnLifecycle: "failed" })[0];
+    expect(turn.finalAgent).toBeNull();
+    expect(turn.planControlTools).toHaveLength(1);
+    expect(turn.activityTools).toHaveLength(0);
   });
 });

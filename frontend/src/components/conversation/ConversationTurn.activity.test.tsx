@@ -86,7 +86,8 @@ describe("turn-level activity through the live event path", () => {
     // One user turn => exactly one Current Activity row.
     expect(container.querySelectorAll("span[aria-live='polite']")).toHaveLength(1);
     // Execution tools only: 2 reads + 1 bash. Todo is plan-control.
-    expect(screen.getByText("Completed · 3 operations")).toBeInTheDocument();
+    expect(screen.getByText("Complete")).toBeInTheDocument();
+    expect(screen.getByLabelText("3 operations")).toBeInTheDocument();
     // Intermediate narration is suppressed; only the final answer is prose.
     expect(screen.queryByText("我先读取 turn-presentation.ts。")).not.toBeInTheDocument();
     expect(screen.queryByText("接下来看事件折叠。")).not.toBeInTheDocument();
@@ -106,11 +107,12 @@ describe("turn-level activity through the live event path", () => {
     source.emit("text.updated", { type: "text.updated", sessionId: SESSION, partId: "m1", text: "我先读取实现。" });
     source.emit("tool.updated", { type: "tool.updated", sessionId: SESSION, callId: "c1", tool: "read", status: "running", title: "Reading turn-presentation.ts", input: { path: "a.ts" } });
 
-    render(<>{renderBlocks(useRuntimeStore.getState().thread.blocks, codeRunner)}</>);
-    // Phase label, not the per-tool title: the title stays in the trace.
-    expect(screen.getByText("Inspecting the code")).toBeInTheDocument();
+    const runtime = useRuntimeStore.getState();
+    render(<>{buildTurnPresentations(runtime.thread.blocks, { lastTurnLifecycle: runtime.turnLifecycle }).map((turn) => renderTurn(turn, codeRunner))}</>);
+    // Narrative label, not the per-tool title: the title stays in the trace.
+    expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
     expect(screen.queryByText("我先读取实现。")).not.toBeInTheDocument();
-    expect(screen.queryByText(/Completed ·/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Complete")).not.toBeInTheDocument();
   });
 
   it("keeps todo bookkeeping out of the trace while the plan still shows", async () => {
@@ -119,7 +121,7 @@ describe("turn-level activity through the live event path", () => {
     emitTurn();
     render(<>{renderBlocks(useRuntimeStore.getState().thread.blocks, codeRunner)}</>);
 
-    fireEvent.click(screen.getByRole("button", { name: /Completed · 3 operations/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Complete/ }));
     expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
     const traceLabels = Array.from(document.querySelectorAll("[aria-label='Execution trace'] button > span"));
     expect(traceLabels.map((node) => node.textContent)).toEqual([
@@ -138,7 +140,8 @@ describe("turn-level activity through the history path", () => {
     const { container } = render(<>{renderBlocks(thread.blocks, codeRunner)}</>);
 
     expect(container.querySelectorAll("span[aria-live='polite']")).toHaveLength(1);
-    expect(screen.getByText("Completed · 3 operations")).toBeInTheDocument();
+    expect(screen.getByText("Complete")).toBeInTheDocument();
+    expect(screen.getByLabelText("3 operations")).toBeInTheDocument();
     expect(screen.queryByText("我先读取 turn-presentation.ts。")).not.toBeInTheDocument();
     expect(screen.getByText(/实现符合方案/)).toBeInTheDocument();
     expect(todoViewModel(thread.blocks)?.allCompleted).toBe(true);
@@ -155,7 +158,7 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       const emit = (type: string, payload: Record<string, unknown>) => source.emit(type, { type, sessionId: SESSION, ...payload });
       const view = () => {
         const state = useRuntimeStore.getState();
-        return <>{buildTurnPresentations(state.thread.blocks, { lastTurnActive: state.working }).map((turn) => renderTurn(turn, codeRunner))}</>;
+        return <>{buildTurnPresentations(state.thread.blocks, { lastTurnLifecycle: state.turnLifecycle }).map((turn) => renderTurn(turn, codeRunner))}</>;
       };
       const { rerender } = render(view());
 
@@ -165,43 +168,44 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       // Provisional narration: invisible from the very first token, not just
       // after a tool supersedes it.
       expect(screen.queryByText("我先检查一下。")).not.toBeInTheDocument();
-      expect(screen.queryByText("Inspecting the code")).not.toBeInTheDocument();
+      expect(screen.queryByText("Reviewing the implementation")).not.toBeInTheDocument();
 
       emit("tool.updated", { callId: "r1", tool: "read", status: "running", input: { path: "a.ts" } });
       rerender(view());
-      expect(screen.getByText("Inspecting the code")).toBeInTheDocument();
+      expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
 
       emit("tool.updated", { callId: "r1", tool: "read", status: "done" });
       emit("tool.updated", { callId: "r2", tool: "grep", status: "running", input: { pattern: "x" } });
       rerender(view());
       // More micro ops inside the same burst: no visible transition at all.
-      expect(screen.getByText("Inspecting the code")).toBeInTheDocument();
+      expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
 
       emit("tool.updated", { callId: "r2", tool: "grep", status: "done" });
       emit("tool.updated", { callId: "e1", tool: "edit", status: "running", input: { path: "b.ts" } });
       rerender(view());
-      expect(screen.getByText("Inspecting the code")).toBeInTheDocument();
+      expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
       act(() => { vi.advanceTimersByTime(900); });
-      expect(screen.getByText("Updating the code")).toBeInTheDocument();
+      expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
 
       emit("tool.updated", { callId: "e1", tool: "edit", status: "done" });
       emit("tool.updated", { callId: "b1", tool: "bash", status: "running", input: { command: "pnpm vitest run", description: "运行测试" } });
       rerender(view());
-      expect(screen.getByText("Updating the code")).toBeInTheDocument();
+      expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
       act(() => { vi.advanceTimersByTime(900); });
-      expect(screen.getByText("Verifying the changes")).toBeInTheDocument();
+      expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
 
       emit("tool.updated", { callId: "b1", tool: "bash", status: "done" });
       emit("text.updated", { partId: "m2", text: "这是最终回答。" });
       rerender(view());
       // Streaming answer prose stays hidden until the lifecycle confirms it.
       expect(screen.queryByText("这是最终回答。")).not.toBeInTheDocument();
-      expect(screen.getByText("Verifying the changes")).toBeInTheDocument();
+      expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
 
       emit("session.idle", {});
       rerender(view());
       expect(screen.getByText("这是最终回答。")).toBeInTheDocument();
-      expect(screen.getByText("Completed · 4 operations")).toBeInTheDocument();
+      expect(screen.getByText("Complete")).toBeInTheDocument();
+      expect(screen.getByLabelText("4 operations")).toBeInTheDocument();
       expect(screen.queryByText("我先检查一下。")).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();

@@ -29,7 +29,7 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
   return (
     <div data-thread-block-ids={turnBlockIds(turn).join(" ")} className="flex flex-col gap-3 scroll-mt-4">
       {turn.user && <UserMessage block={turn.user} />}
-      {turn.activityTools.length > 0 && <AgentActivity blocks={turn.activityTools} completed={turn.completed} />}
+      {turn.activityTools.length > 0 && <AgentActivity blocks={turn.activityTools} lifecycle={turn.lifecycle} />}
       {turn.finalAgent && <AgentMessage block={turn.finalAgent} actionText={actionTextByBlock?.get(turn.finalAgent.id)} codeRunner={codeRunner} />}
       {turn.systemBlocks.map((block) => <SystemBlock key={block.id} block={block} />)}
       {turn.artifacts.map((block) => <TurnArtifactStrip key={block.id} artifacts={block.artifacts} cwd={codeRunner?.cwd} />)}

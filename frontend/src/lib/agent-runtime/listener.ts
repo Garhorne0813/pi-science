@@ -226,6 +226,7 @@ export function registerEventListener(client: PiScienceClient) {
       ++generations.activity;
       useRuntimeStore.setState({
         working: true,
+        turnLifecycle: "waiting",
         status: "ready",
         pendingQuestionnaire: {
           toolCallId: String(event.toolCallId || ""),
@@ -255,6 +256,7 @@ export function registerEventListener(client: PiScienceClient) {
         : (event.method as PendingInteraction["method"]) || "input";
       useRuntimeStore.setState({
         working: true,
+        turnLifecycle: "waiting",
         status: "ready",
         pendingInteraction: {
           requestId: String(event.requestId || ""),
@@ -274,17 +276,17 @@ export function registerEventListener(client: PiScienceClient) {
       ++generations.activity;
       resetTurnBuffer();
       turnState.errored = false;
-      useRuntimeStore.setState({ working: true, status: "ready" });
+      useRuntimeStore.setState({ working: true, turnLifecycle: "active", status: "ready" });
     } else if (event.type === "text.updated" || event.type === "tool.updated") {
       ++generations.activity;
       turnState.errored = false;
-      useRuntimeStore.setState({ working: true, status: "ready" });
+      useRuntimeStore.setState({ working: true, turnLifecycle: event.type === "tool.updated" && String(event.status || "") === "waiting-approval" ? "waiting" : "active", status: "ready" });
     } else if (event.type === "compaction.updated") {
       ++generations.activity;
       const status = String(event.status || "");
       const failed = status === "error";
       const finished = status === "end" || failed;
-      useRuntimeStore.setState({ working: !finished, status: failed ? "error" : "ready" });
+      useRuntimeStore.setState({ working: !finished, turnLifecycle: failed ? "failed" : finished ? "settled" : "active", status: failed ? "error" : "ready" });
     } else if (event.type === "turn.artifacts") {
       ++generations.activity;
       // No extra tree refresh here: the server publishes this event from the
@@ -295,6 +297,7 @@ export function registerEventListener(client: PiScienceClient) {
       const successful = !turnState.errored;
       useRuntimeStore.setState({
         working: false,
+        turnLifecycle: successful ? "settled" : "failed",
         status: successful ? "ready" : "error",
         pendingInteraction: null,
         pendingQuestionnaire: null,
@@ -320,7 +323,7 @@ export function registerEventListener(client: PiScienceClient) {
         useRuntimeStore.setState({ status: "connecting" });
       } else {
         turnState.errored = true;
-        useRuntimeStore.setState({ working: false, status: "error", pendingInteraction: null, pendingQuestionnaire: null });
+        useRuntimeStore.setState({ working: false, turnLifecycle: "failed", status: "error", pendingInteraction: null, pendingQuestionnaire: null });
       }
     }
 

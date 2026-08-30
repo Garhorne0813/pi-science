@@ -4,49 +4,78 @@ import i18n from "../../i18n";
 import type { ToolCallBlock } from "../../types/thread";
 import { AgentActivity } from "./AgentActivity";
 import { executionActivities, executionOperationCount } from "../../lib/conversation/activity-policy";
+
 const tool = (id: string, name: string, status: ToolCallBlock["status"] = "done", input?: Record<string, unknown>): ToolCallBlock => ({ kind: "tool", id, callId: `${id}-call`, tool: name, status, input, output: "output" });
 beforeAll(async () => { await i18n.changeLanguage("en"); });
+
 describe("AgentActivity data filters", () => {
   it("does not count todo", () => { expect(executionOperationCount([tool("a", "todo"), tool("b", "todo")])).toBe(0); });
   it("keeps todo out of trace", () => { expect(executionActivities([tool("read", "read"), tool("todo", "todo"), tool("search", "grep")]).map((block) => block.id)).toEqual(["read", "search"]); });
 });
+
 describe("AgentActivity", () => {
-  it("presents a phase label, not the last tool", () => {
+  it("presents a narrative label while precise tool titles stay in Trace", () => {
     render(<AgentActivity blocks={[tool("read", "read", "done", { path: "ConversationBlocks.tsx" }), tool("todo", "todo"), tool("search", "grep", "running", { pattern: "tool.updated" })]} />);
-    expect(screen.getByText("Inspecting the code")).toBeInTheDocument();
+    expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
     expect(screen.queryByText("Reading ConversationBlocks.tsx")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Inspecting the code/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Reviewing the implementation/i }));
     expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
     expect(screen.getByText("Reading ConversationBlocks.tsx")).toBeInTheDocument();
   });
-  it("counts execution only", () => { render(<AgentActivity completed blocks={[tool("read", "read"), tool("todo", "todo"), tool("search", "grep")]} />); expect(screen.getByText("Completed · 2 operations")).toBeInTheDocument(); });
-  it("renders nothing for todo only", () => { const { container } = render(<AgentActivity blocks={[tool("todo", "todo")]} />); expect(container).toBeEmptyDOMElement(); });
-  it("folds raw details", () => {
-    render(<AgentActivity completed blocks={[tool("read", "read", "done", { path: "event-fold.ts" })]} />);
-    fireEvent.click(screen.getByRole("button", { name: /Completed · 1 operations/i })); fireEvent.click(screen.getByRole("button", { name: /Reading event-fold.ts/i }));
-    expect(screen.getByText((_, element) => element?.tagName === "PRE" && element.textContent?.includes('"path": "event-fold.ts"') === true)).toBeInTheDocument();
+
+  it("shows completion as the main copy and operation count as metadata", () => {
+    render(<AgentActivity lifecycle="settled" blocks={[tool("read", "read"), tool("todo", "todo"), tool("search", "grep")]} />);
+    expect(screen.getByText("Complete")).toBeInTheDocument();
+    expect(screen.getByLabelText("2 operations")).toHaveTextContent("2");
   });
-  it("holds one phase label through a micro burst and switches only on a real phase change", () => {
+
+  it("renders nothing for todo only", () => { const { container } = render(<AgentActivity blocks={[tool("todo", "todo")]} />); expect(container).toBeEmptyDOMElement(); });
+
+  it("keeps opaque tools without semantics trace-only", () => {
+    render(<AgentActivity blocks={[tool("bash", "bash", "running", { command: "git status" })]} />);
+    expect(screen.queryByText(/Running commands|Working/)).not.toBeInTheDocument();
+    expect(screen.getByText("Execution trace")).toBeInTheDocument();
+  });
+
+  it("holds implementation through test and corrective reads", () => {
     vi.useFakeTimers();
     try {
       const { rerender } = render(<AgentActivity blocks={[tool("read-1", "read", "running", { path: "first.ts" })]} />);
-      expect(screen.getByText("Inspecting the code")).toBeInTheDocument();
-      rerender(<AgentActivity blocks={[tool("read-1", "read", "done"), tool("grep", "grep", "done"), tool("read-2", "read", "running")]} />);
-      expect(screen.getByText("Inspecting the code")).toBeInTheDocument();
-      rerender(<AgentActivity blocks={[tool("read-1", "read", "done"), tool("grep", "grep", "done"), tool("edit", "edit", "running", { path: "ConversationBlocks.tsx" })]} />);
-      expect(screen.getByText("Inspecting the code")).toBeInTheDocument();
+      expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
+      rerender(<AgentActivity blocks={[tool("read-1", "read"), tool("edit", "edit", "running", { path: "a.ts" })]} />);
       act(() => { vi.advanceTimersByTime(900); });
-      expect(screen.getByText("Updating the code")).toBeInTheDocument();
+      expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
+      rerender(<AgentActivity blocks={[tool("read-1", "read"), tool("edit", "edit"), tool("test", "bash", "running", { description: "Run tests" }), tool("corrective", "read", "running", { path: "a.ts" })]} />);
+      act(() => { vi.advanceTimersByTime(900); });
+      expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
   });
-  it("shows waiting interactions immediately", () => {
-    render(<AgentActivity blocks={[tool("read", "read"), tool("ask", "ask_user_question", "waiting-approval")]} />);
-    expect(screen.getByText("Waiting for your approval")).toBeInTheDocument();
+
+  it("does not let partial output starve a narrative transition", () => {
+    vi.useFakeTimers();
+    try {
+      const read = tool("read", "read", "running", { path: "a.ts" });
+      const running = tool("test", "bash", "running", { description: "Run tests" });
+      const { rerender } = render(<AgentActivity blocks={[read]} />);
+      rerender(<AgentActivity blocks={[{ ...read, status: "done" }, running]} />);
+      for (let elapsed = 100; elapsed <= 1_000; elapsed += 100) {
+        act(() => { vi.advanceTimersByTime(100); });
+        rerender(<AgentActivity blocks={[{ ...read, status: "done" }, { ...running, partialOutput: `line ${elapsed}` }]} />);
+      }
+      expect(screen.getByText("Verifying the changes")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
-  it("summarizes failures after the final answer starts", () => {
-    render(<AgentActivity completed blocks={[tool("failed", "bash", "error"), tool("fixed", "bash", "done")]} />);
-    expect(screen.getByText("Completed · 2 operations, 1 failed")).toBeInTheDocument();
+
+  it("shows interaction, failure, and abort lifecycle copy", () => {
+    const { rerender } = render(<AgentActivity lifecycle="waiting" blocks={[tool("read", "read"), tool("ask", "ask_user_question", "waiting-approval")]} />);
+    expect(screen.getByText("Needs your input")).toBeInTheDocument();
+    rerender(<AgentActivity lifecycle="failed" blocks={[tool("failed", "bash", "error", { description: "Run tests" })]} />);
+    expect(screen.getByText("Encountered a problem")).toBeInTheDocument();
+    rerender(<AgentActivity lifecycle="aborted" blocks={[tool("read", "read")]} />);
+    expect(screen.getByText("Stopped")).toBeInTheDocument();
   });
 });
