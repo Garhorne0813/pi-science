@@ -1,6 +1,4 @@
-import type { Thread } from "./event-fold";
-import { attachTurnArtifacts } from "./event-fold";
-import { getClient } from "../client/pi-science-client";
+import { getClient, type TurnArtifactTurn } from "../client/pi-science-client";
 import { queryClient } from "../client/query-client";
 
 const TURN_ARTIFACTS_STALE_MS = 3_000;
@@ -13,11 +11,9 @@ export const turnArtifactsKey = (cwd: string, sessionId: string) => [
   sessionId,
 ] as const;
 
-/** Fetch persisted turn-artifact summaries and attach them to a history-built
- *  thread. Failures degrade to the unchanged thread (the conversation itself
- *  is authoritative). */
-export async function attachPersistedTurnArtifacts(thread: Thread, sessionId: string, cwd: string): Promise<Thread> {
-  if (!sessionId) return thread;
+/** Fetch persisted turn-artifact summaries through the shared query cache. */
+export async function fetchPersistedTurnArtifacts(sessionId: string, cwd: string): Promise<TurnArtifactTurn[]> {
+  if (!sessionId) return [];
   try {
     const { turns } = await queryClient.fetchQuery({
       queryKey: turnArtifactsKey(cwd, sessionId),
@@ -25,8 +21,8 @@ export async function attachPersistedTurnArtifacts(thread: Thread, sessionId: st
       staleTime: TURN_ARTIFACTS_STALE_MS,
       retry: false,
     });
-    return attachTurnArtifacts(thread, turns);
+    return turns;
   } catch {
-    return thread;
+    return [];
   }
 }
