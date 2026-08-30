@@ -150,6 +150,7 @@ describe("runtime event subscription", () => {
 
     await useRuntimeStore.getState().respondToInteraction({ value: "B" });
     expect(useRuntimeStore.getState().pendingInteraction).toBeNull();
+    expect(useRuntimeStore.getState().turnLifecycle).toBe("active");
     source.emit("session.idle", { type: "session.idle", sessionId: "session-a" });
     expect(useRuntimeStore.getState().working).toBe(false);
     expect(useRuntimeStore.getState().status).toBe("ready");

@@ -139,6 +139,7 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
         startedAt: (event.startedAt as string | undefined) ?? previous?.startedAt,
         endedAt: (event.endedAt as string | undefined) ?? previous?.endedAt,
         childSessionId: (event.childSessionId as string | undefined) ?? previous?.childSessionId,
+        interactionResolved: previous?.interactionResolved,
       };
       if (existingIdx !== undefined) {
         blocks[existingIdx] = block;

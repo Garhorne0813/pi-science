@@ -7,6 +7,7 @@ const SYSTEM_TOOLS = new Set(["context_compaction", "runtime_recovery", "reconne
 export function activityPolicy(block: ToolCallBlock): ToolPresentationPolicy {
   const tool = block.tool.trim().toLowerCase();
   if (PLAN_CONTROL_TOOLS.has(tool)) return policy("plan-control", false, false, false);
+  if (block.interactionResolved) return policy("plan-control", false, false, false);
   if (INTERACTION_TOOLS.has(tool) || block.status === "waiting-approval") return policy("interaction", true, false, false);
   if (SYSTEM_TOOLS.has(tool)) {
     const recoveryVisible = (tool === "runtime_recovery" || tool === "reconnect") && block.status === "running";

@@ -572,7 +572,17 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           && current.cwd === cwd
           && current.pendingInteraction?.requestId === requestId
         ) {
-          set({ pendingInteraction: null, status: "ready" });
+          const resolvedBlocks = current.thread.blocks.map((block) => {
+            if (block.kind !== "tool" || block.status !== "waiting-approval") return block;
+            const matches = pendingInteraction.toolCallId
+              ? block.callId === pendingInteraction.toolCallId
+              : block.callId === requestId;
+            return matches || !pendingInteraction.toolCallId ? { ...block, interactionResolved: true } : block;
+          });
+          const thread = resolvedBlocks.some((block, index) => block !== current.thread.blocks[index])
+            ? { ...current.thread, blocks: resolvedBlocks, index: Object.fromEntries(resolvedBlocks.map((block, index) => [block.id, index])) }
+            : current.thread;
+          set({ pendingInteraction: null, working: true, turnLifecycle: "active", status: "ready", thread });
         }
       } catch (error) {
         const current = get();

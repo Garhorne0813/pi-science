@@ -36,7 +36,7 @@ export function AgentActivity({ blocks, lifecycle = "active" }: { blocks: ToolCa
           ? narrativeLabel(shown, t)
           : t("conversation.activity.trace");
 
-  return <div id={blocks.length === 1 ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} className={cn("overflow-hidden scroll-mt-4", !traceOnly && "rounded-input border border-faint bg-surface")}>
+  return <div id={blocks.length === 1 ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} className="overflow-hidden scroll-mt-4">
     <button type="button" aria-expanded={canExpand ? expanded : undefined} onClick={() => canExpand && setExpanded((value) => !value)} className={cn("flex w-full items-center gap-2 text-left text-xs text-muted transition-colors", canExpand && "hover:bg-surface-2", traceOnly ? "px-1 py-1" : "px-3 py-2")}>
       {!traceOnly && <ActivityIcon state={state} config={progressAppearance} label={label} />}
       <span {...(!traceOnly ? { "aria-live": "polite", "aria-atomic": "true" } : {})} className={cn("min-w-0 flex-1 truncate", state === "error" && "text-error-text")}>{label}</span>
