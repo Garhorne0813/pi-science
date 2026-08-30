@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import {
   AlertTriangle, ArrowLeft, ArrowUpRight, Copy, Crosshair, FileOutput, FileSearch,
-  Loader2, MessageSquare, RotateCcw,
+  Loader2, MessageSquare, RotateCcw, CalendarClock,
 } from "lucide-react";
 import type { ExecutionRecord } from "@pi-science/contracts";
 import { useTranslation } from "react-i18next";
@@ -19,13 +19,14 @@ export interface ExecutionDetailsProps {
   onOpenFile: (path: string) => void;
   onOpenArtifact: (artifact: ExecutionRecord["artifacts"][number]) => void;
   onOpenSession?: () => void;
+  onOpenScheduledTask?: () => void;
   onLocate?: () => void;
   onReproduce: () => void;
   log?: DisplayLog;
   loadingLog: boolean;
 }
 
-export function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpenFile, onOpenArtifact, onOpenSession, onLocate, onReproduce, log, loadingLog }: ExecutionDetailsProps) {
+export function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpenFile, onOpenArtifact, onOpenSession, onOpenScheduledTask, onLocate, onReproduce, log, loadingLog }: ExecutionDetailsProps) {
   const { t } = useTranslation();
   const tabs: DetailTab[] = ["summary", "input", "output", "files", "runtime", "timing"];
   const problem = isProblemExecution(run) ? executionError(run) : "";
@@ -52,6 +53,7 @@ export function ExecutionDetails({ run, tab, onTabChange, onBack, onCopy, onOpen
           <DetailAction icon={<RotateCcw size={12} />} label={t("runs.reproduce")} onClick={onReproduce} primary />
           {onLocate && <DetailAction icon={<Crosshair size={12} />} label={t("runs.locateExecution")} onClick={onLocate} />}
           {onOpenSession && <DetailAction icon={<MessageSquare size={12} />} label={t("runs.openSession")} onClick={onOpenSession} />}
+          {onOpenScheduledTask && <DetailAction icon={<CalendarClock size={12} />} label={t("runs.openScheduledTask")} onClick={onOpenScheduledTask} />}
           <DetailAction icon={<Copy size={12} />} label={t("runs.copyId")} onClick={() => onCopy(run.execution_id, t("runs.idCopied"))} />
           {executionCommandText(run) && <DetailAction icon={<Copy size={12} />} label={t("runs.copyCommand")} onClick={() => onCopy(executionCommandText(run), t("runs.commandCopied"))} />}
         </div>

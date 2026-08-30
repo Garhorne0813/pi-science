@@ -7,6 +7,9 @@ import type { ThreadBlock, ToolCallBlock } from "../../types/thread";
 import { buildTurnPresentations } from "../../lib/conversation/turn-presentation";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 
+vi.mock("react-router-dom", async (importOriginal) => ({ ...await importOriginal<typeof import("react-router-dom")>(), useNavigate: () => vi.fn() }));
+vi.mock("../feedback/feedback-context", () => ({ useFeedback: () => ({ toast: vi.fn() }) }));
+
 const codeRunner: CodeRunner = { cwd: "proj", sessionId: "s1" };
 const user = (id: string, text = id): ThreadBlock => ({ kind: "user", id, text, timestamp: new Date().toISOString() });
 const agent = (id: string, text: string, partial = false): ThreadBlock => ({ kind: "agent", id, parts: [{ id: `${id}-p0`, text }], ...(partial ? { partial: true } : {}) });
@@ -63,6 +66,56 @@ describe("turn-level conversation rendering", () => {
     const agentCopy = screen.getAllByRole("button", { name: "Copy" }).find((button) => !userMessage.contains(button));
     fireEvent.click(agentCopy!);
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith("visible answer");
+  });
+
+  it("hides the copy action when the turn ends on a tool call with no final assistant answer", () => {
+    render(<>{renderBlocks([
+      user("u1", "do the thing"),
+      agent("a1", "Working on it."),
+      tool("t1", "read"),
+    ], codeRunner)}</>);
+
+    // Only the user message has a copy button; the tool-call narration does not.
+    const copyButtons = screen.getAllByRole("button", { name: "Copy" });
+    expect(copyButtons).toHaveLength(1);
+  });
+
+  it("renders a scheduled-task proposal fence as a confirmation card", () => {
+    const proposal = `I prepared this task.\n\n\`\`\`scheduled-task-proposal\n{"proposal_id":"p1","title":"CRISPR watch","task_kind":"literature_monitor","description":"Watch papers","schedule":{"display_text":"Every weekday · 09:00 · UTC","canonical":{"type":"cron","expression":"0 9 * * 1-5","timezone":"UTC"}},"action_summary":"Track CRISPR papers","delivery_policy":"only_when_relevant","query":"CRISPR screening","providers":["pubmed"]}\n\`\`\``;
+    render(<>{renderBlocks([agent("a1", proposal)], codeRunner)}</>);
+
+    expect(screen.getByText("I prepared this task.")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Scheduled task proposal" })).toHaveTextContent("CRISPR watch");
+    expect(screen.getByRole("button", { name: "Schedule & run now" })).toBeInTheDocument();
+    expect(screen.queryByText(/proposal_id/)).not.toBeInTheDocument();
+  });
+
+  it("does not make an unconfirmed planned path clickable", () => {
+    useRuntimeStore.setState({ thread: { blocks: [], index: {}, loaded: true } });
+    render(<>{renderBlocks([
+      agent("a1", "计划输出 `drafts/structure_prediction_research_brief.md`。"),
+    ], codeRunner)}</>);
+
+    expect(screen.queryByRole("button", { name: /drafts\/structure_prediction_research_brief\.md/ })).not.toBeInTheDocument();
+  });
+
+  it("does not render file-reference chips even for published artifact paths (cards replace them)", () => {
+    useRuntimeStore.setState({ thread: { blocks: [], index: {}, loaded: true } });
+    render(<>{renderBlocks([
+      agent("a1", "生成完成：`work/plot.png` 和 `work/results.csv`。"),
+      { kind: "status-line", id: "st1", text: "artifact ready", level: "done", path: "work/plot.png" },
+      { kind: "artifact-summary", id: "turn-artifacts-t1", turnId: "t1", assistantMessageId: "a1", artifacts: [{ path: "work/plot.png", kind: "image", mime: "image/png", size: 10 }, { path: "work/results.csv", kind: "table", mime: "text/csv", size: 10 }] },
+    ], codeRunner)}</>);
+
+    // The paths are published (status-line done + artifact-summary), but the
+    // per-message chip row is gone — the turn artifact cards are the single source.
+    // Exact name match: the old chips exposed the bare path as their accessible
+    // name, while the artifact cards use an aria-label like "plot.png (work/plot.png)",
+    // so an exact "work/plot.png" lookup only ever matches the removed chips.
+    expect(screen.queryByRole("button", { name: "work/plot.png" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "work/results.csv" })).not.toBeInTheDocument();
+    // The strip itself still renders (its cards use img/alt or aria-label, not button text).
+    expect(screen.getByLabelText("Generated files")).toBeInTheDocument();
   });
 
   it("keeps user bubble geometry", () => {

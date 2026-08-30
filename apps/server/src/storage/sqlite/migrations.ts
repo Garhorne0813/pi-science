@@ -5,6 +5,8 @@ import type { Migration } from "./protocol.js";
 
 const migrationFiles = [
   { version: 1, name: "0001_initial.sql", url: new URL("./migrations/0001_initial.sql", import.meta.url) },
+  { version: 2, name: "0002_scheduled_tasks.sql", url: new URL("./migrations/0002_scheduled_tasks.sql", import.meta.url) },
+  { version: 3, name: "0003_scheduled_tasks_product_layer.sql", url: new URL("./migrations/0003_scheduled_tasks_product_layer.sql", import.meta.url) },
 ] as const;
 
 export async function loadMigrations(): Promise<Migration[]> {

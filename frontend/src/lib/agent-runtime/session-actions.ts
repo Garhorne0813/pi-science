@@ -152,7 +152,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           nextState.historyHasMore = historyPage.has_more;
           nextState.historySnapshotVersion = historyPage.snapshot_version;
         }
-        if (sessionsResult.status === "fulfilled" && sessionsResult.value.length > 0) {
+        if (sessionsResult.status === "fulfilled" && sessionsResult.value !== null && sessionsResult.value.length > 0) {
           nextState.sessions = sessionsResult.value;
         }
         if (runtimeStateResult.status === "fulfilled") {
@@ -195,7 +195,14 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           nextState.status = "ready";
         }
         set(nextState);
-        if (nextState.thread) backfillSessionName(cwd, targetSessionId, nextState.thread);
+        if (nextState.thread) {
+          // Wait for the authoritative session list before deriving a fallback
+          // name. Otherwise a slow list request can race this backfill and a
+          // persisted server title can be replaced by the first user message.
+          const sessionList = await sessionsPromise;
+          if (generation !== generations.connection || localMutationGeneration !== generations.localMutation) return;
+          if (sessionList !== null) backfillSessionName(cwd, targetSessionId, nextState.thread);
+        }
 
         // A refresh can restore a cached busy snapshot after the turn's final
         // SSE event has already passed. Keep checking the authoritative state

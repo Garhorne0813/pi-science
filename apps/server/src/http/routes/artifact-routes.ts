@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { provenanceRecordSchema, type ProvenanceRecord } from "@pi-science/contracts";
 import { appendJsonLine, appendJsonLineUnlocked, metadataRoot, readJsonLines, withFileWriteLock, workspaceFile } from "../../storage/persistence.js";
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/workspace-security.js";
+import { provenanceRepository, type Provenance } from "../../runtime/provenance/provenance-repository.js";
 
 interface Artifact { artifact_id: string; version: number; path: string; kind: string; mime: string; size: number; sha256: string; published_at: string; producer?: Record<string, unknown>; inputs?: unknown[]; environment?: Record<string, unknown>; verification?: Record<string, unknown> }
 const MAX_PUBLISH_BYTES = 2 * 1024 * 1024 * 1024;

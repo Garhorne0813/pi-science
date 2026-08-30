@@ -210,12 +210,14 @@ export async function deleteSession(baseUrl: string, sessionId: string, cwd?: st
   }
 }
 
-export async function setSessionTitle(baseUrl: string, sessionId: string, title: string, cwd?: string): Promise<void> {
+export async function setSessionTitle(baseUrl: string, sessionId: string, title: string, cwd?: string, options?: { derived?: boolean }): Promise<void> {
   const params = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
   const res = await request(`${baseUrl}/api/sessions/${sessionId}/title${params}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title }),
+    // A derived fallback must be marked as such on the server, otherwise the
+    // AI-title POST would treat it as final and never replace it.
+    body: JSON.stringify(options?.derived === true ? { title, derived: true } : { title }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.ok === false) {

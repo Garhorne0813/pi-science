@@ -14,6 +14,8 @@ import { canonicalFromRuntimeModelRef, canonicalRuntimeModelRef, projectedRuntim
 import type { ProjectReviewService } from "../../project-review/service.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { SessionRepository, invalidateSessionFileCache, sessionRepository } from "./session-repository.js";
+import type { SessionTitleRepository } from "./session-titles.js";
+import { sessionTitleRepository } from "./session-titles.js";
 import { deleteSessionStats, foldSessionFileStats, loadSessionStats, saveSessionStats } from "./session-stats-repository.js";
 import { foldEventRecordsTiming, maxTiming, mergeSessionStats, SessionStatsProjector, timingFromStats, type SessionTiming } from "./session-stats-projector.js";
 import { WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
@@ -190,6 +192,7 @@ export class NodeSessionService {
     private readonly projectReview: Pick<ProjectReviewService, "run"> | null = null,
     private readonly statsEventStore: StatsEventStore = durableEventStore,
     private readonly modelResources: Pick<ModelResourceService, "ensureMigrated" | "isModelAvailable"> | null = null,
+    private readonly titles: Pick<SessionTitleRepository, "moveTitle"> = sessionTitleRepository,
   ) {}
 
   configureLogging(log: (level: "info" | "warn" | "error", message: string) => void): void {
@@ -1293,7 +1296,13 @@ export class NodeSessionService {
       if (state.success && started.activeSessionId) {
         started.restartPending = false;
         this.registerRuntime(started, oldId);
-        if (oldId && started.activeSessionId !== oldId) await this.publishReplacement(cwd, oldId, started.activeSessionId);
+        if (oldId && started.activeSessionId !== oldId) {
+          // A restart that replaces the session id must carry the persisted
+          // display title to the new id BEFORE announcing the replacement, so
+          // no subscriber can observe the new session without its title.
+          await this.titles.moveTitle(cwd, oldId, started.activeSessionId);
+          await this.publishReplacement(cwd, oldId, started.activeSessionId);
+        }
         return started;
       }
       await this.cleanupRuntime(started);
