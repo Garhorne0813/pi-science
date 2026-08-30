@@ -53,6 +53,7 @@ const RESEARCH_EXTENSION = join(
   "extensions",
   "pi-science-research.ts",
 );
+const MCP_EXTENSION = join(PROJECT_ROOT, "apps", "server", "src", "runtime", "pi", "extensions", "pi-science-mcp.ts");
 
 function webPort(): number {
   if (sharedWebPort === null) sharedWebPort = randomInt(20_000, 60_000);
@@ -127,7 +128,7 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
   if (effectiveThinking) args.push("--thinking", effectiveThinking);
   if (useRpcMode && sessionPath) args.push("--session", sessionPath);
   for (const skill of useRpcMode ? [...seededSkills, ...config.skills] : config.skills) args.push("--skill", skill);
-  const extensionPaths = ensureResearchExtension(ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(config.extensions)));
+  const extensionPaths = ensureMcpExtension(ensureResearchExtension(ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(config.extensions))));
   for (const extension of extensionPaths) args.push("-e", extension);
   const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
   let agentDir = join(dataRoot, "pi-agent", useRpcMode ? workspaceKey : "web-host");
@@ -513,6 +514,13 @@ function ensureNotebookExtension(paths: string[]): string[] {
 function ensureResearchExtension(paths: string[]): string[] {
   if (process.env.PI_SCIENCE_DISABLE_RESEARCH_TOOLS === "1" || !existsSync(RESEARCH_EXTENSION)) return paths;
   return [...paths.filter((path) => path !== RESEARCH_EXTENSION), RESEARCH_EXTENSION];
+}
+
+/** MCP is always loaded through Pi-Science's programmatic snapshot adapter.
+ * This prevents pi-mcp-adapter from merging ambient global/project files. */
+function ensureMcpExtension(paths: string[]): string[] {
+  if (process.env.PI_SCIENCE_DISABLE_MCP === "1" || !existsSync(MCP_EXTENSION)) return paths;
+  return [...paths.filter((path) => path !== MCP_EXTENSION && !path.includes("pi-mcp-adapter")), MCP_EXTENSION];
 }
 
 function readSettings(dataRoot: string): Record<string, any> {

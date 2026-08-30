@@ -62,7 +62,7 @@ function runningJob(cwd: string): JobRecord {
 describe("SQLite state store", () => {
   it("starts the worker, applies migrations, and rolls back a failed batch", async () => {
     const state = await store();
-    expect(state.diagnostics()).toMatchObject({ status: "ready", schema_version: 1 });
+    expect(state.diagnostics()).toMatchObject({ status: "ready", schema_version: 2 });
 
     await expect(state.batch([
       { sql: "INSERT INTO projects (project_id, name, manifest_version, created_at, updated_at, last_seen_at) VALUES (?, ?, 1, 1, 1, 1)", params: ["project-one", "one"] },

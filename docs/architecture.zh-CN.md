@@ -35,6 +35,22 @@ React 应用是 Node 控制面的客户端。控制面拥有应用 API、协调�
 | 全局 SQLite 状态 | Workspace 位置、环境 revision、持久任务、租约和旧状态导入标记 |
 | 工作区 | 用户文件，以及项目级指令、技能、环境、session、产物和谱系 |
 
+### MCP 控制面
+
+MCP Connector、项目绑定、工具授权与元数据缓存都以 `state.sqlite` 中的规范记录为
+唯一权威。设置页和兼容 API 统一调用 `McpConnectorService`；旧 MCP 文件只作为导入源。
+
+控制面为每个项目生成 `.pi-science/mcp-runtime.json` 派生快照。托管 Pi runtime
+始终加载 Pi-Science MCP wrapper，由 wrapper 使用该快照调用
+`createMcpAdapter({ config })`，因此不会再把 ambient 全局/项目 MCP 文件合并到托管
+runtime。Connector 变更会重建受影响项目的快照并 reload 活跃 session。MCP transport
+生命周期和第一阶段 OAuth credential 仍由 adapter 管理；控制面 OAuth 与 live runtime
+状态属于后续阶段。
+
+`paper-search` 会被幂等写入为不可编辑、不可删除的内置 Connector。仓库自带的 Node
+MCP server 提供只读 PubMed、arXiv 与 Crossref 检索，不依赖用户的 Python 环境；它仍需
+用户为具体项目显式启用。
+
 ## Pi Orbit 运行时模型
 
 Pi-Science 为每个 Node 控制面进程启动**一个 Pi Orbit Web Host**，而不是为每个

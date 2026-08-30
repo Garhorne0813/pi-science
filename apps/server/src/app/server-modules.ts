@@ -23,6 +23,9 @@ import { EnvironmentRepository } from "../storage/sqlite/repositories/environmen
 import { JobRepository } from "../storage/sqlite/repositories/job-repository.js";
 import { WorkspaceRepository } from "../storage/sqlite/repositories/workspace-repository.js";
 import { SqliteStateStore } from "../storage/sqlite/state-store.js";
+import { McpRepository } from "../storage/sqlite/repositories/mcp-repository.js";
+import { McpConnectorService } from "../mcp/connector-service.js";
+import { McpRuntimeProjection } from "../mcp/runtime-projection.js";
 
 export interface ServerModules {
   readonly sessions: NodeSessionService;
@@ -42,6 +45,7 @@ export interface ServerModules {
   readonly environmentRepository: EnvironmentRepository;
   readonly jobRepository: JobRepository;
   readonly sqliteEnabled: boolean;
+  readonly mcp: McpConnectorService;
 }
 
 export interface ServerModuleOptions {
@@ -72,6 +76,8 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
   const modelResources = new ModelResourceService({ settings });
   const projectReview = new ProjectReviewService(new PiReviewSubagentRunner(environments, piManager), sessionRepository);
   const sessions = new NodeSessionService(events, piManager, sessionRepository, environments, projectReview, undefined, modelResources);
+  const mcpRepository = new McpRepository(stateStore);
+  const mcp = new McpConnectorService(mcpRepository, workspaces, settings, sessions, new McpRuntimeProjection(mcpRepository));
   const jobs = new JobCoordinator(environments, {}, undefined, sqliteEnabled ? jobRepository : undefined);
   const research = new ResearchOrchestrator(
     new ResearchGraphStore(),
@@ -80,5 +86,5 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
     new ExperimentExecutor(jobs),
     new PiResearchWorker(new PiManagedResearchRuntime(environments, piManager)),
   );
-  return { sessions, events, sessionRepository, piManager, settings, modelResources, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled };
+  return { sessions, events, sessionRepository, piManager, settings, modelResources, mcp, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled };
 }

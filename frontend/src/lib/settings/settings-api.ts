@@ -2,6 +2,7 @@ import { applySessionReplacements, type SessionReplacement } from "../agent-runt
 import { apiRequest } from "../client/api";
 import { queryClient } from "../client/query-client";
 import type { AgentProfile, McpServer, ProjectSubagent, RuntimeExtension, WebAccessConfig } from "./settings-types";
+import type { McpConnector, McpConnectorCreate, McpProjectBindingUpdate, McpToolSummary } from "@pi-science/contracts";
 
 export const settingsKey = (...selector: Array<string | null>) => ["settings", ...selector];
 
@@ -89,6 +90,13 @@ export const mcpCatalogQuery = (cwd: string, errorFallback: string) => ({
   staleTime: 0,
 });
 
+export const mcpConnectorsKey = (cwd: string) => ["mcp", "connectors", cwd];
+export const mcpConnectorsQuery = (cwd: string, errorFallback: string) => ({
+  queryKey: mcpConnectorsKey(cwd),
+  queryFn: () => apiRequest<{ connectors: McpConnector[]; legacy_count?: number; legacy_config_path?: string | null }>(`/api/mcp/connectors?cwd=${encodeURIComponent(cwd)}`, { errorFallback }),
+  staleTime: 0,
+});
+
 export const settingsApi = {
   async config<T>(cwd?: string | null): Promise<T> {
     // The replacement side effect runs on every call, cached or not, as it did before.
@@ -153,6 +161,31 @@ export const settingsApi = {
 
   setMcpEnabled(id: string, enabled: boolean, fallback: string) {
     return writeSettings(`/api/settings/mcp/${id}?enabled=${enabled}`, { method: "PUT" }, fallback);
+  },
+
+  createMcp(cwd: string, body: McpConnectorCreate) {
+    return apiRequest<McpConnector>(`/api/mcp/connectors?cwd=${encodeURIComponent(cwd)}`, json("POST", body));
+  },
+  updateMcpBinding(cwd: string, connectorId: string, body: McpProjectBindingUpdate) {
+    return apiRequest<McpConnector>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/binding?cwd=${encodeURIComponent(cwd)}`, json("PUT", body));
+  },
+  deleteMcp(cwd: string, connectorId: string) {
+    return apiRequest<void>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}?cwd=${encodeURIComponent(cwd)}`, { method: "DELETE" });
+  },
+  probeMcp(cwd: string, connectorId: string) {
+    return apiRequest<{ runtime_state: string; auth_state: string; error: string | null; tools: McpToolSummary[] }>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/probe?cwd=${encodeURIComponent(cwd)}`, { method: "POST" });
+  },
+  mcpTools(cwd: string, connectorId: string) {
+    return apiRequest<{ tools: McpToolSummary[]; cached_at: number | null }>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/tools?cwd=${encodeURIComponent(cwd)}`);
+  },
+  setMcpToolDecision(cwd: string, connectorId: string, toolName: string, decision: "allow" | "ask" | "deny") {
+    return apiRequest(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/tools/${encodeURIComponent(toolName)}?cwd=${encodeURIComponent(cwd)}`, json("PUT", { decision }));
+  },
+  previewMcpImport(cwd: string) {
+    return apiRequest<{ source: string | null; entries: Array<{ name: string; importable: boolean; conflict: boolean; contains_sensitive_fields: boolean }> }>(`/api/mcp/import/preview?cwd=${encodeURIComponent(cwd)}`, { method: "POST" });
+  },
+  commitMcpImport(cwd: string, names: string[]) {
+    return apiRequest<{ imported: McpConnector[]; failed: Array<{ name: string; error: string }> }>(`/api/mcp/import/commit?cwd=${encodeURIComponent(cwd)}`, json("POST", { names }));
   },
 
   /* ── Agent profiles ── */
