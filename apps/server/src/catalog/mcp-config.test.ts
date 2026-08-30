@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { NodeSessionService } from "../runtime/node/node-session-service.js";
@@ -50,7 +50,7 @@ describe("MCP configuration resolution", () => {
     });
   });
 
-  it("prefers an explicit config path over workspace and standard locations", async () => {
+  it("does not read arbitrary explicit config paths outside standard locations", async () => {
     const workspace = join(home, "workspace");
     const explicitPath = join(home, "explicit-mcp.json");
     await writeMcp(join(home, ".config", "mcp", "mcp.json"), { standard: {} });
@@ -58,7 +58,7 @@ describe("MCP configuration resolution", () => {
     await writeMcp(explicitPath, { explicit: {} });
 
     const result = await resolveMcpConfig({ workspaceRoot: workspace, explicitPath });
-    expect(result).toEqual({ definitions: { explicit: {} }, source: explicitPath });
+    expect(result).toEqual({ definitions: { workspace: {} }, source: join(await realpath(workspace), ".mcp.json") });
   });
 
   it("exposes standard user-level servers through the Settings endpoint", async () => {

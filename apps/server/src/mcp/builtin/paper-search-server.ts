@@ -66,4 +66,7 @@ function dateYear(value: unknown): number | null { const parts = value && typeof
 function articleId(value: unknown, type: string): unknown { return Array.isArray(value) ? (value.find((item) => typeof item === "object" && item && (item as { idtype?: unknown }).idtype === type) as { value?: unknown } | undefined)?.value ?? null : null; }
 function tag(xml: string, name: string): string { return decode(xml.match(new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${name}>`))?.[1] ?? ""); }
 function clean(value: string): string { return decode(value).replace(/\s+/g, " ").trim(); }
-function decode(value: string): string { return value.replaceAll("&amp;", "&").replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&quot;", '"').replaceAll("&#39;", "'"); }
+function decode(value: string): string {
+  const entities: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'" };
+  return value.replace(/&(amp|lt|gt|quot|#39);/g, (entity) => entities[entity.slice(1, -1)] ?? entity);
+}

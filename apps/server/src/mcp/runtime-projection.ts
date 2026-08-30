@@ -1,7 +1,9 @@
-import { lstat, mkdir, rename, writeFile } from "node:fs/promises";
+import { lstat, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { McpEnvironmentBinding } from "./runtime-projection-types.js";
 import type { McpRepository, StoredMcpConnector } from "../storage/sqlite/repositories/mcp-repository.js";
+import { validateWorkspaceCwd } from "../security/workspace-security.js";
+import { metadataRoot, writeJsonAtomic } from "../storage/persistence.js";
 
 export const MCP_RUNTIME_SNAPSHOT = ".pi-science/mcp-runtime.json";
 
@@ -28,6 +30,7 @@ export class McpRuntimeProjection {
   constructor(private readonly repository: McpRepository) {}
 
   async materialize(cwd: string, projectId: string): Promise<void> {
+    const workspace = await validateWorkspaceCwd(cwd);
     const bindings = (await this.repository.bindingsForProject(projectId)).filter((item) => item.enabled);
     const connectors = new Map((await this.repository.list()).map((item) => [item.connector_id, item]));
     const mcpServers: Record<string, ProjectedMcpServer> = {};
@@ -42,7 +45,7 @@ export class McpRuntimeProjection {
       mcpServers[connector.name] = projectServer(connector, includeTools, excludeTools,
         binding.approval_mode === "allow_all" ? false : binding.approval_mode === "ask" ? true : asked);
     }
-    await atomicSnapshot(cwd, { version: 1, project_id: projectId, generated_at: Date.now(), mcpServers });
+    await atomicSnapshot(workspace, { version: 1, project_id: projectId, generated_at: Date.now(), mcpServers });
   }
 }
 
@@ -68,14 +71,11 @@ function projectServer(connector: StoredMcpConnector, includeTools: string[], ex
 }
 
 async function atomicSnapshot(cwd: string, payload: unknown): Promise<void> {
-  const directory = join(cwd, ".pi-science");
+  const directory = metadataRoot(cwd);
   try { if ((await lstat(directory)).isSymbolicLink()) throw new Error("Workspace .pi-science directory must not be a symbolic link"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   await mkdir(directory, { recursive: true });
-  const target = join(cwd, MCP_RUNTIME_SNAPSHOT);
-  const temporary = `${target}.${process.pid}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(payload, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  await rename(temporary, target);
+  await writeJsonAtomic(join(directory, "mcp-runtime.json"), payload, { mode: 0o600 });
 }
 
 function unique(values: string[]): string[] { return [...new Set(values)].sort(); }
