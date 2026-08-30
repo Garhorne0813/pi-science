@@ -44,11 +44,23 @@ describe("turn-level conversation rendering", () => {
     expect(screen.getByText("done")).toBeInTheDocument();
   });
 
-  it("keeps tool-only unfinished narration hidden", () => {
-    const turn = buildTurnPresentations([user("u1"), agent("a1", "I will inspect it."), tool("read", "read", "running", { path: "event-fold.ts" })])[0];
-    render(<>{renderTurn(turn, codeRunner, undefined, true)}</>);
-    expect(screen.getByText("Reading event-fold.ts")).toBeInTheDocument();
+  it("keeps tool-only unfinished narration hidden and shows the phase label", () => {
+    const turn = buildTurnPresentations([user("u1"), agent("a1", "I will inspect it."), tool("read", "read", "running", { path: "event-fold.ts" })], { lastTurnActive: true })[0];
+    render(<>{renderTurn(turn, codeRunner)}</>);
+    expect(screen.getByText("Inspecting the code")).toBeInTheDocument();
     expect(screen.queryByText("I will inspect it.")).not.toBeInTheDocument();
+  });
+
+  it("hides streaming answer prose until the turn lifecycle settles", () => {
+    const turn = buildTurnPresentations([user("u1"), tool("read", "read"), agent("a1", "streaming answer")], { lastTurnActive: true })[0];
+    render(<>{renderTurn(turn, codeRunner)}</>);
+    expect(screen.queryByText("streaming answer")).not.toBeInTheDocument();
+    expect(screen.getByText("Inspecting the code")).toBeInTheDocument();
+    cleanup();
+    const settled = buildTurnPresentations([user("u1"), tool("read", "read"), agent("a1", "streaming answer")])[0];
+    render(<>{renderTurn(settled, codeRunner)}</>);
+    expect(screen.getByText("streaming answer")).toBeInTheDocument();
+    expect(screen.getByText("Completed · 1 operations")).toBeInTheDocument();
   });
 
   it("shows a completed summary when a settled turn ends on a tool", () => {

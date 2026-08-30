@@ -19,11 +19,6 @@ export function isVisibleActivity(block: ToolCallBlock): boolean {
 
 export function executionActivities(blocks: ToolCallBlock[]): ToolCallBlock[] { return blocks.filter((block) => activityPolicy(block).visibleInExecutionTrace); }
 export function executionOperationCount(blocks: ToolCallBlock[]): number { return blocks.filter((block) => activityPolicy(block).countsAsOperation).length; }
-export function selectCurrentActivity(blocks: ToolCallBlock[]): ToolCallBlock | null {
-  const candidates = blocks.filter((block) => activityPolicy(block).visibleInCurrentActivity);
-  const latest = candidates.at(-1);
-  return candidates.findLast((block) => block.status === "waiting-approval") ?? candidates.findLast((block) => block.status === "running") ?? (latest?.status === "error" ? latest : null);
-}
 
 function policy(plane: ToolPresentationPolicy["plane"], visibleInCurrentActivity: boolean, visibleInExecutionTrace: boolean, countsAsOperation: boolean): ToolPresentationPolicy {
   return { plane, visibleInCurrentActivity, visibleInExecutionTrace, countsAsOperation };

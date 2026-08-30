@@ -3,7 +3,7 @@ import { Loader2, File, FolderOpen } from "lucide-react";
 import { cn } from "../../lib/ui";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
-import type { AgentMessageBlock, StatusLineBlock, ThreadBlock, ToolCallBlock, UserMessageBlock } from "../../types/thread";
+import type { AgentMessageBlock, StatusLineBlock, ThreadBlock, UserMessageBlock } from "../../types/thread";
 import { MarkdownViewer, type CodeRunner } from "../markdown-viewer/MarkdownViewer";
 import { fileInspectorFromBlock, refToArtifactBlock } from "../../lib/artifacts";
 import { TurnArtifactStrip } from "./TurnArtifactStrip";
@@ -12,12 +12,11 @@ import { agentActionTextByBlock } from "../../lib/conversation";
 import { extractCitations } from "../../lib/citations";
 import { parseSuggestions } from "../../lib/conversation";
 import { MessageActions } from "./MessageActions";
-import { isVisibleActivity } from "../../lib/conversation/activity-policy";
 import { buildTurnPresentations, turnBlockIds, type TurnPresentation } from "../../lib/conversation/turn-presentation";
 import { AgentActivity } from "./AgentActivity";
 
-export function renderTurn(turn: TurnPresentation, codeRunner: CodeRunner, actionTextByBlock?: Map<string, string>, active = false) {
-  return <ConversationTurn key={turn.id} turn={turn} codeRunner={codeRunner} actionTextByBlock={actionTextByBlock} active={active} />;
+export function renderTurn(turn: TurnPresentation, codeRunner: CodeRunner, actionTextByBlock?: Map<string, string>) {
+  return <ConversationTurn key={turn.id} turn={turn} codeRunner={codeRunner} actionTextByBlock={actionTextByBlock} />;
 }
 
 export function renderBlocks(blocks: ThreadBlock[], codeRunner: CodeRunner) {
@@ -26,13 +25,11 @@ export function renderBlocks(blocks: ThreadBlock[], codeRunner: CodeRunner) {
   return buildTurnPresentations(blocks).map((turn) => renderTurn(turn, codeRunner, actionTextByBlock));
 }
 
-function ConversationTurn({ turn, codeRunner, actionTextByBlock, active }: { turn: TurnPresentation; codeRunner: CodeRunner; actionTextByBlock?: Map<string, string>; active: boolean }) {
-  const activityTools = turn.blocks.filter((block): block is ToolCallBlock => block.kind === "tool" && isVisibleActivity(block));
-  const completed = turn.finalAgent !== null || (!active && turn.completed);
+function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnPresentation; codeRunner: CodeRunner; actionTextByBlock?: Map<string, string> }) {
   return (
     <div data-thread-block-ids={turnBlockIds(turn).join(" ")} className="flex flex-col gap-3 scroll-mt-4">
       {turn.user && <UserMessage block={turn.user} />}
-      {activityTools.length > 0 && <AgentActivity blocks={activityTools} completed={completed} />}
+      {turn.activityTools.length > 0 && <AgentActivity blocks={turn.activityTools} completed={turn.completed} />}
       {turn.finalAgent && <AgentMessage block={turn.finalAgent} actionText={actionTextByBlock?.get(turn.finalAgent.id)} codeRunner={codeRunner} />}
       {turn.systemBlocks.map((block) => <SystemBlock key={block.id} block={block} />)}
       {turn.artifacts.map((block) => <TurnArtifactStrip key={block.id} artifacts={block.artifacts} cwd={codeRunner?.cwd} />)}
