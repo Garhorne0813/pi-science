@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { defaultProgressAppearance } from "@pi-science/contracts";
 import { ProgressVisual } from "./ProgressVisual";
-import { normalizeProgressAppearance } from "./ProgressPatternCatalog";
+import { normalizeProgressAppearance, PROGRESS_PATTERN_CATALOG, patternsForSlot } from "./ProgressPatternCatalog";
 import { getProgressAppearance, setProgressAppearance } from "./progress-settings-store";
 import { ProgressTab } from "../settings/ProgressTab";
 import type { SettingsConfig } from "../../lib/settings";
@@ -26,6 +26,12 @@ describe("ProgressVisual", () => {
     expect(container.firstChild).toBeTruthy();
   });
 
+  it("exposes every bundled loader family", () => {
+    expect(patternsForSlot("currentActivity")).toHaveLength(14);
+    expect(patternsForSlot("streamingAnswer")).toHaveLength(16);
+    expect(patternsForSlot("imageGeneration")).toHaveLength(9);
+    expect(PROGRESS_PATTERN_CATALOG).toHaveLength(40);
+  });
   it("falls back to an inline thinking pattern for old text-only settings", () => {
     const normalized = normalizeProgressAppearance({ ...defaultProgressAppearance, patterns: { ...defaultProgressAppearance.patterns, thinking: "text-skeleton" } });
     expect(normalized.patterns.thinking).toBe("static-check");

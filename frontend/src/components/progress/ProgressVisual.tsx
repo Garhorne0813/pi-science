@@ -12,12 +12,14 @@ export function useProgressAppearance(): ProgressAppearance {
   return useSyncExternalStore(subscribeProgressAppearance, getProgressAppearance, getProgressAppearance);
 }
 const INLINE_VARIANTS = {
-  "inline-signal": "signal",
-  "inline-spark": "spark",
-  "inline-ripple": "ripple",
+  "inline-glyph": "glyph", "inline-matrix": "matrix", "inline-orbit": "orbit", "inline-ripple": "ripple", "inline-signal": "signal", "inline-spark": "spark", "inline-rotor": "rotor", "inline-pixel-drift": "pixel-drift", "inline-chomp": "chomp", "inline-snake": "snake", "inline-fold": "fold", "inline-gravity": "gravity", "inline-domino": "domino", "inline-aperture": "aperture",
 } as const;
-const TEXT_VARIANTS = { "text-decode": "decode", "text-cascade": "cascade", "text-skeleton": "skeleton" } as const;
-const IMAGE_VARIANTS = { "image-scan": "scan", "image-tiles": "tiles" } as const;
+const TEXT_VARIANTS = {
+  "text-decode": "decode", "text-typewriter": "typewriter", "text-skeleton": "skeleton", "text-cascade": "cascade", "text-focus": "focus", "text-wipe": "wipe", "text-flip": "flip", "text-redact": "redact", "text-line": "line", "text-terminal": "terminal", "text-wave": "wave", "text-dissolve": "dissolve", "text-slice": "slice", "text-tracking": "tracking", "text-coalesce": "coalesce", "text-fragments": "fragments",
+} as const;
+const IMAGE_VARIANTS = {
+  "image-skeleton": "skeleton", "image-bands": "bands", "image-tiles": "tiles", "image-scan": "scan", "image-pixel-grid": "pixel-grid", "image-resolution": "resolution", "image-focus": "focus", "image-shutter": "shutter", "image-contour": "contour",
+} as const;
 
 export function progressPatternShowsText(slot: ProgressSlot, config: ProgressAppearance): boolean {
   const pattern = config.patterns[slot];

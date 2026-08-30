@@ -60,8 +60,10 @@ export const toolPresentationSchema = z.object({
 export type ToolPresentation = z.infer<typeof toolPresentationSchema>;
 
 export const progressPatternIdSchema = z.enum([
-  "static-check", "inline-signal", "inline-spark", "inline-ripple",
-  "text-decode", "text-cascade", "text-skeleton", "image-scan", "image-tiles",
+  "static-check",
+  "inline-glyph", "inline-matrix", "inline-orbit", "inline-ripple", "inline-signal", "inline-spark", "inline-rotor", "inline-pixel-drift", "inline-chomp", "inline-snake", "inline-fold", "inline-gravity", "inline-domino", "inline-aperture",
+  "text-decode", "text-typewriter", "text-skeleton", "text-cascade", "text-focus", "text-wipe", "text-flip", "text-redact", "text-line", "text-terminal", "text-wave", "text-dissolve", "text-slice", "text-tracking", "text-coalesce", "text-fragments",
+  "image-skeleton", "image-bands", "image-tiles", "image-scan", "image-pixel-grid", "image-resolution", "image-focus", "image-shutter", "image-contour",
 ]);
 export const progressAppearanceSchema = z.object({
   version: z.literal(1).default(1),

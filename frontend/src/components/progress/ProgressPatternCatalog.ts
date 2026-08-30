@@ -10,16 +10,15 @@ export interface ProgressPatternDefinition {
   slots: ProgressSlot[];
 }
 
+const INLINE_SLOTS: ProgressSlot[] = ["thinking", "currentActivity", "waiting"];
+const TEXT_SLOTS: ProgressSlot[] = ["streamingAnswer"];
+const IMAGE_SLOTS: ProgressSlot[] = ["imageGeneration"];
+
 export const PROGRESS_PATTERN_CATALOG: ProgressPatternDefinition[] = [
   { id: "static-check", labelKey: "settings.progress.pattern.static", source: "pi-science", kind: "static", slots: ["thinking", "waiting", "completed"] },
-  { id: "inline-signal", labelKey: "settings.progress.pattern.signal", source: "generative-loaders", kind: "inline", slots: ["currentActivity", "waiting"] },
-  { id: "inline-spark", labelKey: "settings.progress.pattern.spark", source: "generative-loaders", kind: "inline", slots: ["currentActivity", "thinking"] },
-  { id: "inline-ripple", labelKey: "settings.progress.pattern.ripple", source: "generative-loaders", kind: "inline", slots: ["currentActivity", "waiting"] },
-  { id: "text-decode", labelKey: "settings.progress.pattern.decode", source: "generative-loaders", kind: "text", slots: ["streamingAnswer"] },
-  { id: "text-cascade", labelKey: "settings.progress.pattern.cascade", source: "generative-loaders", kind: "text", slots: ["streamingAnswer"] },
-  { id: "text-skeleton", labelKey: "settings.progress.pattern.skeleton", source: "generative-loaders", kind: "text", slots: ["streamingAnswer"] },
-  { id: "image-scan", labelKey: "settings.progress.pattern.scan", source: "generative-loaders", kind: "image", slots: ["imageGeneration"] },
-  { id: "image-tiles", labelKey: "settings.progress.pattern.tiles", source: "generative-loaders", kind: "image", slots: ["imageGeneration"] },
+...(["glyph", "matrix", "orbit", "ripple", "signal", "spark", "rotor", "pixel-drift", "chomp", "snake", "fold", "gravity", "domino", "aperture"] as const).map((name): ProgressPatternDefinition => ({ id: `inline-${name}` as ProgressPatternDefinition["id"], labelKey: `settings.progress.pattern.${name}`, source: "generative-loaders", kind: "inline", slots: INLINE_SLOTS })),
+  ...(["decode", "typewriter", "skeleton", "cascade", "focus", "wipe", "flip", "redact", "line", "terminal", "wave", "dissolve", "slice", "tracking", "coalesce", "fragments"] as const).map((name): ProgressPatternDefinition => ({ id: `text-${name}` as ProgressPatternDefinition["id"], labelKey: `settings.progress.pattern.${name}`, source: "generative-loaders", kind: "text", slots: TEXT_SLOTS })),
+  ...(["skeleton", "bands", "tiles", "scan", "pixel-grid", "resolution", "focus", "shutter", "contour"] as const).map((name): ProgressPatternDefinition => ({ id: `image-${name}` as ProgressPatternDefinition["id"], labelKey: `settings.progress.pattern.${name}`, source: "generative-loaders", kind: "image", slots: IMAGE_SLOTS })),
 ];
 
 export function patternsForSlot(slot: ProgressSlot): ProgressPatternDefinition[] {

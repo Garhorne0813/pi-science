@@ -21,6 +21,7 @@ const SLOTS: Array<{ id: ProgressSlot; labelKey: string; sample: string }> = [
   { id: "thinking", labelKey: "settings.progress.slot.thinking", sample: "Thinking" },
   { id: "currentActivity", labelKey: "settings.progress.slot.activity", sample: "Reviewing related content" },
   { id: "streamingAnswer", labelKey: "settings.progress.slot.streaming", sample: "AI" },
+  { id: "imageGeneration", labelKey: "settings.progress.slot.image", sample: "Generating image" },
   { id: "waiting", labelKey: "settings.progress.slot.waiting", sample: "Needs your input" },
 ];
 
