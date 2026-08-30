@@ -54,6 +54,7 @@ describe("MCP configuration resolution", () => {
     const workspace = join(home, "workspace");
     const explicitPath = join(home, "explicit-mcp.json");
     await writeMcp(join(home, ".config", "mcp", "mcp.json"), { standard: {} });
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
     await writeMcp(join(workspace, ".mcp.json"), { workspace: {} });
     await writeMcp(explicitPath, { explicit: {} });
 

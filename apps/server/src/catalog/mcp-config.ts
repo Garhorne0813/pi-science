@@ -1,5 +1,6 @@
-import { readFile, realpath } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
+import { validateWorkspaceCwd } from "../security/workspace-security.js";
 import { configPath } from "../storage/persistence.js";
 import { userHome } from "../support/platform-utils.js";
 
@@ -16,7 +17,7 @@ function expandConfigPath(path: string): string {
 
 /** Resolve MCP definitions consistently for Settings, Catalog, and health routes. */
 export async function resolveMcpConfig(options: { workspaceRoot?: string; explicitPath?: string } = {}): Promise<McpConfigResolution> {
-  const workspaceRoot = options.workspaceRoot ? await realpath(resolve(options.workspaceRoot)).catch(() => null) : null;
+  const workspaceRoot = options.workspaceRoot ? await validateWorkspaceCwd(options.workspaceRoot).catch(() => null) : null;
   const candidates = [
     ...(workspaceRoot ? [join(workspaceRoot, ".mcp.json"), join(workspaceRoot, ".pi", "mcp.json")] : []),
     join(userHome(), ".config", "mcp", "mcp.json"),
