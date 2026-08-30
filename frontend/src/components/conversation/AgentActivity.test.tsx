@@ -31,10 +31,10 @@ describe("AgentActivity", () => {
 
   it("renders nothing for todo only", () => { const { container } = render(<AgentActivity blocks={[tool("todo", "todo")]} />); expect(container).toBeEmptyDOMElement(); });
 
-  it("keeps opaque tools without semantics trace-only", () => {
+  it("uses the thinking pattern when a tool has no semantics", () => {
     render(<AgentActivity blocks={[tool("bash", "bash", "running", { command: "git status" })]} />);
-    expect(screen.queryByText(/Running commands|Working/)).not.toBeInTheDocument();
-    expect(screen.getByText("Execution trace")).toBeInTheDocument();
+    expect(screen.getByText("Analyzing the request")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Analyzing the request/i })).toBeInTheDocument();
   });
 
   it("holds implementation through test and corrective reads", () => {

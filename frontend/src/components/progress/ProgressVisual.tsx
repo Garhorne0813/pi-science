@@ -19,6 +19,11 @@ const INLINE_VARIANTS = {
 const TEXT_VARIANTS = { "text-decode": "decode", "text-cascade": "cascade", "text-skeleton": "skeleton" } as const;
 const IMAGE_VARIANTS = { "image-scan": "scan", "image-tiles": "tiles" } as const;
 
+export function progressPatternShowsText(slot: ProgressSlot, config: ProgressAppearance): boolean {
+  const pattern = config.patterns[slot];
+  return PROGRESS_PATTERN_CATALOG.find((item) => item.id === pattern)?.kind === "text";
+}
+
 export function ProgressVisual({ slot, config, state = "running", text = "Generating response", compact = false }: { slot: ProgressSlot; config: ProgressAppearance; state?: "running" | "waiting" | "completed"; text?: string; compact?: boolean }) {
   const pattern = config.patterns[slot];
   const definition = PROGRESS_PATTERN_CATALOG.find((item) => item.id === pattern) ?? PROGRESS_PATTERN_CATALOG[0];

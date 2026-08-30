@@ -7,7 +7,7 @@ import { ACTIVITY_SWITCH_DEBOUNCE_MS, MIN_ACTIVITY_VISIBLE_MS, selectDisplayedAc
 import type { PresentedActivity } from "../../lib/conversation/activity-narrative";
 import type { TurnLifecycle } from "../../lib/conversation/turn-presentation";
 import { presentToolActivity } from "../../lib/conversation/activity-presenters";
-import { ProgressVisual, useProgressAppearance } from "../progress/ProgressVisual";
+import { ProgressVisual, progressPatternShowsText, useProgressAppearance } from "../progress/ProgressVisual";
 import { cn } from "../../lib/ui";
 
 export function AgentActivity({ blocks, lifecycle = "active" }: { blocks: ToolCallBlock[]; lifecycle?: TurnLifecycle }) {
@@ -20,8 +20,7 @@ export function AgentActivity({ blocks, lifecycle = "active" }: { blocks: ToolCa
   if (!shown && activities.length === 0 && lifecycle !== "recovering" && lifecycle !== "waiting") return null;
 
   const canExpand = activities.length > 0;
-  const traceOnly = !shown && (lifecycle === "queued" || lifecycle === "active" || lifecycle === "waiting" || lifecycle === "recovering");
-  const state = lifecycle === "failed" || shown?.state === "error" ? "error" : lifecycle === "aborted" ? "stopped" : lifecycle === "settled" ? "completed" : shown?.state === "interaction" ? "waiting" : "running";
+  const state = lifecycle === "failed" || shown?.state === "error" ? "error" : lifecycle === "aborted" ? "stopped" : lifecycle === "settled" ? "completed" : lifecycle === "waiting" || shown?.state === "interaction" ? "waiting" : "running";
   const label = lifecycle === "failed"
     ? t("conversation.activity.error")
     : lifecycle === "aborted"
@@ -33,13 +32,14 @@ export function AgentActivity({ blocks, lifecycle = "active" }: { blocks: ToolCa
           : lifecycle === "waiting" && !shown
             ? t("conversation.activity.waitingInput")
             : shown
-          ? narrativeLabel(shown, t)
-          : t("conversation.activity.trace");
+            ? narrativeLabel(shown, t)
+            : t("conversation.activity.continuing");
+  const visualSlot = state === "waiting" ? "waiting" : shown ? "currentActivity" : "thinking";
 
   return <div id={blocks.length === 1 ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} className="overflow-hidden scroll-mt-4">
-    <button type="button" aria-expanded={canExpand ? expanded : undefined} onClick={() => canExpand && setExpanded((value) => !value)} className={cn("flex w-full items-center gap-2 text-left text-xs text-muted transition-colors", canExpand && "hover:bg-surface-2", traceOnly ? "px-1 py-1" : "px-3 py-2")}>
-      {!traceOnly && <ActivityIcon state={state} config={progressAppearance} label={label} />}
-      <span {...(!traceOnly ? { "aria-live": "polite", "aria-atomic": "true" } : {})} className={cn("min-w-0 flex-1 truncate", state === "error" && "text-error-text")}>{label}</span>
+    <button type="button" aria-expanded={canExpand ? expanded : undefined} onClick={() => canExpand && setExpanded((value) => !value)} className={cn("flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-muted transition-colors", canExpand && "hover:bg-surface-2")}>
+      <ActivityIcon state={state} slot={visualSlot} config={progressAppearance} label={label} />
+      <span aria-live="polite" aria-atomic="true" className={cn("min-w-0 flex-1 truncate", state === "error" && "text-error-text")}>{!progressPatternShowsText(visualSlot, progressAppearance) && label}</span>
       {lifecycle === "settled" && <span className="shrink-0 font-mono text-[10px] text-muted/60" aria-label={t("conversation.activity.operationCount", { count })}>{count}</span>}
       {canExpand && <ChevronRight size={13} aria-hidden className={cn("shrink-0 text-muted/60 transition-transform", expanded && "rotate-90")} />}
     </button>
@@ -90,8 +90,8 @@ function narrativeLabel(activity: PresentedActivity, t: (key: string) => string)
   return translated === domainKey ? t(`conversation.activity.narrative.${activity.state}`) : translated;
 }
 
-function ActivityIcon({ state, config, label }: { state: "waiting" | "running" | "error" | "stopped" | "completed"; config: import("@pi-science/contracts").ProgressAppearance; label: string }) {
-  if (state === "running") return <ProgressVisual slot="currentActivity" config={config} text={label} />;
+function ActivityIcon({ state, slot, config, label }: { state: "waiting" | "running" | "error" | "stopped" | "completed"; slot: "thinking" | "currentActivity" | "waiting"; config: import("@pi-science/contracts").ProgressAppearance; label: string }) {
+  if (state === "running") return <ProgressVisual slot={slot} config={config} text={label} />;
   if (state === "waiting") return <ProgressVisual slot="waiting" config={config} state="waiting" text={label} />;
   if (state === "completed") return <ProgressVisual slot="completed" config={config} state="completed" text={label} />;
   if (state === "error" || state === "stopped") return <CircleX size={13} aria-hidden className={cn("shrink-0", state === "error" ? "text-error-text" : "text-muted")} />;

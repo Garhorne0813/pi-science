@@ -30,7 +30,7 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
   return (
     <div data-thread-block-ids={turnBlockIds(turn).join(" ")} className="flex flex-col gap-3 scroll-mt-4">
       {turn.user && <UserMessage block={turn.user} />}
-      {turn.activityTools.length > 0 || (turn.active && (turn.lifecycle === "waiting" || turn.lifecycle === "recovering")) ? <AgentActivity blocks={turn.activityTools} lifecycle={turn.finalAgent ? "settled" : turn.lifecycle} /> : null}
+      {turn.activityTools.length > 0 || (turn.active && (turn.lifecycle === "waiting" || turn.lifecycle === "recovering")) ? <AgentActivity blocks={turn.activityTools} lifecycle={turn.lifecycle} /> : null}
       {turn.finalAgent && <AgentMessage block={turn.finalAgent} actionText={actionTextByBlock?.get(turn.finalAgent.id)} codeRunner={codeRunner} />}
       {turn.systemBlocks.map((block) => <SystemBlock key={block.id} block={block} />)}
       {turn.artifacts.map((block) => <TurnArtifactStrip key={block.id} artifacts={block.artifacts} cwd={codeRunner?.cwd} />)}

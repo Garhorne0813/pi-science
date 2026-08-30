@@ -22,7 +22,7 @@ import { isVisibleActivity } from "../../lib/conversation/activity-policy";
 import { buildTurnPresentations, type TurnPresentation } from "../../lib/conversation/turn-presentation";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
 import { SessionExecutionButton } from "../../components/conversation/SessionExecutionButton";
-import { ProgressVisual, useProgressAppearance } from "../../components/progress/ProgressVisual";
+import { ProgressVisual, progressPatternShowsText, useProgressAppearance } from "../../components/progress/ProgressVisual";
 import { visibleUserMessage } from "../../lib/files";
 import { useTranslation } from "react-i18next";
 import { ResearchLoopDraftCard, ResearchLoopStatusCard, ResearchModePicker } from "../../components/conversation/ResearchLoopControls";
@@ -79,7 +79,7 @@ export function ConversationFooter() {
       {working && !pendingInteraction && !hasTurnActivity && (
         <div className="flex items-center gap-2 py-4 text-sm text-muted" aria-live="polite">
           <ProgressVisual slot="thinking" config={progressAppearance} text={t("conversation.activity.continuing")} />
-          {t("conversation.activity.continuing")}
+          {!progressPatternShowsText("thinking", progressAppearance) && t("conversation.activity.continuing")}
         </div>
       )}
     </div>
@@ -423,7 +423,7 @@ export function LiveSessionPage() {
                 {working && !pendingInteraction && (
                   <div className="flex items-center gap-2 py-4 text-sm text-muted">
                     <ProgressVisual slot="thinking" config={progressAppearance} text={t("conversation.activity.continuing")} />
-                    {t("conversation.activity.continuing")}
+                    {!progressPatternShowsText("thinking", progressAppearance) && t("conversation.activity.continuing")}
                   </div>
                 )}
               </>
