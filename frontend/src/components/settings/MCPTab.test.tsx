@@ -12,7 +12,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
   const url = String(input);
   const method = (init.method || "GET").toUpperCase();
-  if ((url === "/api/mcp/connectors" || url.startsWith("/api/mcp/connectors?cwd=")) && method === "GET") {
+  if (url === "/api/mcp/connectors" && method === "GET") {
     return jsonResponse({
       connectors: [{
         connector_id: "mcp-paper-search",
@@ -22,13 +22,13 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {})
         source: "custom", transport: "stdio", endpoint_url: null, command: "node", args: ["server.js"], socket_path: null,
         runtime_config: { lifecycle: "lazy", expose_resources: true, include_tools: [], exclude_tools: [], environment: {}, headers: {}, auth: "none", allow_private: false },
         credential_ref: null, revision: 1, created_at: 1, updated_at: 1,
-        binding: { project_id: "project-1", connector_id: "mcp-paper-search", enabled: true, include_tools: [], exclude_tools: [], approval_mode: "ask", revision: 1, created_at: 1, updated_at: 1 },
+        settings: { connector_id: "mcp-paper-search", enabled: true, include_tools: [], exclude_tools: [], approval_mode: "ask", revision: 1, created_at: 1, updated_at: 1 },
         config_state: "valid", auth_state: "not-required", runtime_state: "ready", tool_count: 2, error: null,
       }],
       legacy_count: 0,
     });
   }
-  if (url.startsWith("/api/mcp/connectors/mcp-paper-search/binding?cwd=") && method === "PUT") {
+  if (url === "/api/mcp/connectors/mcp-paper-search/settings" && method === "PUT") {
     return jsonResponse({ ok: true });
   }
   return jsonResponse({ error: `unhandled ${method} ${url}` }, 404);
@@ -59,13 +59,12 @@ afterEach(() => {
 });
 
 describe("MCPTab", () => {
-  it("shows global connectors read-only when no workspace is active", async () => {
+  it("offers the same global connector controls when no workspace is active", async () => {
     renderTab(null);
     expect(await screen.findByText("Paper Search")).toBeInTheDocument();
-    expect(screen.getByText("Open Settings from a workspace to change project enablement, test connectors, or edit tool permissions.")).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "Enable Paper Search" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Test" })).toBeDisabled();
-    expect(screen.queryByRole("button", { name: "Add connector" })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Enable Paper Search" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Test" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Add connector" })).toBeInTheDocument();
     expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
   });
 
@@ -93,7 +92,7 @@ describe("MCPTab", () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/api/mcp/connectors/mcp-paper-search/binding?cwd="),
+        "/api/mcp/connectors/mcp-paper-search/settings",
         expect.objectContaining({ method: "PUT", body: expect.stringContaining('"enabled":false') }),
       );
     });

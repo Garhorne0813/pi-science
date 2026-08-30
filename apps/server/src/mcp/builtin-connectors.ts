@@ -5,7 +5,7 @@ import type { McpConnectorCreate, McpToolSummary } from "@pi-science/contracts";
 
 export interface BuiltinMcpConnector {
   connector_id: string;
-  definition: Omit<McpConnectorCreate, "enable_for_project">;
+  definition: Omit<McpConnectorCreate, "enabled">;
   tools: McpToolSummary[];
 }
 

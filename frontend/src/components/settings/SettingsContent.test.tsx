@@ -179,7 +179,7 @@ describe("SettingsContent", () => {
     expect(await screen.findByText("Analyze alpha data")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "MCP" }));
-    expect(await screen.findByText("Open Settings from a workspace to change project enablement, test connectors, or edit tool permissions.")).toBeInTheDocument();
+    expect(await screen.findByText("Manage canonical MCP connectors here. They are projected into each Pi runtime.")).toBeInTheDocument();
     expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
   });
 

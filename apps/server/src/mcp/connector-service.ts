@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, normalize } from "node:path";
 import {
   mcpConnectorCreateSchema,
   mcpConnectorUpdateSchema,
-  mcpProjectBindingUpdateSchema,
+  mcpConnectorSettingsUpdateSchema,
   type McpConnector,
   type McpConnectorCreate,
   type McpConnectorUpdate,
   type McpProbeResult,
-  type McpProjectBindingUpdate,
+  type McpConnectorSettingsUpdate,
   type McpToolSummary,
 } from "@pi-science/contracts";
 import { resolveMcpConfig } from "../catalog/mcp-config.js";
@@ -17,7 +17,7 @@ import { validateConnectorOutboundUrl } from "../security/outbound-security.js";
 import { probeMcpHealth } from "../security/mcp-health.js";
 import { validateWorkspaceCwd } from "../security/workspace-security.js";
 import { egressAuditEnabled, recordEgress } from "../security/egress-audit.js";
-import type { McpRepository, StoredMcpBinding, StoredMcpConnector } from "../storage/sqlite/repositories/mcp-repository.js";
+import type { McpRepository, StoredMcpConnector, StoredMcpSettings } from "../storage/sqlite/repositories/mcp-repository.js";
 import type { WorkspaceRepository } from "../storage/sqlite/repositories/workspace-repository.js";
 import type { SettingsStore } from "../storage/settings-store.js";
 import type { McpRuntimeProjection } from "./runtime-projection.js";
@@ -58,16 +58,13 @@ export class McpConnectorService {
           expires_at: Number.MAX_SAFE_INTEGER,
         });
       }
-      const locations = await this.repository.bindingLocations(connector.connector_id);
-      await Promise.all(locations.map((item) => this.projection?.materialize(item.canonical_path, item.project_id)));
+      await this.materializeKnownWorkspaces();
     }
   }
 
-  async list(cwd?: string | null): Promise<{ connectors: McpConnector[]; project_id: string | null; legacy_config_path: string | null; legacy_count: number }> {
+  async list(cwd?: string | null): Promise<{ connectors: McpConnector[]; legacy_config_path: string | null; legacy_count: number }> {
     const connectors = await this.repository.list();
-    const project = cwd ? await this.project(cwd) : null;
-    const bindings = new Map(project ? (await this.repository.bindingsForProject(project.project_id)).map((item) => [item.connector_id, item]) : []);
-    const result = await Promise.all(connectors.map(async (item) => this.publicConnector(item, bindings.get(item.connector_id) ?? null)));
+    const result = await Promise.all(connectors.map((item) => this.publicConnector(item)));
     const legacy = await this.legacyDefinitions(cwd);
     const canonicalNames = new Set(connectors.map((item) => item.name.toLowerCase()));
     const legacyCount = Object.entries(legacy.definitions).filter(([name, raw]) => {
@@ -76,34 +73,25 @@ export class McpConnectorService {
       const sensitive = Boolean(definition.env || definition.headers || definition.bearerToken || definition.oauth || definition.auth);
       return !sensitive && Boolean(definition.url || definition.socket || definition.command);
     }).length;
-    return { connectors: result, project_id: project?.project_id ?? null, legacy_config_path: legacy.source, legacy_count: legacyCount };
+    return { connectors: result, legacy_config_path: legacy.source, legacy_count: legacyCount };
   }
 
-  async get(connectorId: string, cwd: string): Promise<McpConnector & { referenced_projects: Array<{ project_id: string; name: string }> }> {
-    const project = await this.project(cwd);
-    const connector = await this.requireConnector(connectorId);
-    const view = await this.publicConnector(connector, await this.repository.binding(project.project_id, connectorId));
-    return { ...view, referenced_projects: await this.repository.bindingReferences(connectorId) };
+  async get(connectorId: string): Promise<McpConnector> {
+    return this.publicConnector(await this.requireConnector(connectorId));
   }
 
-  async create(raw: unknown, cwd: string, source: "custom" | "imported" = "custom"): Promise<McpConnector> {
+  async create(raw: unknown, source: "custom" | "imported" = "custom"): Promise<McpConnector> {
     const input = mcpConnectorCreateSchema.parse(raw);
-    const project = await this.project(cwd);
-    await this.validate(input, cwd);
+    await this.validate(input);
     if (await this.repository.getByName(input.name)) throw new McpServiceError("name_conflict", `Connector '${input.name}' already exists`, 409);
     let connector: StoredMcpConnector;
     try { connector = await this.repository.create(input, source); }
     catch (error) { throw sqliteConflict(error); }
-    let binding: StoredMcpBinding | null = null;
-    if (input.enable_for_project) {
-      binding = await this.repository.upsertBinding(project.project_id, connector.connector_id, { enabled: true, include_tools: [], exclude_tools: [], approval_mode: "ask" });
-      await this.projection?.materialize(cwd, project.project_id);
-      await this.reload();
-    }
-    return this.publicConnector(connector, binding);
+    if (input.enabled) { await this.materializeKnownWorkspaces(); await this.reload(); }
+    return this.publicConnector(connector);
   }
 
-  async update(connectorId: string, raw: unknown, cwd: string): Promise<McpConnector> {
+  async update(connectorId: string, raw: unknown): Promise<McpConnector> {
     const patch = mcpConnectorUpdateSchema.parse(raw) as McpConnectorUpdate;
     const current = await this.requireConnector(connectorId);
     if (current.source === "builtin") throw new McpServiceError("read_only", "Builtin connectors cannot be edited", 403);
@@ -118,77 +106,65 @@ export class McpConnectorService {
       socket_path: patch.socket_path === undefined ? current.socket_path : patch.socket_path,
       runtime_config: patch.runtime_config ?? current.runtime_config,
       credential_ref: patch.credential_ref === undefined ? current.credential_ref : patch.credential_ref,
-      enable_for_project: false,
+      enabled: current.enabled,
     });
-    await this.validate(merged, cwd);
+    await this.validate(merged);
     const duplicate = await this.repository.getByName(merged.name);
     if (duplicate && duplicate.connector_id !== connectorId) throw new McpServiceError("name_conflict", `Connector '${merged.name}' already exists`, 409);
-    const { enable_for_project: _enableForProject, ...updateInput } = merged;
+    const { enabled: _enabled, ...updateInput } = merged;
     const updated = await this.repository.update(connectorId, patch.revision, updateInput);
     if (!updated) throw new McpServiceError("revision_conflict", "Connector was changed by another request", 409);
-    const project = await this.project(cwd);
-    const locations = await this.repository.bindingLocations(connectorId);
-    if (locations.length) await Promise.all(locations.map((item) => this.projection?.materialize(item.canonical_path, item.project_id)));
-    else await this.projection?.materialize(cwd, project.project_id);
+    await this.materializeKnownWorkspaces();
     await this.reload();
-    return this.publicConnector(updated, await this.repository.binding(project.project_id, connectorId));
+    return this.publicConnector(updated);
   }
 
-  async remove(connectorId: string, cwd: string): Promise<void> {
-    const project = await this.project(cwd);
+  async remove(connectorId: string): Promise<void> {
     const connector = await this.requireConnector(connectorId);
     if (connector.source === "builtin") throw new McpServiceError("read_only", "Builtin connectors cannot be removed", 403);
-    const references = await this.repository.bindingReferences(connectorId);
-    const others = references.filter((item) => item.project_id !== project.project_id);
-    if (others.length) throw new McpServiceError("connector_in_use", "Connector is enabled or configured in other projects", 409, { projects: others });
     await this.repository.delete(connectorId);
-    await this.projection?.materialize(cwd, project.project_id);
+    await this.materializeKnownWorkspaces();
     await this.reload();
   }
 
-  async setBinding(connectorId: string, raw: unknown, cwd: string): Promise<McpConnector> {
-    const input = mcpProjectBindingUpdateSchema.parse(raw) as McpProjectBindingUpdate;
-    const project = await this.project(cwd);
+  async setSettings(connectorId: string, raw: unknown): Promise<McpConnector> {
+    const input = mcpConnectorSettingsUpdateSchema.parse(raw) as McpConnectorSettingsUpdate;
     const connector = await this.requireConnector(connectorId);
-    const binding = await this.repository.upsertBinding(project.project_id, connectorId, input);
-    if (!binding) throw new McpServiceError("revision_conflict", "Project connector settings were changed by another request", 409);
-    await this.projection?.materialize(cwd, project.project_id);
+    const settings = await this.repository.updateSettings(connectorId, input);
+    if (!settings) throw new McpServiceError("revision_conflict", "Connector settings were changed by another request", 409);
+    await this.materializeKnownWorkspaces();
     const reload = await this.reload();
-    const view = await this.publicConnector(connector, binding);
+    const view = await this.publicConnector({ ...connector, enabled: settings.enabled, include_tools: settings.include_tools, exclude_tools: settings.exclude_tools, approval_mode: settings.approval_mode, settings_revision: settings.revision, updated_at: settings.updated_at });
     return Object.assign(view, reload.length ? { reload_replacements: reload } : {});
   }
 
-  async tools(connectorId: string, cwd?: string | null): Promise<{ tools: McpToolSummary[]; cached_at: number | null }> {
-    const project = cwd ? await this.project(cwd) : null;
+  async tools(connectorId: string): Promise<{ tools: McpToolSummary[]; cached_at: number | null }> {
     await this.requireConnector(connectorId);
     const cache = await this.repository.toolCache(connectorId);
-    const grants = project ? await this.repository.toolGrants(project.project_id, connectorId) : new Map<string, "allow" | "ask" | "deny">();
+    const grants = await this.repository.toolGrants(connectorId);
     return {
       tools: (cache?.tools ?? []).map((tool) => ({ ...tool, decision: grants.get(tool.name) ?? "ask" })),
       cached_at: cache?.fetched_at ?? null,
     };
   }
 
-  async setToolGrant(connectorId: string, toolName: string, decision: "allow" | "ask" | "deny", cwd: string): Promise<void> {
-    const project = await this.project(cwd);
+  async setToolGrant(connectorId: string, toolName: string, decision: "allow" | "ask" | "deny"): Promise<void> {
     await this.requireConnector(connectorId);
-    if (!(await this.repository.binding(project.project_id, connectorId))) throw new McpServiceError("binding_required", "Enable or configure the connector for this project first", 409);
-    await this.repository.setToolGrant(project.project_id, connectorId, toolName, decision);
-    await this.projection?.materialize(cwd, project.project_id);
+    await this.repository.setToolGrant(connectorId, toolName, decision);
+    await this.materializeKnownWorkspaces();
     await this.reload();
   }
 
-  async probe(connectorId: string, cwd: string): Promise<McpProbeResult> {
+  async probe(connectorId: string): Promise<McpProbeResult> {
     const existing = this.probeInflight.get(connectorId);
     if (existing) return existing;
-    const pending = this.probeOnce(connectorId, cwd);
+    const pending = this.probeOnce(connectorId);
     this.probeInflight.set(connectorId, pending);
     try { return await pending; }
     finally { if (this.probeInflight.get(connectorId) === pending) this.probeInflight.delete(connectorId); }
   }
 
-  private async probeOnce(connectorId: string, cwd: string): Promise<McpProbeResult> {
-    await this.project(cwd);
+  private async probeOnce(connectorId: string): Promise<McpProbeResult> {
     const connector = await this.requireConnector(connectorId);
     const definition = connector.transport === "stdio"
       ? { command: connector.command, required_env: requiredEnvironment(connector) }
@@ -200,7 +176,7 @@ export class McpConnectorService {
     if (result.health === "error") { const safeError = redactMcpError(result.error); return { connector_id: connectorId, runtime_state: "error", auth_state: this.authState(connector), error_code: classifyProbeError(safeError), error: safeError, tools: [], checked_at: checkedAt }; }
     try {
       if (connector.endpoint_url && await egressAuditEnabled()) await recordEgress({ connector_type: "mcp", connector_id: connectorId, target_domain: connector.endpoint_url, approved: true, note: "mcp_probe" });
-      const tools = await connectAndListMcpTools(connector, cwd);
+      const tools = await connectAndListMcpTools(connector, process.cwd());
       await this.repository.replaceToolCache({ connector_id: connectorId, config_revision: connector.revision, fingerprint: mcpConnectorFingerprint(connector), tools, fetched_at: checkedAt, expires_at: checkedAt + 5 * 60_000 });
       return { connector_id: connectorId, runtime_state: "ready", auth_state: this.authState(connector), error_code: null, error: null, tools, checked_at: checkedAt };
     } catch (error) {
@@ -245,14 +221,14 @@ export class McpConnectorService {
           socket_path: transport === "socket" ? String(definition.socket) : null,
           runtime_config: { lifecycle: "lazy", expose_resources: true, include_tools: [], exclude_tools: [], environment: {}, headers: {}, auth: "auto", allow_private: false },
           credential_ref: null,
-          enable_for_project: true,
-        }, cwd, "imported"));
+          enabled: true,
+        }, "imported"));
       } catch (error) { failed.push({ name, error: error instanceof Error ? error.message : String(error) }); }
     }
     return { imported, failed };
   }
 
-  private async validate(input: McpConnectorCreate, cwd: string): Promise<void> {
+  private async validate(input: McpConnectorCreate): Promise<void> {
     if (input.transport === "streamable_http" || input.transport === "sse") {
       try { await validateConnectorOutboundUrl(input.endpoint_url!, { allowPrivate: input.runtime_config.allow_private }); }
       catch (error) { throw new McpServiceError("network_blocked", error instanceof Error ? error.message : String(error)); }
@@ -262,10 +238,8 @@ export class McpConnectorService {
       const configuredCwd = input.runtime_config.cwd;
       if (configuredCwd) {
         if (isAbsolute(configuredCwd)) throw new McpServiceError("workspace_escape", "Local MCP cwd must be relative to the workspace");
-        const root = resolve(cwd);
-        const target = resolve(root, configuredCwd);
-        const pathFromRoot = relative(root, target);
-        if (pathFromRoot.startsWith("..") || isAbsolute(pathFromRoot)) throw new McpServiceError("workspace_escape", "Local MCP cwd must remain inside the workspace");
+        const normalized = normalize(configuredCwd);
+        if (normalized === ".." || normalized.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) throw new McpServiceError("workspace_escape", "Local MCP cwd must remain inside the workspace");
       }
     }
     for (const [name, binding] of Object.entries(input.runtime_config.headers)) {
@@ -275,20 +249,21 @@ export class McpConnectorService {
     }
   }
 
-  private async publicConnector(connector: StoredMcpConnector, binding: StoredMcpBinding | null): Promise<McpConnector> {
+  private async publicConnector(connector: StoredMcpConnector): Promise<McpConnector> {
     const cache = await this.repository.toolCache(connector.connector_id);
-    const enabled = binding?.enabled === true;
+    const settings: StoredMcpSettings = { connector_id: connector.connector_id, enabled: connector.enabled, include_tools: connector.include_tools, exclude_tools: connector.exclude_tools, approval_mode: connector.approval_mode, revision: connector.settings_revision, created_at: connector.created_at, updated_at: connector.updated_at };
+    const { enabled: _enabled, include_tools: _includeTools, exclude_tools: _excludeTools, approval_mode: _approvalMode, settings_revision: _settingsRevision, ...definition } = connector;
     return {
-      ...connector,
+      ...definition,
       runtime_config: {
         ...connector.runtime_config,
         environment: redactLiteralBindings(connector.runtime_config.environment),
         headers: redactLiteralBindings(connector.runtime_config.headers),
       },
-      binding,
+      settings,
       config_state: "valid",
       auth_state: this.authState(connector),
-      runtime_state: enabled ? cache ? "ready" : "unknown" : "disabled",
+      runtime_state: connector.enabled ? cache ? "ready" : "unknown" : "disabled",
       tool_count: cache?.tools.length ?? 0,
       error: null,
     };
@@ -304,6 +279,16 @@ export class McpConnectorService {
   private async project(cwd: string) {
     try { return this.workspaces.rememberWorkspace(await validateWorkspaceCwd(cwd), { touch: false }); }
     catch (error) { throw new McpServiceError("workspace_forbidden", error instanceof Error ? error.message : String(error), 403); }
+  }
+
+  async materializeWorkspace(cwd: string): Promise<void> {
+    const project = await this.project(cwd);
+    await this.projection?.materialize(project.canonical_path, project.project_id);
+  }
+
+  private async materializeKnownWorkspaces(): Promise<void> {
+    const locations = await this.workspaces.listKnown({ includeMissing: false });
+    await Promise.all(locations.map((item) => this.projection?.materialize(item.canonical_path, item.project_id)));
   }
 
   private async requireConnector(connectorId: string): Promise<StoredMcpConnector> {

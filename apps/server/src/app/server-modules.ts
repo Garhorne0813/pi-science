@@ -78,6 +78,7 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
   const sessions = new NodeSessionService(events, piManager, sessionRepository, environments, projectReview, undefined, modelResources);
   const mcpRepository = new McpRepository(stateStore);
   const mcp = new McpConnectorService(mcpRepository, workspaces, settings, sessions, new McpRuntimeProjection(mcpRepository));
+  if (sqliteEnabled) sessions.configureBeforeRuntimeStart((cwd) => mcp.materializeWorkspace(cwd));
   const jobs = new JobCoordinator(environments, {}, undefined, sqliteEnabled ? jobRepository : undefined);
   const research = new ResearchOrchestrator(
     new ResearchGraphStore(),

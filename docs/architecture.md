@@ -39,22 +39,22 @@ service the browser calls directly.
 
 ### MCP control plane
 
-MCP connector definitions, project bindings, tool grants, and metadata caches are
+MCP connector definitions, global enablement, tool grants, and metadata caches are
 canonical rows in `state.sqlite`. The settings UI and compatibility endpoints use
 the same `McpConnectorService`; legacy MCP files are import sources only.
 
-For each project, the control plane writes a derived
+For each workspace, the control plane writes a derived
 `.pi-science/mcp-runtime.json` snapshot. Managed Pi runtimes always load the
 Pi-Science MCP wrapper, which calls `createMcpAdapter({ config })` with that
 snapshot. Ambient global and project MCP files are therefore not merged into a
-managed runtime. Connector changes regenerate affected snapshots and reload
+managed runtime. Connector changes regenerate all known workspace snapshots and reload
 active sessions. The adapter still owns MCP transport lifecycle and first-phase
 OAuth credentials; control-plane OAuth and live runtime status are a later phase.
 
 `paper-search` is seeded idempotently as an immutable built-in connector. Its
 repository-owned Node MCP server exposes read-only PubMed, arXiv, and Crossref
 search tools without depending on a user Python environment. It remains
-disabled until explicitly enabled for a project.
+enabled globally by default.
 
 ## Pi Orbit runtime model
 

@@ -29,12 +29,12 @@ flowchart LR
 
 核心决策：
 
-1. Connector 全局注册，按项目绑定和启停；不在每个会话复制服务器配置。
+1. Connector、启用状态和默认工具权限均为用户级全局配置；所有工作区使用同一集合。
 2. 配置、启用、认证、运行状态和工具权限分别建模。
 3. 项目运行时只接受控制面生成的 programmatic MCP 配置，不再让 adapter 隐式合并环境中的多个 MCP 文件。
 4. 现有 `.mcp.json`、`.pi/mcp.json` 和用户级配置只作为兼容导入源，不再作为最终运行时权威。
 5. 第一阶段继续使用 `pi-mcp-adapter` 的单一 `mcp` proxy tool，避免大量 MCP tool schema 占用上下文；默认不开启 `directTools`。
-6. 不复制 Claude Science 的 Agent attachment 模型。Pi-Science 当前稳定作用域是 Project/Workspace，因此本期使用 project binding；待 Specialist Agent 获得稳定数据库身份后再扩展 agent binding。
+6. 与 Claude Science 一致，不把 Project/Workspace 作为 MCP 设置作用域；待 Specialist Agent 获得稳定数据库身份后扩展 agent assignment。
 
 ## 2. 背景与现状
 
@@ -224,18 +224,18 @@ Local 高级字段：
 
 详情页分为：
 
-1. Overview：source、transport、endpoint/command 摘要、project binding。
+1. Overview：source、transport、endpoint/command 摘要、全局启用状态。
 2. Connection：Configured/Checking/Ready/Needs auth/Error/Disabled。
 3. Tools：工具名、描述、只读提示、Allow/Ask/Deny。
-4. Project access：当前项目启用开关、include/exclude、Allow all。
+4. Default agent access：全局启用开关、include/exclude、Allow all。
 5. Security：credential 来源、data egress、terms/privacy、最近 probe 时间。
 6. Actions：Probe、Reconnect、Edit、Disconnect credential、Remove。
 
 “Disable”“Disconnect”“Remove”必须是三个动作：
 
-- Disable：仅关闭当前 project binding。
+- Disable：全局关闭 Connector，不再投影到任何工作区。
 - Disconnect：删除/撤销认证，不删除配置。
-- Remove：删除全局 Connector；存在其他 project binding 时返回冲突并列出引用项目。
+- Remove：删除全局 Connector；内置 Connector 不可删除。
 
 ### 4.4 状态模型
 
@@ -280,11 +280,10 @@ interface McpConnector {
 
 `runtime_config` 只保存非敏感字段，例如 cwd、lifecycle、timeout、headers 的环境/credential 引用、OAuth metadata、include/exclude 和资源开关。
 
-### 5.2 Project binding
+### 5.2 Global connector settings
 
 ```ts
-interface McpProjectBinding {
-  project_id: string;
+interface McpConnectorSettings {
   connector_id: string;
   enabled: boolean;
   include_tools: string[];
@@ -296,13 +295,12 @@ interface McpProjectBinding {
 }
 ```
 
-项目绑定是 runtime effective config 的入口。未绑定等价于当前项目不可用；不要把“全局存在”自动解释成“所有项目启用”。
+全局设置是 runtime effective config 的入口。启用后自动进入所有工作区的派生快照；Workspace 不是 MCP 权限边界。
 
 ### 5.3 Tool grant
 
 ```ts
 interface McpToolGrant {
-  project_id: string;
   connector_id: string;
   tool_name: string;
   decision: "allow" | "ask" | "deny";
@@ -310,7 +308,7 @@ interface McpToolGrant {
 }
 ```
 
-`allow_all` 是 binding 级显式状态，不使用工具名 `*` 冒充普通 grant。
+`allow_all` 是 connector settings 级显式状态，不使用工具名 `*` 冒充普通 grant。
 
 ### 5.4 Tool metadata cache
 
@@ -330,7 +328,7 @@ interface McpToolCacheEntry {
 
 ## 6. SQLite schema
 
-新增迁移 `0002_mcp_connectors.sql`，并注册到 `apps/server/src/storage/sqlite/migrations.ts`。
+`0002_mcp_connectors.sql` 建立初始结构；`0003_global_mcp_settings.sql` 将项目绑定迁移为全局设置，并注册到 `apps/server/src/storage/sqlite/migrations.ts`。
 
 建议 schema：
 
@@ -348,6 +346,11 @@ CREATE TABLE mcp_connectors (
   socket_path TEXT,
   runtime_config_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(runtime_config_json)),
   credential_ref TEXT,
+  enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+  include_tools_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(include_tools_json)),
+  exclude_tools_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(exclude_tools_json)),
+  approval_mode TEXT NOT NULL DEFAULT 'ask' CHECK (approval_mode IN ('ask', 'custom', 'allow_all')),
+  settings_revision INTEGER NOT NULL DEFAULT 1,
   revision INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
@@ -358,33 +361,13 @@ CREATE TABLE mcp_connectors (
   )
 ) STRICT;
 
-CREATE TABLE mcp_project_bindings (
-  project_id TEXT NOT NULL,
-  connector_id TEXT NOT NULL,
-  enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
-  include_tools_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(include_tools_json)),
-  exclude_tools_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(exclude_tools_json)),
-  approval_mode TEXT NOT NULL DEFAULT 'ask' CHECK (approval_mode IN ('ask', 'custom', 'allow_all')),
-  revision INTEGER NOT NULL DEFAULT 1,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (project_id, connector_id),
-  FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE,
-  FOREIGN KEY (connector_id) REFERENCES mcp_connectors(connector_id) ON DELETE CASCADE
-) STRICT;
-
-CREATE INDEX mcp_project_bindings_connector_idx
-  ON mcp_project_bindings(connector_id);
-
-CREATE TABLE mcp_tool_grants (
-  project_id TEXT NOT NULL,
+CREATE TABLE mcp_global_tool_grants (
   connector_id TEXT NOT NULL,
   tool_name TEXT NOT NULL,
   decision TEXT NOT NULL CHECK (decision IN ('allow', 'ask', 'deny')),
   updated_at INTEGER NOT NULL,
-  PRIMARY KEY (project_id, connector_id, tool_name),
-  FOREIGN KEY (project_id, connector_id)
-    REFERENCES mcp_project_bindings(project_id, connector_id) ON DELETE CASCADE
+  PRIMARY KEY (connector_id, tool_name),
+  FOREIGN KEY (connector_id) REFERENCES mcp_connectors(connector_id) ON DELETE CASCADE
 ) STRICT;
 
 CREATE TABLE mcp_tool_cache (
@@ -493,14 +476,14 @@ socket：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/api/mcp/connectors?cwd=` | 全局 Connector + 当前项目 binding/status |
-| `POST` | `/api/mcp/connectors?cwd=` | 创建 Connector，可选同时启用当前项目 |
-| `GET` | `/api/mcp/connectors/:id?cwd=` | 详情、binding、工具缓存、引用项目 |
+| `GET` | `/api/mcp/connectors` | 全局 Connector + settings/status |
+| `POST` | `/api/mcp/connectors` | 创建 Connector，可选同时全局启用 |
+| `GET` | `/api/mcp/connectors/:id` | 详情、全局设置和工具缓存 |
 | `PATCH` | `/api/mcp/connectors/:id` | 更新配置，要求 `revision` |
-| `DELETE` | `/api/mcp/connectors/:id` | 删除；被其他项目引用时 409 |
-| `PUT` | `/api/mcp/connectors/:id/binding?cwd=` | 启停和项目策略 |
-| `POST` | `/api/mcp/connectors/:id/probe?cwd=` | 有界真实握手 + tools/list |
-| `GET` | `/api/mcp/connectors/:id/tools?cwd=` | 工具缓存和权限 |
+| `DELETE` | `/api/mcp/connectors/:id` | 删除自定义 Connector；内置返回 403 |
+| `PUT` | `/api/mcp/connectors/:id/settings` | 全局启停和默认工具策略 |
+| `POST` | `/api/mcp/connectors/:id/probe` | 有界真实握手 + tools/list |
+| `GET` | `/api/mcp/connectors/:id/tools` | 工具缓存和全局权限 |
 | `PUT` | `/api/mcp/connectors/:id/tools/:tool` | Allow/Ask/Deny |
 | `POST` | `/api/mcp/connectors/:id/disconnect` | 删除/撤销认证 |
 
@@ -564,7 +547,7 @@ preview 不能启动 command、连接远端或执行 `!command` secret helper。
 
 - `/api/mcp/catalog`：第一阶段改为调用新 Service，返回旧 DTO 投影并标注 deprecated。
 - `/api/settings/mcp`：改为新 Service 的 compatibility projection。
-- `PUT /api/settings/mcp/:server_id`：内部转换成当前 project binding mutation；无 `cwd` 时返回 400，而不是继续写全局 `mcp_servers`。
+- `PUT /api/settings/mcp/:server_id`：内部转换成全局 connector settings mutation，不再要求 `cwd`。
 - 两个版本后删除旧 route 和前端调用。
 
 ## 9. 真实 Probe 与状态管理
@@ -630,7 +613,7 @@ Node `McpStatusRegistry` 以内存 TTL 保存，不写 SQLite。runtime 停止�
 如果继续让默认 `pi-mcp-adapter` 扫描 `.mcp.json` 等文件：
 
 - 设置页无法证明运行时实际使用了哪个 definition；
-- 项目绑定无法成为强约束；
+- 全局启用状态无法成为强约束；
 - import 后会产生重复或同名覆盖；
 - UI disable 仍可能被另一个配置层覆盖；
 - 运行时可能执行用户未在 Pi-Science 中启用的 MCP command。
@@ -669,8 +652,8 @@ export default createMcpAdapter({ config: snapshot.config });
 
 `McpRuntimeProjection` 输入：
 
-- project_id；
-- enabled bindings；
+- workspace project_id（只写入快照标识，不参与设置选择）；
+- globally enabled connectors；
 - connector revisions；
 - tool grants；
 - credential runtime values；
@@ -967,7 +950,7 @@ adapter 的真实 tool call egress 若无法从控制面拦截，第一阶段必
 
 ### 16.5 Runtime projection
 
-- 只包含当前 project enabled bindings；
+- 只包含全局 enabled connectors；
 - ambient `.mcp.json` 不会进入 programmatic config；
 - include/exclude/approval 映射正确；
 - snapshot 不含 credential value；
@@ -1021,12 +1004,12 @@ pnpm build
 - migration 0002；
 - repository/service/contracts/routes；
 - Connector list/add/edit/remove；
-- project binding；
+- global connector settings；
 - legacy import preview/commit；
 - preflight health；
 - 旧 API compatibility projection。
 
-完成标准：用户可在 UI 创建 Remote/Local/Socket Connector，并按项目启停；规范状态落 SQLite。
+完成标准：用户可在 UI 创建 Remote/Local/Socket Connector，并全局启停；规范状态落 SQLite。
 
 ### M2：隔离 Runtime Projection
 
@@ -1114,18 +1097,18 @@ docs/architecture.zh-CN.md                                  update at M2/M5
 ## 19. 验收标准
 
 1. 设置页列出的有效 Connector 集合与新建 runtime 实际加载集合完全一致。
-2. 关闭当前项目 Connector 后，新 turn 无法再调用；繁忙 turn 不被强制中断。
+2. 全局关闭 Connector 后，新 turn 无法再调用；繁忙 turn 不被强制中断。
 3. 新建 Remote、Local command、Socket Connector 均可通过 UI 完成。
 4. Remote URL 经过 SSRF/redirect 校验；local command 不经 shell。
-5. Connector 全局存在但未绑定项目时，当前项目 Agent 不可访问。
+5. Connector 全局关闭时，所有工作区 Agent 均不可访问。
 6. Probe 能区分 ready、auth required、protocol error、timeout 和 command not found。
 7. Tools 页面展示真实 `tools/list` 结果，并能配置 Allow/Ask/Deny。
 8. Credential 不出现在 SQLite Connector 表、API、runtime snapshot、日志和 egress audit。
 9. 修改 MCP URL 或 OAuth server 会使旧 grant 失效。
 10. legacy 配置导入前有 preview，导入不会自动执行 command/helper 或复制明文 secret。
-11. ambient `.mcp.json` 无法绕过 project binding 注入 runtime。
-12. 多 workspace、多 session 情况下配置和状态不串项目。
-13. 删除被其他项目引用的 Connector 返回明确 409，而不是静默级联破坏其他项目。
+11. ambient `.mcp.json` 无法绕过全局启用状态注入 runtime。
+12. 多 workspace、多 session 使用同一全局配置，运行快照不会过期或分叉。
+13. 内置 Connector 删除返回明确 403；自定义 Connector 删除后从全部工作区快照移除。
 14. 旧 API 在迁移期有明确兼容投影和删除条件。
 15. typecheck、unit、integration、build、视觉和 accessibility 验证通过。
 

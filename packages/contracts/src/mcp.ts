@@ -44,7 +44,7 @@ const mcpConnectorInputSchema = z.object({
   socket_path: z.string().min(1).max(2048).nullish(),
   runtime_config: mcpRuntimeConfigSchema,
   credential_ref: z.string().min(1).max(200).nullish(),
-  enable_for_project: z.boolean().default(false),
+  enabled: z.boolean().default(false),
 });
 
 function validateConnectorShape(value: z.infer<typeof mcpConnectorInputSchema>, context: z.RefinementCtx): void {
@@ -55,10 +55,9 @@ function validateConnectorShape(value: z.infer<typeof mcpConnectorInputSchema>, 
 }
 
 export const mcpConnectorCreateSchema = mcpConnectorInputSchema.superRefine(validateConnectorShape);
-export const mcpConnectorUpdateSchema = mcpConnectorInputSchema.omit({ enable_for_project: true }).partial().extend({ revision: z.number().int().positive() });
+export const mcpConnectorUpdateSchema = mcpConnectorInputSchema.omit({ enabled: true }).partial().extend({ revision: z.number().int().positive() });
 
-export const mcpProjectBindingSchema = z.object({
-  project_id: z.string().min(1),
+export const mcpConnectorSettingsSchema = z.object({
   connector_id: z.string().min(1),
   enabled: z.boolean(),
   include_tools: z.array(z.string()).default([]),
@@ -69,7 +68,7 @@ export const mcpProjectBindingSchema = z.object({
   updated_at: z.number().int().nonnegative(),
 });
 
-export const mcpProjectBindingUpdateSchema = z.object({
+export const mcpConnectorSettingsUpdateSchema = z.object({
   enabled: z.boolean(),
   include_tools: z.array(z.string().min(1).max(255)).max(500).default([]),
   exclude_tools: z.array(z.string().min(1).max(255)).max(500).default([]),
@@ -101,7 +100,7 @@ export const mcpConnectorSchema = z.object({
   revision: z.number().int().positive(),
   created_at: z.number().int().nonnegative(),
   updated_at: z.number().int().nonnegative(),
-  binding: mcpProjectBindingSchema.nullable(),
+  settings: mcpConnectorSettingsSchema,
   config_state: mcpConfigStateSchema,
   auth_state: mcpAuthStateSchema,
   runtime_state: mcpRuntimeStateSchema,
@@ -109,7 +108,7 @@ export const mcpConnectorSchema = z.object({
   error: z.string().nullable(),
 });
 
-export const mcpConnectorListSchema = z.object({ connectors: z.array(mcpConnectorSchema), project_id: z.string() });
+export const mcpConnectorListSchema = z.object({ connectors: z.array(mcpConnectorSchema) });
 export const mcpToolGrantUpdateSchema = z.object({ decision: mcpToolDecisionSchema });
 export const mcpProbeResultSchema = z.object({
   connector_id: z.string(),
@@ -124,8 +123,8 @@ export const mcpProbeResultSchema = z.object({
 export type McpConnectorCreate = z.infer<typeof mcpConnectorCreateSchema>;
 export type McpConnectorUpdate = z.infer<typeof mcpConnectorUpdateSchema>;
 export type McpConnector = z.infer<typeof mcpConnectorSchema>;
-export type McpProjectBinding = z.infer<typeof mcpProjectBindingSchema>;
-export type McpProjectBindingUpdate = z.infer<typeof mcpProjectBindingUpdateSchema>;
+export type McpConnectorSettings = z.infer<typeof mcpConnectorSettingsSchema>;
+export type McpConnectorSettingsUpdate = z.infer<typeof mcpConnectorSettingsUpdateSchema>;
 export type McpRuntimeConfig = z.infer<typeof mcpRuntimeConfigSchema>;
 export type McpToolSummary = z.infer<typeof mcpToolSummarySchema>;
 export type McpProbeResult = z.infer<typeof mcpProbeResultSchema>;

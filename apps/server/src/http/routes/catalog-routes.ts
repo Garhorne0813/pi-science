@@ -329,11 +329,11 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
 }
 
 // ── MCP catalog ──
-  app.get("/api/mcp/catalog", async (request, reply) => { const root = await ws(request, reply); if (!root) return; if (mcp) { const result = await mcp.list(root); return { servers: result.connectors.map((item) => ({ id: item.connector_id, name: item.display_name, description: item.description, transport: item.transport, enabled: item.binding?.enabled === true, health: item.runtime_state, auth: item.auth_state, data_egress: item.endpoint_url ? "remote" : "local", terms_url: item.runtime_config.terms_url ?? null, privacy_url: item.runtime_config.privacy_url ?? null, tools: [] })), config_path: null, deprecated: true }; } const { definitions, source } = await loadMcpDefinitions(root); const servers = summarizeMcpServers(definitions, await mcpEnabledSet(definitions)); return { servers, config_path: source }; });
+  app.get("/api/mcp/catalog", async (request, reply) => { const root = await ws(request, reply); if (!root) return; if (mcp) { const result = await mcp.list(); return { servers: result.connectors.map((item) => ({ id: item.connector_id, name: item.display_name, description: item.description, transport: item.transport, enabled: item.settings.enabled, health: item.runtime_state, auth: item.auth_state, data_egress: item.endpoint_url ? "remote" : "local", terms_url: item.runtime_config.terms_url ?? null, privacy_url: item.runtime_config.privacy_url ?? null, tools: [] })), config_path: null, deprecated: true }; } const { definitions, source } = await loadMcpDefinitions(root); const servers = summarizeMcpServers(definitions, await mcpEnabledSet(definitions)); return { servers, config_path: source }; });
   app.get<{ Params: { server_id: string } }>("/api/mcp/health/:server_id", async (request, reply) => {
     const root = await ws(request, reply);
     if (!root) return;
-    if (mcp) return mcp.probe(request.params.server_id, root);
+    if (mcp) return mcp.probe(request.params.server_id);
     const { definitions } = await loadMcpDefinitions(root);
     const definition = definitions[request.params.server_id];
     if (!definition) return reply.code(404).send({ error: "MCP server not found" });

@@ -31,19 +31,17 @@ export class McpRuntimeProjection {
 
   async materialize(cwd: string, projectId: string): Promise<void> {
     const workspace = await validateWorkspaceCwd(cwd);
-    const bindings = (await this.repository.bindingsForProject(projectId)).filter((item) => item.enabled);
-    const connectors = new Map((await this.repository.list()).map((item) => [item.connector_id, item]));
+    const connectors = (await this.repository.list()).filter((item) => item.enabled);
     const mcpServers: Record<string, ProjectedMcpServer> = {};
-    for (const binding of bindings) {
-      const connector = connectors.get(binding.connector_id);
-      if (!connector) continue;
-      const grants = await this.repository.toolGrants(projectId, connector.connector_id);
+    for (const connector of connectors) {
+      const grants = await this.repository.toolGrants(connector.connector_id);
+      const cache = await this.repository.toolCache(connector.connector_id);
       const denied = [...grants].filter(([, decision]) => decision === "deny").map(([name]) => name);
-      const asked = [...grants].filter(([, decision]) => decision === "ask").map(([name]) => name);
-      const includeTools = unique([...connector.runtime_config.include_tools, ...binding.include_tools]);
-      const excludeTools = unique([...connector.runtime_config.exclude_tools, ...binding.exclude_tools, ...denied]);
+      const asked = (cache?.tools ?? []).filter((tool) => (grants.get(tool.name) ?? "ask") === "ask").map((tool) => tool.name);
+      const includeTools = unique([...connector.runtime_config.include_tools, ...connector.include_tools]);
+      const excludeTools = unique([...connector.runtime_config.exclude_tools, ...connector.exclude_tools, ...denied]);
       mcpServers[connector.name] = projectServer(connector, includeTools, excludeTools,
-        binding.approval_mode === "allow_all" ? false : binding.approval_mode === "ask" ? true : asked);
+        connector.approval_mode === "allow_all" ? false : connector.approval_mode === "ask" ? true : asked);
     }
     await atomicSnapshot(workspace, { version: 1, project_id: projectId, generated_at: Date.now(), mcpServers });
   }
