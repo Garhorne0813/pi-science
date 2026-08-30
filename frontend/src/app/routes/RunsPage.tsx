@@ -22,7 +22,7 @@ import { executionSearchText, fileName, isActiveExecution, workspaceRelativePath
 type KindFilter = "all" | ExecutionRecord["kind"];
 type StatusFilter = "all" | ExecutionRecord["status"];
 
-const KINDS: ExecutionRecord["kind"][] = ["tool", "kernel_cell", "job", "research_agent", "research_evaluation"];
+const KINDS: ExecutionRecord["kind"][] = ["tool", "kernel_cell", "job", "research_agent", "research_evaluation", "scheduled_task"];
 const STATUSES: ExecutionRecord["status"][] = ["pending", "running", "succeeded", "failed", "timed_out", "cancelled", "interrupted", "lost"];
 const EMPTY_RUNS: ExecutionRecord[] = [];
 
@@ -130,6 +130,13 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
     navigate(run.correlation.session_id ? `${root}/session/${encodeURIComponent(run.correlation.session_id)}` : root);
   };
 
+  // Scheduled-task attempts jump back to their task page (docs §13.3).
+  const openScheduledTask = (run: ExecutionRecord) => {
+    const taskId = run.correlation.scheduled_task_id;
+    if (!taskId) return;
+    navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/scheduled-tasks?task=${encodeURIComponent(taskId)}`);
+  };
+
   const locateExecution = (run: ExecutionRecord) => {
     const toolCallId = run.correlation.tool_call_id;
     if (!toolCallId) return;
@@ -215,6 +222,7 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
                 onOpenFile={openFile}
                 onOpenArtifact={(artifact) => void openArtifact(artifact)}
                 onOpenSession={!sessionId && selected.correlation.session_id ? () => openSession(selected) : undefined}
+                onOpenScheduledTask={!sessionId && selected.kind === "scheduled_task" && selected.correlation.scheduled_task_id ? () => openScheduledTask(selected) : undefined}
                 onLocate={sessionId && selected.correlation.tool_call_id ? () => locateExecution(selected) : undefined}
                 onReproduce={() => reproduce(selected)}
                 log={logs[selected.execution_id]}

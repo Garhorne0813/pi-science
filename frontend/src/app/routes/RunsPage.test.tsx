@@ -97,7 +97,25 @@ const toolExecution: ExecutionRecord = {
   artifacts: [],
 };
 
-const executions = [toolExecution, jobExecution, kernelExecution];
+const scheduledExecution: ExecutionRecord = {
+  schema_version: 1,
+  execution_id: "exec_sched",
+  kind: "scheduled_task",
+  surface: "pi",
+  status: "running",
+  workspace_id: "/workspace",
+  created_at: "2026-08-15T04:00:00.000Z",
+  started_at: "2026-08-15T04:00:00.000Z",
+  producer: "scheduled-task-service",
+  correlation: { scheduled_task_id: "stask_42", scheduled_task_run_id: "run_9", scheduled_task_attempt_id: "satt_3" },
+  request: { executor_kind: "literature_digest", business_date: "2026-08-15" },
+  runtime: {},
+  result: { stdout_preview: "digest running" },
+  files: { read: [], written: [{ path: "outputs/digest/report.md", detection: "snapshot" }] },
+  artifacts: [],
+};
+
+const executions = [toolExecution, jobExecution, kernelExecution, scheduledExecution];
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -129,6 +147,7 @@ function renderPage(initial = "/workspace/project/runs") {
       <MemoryRouter initialEntries={[initial]}>
         <Routes>
           <Route path="/workspace/:cwd/runs" element={<><RunsPage /><LocationProbe /></>} />
+          <Route path="/workspace/:cwd/scheduled-tasks" element={<LocationProbe />} />
           <Route path="/workspace/:cwd" element={<LocationProbe />} />
           <Route path="/workspace/:cwd/session/:sessionId" element={<LocationProbe />} />
         </Routes>
@@ -287,5 +306,16 @@ describe("RunsPage execution ledger", () => {
     expect(await screen.findByText("Execution problem")).toBeInTheDocument();
     expect(screen.getByText("training failed")).toBeInTheDocument();
     expect(screen.getByText(/exit code 1/)).toBeInTheDocument();
+  });
+
+  it("labels scheduled-task attempts from correlation and deep-links back to the task page", async () => {
+    renderPage();
+
+    expect(await screen.findByText("stask:stask_42 · satt_3")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Filter by execution type"), { target: { value: "scheduled_task" } });
+    fireEvent.click(await screen.findByRole("button", { name: /stask:stask_42 · satt_3/ }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Open scheduled task" }));
+    await waitFor(() => expect(screen.getByLabelText("location")).toHaveTextContent("/workspace/%2Fworkspace/scheduled-tasks?task=stask_42"));
   });
 });

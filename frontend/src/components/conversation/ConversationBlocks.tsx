@@ -15,6 +15,8 @@ import { MessageActions } from "./MessageActions";
 import { isVisibleActivity } from "../../lib/conversation/activity-policy";
 import { buildTurnPresentations, turnBlockIds, type TurnPresentation } from "../../lib/conversation/turn-presentation";
 import { AgentActivity } from "./AgentActivity";
+import { extractScheduledProposal } from "../../features/scheduled/model";
+import { ConversationScheduledProposal } from "../../features/scheduled/ConversationScheduledProposal";
 
 export function renderTurn(turn: TurnPresentation, codeRunner: CodeRunner, actionTextByBlock?: Map<string, string>, active = false) {
   return <ConversationTurn key={turn.id} turn={turn} codeRunner={codeRunner} actionTextByBlock={actionTextByBlock} active={active} />;
@@ -62,10 +64,13 @@ function AgentMessage({ block, actionText, codeRunner }: { block: AgentMessageBl
   const { t } = useTranslation();
   const rawText = block.parts.map((part) => part.text).join("");
   if (!rawText) return null;
-  const text = parseSuggestions(rawText).clean;
+  const suggested = parseSuggestions(rawText).clean;
+  const scheduled = extractScheduledProposal(suggested);
+  const text = scheduled.text;
   const citations = extractCitations(text);
-  return <div className="group/message">
-    <MarkdownViewer variant="chat" codeRunner={codeRunner}>{text}</MarkdownViewer>
+  return <div className="group/message space-y-3">
+    {text && <MarkdownViewer variant="chat" codeRunner={codeRunner}>{text}</MarkdownViewer>}
+    {scheduled.proposal && codeRunner?.cwd && <ConversationScheduledProposal initial={scheduled.proposal} cwd={codeRunner.cwd} />}
     {citations.length > 0 && <div className="mt-2 flex flex-wrap items-center gap-1.5">
       <span className="text-[10px] text-muted">{t("conversation.sources")} ({citations.length})</span>
       {citations.map((citation, index) => <a key={`${citation.kind}:${citation.id}`} href={citation.url} target="_blank" rel="noreferrer" title={citation.id} className="rounded-full border border-border bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-muted hover:text-text">{index + 1} · {shortCitationId(citation.id)}</a>)}

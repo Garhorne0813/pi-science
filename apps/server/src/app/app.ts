@@ -21,6 +21,8 @@ import { registerNotebookRoutes } from "../http/routes/notebook-routes.js";
 import { knownWorkspacePaths, registerCatalogRoutes, rootDir } from "../http/routes/catalog-routes.js";
 import { registerProjectRoutes } from "../http/routes/project-routes.js";
 import { registerLiteratureRoutes } from "../http/routes/literature-routes.js";
+import { registerScheduledTaskRoutes, scheduledTasksDiagnostics } from "../http/routes/scheduled-task-routes.js";
+import { isScheduledTasksEnabled } from "../scheduled-tasks/service.js";
 import { createServerModules, type ServerModules } from "./server-modules.js";
 import { registerEnvironmentRoutes } from "../http/routes/environment-routes.js";
 import { serveFrontend } from "../http/frontend-static.js";
@@ -30,7 +32,7 @@ import { importLegacyState } from "../storage/sqlite/legacy-state.js";
 import { internalAuthCookie, requestInternalToken, tokensMatch } from "../security/internal-auth.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
-  const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, modelResources, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
+  const { sessions: nodeSessionService, events, sessionRepository, piManager, settings, modelResources, jobs, research, projectReview, literature, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled, scheduled } = modules;
   let stateReady = !sqliteEnabled;
   let stateError: unknown;
   const app = Fastify({
@@ -129,6 +131,8 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
         binding_count: modelState.bindings.length,
         credential_ref_count: Object.keys(modelState.credential_refs).length,
       },
+      // docs §11.7 scheduled_tasks block (aggregated scheduler/dispatcher/service slices).
+      scheduled_tasks: await scheduledTasksDiagnostics({ service: scheduled.service, sqliteEnabled, stateStore }),
     };
   });
 
@@ -159,7 +163,14 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   registerNotebookRoutes(app, notebooks);
   if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, research, sqliteEnabled ? workspaces : undefined);
   if (config.nodeProject !== false) registerProjectRoutes(app, research, projectReview);
-  if (config.nodeLiterature !== false) registerLiteratureRoutes(app);
+  if (config.nodeLiterature !== false) registerLiteratureRoutes(app, literature);
+  registerScheduledTaskRoutes(app, {
+    service: scheduled.service,
+    workspacesResolver: async (cwd) => validateWorkspaceCwd(cwd),
+    sqliteEnabled,
+    stateStore,
+    onMutation: () => scheduled.scheduler?.wake(),
+  });
   app.addHook("onReady", async () => {
     if (sqliteEnabled) {
       try {
@@ -170,11 +181,27 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
         stateError = error;
         app.log.error({ err: error }, "SQLite state initialization failed");
       }
+      // docs §11.2 step 5: after durable state is up, recover leases → dispatch
+      // pending attempts → claim due occurrences → arm the nearest timer.
+      // A scheduler failure degrades diagnostics only — never the whole app.
+      if (stateReady && scheduled.scheduler && isScheduledTasksEnabled()) {
+        try {
+          scheduled.scheduler.start();
+          await scheduled.scheduler.startupOnce();
+        } catch (error) {
+          app.log.error({ err: error }, "scheduled tasks startup failed");
+        }
+      }
     }
     const recoveryRepository = sqliteEnabled && stateReady ? workspaces : undefined;
     const results = await Promise.allSettled((await knownWorkspacePaths(recoveryRepository)).map((cwd) => research.reconcile(cwd)));
     for (const result of results) if (result.status === "rejected") app.log.error({ err: result.reason }, "research loop recovery failed");
   });
+  // docs §11.5 shutdown orchestration. Fastify executes onClose hooks in
+  // reverse registration order (verified empirically), so the desired runtime
+  // order — scheduled runtimes settled first, SQLite closed LAST — is encoded
+  // by registering the store hook FIRST and the scheduled hook LAST.
+  app.addHook("onClose", async () => stateStore.close());
   if (config.nodePiManager) app.addHook("onClose", async () => nodeSessionService.shutdownAll());
   // Unconditional: research/review subagent runtimes use the same shared
   // manager, so the host must be torn down even when nodePiManager is off.
@@ -184,7 +211,12 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   app.addHook("onClose", async () => projectReview.shutdown());
   app.addHook("onClose", async () => kernels.shutdownAll());
   app.addHook("onClose", async () => notebooks.shutdown());
-  app.addHook("onClose", async () => stateStore.close());
+  // Registered last ⇒ runs first: stop claiming occurrences, then abort and
+  // owner-fence every in-flight attempt before any runtime/store teardown.
+  app.addHook("onClose", async () => {
+    await scheduled.scheduler?.stop();
+    await scheduled.dispatcher?.shutdown();
+  });
   if (config.nodePiManager) {
     app.all("/api/sessions/*", async (request, reply) => reply.code(404).send({
       ok: false,

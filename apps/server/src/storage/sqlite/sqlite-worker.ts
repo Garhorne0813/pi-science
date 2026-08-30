@@ -57,7 +57,18 @@ port.on("message", (request: SqliteRequest) => {
 function runBatch(statements: SqlStatement[]) {
   database.exec("BEGIN IMMEDIATE");
   try {
-    const results = statements.map((statement) => database.prepare(statement.sql).run(...(statement.params ?? [])));
+    const results = [];
+    for (const statement of statements) {
+      const result = database.prepare(statement.sql).run(...(statement.params ?? []));
+      // Assert inside the transaction, before COMMIT: a late assertion in the
+      // parent would observe an already-committed batch it cannot undo.
+      if (statement.expectChanges !== undefined && Number(result.changes) !== statement.expectChanges) {
+        const error = new Error(`Expected ${statement.expectChanges} changes, got ${String(result.changes)}: ${statement.sql.slice(0, 200)}`);
+        (error as Error & { code?: string }).code = "SQLITE_EXPECT_CHANGES";
+        throw error;
+      }
+      results.push(result);
+    }
     database.exec("COMMIT");
     return results;
   } catch (error) {

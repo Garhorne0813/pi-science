@@ -6,6 +6,7 @@ import {
   deriveSessionName,
   getSessionName,
   hasAiTitle,
+  hasDerivedSessionName,
   markAiTitle,
   markAiTitleAttempted,
   moveSessionName,
@@ -135,6 +136,46 @@ describe("setSessionName server persistence", () => {
       setSessionName("/workspace", "fail-me", "离线标题");
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(getSessionName("/workspace", "fail-me")).toBe("离线标题");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("mirrors the server's 100-character title limit locally", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => { throw new Error("network down"); }) as typeof fetch;
+    try {
+      // A persisted final title of exactly 100 characters must not be
+      // truncated in localStorage (the old cap was 50).
+      const exactly = "x".repeat(100);
+      setSessionName("/workspace", "cap-exact", exactly);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(getSessionName("/workspace", "cap-exact")).toBe(exactly);
+
+      const longer = `${"y".repeat(100)}truncated`;
+      setSessionName("/workspace", "cap-over", longer);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(getSessionName("/workspace", "cap-over")).toBe("y".repeat(100));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("marks derived names and carries the mark through a replacement move", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => { throw new Error("network down"); }) as typeof fetch;
+    try {
+      setSessionName("/workspace", "derived-old", "fallback question", { derived: true });
+      expect(hasDerivedSessionName("/workspace", "derived-old")).toBe(true);
+
+      moveSessionName("/workspace", "derived-old", "derived-new");
+      expect(getSessionName("/workspace", "derived-new")).toBe("fallback question");
+      expect(hasDerivedSessionName("/workspace", "derived-new")).toBe(true);
+      expect(hasDerivedSessionName("/workspace", "derived-old")).toBe(false);
+
+      // A final rename clears the derived mark.
+      setSessionName("/workspace", "derived-new", "final name");
+      expect(hasDerivedSessionName("/workspace", "derived-new")).toBe(false);
     } finally {
       globalThis.fetch = originalFetch;
     }

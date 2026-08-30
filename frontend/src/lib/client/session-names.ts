@@ -3,6 +3,7 @@
 import { sessionKey } from "./session-key";
 
 const NAME_KEY = "pi-science.session-names";
+const DERIVED_NAME_KEY = "pi-science.session-names-derived";
 
 function loadNames(): Record<string, string> {
   try {
@@ -25,6 +26,46 @@ function saveNames(names: Record<string, string>) {
     // Session naming is optional metadata; storage failures must never prevent
     // the actual prompt from being sent.
   }
+}
+
+function loadDerivedNames(): Record<string, true> {
+  try {
+    const raw = localStorage.getItem(DERIVED_NAME_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, true>;
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+function saveDerivedNames(names: Record<string, true>): void {
+  try {
+    localStorage.setItem(DERIVED_NAME_KEY, JSON.stringify(names));
+  } catch {
+    // Derived-name metadata is optional and must never block the session.
+  }
+}
+
+/** True when the display name is a temporary derivation from the first user
+ *  message and may still be replaced by the AI title generator. */
+export function hasDerivedSessionName(cwd: string, sessionId: string): boolean {
+  return loadDerivedNames()[sessionKey(cwd, sessionId)] === true;
+}
+
+export function markDerivedSessionName(cwd: string, sessionId: string): void {
+  const names = loadDerivedNames();
+  names[sessionKey(cwd, sessionId)] = true;
+  saveDerivedNames(names);
+}
+
+export function clearDerivedSessionName(cwd: string, sessionId: string): void {
+  const names = loadDerivedNames();
+  const key = sessionKey(cwd, sessionId);
+  if (names[key] === undefined) return;
+  delete names[key];
+  saveDerivedNames(names);
 }
 
 /** Read the display name for a session. On first read it migrates the v2
@@ -65,15 +106,26 @@ export function getSessionName(cwd: string, sessionId: string): string {
   return typeof value === "string" ? value : "";
 }
 
-export function setSessionName(cwd: string, sessionId: string, name: string): void {
+/** Server titles are capped at 100 characters; the local mirror must use the
+ *  same limit so a persisted final title is not silently truncated here. */
+const SESSION_NAME_MAX_LENGTH = 100;
+
+export function setLocalSessionName(cwd: string, sessionId: string, name: string): void {
   const names = loadNames();
-  names[sessionKey(cwd, sessionId)] = name.slice(0, 50);  // Cap length
+  names[sessionKey(cwd, sessionId)] = name.slice(0, SESSION_NAME_MAX_LENGTH);
   saveNames(names);
+}
+
+export function setSessionName(cwd: string, sessionId: string, name: string, options: { derived?: boolean } = {}): void {
+  if (options.derived === true) markDerivedSessionName(cwd, sessionId);
+  else clearDerivedSessionName(cwd, sessionId);
+  setLocalSessionName(cwd, sessionId, name);
   // Best-effort server persistence (fire-and-forget): the localStorage
   // registry stays the immediate source and the fallback when the control
-  // plane is unreachable, so naming never blocks the prompt path.
+  // plane is unreachable, so naming never blocks the prompt path. Derived
+  // fallbacks are flagged server-side so a later AI title can replace them.
   void import("./pi-science-client").then(({ getClient }) => {
-    void getClient().setSessionTitle(sessionId, name.slice(0, 100), cwd).catch(() => undefined);
+    void getClient().setSessionTitle(sessionId, name.slice(0, SESSION_NAME_MAX_LENGTH), cwd, { derived: options.derived === true }).catch(() => undefined);
   });
 }
 
@@ -94,6 +146,7 @@ export function clearSessionName(cwd: string, sessionId: string): void {
     changed = true;
   }
   if (changed) saveNames(names);
+  clearDerivedSessionName(cwd, sessionId);
 }
 
 export function moveSessionName(cwd: string, previousSessionId: string, nextSessionId: string): string {
@@ -118,6 +171,12 @@ export function moveSessionName(cwd: string, previousSessionId: string, nextSess
     marks[nextKey] = true;
     delete marks[previousKey];
     saveAiMarks(marks);
+  }
+  const derived = loadDerivedNames();
+  if (derived[previousKey] === true) {
+    derived[nextKey] = true;
+    delete derived[previousKey];
+    saveDerivedNames(derived);
   }
   return typeof names[nextKey] === "string" ? names[nextKey] : "";
 }

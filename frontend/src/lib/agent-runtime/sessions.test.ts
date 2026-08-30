@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { getSessionName, hasDerivedSessionName } from "../client/pi-science-client";
 import { useRuntimeStore } from "./index";
 import { jsonResponse, installRuntimeTestEnvironment } from "./test-helpers";
 import { loadSessionsInternal } from "./sessions";
@@ -31,7 +32,7 @@ describe("loadSessionsInternal stale protection", () => {
 
     const stale = loadSessionsInternal();
     const fresh = await loadSessionsInternal();
-    expect(fresh.map((session) => session.id)).toEqual(["fresh-session"]);
+    expect(fresh?.map((session) => session.id)).toEqual(["fresh-session"]);
     expect(useRuntimeStore.getState().sessions.map((session) => session.id)).toEqual(["fresh-session"]);
 
     releaseStale[0]?.(); // stale response arrives after the fresh one
@@ -64,5 +65,40 @@ describe("loadSessionsInternal stale protection", () => {
     // drive navigation from), never an empty array.
     await expect(stale).resolves.toMatchObject([{ id: "kept" }]);
     expect(useRuntimeStore.getState().sessions.map((session) => session.id)).toEqual(["kept"]);
+  });
+
+  it("returns null when the session list request fails", async () => {
+    useRuntimeStore.setState({ cwd: "/workspace", activeSessionId: null, sessions: [] });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/sessions?")) return jsonResponse({ error: "backend unavailable" }, 503);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await expect(loadSessionsInternal()).resolves.toBeNull();
+    expect(useRuntimeStore.getState().sessions).toEqual([]);
+  });
+
+  it("syncs the server's derived flag into the local fallback mark", async () => {
+    useRuntimeStore.setState({ cwd: "/workspace", activeSessionId: null, sessions: [] });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/sessions?")) {
+        return jsonResponse([
+          // A server-side derived fallback stays replaceable by an AI title...
+          { id: "s-derived", cwd: "/workspace", name: "derived fallback", name_derived: true },
+          // ...while a final server title keeps blocking regeneration.
+          { id: "s-final", cwd: "/workspace", name: "final title" },
+        ]);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await loadSessionsInternal();
+
+    expect(getSessionName("/workspace", "s-derived")).toBe("derived fallback");
+    expect(hasDerivedSessionName("/workspace", "s-derived")).toBe(true);
+    expect(getSessionName("/workspace", "s-final")).toBe("final title");
+    expect(hasDerivedSessionName("/workspace", "s-final")).toBe(false);
   });
 });

@@ -6,6 +6,12 @@ export function executionLabel(run: ExecutionRecord): string {
     const code = typeof run.request.code === "string" ? run.request.code.trim().split("\n")[0] : "";
     return `${notebook} · ${code || run.surface}`;
   }
+  if (run.kind === "scheduled_task") {
+    // The ledger correlation carries ids only — show task id + attempt id.
+    const taskId = typeof run.correlation.scheduled_task_id === "string" ? run.correlation.scheduled_task_id : "";
+    const attemptId = typeof run.correlation.scheduled_task_attempt_id === "string" ? run.correlation.scheduled_task_attempt_id : "";
+    return [taskId ? `stask:${taskId}` : "", attemptId].filter(Boolean).join(" · ") || run.execution_id;
+  }
   return run.request.command?.join(" ") || String(run.request.tool || run.execution_id);
 }
 

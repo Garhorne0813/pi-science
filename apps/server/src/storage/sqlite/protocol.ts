@@ -3,6 +3,8 @@ export type SqlValue = null | number | bigint | string | Uint8Array;
 export interface SqlStatement {
   sql: string;
   params?: SqlValue[];
+  /** Asserts `result.changes` inside the worker before COMMIT; mismatch rolls the whole batch back. */
+  expectChanges?: number;
 }
 
 export interface SqlRunResult {

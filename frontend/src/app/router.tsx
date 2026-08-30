@@ -12,6 +12,7 @@ const FilesPage = lazy(() => import("./routes/FilesPage").then((m) => ({ default
 const RunsPage = lazy(() => import("./routes/RunsPage").then((m) => ({ default: m.RunsPage })));
 const KnowledgePage = lazy(() => import("./routes/KnowledgePage").then((m) => ({ default: m.KnowledgePage })));
 const ResearchPage = lazy(() => import("./routes/ResearchPage").then((m) => ({ default: m.ResearchPage })));
+const ScheduledTasksPage = lazy(() => import("./routes/ScheduledTasksPage").then((m) => ({ default: m.ScheduledTasksPage })));
 
 function LoadingFallback() {
   const { t } = useTranslation();
@@ -36,6 +37,7 @@ export const router = createBrowserRouter([
       { path: "workspace/:cwd/files", element: wrap(<FilesPage />) },
       { path: "workspace/:cwd/notebooks", element: <LegacyNotebooksRedirect /> },
       { path: "workspace/:cwd/runs", element: wrap(<RunsPage />) },
+      { path: "workspace/:cwd/scheduled-tasks", element: wrap(<ScheduledTasksPage />) },
       { path: "workspace/:cwd/knowledge", element: wrap(<KnowledgePage />) },
       { path: "workspace/:cwd/research", element: wrap(<ResearchPage />) },
       { path: "workspace/:cwd/settings", element: wrap(<SettingsPage />) },
