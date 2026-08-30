@@ -23,6 +23,8 @@ describe("AgentActivity", () => {
     const detail = screen.getByText("Searching for tool.updated");
     expect(title).toHaveClass("text-sm");
     expect(detail).toHaveClass("text-xs");
+    expect(title.parentElement).toBe(detail.parentElement);
+    expect(title.nextElementSibling).toHaveAttribute("aria-hidden");
     expect(container.firstElementChild).not.toHaveClass("border");
     expect(document.querySelector('[data-orb-variant="S4"]')).toBeInTheDocument();
     expect(screen.queryByText("Reading ConversationBlocks.tsx")).not.toBeInTheDocument();

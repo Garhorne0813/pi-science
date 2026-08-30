@@ -277,17 +277,16 @@ errors remain in Execution Trace and do not change the lifecycle to failed.
 ### Activity row proposal
 
 DeepSeek Harness renders reasoning and tool progress as quiet, borderless rows.
-Its `ReasoningRow.module.css` and `ToolRow.module.css` use a 400-weight title and
-a tertiary summary at 14px/24px, with no surrounding card border. Pi-Science
-uses the same borderless hierarchy, adapted to two vertical lines so long task
-names remain readable:
+Its `ReasoningRow.module.css` and `ToolRow.module.css` use a 400-weight title,
+a 2px separator dot, and a tertiary summary on one borderless line. Pi-Science
+uses the same horizontal hierarchy:
 
+- semantic progress glyph: 20px and `--accent` in both light and dark themes;
 - primary Activity title: 14px/20px, regular weight, primary text;
-- current task detail: 12px/18px, regular weight, tertiary text;
+- separator: 2px round dot with 8px spacing on each side;
+- current task detail: 12px/18px, regular weight, tertiary text, truncating first;
 - row padding: 4px vertical, no outer background or border;
-- expanded Execution Trace may keep its own quiet inset surface;
-- semantic progress glyph: 20px and `--accent` in both light and dark themes.
+- expanded Execution Trace may keep its own quiet inset surface.
 
-The 12px secondary line is a Pi-Science proposal. The upstream row keeps both
-fragments at 14px/24px on one line; the smaller second line preserves the same
-visual hierarchy after changing to a stacked layout.
+The 12px task detail is a Pi-Science proposal. Upstream keeps the summary at
+14px/24px; the smaller value preserves the requested title/task hierarchy.

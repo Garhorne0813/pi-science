@@ -46,14 +46,14 @@ export function AgentActivity({ blocks, lifecycle = "active" }: { blocks: ToolCa
   const visualSlot = state === "waiting" ? "waiting" : shown ? "currentActivity" : "thinking";
 
   return <div id={blocks.length === 1 ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} className="scroll-mt-4">
-    <button type="button" aria-expanded={canExpand ? expanded : undefined} onClick={() => canExpand && setExpanded((value) => !value)} className={cn("flex w-full items-start gap-2 py-1 text-left transition-colors", canExpand && "rounded-input hover:bg-surface-2/60")}>
-      <span className="mt-0.5 flex h-5 shrink-0 items-center"><ActivityIcon state={state} slot={visualSlot} config={progressAppearance} label={title} activityState={activityStateFor(lifecycle, shown)} /></span>
-      <span aria-live="polite" aria-atomic="true" className="min-w-0 flex-1">
-        <span className={cn("block truncate text-sm font-normal leading-5 text-text", state === "error" && "text-error-text")}>{!progressPatternShowsText(visualSlot, progressAppearance) && title}</span>
-        {detail && <span className="block truncate text-xs font-normal leading-[18px] text-muted">{detail}</span>}
+    <button type="button" aria-expanded={canExpand ? expanded : undefined} onClick={() => canExpand && setExpanded((value) => !value)} className={cn("flex w-full items-center gap-2 py-1 text-left transition-colors", canExpand && "rounded-input hover:bg-surface-2/60")}>
+      <span className="flex h-5 shrink-0 items-center"><ActivityIcon state={state} slot={visualSlot} config={progressAppearance} label={title} activityState={activityStateFor(lifecycle, shown)} /></span>
+      <span aria-live="polite" aria-atomic="true" className="flex min-w-0 flex-1 items-center">
+        <span className={cn("shrink-0 whitespace-nowrap text-sm font-normal leading-5 text-text", state === "error" && "text-error-text")}>{!progressPatternShowsText(visualSlot, progressAppearance) && title}</span>
+        {detail && <><span aria-hidden className="mx-2 h-0.5 w-0.5 shrink-0 rounded-full bg-muted" /><span className="min-w-0 flex-1 truncate text-xs font-normal leading-[18px] text-muted">{detail}</span></>}
       </span>
-      {lifecycle === "settled" && <span className="mt-0.5 shrink-0 font-mono text-[10px] text-muted/60" aria-label={t("conversation.activity.operationCount", { count })}>{count}</span>}
-      {canExpand && <ChevronRight size={13} aria-hidden className={cn("mt-1 shrink-0 text-muted/60 transition-transform", expanded && "rotate-90")} />}
+      {lifecycle === "settled" && <span className="shrink-0 font-mono text-[10px] text-muted/60" aria-label={t("conversation.activity.operationCount", { count })}>{count}</span>}
+      {canExpand && <ChevronRight size={13} aria-hidden className={cn("shrink-0 text-muted/60 transition-transform", expanded && "rotate-90")} />}
     </button>
     {expanded && canExpand && <div className="mt-1 rounded-card border border-faint bg-surface-2/50 px-2 py-1" aria-label={t("conversation.activity.trace")}>{activities.map((block) => <TraceItem key={block.id} block={block} />)}</div>}
   </div>;
