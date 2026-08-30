@@ -1,12 +1,15 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import i18n from "../../i18n";
 import type { ToolCallBlock } from "../../types/thread";
 import { AgentActivity } from "./AgentActivity";
 import { executionActivities, executionOperationCount } from "../../lib/conversation/activity-policy";
+import { defaultProgressAppearance } from "@pi-science/contracts";
+import { setProgressAppearance } from "../progress/progress-settings-store";
 
 const tool = (id: string, name: string, status: ToolCallBlock["status"] = "done", input?: Record<string, unknown>): ToolCallBlock => ({ kind: "tool", id, callId: `${id}-call`, tool: name, status, input, output: "output" });
 beforeAll(async () => { await i18n.changeLanguage("en"); });
+beforeEach(() => { setProgressAppearance(defaultProgressAppearance); });
 
 describe("AgentActivity data filters", () => {
   it("does not count todo", () => { expect(executionOperationCount([tool("a", "todo"), tool("b", "todo")])).toBe(0); });
@@ -14,9 +17,10 @@ describe("AgentActivity data filters", () => {
 });
 
 describe("AgentActivity", () => {
-  it("presents a narrative label while precise tool titles stay in Trace", () => {
+  it("presents a narrative label and semantic explore orb while precise tool titles stay in Trace", () => {
     render(<AgentActivity blocks={[tool("read", "read", "done", { path: "ConversationBlocks.tsx" }), tool("todo", "todo"), tool("search", "grep", "running", { pattern: "tool.updated" })]} />);
     expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
+    expect(document.querySelector('[data-orb-variant="S4"]')).toBeInTheDocument();
     expect(screen.queryByText("Reading ConversationBlocks.tsx")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Reviewing the implementation/i }));
     expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
@@ -30,6 +34,12 @@ describe("AgentActivity", () => {
   });
 
   it("renders nothing for todo only", () => { const { container } = render(<AgentActivity blocks={[tool("todo", "todo")]} />); expect(container).toBeEmptyDOMElement(); });
+
+  it("uses the generation narrative and orb for image generation", () => {
+    render(<AgentActivity blocks={[tool("image", "image_gen", "running")]} />);
+    expect(screen.getByText("Generating the output")).toBeInTheDocument();
+    expect(document.querySelector('[data-orb-variant="B3"]')).toBeInTheDocument();
+  });
 
   it("uses the thinking pattern when a tool has no semantics", () => {
     render(<AgentActivity blocks={[tool("bash", "bash", "running", { command: "git status" })]} />);
@@ -45,6 +55,7 @@ describe("AgentActivity", () => {
       rerender(<AgentActivity blocks={[tool("read-1", "read"), tool("edit", "edit", "running", { path: "a.ts" })]} />);
       act(() => { vi.advanceTimersByTime(900); });
       expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
+      expect(document.querySelector('[data-orb-variant="B4"]')).toBeInTheDocument();
       rerender(<AgentActivity blocks={[tool("read-1", "read"), tool("edit", "edit"), tool("test", "bash", "running", { description: "Run tests" }), tool("corrective", "read", "running", { path: "a.ts" })]} />);
       act(() => { vi.advanceTimersByTime(900); });
       expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
@@ -65,6 +76,7 @@ describe("AgentActivity", () => {
         rerender(<AgentActivity blocks={[{ ...read, status: "done" }, { ...running, partialOutput: `line ${elapsed}` }]} />);
       }
       expect(screen.getByText("Verifying the changes")).toBeInTheDocument();
+      expect(document.querySelector('[data-orb-variant="C5"]')).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -73,8 +85,10 @@ describe("AgentActivity", () => {
   it("renders recovery and waiting states without a trace", () => {
     const { rerender } = render(<AgentActivity lifecycle="recovering" blocks={[]} />);
     expect(screen.getByText("Resuming the task")).toBeInTheDocument();
+    expect(document.querySelector('[data-orb-variant]')).toHaveAttribute("data-orb-variant", "G4");
     rerender(<AgentActivity lifecycle="waiting" blocks={[]} />);
     expect(screen.getByText("Needs your input")).toBeInTheDocument();
+    expect(document.querySelector('[data-orb-variant="C2"]')).toBeInTheDocument();
   });
   it("shows recovery and interaction without execution trace items", () => {
     const { rerender, container } = render(<AgentActivity lifecycle="recovering" blocks={[tool("recovery", "runtime_recovery", "running")]} />);

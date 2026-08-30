@@ -248,3 +248,26 @@ application owns layout, semantic colors, typography, radii, accessibility
 labels, reduced-motion behavior, and the settings contract. Current Activity
 keeps its narrative text outside the loader so the animation cannot replace
 meaning or affect Markdown and KaTeX rendering.
+
+### Semantic Activity mapping
+
+`aicss-auto` is the default pattern for Thinking, Current Activity, and Waiting.
+The turn lifecycle controls whether progress is running, waiting, completed, or
+failed. The narrative state independently selects the AICSS Orb geometry:
+
+| Narrative state | Orb | Meaning |
+| --- | --- | --- |
+| orient | S1 | Understand the request |
+| explore | S4 | Read or search local context |
+| research | B2 | Search external sources |
+| analyze | C4 | Analyze information |
+| implementation | B4 | Edit or solve |
+| compute | G1 | Run scientific computation |
+| verify | C5 | Test, build, or validate |
+| generate | B3 | Generate images or other outputs |
+| interaction | C2 | Wait for user input |
+| recover | G4 | Reconnect or restore state |
+| complete | S5 | Finalize the turn |
+
+A user-selected fixed pattern overrides this automatic mapping. Recoverable tool
+errors remain in Execution Trace and do not change the lifecycle to failed.

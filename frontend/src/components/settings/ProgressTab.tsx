@@ -10,9 +10,9 @@ import type { SettingsConfig } from "../../lib/settings";
 import { SettingsSelectMenu } from "./SettingsSelectMenu";
 
 const PRESET_PATTERNS: Record<Exclude<ProgressAppearance["preset"], "custom">, ProgressAppearance["patterns"]> = {
-  quiet: { thinking: "static-check", currentActivity: "inline-signal", streamingAnswer: "text-decode", imageGeneration: "image-scan", waiting: "static-check", completed: "static-check" },
-  research: { thinking: "inline-spark", currentActivity: "inline-signal", streamingAnswer: "text-decode", imageGeneration: "image-scan", waiting: "static-check", completed: "static-check" },
-  science: { thinking: "inline-spark", currentActivity: "inline-signal", streamingAnswer: "text-cascade", imageGeneration: "image-tiles", waiting: "static-check", completed: "static-check" },
+  quiet: { thinking: "aicss-auto", currentActivity: "aicss-auto", streamingAnswer: "text-decode", imageGeneration: "image-scan", waiting: "aicss-auto", completed: "static-check" },
+  research: { thinking: "aicss-auto", currentActivity: "aicss-auto", streamingAnswer: "text-decode", imageGeneration: "image-scan", waiting: "aicss-auto", completed: "static-check" },
+  science: { thinking: "aicss-auto", currentActivity: "aicss-auto", streamingAnswer: "text-cascade", imageGeneration: "image-tiles", waiting: "aicss-auto", completed: "static-check" },
 };
 
 const PROGRESS_SELECT_CLASS = "max-w-none border-transparent focus-visible:border-transparent focus-visible:ring-0 data-[state=open]:border-transparent";

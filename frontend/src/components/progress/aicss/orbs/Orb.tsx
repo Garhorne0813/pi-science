@@ -544,6 +544,8 @@ export interface OrbProps {
   label?: string;
   /** Wraps the orb and its label in a status pill. */
   pill?: boolean;
+  /** Pauses all internal animations while keeping the current geometry visible. */
+  paused?: boolean;
   className?: string;
   style?: CSSProperties;
 }
@@ -553,6 +555,7 @@ export function Orb({
   size = SIZE,
   label,
   pill,
+  paused,
   className,
   style,
 }: OrbProps) {
@@ -561,6 +564,8 @@ export function Orb({
     <span
       className={styles.root + (className ? " " + className : "")}
       data-pill={pill ? "" : undefined}
+      data-paused={paused ? "" : undefined}
+      data-orb-variant={variant}
       style={style}
     >
       <span

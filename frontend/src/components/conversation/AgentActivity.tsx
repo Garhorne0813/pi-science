@@ -8,6 +8,7 @@ import type { PresentedActivity } from "../../lib/conversation/activity-narrativ
 import type { TurnLifecycle } from "../../lib/conversation/turn-presentation";
 import { presentToolActivity } from "../../lib/conversation/activity-presenters";
 import { ProgressVisual, progressPatternShowsText, useProgressAppearance } from "../progress/ProgressVisual";
+import type { ProgressActivityState } from "../progress/progress-activity-map";
 import { cn } from "../../lib/ui";
 
 export function AgentActivity({ blocks, lifecycle = "active" }: { blocks: ToolCallBlock[]; lifecycle?: TurnLifecycle }) {
@@ -38,7 +39,7 @@ export function AgentActivity({ blocks, lifecycle = "active" }: { blocks: ToolCa
 
   return <div id={blocks.length === 1 ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} className="overflow-hidden scroll-mt-4 rounded-card border border-faint">
     <button type="button" aria-expanded={canExpand ? expanded : undefined} onClick={() => canExpand && setExpanded((value) => !value)} className={cn("flex w-full items-center gap-2 rounded-card px-3 py-2.5 text-left text-xs text-muted transition-colors", canExpand && "hover:bg-surface-2")}>
-      <ActivityIcon state={state} slot={visualSlot} config={progressAppearance} label={label} />
+      <ActivityIcon state={state} slot={visualSlot} config={progressAppearance} label={label} activityState={activityStateFor(lifecycle, shown)} />
       <span aria-live="polite" aria-atomic="true" className={cn("min-w-0 flex-1 truncate", state === "error" && "text-error-text")}>{!progressPatternShowsText(visualSlot, progressAppearance) && label}</span>
       {lifecycle === "settled" && <span className="shrink-0 font-mono text-[10px] text-muted/60" aria-label={t("conversation.activity.operationCount", { count })}>{count}</span>}
       {canExpand && <ChevronRight size={13} aria-hidden className={cn("shrink-0 text-muted/60 transition-transform", expanded && "rotate-90")} />}
@@ -90,9 +91,15 @@ function narrativeLabel(activity: PresentedActivity, t: (key: string) => string)
   return translated === domainKey ? t(`conversation.activity.narrative.${activity.state}`) : translated;
 }
 
-function ActivityIcon({ state, slot, config, label }: { state: "waiting" | "running" | "error" | "stopped" | "completed"; slot: "thinking" | "currentActivity" | "waiting"; config: import("@pi-science/contracts").ProgressAppearance; label: string }) {
-  if (state === "running") return <ProgressVisual slot={slot} config={config} text={label} />;
-  if (state === "waiting") return <ProgressVisual slot="waiting" config={config} state="waiting" text={label} />;
+function activityStateFor(lifecycle: TurnLifecycle, activity: PresentedActivity | null): ProgressActivityState {
+  if (lifecycle === "recovering") return "recover";
+  if (lifecycle === "waiting") return "interaction";
+  return activity?.state ?? "orient";
+}
+
+function ActivityIcon({ state, slot, config, label, activityState }: { state: "waiting" | "running" | "error" | "stopped" | "completed"; slot: "thinking" | "currentActivity" | "waiting"; config: import("@pi-science/contracts").ProgressAppearance; label: string; activityState: ProgressActivityState }) {
+  if (state === "running") return <ProgressVisual slot={slot} config={config} activityState={activityState} text={label} />;
+  if (state === "waiting") return <ProgressVisual slot="waiting" config={config} state="waiting" activityState={activityState} text={label} />;
   if (state === "completed") return <ProgressVisual slot="completed" config={config} state="completed" text={label} />;
   if (state === "error" || state === "stopped") return <CircleX size={14} aria-hidden className={cn("shrink-0", state === "error" ? "text-error-text" : "text-muted")} />;
   return <span aria-hidden className="shrink-0 text-sm font-medium text-warn">!</span>;

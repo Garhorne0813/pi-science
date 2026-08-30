@@ -1,4 +1,4 @@
-import type { ProgressAppearance } from "@pi-science/contracts";
+import { defaultProgressAppearance, type ProgressAppearance } from "@pi-science/contracts";
 
 export type ProgressSlot = keyof ProgressAppearance["patterns"];
 
@@ -17,6 +17,7 @@ const AICSS_ORB_NAMES = ["S1", "S2", "S3", "S4", "S5", "B1", "B2", "B3", "B4", "
 
 export const PROGRESS_PATTERN_CATALOG: ProgressPatternDefinition[] = [
   { id: "static-check", labelKey: "settings.progress.pattern.static", source: "pi-science", kind: "static", slots: ["thinking", "waiting", "completed"] },
+  { id: "aicss-auto", labelKey: "settings.progress.pattern.aicss.auto", source: "aicss", kind: "orb", slots: INLINE_SLOTS },
   ...AICSS_ORB_NAMES.map((name): ProgressPatternDefinition => ({ id: `aicss-orb-${name}` as ProgressPatternDefinition["id"], labelKey: `settings.progress.pattern.aicss.${name}`, source: "aicss", kind: "orb", slots: INLINE_SLOTS })),
   ...(["glyph", "matrix", "orbit", "ripple", "signal", "spark", "rotor", "pixel-drift", "chomp", "snake", "fold", "gravity", "domino", "aperture"] as const).map((name): ProgressPatternDefinition => ({ id: `inline-${name}` as ProgressPatternDefinition["id"], labelKey: `settings.progress.pattern.${name}`, source: "generative-loaders", kind: "inline", slots: INLINE_SLOTS })),
   ...(["decode", "typewriter", "skeleton", "cascade", "focus", "wipe", "flip", "redact", "line", "terminal", "wave", "dissolve", "slice", "tracking", "coalesce", "fragments"] as const).map((name): ProgressPatternDefinition => ({ id: `text-${name}` as ProgressPatternDefinition["id"], labelKey: `settings.progress.pattern.${name}`, source: "generative-loaders", kind: "text", slots: TEXT_SLOTS })),
@@ -29,9 +30,14 @@ export function patternsForSlot(slot: ProgressSlot): ProgressPatternDefinition[]
 
 export function normalizeProgressAppearance(config: ProgressAppearance): ProgressAppearance {
   const next = structuredClone(config);
+  if (next.preset !== "custom") {
+    if (next.patterns.thinking === "static-check" || next.patterns.thinking === "inline-spark") next.patterns.thinking = "aicss-auto";
+    if (next.patterns.currentActivity === "inline-signal") next.patterns.currentActivity = "aicss-auto";
+    if (next.patterns.waiting === "static-check") next.patterns.waiting = "aicss-auto";
+  }
   for (const slot of Object.keys(next.patterns) as ProgressSlot[]) {
     const options = patternsForSlot(slot);
-    if (!options.some((pattern) => pattern.id === next.patterns[slot])) next.patterns[slot] = options[0].id;
+    if (!options.some((pattern) => pattern.id === next.patterns[slot])) next.patterns[slot] = defaultProgressAppearance.patterns[slot];
   }
   return next;
 }

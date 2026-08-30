@@ -64,6 +64,10 @@ describe("Narrative Progress reducer", () => {
     expect(transitions(blocks)).toEqual(["explore:science", "implementation:science"]);
   });
 
+  it("uses a generation epoch for image output", () => {
+    expect(selectDisplayedActivity([tool("image_gen", "image", "running")])).toMatchObject({ state: "generate", domain: "document" });
+  });
+
   it("uses standalone verify when no mutation epoch exists", () => {
     expect(selectDisplayedActivity([tool("bash", "b", "running", { input: { description: "Run tests" } })])).toMatchObject({ state: "verify", domain: "code" });
   });

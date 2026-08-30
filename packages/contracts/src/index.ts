@@ -54,13 +54,14 @@ export const toolPresentationSchema = z.object({
   description: z.string().optional(),
   importance: z.enum(["micro", "stage", "interrupt"]),
   domain: z.enum(["code", "research", "science", "document", "data", "generic"]),
-  narrativeHint: z.object({ state: z.enum(["explore", "research", "analyze", "implementation", "compute", "verify"]).optional(), finalVerification: z.boolean().optional() }).optional(),
+  narrativeHint: z.object({ state: z.enum(["explore", "research", "analyze", "implementation", "compute", "verify", "generate"]).optional(), finalVerification: z.boolean().optional() }).optional(),
   locations: z.array(z.object({ path: z.string().optional(), line: z.number().int().optional(), uri: z.string().optional() })).optional(),
 });
 export type ToolPresentation = z.infer<typeof toolPresentationSchema>;
 
 export const progressPatternIdSchema = z.enum([
   "static-check",
+  "aicss-auto",
   "aicss-orb-S1", "aicss-orb-S2", "aicss-orb-S3", "aicss-orb-S4", "aicss-orb-S5", "aicss-orb-B1", "aicss-orb-B2", "aicss-orb-B3", "aicss-orb-B4", "aicss-orb-B5", "aicss-orb-C1", "aicss-orb-C2", "aicss-orb-C3", "aicss-orb-C4", "aicss-orb-C5", "aicss-orb-G1", "aicss-orb-G2", "aicss-orb-G3", "aicss-orb-G4", "aicss-orb-G5", "aicss-orb-M1", "aicss-orb-M2", "aicss-orb-M3", "aicss-orb-M4", "aicss-orb-M5",
   "inline-glyph", "inline-matrix", "inline-orbit", "inline-ripple", "inline-signal", "inline-spark", "inline-rotor", "inline-pixel-drift", "inline-chomp", "inline-snake", "inline-fold", "inline-gravity", "inline-domino", "inline-aperture",
   "text-decode", "text-typewriter", "text-skeleton", "text-cascade", "text-focus", "text-wipe", "text-flip", "text-redact", "text-line", "text-terminal", "text-wave", "text-dissolve", "text-slice", "text-tracking", "text-coalesce", "text-fragments",
@@ -74,18 +75,18 @@ export const progressAppearanceSchema = z.object({
   colorMode: z.enum(["semantic", "custom"]).default("semantic"),
   customColor: z.string().nullable().default(null),
   patterns: z.object({
-    thinking: progressPatternIdSchema.default("static-check"),
-    currentActivity: progressPatternIdSchema.default("inline-signal"),
+    thinking: progressPatternIdSchema.default("aicss-auto"),
+    currentActivity: progressPatternIdSchema.default("aicss-auto"),
     streamingAnswer: progressPatternIdSchema.default("text-decode"),
     imageGeneration: progressPatternIdSchema.default("image-scan"),
-    waiting: progressPatternIdSchema.default("static-check"),
+    waiting: progressPatternIdSchema.default("aicss-auto"),
     completed: progressPatternIdSchema.default("static-check"),
   }).default({
-    thinking: "static-check",
-    currentActivity: "inline-signal",
+    thinking: "aicss-auto",
+    currentActivity: "aicss-auto",
     streamingAnswer: "text-decode",
     imageGeneration: "image-scan",
-    waiting: "static-check",
+    waiting: "aicss-auto",
     completed: "static-check",
   }),
 });

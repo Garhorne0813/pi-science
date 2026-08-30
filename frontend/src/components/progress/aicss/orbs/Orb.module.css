@@ -58,6 +58,10 @@
 }
 
 /* The inline pill form - same component, wrapped. */
+.root[data-paused] * {
+  animation-play-state: paused !important;
+}
+
 .root[data-pill] {
   gap: 7px;
   height: 30px;
