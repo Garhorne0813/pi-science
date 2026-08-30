@@ -21,11 +21,11 @@ afterEach(async () => {
 
 describe("egress audit", () => {
   it("records one JSONL entry with normalized domain and timestamp", async () => {
-    await recordEgress({ connector_type: "literature", connector_id: "pubmed", target_domain: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils?term=x", approved: true });
+    await recordEgress({ connector_type: "connector", connector_id: "pubmed", target_domain: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils?term=x", approved: true });
     const lines = (await readFile(configPath("egress-audit.jsonl"), "utf8")).trim().split("\n");
     expect(lines).toHaveLength(1);
     const entry = JSON.parse(lines[0]!) as Record<string, unknown>;
-    expect(entry.connector_type).toBe("literature");
+    expect(entry.connector_type).toBe("connector");
     expect(entry.connector_id).toBe("pubmed");
     expect(entry.target_domain).toBe("eutils.ncbi.nlm.nih.gov");
     expect(entry.approved).toBe(true);

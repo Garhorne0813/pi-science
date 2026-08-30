@@ -17,7 +17,8 @@ flowchart LR
     CP -->|按需 spawn| K[原生 Python 和 R 内核]
     CP --> DB[(全局 state.sqlite)]
     CP --> WS[(工作区文件和 .pi-science 元数据)]
-    CP -->|有界出站 HTTP| EXT[已配置的模型与文献服务]
+    CP -->|有界出站 HTTP| EXT[已配置的模型服务]
+    PH -->|paper-search MCP| LIT[文献服务]
     PH --> WS
     K --> WS
 ```
@@ -242,7 +243,7 @@ flowchart LR
   的 runtime 恢复 session。
 - 多个 writer 可能更新同一记录时，项目本地元数据使用经过校验的路径、原子写入和
   advisory lock；全局状态变更通过 SQLite worker 中的 repository 操作串行化。
-- 模型提供商以及用户显式触发的文献/连接器操作可能向本机外发送请求。端点 URL 不允许
+- 模型提供商以及用户显式触发的 MCP/连接器操作可能向本机外发送请求。端点 URL 不允许
   嵌入凭据；健康检查限制重定向次数、响应大小和超时时间，跨 origin 跳转不会携带敏感
   header。为支持本地模型服务，默认允许私网端点；设置
   `PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS=0` 可以拒绝私网地址。

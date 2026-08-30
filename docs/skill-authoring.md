@@ -56,4 +56,4 @@ license: Apache-2.0       # 必须显式声明（内置技能缺失 = 校验失�
 
 - 技能目录由 `seedWorkspaceAssets` 完整镜像到工作区 `.pi/skills/<name>/`；源树中的符号链接不会被复制；目标侧残留的符号链接或类型不匹配条目（树根或任意嵌套层级）会被先移除再重建，绝不穿透链接写入或删除外部位置；失效/过期文件会被清理
 - **警告：内置技能目录（`.pi/skills/<builtin>/`）是完全托管区**。seed 会清理其中所有无上游对应的文件（每次清理都会输出 `removing stale seeded entry` 日志）；请勿在其中放置自定义文件，自定义技能请放在独立目录（不随 seed 管理的位置）
-- 技能通过 Pi 的 `--skill` 注入；MCP 工具优先时在正文写明探测/回退策略（参考 `literature-review`）
+- 技能通过 Pi 的 `--skill` 注入；依赖 MCP 时应在 frontmatter 声明 `required_mcp_tools`，并在正文说明不可用时的失败行为（参考 `literature-review`）

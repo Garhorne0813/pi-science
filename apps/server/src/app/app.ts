@@ -21,7 +21,6 @@ import { registerNotebookRoutes } from "../http/routes/notebook-routes.js";
 import { knownWorkspacePaths, registerCatalogRoutes, rootDir } from "../http/routes/catalog-routes.js";
 import { registerProjectRoutes } from "../http/routes/project-routes.js";
 import { registerResearchRoutes } from "../http/routes/research-routes.js";
-import { registerLiteratureRoutes } from "../http/routes/literature-routes.js";
 import { createServerModules, type ServerModules } from "./server-modules.js";
 import { registerEnvironmentRoutes } from "../http/routes/environment-routes.js";
 import { serveFrontend } from "../http/frontend-static.js";
@@ -163,7 +162,6 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     registerProjectRoutes(app, projectReview);
     registerResearchRoutes(app, research);
   }
-  if (config.nodeLiterature !== false) registerLiteratureRoutes(app);
   app.addHook("onReady", async () => {
     if (sqliteEnabled) {
       try {

@@ -15,6 +15,7 @@ import type { WorkspaceRepository } from "../../storage/sqlite/repositories/work
 import { findExecutable, pathIsInside, userHome } from "../../support/platform-utils.js";
 import { defaultPythonExecutable } from "../../runtime/workspace/workspace-environment.js";
 import { ensureProject, updateProject } from "../../project/project-registry.js";
+import { resolveMcpConfig } from "../../catalog/mcp-config.js";
 
 function q(request: { query: unknown }, key: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[key]; return typeof value === "string" && value ? value : fallback; }
 async function ws(request: { query: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): Promise<string | null> { try { return await validateWorkspaceCwd(q(request, "cwd")); } catch (error) { reply.code(403).send({ error: String(error) }); return null; } }
@@ -296,14 +297,8 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
   });
 
 async function loadMcpDefinitions(root: string): Promise<{ definitions: Record<string, unknown>; source: string | null }> {
-  const paths = [join(root, ".mcp.json"), join(root, ".pi", "mcp.json"), configPath("mcp.json")];
-  for (const path of paths) {
-    try {
-      const definitions = ((JSON.parse(await readFile(path, "utf8")) as { mcpServers?: unknown }).mcpServers ?? {}) as Record<string, unknown>;
-      return { definitions, source: path };
-    } catch { /* try next */ }
-  }
-  return { definitions: {}, source: null };
+  const config = await readJson<{ mcp_config_path?: unknown }>(configPath("config.json"), {});
+  return resolveMcpConfig({ workspaceRoot: root, explicitPath: typeof config.mcp_config_path === "string" ? config.mcp_config_path : undefined });
 }
 
 function summarizeMcpServers(definitions: Record<string, unknown>, enabled: ReadonlySet<string>): Array<Record<string, unknown>> {

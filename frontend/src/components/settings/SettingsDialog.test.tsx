@@ -67,6 +67,15 @@ describe("SettingsDialog", () => {
     expect(await screen.findByText("Global settings")).toBeInTheDocument();
   });
 
+  it("renders the settings navigation without a second lazy-loading boundary", () => {
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(() => undefined));
+    renderDialog();
+    openSettings(null);
+
+    expect(screen.getByRole("tablist", { name: "Settings" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "General" })).toBeInTheDocument();
+  });
+
   it("shows the workspace scope label when opened from a workspace", async () => {
     renderDialog();
     openSettings("proj");

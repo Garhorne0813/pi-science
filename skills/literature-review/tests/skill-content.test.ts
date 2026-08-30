@@ -2,9 +2,9 @@
  * Content and metadata tests for the builtin literature-review skill.
  *
  * Validates the real SKILL.md against the server skill catalog (frontmatter
- * schema, no hard MCP requirement, third-party disclosures) and asserts the
- * zero-configuration direct API commands and the mandatory citation output
- * convention are documented. Run from the server package:
+ * schema, paper-search MCP requirements, third-party disclosures) and asserts
+ * the retrieval workflow and mandatory citation output convention are
+ * documented. Run from the server package:
  *
  *   pnpm --filter @pi-science/server exec vitest run --dir ../../skills/literature-review/tests
  */
@@ -33,19 +33,16 @@ describe("literature-review skill content", () => {
     expect(validations[0]?.valid).toBe(true);
   });
 
-  it("does not require MCP tools and declares the direct API providers", async () => {
+  it("requires paper-search MCP tools and declares their literature sources", async () => {
     const record = await parseSkill(SKILL_MD, "builtin", SKILLS_ROOT);
     expect(record.metadata.name).toBe("literature-review");
     expect(record.metadata.risk).toBe("low");
-    // MCP connectors are preferred when present but must not be required.
-    expect(record.metadata.required_mcp_tools).toEqual([]);
-
-    const requirementNames = record.metadata.requirements.map((r) => r.name);
-    expect(requirementNames).toContain("network");
-    expect(requirementNames).toContain("curl");
-    const curl = record.metadata.requirements.find((r) => r.name === "curl");
-    expect(curl?.kind).toBe("command");
-    expect(curl?.optional).toBe(true);
+    expect(record.metadata.required_mcp_tools).toEqual([
+      "paper_search_search_pubmed",
+      "paper_search_search_arxiv",
+      "paper_search_search_crossref",
+    ]);
+    expect(record.metadata.requirements).toEqual([]);
 
     const services = record.metadata.third_party.map((t) => t.name);
     expect(services).toContain("Crossref REST API");
@@ -56,48 +53,19 @@ describe("literature-review skill content", () => {
     }
   });
 
-  it("documents the retrieval strategy and exact direct API commands", async () => {
+  it("documents the paper-search-only retrieval strategy", async () => {
     const body = await readFile(SKILL_MD, "utf8");
 
-    // MCP preferred, direct APIs as the zero-config fallback, no memory answers.
-    expect(body).toContain("literature.search");
+    expect(body).toContain("paper-search");
+    expect(body).toContain("paper_search_search_pubmed");
+    expect(body).toContain("paper_search_search_arxiv");
+    expect(body).toContain("paper_search_search_crossref");
     expect(body).toContain("Never answer from memory");
     expect(body).toContain("never invent a DOI");
     expect(body).toContain("Never silently substitute memory");
-
-    // Local control-plane gateway with the sensitive-term hard gate.
-    expect(body).toContain("/api/literature/search");
-    expect(body).toContain("/api/literature/approve");
-    expect(body).toContain("approvedToken");
-    expect(body).toContain("\"blocked\": true");
-    expect(body).toContain("no request leaves the machine");
-    expect(body).toContain("expires after 5 minutes");
-    expect(body).toContain("single-use");
-    expect(body).toContain("PI_SCIENCE_PORT");
-
-    // Gateway provider coverage and disclosed outbound domains.
-    expect(body).toContain("rest.uniprot.org");
-    expect(body).toContain("pubchem.ncbi.nlm.nih.gov");
-    expect(body).toContain("Crossref, which remains direct-curl-only");
-
-    // Crossref command shape and polite-pool convention.
-    expect(body).toContain(
-      'curl -s "https://api.crossref.org/works?query=<terms>&rows=10&select=DOI,title,author,issued,container-title,is-referenced-by-count"',
-    );
-    expect(body).toContain("mailto");
-
-    // arXiv command shape and sort options.
-    expect(body).toContain('curl -s "https://export.arxiv.org/api/query?search_query=all:<terms>&max_results=10"');
-    expect(body).toContain("sortBy=relevance");
-    expect(body).toContain("sortBy=submittedDate");
-
-    // PubMed E-utilities two-step flow and no-key rate limit.
-    expect(body).toContain(
-      'curl -s "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=<terms>&retmode=json&retmax=10"',
-    );
-    expect(body).toContain("esummary.fcgi");
-    expect(body).toContain("efetch.fcgi");
-    expect(body).toContain("3 requests/second");
+    expect(body).toContain("do not call a Pi-Science literature HTTP gateway");
+    expect(body).not.toContain("/api/literature/");
+    expect(body).not.toContain("curl -s");
 
     // Result handling rules.
     expect(body).toContain("Deduplicate across providers");
@@ -137,7 +105,11 @@ describe("literature-review skill content", () => {
       expect(skill).toBeDefined();
       expect(skill?.source).toBe("builtin");
       expect(skill?.validation.valid).toBe(true);
-      expect(skill?.required_mcp_tools).toEqual([]);
+      expect(skill?.required_mcp_tools).toEqual([
+        "paper_search_search_pubmed",
+        "paper_search_search_arxiv",
+        "paper_search_search_crossref",
+      ]);
     } finally {
       if (oldSkillsDir === undefined) delete process.env.PI_SCIENCE_SKILLS_DIR;
       else process.env.PI_SCIENCE_SKILLS_DIR = oldSkillsDir;
@@ -181,6 +153,6 @@ describe("literature-review skill content", () => {
     const allRequired = new Set(fixtures.flatMap((f) => f.required_outputs ?? []));
     expect(allRequired.has("references_section")).toBe(true);
     expect(allRequired.has("inline_identifier_citations")).toBe(true);
-    expect(allRequired.has("direct_api_search_record")).toBe(true);
+    expect(allRequired.has("mcp_search_record")).toBe(true);
   });
 });

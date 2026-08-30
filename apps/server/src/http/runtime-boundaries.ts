@@ -26,7 +26,6 @@ export const routeBoundaries: readonly RouteBoundary[] = [
   { prefix: "/api/research-events", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/artifacts", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/citations", owner: "node-control-plane", availability: "native" },
-  { prefix: "/api/literature", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/mcp", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/jobs", owner: "node-control-plane", availability: "native" },
   { prefix: "/api/environments", owner: "node-control-plane", availability: "native" },

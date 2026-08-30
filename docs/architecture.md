@@ -18,7 +18,8 @@ flowchart LR
     CP -->|spawn on demand| K[Native Python and R kernels]
     CP --> DB[(Global state.sqlite)]
     CP --> WS[(Workspace files and .pi-science metadata)]
-    CP -->|bounded outbound HTTP| EXT[Configured model and literature services]
+    CP -->|bounded outbound HTTP| EXT[Configured model services]
+    PH -->|paper-search MCP| LIT[Literature services]
     PH --> WS
     K --> WS
 ```
@@ -290,7 +291,7 @@ new writes use the canonical resource services.
 - Project-local metadata uses validated paths, atomic writes, and advisory locks
   where multiple writers may update the same record. Global state mutations are
   serialized through repository operations in the SQLite worker.
-- Model providers and explicit literature/connector actions may send requests
+- Model providers and explicit MCP/connector actions may send requests
   outside the machine. Endpoint URLs reject embedded credentials; health probes
   have redirect, response-size, and timeout limits, and cross-origin redirects
   cannot retain sensitive headers. Private endpoints are allowed by default for

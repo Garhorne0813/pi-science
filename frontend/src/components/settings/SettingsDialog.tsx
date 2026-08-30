@@ -1,14 +1,9 @@
-import { lazy, Suspense, useEffect, useRef } from "react";
-import { X } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { useUiStore } from "../../lib/ui";
-import { IconButton } from "../ui/Icon";
-
-/** The settings content (vertical nav + tabs) is the heavy part; it only
- *  loads once the dialog is first opened. */
-const SettingsContent = lazy(() => import("./SettingsContent").then((m) => ({ default: m.SettingsContent })));
+import { SettingsContent } from "./SettingsContent";
 
 /** Floating settings dialog: one instance mounted at the layout root,
  *  driven entirely by the UI store, floating above every page. */
@@ -80,30 +75,7 @@ export function SettingsDialog() {
           "rounded-none border-0 shadow-none md:h-[min(86vh,860px)] md:w-[min(920px,calc(100vw-32px))] md:rounded-large md:border md:shadow-pop",
         )}
       >
-        <Suspense fallback={(
-          <div className="flex min-h-0 min-w-0 flex-1">
-            <div className="flex w-14 shrink-0 flex-col border-r border-faint bg-sidebar px-2.5 pt-panel pb-panel md:w-[188px] md:px-3 md:pt-[22px] md:pb-0" />
-            <div className="settings-page min-w-0 flex-1 overflow-y-auto">
-              <div className="mx-auto flex min-h-full w-full max-w-[820px] flex-col md:px-6">
-                <header className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-card border-b border-faint bg-surface-raised px-card py-panel md:px-0 md:py-4">
-                  <h1 className="text-ui-title font-medium tracking-tight text-text">{t("nav.settings")}</h1>
-                  <IconButton
-                    icon={X}
-                    label={t("common.close")}
-                    size="standard"
-                    className="h-7 w-7 rounded-full hover:bg-surface-hover"
-                    onClick={closeSettings}
-                  />
-                </header>
-                <div className="flex min-h-0 flex-1 items-center justify-center px-card py-card text-sm text-muted md:px-6 md:py-6">
-                  {t("common.loading")}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}>
-          <SettingsContent scope={settingsScope} onClose={closeSettings} />
-        </Suspense>
+        <SettingsContent scope={settingsScope} onClose={closeSettings} />
       </div>
     </div>
   );

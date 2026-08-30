@@ -26,8 +26,8 @@ Most AI research tools stop at reading and summarizing papers. Pi-Science is bui
 - **Execute, don't just explain.** Python code blocks in any answer run on a real workspace kernel with one click — state persists across blocks, so a conversation is also a live analysis session.
 - **Reproducibility as a side effect, not a virtue.** Every run lands in an event log, artifacts carry sha256 digests, projects bind to versioned Micromamba environments, and results trace back to the code and data that produced them — without changing how you work.
 - **Autonomous research loops with a human in charge.** Describe an objective and a deterministic metric; a supervised agent proposes candidates, executes them in immutable snapshots, evaluates, analyzes, and iterates — with budgets, pause/resume, and crash recovery.
-- **Literature with real, verifiable citations.** Zero-config Crossref/arXiv/PubMed retrieval with inline DOIs rendered as clickable sources — never invented references.
-- **Local-first by architecture.** Workspaces are plain folders on your machine, and project files stay local unless you send content through a configured model or explicitly invoke an external service such as literature search. Fully local endpoints such as Ollama and LM Studio are supported, and connector destinations are recorded in a local egress audit.
+- **Literature with real, verifiable citations.** The paper-search MCP retrieves Crossref/arXiv/PubMed records, with inline DOIs rendered as clickable sources — never invented references.
+- **Local-first by architecture.** Workspaces are plain folders on your machine, and project files stay local unless you send content through a configured model or explicitly invoke an external service such as literature search. Fully local endpoints such as Ollama and LM Studio are supported, and control-plane-managed connector destinations are recorded in a local egress audit.
 
 Each project keeps its own conversations, files, runs, provenance, and reviewed knowledge. Conversations run in isolated runtimes inside a shared Pi host, so multiple sessions continue concurrently without blocking one another.
 
