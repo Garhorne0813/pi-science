@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { attachTurnArtifacts, foldEvent, resetTurnBuffer } from "./event-fold";
-import type { Thread } from "./event-fold";
-import type { PiScienceEvent } from "../client/pi-science-client";
+import { attachTurnArtifacts as attachTurnArtifactsPure, foldEvent, resetTurnBuffer } from "./event-fold";
+import type { ArtifactAttachOptions, Thread } from "./event-fold";
+import type { PiScienceEvent, TurnArtifactTurn } from "../client/pi-science-client";
 
 beforeEach(() => { resetTurnBuffer(); });
+
+function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[], opts: ArtifactAttachOptions = { windowComplete: true }): Thread {
+  return attachTurnArtifactsPure(thread, turns, opts);
+}
 
 function threadWith(blocks: Array<{ kind: string; id: string; [key: string]: unknown }>): Thread {
   const index: Record<string, number> = {};

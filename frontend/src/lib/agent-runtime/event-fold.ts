@@ -499,41 +499,17 @@ function afterAssistantTurnEnd(blocks: ThreadBlock[], assistantMessageId: string
   return lastAgent >= 0 ? lastAgent + 1 : spanEnd;
 }
 
-/** Attach persisted per-turn artifact summaries to a history-built thread.
- *  Idempotent per turn id: when the strip is already present it is updated in
- *  place when its position is correct, otherwise it is repositioned to the
- *  right place (SSE replay may have inserted it at a fallback position before
- *  the full history arrived).
- *
- *  Anchoring order: exact assistant message id → ended_at timestamp (end of
- *  the turn that finished at that time, delimited by timestamped user
- *  messages) → turn_ordinal (end of the n-th turn) → record order fallback
- *  → end of thread. Turns spanning several assistant messages anchor after
- *  the LAST one (Pi emits anonymous part ids without a message id); when
- *  user boundaries are unavailable (paged history), the timestamp path uses
- *  the last matching agent block or falls back to the n-th agent block.
- *
- *  Legacy-data compatibility: records persisted before turn ordinals were
- *  derived from the persisted log (runtime rebuilds used to reset the
- *  counter) can carry duplicate ordinals (e.g. two records with
- *  turn_ordinal=1). The ended_at anchor is independent of ordinals, so mixed
- *  sequences such as [1,1,2] with an intervening record-less turn still land
- *  every strip in its own turn; ordinals are only consulted when timestamp
- *  anchoring cannot find a matching agent block. When an ordinal repeats,
- *  every LATER record falls back to its record position (the M-th record
- *  anchors the M-th turn). */
-export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[], opts: { windowComplete?: boolean } = {}): Thread {
-  // `windowComplete` marks that the thread window holds the full history
-  // (`has_more === false`). Only then are the guess-based anchors (turn
-  // ordinal, record order, thread end) allowed: in a partial window they
-  // count user blocks from the window start and reliably land the strip on
-  // a NEWER turn. A partial window defers unresolvable records instead;
-  // the strip is placed by a later attach once its history page is
-  // prepended (loadHistoryPage re-runs this after every page).
-  const windowComplete = opts.windowComplete !== false;
+/** Controls whether position-based compatibility anchors are safe. */
+export interface ArtifactAttachOptions {
+  windowComplete: boolean;
+}
+
+/** Attach persisted artifact summaries to their turn ends. */
+export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[], opts: ArtifactAttachOptions): Thread {
+  const windowComplete = opts.windowComplete;
   if (!turns || turns.length === 0) return thread;
-  let blocks = thread.blocks;
-  let index = thread.index;
+  let blocks = [...thread.blocks];
+  let index = { ...thread.index };
   let changed = false;
   let insertedBefore = blocks.filter((b) => b.kind === "artifact-summary").length;
   const usedOrdinals = new Set<number>();
