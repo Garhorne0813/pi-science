@@ -65,7 +65,7 @@ function AgentMessage({ block, actionText, codeRunner }: { block: AgentMessageBl
   const text = parseSuggestions(rawText).clean;
   const citations = extractCitations(text);
   return <div className="group/message">
-    {block.partial && <div className="mb-1 flex h-5 items-center"><ProgressVisual slot="streamingAnswer" config={progressAppearance} text={t("conversation.activity.streaming")} compact /></div>}
+    {block.partial && <div className="mb-1 flex h-5 items-center gap-2" role="status"><span aria-hidden><ProgressVisual slot="streamingAnswer" config={progressAppearance} text="AI" compact /></span><span className="text-xs text-muted">{t("conversation.activity.streaming")}</span></div>}
     <MarkdownViewer variant="chat" codeRunner={codeRunner}>{text}</MarkdownViewer>
     {citations.length > 0 && <div className="mt-2 flex flex-wrap items-center gap-1.5">
       <span className="text-[10px] text-muted">{t("conversation.sources")} ({citations.length})</span>
