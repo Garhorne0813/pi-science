@@ -4,6 +4,16 @@ import type { SettingsConfig } from "../../lib/settings";
 
 function clampCompactionThreshold(value: number): number { return Math.min(95, Math.max(50, value)); }
 
+function compactionPointTokens(contextWindow: number, threshold: number, maxOutputTokens: number | null): number {
+  const thresholdReserve = Math.round(contextWindow * (1 - threshold / 100));
+  const outputReserve = Math.min(32_000, Math.max(8_192, maxOutputTokens ?? 16_384));
+  const overhead = Math.min(16_384, Math.max(4_096, Math.round(contextWindow * 0.04)));
+  const reserve = Math.max(thresholdReserve, outputReserve + overhead);
+  return Math.max(1_024, contextWindow - Math.min(contextWindow - 1_024, reserve));
+}
+
+
+
 export function ContextManagementSection({ config, saving, onSave }: { config: SettingsConfig; saving: boolean; onSave: (enabled: boolean, threshold: number) => Promise<void> }) {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useState(config.compaction_enabled !== false);
@@ -59,12 +69,16 @@ export function ContextManagementSection({ config, saving, onSave }: { config: S
 
   const selectedModel = config.available_models.find((model) => model.id === config.model);
   const contextWindow = selectedModel?.context_window || config.model_context_window || null;
-  const thresholdTokens = contextWindow ? Math.round(contextWindow * threshold / 100) : null;
+  const maxOutputTokens = selectedModel?.max_output_tokens || config.model_max_output_tokens || null;
+  const thresholdTokens = contextWindow ? compactionPointTokens(contextWindow, threshold, maxOutputTokens) : null;
 
   return (
-    <section className="overflow-hidden rounded-card border border-faint bg-surface-2/40">
-      <div className="flex min-h-14 items-center justify-between gap-3 border-b border-faint px-4 py-2">
-        <h2 className="text-[13px] font-semibold text-text">{t("settings.context.title")}</h2>
+    <section className="border-y border-faint">
+      <div className="flex min-h-14 items-center justify-between gap-3 border-b border-faint py-3">
+        <div>
+          <h2 className="text-[13px] font-semibold text-text">{t("settings.context.title")}</h2>
+          <p className="mt-1 text-ui-meta text-muted">{t("settings.context.description")}</p>
+        </div>
         <label className="flex cursor-pointer items-center gap-2 text-[11px] text-text">
           <span>{t("settings.context.autoCompact")}</span>
           <span className="relative inline-flex h-5 w-9 shrink-0 rounded-full bg-surface-2 transition-colors has-[:checked]:bg-accent-fill">
@@ -73,7 +87,7 @@ export function ContextManagementSection({ config, saving, onSave }: { config: S
           </span>
         </label>
       </div>
-      <div className="px-4 py-3">
+      <div className="py-3">
         <div className="flex items-center justify-between gap-3">
           <label htmlFor="compaction-threshold" className="text-[12px] font-medium text-text">{t("settings.context.threshold")}</label>
           <output className="font-mono text-[11px] text-text">{threshold}%</output>

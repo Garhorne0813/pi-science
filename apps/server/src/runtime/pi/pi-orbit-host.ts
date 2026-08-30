@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import type { PiOrbitCatalog } from "./pi-orbit-catalog.js";
 import type { PiOrbitRuntimeRequest, PiProcessOptions } from "./pi-process.js";
 
 export type PiOrbitRuntimeDescriptor = {
@@ -82,6 +83,12 @@ export class PiOrbitHost extends EventEmitter {
     return this.readyPromise;
   }
 
+  async getCatalog(timeoutMs = this.requestTimeoutMs): Promise<PiOrbitCatalog> {
+    await this.ready();
+    const response = await this.request("GET", "/api/catalog", undefined, timeoutMs);
+    if (!response.ok) throw await this.requestError(response);
+    return response.json() as Promise<PiOrbitCatalog>;
+  }
   async createRuntime(request: PiOrbitRuntimeRequest, timeoutMs = this.requestTimeoutMs): Promise<PiOrbitRuntimeDescriptor> {
     await this.ready();
     await this.trustRegisteredWorkspace(request.cwd, timeoutMs);

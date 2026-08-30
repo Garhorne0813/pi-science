@@ -38,6 +38,9 @@ export class PiManager {
     await process.shutdown();
   }
 
+  async getCatalog(options: PiProcessOptions): Promise<Awaited<ReturnType<PiOrbitHost["getCatalog"]>>> {
+    return (await this.ensureWebHost(options)).getCatalog();
+  }
   async recycleWebHost(): Promise<boolean> {
     if (!this.webHost && !this.webHostStart) return false;
     await this.shutdownAll();
