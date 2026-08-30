@@ -2,7 +2,8 @@
 
 // Source-compatibility re-export for older UI imports. Wire/domain contracts
 // live in @pi-science/contracts and are parsed at the client boundary.
-export type { ExecutionRecord, ProvenanceEnvironment, ProvenanceRecord } from "@pi-science/contracts";
+export type { ExecutionRecord, ProvenanceEnvironment, ProvenanceRecord, ToolPresentation } from "@pi-science/contracts";
+import type { ToolPresentation } from "@pi-science/contracts";
 
 // ── Discriminated union of all block types ──
 
@@ -32,6 +33,7 @@ export interface AgentMessageBlock {
   id: string;
   parts: AgentMessagePart[];
   partial?: boolean;
+  presentationRole?: "intermediate" | "final";
   timestamp?: string;
   subagentId?: string;
 }
@@ -54,6 +56,7 @@ export interface ToolCallBlock {
   tool: string;
   status: ToolStatus;
   title?: string;
+  presentation?: ToolPresentation;
   input?: Record<string, unknown>;
   output?: string;
   /** Tool-specific metadata from the persisted toolResult message (e.g.

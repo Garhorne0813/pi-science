@@ -481,6 +481,9 @@ describe("runtime session actions", () => {
     expect(useRuntimeStore.getState().working).toBe(false);
     expect(useRuntimeStore.getState().turnLifecycle).toBe("aborted");
     expect(useRuntimeStore.getState().status).toBe("ready");
+
+    FakeEventSource.instances[0].emit("session.idle", { type: "session.idle", sessionId: "session-a" });
+    expect(useRuntimeStore.getState().turnLifecycle).toBe("aborted");
   });
 
   it("clears active conversation state when deleting the active session", async () => {

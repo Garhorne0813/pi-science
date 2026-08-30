@@ -2,7 +2,7 @@ import type { ToolCallBlock } from "../../types/thread";
 import { activityPolicy } from "./activity-policy";
 
 export type NarrativeState = "orient" | "explore" | "research" | "analyze" | "implementation" | "compute" | "verify" | "interaction" | "recover" | "error" | "complete";
-export type NarrativeDomain = "code" | "research" | "science" | "document" | "generic";
+export type NarrativeDomain = "code" | "research" | "science" | "document" | "data" | "generic";
 export type OperationKind = "read" | "search" | "fetch" | "edit" | "execute" | "compute" | "verify" | "interaction" | "recover" | "other";
 
 export interface ToolActivityPresentation {
@@ -11,6 +11,8 @@ export interface ToolActivityPresentation {
   description?: string;
   importance: "micro" | "stage" | "interrupt";
   domain: NarrativeDomain;
+  finalVerification?: boolean;
+  narrativeHint?: Extract<NarrativeState, "explore" | "research" | "analyze" | "implementation" | "compute" | "verify">;
 }
 
 export interface PresentedActivity {
@@ -33,14 +35,15 @@ const FINAL_VERIFY_FIELDS = ["finalVerification", "final_verification"] as const
 
 /** Fold precise tool events into one quiet, task-level progress narrative. */
 export function selectNarrativeActivity(blocks: ToolCallBlock[]): PresentedActivity | null {
+  const entries = blocks.map((block) => ({ block, presentation: toolActivityPresentation(block) })).filter((entry): entry is { block: ToolCallBlock; presentation: ToolActivityPresentation } => entry.presentation !== null);
+  const implementationBusy = entries.some(({ block, presentation }) => block.status === "running" && (presentation.kind === "edit" || presentation.kind === "verify"));
   let current: PresentedActivity | null = null;
   let interrupted: PresentedActivity | null = null;
   let implementationSeen = false;
   let supportBurst = 0;
+  let supportBurstStartedAt: number | null = null;
 
-  for (const block of blocks) {
-    const presentation = toolActivityPresentation(block);
-    if (!presentation) continue;
+  for (const { block, presentation } of entries) {
     const next = narrativeFor(block, presentation, implementationSeen);
     if (!next) continue;
 
@@ -48,6 +51,7 @@ export function selectNarrativeActivity(blocks: ToolCallBlock[]): PresentedActiv
       if (current && current.state !== "interaction" && current.state !== "error" && current.state !== "recover") interrupted = current;
       current = next;
       supportBurst = 0;
+      supportBurstStartedAt = null;
       continue;
     }
     if (current && (current.state === "interaction" || current.state === "error" || current.state === "recover") && interrupted) current = interrupted;
@@ -55,15 +59,20 @@ export function selectNarrativeActivity(blocks: ToolCallBlock[]): PresentedActiv
     if (next.state === "implementation") {
       implementationSeen = true;
       supportBurst = 0;
+      supportBurstStartedAt = null;
       current = next;
       continue;
     }
 
     if (current?.state === "implementation" && presentation.importance === "micro") {
       supportBurst += 1;
-      if (supportBurst < 3) continue;
+      const eventTime = activityTime(block);
+      supportBurstStartedAt ??= eventTime;
+      const burstDuration = eventTime !== null && supportBurstStartedAt !== null ? eventTime - supportBurstStartedAt : 0;
+      if (supportBurst < 3 || burstDuration < 1_500 || implementationBusy) continue;
     } else {
       supportBurst = 0;
+      supportBurstStartedAt = null;
     }
     if (current?.state === "research" && presentation.importance === "micro" && next.state === "explore") continue;
 
@@ -76,6 +85,7 @@ export function selectNarrativeActivity(blocks: ToolCallBlock[]): PresentedActiv
 export function toolActivityPresentation(block: ToolCallBlock): ToolActivityPresentation | null {
   const plane = activityPolicy(block).plane;
   if (plane === "plan-control") return null;
+  if (block.presentation) return fromToolPresentation(block.presentation);
   const tool = block.tool.trim().toLowerCase();
   if (plane === "interaction") {
     if (block.status !== "waiting-approval" && block.status !== "running") return null;
@@ -101,14 +111,33 @@ export function toolActivityPresentation(block: ToolCallBlock): ToolActivityPres
   return kind ? presentation(kind, block, "stage", kind === "compute" ? "science" : kind === "verify" || kind === "edit" ? "code" : "generic", description) : null;
 }
 
+function fromToolPresentation(presentation: ToolCallBlock["presentation"]): ToolActivityPresentation | null {
+  if (!presentation) return null;
+  if (presentation.kind === "artifact" || presentation.kind === "other") return null;
+  if (presentation.kind === "system") return { kind: "recover", title: presentation.title, importance: presentation.importance, domain: presentation.domain };
+  return {
+    kind: presentation.kind,
+    title: presentation.title,
+    ...(presentation.description ? { description: presentation.description } : {}),
+    importance: presentation.importance,
+    domain: presentation.domain,
+    ...(presentation.narrativeHint?.state ? { narrativeHint: presentation.narrativeHint.state } : {}),
+    ...(presentation.narrativeHint?.finalVerification !== undefined ? { finalVerification: presentation.narrativeHint.finalVerification } : {}),
+  };
+}
+
 function narrativeFor(block: ToolCallBlock, presentation: ToolActivityPresentation, implementationSeen: boolean): PresentedActivity | null {
   if (block.status === "error") return activity("error", presentation.domain, block, true);
   if (presentation.kind === "interaction") return activity("interaction", presentation.domain, block, true);
   if (presentation.kind === "recover") return activity("recover", presentation.domain, block, true);
+  if (presentation.narrativeHint) {
+    if (presentation.narrativeHint === "verify" && implementationSeen && !presentation.finalVerification) return activity("implementation", presentation.domain, block);
+    return activity(presentation.narrativeHint, presentation.domain, block);
+  }
   if (presentation.kind === "edit") return activity("implementation", presentation.domain, block);
   if (presentation.kind === "compute") return activity(implementationSeen && presentation.domain === "science" ? "implementation" : "compute", presentation.domain, block);
   if (presentation.kind === "verify") {
-    const finalVerification = FINAL_VERIFY_FIELDS.some((field) => block.input?.[field] === true);
+    const finalVerification = presentation.finalVerification === true || FINAL_VERIFY_FIELDS.some((field) => block.input?.[field] === true);
     return activity(implementationSeen && !finalVerification ? "implementation" : "verify", presentation.domain, block);
   }
   if (presentation.kind === "search" || presentation.kind === "fetch") {
@@ -140,6 +169,13 @@ function domainFor(tool: string): NarrativeDomain {
   if (tool.includes("notebook")) return "science";
   if (tool.includes("document") || tool.includes("artifact")) return "document";
   return "code";
+}
+
+function activityTime(block: ToolCallBlock): number | null {
+  const value = block.startedAt ?? block.endedAt;
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function stringField(value: unknown): string { return typeof value === "string" ? value.trim() : ""; }

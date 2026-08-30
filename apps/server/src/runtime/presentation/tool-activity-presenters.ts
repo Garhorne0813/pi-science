@@ -1,6 +1,34 @@
+import type { ToolPresentation } from "@pi-science/contracts";
+
 const PLAN_TOOLS = new Set(["todo", "plan_update", "task_state", "internal_checkpoint"]);
 const INTERACTION_TOOLS = new Set(["ask_user_question", "permission_request", "request_permission", "confirmation", "authenticate"]);
 
+export function toolActivityPresentation(toolName: string, rawInput: unknown): ToolPresentation | undefined {
+  const tool = toolName.trim().toLowerCase();
+  const input = record(rawInput);
+  const description = text(input.description);
+  if (PLAN_TOOLS.has(tool)) return { version: 1, kind: "other", title: "Update task plan", importance: "micro", domain: "generic" };
+  if (INTERACTION_TOOLS.has(tool)) return { version: 1, kind: "interaction", title: "Needs your input", importance: "interrupt", domain: "generic" };
+  if (tool === "runtime_recovery" || tool === "reconnect") return { version: 1, kind: "system", title: "Resume the task", importance: "interrupt", domain: "generic" };
+  const kind: ToolPresentation["kind"] | null = tool === "read" || tool === "read_file" || tool === "notebook_read" ? "read"
+    : ["grep", "rg", "search", "search_files", "find", "ls", "list_files", "web_search", "tavily_search", "search_web"].includes(tool) ? "search"
+      : ["web_fetch", "fetch"].includes(tool) ? "fetch"
+        : ["edit", "write", "write_file", "apply_patch", "notebook_edit"].includes(tool) ? "edit"
+          : ["notebook", "notebook_run", "run_cell", "execute_code"].includes(tool) ? "compute"
+            : description ? (/(test|vitest|pytest|jest|typecheck|lint|build|check|verify|validate|测试|验证)/i.test(description) ? "verify" : /(analy|analysis|simulate|compute|forecast|model|分析|计算|模拟)/i.test(description) ? "compute" : "execute") : null;
+  if (!kind) return undefined;
+  const domain: ToolPresentation["domain"] = tool.includes("notebook") ? "science" : kind === "search" || kind === "fetch" && ["web_fetch", "fetch"].includes(tool) ? "research" : "code";
+  const title = toolActivityTitle(toolName, rawInput) || description || toolName;
+  return {
+    version: 1,
+    kind,
+    title,
+    ...(description ? { description } : {}),
+    importance: kind === "read" || kind === "search" || kind === "fetch" ? "micro" : "stage",
+    domain,
+    narrativeHint: kind === "edit" ? { state: "implementation" } : kind === "verify" ? { state: "verify" } : kind === "compute" ? { state: "compute" } : undefined,
+  };
+}
 export function toolActivityTitle(toolName: string, rawInput: unknown): string | undefined {
   const tool = toolName.trim().toLowerCase();
   if (!tool || PLAN_TOOLS.has(tool) || INTERACTION_TOOLS.has(tool)) return undefined;

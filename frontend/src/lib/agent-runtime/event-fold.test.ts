@@ -100,6 +100,31 @@ describe("transport event folding", () => {
     );
   });
 
+  it("keeps tool presentation metadata across live updates", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    const source = FakeEventSource.instances[0];
+    const presentation = { version: 1 as const, kind: "verify" as const, title: "Run frontend tests", importance: "stage" as const, domain: "code" as const };
+    source.emit("tool.updated", { type: "tool.updated", sessionId: "session-a", callId: "call-1", tool: "bash", status: "running", presentation });
+    source.emit("tool.updated", { type: "tool.updated", sessionId: "session-a", callId: "call-1", tool: "bash", status: "done" });
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(expect.objectContaining({ presentation }));
+    source.emit("text.updated", {
+      type: "text.updated",
+      sessionId: "session-a",
+      partId: "assistant-final",
+      text: "final",
+      presentationRole: "final",
+    });
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(expect.objectContaining({ kind: "agent", presentationRole: "final" }));
+
+  });
+
   it("renders compaction start, completion, and failure state", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -158,6 +183,15 @@ describe("conversation history conversion", () => {
     ]);
   });
 
+  it("restores tool and assistant presentation metadata from history", () => {
+    const presentation = { version: 1 as const, kind: "verify" as const, title: "Run frontend tests", importance: "stage" as const, domain: "code" as const };
+    const blocks = convertHistoryToBlocks([
+      { id: "assistant-1", role: "assistant", presentationRole: "final", content: [{ type: "text", text: "answer" }, { type: "toolCall", id: "call-1", name: "bash", presentation }] },
+      { id: "result-1", role: "toolResult", toolCallId: "call-1", toolName: "bash", content: [{ type: "text", text: "done" }], presentation },
+    ]);
+    expect(blocks).toContainEqual(expect.objectContaining({ kind: "agent", presentationRole: "final" }));
+    expect(blocks).toContainEqual(expect.objectContaining({ kind: "tool", presentation }));
+  });
   it("carries toolResult details through so panels can rebuild tool state", () => {
     const blocks = convertHistoryToBlocks([
       {

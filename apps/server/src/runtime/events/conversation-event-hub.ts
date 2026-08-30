@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { durableEventStore, type EventPublishGuard, type SseEventRecord } from "./event-store.js";
 import type { PiEvent, PiProcess } from "../pi/pi-process.js";
-import { toolActivityTitle } from "../presentation/tool-activity-presenters.js";
+import { toolActivityPresentation, toolActivityTitle } from "../presentation/tool-activity-presenters.js";
 
 type Subscriber = {
   ready: boolean;
@@ -120,7 +120,7 @@ function textSnapshot(value: unknown, contentIndex: number): string | undefined 
   return record.type === "text" && typeof record.text === "string" ? record.text : undefined;
 }
 
-function assistantText(event: PiEvent): { type: string; text: string; snapshot?: string; messageId: string; contentIndex: string } | null {
+function assistantText(event: PiEvent): { type: string; text: string; snapshot?: string; messageId: string; contentIndex: string; presentationRole?: "intermediate" | "final" } | null {
   if (event.type !== "message_update") return null;
   const assistant = event.assistantMessageEvent as Record<string, unknown> | undefined;
   if (!assistant) return null;
@@ -139,12 +139,14 @@ function assistantText(event: PiEvent): { type: string; text: string; snapshot?:
   // correct. `event.message` is a compatibility fallback for older runtimes.
   const snapshot = textSnapshot(assistant.partial, contentIndex)
     ?? textSnapshot(message, contentIndex);
+  const role = assistant.presentationRole ?? message?.presentationRole;
   return {
     type,
     text,
     ...(snapshot === undefined ? {} : { snapshot }),
     messageId: typeof message?.id === "string" ? message.id : "",
     contentIndex: String(assistant.contentIndex ?? "0"),
+    ...(role === "final" || role === "intermediate" ? { presentationRole: role } : {}),
   };
 }
 
@@ -556,7 +558,7 @@ export class ConversationEventHub {
       }
       if (text.text.trim() || accumulated.trim()) turn.hadText = true;
       if (!emitted && !replace) return [];
-      return [{ type: "text.updated", sessionId, partId: messageKey, text: cap(emitted), ...(replace ? { replace: true } : {}) }];
+      return [{ type: "text.updated", sessionId, partId: messageKey, text: cap(emitted), ...(text.presentationRole ? { presentationRole: text.presentationRole } : {}), ...(replace ? { replace: true } : {}) }];
     }
 
     const exactError = modelError(event);
@@ -573,7 +575,8 @@ export class ConversationEventHub {
           ? message.id
           : `anonymous-${++turn.anonymousSerial}`;
         turn.activeAnonymousKey = typeof message.id === "string" && message.id ? null : partId;
-        return [{ type: "text.updated", sessionId, partId, text: "" }];
+        const presentationRole = message?.presentationRole === "final" || message?.presentationRole === "intermediate" ? message.presentationRole : undefined;
+        return [{ type: "text.updated", sessionId, partId, text: "", ...(presentationRole ? { presentationRole } : {}) }];
       }
       case "tool_execution_start": {
         turn.hadActivity = true;
@@ -585,7 +588,8 @@ export class ConversationEventHub {
           if (questionnaire) records.push(questionnaire);
         }
         const title = toolActivityTitle(tool, event.args);
-        records.push({ type: "tool.updated", sessionId, callId, tool, status: "running", ...(title ? { title } : {}), input: safeValue(event.args ?? {}), startedAt: new Date().toISOString() });
+        const presentation = event.presentation && typeof event.presentation === "object" ? event.presentation : toolActivityPresentation(tool, event.args);
+        records.push({ type: "tool.updated", sessionId, callId, tool, status: "running", ...(title ? { title } : {}), ...(presentation ? { presentation } : {}), input: safeValue(event.args ?? {}), startedAt: new Date().toISOString() });
         return records;
       }
       case "tool_execution_update":
@@ -597,7 +601,8 @@ export class ConversationEventHub {
         const tool = String(event.toolName ?? "");
         const records: Record<string, unknown>[] = [];
         if (tool === "ask_user_question") records.push({ type: "questionnaire.finished", sessionId, toolCallId: callId, cancelled: event.isError === true });
-        records.push({ type: "tool.updated", sessionId, callId, tool, status: event.isError ? "error" : "done", output: cap(event.result), ...(event.details === undefined ? {} : { details: safeValue(event.details) }), endedAt: new Date().toISOString() });
+        const presentation = event.presentation && typeof event.presentation === "object" ? event.presentation : toolActivityPresentation(tool, event.args);
+        records.push({ type: "tool.updated", sessionId, callId, tool, status: event.isError ? "error" : "done", output: cap(event.result), ...(presentation ? { presentation } : {}), ...(event.details === undefined ? {} : { details: safeValue(event.details) }), endedAt: new Date().toISOString() });
         return records;
       }
       case "extension_ui_request": {
