@@ -18,7 +18,7 @@ const tool = (id: string, status: "running" | "done" = "done"): ThreadBlock => (
 });
 
 describe("agent message actions", () => {
-  it("shows one copy action for agent text split by tool calls", () => {
+  it("copies only the final visible answer after tool calls", () => {
     const actions = agentActionTextByBlock([
       user("u1"),
       agent("a-before", "先读取文件。"),
@@ -27,7 +27,7 @@ describe("agent message actions", () => {
     ]);
 
     expect([...actions.entries()]).toEqual([
-      ["a-final", "先读取文件。\n\n读取完成。"],
+      ["a-final", "读取完成。"],
     ]);
   });
 

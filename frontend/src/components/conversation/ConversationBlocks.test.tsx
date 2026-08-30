@@ -1,189 +1,96 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { groupBlocks, renderBlockGroup, renderBlocks } from "./ConversationBlocks";
+import { renderBlocks, renderTurn } from "./ConversationBlocks";
 import i18n from "../../i18n";
 import type { CodeRunner } from "../markdown-viewer/MarkdownViewer";
-import type { ThreadBlock } from "../../types/thread";
+import type { ThreadBlock, ToolCallBlock } from "../../types/thread";
+import { buildTurnPresentations } from "../../lib/conversation/turn-presentation";
 import { useRuntimeStore } from "../../lib/agent-runtime";
-import { todoViewModel } from "../../lib/conversation/todos";
 
 const codeRunner: CodeRunner = { cwd: "proj", sessionId: "s1" };
+const user = (id: string, text = id): ThreadBlock => ({ kind: "user", id, text, timestamp: new Date().toISOString() });
+const agent = (id: string, text: string, partial = false): ThreadBlock => ({ kind: "agent", id, parts: [{ id: `${id}-p0`, text }], ...(partial ? { partial: true } : {}) });
+const tool = (id: string, name: string, status: ToolCallBlock["status"] = "done", input?: Record<string, unknown>): ThreadBlock => ({ kind: "tool", id, callId: `${id}-call`, tool: name, status, input, output: "output" });
 
-function user(id: string, text: string): ThreadBlock {
-  return { kind: "user", id, text, timestamp: new Date().toISOString() };
-}
+beforeAll(async () => { await i18n.changeLanguage("en"); });
+beforeEach(() => { Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: vi.fn(async () => undefined) } }); });
+afterEach(() => { cleanup(); useRuntimeStore.setState({ thread: { blocks: [], index: {}, loaded: true } }); Reflect.deleteProperty(navigator, "clipboard"); });
 
-function agent(id: string, text: string): ThreadBlock {
-  return { kind: "agent", id, parts: [{ id: `${id}-p0`, text }] };
-}
-
-function tool(id: string, name: string): ThreadBlock {
-  return { kind: "tool", id, callId: `${id}-call`, tool: name, status: "done", output: "output" };
-}
-
-beforeAll(async () => {
-  await i18n.changeLanguage("en");
-});
-
-beforeEach(() => {
-  Object.defineProperty(navigator, "clipboard", {
-    configurable: true,
-    value: { writeText: vi.fn(async () => undefined) },
-  });
-});
-
-afterEach(() => {
-  cleanup();
-  useRuntimeStore.setState({ thread: { blocks: [], index: {}, loaded: true } });
-  Reflect.deleteProperty(navigator, "clipboard");
-});
-
-describe("groupBlocks", () => {
-  it("returns an empty grouping for non-array input instead of throwing", () => {
-    expect(groupBlocks(null as unknown as ThreadBlock[])).toEqual([]);
-    expect(groupBlocks(undefined as unknown as ThreadBlock[])).toEqual([]);
-    expect(groupBlocks("garbage" as unknown as ThreadBlock[])).toEqual([]);
-  });
-
-  it("omits todo-only presentation groups without deleting todo state", () => {
-    const blocks: ThreadBlock[] = [
-      { kind: "tool", id: "todo-1", callId: "todo-1", tool: "todo", status: "done", details: { tasks: [{ id: 1, subject: "Implement", status: "in_progress" }], nextId: 2 } },
-    ];
-    expect(groupBlocks(blocks)).toEqual([]);
-    expect(todoViewModel(blocks)?.activeTask?.subject).toBe("Implement");
-  });
-
-  it("keeps execution tools together when todo events are interleaved", () => {
-    const blocks = [tool("read", "read"), tool("todo", "todo"), tool("search", "grep")];
-    expect(groupBlocks(blocks)).toEqual([blocks]);
-  });
-});
-
-describe("renderBlocks", () => {
-  it("renders nothing for non-array input instead of throwing", () => {
+describe("turn-level conversation rendering", () => {
+  it("renders nothing for invalid input", () => {
     expect(renderBlocks(null as unknown as ThreadBlock[], codeRunner)).toBeNull();
-    expect(renderBlocks(undefined as unknown as ThreadBlock[], codeRunner)).toBeNull();
     expect(renderBlocks({} as unknown as ThreadBlock[], codeRunner)).toBeNull();
   });
 
-  it("shows the copy action only on the final assistant answer, with the whole turn's text", () => {
+  it("renders one activity across narration-separated tools and hides intermediate narration", () => {
     render(<>{renderBlocks([
-      user("u1", "do the thing"),
-      agent("a1", "Let me check that for you."),
-      tool("t1", "read"),
-      agent("a2", "Here is the final answer."),
+      user("u1", "check module"),
+      agent("a1", "I will read the component."),
+      tool("read", "read", "done", { path: "ConversationBlocks.tsx" }),
+      agent("a2", "Now I will search events."),
+      tool("grep", "grep", "done", { pattern: "tool.updated" }),
+      agent("a3", "The final answer."),
     ], codeRunner)}</>);
+    expect(screen.getByText("Complete")).toBeInTheDocument();
+    expect(screen.getByLabelText("2 operations")).toBeInTheDocument();
+    expect(screen.queryByText("I will read the component.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Now I will search events.")).not.toBeInTheDocument();
+    expect(screen.getByText("The final answer.")).toBeInTheDocument();
+  });
 
-    // One copy button on the user message, one on the final assistant block —
-    // the assistant narration before the tool call has none.
-    const copyButtons = screen.getAllByRole("button", { name: "Copy" });
-    expect(copyButtons).toHaveLength(2);
+  it("excludes interleaved todo tools from the turn activity", () => {
+    render(<>{renderBlocks([user("u1"), agent("a1", "planning"), tool("read", "read"), tool("todo", "todo"), agent("a2", "searching"), tool("grep", "grep"), tool("todo-2", "todo"), agent("final", "done")], codeRunner)}</>);
+    expect(screen.getByText("Complete")).toBeInTheDocument();
+    expect(screen.getByLabelText("2 operations")).toBeInTheDocument();
+    expect(screen.queryByText(/todo/i)).not.toBeInTheDocument();
+    expect(screen.getByText("done")).toBeInTheDocument();
+  });
+
+  it("keeps tool-only unfinished narration hidden and shows the phase label", () => {
+    const turn = buildTurnPresentations([user("u1"), agent("a1", "I will inspect it."), tool("read", "read", "running", { path: "event-fold.ts" })], { lastTurnLifecycle: "active" })[0];
+    render(<>{renderTurn(turn, codeRunner)}</>);
+    expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
+    expect(screen.queryByText("I will inspect it.")).not.toBeInTheDocument();
+  });
+
+  it("hides streaming answer prose until the turn lifecycle settles", () => {
+    const turn = buildTurnPresentations([user("u1"), tool("read", "read"), agent("a1", "streaming answer")], { lastTurnLifecycle: "active" })[0];
+    render(<>{renderTurn(turn, codeRunner)}</>);
+    expect(screen.queryByText("streaming answer")).not.toBeInTheDocument();
+    expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
+    cleanup();
+    const settled = buildTurnPresentations([user("u1"), tool("read", "read"), agent("a1", "streaming answer")])[0];
+    render(<>{renderTurn(settled, codeRunner)}</>);
+    expect(screen.getByText("streaming answer")).toBeInTheDocument();
+    expect(screen.getByText("Complete")).toBeInTheDocument();
+    expect(screen.getByLabelText("1 operation")).toBeInTheDocument();
+  });
+
+  it("shows a completed summary when a settled turn ends on a tool", () => {
+    render(<>{renderBlocks([user("u1"), agent("a1", "I will inspect it."), tool("read", "read")], codeRunner)}</>);
+    expect(screen.getByText("Complete")).toBeInTheDocument();
+    expect(screen.getByLabelText("1 operation")).toBeInTheDocument();
+    expect(screen.queryByText("I will inspect it.")).not.toBeInTheDocument();
+  });
+
+  it("copies only the final visible answer", () => {
+    render(<>{renderBlocks([user("u1", "question"), agent("a1", "hidden narration"), tool("read", "read"), agent("a2", "visible answer")], codeRunner)}</>);
     const userMessage = document.getElementById("user-msg-u1")!;
-    const agentCopy = copyButtons.find((button) => !userMessage.contains(button));
-    expect(agentCopy).toBeDefined();
-
+    const agentCopy = screen.getAllByRole("button", { name: "Copy" }).find((button) => !userMessage.contains(button));
     fireEvent.click(agentCopy!);
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
-      "Let me check that for you.\n\nHere is the final answer.",
-    );
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("visible answer");
   });
 
-  it("renders execution activity instead of raw tool cards and excludes todo", () => {
-    render(<>{renderBlocks([
-      tool("read", "read"),
-      tool("todo", "todo"),
-      tool("search", "grep"),
-    ], codeRunner)}</>);
-
-    expect(screen.getByText("Completed · 2 operations")).toBeInTheDocument();
-    expect(screen.queryByText("todo")).not.toBeInTheDocument();
-    expect(screen.queryByText("2/3 done")).not.toBeInTheDocument();
-  });
-
-  it("hides the copy action when the turn ends on a tool call with no final assistant answer", () => {
-    render(<>{renderBlocks([
-      user("u1", "do the thing"),
-      agent("a1", "Working on it."),
-      tool("t1", "read"),
-    ], codeRunner)}</>);
-
-    // Only the user message has a copy button; the tool-call narration does not.
-    const copyButtons = screen.getAllByRole("button", { name: "Copy" });
-    expect(copyButtons).toHaveLength(1);
-  });
-
-  it("does not make an unconfirmed planned path clickable", () => {
-    useRuntimeStore.setState({ thread: { blocks: [], index: {}, loaded: true } });
-    render(<>{renderBlocks([
-      agent("a1", "计划输出 `drafts/structure_prediction_research_brief.md`。"),
-    ], codeRunner)}</>);
-
-    expect(screen.queryByRole("button", { name: /drafts\/structure_prediction_research_brief\.md/ })).not.toBeInTheDocument();
-  });
-
-  it("does not render file-reference chips even for published artifact paths (cards replace them)", () => {
-    useRuntimeStore.setState({ thread: { blocks: [], index: {}, loaded: true } });
-    render(<>{renderBlocks([
-      agent("a1", "生成完成：`work/plot.png` 和 `work/results.csv`。"),
-      { kind: "status-line", id: "st1", text: "artifact ready", level: "done", path: "work/plot.png" },
-      { kind: "artifact-summary", id: "turn-artifacts-t1", turnId: "t1", assistantMessageId: "a1", artifacts: [{ path: "work/plot.png", kind: "image", mime: "image/png", size: 10 }, { path: "work/results.csv", kind: "table", mime: "text/csv", size: 10 }] },
-    ], codeRunner)}</>);
-
-    // The paths are published (status-line done + artifact-summary), but the
-    // per-message chip row is gone — the turn artifact cards are the single source.
-    // Exact name match: the old chips exposed the bare path as their accessible
-    // name, while the artifact cards use an aria-label like "plot.png (work/plot.png)",
-    // so an exact "work/plot.png" lookup only ever matches the removed chips.
-    expect(screen.queryByRole("button", { name: "work/plot.png" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "work/results.csv" })).not.toBeInTheDocument();
-    // The strip itself still renders (its cards use img/alt or aria-label, not button text).
-    expect(screen.getByLabelText("Generated files")).toBeInTheDocument();
-  });
-});
-
-describe("renderBlockGroup", () => {
-  it("renders the user message with the reference bubble geometry", () => {
+  it("keeps user bubble geometry", () => {
     render(<>{renderBlocks([user("u1", "hello")], codeRunner)}</>);
     const bubble = document.getElementById("user-msg-u1")!;
     expect(bubble).toHaveClass("max-w-[min(var(--user-message-width),82%)]");
-    const bubbleBody = bubble.querySelector(".ui-user-message")!;
-    expect(bubbleBody).toHaveClass("rounded-bubble", "px-4", "py-2.5");
+    expect(bubble.querySelector(".ui-user-message")).toHaveClass("rounded-bubble", "px-4", "py-2.5");
   });
 
-  it("prefers the whole-thread action map over a per-group computation", () => {
-    const wholeThread = new Map([["a2", "final only"]]);
-    render(<>{renderBlockGroup([agent("a1", "narration")], codeRunner, wholeThread)}</>);
-
-    expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
-
-    cleanup();
-    render(<>{renderBlockGroup([agent("a2", "final")], codeRunner, wholeThread)}</>);
-    expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
-  });
-
-  it("shows one copy action for a response split across tool groups", () => {
-    render(<>{renderBlocks([
-      agent("a1", "好的，我来探索工作区的现有数据。先看一下整体结构。"),
-      tool("ls", "bash"),
-      agent("a2", "venv 内容淹没了输出，我排除它再看实际的工作文件。"),
-      tool("find", "bash"),
-      agent("a3", "工作区内容很精简。现在看一下脚本、数据和已有图。"),
-      tool("read", "bash"),
-      agent("a4", "已完成探索。"),
-    ], codeRunner)}</>);
-
-    expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(1);
-  });
-});
-
-describe("artifact-summary blocks", () => {
-  it("renders the turn artifact strip after the final agent message", () => {
-    render(<>{renderBlocks([
-      agent("a1", "final answer"),
-      { kind: "artifact-summary", id: "turn-artifacts-t1", turnId: "t1", assistantMessageId: "a1", artifacts: [{ path: "work/plot.png", kind: "image", mime: "image/png", size: 10 }] },
-    ], codeRunner)}</>);
-
+  it("renders artifacts after the final answer", () => {
+    render(<>{renderBlocks([user("u1"), agent("a1", "final answer"), { kind: "artifact-summary", id: "turn-artifacts-t1", turnId: "t1", assistantMessageId: "a1", artifacts: [{ path: "work/plot.png", kind: "image", mime: "image/png", size: 10 }] }], codeRunner)}</>);
+    expect(screen.getByText("final answer")).toBeInTheDocument();
     expect(screen.getByLabelText("Generated files")).toBeInTheDocument();
-    expect(screen.getByAltText("plot.png")).toBeInTheDocument();
   });
 });

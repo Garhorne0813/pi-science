@@ -8,6 +8,7 @@ export const piConfigSchema = z.object({
   compaction_enabled: z.boolean().optional(),
   compaction_threshold_percent: z.number().min(50).max(95).optional(),
   model_context_window: z.number().int().positive().optional(),
+  model_max_output_tokens: z.number().int().positive().optional(),
   skills: z.array(z.string()).default([]),
   extensions: z.array(z.string()).default([]),
 });
@@ -47,6 +48,18 @@ export const sessionStateSchema = z.object({
   compaction_threshold_percent: z.number().min(0).max(100).nullable().optional(),
 });
 
+export const toolPresentationSchema = z.object({
+  version: z.literal(1).default(1),
+  kind: z.enum(["read", "search", "fetch", "edit", "execute", "compute", "verify", "artifact", "interaction", "system", "other"]),
+  title: z.string().min(1),
+  description: z.string().optional(),
+  importance: z.enum(["micro", "stage", "interrupt"]),
+  domain: z.enum(["code", "research", "science", "document", "data", "generic"]),
+  narrativeHint: z.object({ state: z.enum(["explore", "research", "analyze", "implementation", "compute", "verify"]).optional(), finalVerification: z.boolean().optional() }).optional(),
+  locations: z.array(z.object({ path: z.string().optional(), line: z.number().int().optional(), uri: z.string().optional() })).optional(),
+});
+export type ToolPresentation = z.infer<typeof toolPresentationSchema>;
+
 export const historyMessageSchema = z.object({
   id: z.string().min(1),
   role: z.string(),
@@ -55,6 +68,8 @@ export const historyMessageSchema = z.object({
   toolName: z.string().optional(),
   isError: z.boolean().optional(),
   timestamp: z.string().nullish(),
+  presentation: toolPresentationSchema.optional(),
+  presentationRole: z.enum(["intermediate", "final"]).optional(),
 });
 
 export const sessionMessagePageSchema = z.object({
@@ -102,6 +117,7 @@ const textUpdatedEventSchema = z.object({
   sessionId: z.string(),
   partId: z.string(),
   text: z.string(),
+  presentationRole: z.enum(["intermediate", "final"]).optional(),
 });
 
 const toolUpdatedEventSchema = z.object({
@@ -111,6 +127,7 @@ const toolUpdatedEventSchema = z.object({
   tool: z.string(),
   status: z.enum(["running", "done", "error", "waiting-approval"]),
   title: z.string().optional(),
+  presentation: toolPresentationSchema.optional(),
   input: z.record(z.string(), z.unknown()).optional(),
   output: z.string().optional(),
   details: z.unknown().optional(),

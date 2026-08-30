@@ -164,7 +164,7 @@ describe("Pi runtime custom provider materialization", () => {
       extensions: [],
     });
     const settings = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME!, "pi-agent", "web-host", "settings.json"), "utf8"));
-    expect(settings.compaction).toMatchObject({ enabled: true, reserveTokens: 20000, keepRecentTokens: 20000 });
+    expect(settings.compaction).toMatchObject({ enabled: true, reserveTokens: 20480, keepRecentTokens: 20000 });
   });
 
   it("materializes follow-up suggestion guidance as the agent append system prompt", async () => {

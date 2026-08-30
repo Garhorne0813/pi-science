@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createClient } from "../client/pi-science-client";
 import { queryClient } from "../client/query-client";
-import { attachPersistedTurnArtifacts } from "./turn-artifacts";
+import { fetchPersistedTurnArtifacts } from "./turn-artifacts";
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -26,9 +26,8 @@ describe("persisted turn artifacts", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ turns: [] }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const thread = { blocks: [], index: {}, loaded: true };
-    await attachPersistedTurnArtifacts(thread, "session-a", "/workspace");
-    await attachPersistedTurnArtifacts(thread, "session-a", "/workspace");
+    await fetchPersistedTurnArtifacts("session-a", "/workspace");
+    await fetchPersistedTurnArtifacts("session-a", "/workspace");
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/sessions/session-a/artifacts?cwd=%2Fworkspace");

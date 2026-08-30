@@ -2,8 +2,8 @@
  *  stream attach or a transport failure, and the missing-session reset. */
 
 import { clearCachedMessages, clearAiTitle, clearSessionName, getClient, type PiScienceClient, type SessionState } from "../client/pi-science-client";
-import { emptyThread, mergeHistoryWithLive, resetTurnBuffer, threadFromMessages } from "./event-fold";
-import { attachPersistedTurnArtifacts } from "./turn-artifacts";
+import { attachTurnArtifacts, emptyThread, mergeHistoryWithLive, resetTurnBuffer, threadFromMessages } from "./event-fold";
+import { fetchPersistedTurnArtifacts } from "./turn-artifacts";
 import { markWorkspaceFilesChanged } from "./file-revision";
 import { generations, turnState } from "./generations";
 import { backfillSessionName } from "./naming";
@@ -68,8 +68,10 @@ export function consumeSuppressedConnectionRecovery(client: PiScienceClient, ses
 }
 
 function applyRuntimeState(runtimeState: SessionState, current = useRuntimeStore.getState()): void {
+  const working = pendingWorkingState(runtimeBusy(runtimeState), current);
   useRuntimeStore.setState({
-    working: pendingWorkingState(runtimeBusy(runtimeState), current),
+    working,
+    turnLifecycle: working ? (hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire) ? "waiting" : "active") : current.turnLifecycle,
     model: runtimeState.model ?? current.model,
     thinking: runtimeState.thinking ?? current.thinking,
     contextTokens: runtimeState.context_tokens ?? current.contextTokens,
@@ -87,26 +89,26 @@ function waitForRecovery(ms: number): Promise<void> {
 export async function resyncCompletedHistory(sessionId: string, cwd: string): Promise<void> {
   const generation = generations.connection;
   try {
-    const history = await getClient().getMessagesPage(sessionId, cwd);
+    const [historyResult, artifactsResult] = await Promise.allSettled([
+      getClient().getMessagesPage(sessionId, cwd),
+      fetchPersistedTurnArtifacts(sessionId, cwd),
+    ]);
     const current = useRuntimeStore.getState();
+    if (historyResult.status !== "fulfilled") return;
     if (
       generation !== generations.connection
       || current.activeSessionId !== sessionId
       || current.cwd !== cwd
       || current.working
     ) return;
+    const history = historyResult.value;
     // Restore the REST snapshot wholesale for a settled conversation. The Pi
     // process writes the session JSONL before agent_settled, so a non-empty
-    // snapshot is authoritative. Merging live blocks into it would duplicate
-    // the turn: live ids (user-<ts>, SSE partId) can never match REST ids
-    // (JSONL message ids). Only a racing empty snapshot needs the guard — the
-    // file may not have flushed yet, so keep the visible live thread.
-    if (history.messages.length === 0 && current.thread.blocks.length > 0) {
-      // The snapshot is stale (file not flushed yet) — keep the live thread.
-      return;
-    }
+    // snapshot is authoritative. An empty snapshot can still race the flush.
+    if (history.messages.length === 0 && current.thread.blocks.length > 0) return;
+    const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
     useRuntimeStore.setState({
-      thread: await attachPersistedTurnArtifacts(threadFromMessages(history.messages), sessionId, cwd),
+      thread: attachTurnArtifacts(threadFromMessages(history.messages), turns, { windowComplete: !history.has_more }),
       historyCursor: history.next_cursor,
       historyHasMore: history.has_more,
       historyLoading: false,
@@ -170,7 +172,7 @@ export async function reconcileWorkingState(
   } else if (!hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire)) {
     // Only an authoritative idle snapshot from this activity generation may
     // settle a failed probe. An unknown state must remain conservatively busy.
-    useRuntimeStore.setState({ working: false });
+    useRuntimeStore.setState({ working: false, turnLifecycle: "settled" });
     markWorkspaceFilesChanged();
   }
 }
@@ -192,9 +194,10 @@ async function runConnectionRecovery(
   let stateSucceeded = false;
 
   for (let attempt = 0; attempt < CONNECTION_RECOVERY_MAX_ATTEMPTS; attempt += 1) {
-    const [historyResult, stateResult] = await Promise.allSettled([
+    const [historyResult, stateResult, artifactsResult] = await Promise.allSettled([
       client.getMessagesPage(sessionId, cwd),
       client.getSessionState(sessionId, cwd),
+      fetchPersistedTurnArtifacts(sessionId, cwd),
     ]);
     const current = useRuntimeStore.getState();
     if (
@@ -214,7 +217,11 @@ async function runConnectionRecovery(
     }
     if (historyResult.status === "fulfilled") {
       const history = historyResult.value;
-      const restored = mergeHistoryWithLive(await attachPersistedTurnArtifacts(threadFromMessages(history.messages), sessionId, cwd), useRuntimeStore.getState().thread);
+      const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
+      const restored = mergeHistoryWithLive(
+        attachTurnArtifacts(threadFromMessages(history.messages), turns, { windowComplete: !history.has_more }),
+        useRuntimeStore.getState().thread,
+      );
       useRuntimeStore.setState({
         thread: restored,
         historyCursor: history.next_cursor,
@@ -249,12 +256,12 @@ async function runConnectionRecovery(
   // endpoint stayed unavailable. If state never succeeded, preserve working.
   if (lastState) applyRuntimeState(lastState, current);
   if (lastState && !runtimeBusy(lastState) && !hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire)) {
-    useRuntimeStore.setState({ working: false });
+    useRuntimeStore.setState({ working: false, turnLifecycle: "settled" });
     markWorkspaceFilesChanged();
   } else if (!stateSucceeded) {
     const known = knownRuntimeState(client, sessionId, cwd);
     if (known?.activityGeneration === activityGeneration && !known.busy && !hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire)) {
-      useRuntimeStore.setState({ working: false });
+      useRuntimeStore.setState({ working: false, turnLifecycle: "settled" });
       markWorkspaceFilesChanged();
     }
   }
@@ -296,13 +303,19 @@ export async function reconcileAfterGap(
   cwd: string,
 ): Promise<void> {
   const client = getClient();
+  const connectionGeneration = generations.connection;
   const activityGeneration = generations.activity;
-  const [historyResult, stateResult] = await Promise.allSettled([
+  const [historyResult, stateResult, artifactsResult] = await Promise.allSettled([
     client.getMessagesPage(sessionId, cwd),
     client.getSessionState(sessionId, cwd),
+    fetchPersistedTurnArtifacts(sessionId, cwd),
   ]);
   const current = useRuntimeStore.getState();
-  if (current.activeSessionId !== sessionId || current.cwd !== cwd) return;
+  if (
+    connectionGeneration !== generations.connection
+    || current.activeSessionId !== sessionId
+    || current.cwd !== cwd
+  ) return;
 
   // Apply the authoritative runtime state BEFORE the history snapshot so we do
   // not clobber a busy flag the backend still holds. A gap during a long tool
@@ -314,7 +327,11 @@ export async function reconcileAfterGap(
   // History recovery is independent from busy state. Merge the REST snapshot
   // with live blocks so a text.updated arriving during this request is kept.
   if (historyResult.status === "fulfilled") {
-    const merged = mergeHistoryWithLive(await attachPersistedTurnArtifacts(threadFromMessages(historyResult.value.messages), sessionId, cwd), useRuntimeStore.getState().thread);
+    const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
+    const merged = mergeHistoryWithLive(
+      attachTurnArtifacts(threadFromMessages(historyResult.value.messages), turns, { windowComplete: !historyResult.value.has_more }),
+      useRuntimeStore.getState().thread,
+    );
     useRuntimeStore.setState({
       thread: merged,
       historyCursor: historyResult.value.next_cursor,
@@ -393,7 +410,7 @@ export async function reconcilePromptAfterLateStream(
         // interaction request. The prompt is the work the user needs to do,
         // so clear the spinner state but keep both pending payloads intact.
         ++generations.activity;
-        useRuntimeStore.setState({ working: false, status: "ready" });
+        useRuntimeStore.setState({ working: false, turnLifecycle: "waiting", status: "ready" });
         return;
       }
       if (pendingInteraction) {
@@ -428,7 +445,7 @@ export async function reconcilePromptAfterLateStream(
           || !recheck.working
         ) return;
         ++generations.activity;
-        useRuntimeStore.setState({ working: false, status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
+        useRuntimeStore.setState({ working: false, turnLifecycle: "settled", status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
         void resyncCompletedHistory(sessionId, cwd);
         void loadSessionsInternal();
         return;
@@ -504,6 +521,7 @@ export function recoverMissingSession(sessionId: string, cwd: string, client?: P
     historyLoading: false,
     historySnapshotVersion: "",
     working: false,
+    turnLifecycle: "settled",
     status: "ready",
     model: null,
     thinking: null,

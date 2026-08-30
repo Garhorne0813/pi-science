@@ -5,7 +5,6 @@ set -euo pipefail
 
 PI_ORBIT_VERSION="${PI_ORBIT_VERSION:-0.3.1}"
 PI_ORBIT_RELEASE_REPO="${PI_ORBIT_RELEASE_REPO:-Garhorne0813/pi-orbit}"
-PI_AI_VERSION="${PI_AI_VERSION:-0.84.3}"
 PI_MCP_ADAPTER_VERSION="${PI_MCP_ADAPTER_VERSION:-2.18.0}"
 PI_SUBAGENTS_VERSION="${PI_SUBAGENTS_VERSION:-0.40.0}"
 PI_WEB_ACCESS_VERSION="${PI_WEB_ACCESS_VERSION:-0.18.0}"
@@ -31,7 +30,6 @@ install_runtime_extensions() {
     --no-package-lock \
     --omit=dev \
     --cache "$RUNTIME_DIR/.npm-cache" \
-    "@earendil-works/pi-ai@$PI_AI_VERSION" \
     "pi-mcp-adapter@$PI_MCP_ADAPTER_VERSION" \
     "pi-subagents@$PI_SUBAGENTS_VERSION" \
     "pi-web-access@$PI_WEB_ACCESS_VERSION" \

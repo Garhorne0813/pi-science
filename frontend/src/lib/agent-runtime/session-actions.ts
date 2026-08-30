@@ -12,8 +12,8 @@ import {
   type SessionInfo,
 } from "../client/pi-science-client";
 import { appendRuntimeError, isMissingSessionError } from "./errors";
-import { emptyThread, mergeHistoryWithLive, prependHistoryMessages, resetTurnBuffer, threadFromMessages } from "./event-fold";
-import { attachPersistedTurnArtifacts } from "./turn-artifacts";
+import { attachTurnArtifacts, emptyThread, mergeHistoryWithLive, prependHistoryMessages, resetTurnBuffer, threadFromMessages } from "./event-fold";
+import { fetchPersistedTurnArtifacts } from "./turn-artifacts";
 import { generations, turnState } from "./generations";
 import { registerEventListener } from "./listener";
 import { applyPromptSessionName, backfillSessionName } from "./naming";
@@ -59,6 +59,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           sessions: state.cwd !== cwd ? [] : state.sessions,
           activeSessionId: sessionId ?? null,
           working: false,
+          turnLifecycle: "settled",
           model: null,
           thinking: null,
           contextTokens: null,
@@ -91,6 +92,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
             historySnapshotVersion: "",
             status: "ready",
             working: false,
+            turnLifecycle: "settled",
           });
           void loadSessionsInternal();
           return;
@@ -113,15 +115,18 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         const cachedMessages = client.getCachedMessages(targetSessionId, cwd);
         if (cachedMessages && cachedMessages.length > 0) {
           if (localMutationGeneration === generations.localMutation && generation === generations.connection) {
-            set({ thread: await attachPersistedTurnArtifacts(threadFromMessages(cachedMessages), targetSessionId, cwd) });
+            // Cached snapshots are the tail page of a previous view. Show the
+            // messages immediately; authoritative restore attaches artifacts.
+            set({ thread: threadFromMessages(cachedMessages) });
           }
         }
 
         client.connect(targetSessionId, cwd);
-        const [messagesResult, runtimeStateResult, sessionsResult] = await Promise.allSettled([
+        const [messagesResult, runtimeStateResult, sessionsResult, artifactsResult] = await Promise.allSettled([
           client.getMessagesPage(targetSessionId, cwd),
           client.getSessionState(targetSessionId, cwd),
           sessionsPromise,
+          fetchPersistedTurnArtifacts(targetSessionId, cwd),
         ]);
         if (generation !== generations.connection) return;
         // A prompt/model action may have started while the initial history/state
@@ -140,13 +145,14 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           // can locate a target, but its cursor must never be merged into the
           // current history window as an arbitrary prepend.
           const historyPage = messagesResult.value;
-          nextState.thread = await attachPersistedTurnArtifacts(
+          const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
+          nextState.thread = attachTurnArtifacts(
             mergeHistoryWithLive(
               threadFromMessages(historyPage.messages),
               get().thread,
             ),
-            targetSessionId,
-            cwd,
+            turns,
+            { windowComplete: !historyPage.has_more },
           );
           nextState.historyCursor = historyPage.next_cursor;
           nextState.historyHasMore = historyPage.has_more;
@@ -266,16 +272,37 @@ export function createRuntimeActions(set: SetState, get: GetState) {
   };
 
   const loadHistoryPage = async (sessionId: string, cwd: string, before: string): Promise<number> => {
+    const connectionGeneration = generations.connection;
     set({ historyLoading: true });
     try {
       const page = await getClient().getMessagesPage(sessionId, cwd, { before });
       const current = get();
-      if (current.activeSessionId !== sessionId || current.cwd !== cwd) return 0;
+      if (
+        connectionGeneration !== generations.connection
+        || current.activeSessionId !== sessionId
+        || current.cwd !== cwd
+        || current.historyCursor !== before
+      ) return 0;
       set({
         thread: prependHistoryMessages(current.thread, page.messages),
         historyCursor: page.next_cursor,
         historyHasMore: page.has_more,
         historySnapshotVersion: page.snapshot_version,
+        historyLoading: false,
+      });
+
+      // Show history first. Re-anchor against the newest thread after the
+      // optional artifact request completes.
+      void fetchPersistedTurnArtifacts(sessionId, cwd).then((turns) => {
+        const latest = get();
+        if (
+          connectionGeneration !== generations.connection
+          || latest.activeSessionId !== sessionId
+          || latest.cwd !== cwd
+        ) return;
+        set({
+          thread: attachTurnArtifacts(latest.thread, turns, { windowComplete: !latest.historyHasMore }),
+        });
       });
       return page.messages.length;
     } catch (error) {
@@ -324,13 +351,13 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         timestamp: new Date().toISOString(),
       };
       const blocks = [...thread.blocks, userBlock];
-      set({ thread: { blocks, index: { ...thread.index, [userBlock.id]: blocks.length - 1 }, loaded: true }, working: true });
+      set({ thread: { blocks, index: { ...thread.index, [userBlock.id]: blocks.length - 1 }, loaded: true }, working: true, turnLifecycle: "active" });
       if (!activeSessionId) {
         try {
           activeSessionId = await get().createNewSession();
         } catch (error) {
           const current = get();
-          if (current.cwd === cwd) set({ working: false });
+          if (current.cwd === cwd) set({ working: false, turnLifecycle: "failed" });
           throw error;
         }
       }
@@ -344,7 +371,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       ++generations.localMutation;
       resetTurnBuffer();
       turnState.errored = false;
-      set({ client, working: true });
+      set({ client, working: true, turnLifecycle: "active" });
 
       applyPromptSessionName(cwd, activeSessionId, message);
       // Baseline for the late-stream monitor: any assistant message persisted
@@ -411,6 +438,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
             // until the user aborts. Keep Stop visible so the UI cannot submit a
             // second prompt against that still-running/unknown turn.
             working: ambiguousTransportFailure,
+            turnLifecycle: ambiguousTransportFailure ? "active" : "failed",
             status: "error",
           });
         }
@@ -428,7 +456,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         await getClient().abort(activeSessionId, cwd);
         const current = get();
         if (current.activeSessionId === activeSessionId && current.cwd === cwd) {
-          set({ working: false, status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
+          set({ working: false, turnLifecycle: "aborted", status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
         }
       } catch (error) {
         const current = get();
@@ -603,23 +631,26 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         snapshot_version: "",
       };
       let historyError: unknown = null;
-      try {
-        history = await client.getMessagesPage(result.id, cwd);
-      } catch (error) {
-        // The clone already succeeded and changed the backend's active session.
-        // Do not strand the UI on the parent route merely because the immediate
-        // history read had a transient failure.
-        historyError = error;
-      }
+      let artifactTurns = [] as Awaited<ReturnType<typeof fetchPersistedTurnArtifacts>>;
+      const [historyResult, artifactsResult] = await Promise.allSettled([
+        client.getMessagesPage(result.id, cwd),
+        fetchPersistedTurnArtifacts(result.id, cwd),
+      ]);
+      if (historyResult.status === "fulfilled") history = historyResult.value;
+      else historyError = historyResult.reason;
+      if (artifactsResult.status === "fulfilled") artifactTurns = artifactsResult.value;
+      const latest = get();
+      if (latest.cwd !== cwd || latest.activeSessionId !== result.id) return result.id;
       set({
         client,
         activeSessionId: result.id,
-        thread: await attachPersistedTurnArtifacts(threadFromMessages(history.messages), result.id, cwd),
+        thread: attachTurnArtifacts(threadFromMessages(history.messages), artifactTurns, { windowComplete: !history.has_more }),
         historyCursor: history.next_cursor,
         historyHasMore: history.has_more,
         historyLoading: false,
         historySnapshotVersion: history.snapshot_version,
         working: false,
+        turnLifecycle: "settled",
         sessions: [
           { id: result.id, cwd, project_id: get().sessions.find((session) => session.cwd === cwd)?.project_id ?? null, name: "New Session" },
           ...get().sessions.filter((session) => session.id !== result.id),
@@ -656,6 +687,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           historyLoading: false,
           historySnapshotVersion: "",
           working: false,
+          turnLifecycle: "settled",
           status: "connecting",
           pendingInteraction: null,
           pendingQuestionnaire: null,
@@ -693,6 +725,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
             },
             status: "error",
             working: false,
+            turnLifecycle: "failed",
           });
         }
         throw error;

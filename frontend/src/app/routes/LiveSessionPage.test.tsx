@@ -646,7 +646,7 @@ describe("stable Virtuoso footer", () => {
     expect(workingProps?.components?.Footer).toBe(Footer);
     if (!workingProps?.context) throw new Error("updated Virtuoso context was not captured");
     footerView.rerender(<Footer context={workingProps.context} />);
-    expect(footerView.container).toHaveTextContent("Continuing work…");
+    expect(footerView.container).toHaveTextContent("Understanding the context");
 
     const interaction: PendingInteraction = {
       requestId: "questionnaire-request",
@@ -902,7 +902,7 @@ describe("conversation nav rail and scroll-to-latest", () => {
     expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual([
       "u-old", "a-old", "u-middle", "a-middle", "u-latest", "a-latest",
     ]);
-    await waitFor(() => expect(virtuosoProps.at(-1)?.firstItemIndex).toBe(99_996));
+    await waitFor(() => expect(virtuosoProps.at(-1)?.firstItemIndex).toBe(99_998));
   });
 
   it("jumps to the selected user message on click", async () => {
@@ -1273,7 +1273,7 @@ describe("defensive thread shape and copy actions (docs/pr30markdown.md 3.4/3.5/
     expect(screen.getByLabelText("Send message")).toBeInTheDocument();
   });
 
-  it("shows the copy action only on the final assistant answer, copying the merged turn text", async () => {
+  it("shows the copy action only on the final assistant answer", async () => {
     useRuntimeStore.setState({
       thread: {
         blocks: [
@@ -1297,9 +1297,7 @@ describe("defensive thread shape and copy actions (docs/pr30markdown.md 3.4/3.5/
     expect(agentCopy).toBeDefined();
 
     fireEvent.click(agentCopy!);
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
-      "Let me check that for you.\n\nHere is the final answer.",
-    );
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("Here is the final answer.");
   });
 
   it("hides the copy action when the turn ends on a tool call with no final assistant answer", async () => {

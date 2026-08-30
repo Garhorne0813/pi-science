@@ -49,7 +49,7 @@ describe("canonical MCP routes", () => {
   });
 
   it("rejects local connector working directories that escape the workspace", async () => {
-    const { app, cwd } = await fixture();
+    const { app } = await fixture();
     const response = await app.inject({ method: "POST", url: "/api/mcp/connectors", payload: {
       name: "escape", display_name: "Escape", transport: "stdio", command: process.execPath, args: [],
       runtime_config: { cwd: "../outside", lifecycle: "lazy", expose_resources: true, include_tools: [], exclude_tools: [], environment: {}, headers: {}, auth: "none", allow_private: false }, enabled: false,

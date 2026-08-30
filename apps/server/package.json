@@ -12,7 +12,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "0.84.3",
     "@fastify/cors": "^11.3.0",
     "@fastify/http-proxy": "^11.6.0",
     "@fastify/rate-limit": "^11.2.0",

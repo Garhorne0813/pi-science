@@ -410,6 +410,7 @@ export function loadDefaultPiConfig(runtimeRoots?: string[]): PiConfig {
     compaction_enabled: settings.compaction_enabled !== false,
     compaction_threshold_percent: validThreshold(settings.compaction_threshold_percent),
     model_context_window: positiveInteger(settings.model_context_window),
+    model_max_output_tokens: positiveInteger(settings.model_max_output_tokens),
     provider: null,
     api_key: null,
     skills: Array.isArray(settings.skill_paths) ? settings.skill_paths.map(String).filter(Boolean) : [],
@@ -568,7 +569,7 @@ function materializeRuntimeSettings(agentDir: string, settings: Record<string, a
   const contextWindow = positiveInteger(config.model_context_window) ?? positiveInteger(settings.model_context_window);
   const threshold = validThreshold(config.compaction_threshold_percent) ?? validThreshold(settings.compaction_threshold_percent);
   const reserveTokens = contextWindow && threshold
-    ? Math.max(1024, Math.round(contextWindow * (1 - threshold / 100)))
+    ? compactionReserveTokens(contextWindow, threshold, positiveInteger(config.model_max_output_tokens) ?? positiveInteger(settings.model_max_output_tokens))
     : 16384;
   current.compaction = {
     ...(current.compaction && typeof current.compaction === "object" ? current.compaction as Record<string, unknown> : {}),
@@ -594,6 +595,13 @@ function materializeFollowUpGuidance(agentDir: string): void {
 function runtimeEnvSnapshot(env: NodeJS.ProcessEnv, generatedSecrets: Record<string, string>): Record<string, string | null> {
   const isSecretName = (key: string): boolean => Object.hasOwn(generatedSecrets, key) || /(?:API_KEY|TOKEN|PASSWORD|SECRET|PRIVATE_KEY)$/i.test(key);
   return Object.fromEntries(Object.entries(env).filter(([key]) => !isSecretName(key)).map(([key, value]) => [key, value ?? null]));
+}
+
+function compactionReserveTokens(contextWindow: number, threshold: number, maxOutputTokens?: number): number {
+  const thresholdReserve = Math.round(contextWindow * (1 - threshold / 100));
+  const outputReserve = Math.min(32_000, Math.max(8_192, maxOutputTokens ?? 16_384));
+  const overhead = Math.min(16_384, Math.max(4_096, Math.round(contextWindow * 0.04)));
+  return Math.max(1_024, Math.min(contextWindow - 1_024, Math.max(thresholdReserve, outputReserve + overhead)));
 }
 
 function positiveInteger(value: unknown): number | undefined {

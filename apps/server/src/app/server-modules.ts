@@ -1,6 +1,7 @@
 import { ConversationEventHub } from "../runtime/events/conversation-event-hub.js";
 import { NodeSessionService } from "../runtime/node/node-session-service.js";
 import { PiManager } from "../runtime/pi/pi-manager.js";
+import { PiOrbitCatalogService } from "../runtime/pi/pi-orbit-catalog.js";
 import { SessionRepository } from "../runtime/node/session-repository.js";
 import { SettingsStore } from "../storage/settings-store.js";
 import { ModelResourceService } from "../model-resources/model-resource-service.js";
@@ -32,6 +33,7 @@ export interface ServerModules {
   readonly events: ConversationEventHub;
   readonly sessionRepository: SessionRepository;
   readonly piManager: PiManager;
+  readonly runtimeCatalog: PiOrbitCatalogService;
   readonly settings: SettingsStore;
   readonly modelResources: ModelResourceService;
   readonly jobs: JobCoordinator;
@@ -65,6 +67,7 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
   const events = new ConversationEventHub();
   const sessionRepository = new SessionRepository();
   const piManager = new PiManager();
+  const runtimeCatalog = new PiOrbitCatalogService(piManager);
   const environments = new WorkspaceEnvironmentService(undefined, config?.micromambaExecutable, sqliteEnabled ? environmentRepository : undefined);
   const kernels = new NodeKernelManager();
   const notebooks = new NotebookService({
@@ -73,7 +76,7 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
     environments,
   });
   const settings = new SettingsStore();
-  const modelResources = new ModelResourceService({ settings });
+  const modelResources = new ModelResourceService({ settings, runtimeCatalog });
   const projectReview = new ProjectReviewService(new PiReviewSubagentRunner(environments, piManager), sessionRepository);
   const sessions = new NodeSessionService(events, piManager, sessionRepository, environments, projectReview, undefined, modelResources);
   const mcpRepository = new McpRepository(stateStore);
@@ -87,5 +90,5 @@ export function createServerModules(config?: ServerConfig, options: ServerModule
     new ExperimentExecutor(jobs),
     new PiResearchWorker(new PiManagedResearchRuntime(environments, piManager)),
   );
-  return { sessions, events, sessionRepository, piManager, settings, modelResources, mcp, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled };
+  return { sessions, events, sessionRepository, piManager, runtimeCatalog, settings, modelResources, mcp, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled };
 }

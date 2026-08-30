@@ -5,10 +5,9 @@ import { runtimeExtensionStatus } from "../../runtime/pi/pi-runtime-launch.js";
 import { privateProviderAccessEnabled, safeConnectorFetch, validateOutboundHttpUrl } from "../../security/outbound-security.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { SettingsStore, type SettingsData as Settings } from "../../storage/settings-store.js";
-import { loadPiAiCatalog } from "../../config/model-catalog-fallback.js";
-import { hasEnvApiKey, loadPiAiProviderCatalog } from "../../config/pi-ai-provider-catalog.js";
 import { catalog as skillCatalog } from "../../catalog/skill-catalog.js";
 import { resolveMcpConfig } from "../../catalog/mcp-config.js";
+import type { PiOrbitCatalog, PiOrbitCatalogProvider, PiOrbitCatalogModel } from "../../runtime/pi/pi-orbit-catalog.js";
 import {
   createProjectSkill,
   deleteProjectSkill,
@@ -23,6 +22,7 @@ import { knownWorkspacePaths } from "./catalog-routes.js";
 import type { RuntimeSkillPolicy } from "../../runtime/pi/pi-process.js";
 import type { ModelResourceService } from "../../model-resources/model-resource-service.js";
 import type { McpConnectorService } from "../../mcp/connector-service.js";
+import type { PiOrbitCatalogService } from "../../runtime/pi/pi-orbit-catalog.js";
 const BUILTIN_SUBAGENTS = [
   ["context-builder", "Builds grounded context for a later agent."],
   ["delegate", "Handles a focused delegated task."],
@@ -63,10 +63,6 @@ function parseProjectSubagent(content: string): { name: string; description: str
   if (rawPackage && (!packageName || !/^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)*$/.test(packageName))) return null;
   return { name, description, ...(packageName ? { packageName } : {}) };
 }
-const FALLBACK_MODEL_HINTS: Record<string, { contextWindow: number; thinkingLevels: string[] }> = {
-  "deepseek/deepseek-v4-pro": { contextWindow: 1_000_000, thinkingLevels: ["off", "high", "max"] },
-  "deepseek/deepseek-v4-flash": { contextWindow: 1_000_000, thinkingLevels: ["off", "high", "max"] },
-};
 async function respondWithRuntimeReload<T extends Record<string, unknown>>(nodeSessionService: NodeSessionService, reply: FastifyReply, payload: T): Promise<(T & { session_replacements: Array<{ cwd: string; oldId: string; newId: string }> }) | FastifyReply> {
   try { return { ...payload, session_replacements: await nodeSessionService.reloadConfiguration() }; }
   catch (error) {
@@ -112,7 +108,38 @@ async function unifiedSkillCatalog() {
   for (const catalog of catalogs) for (const skill of catalog) if (!byName.has(skill.name)) byName.set(skill.name, skill);
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
+function catalogModels(catalog: PiOrbitCatalog): Array<Record<string, unknown>> {
+  return catalog.providers.flatMap((provider) => provider.models.map((model) => orbitModel(provider, model)));
+}
+
+function orbitModel(provider: PiOrbitCatalogProvider, model: PiOrbitCatalogModel): Record<string, unknown> {
+  return {
+    id: `${provider.id}/${model.id}`,
+    provider: provider.id,
+    model: model.id,
+    label: `${provider.name} · ${model.name}`,
+    custom: provider.id.startsWith("user-"),
+    reasoning: model.reasoning,
+    thinking_levels: model.reasoning ? [...FALLBACK_DEFAULT_THINKING_LEVELS] : ["off"],
+    context_window: model.contextWindow || null,
+    max_output_tokens: model.maxTokens || null,
+    input_formats: model.input,
+    capability_source: "orbit-catalog",
+  };
+}
+
+async function readRuntimeCatalog(source?: Pick<PiOrbitCatalogService, "getCatalog">): Promise<PiOrbitCatalog> {
+  if (!source) return { schemaVersion: 1, providers: [] };
+  try { return await source.getCatalog(); }
+  catch (error) {
+    if (process.env.NODE_ENV !== "test" && process.env.PI_CLI_PATH) throw error;
+    return { schemaVersion: 1, providers: [] };
+  }
+}
+
 function fallbackModel(provider: string, model: string, label: string, custom: boolean, reasoning: boolean, contextWindow = 128000, thinkingLevels?: string[]): Record<string, unknown> { return { id: `${provider}/${model}`, provider, model, label, custom, reasoning, thinking_levels: reasoning ? (thinkingLevels?.length ? thinkingLevels : FALLBACK_DEFAULT_THINKING_LEVELS) : ["off"], context_window: contextWindow, capability_source: "pi-science fallback" }; }
+
+
 
 /** Custom-provider fallback models only. Builtin providers come exclusively
  *  from the pi-ai runtime catalog (Pi Orbit's companion); the static builtin
@@ -128,21 +155,6 @@ function customModels(config: Settings): Array<Record<string, unknown>> {
   return result;
 }
 
-/** Boolean credential presence (stored Pi-Science key or environment key) for
- *  every builtin pi-ai provider. Environment detection delegates to pi-ai's
- *  own env map (shared OPENCODE_API_KEY etc.) and never exposes key values. */
-async function providerCredentialMap(config: Settings, modelResources?: ModelResourceService): Promise<Record<string, boolean>> {
-  const providers = await loadPiAiProviderCatalog();
-  const result: Record<string, boolean> = {};
-  const resourceState = modelResources?.repository.readSync();
-  for (const provider of providers) {
-    const ref = resourceState?.credential_refs[provider.id];
-    const managed = ref && modelResources ? Boolean((await modelResources.credentials.getForRuntime(ref))?.secret) : false;
-    const stored = typeof config.api_keys?.[provider.id] === "string" && config.api_keys[provider.id] !== "";
-    result[provider.id] = managed || stored || await hasEnvApiKey(provider.id);
-  }
-  return result;
-}
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const THINKING_LEVEL_SET = new Set<string>(THINKING_LEVELS);
 /** Fallback capability guess for models without explicit hints: never invent
@@ -233,56 +245,32 @@ function mergeModelCatalog(primary: Array<Record<string, unknown>>, overlay: Arr
   }
   return [...byId.values()];
 }
-async function modelCatalog(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, modelResources?: ModelResourceService): Promise<{ available: Array<Record<string, unknown>>; source: "pi" | "fallback" }> {
-  const credential = await providerCredentialMap(config, modelResources);
+async function modelCatalog(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, runtimeCatalog?: Pick<PiOrbitCatalogService, "getCatalog">): Promise<{ available: Array<Record<string, unknown>>; source: "pi" | "fallback" }> {
+  const catalog = await readRuntimeCatalog(runtimeCatalog);
+  const catalogEntries = catalogModels(catalog);
   if (cwdValue) {
     const result = await nodeSessionService.availableModels(cwdValue);
     const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
     if (result.success && Array.isArray(data.models)) {
-      // Pi Orbit is the runtime truth: its listing is authoritative, an empty
-      // array stays empty (no pi-ai fallback models are mixed in). Enrich
-      // matching runtime entries with pi-ai capability metadata only for
-      // credentialed providers; never add models Orbit did not list.
       const runtimeModels = data.models.map(normalizePiModel).filter((item): item is Record<string, unknown> => Boolean(item));
       const runtimeById = new Map(runtimeModels.map((item) => [String(item.id), item]));
-      // Gap-fill capability metadata the runtime omitted: pi-ai entries for
-      // credentialed builtin providers, and custom config hints. Explicit
-      // runtime fields always win; Orbit stays the runtime truth.
-      const generated = await loadPiAiCatalog();
-      const piEntries = generated
-        .filter((item) => credential[String(item.provider)] === true)
-        .map(normalizePiModel)
-        .filter((item): item is Record<string, unknown> => Boolean(item));
-      for (const source of [...piEntries, ...customModels(config)]) {
+      for (const source of [...catalogEntries, ...customModels(config)]) {
         const existing = runtimeById.get(String(source.id));
         if (!existing) continue;
         if (existing.reasoning === undefined) existing.reasoning = source.reasoning ?? false;
         if (!Array.isArray(existing.thinking_levels) || existing.thinking_levels.length === 0) existing.thinking_levels = source.thinking_levels;
         if (!existing.context_window) existing.context_window = source.context_window;
+        if (!existing.max_output_tokens) existing.max_output_tokens = source.max_output_tokens;
+        if (!Array.isArray(existing.input_formats) || existing.input_formats.length === 0) existing.input_formats = source.input_formats;
       }
-      // Custom providers remain available even when Orbit does not list them.
       const customOnly = customModels(config).filter((item) => !runtimeById.has(String(item.id)));
       return { available: [...runtimeById.values(), ...customOnly], source: "pi" };
     }
   }
-  // No live Orbit listing: fall back to the pi-ai catalog filtered to
-  // credentialed providers, then custom providers. Custom stays available
-  // even when the builtin catalog is empty (older installs).
-  const generated = await loadPiAiCatalog();
-  const piModels = generated
-    .filter((item) => credential[String(item.provider)] === true)
-    .map(normalizePiModel)
-    .filter((item): item is Record<string, unknown> => Boolean(item));
-  // Preserve the curated DeepSeek V4 hints (context window + level set) for
-  // fallback entries; richer pi-ai metadata already present wins.
-  for (const item of piModels) {
-    const hint = FALLBACK_MODEL_HINTS[`${String(item.provider)}/${String(item.model)}`];
-    if (!hint) continue;
-    item.context_window = hint.contextWindow;
-    if (!Array.isArray(item.thinking_levels) || item.thinking_levels.length === 0) item.thinking_levels = [...hint.thinkingLevels];
-  }
+  const configuredProviders = new Set(catalog.providers.filter((provider) => provider.auth.configured).map((provider) => provider.id));
+  const builtinModels = catalogEntries.filter((item) => configuredProviders.has(String(item.provider)));
   const custom = customModels(config);
-  if (piModels.length > 0) return { available: mergeModelCatalog(piModels, custom), source: "pi" };
+  if (builtinModels.length > 0) return { available: mergeModelCatalog(builtinModels, custom), source: "pi" };
   return { available: custom, source: "fallback" };
 }
 
@@ -290,19 +278,17 @@ type ProviderInventoryEntry = {
   id: string;
   name: string;
   models: string[];
-  auth: { kind: "api_key" | "oauth" | "api_key_or_oauth"; api_key_supported: boolean; oauth_supported: boolean; login_supported: false };
-  credential_status: "configured" | "connected" | "needs_key" | "needs_login";
+  auth: { kind: "api_key" | "oauth" | "api_key_or_oauth" | "none"; api_key_supported: boolean; oauth_supported: boolean; login_supported: false };
+  credential_status: "configured" | "connected" | "needs_key" | "needs_login" | "invalid";
   enabled: boolean;
   has_key: boolean;
+  custom?: boolean;
 };
 
-/** Builtin provider inventory: full pi-ai catalog, Orbit models when a live
- *  runtime lists them (per-provider), pi-ai model ids otherwise. Credential
- *  status distinguishes API-key providers (stored/env key) from OAuth-only
- *  subscription providers (needs_login until the runtime has them). */
-async function providerInventory(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, modelResources?: ModelResourceService): Promise<ProviderInventoryEntry[]> {
-  const providers = await loadPiAiProviderCatalog();
-  if (providers.length === 0) return [];
+/** Builtin provider inventory from the Orbit runtime catalog. Workspace model
+ *  availability still comes from the live session's `/api/models` command. */
+async function providerInventory(nodeSessionService: NodeSessionService, config: Settings, cwdValue: string, modelResources?: ModelResourceService, runtimeCatalog?: Pick<PiOrbitCatalogService, "getCatalog">): Promise<ProviderInventoryEntry[]> {
+  const catalog = await readRuntimeCatalog(runtimeCatalog);
   let orbitModels: Record<string, string[]> | null = null;
   if (cwdValue) {
     const result = await nodeSessionService.availableModels(cwdValue);
@@ -319,32 +305,31 @@ async function providerInventory(nodeSessionService: NodeSessionService, config:
     }
   }
   const entries: ProviderInventoryEntry[] = [];
-  for (const provider of providers) {
+  for (const provider of catalog.providers) {
     const ref = modelResources?.repository.readSync().credential_refs[provider.id];
     const managed = ref && modelResources ? Boolean((await modelResources.credentials.getForRuntime(ref))?.secret) : false;
     const stored = typeof config.api_keys?.[provider.id] === "string" && config.api_keys[provider.id] !== "";
-    const env = await hasEnvApiKey(provider.id);
-    const hasKey = provider.apiKeySupported && (managed || stored || env);
-    let credential_status: ProviderInventoryEntry["credential_status"];
-    if (hasKey) credential_status = "configured";
-    else if (!provider.apiKeySupported && provider.oauthSupported) credential_status = orbitModels && orbitModels[provider.id] ? "connected" : "needs_login";
-    else credential_status = "needs_key";
+    const localCredential = managed || stored;
+    const configured = localCredential || provider.auth.configured;
+    const credential_status: ProviderInventoryEntry["credential_status"] = configured
+      ? localCredential ? "configured" : "connected"
+      : !provider.auth.apiKey && provider.auth.oauth ? "needs_login" : provider.auth.apiKey ? "needs_key" : "connected";
     entries.push({
       id: provider.id,
       name: provider.name,
-      models: orbitModels?.[provider.id] ?? provider.modelIds,
+      models: orbitModels?.[provider.id] ?? provider.models.map((model) => `${provider.id}/${model.id}`),
       auth: {
-        kind: provider.apiKeySupported && provider.oauthSupported ? "api_key_or_oauth" : provider.oauthSupported ? "oauth" : "api_key",
-        api_key_supported: provider.apiKeySupported,
-        oauth_supported: provider.oauthSupported,
+        kind: provider.auth.apiKey && provider.auth.oauth ? "api_key_or_oauth" : provider.auth.oauth ? "oauth" : provider.auth.apiKey ? "api_key" : "none",
+        api_key_supported: provider.auth.apiKey,
+        oauth_supported: provider.auth.oauth,
         login_supported: false,
       },
       credential_status,
-      enabled: hasKey || credential_status === "connected",
-      has_key: hasKey,
+      enabled: configured,
+      has_key: localCredential,
     });
   }
-  return entries;
+  return entries.sort((a, b) => a.name.localeCompare(b.name));
 }
 function publicCustom(item: NonNullable<Settings["custom_providers"]>[number] & { has_key?: boolean }): Record<string, unknown> { return { id: item.id, name: item.name, base_url: item.base_url, api: item.api, models: item.models, has_key: Boolean(item.api_key) || item.has_key === true, reasoning: item.reasoning, context_window: item.context_window, model_hints: item.model_hints }; }
 function slug(value: string): string { return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "custom-api"; }
@@ -496,7 +481,6 @@ async function discoverProvider(baseUrl: string, apiKey: string, api: string, al
     if (id && !rowById.has(id)) rowById.set(id, row);
   }
   const models = [...rowById.keys()];
-  const piModels = await loadPiAiCatalog();
   const modelHints: Record<string, ModelHint> = {};
   await forEachConcurrent(models, 4, async (model) => {
     const inlineHint = capabilitiesFromPayload(rowById.get(model));
@@ -506,14 +490,12 @@ async function discoverProvider(baseUrl: string, apiKey: string, api: string, al
       hint = mergeHint(hint, detail);
     }
     if (!hint.context_window || typeof hint.reasoning !== "boolean") hint = mergeHint(hint, await probeModelProtocol(normalizedBase, model, apiKey, api, allowPrivate, timeoutMs));
-    const pi = piModels.find((candidate) => String(candidate.id ?? "") === model);
-    if (pi) hint = mergeHint(hint, { ...capabilitiesFromPayload(pi), source: "pi-ai" });
     if (usefulHint(hint)) modelHints[model] = hint;
   });
   return { safeUrl, models, modelHints };
 }
 
-export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService: NodeSessionService, settingsStore: SettingsStore, modelResources?: ModelResourceService, mcp?: McpConnectorService): void {
+export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService: NodeSessionService, settingsStore: SettingsStore, modelResources?: ModelResourceService, runtimeCatalog?: Pick<PiOrbitCatalogService, "getCatalog">, mcp?: McpConnectorService): void {
   const load = () => settingsStore.read();
   const mutate = <T>(operation: (config: Settings) => T | Promise<T>) => settingsStore.update(operation);
   // Direct API clients may save without calling the discovery endpoint first.
@@ -544,11 +526,11 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       ? respondWithRuntimeReload(first as NodeSessionService, second as FastifyReply, third)
       : respondWithRuntimeReload(nodeSessionService, first as FastifyReply, second as T);
   }
-  app.get("/api/settings/providers", async () => { const config = await load(); return { providers: await providerInventory(nodeSessionService, config, "", modelResources) }; });
+  app.get("/api/settings/providers", async () => { const config = await load(); return { providers: await providerInventory(nodeSessionService, config, "", modelResources, runtimeCatalog) }; });
   app.get("/api/settings/config", async (request) => {
     const config = await load();
     const cwdValue = query(request, "cwd", "");
-    const catalog = await modelCatalog(nodeSessionService, config, cwdValue, modelResources);
+    const catalog = await modelCatalog(nodeSessionService, config, cwdValue, runtimeCatalog);
     let available = catalog.available;
     const canonicalState = modelResources?.repository.readSync();
     const hasCanonicalResources = Boolean(canonicalState && (canonicalState.migration || canonicalState.providers.length > 0 || canonicalState.models.length > 0));
@@ -566,6 +548,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
           thinking_levels: item.capabilities.thinking_levels,
           context_window: item.capabilities.context_window,
           capability_source: item.capability_source,
+          input_formats: ["text", ...(item.capabilities.vision ? ["image"] : [])],
           available: item.available,
           availability_reason: item.availability_reason,
         }));
@@ -639,7 +622,23 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
         }
       }
     }
-    const providers = await providerInventory(nodeSessionService, config, cwdValue, modelResources);
+    const providers = await providerInventory(nodeSessionService, config, cwdValue, modelResources, runtimeCatalog);
+    if (modelResources) {
+      const canonicalProviders = await modelResources.listProviders();
+      for (const provider of canonicalProviders.filter((item) => item.kind === "user")) {
+        const authKind = provider.auth_kind;
+        providers.push({
+          id: provider.id,
+          name: provider.name,
+          models: provider.models,
+          auth: { kind: authKind, api_key_supported: authKind === "api_key" || authKind === "api_key_or_oauth", oauth_supported: authKind === "oauth" || authKind === "api_key_or_oauth", login_supported: false },
+          credential_status: provider.credential_status,
+          enabled: provider.enabled,
+          has_key: provider.has_key,
+          custom: true,
+        });
+      }
+    }
     const apiKeys = Object.fromEntries(providers.map((provider) => [provider.id, provider.has_key]));
     // Without the pi-ai runtime there is no provider inventory to derive
     // key presence from; surface stored keys so persistence stays observable
@@ -651,13 +650,12 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       const resourceState = modelResources.repository.readSync();
       for (const [id, ref] of Object.entries(resourceState.credential_refs)) if (modelResources.credentials.readSync(ref)?.secret) apiKeys[id] = true;
     }
-    return { api_keys: apiKeys, model: configured, thinking, model_context_window: config.model_context_window ?? null, compaction_enabled: config.compaction_enabled !== false, compaction_threshold_percent: compactionThreshold(config, available, configured), allow_private_providers: privateProviderAccessEnabled(config.allow_private_providers), providers, custom_providers: (config.custom_providers ?? []).map(publicCustom), available_models: available, model_catalog_source: catalog.source };
+    return { api_keys: apiKeys, model: configured, thinking, model_context_window: config.model_context_window ?? null, model_max_output_tokens: Number(selected?.max_output_tokens ?? 0) || null, compaction_enabled: config.compaction_enabled !== false, compaction_threshold_percent: compactionThreshold(config, available, configured), allow_private_providers: privateProviderAccessEnabled(config.allow_private_providers), providers, custom_providers: (config.custom_providers ?? []).map(publicCustom), available_models: available, model_catalog_source: catalog.source };
   });
   app.put("/api/settings/private-providers", async (request, reply) => { const body = (request.body ?? {}) as { enabled?: unknown }; const enabled = body.enabled === true; await mutate((config) => { config.allow_private_providers = enabled; }); return respondWithReload(nodeSessionService, reply, { ok: true, allow_private_providers: enabled }); });
-  app.put("/api/settings/api-key", async (request, reply) => { const body = (request.body ?? {}) as { provider?: unknown; api_key?: unknown }; const provider = String(body.provider ?? ""); const apiKey = String(body.api_key ?? ""); const catalog = await loadPiAiProviderCatalog(); // Without the pi-ai runtime installed there is no catalog to validate
-    // against; accept the key (it stays inert until a runtime exists) so
-    // smoke tests and headless installs can still persist settings.
-    if (catalog.length > 0) { const entry = catalog.find((candidate) => candidate.id === provider); if (!entry) return reply.code(400).send({ error: `Unknown provider: ${provider}` }); if (!entry.apiKeySupported) return reply.code(400).send({ code: "provider_requires_login", error: `${provider} uses subscription login instead of an API key` }); }
+  app.put("/api/settings/api-key", async (request, reply) => { const body = (request.body ?? {}) as { provider?: unknown; api_key?: unknown }; const provider = String(body.provider ?? ""); const apiKey = String(body.api_key ?? ""); const catalog = await readRuntimeCatalog(runtimeCatalog);
+    // A missing runtime catalog is allowed for headless installs; the key is still persisted.
+    if (catalog.providers.length > 0) { const entry = catalog.providers.find((candidate) => candidate.id === provider); if (!entry) return reply.code(400).send({ error: `Unknown provider: ${provider}` }); if (!entry.auth.apiKey) return reply.code(400).send({ code: "provider_requires_login", error: `${provider} uses subscription login instead of an API key` }); }
     if (modelResources) {
       await modelResources.ensureMigrated();
       const credentialId = `cred_system_${provider.toLowerCase().replace(/[^a-z0-9_-]/g, "-")}`;
@@ -694,7 +692,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
         }
       }
       const thinking = clampThinking(requestedThinking, levels ?? ["off"]);
-      await mutate((config) => { config.model = canonicalModel; config.thinking = thinking; const contextWindow = Number(selected?.capabilities.context_window ?? 0); if (contextWindow > 0) config.model_context_window = contextWindow; });
+      await mutate((config) => { config.model = canonicalModel; config.thinking = thinking; const contextWindow = Number(selected?.capabilities.context_window ?? 0); if (contextWindow > 0) config.model_context_window = contextWindow; const maxOutputTokens = Number(selected?.capabilities.max_output_tokens ?? 0); if (maxOutputTokens > 0) config.model_max_output_tokens = maxOutputTokens; });
       if (runtimeLevelsVerified && canonicalModel.startsWith("user-") && selected) {
         const separator = canonicalModel.indexOf("/");
         if (separator > 0) await modelResources.applyRuntimeCapabilities(canonicalModel.slice(0, separator), canonicalModel.slice(separator + 1), { reasoning: selected.capabilities.reasoning, thinking_levels: levels ?? selected.capabilities.thinking_levels });
@@ -721,7 +719,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       }
       return reloaded;
     }
-    const catalog = await modelCatalog(nodeSessionService, current, cwdValue, modelResources); const selected = catalog.available.find((item) => item.id === model); if (model && !selected) return reply.code(400).send({ error: "Model is not available from a configured provider" }); // Never persist a thinking level the model does not support. Clamp to the
+    const catalog = await modelCatalog(nodeSessionService, current, cwdValue, runtimeCatalog); const selected = catalog.available.find((item) => item.id === model); if (model && !selected) return reply.code(400).send({ error: "Model is not available from a configured provider" }); // Never persist a thinking level the model does not support. Clamp to the
     // catalog levels for the selected model; when the levels are unknown,
     // fall back to "off" instead of inventing a level.
     const levels = normalizeThinkingLevels(selected?.thinking_levels);

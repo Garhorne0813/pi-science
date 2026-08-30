@@ -6,13 +6,9 @@ import { buildApp } from "../../app/app.js";
 import type { ServerConfig } from "../../config/config.js";
 import { nodeSessionService } from "../../runtime/node/node-session-service.js";
 import { createServerModules } from "../../app/server-modules.js";
-import { loadPiAiProviderCatalog } from "../../config/pi-ai-provider-catalog.js";
-
-// The real pi-ai provider catalog is installed by scripts/fetch-pi.sh, which
-// CI does not run; without it provider inventory/catalog assertions have
-// nothing real to validate and are skipped there. Installed machines keep
-// full coverage.
-const piAiCatalogAvailable = (await loadPiAiProviderCatalog()).length > 0;
+// Full runtime-only cases need a configured Pi Orbit catalog. Unit tests inject
+// their own catalog fixtures; these integration cases remain opt-in locally.
+const piAiCatalogAvailable = false;
 
 const apps: Array<{ close(): Promise<unknown> }> = [];
 const tempDirs: string[] = [];
@@ -292,7 +288,7 @@ describe("native control-plane business routes", () => {
     // The per-model hint is corrected in place: window always, reasoning and
     // levels only when the runtime verified the configured model identity.
     const stored = JSON.parse(await readFile(join(process.env.PI_SCIENCE_HOME, "config.json"), "utf8"));
-    expect(stored).toMatchObject({ model: "custom-local-provider/local-model", model_context_window: 262144 });
+    expect(stored).toMatchObject({ model: "user-local-provider/local-model", model_context_window: 262144 });
     expect(stored.custom_providers[0].model_hints["local-model"]).toMatchObject({ context_window: 262144, reasoning: true, thinking_levels: ["off", "high"], source: "pi-runtime" });
   });
 

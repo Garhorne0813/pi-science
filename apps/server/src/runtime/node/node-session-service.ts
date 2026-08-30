@@ -154,6 +154,7 @@ function effectiveConfig(requested?: Partial<PiConfig>): PiConfig {
     compaction_enabled: requested?.compaction_enabled ?? defaults.compaction_enabled ?? true,
     compaction_threshold_percent: requested?.compaction_threshold_percent ?? defaults.compaction_threshold_percent,
     model_context_window: requested?.model_context_window ?? defaults.model_context_window,
+    model_max_output_tokens: requested?.model_max_output_tokens ?? defaults.model_max_output_tokens,
     skills: requested?.skills?.length ? requested.skills : defaults.skills,
     extensions: requested?.extensions?.length ? requested.extensions : defaults.extensions,
   };
