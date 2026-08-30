@@ -81,6 +81,7 @@
   "conversation.activity.stopped": "已停止",
   "conversation.activity.thinking": "思考中",
   "conversation.activity.continuing": "分析问题",
+  "conversation.activity.streaming": "正在回答",
   "conversation.activity.recoveringDetail": "恢复实时会话",
   "conversation.activity.waitingApproval": "需要你的确认",
   "conversation.activity.waitingInput": "需要你的输入",

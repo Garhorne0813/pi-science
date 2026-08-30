@@ -56,7 +56,8 @@ describe("turn-level conversation rendering", () => {
   it("shows streaming answer prose before the turn lifecycle settles", () => {
     const turn = buildTurnPresentations([user("u1"), tool("read", "read"), agent("a1", "streaming answer", true)], { lastTurnLifecycle: "active" })[0];
     render(<>{renderTurn(turn, codeRunner)}</>);
-    expect(screen.getByLabelText("streaming answer")).toBeInTheDocument();
+    expect(screen.getByLabelText("Responding")).toBeInTheDocument();
+    expect(screen.getByText("streaming answer")).toBeInTheDocument();
     expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
     cleanup();
     const settled = buildTurnPresentations([user("u1"), tool("read", "read"), agent("a1", "streaming answer")])[0];

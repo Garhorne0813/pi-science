@@ -673,6 +673,7 @@ describe("stable Virtuoso footer", () => {
     expect(workingProps?.components?.Footer).toBe(Footer);
     if (!workingProps?.context) throw new Error("updated Virtuoso context was not captured");
     footerView.rerender(<Footer context={workingProps.context} />);
+    expect(footerView.container).toHaveTextContent("Thinking");
     expect(footerView.container).toHaveTextContent("Analyzing the request");
 
     const interaction: PendingInteraction = {

@@ -7,9 +7,20 @@ import { ACTIVITY_SWITCH_DEBOUNCE_MS, MIN_ACTIVITY_VISIBLE_MS, selectDisplayedAc
 import type { PresentedActivity } from "../../lib/conversation/activity-narrative";
 import type { TurnLifecycle } from "../../lib/conversation/turn-presentation";
 import { presentToolActivity } from "../../lib/conversation/activity-presenters";
-import { ProgressVisual, progressPatternShowsText, useProgressAppearance } from "../progress/ProgressVisual";
+import { ProgressVisual, useProgressAppearance } from "../progress/ProgressVisual";
 import type { ProgressActivityState } from "../progress/progress-activity-map";
 import { cn } from "../../lib/ui";
+
+export function ThinkingActivity({ className }: { className?: string }) {
+  const { t } = useTranslation();
+  const config = useProgressAppearance();
+  const title = t("conversation.activity.thinking");
+  const detail = t("conversation.activity.continuing");
+  return <div className={cn("flex w-full items-center gap-2 py-1", className)}>
+    <span className="flex h-5 shrink-0 items-center"><ProgressVisual slot="thinking" config={config} activityState="orient" text={title} /></span>
+    <ActivityLabel title={title} detail={detail} />
+  </div>;
+}
 
 export function AgentActivity({ blocks, lifecycle = "active" }: { blocks: ToolCallBlock[]; lifecycle?: TurnLifecycle }) {
   const { t } = useTranslation();
@@ -48,10 +59,7 @@ export function AgentActivity({ blocks, lifecycle = "active" }: { blocks: ToolCa
   return <div id={blocks.length === 1 ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} className="scroll-mt-4">
     <button type="button" aria-expanded={canExpand ? expanded : undefined} onClick={() => canExpand && setExpanded((value) => !value)} className={cn("flex w-full items-center gap-2 py-1 text-left transition-colors", canExpand && "rounded-input hover:bg-surface-2/60")}>
       <span className="flex h-5 shrink-0 items-center"><ActivityIcon state={state} slot={visualSlot} config={progressAppearance} label={title} activityState={activityStateFor(lifecycle, shown)} /></span>
-      <span aria-live="polite" aria-atomic="true" className="flex min-w-0 flex-1 items-center">
-        <span className={cn("shrink-0 whitespace-nowrap text-sm font-normal leading-5 text-text", state === "error" && "text-error-text")}>{!progressPatternShowsText(visualSlot, progressAppearance) && title}</span>
-        {detail && <><span aria-hidden className="mx-2 h-0.5 w-0.5 shrink-0 rounded-full bg-muted" /><span className="min-w-0 flex-1 truncate text-xs font-normal leading-[18px] text-muted">{detail}</span></>}
-      </span>
+      <ActivityLabel title={title} detail={detail} error={state === "error"} />
       {lifecycle === "settled" && <span className="shrink-0 font-mono text-[10px] text-muted/60" aria-label={t("conversation.activity.operationCount", { count })}>{count}</span>}
       {canExpand && <ChevronRight size={13} aria-hidden className={cn("shrink-0 text-muted/60 transition-transform", expanded && "rotate-90")} />}
     </button>
@@ -100,6 +108,13 @@ function narrativeLabel(activity: PresentedActivity, t: (key: string) => string)
   const domainKey = `conversation.activity.narrative.${activity.state}.${activity.domain}`;
   const translated = t(domainKey);
   return translated === domainKey ? t(`conversation.activity.narrative.${activity.state}`) : translated;
+}
+
+function ActivityLabel({ title, detail, error = false }: { title: string; detail: string | null; error?: boolean }) {
+  return <span aria-live="polite" aria-atomic="true" className="flex min-w-0 flex-1 items-center">
+    <span className={cn("shrink-0 whitespace-nowrap text-sm font-normal leading-5 text-text", error && "text-error-text")}>{title}</span>
+    {detail && <><span aria-hidden className="mx-2 h-0.5 w-0.5 shrink-0 rounded-full bg-muted" /><span className="min-w-0 flex-1 truncate text-xs font-normal leading-[18px] text-muted">{detail}</span></>}
+  </span>;
 }
 
 function activityStateFor(lifecycle: TurnLifecycle, activity: PresentedActivity | null): ProgressActivityState {

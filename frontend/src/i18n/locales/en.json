@@ -81,6 +81,7 @@
   "conversation.activity.stopped": "Stopped",
   "conversation.activity.thinking": "Thinking",
   "conversation.activity.continuing": "Analyzing the request",
+  "conversation.activity.streaming": "Responding",
   "conversation.activity.recoveringDetail": "Restoring the live session",
   "conversation.activity.waitingApproval": "Needs your approval",
   "conversation.activity.waitingInput": "Needs your input",

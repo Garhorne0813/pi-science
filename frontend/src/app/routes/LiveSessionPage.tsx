@@ -22,7 +22,7 @@ import { isVisibleActivity } from "../../lib/conversation/activity-policy";
 import { buildTurnPresentations, type TurnPresentation } from "../../lib/conversation/turn-presentation";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
 import { SessionExecutionButton } from "../../components/conversation/SessionExecutionButton";
-import { ProgressVisual, progressPatternShowsText, useProgressAppearance } from "../../components/progress/ProgressVisual";
+import { ThinkingActivity } from "../../components/conversation/AgentActivity";
 import { visibleUserMessage } from "../../lib/files";
 import { useTranslation } from "react-i18next";
 import { ResearchLoopDraftCard, ResearchLoopStatusCard, ResearchModePicker } from "../../components/conversation/ResearchLoopControls";
@@ -51,11 +51,9 @@ const SessionRunsPage = lazy(() => import("./RunsPage").then((m) => ({ default: 
  * its local answer state.
  */
 export function ConversationFooter() {
-  const { t } = useTranslation();
   const pendingInteraction = useRuntimeStore((s) => s.pendingInteraction);
   const pendingQuestionnaire = useRuntimeStore((s) => s.pendingQuestionnaire);
   const working = useRuntimeStore((s) => s.working);
-  const progressAppearance = useProgressAppearance();
   const respondToInteraction = useRuntimeStore((s) => s.respondToInteraction);
   const blocks = useRuntimeStore((s) => s.thread.blocks);
   const lastUserIndex = blocks.findLastIndex((block) => block.kind === "user");
@@ -76,12 +74,7 @@ export function ConversationFooter() {
           onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
         />
       ) : null}
-      {working && !pendingInteraction && !hasTurnActivity && (
-        <div className="flex items-center gap-2 py-4 text-sm text-muted" aria-live="polite">
-          <ProgressVisual slot="thinking" config={progressAppearance} text={t("conversation.activity.continuing")} />
-          {!progressPatternShowsText("thinking", progressAppearance) && t("conversation.activity.continuing")}
-        </div>
-      )}
+      {working && !pendingInteraction && !hasTurnActivity && <ThinkingActivity className="py-4" />}
     </div>
   );
 }
@@ -106,7 +99,6 @@ export function LiveSessionPage() {
     : { blocks: [] as ThreadBlock[], index: {} as Record<string, number>, loaded: true };
   const sessions = useRuntimeStore((s) => s.sessions);
   const working = useRuntimeStore((s) => s.working);
-  const progressAppearance = useProgressAppearance();
   const turnLifecycle = useRuntimeStore((s) => s.turnLifecycle);
   const historyLoading = useRuntimeStore((s) => s.historyLoading);
   const loadOlderMessages = useRuntimeStore((s) => s.loadOlderMessages);
@@ -421,12 +413,7 @@ export function LiveSessionPage() {
                 {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
                 {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{research.error}</div>}
                 {renderInteractionPrompt()}
-                {working && !pendingInteraction && (
-                  <div className="flex items-center gap-2 py-4 text-sm text-muted">
-                    <ProgressVisual slot="thinking" config={progressAppearance} text={t("conversation.activity.continuing")} />
-                    {!progressPatternShowsText("thinking", progressAppearance) && t("conversation.activity.continuing")}
-                  </div>
-                )}
+                {working && !pendingInteraction && <ThinkingActivity className="py-4" />}
               </>
             )}
           </div>
