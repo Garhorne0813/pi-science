@@ -113,7 +113,9 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         const cachedMessages = client.getCachedMessages(targetSessionId, cwd);
         if (cachedMessages && cachedMessages.length > 0) {
           if (localMutationGeneration === generations.localMutation && generation === generations.connection) {
-            set({ thread: await attachPersistedTurnArtifacts(threadFromMessages(cachedMessages), targetSessionId, cwd) });
+            // Cached snapshots are the tail page of a previous view, not the
+            // full history: defer strips whose turns are not in the window.
+            set({ thread: await attachPersistedTurnArtifacts(threadFromMessages(cachedMessages), targetSessionId, cwd, { windowComplete: false }) });
           }
         }
 
@@ -147,6 +149,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
             ),
             targetSessionId,
             cwd,
+            { windowComplete: !historyPage.has_more },
           );
           nextState.historyCursor = historyPage.next_cursor;
           nextState.historyHasMore = historyPage.has_more;
@@ -271,8 +274,17 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       const page = await getClient().getMessagesPage(sessionId, cwd, { before });
       const current = get();
       if (current.activeSessionId !== sessionId || current.cwd !== cwd) return 0;
+      // Re-anchor persisted strips after the older page arrives: strips that
+      // were deferred at initial load (their turns live in this page) now
+      // anchor, and any earlier misplacement gets repositioned.
+      const thread = await attachPersistedTurnArtifacts(
+        prependHistoryMessages(current.thread, page.messages),
+        sessionId,
+        cwd,
+        { windowComplete: !page.has_more },
+      );
       set({
-        thread: prependHistoryMessages(current.thread, page.messages),
+        thread,
         historyCursor: page.next_cursor,
         historyHasMore: page.has_more,
         historySnapshotVersion: page.snapshot_version,
@@ -614,7 +626,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       set({
         client,
         activeSessionId: result.id,
-        thread: await attachPersistedTurnArtifacts(threadFromMessages(history.messages), result.id, cwd),
+        thread: await attachPersistedTurnArtifacts(threadFromMessages(history.messages), result.id, cwd, { windowComplete: !history.has_more }),
         historyCursor: history.next_cursor,
         historyHasMore: history.has_more,
         historyLoading: false,

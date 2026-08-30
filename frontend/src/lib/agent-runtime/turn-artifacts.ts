@@ -16,7 +16,12 @@ export const turnArtifactsKey = (cwd: string, sessionId: string) => [
 /** Fetch persisted turn-artifact summaries and attach them to a history-built
  *  thread. Failures degrade to the unchanged thread (the conversation itself
  *  is authoritative). */
-export async function attachPersistedTurnArtifacts(thread: Thread, sessionId: string, cwd: string): Promise<Thread> {
+export async function attachPersistedTurnArtifacts(
+  thread: Thread,
+  sessionId: string,
+  cwd: string,
+  opts: { windowComplete?: boolean } = {},
+): Promise<Thread> {
   if (!sessionId) return thread;
   try {
     const { turns } = await queryClient.fetchQuery({
@@ -25,7 +30,7 @@ export async function attachPersistedTurnArtifacts(thread: Thread, sessionId: st
       staleTime: TURN_ARTIFACTS_STALE_MS,
       retry: false,
     });
-    return attachTurnArtifacts(thread, turns);
+    return attachTurnArtifacts(thread, turns, opts);
   } catch {
     return thread;
   }

@@ -522,7 +522,15 @@ function afterAssistantTurnEnd(blocks: ThreadBlock[], assistantMessageId: string
  *  anchoring cannot find a matching agent block. When an ordinal repeats,
  *  every LATER record falls back to its record position (the M-th record
  *  anchors the M-th turn). */
-export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): Thread {
+export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[], opts: { windowComplete?: boolean } = {}): Thread {
+  // `windowComplete` marks that the thread window holds the full history
+  // (`has_more === false`). Only then are the guess-based anchors (turn
+  // ordinal, record order, thread end) allowed: in a partial window they
+  // count user blocks from the window start and reliably land the strip on
+  // a NEWER turn. A partial window defers unresolvable records instead;
+  // the strip is placed by a later attach once its history page is
+  // prepended (loadHistoryPage re-runs this after every page).
+  const windowComplete = opts.windowComplete !== false;
   if (!turns || turns.length === 0) return thread;
   let blocks = thread.blocks;
   let index = thread.index;
@@ -552,6 +560,14 @@ export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[]): 
       // endedAt starts the span; the strip lands after that turn's LAST
       // agent block).
       insertAt = afterTurnEndedAt(blocks, turn.ended_at);
+    }
+    if (insertAt < 0 && !windowComplete) {
+      // Partial history window: this record's turn has not loaded yet (its
+      // user message and agent blocks live in an older page). Every
+      // remaining anchor would guess from the window start and land the
+      // strip on a newer turn, so defer placement; a later attach (after
+      // the older page is prepended) anchors it correctly.
+      continue;
     }
     if (insertAt < 0 && !ordinalBroken && Number.isInteger(ordinal) && ordinal > 0 && !usedOrdinals.has(ordinal)) {
       // Anchor to the END of the ordinal-th turn (user-message delimited) so

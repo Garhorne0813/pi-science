@@ -475,4 +475,46 @@ describe("attachTurnArtifacts (history restore)", () => {
     ]);
     expect(next.blocks.at(-1)).toMatchObject({ kind: "artifact-summary", turnId: "turn-1" });
   });
+
+  it("defers a strip whose turn is outside a partial history window (windowComplete: false)", () => {
+    // Restore path: only the LAST page is loaded. The old turn's user/agent
+    // blocks are not in the window, so every guess-based anchor would land
+    // the strip on the newer turn — defer it instead.
+    const thread = threadWith([
+      { kind: "user", id: "u2", text: "b", timestamp: "2026-08-30T04:39:32.000Z" },
+      { kind: "agent", id: "msg-2", parts: [{ id: "msg-2", text: "r2" }], timestamp: "2026-08-30T04:40:39.000Z" },
+    ]);
+    const next = attachTurnArtifacts(thread, [
+      { turn_id: "turn-1", session_id: "s", assistant_message_id: null, turn_ordinal: 1, ended_at: "2026-08-29T16:44:56.000Z", artifacts: [{ path: "old.png", kind: "image", mime: "image/png", size: 1 }] },
+      { turn_id: "turn-2", session_id: "s", assistant_message_id: null, turn_ordinal: 2, ended_at: "2026-08-30T04:40:39.064Z", artifacts: [{ path: "new.png", kind: "image", mime: "image/png", size: 2 }] },
+    ], { windowComplete: false });
+    const strips = next.blocks.filter((block) => block.kind === "artifact-summary");
+    expect(strips).toHaveLength(1);
+    expect(strips[0]).toMatchObject({ turnId: "turn-2" });
+    expect(next.index["turn-artifacts-turn-2"]).toBe(2);
+  });
+
+  it("places a deferred strip after its own turn once the older page is prepended", () => {
+    const tail = threadWith([
+      { kind: "user", id: "u2", text: "b", timestamp: "2026-08-30T04:39:32.000Z" },
+      { kind: "agent", id: "msg-2", parts: [{ id: "msg-2", text: "r2" }], timestamp: "2026-08-30T04:40:39.000Z" },
+    ]);
+    const turns = [
+      { turn_id: "turn-1", session_id: "s", assistant_message_id: null, turn_ordinal: 1, ended_at: "2026-08-29T16:44:56.000Z", artifacts: [{ path: "old.png", kind: "image", mime: "image/png", size: 1 }] },
+      { turn_id: "turn-2", session_id: "s", assistant_message_id: null, turn_ordinal: 2, ended_at: "2026-08-30T04:40:39.064Z", artifacts: [{ path: "new.png", kind: "image", mime: "image/png", size: 2 }] },
+    ];
+    const deferred = attachTurnArtifacts(tail, turns, { windowComplete: false });
+    // The older page arrives (loadHistoryPage prepends it), then attach re-runs.
+    const older = threadWith([
+      { kind: "user", id: "u1", text: "a", timestamp: "2026-08-29T16:42:58.000Z" },
+      { kind: "agent", id: "msg-1", parts: [{ id: "msg-1", text: "r1" }], timestamp: "2026-08-29T16:44:56.000Z" },
+    ]);
+    const mergedBlocks = [...older.blocks, ...deferred.blocks];
+    const index: Record<string, number> = {};
+    mergedBlocks.forEach((block, position) => { index[block.id] = position; });
+    const full = attachTurnArtifacts({ blocks: mergedBlocks, index, loaded: true }, turns, { windowComplete: true });
+    expect(full.blocks.map((block) => block.kind)).toEqual(["user", "agent", "artifact-summary", "user", "agent", "artifact-summary"]);
+    expect(full.blocks[2]).toMatchObject({ turnId: "turn-1" });
+    expect(full.blocks[5]).toMatchObject({ turnId: "turn-2" });
+  });
 });
