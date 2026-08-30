@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { defaultProgressAppearance } from "@pi-science/contracts";
 import { ProgressVisual } from "./ProgressVisual";
+import { normalizeProgressAppearance } from "./ProgressPatternCatalog";
 import { getProgressAppearance, setProgressAppearance } from "./progress-settings-store";
 import { ProgressTab } from "../settings/ProgressTab";
 import type { SettingsConfig } from "../../lib/settings";
@@ -23,6 +24,11 @@ describe("ProgressVisual", () => {
   it("renders a bundled inline pattern without a network dependency", () => {
     const { container } = render(<ProgressVisual slot="currentActivity" config={defaultProgressAppearance} text="Reviewing" />);
     expect(container.firstChild).toBeTruthy();
+  });
+
+  it("falls back to an inline thinking pattern for old text-only settings", () => {
+    const normalized = normalizeProgressAppearance({ ...defaultProgressAppearance, patterns: { ...defaultProgressAppearance.patterns, thinking: "text-skeleton" } });
+    expect(normalized.patterns.thinking).toBe("static-check");
   });
 });
 

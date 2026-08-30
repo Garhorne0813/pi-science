@@ -5,14 +5,14 @@ import type { ProgressAppearance } from "@pi-science/contracts";
 import { defaultProgressAppearance } from "@pi-science/contracts";
 import { ProgressVisual } from "../progress/ProgressVisual";
 import { setProgressAppearance } from "../progress/progress-settings-store";
-import { patternsForSlot, type ProgressSlot } from "../progress/ProgressPatternCatalog";
+import { patternsForSlot, normalizeProgressAppearance, type ProgressSlot } from "../progress/ProgressPatternCatalog";
 import type { SettingsConfig } from "../../lib/settings";
 import { SettingsSelectMenu } from "./SettingsSelectMenu";
 
 const PRESET_PATTERNS: Record<Exclude<ProgressAppearance["preset"], "custom">, ProgressAppearance["patterns"]> = {
   quiet: { thinking: "static-check", currentActivity: "inline-signal", streamingAnswer: "text-decode", imageGeneration: "image-scan", waiting: "static-check", completed: "static-check" },
-  research: { thinking: "text-skeleton", currentActivity: "inline-signal", streamingAnswer: "text-decode", imageGeneration: "image-scan", waiting: "static-check", completed: "static-check" },
-  science: { thinking: "text-skeleton", currentActivity: "inline-signal", streamingAnswer: "text-cascade", imageGeneration: "image-tiles", waiting: "static-check", completed: "static-check" },
+  research: { thinking: "inline-spark", currentActivity: "inline-signal", streamingAnswer: "text-decode", imageGeneration: "image-scan", waiting: "static-check", completed: "static-check" },
+  science: { thinking: "inline-spark", currentActivity: "inline-signal", streamingAnswer: "text-cascade", imageGeneration: "image-tiles", waiting: "static-check", completed: "static-check" },
 };
 
 const PROGRESS_SELECT_CLASS = "max-w-none border-transparent focus-visible:border-transparent focus-visible:ring-0 data-[state=open]:border-transparent";
@@ -25,7 +25,7 @@ const SLOTS: Array<{ id: ProgressSlot; labelKey: string; sample: string }> = [
 ];
 
 function configFrom(input: ProgressAppearance | undefined): ProgressAppearance {
-  return input ? structuredClone(input) : structuredClone(defaultProgressAppearance);
+  return normalizeProgressAppearance(input ? structuredClone(input) : structuredClone(defaultProgressAppearance));
 }
 
 export function ProgressTab({ config, saving, onSave }: { config: SettingsConfig; saving: boolean; onSave: (next: ProgressAppearance) => Promise<void> }) {

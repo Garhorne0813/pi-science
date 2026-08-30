@@ -1,5 +1,6 @@
 import { apiRequest } from "../../lib/client/api";
 import { defaultProgressAppearance, type ProgressAppearance } from "@pi-science/contracts";
+import { normalizeProgressAppearance } from "./ProgressPatternCatalog";
 
 let current = defaultProgressAppearance;
 let hydration: Promise<void> | null = null;
@@ -16,7 +17,7 @@ export function hydrateProgressAppearance(): Promise<void> {
 
 export function getProgressAppearance(): ProgressAppearance { return current; }
 export function setProgressAppearance(next: ProgressAppearance): void {
-  current = structuredClone(next);
+  current = normalizeProgressAppearance(next);
   listeners.forEach((listener) => listener());
 }
 export function subscribeProgressAppearance(listener: () => void): () => void {

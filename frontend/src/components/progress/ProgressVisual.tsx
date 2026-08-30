@@ -26,7 +26,7 @@ export function progressPatternShowsText(slot: ProgressSlot, config: ProgressApp
 
 export function ProgressVisual({ slot, config, state = "running", text = "Generating response", compact = false }: { slot: ProgressSlot; config: ProgressAppearance; state?: "running" | "waiting" | "completed"; text?: string; compact?: boolean }) {
   const pattern = config.patterns[slot];
-  const definition = PROGRESS_PATTERN_CATALOG.find((item) => item.id === pattern) ?? PROGRESS_PATTERN_CATALOG[0];
+  const definition = PROGRESS_PATTERN_CATALOG.find((item) => item.id === pattern && item.slots.includes(slot)) ?? PROGRESS_PATTERN_CATALOG.find((item) => item.slots.includes(slot)) ?? PROGRESS_PATTERN_CATALOG[0];
   const paused = config.motion === "off" || (config.motion === "system" && typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
   const color = config.colorMode === "custom" && config.customColor ? config.customColor : "var(--color-accent)";
   const speed = Number.isFinite(config.speed) && config.speed > 0 ? config.speed : 1;
