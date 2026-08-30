@@ -15,9 +15,10 @@ export function AgentActivity({ blocks, lifecycle = "active" }: { blocks: ToolCa
   const activities = useMemo(() => executionActivities(blocks), [blocks]);
   const count = useMemo(() => executionOperationCount(blocks), [blocks]);
   const shown = useDisplayedActivity(blocks, lifecycle);
-  if (activities.length === 0) return null;
+  if (!shown && activities.length === 0 && lifecycle !== "recovering" && lifecycle !== "waiting") return null;
 
-  const traceOnly = !shown && (lifecycle === "active" || lifecycle === "waiting");
+  const canExpand = activities.length > 0;
+  const traceOnly = !shown && (lifecycle === "queued" || lifecycle === "active" || lifecycle === "waiting" || lifecycle === "recovering");
   const state = lifecycle === "failed" || shown?.state === "error" ? "error" : lifecycle === "aborted" ? "stopped" : lifecycle === "settled" ? "completed" : shown?.state === "interaction" ? "waiting" : "running";
   const label = lifecycle === "failed"
     ? t("conversation.activity.error")
@@ -25,25 +26,29 @@ export function AgentActivity({ blocks, lifecycle = "active" }: { blocks: ToolCa
       ? t("conversation.activity.stopped")
       : lifecycle === "settled"
         ? t("conversation.activity.completed")
-        : shown
+        : lifecycle === "recovering"
+          ? t("conversation.activity.narrative.recover")
+          : lifecycle === "waiting" && !shown
+            ? t("conversation.activity.waitingInput")
+            : shown
           ? narrativeLabel(shown, t)
           : t("conversation.activity.trace");
 
   return <div id={blocks.length === 1 ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} className={cn("overflow-hidden scroll-mt-4", !traceOnly && "rounded-input border border-faint bg-surface")}>
-    <button type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)} className={cn("flex w-full items-center gap-2 text-left text-xs text-muted transition-colors hover:bg-surface-2", traceOnly ? "px-1 py-1" : "px-3 py-2")}>
+    <button type="button" aria-expanded={canExpand ? expanded : undefined} onClick={() => canExpand && setExpanded((value) => !value)} className={cn("flex w-full items-center gap-2 text-left text-xs text-muted transition-colors", canExpand && "hover:bg-surface-2", traceOnly ? "px-1 py-1" : "px-3 py-2")}>
       {!traceOnly && <ActivityIcon state={state} />}
       <span {...(!traceOnly ? { "aria-live": "polite", "aria-atomic": "true" } : {})} className={cn("min-w-0 flex-1 truncate", state === "error" && "text-error-text")}>{label}</span>
       {lifecycle === "settled" && <span className="shrink-0 font-mono text-[10px] text-muted/60" aria-label={t("conversation.activity.operationCount", { count })}>{count}</span>}
-      <ChevronRight size={13} aria-hidden className={cn("shrink-0 text-muted/60 transition-transform", expanded && "rotate-90")} />
+      {canExpand && <ChevronRight size={13} aria-hidden className={cn("shrink-0 text-muted/60 transition-transform", expanded && "rotate-90")} />}
     </button>
-    {expanded && <div className="border-t border-faint bg-surface-2/50 px-2 py-1" aria-label={t("conversation.activity.trace")}>{activities.map((block) => <TraceItem key={block.id} block={block} />)}</div>}
+    {expanded && canExpand && <div className="border-t border-faint bg-surface-2/50 px-2 py-1" aria-label={t("conversation.activity.trace")}>{activities.map((block) => <TraceItem key={block.id} block={block} />)}</div>}
   </div>;
 }
 
 /** Depend on the stable narrative key, not the changing activity object. This
  *  keeps high-frequency partial tool output from restarting the timer. */
 function useDisplayedActivity(blocks: ToolCallBlock[], lifecycle: TurnLifecycle): PresentedActivity | null {
-  const live = lifecycle === "active" || lifecycle === "waiting";
+  const live = lifecycle === "queued" || lifecycle === "active" || lifecycle === "waiting" || lifecycle === "recovering";
   const target = live ? selectDisplayedActivity(blocks) : null;
   const targetKey = target?.mergeKey ?? null;
   const targetForced = target?.forced === true;

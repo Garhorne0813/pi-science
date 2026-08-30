@@ -34,8 +34,23 @@ describe("Narrative Progress reducer", () => {
     expect(transitions(blocks)).toEqual(["explore:code", "implementation:code"]);
   });
 
+  it("keeps a short inspect burst inside the implementation epoch", () => {
+    const blocks = [
+      tool("edit", "edit", "done", { endedAt: "2026-08-30T00:00:00.000Z" }),
+      tool("read", "r1", "done", { startedAt: "2026-08-30T00:00:00.100Z" }),
+      tool("grep", "r2", "done", { startedAt: "2026-08-30T00:00:00.400Z" }),
+      tool("find", "r3", "done", { startedAt: "2026-08-30T00:00:00.800Z" }),
+    ];
+    expect(selectDisplayedActivity(blocks)).toMatchObject({ state: "implementation", domain: "code" });
+  });
+
   it("allows a sustained inspect burst to leave a finished implementation epoch", () => {
-    const blocks = [tool("edit"), tool("read", "r1"), tool("grep", "r2"), tool("find", "r3")];
+    const blocks = [
+      tool("edit", "edit", "done", { endedAt: "2026-08-30T00:00:00.000Z" }),
+      tool("read", "r1", "done", { startedAt: "2026-08-30T00:00:00.100Z" }),
+      tool("grep", "r2", "done", { startedAt: "2026-08-30T00:00:01.000Z" }),
+      tool("find", "r3", "done", { startedAt: "2026-08-30T00:00:02.000Z" }),
+    ];
     expect(selectDisplayedActivity(blocks)).toMatchObject({ state: "explore", domain: "code" });
   });
 

@@ -1,12 +1,17 @@
 import type { AgentMessageBlock, ThreadBlock } from "../../types/thread";
-import { isVisibleActivity } from "./activity-policy";
+import { activityPolicy, isVisibleActivity } from "./activity-policy";
 
 /** Structural pick of the answer of a COMPLETED turn: the last agent block
  *  that no later visible-activity tool supersedes. Never call this for a live
  *  turn: its "no trailing tool" state just means the next tool has not
  *  arrived yet, which is what made provisional narration flicker as an answer. */
 export function finalAgentInCompletedTurn(blocks: ThreadBlock[]): AgentMessageBlock | null {
-  return latestUnsupersededAgent(blocks);
+  const candidate = latestUnsupersededAgent(blocks);
+  if (!candidate) return null;
+  const candidateIndex = blocks.indexOf(candidate);
+  const trailingPlan = blocks.slice(candidateIndex + 1).some((block) => block.kind === "tool" && activityPolicy(block).plane === "plan-control");
+  const executionBeforeCandidate = blocks.slice(0, candidateIndex).some((block) => block.kind === "tool" && activityPolicy(block).plane !== "plan-control");
+  return trailingPlan && !executionBeforeCandidate ? null : candidate;
 }
 
 /** The newest agent block of an ACTIVE turn that no visible tool has taken

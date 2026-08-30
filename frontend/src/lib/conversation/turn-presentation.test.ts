@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { ThreadBlock, ToolCallBlock } from "../../types/thread";
+import type { AgentMessageBlock, ThreadBlock, ToolCallBlock } from "../../types/thread";
 import { finalAgentInCompletedTurn, intermediateAgentsInTurn, provisionalAgentInActiveTurn } from "./turn-analysis";
 import { buildTurnPresentations } from "./turn-presentation";
 
 const user = (id: string): ThreadBlock => ({ kind: "user", id, text: id });
-const agent = (id: string, partial = false): ThreadBlock => ({ kind: "agent", id, parts: [{ id: `${id}-part`, text: id }], ...(partial ? { partial: true } : {}) });
+const agent = (id: string, partial = false): AgentMessageBlock => ({ kind: "agent", id, parts: [{ id: `${id}-part`, text: id }], ...(partial ? { partial: true } : {}) });
 const tool = (id: string, name = "read", status: ToolCallBlock["status"] = "done"): ThreadBlock => ({ kind: "tool", id, callId: `${id}-call`, tool: name, status });
 
 describe("turn analysis", () => {
@@ -82,6 +82,12 @@ describe("buildTurnPresentations", () => {
     expect(turns[1].active).toBe(true);
   });
 
+  it("shows a semantic final answer while it is still streaming", () => {
+    const turn = buildTurnPresentations([user("u1"), tool("tool-1"), { ...agent("final"), presentationRole: "final", partial: true }], { lastTurnLifecycle: "active" })[0];
+    expect(turn.finalAgent?.id).toBe("final");
+    expect(turn.provisionalAgent).toBeNull();
+    expect(turn.completed).toBe(false);
+  });
   it("does not promote provisional narration after abort or terminal failure", () => {
     const blocks = [user("u1"), agent("narration"), tool("tool-1"), agent("provisional")];
     for (const lifecycle of ["aborted", "failed"] as const) {
@@ -93,10 +99,17 @@ describe("buildTurnPresentations", () => {
     }
   });
 
-  it("does not promote narration in a todo-only failed turn", () => {
-    const turn = buildTurnPresentations([user("u1"), agent("planning"), tool("todo", "todo")], { lastTurnLifecycle: "failed" })[0];
-    expect(turn.finalAgent).toBeNull();
-    expect(turn.planControlTools).toHaveLength(1);
-    expect(turn.activityTools).toHaveLength(0);
+  it("does not promote narration in a todo-only settled or failed turn", () => {
+    for (const lifecycle of ["settled", "failed"] as const) {
+      const turn = buildTurnPresentations([user("u1"), agent("planning"), tool("todo", "todo")], { lastTurnLifecycle: lifecycle })[0];
+      expect(turn.finalAgent).toBeNull();
+      expect(turn.planControlTools).toHaveLength(1);
+      expect(turn.activityTools).toHaveLength(0);
+    }
+  });
+
+  it("keeps a final answer when todo bookkeeping follows real execution", () => {
+    const turn = buildTurnPresentations([user("u1"), tool("read"), agent("final"), tool("todo", "todo")], { lastTurnLifecycle: "settled" })[0];
+    expect(turn.finalAgent?.id).toBe("final");
   });
 });

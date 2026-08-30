@@ -2,7 +2,7 @@ import type { AgentMessageBlock, ThreadBlock, ToolCallBlock, TurnArtifactSummary
 import { activityPolicy, isVisibleActivity } from "./activity-policy";
 import { finalAgentInCompletedTurn, intermediateAgentsInTurn, provisionalAgentInActiveTurn } from "./turn-analysis";
 
-export type TurnLifecycle = "active" | "waiting" | "settled" | "aborted" | "failed";
+export type TurnLifecycle = "queued" | "active" | "waiting" | "recovering" | "settled" | "aborted" | "failed";
 
 export interface TurnPresentation {
   id: string;
@@ -53,7 +53,7 @@ export function turnBlockIds(turn: TurnPresentation): string[] {
 }
 
 function buildTurnPresentation(blocks: ThreadBlock[], lifecycle: TurnLifecycle): TurnPresentation {
-  const active = lifecycle === "active" || lifecycle === "waiting";
+  const active = lifecycle === "queued" || lifecycle === "active" || lifecycle === "waiting" || lifecycle === "recovering";
   const user = blocks[0]?.kind === "user" ? blocks[0] : null;
   const tools = blocks.filter((block): block is ToolCallBlock => block.kind === "tool");
   const executionTools = tools.filter((block) => activityPolicy(block).plane === "execution");
@@ -61,8 +61,9 @@ function buildTurnPresentation(blocks: ThreadBlock[], lifecycle: TurnLifecycle):
   const interactionTools = tools.filter((block) => activityPolicy(block).plane === "interaction");
   const activityTools = tools.filter(isVisibleActivity);
   const artifacts = blocks.filter((block): block is TurnArtifactSummaryBlock => block.kind === "artifact-summary");
-  const finalAgent = lifecycle === "settled" ? finalAgentInCompletedTurn(blocks) : null;
-  const provisionalAgent = active ? provisionalAgentInActiveTurn(blocks) : null;
+  const finalAgent = blocks.findLast((block): block is AgentMessageBlock => block.kind === "agent" && block.presentationRole === "final")
+    ?? (lifecycle === "settled" ? finalAgentInCompletedTurn(blocks) : null);
+  const provisionalAgent = active && !finalAgent ? provisionalAgentInActiveTurn(blocks) : null;
   const systemBlocks = blocks.filter((block) => block.kind !== "user" && block.kind !== "agent" && block.kind !== "artifact-summary" && (block.kind !== "tool" || activityPolicy(block).plane === "system"));
   const settled = activityTools.length > 0 && activityTools.every((block) => block.status === "done" || block.status === "error");
   return {

@@ -70,6 +70,21 @@ describe("AgentActivity", () => {
     }
   });
 
+  it("renders recovery and waiting states without a trace", () => {
+    const { rerender } = render(<AgentActivity lifecycle="recovering" blocks={[]} />);
+    expect(screen.getByText("Resuming the task")).toBeInTheDocument();
+    rerender(<AgentActivity lifecycle="waiting" blocks={[]} />);
+    expect(screen.getByText("Needs your input")).toBeInTheDocument();
+  });
+  it("shows recovery and interaction without execution trace items", () => {
+    const { rerender, container } = render(<AgentActivity lifecycle="recovering" blocks={[tool("recovery", "runtime_recovery", "running")]} />);
+    expect(screen.getByText("Resuming the task")).toBeInTheDocument();
+    expect(container.querySelector(".lucide-chevron-right")).toBeNull();
+    rerender(<AgentActivity lifecycle="waiting" blocks={[tool("ask", "ask_user_question", "waiting-approval")]} />);
+    expect(screen.getByText("Needs your input")).toBeInTheDocument();
+    expect(container.querySelector(".lucide-chevron-right")).toBeNull();
+  });
+
   it("shows interaction, failure, and abort lifecycle copy", () => {
     const { rerender } = render(<AgentActivity lifecycle="waiting" blocks={[tool("read", "read"), tool("ask", "ask_user_question", "waiting-approval")]} />);
     expect(screen.getByText("Needs your input")).toBeInTheDocument();

@@ -279,8 +279,10 @@ export function registerEventListener(client: PiScienceClient) {
       useRuntimeStore.setState({ working: true, turnLifecycle: "active", status: "ready" });
     } else if (event.type === "text.updated" || event.type === "tool.updated") {
       ++generations.activity;
-      turnState.errored = false;
-      useRuntimeStore.setState({ working: true, turnLifecycle: event.type === "tool.updated" && String(event.status || "") === "waiting-approval" ? "waiting" : "active", status: "ready" });
+      if (!blocksLateEvents(state.turnLifecycle)) {
+        turnState.errored = false;
+        useRuntimeStore.setState({ working: true, turnLifecycle: event.type === "tool.updated" && String(event.status || "") === "waiting-approval" ? "waiting" : "active", status: "ready" });
+      }
     } else if (event.type === "compaction.updated") {
       ++generations.activity;
       const status = String(event.status || "");
@@ -294,18 +296,20 @@ export function registerEventListener(client: PiScienceClient) {
       // file revision above. Marking again would double-refresh every turn.
     } else if (event.type === "agent_settled" || event.type === "session.idle") {
       ++generations.activity;
-      const successful = !turnState.errored;
-      useRuntimeStore.setState({
-        working: false,
-        turnLifecycle: successful ? "settled" : "failed",
-        status: successful ? "ready" : "error",
-        pendingInteraction: null,
-        pendingQuestionnaire: null,
-      });
-      markWorkspaceFilesChanged();
-      if (successful && state.activeSessionId && event.handledWithoutTurn !== true) {
-        void resyncCompletedHistory(state.activeSessionId, state.cwd);
-        maybeGenerateAiTitle(state.activeSessionId, state.cwd);
+      if (!blocksLateEvents(state.turnLifecycle)) {
+        const successful = !turnState.errored;
+        useRuntimeStore.setState({
+          working: false,
+          turnLifecycle: successful ? "settled" : "failed",
+          status: successful ? "ready" : "error",
+          pendingInteraction: null,
+          pendingQuestionnaire: null,
+        });
+        markWorkspaceFilesChanged();
+        if (successful && state.activeSessionId && event.handledWithoutTurn !== true) {
+          void resyncCompletedHistory(state.activeSessionId, state.cwd);
+          maybeGenerateAiTitle(state.activeSessionId, state.cwd);
+        }
       }
       void loadSessionsInternal();
     } else if (event.type === "session.stats") {
@@ -320,8 +324,8 @@ export function registerEventListener(client: PiScienceClient) {
     } else if (event.type === "error") {
       ++generations.activity;
       if (event.recoverable === true) {
-        useRuntimeStore.setState({ status: "connecting" });
-      } else {
+        if (!blocksLateEvents(state.turnLifecycle)) useRuntimeStore.setState({ turnLifecycle: "recovering", status: "connecting" });
+      } else if (!blocksLateEvents(state.turnLifecycle)) {
         turnState.errored = true;
         useRuntimeStore.setState({ working: false, turnLifecycle: "failed", status: "error", pendingInteraction: null, pendingQuestionnaire: null });
       }
@@ -334,3 +338,5 @@ export function registerEventListener(client: PiScienceClient) {
     }
   });
 }
+
+function blocksLateEvents(lifecycle: string): boolean { return lifecycle === "aborted" || lifecycle === "failed"; }
