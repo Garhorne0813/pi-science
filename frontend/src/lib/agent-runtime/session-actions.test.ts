@@ -474,11 +474,16 @@ describe("runtime session actions", () => {
 
     await expect(useRuntimeStore.getState().sendPrompt("ambiguous")).rejects.toThrow("request timeout");
     expect(useRuntimeStore.getState().working).toBe(true);
+    expect(useRuntimeStore.getState().turnLifecycle).toBe("active");
     expect(useRuntimeStore.getState().status).toBe("error");
 
     await useRuntimeStore.getState().abort();
     expect(useRuntimeStore.getState().working).toBe(false);
+    expect(useRuntimeStore.getState().turnLifecycle).toBe("aborted");
     expect(useRuntimeStore.getState().status).toBe("ready");
+
+    FakeEventSource.instances[0].emit("session.idle", { type: "session.idle", sessionId: "session-a" });
+    expect(useRuntimeStore.getState().turnLifecycle).toBe("aborted");
   });
 
   it("clears active conversation state when deleting the active session", async () => {

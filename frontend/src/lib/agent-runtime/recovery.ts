@@ -68,8 +68,10 @@ export function consumeSuppressedConnectionRecovery(client: PiScienceClient, ses
 }
 
 function applyRuntimeState(runtimeState: SessionState, current = useRuntimeStore.getState()): void {
+  const working = pendingWorkingState(runtimeBusy(runtimeState), current);
   useRuntimeStore.setState({
-    working: pendingWorkingState(runtimeBusy(runtimeState), current),
+    working,
+    turnLifecycle: working ? (hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire) ? "waiting" : "active") : current.turnLifecycle,
     model: runtimeState.model ?? current.model,
     thinking: runtimeState.thinking ?? current.thinking,
     contextTokens: runtimeState.context_tokens ?? current.contextTokens,
@@ -170,7 +172,7 @@ export async function reconcileWorkingState(
   } else if (!hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire)) {
     // Only an authoritative idle snapshot from this activity generation may
     // settle a failed probe. An unknown state must remain conservatively busy.
-    useRuntimeStore.setState({ working: false });
+    useRuntimeStore.setState({ working: false, turnLifecycle: "settled" });
     markWorkspaceFilesChanged();
   }
 }
@@ -249,12 +251,12 @@ async function runConnectionRecovery(
   // endpoint stayed unavailable. If state never succeeded, preserve working.
   if (lastState) applyRuntimeState(lastState, current);
   if (lastState && !runtimeBusy(lastState) && !hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire)) {
-    useRuntimeStore.setState({ working: false });
+    useRuntimeStore.setState({ working: false, turnLifecycle: "settled" });
     markWorkspaceFilesChanged();
   } else if (!stateSucceeded) {
     const known = knownRuntimeState(client, sessionId, cwd);
     if (known?.activityGeneration === activityGeneration && !known.busy && !hasPendingInteractionData(current.pendingInteraction, current.pendingQuestionnaire)) {
-      useRuntimeStore.setState({ working: false });
+      useRuntimeStore.setState({ working: false, turnLifecycle: "settled" });
       markWorkspaceFilesChanged();
     }
   }
@@ -393,7 +395,7 @@ export async function reconcilePromptAfterLateStream(
         // interaction request. The prompt is the work the user needs to do,
         // so clear the spinner state but keep both pending payloads intact.
         ++generations.activity;
-        useRuntimeStore.setState({ working: false, status: "ready" });
+        useRuntimeStore.setState({ working: false, turnLifecycle: "waiting", status: "ready" });
         return;
       }
       if (pendingInteraction) {
@@ -428,7 +430,7 @@ export async function reconcilePromptAfterLateStream(
           || !recheck.working
         ) return;
         ++generations.activity;
-        useRuntimeStore.setState({ working: false, status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
+        useRuntimeStore.setState({ working: false, turnLifecycle: "settled", status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
         void resyncCompletedHistory(sessionId, cwd);
         void loadSessionsInternal();
         return;
@@ -504,6 +506,7 @@ export function recoverMissingSession(sessionId: string, cwd: string, client?: P
     historyLoading: false,
     historySnapshotVersion: "",
     working: false,
+    turnLifecycle: "settled",
     status: "ready",
     model: null,
     thinking: null,

@@ -59,6 +59,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           sessions: state.cwd !== cwd ? [] : state.sessions,
           activeSessionId: sessionId ?? null,
           working: false,
+          turnLifecycle: "settled",
           model: null,
           thinking: null,
           contextTokens: null,
@@ -91,6 +92,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
             historySnapshotVersion: "",
             status: "ready",
             working: false,
+            turnLifecycle: "settled",
           });
           void loadSessionsInternal();
           return;
@@ -324,13 +326,13 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         timestamp: new Date().toISOString(),
       };
       const blocks = [...thread.blocks, userBlock];
-      set({ thread: { blocks, index: { ...thread.index, [userBlock.id]: blocks.length - 1 }, loaded: true }, working: true });
+      set({ thread: { blocks, index: { ...thread.index, [userBlock.id]: blocks.length - 1 }, loaded: true }, working: true, turnLifecycle: "active" });
       if (!activeSessionId) {
         try {
           activeSessionId = await get().createNewSession();
         } catch (error) {
           const current = get();
-          if (current.cwd === cwd) set({ working: false });
+          if (current.cwd === cwd) set({ working: false, turnLifecycle: "failed" });
           throw error;
         }
       }
@@ -344,7 +346,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       ++generations.localMutation;
       resetTurnBuffer();
       turnState.errored = false;
-      set({ client, working: true });
+      set({ client, working: true, turnLifecycle: "active" });
 
       applyPromptSessionName(cwd, activeSessionId, message);
       // Baseline for the late-stream monitor: any assistant message persisted
@@ -411,6 +413,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
             // until the user aborts. Keep Stop visible so the UI cannot submit a
             // second prompt against that still-running/unknown turn.
             working: ambiguousTransportFailure,
+            turnLifecycle: ambiguousTransportFailure ? "active" : "failed",
             status: "error",
           });
         }
@@ -428,7 +431,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         await getClient().abort(activeSessionId, cwd);
         const current = get();
         if (current.activeSessionId === activeSessionId && current.cwd === cwd) {
-          set({ working: false, status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
+          set({ working: false, turnLifecycle: "aborted", status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
         }
       } catch (error) {
         const current = get();
@@ -620,6 +623,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         historyLoading: false,
         historySnapshotVersion: history.snapshot_version,
         working: false,
+        turnLifecycle: "settled",
         sessions: [
           { id: result.id, cwd, project_id: get().sessions.find((session) => session.cwd === cwd)?.project_id ?? null, name: "New Session" },
           ...get().sessions.filter((session) => session.id !== result.id),
@@ -656,6 +660,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           historyLoading: false,
           historySnapshotVersion: "",
           working: false,
+          turnLifecycle: "settled",
           status: "connecting",
           pendingInteraction: null,
           pendingQuestionnaire: null,
@@ -693,6 +698,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
             },
             status: "error",
             working: false,
+            turnLifecycle: "failed",
           });
         }
         throw error;

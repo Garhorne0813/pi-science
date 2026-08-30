@@ -99,6 +99,7 @@ export function installRuntimeTestEnvironment(): void {
       historyLoading: false,
       historySnapshotVersion: "",
       working: false,
+      turnLifecycle: "settled",
       model: null,
       thinking: null,
       contextTokens: null,

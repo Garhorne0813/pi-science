@@ -2,59 +2,95 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, CircleCheck, CircleX, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ToolCallBlock } from "../../types/thread";
-import { executionActivities, executionOperationCount, selectCurrentActivity } from "../../lib/conversation/activity-policy";
+import { executionActivities, executionOperationCount } from "../../lib/conversation/activity-policy";
+import { ACTIVITY_SWITCH_DEBOUNCE_MS, MIN_ACTIVITY_VISIBLE_MS, selectDisplayedActivity } from "../../lib/conversation/activity-display-policy";
+import type { PresentedActivity } from "../../lib/conversation/activity-narrative";
+import type { TurnLifecycle } from "../../lib/conversation/turn-presentation";
 import { presentToolActivity } from "../../lib/conversation/activity-presenters";
 import { cn } from "../../lib/ui";
 
-const MIN_ACTIVITY_VISIBLE_MS = 400;
-const ACTIVITY_SWITCH_DEBOUNCE_MS = 150;
-
-export function AgentActivity({ blocks, completed = false }: { blocks: ToolCallBlock[]; completed?: boolean }) {
+export function AgentActivity({ blocks, lifecycle = "active" }: { blocks: ToolCallBlock[]; lifecycle?: TurnLifecycle }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const activities = useMemo(() => executionActivities(blocks), [blocks]);
   const count = useMemo(() => executionOperationCount(blocks), [blocks]);
-  const failures = useMemo(() => activities.filter((block) => block.status === "error").length, [activities]);
-  const shown = useDisplayedActivity(blocks, activities, completed);
-  if (!shown && activities.length === 0) return null;
-  const state = shown?.status === "waiting-approval" ? "waiting" : shown?.status === "error" ? "error" : shown && !completed ? "running" : failures > 0 ? "error" : "completed";
-  const label = shown ? shown.status === "waiting-approval" ? t("conversation.activity.waitingApproval") : presentToolActivity(shown, t) : failures > 0 ? t("conversation.activity.completedWithErrors", { count, failures }) : t("conversation.activity.completed", { count });
-  return <div id={blocks.length === 1 ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} className="overflow-hidden rounded-input border border-faint bg-surface scroll-mt-4">
-    <button type="button" aria-expanded={expanded} onClick={() => activities.length > 0 && setExpanded((value) => !value)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-muted transition-colors hover:bg-surface-2">
-      <ActivityIcon state={state} />
-      <span aria-live="polite" aria-atomic="true" className={cn("min-w-0 flex-1 truncate", state === "error" && "text-error-text")}>{label}</span>
-      {activities.length > 0 && <ChevronRight size={13} aria-hidden className={cn("shrink-0 transition-transform", expanded && "rotate-90")} />}
+  const shown = useDisplayedActivity(blocks, lifecycle);
+  if (!shown && activities.length === 0 && lifecycle !== "recovering" && lifecycle !== "waiting") return null;
+
+  const canExpand = activities.length > 0;
+  const traceOnly = !shown && (lifecycle === "queued" || lifecycle === "active" || lifecycle === "waiting" || lifecycle === "recovering");
+  const state = lifecycle === "failed" || shown?.state === "error" ? "error" : lifecycle === "aborted" ? "stopped" : lifecycle === "settled" ? "completed" : shown?.state === "interaction" ? "waiting" : "running";
+  const label = lifecycle === "failed"
+    ? t("conversation.activity.error")
+    : lifecycle === "aborted"
+      ? t("conversation.activity.stopped")
+      : lifecycle === "settled"
+        ? t("conversation.activity.completed")
+        : lifecycle === "recovering"
+          ? t("conversation.activity.narrative.recover")
+          : lifecycle === "waiting" && !shown
+            ? t("conversation.activity.waitingInput")
+            : shown
+          ? narrativeLabel(shown, t)
+          : t("conversation.activity.trace");
+
+  return <div id={blocks.length === 1 ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} className={cn("overflow-hidden scroll-mt-4", !traceOnly && "rounded-input border border-faint bg-surface")}>
+    <button type="button" aria-expanded={canExpand ? expanded : undefined} onClick={() => canExpand && setExpanded((value) => !value)} className={cn("flex w-full items-center gap-2 text-left text-xs text-muted transition-colors", canExpand && "hover:bg-surface-2", traceOnly ? "px-1 py-1" : "px-3 py-2")}>
+      {!traceOnly && <ActivityIcon state={state} />}
+      <span {...(!traceOnly ? { "aria-live": "polite", "aria-atomic": "true" } : {})} className={cn("min-w-0 flex-1 truncate", state === "error" && "text-error-text")}>{label}</span>
+      {lifecycle === "settled" && <span className="shrink-0 font-mono text-[10px] text-muted/60" aria-label={t("conversation.activity.operationCount", { count })}>{count}</span>}
+      {canExpand && <ChevronRight size={13} aria-hidden className={cn("shrink-0 text-muted/60 transition-transform", expanded && "rotate-90")} />}
     </button>
-    {expanded && activities.length > 0 && <div className="border-t border-faint bg-surface-2/50 px-2 py-1" aria-label={t("conversation.activity.trace")}>{activities.map((block) => <TraceItem key={block.id} block={block} />)}</div>}
+    {expanded && canExpand && <div className="border-t border-faint bg-surface-2/50 px-2 py-1" aria-label={t("conversation.activity.trace")}>{activities.map((block) => <TraceItem key={block.id} block={block} />)}</div>}
   </div>;
 }
 
-function useDisplayedActivity(blocks: ToolCallBlock[], activities: ToolCallBlock[], completed: boolean): ToolCallBlock | null {
-  const target = completed ? null : selectCurrentActivity(blocks) ?? activities.at(-1) ?? null;
-  const [displayed, setDisplayed] = useState<ToolCallBlock | null>(target);
+/** Depend on the stable narrative key, not the changing activity object. This
+ *  keeps high-frequency partial tool output from restarting the timer. */
+function useDisplayedActivity(blocks: ToolCallBlock[], lifecycle: TurnLifecycle): PresentedActivity | null {
+  const live = lifecycle === "queued" || lifecycle === "active" || lifecycle === "waiting" || lifecycle === "recovering";
+  const target = live ? selectDisplayedActivity(blocks) : null;
+  const targetKey = target?.mergeKey ?? null;
+  const targetForced = target?.forced === true;
+  const [displayed, setDisplayed] = useState<PresentedActivity | null>(target);
+  const displayedKey = displayed?.mergeKey ?? null;
   const shownAt = useRef(Date.now());
+  const targetRef = useRef(target);
+  targetRef.current = target;
+
   useEffect(() => {
-    if (completed || !target) return;
-    if (target.status === "waiting-approval" || target.status === "error" || displayed?.callId === target.callId) {
-      setDisplayed(target);
-      if (displayed?.callId !== target.callId) shownAt.current = Date.now();
+    if (!live || !targetKey) {
+      setDisplayed(null);
+      return;
+    }
+    if (displayedKey === targetKey) return;
+    if (!displayedKey || targetForced) {
+      shownAt.current = Date.now();
+      setDisplayed(targetRef.current);
       return;
     }
     const delay = Math.max(ACTIVITY_SWITCH_DEBOUNCE_MS, MIN_ACTIVITY_VISIBLE_MS - (Date.now() - shownAt.current));
     const timer = window.setTimeout(() => {
       shownAt.current = Date.now();
-      setDisplayed(target);
+      setDisplayed(targetRef.current);
     }, delay);
     return () => window.clearTimeout(timer);
-  }, [completed, displayed?.callId, target]);
-  if (completed) return null;
-  if (target?.status === "waiting-approval" || target?.status === "error") return target;
-  return displayed ?? target;
+  }, [displayedKey, live, targetForced, targetKey]);
+  return displayed;
 }
 
-function ActivityIcon({ state }: { state: "waiting" | "running" | "error" | "completed" }) {
+function narrativeLabel(activity: PresentedActivity, t: (key: string) => string): string {
+  if (activity.state === "interaction") return t(activity.source.tool === "ask_user_question" ? "conversation.activity.waitingInput" : "conversation.activity.waitingApproval");
+  if (activity.state === "error") return t("conversation.activity.error");
+  if (activity.state === "recover") return t("conversation.activity.narrative.recover");
+  const domainKey = `conversation.activity.narrative.${activity.state}.${activity.domain}`;
+  const translated = t(domainKey);
+  return translated === domainKey ? t(`conversation.activity.narrative.${activity.state}`) : translated;
+}
+
+function ActivityIcon({ state }: { state: "waiting" | "running" | "error" | "stopped" | "completed" }) {
   if (state === "running") return <Loader2 size={13} aria-hidden className="shrink-0 animate-spin text-accent" />;
-  if (state === "error") return <CircleX size={13} aria-hidden className="shrink-0 text-error-text" />;
+  if (state === "error" || state === "stopped") return <CircleX size={13} aria-hidden className={cn("shrink-0", state === "error" ? "text-error-text" : "text-muted")} />;
   if (state === "waiting") return <span aria-hidden className="shrink-0 text-warn">!</span>;
   return <CircleCheck size={13} aria-hidden className="shrink-0 text-ok-text" />;
 }

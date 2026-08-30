@@ -6,7 +6,7 @@
  *  agent_start, stream.gap, session replacement, missing-session recovery)
  *  clears it through `resetTurnBuffer()`. */
 
-import type { ThreadBlock } from "../../types/thread";
+import type { ThreadBlock, ToolCallBlock } from "../../types/thread";
 import type { TurnArtifactItem } from "../../types/thread";
 import type { HistoryMessage, PiScienceEvent, TurnArtifactTurn } from "../client/pi-science-client";
 
@@ -84,6 +84,7 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
             kind: "agent",
             id: turnId + "-post",
             parts: [{ id: turnId + "-post", text: _textBuffer }],
+            presentationRole: event.presentationRole === "final" ? "final" : event.presentationRole === "intermediate" ? "intermediate" : undefined,
             partial: true,
             timestamp: new Date().toISOString(),
           } as ThreadBlock);
@@ -92,6 +93,7 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
             ...blocks[existingIdx],
             kind: "agent",
             parts: [{ id: turnId, text: _textBuffer }],
+            presentationRole: event.presentationRole === "final" ? "final" : event.presentationRole === "intermediate" ? "intermediate" : (blocks[existingIdx].kind === "agent" ? blocks[existingIdx].presentationRole : undefined),
             partial: true,
             timestamp: blocks[existingIdx].kind === "agent" ? blocks[existingIdx].timestamp : undefined,
           } as ThreadBlock;
@@ -103,6 +105,7 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
           kind: "agent",
           id: blockId,
           parts: [{ id: turnId, text: _textBuffer }],
+          presentationRole: event.presentationRole === "final" ? "final" : event.presentationRole === "intermediate" ? "intermediate" : undefined,
           partial: true,
           timestamp: new Date().toISOString(),
         };
@@ -130,6 +133,7 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
         input: (event.input as Record<string, unknown> | undefined) ?? previous?.input,
         output: (event.output as string | undefined) ?? previous?.output,
         details: event.details ?? previous?.details,
+        presentation: (event.presentation as ToolCallBlock["presentation"] | undefined) ?? previous?.presentation,
         partialOutput: (event.partialOutput as string | undefined) ?? previous?.partialOutput,
         diff: (event.diff as string | undefined) ?? previous?.diff,
         startedAt: (event.startedAt as string | undefined) ?? previous?.startedAt,
@@ -345,6 +349,7 @@ export function mergeHistoryWithLive(history: Thread, live: Thread): Thread {
 export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[] {
   const blocks: ThreadBlock[] = [];
   const toolNames = new Map<string, string>();
+  const toolPresentations = new Map<string, ToolCallBlock["presentation"]>();
 
   for (const msg of messages) {
     const role = msg.role;
@@ -360,6 +365,7 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
         const callId = String(content.id || "");
         if (callId) {
           toolNames.set(callId, String(content.name || content.tool || "unknown"));
+          if (content.presentation && typeof content.presentation === "object") toolPresentations.set(callId, content.presentation as ToolCallBlock["presentation"]);
         }
       }
       const text = msg.content
@@ -367,7 +373,7 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
         .map((c: any) => c.text)
         .join("\n");
       if (text) {
-        blocks.push({ kind: "agent", id: msg.id, parts: [{ id: msg.id, text }], timestamp: msg.timestamp });
+        blocks.push({ kind: "agent", id: msg.id, parts: [{ id: msg.id, text }], ...(msg.presentationRole ? { presentationRole: msg.presentationRole } : {}), timestamp: msg.timestamp });
       }
     } else if (role === "toolResult") {
       const callId = msg.toolCallId || msg.id;
@@ -383,6 +389,7 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
         status: msg.isError ? "error" as const : "done" as const,
         output: text || undefined,
         details: msg.details,
+        presentation: msg.presentation ?? toolPresentations.get(callId),
       });
     }
   }

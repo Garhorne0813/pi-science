@@ -7,6 +7,7 @@ const DEFAULT_LABELS: Record<string, string> = {
 };
 
 export function presentToolActivity(block: ToolCallBlock, translate: ActivityTranslator = defaultTranslate): string {
+  if (block.presentation?.title?.trim()) return block.presentation.title.trim();
   if (block.title?.trim()) return block.title.trim();
   const input = block.input ?? {};
   const tool = block.tool.trim().toLowerCase();

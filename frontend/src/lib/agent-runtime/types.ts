@@ -72,6 +72,9 @@ export interface RuntimeState {
   historyLoading: boolean;
   historySnapshotVersion: string;
   working: boolean;
+  /** Explicit lifecycle for the newest turn. `working=false` alone cannot
+   *  distinguish a settled answer from an abort or terminal failure. */
+  turnLifecycle: "queued" | "active" | "waiting" | "recovering" | "settled" | "aborted" | "failed";
   model: string | null;
   thinking: string | null;
   contextTokens: number | null;

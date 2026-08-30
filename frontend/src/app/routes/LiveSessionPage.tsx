@@ -104,6 +104,7 @@ export function LiveSessionPage() {
     : { blocks: [] as ThreadBlock[], index: {} as Record<string, number>, loaded: true };
   const sessions = useRuntimeStore((s) => s.sessions);
   const working = useRuntimeStore((s) => s.working);
+  const turnLifecycle = useRuntimeStore((s) => s.turnLifecycle);
   const historyLoading = useRuntimeStore((s) => s.historyLoading);
   const loadOlderMessages = useRuntimeStore((s) => s.loadOlderMessages);
   const connect = useRuntimeStore((s) => s.connect);
@@ -141,7 +142,7 @@ export function LiveSessionPage() {
     };
   }, [sessionId, workspaceCwd, connect, disconnect]);
 
-  const turns = useMemo(() => buildTurnPresentations(thread.blocks), [thread.blocks]);
+  const turns = useMemo(() => buildTurnPresentations(thread.blocks, { lastTurnLifecycle: turnLifecycle }), [thread.blocks, turnLifecycle]);
   // Copy-button eligibility computed across the WHOLE thread (not per group):
   // agentActionTextByBlock needs the trailing tool blocks after an agent block
   // to decide whether it is the final answer. A per-group computation would
@@ -384,7 +385,7 @@ export function LiveSessionPage() {
                   }}
                   itemContent={(_index, turn) => (
                     <div className="mx-auto w-full max-w-[calc(var(--conversation-content-width)+4rem)] px-8 pb-3">
-                      {renderTurn(turn, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock, working && turn === turns.at(-1))}
+                      {renderTurn(turn, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock)}
                       {showSuggestions && turn.blocks.some((block) => block.id === suggestionAnchorBlockId) && (
                         <div className="mt-3 flex flex-wrap gap-2" aria-label={t("conversation.suggestions")}>
                           {suggestions.map((suggestion) => (

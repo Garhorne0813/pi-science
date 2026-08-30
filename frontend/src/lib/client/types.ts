@@ -1,5 +1,6 @@
-/** Wire types shared by the REST calls, the SSE transport and the runtime store. */
+import type { ToolPresentation } from "@pi-science/contracts";
 
+/** Wire types shared by the REST calls, the SSE transport and the runtime store. */
 export interface PiScienceEvent {
   type: string;
   sessionId?: string;
@@ -37,6 +38,8 @@ export interface HistoryMessage {
   timestamp?: string;
   /** Tool-specific metadata persisted by Pi Orbit (toolResult details). */
   details?: unknown;
+  presentation?: ToolPresentation;
+  presentationRole?: "intermediate" | "final";
 }
 
 export interface SessionMessagePage {
