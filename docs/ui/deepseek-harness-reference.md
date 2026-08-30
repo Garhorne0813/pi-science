@@ -33,6 +33,8 @@ source, and so values we invent are clearly marked as our own proposals.
 | `packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css` | Chat content width 748px, composer width = content + 32px, 36px fade mask, tabs 13px/2px active bar |
 | `packages/client/ui-conversation/src/client/skeleton/InputBar.module.css` | Composer card: radius 22px, 1px border `rgba(0,0,0,0.10)` light / `rgba(255,255,255,0.06)` dark, send button 34px circular `#4176e6` (dark `#679efe`) |
 | `packages/client/ui-conversation/src/client/chat/MessageItem.module.css` | User bubble: max-width `min(525px, 82%)`, radius 22px, padding 10px 16px |
+| `packages/client/ui-conversation/src/client/chat/ReasoningRow.module.css` | Borderless reasoning row, title weight 400, muted summary at 14px/24px, running sweep overlay |
+| `packages/client/ui-tool/src/client/tool/components/ToolRow.module.css` | Borderless tool summary row, 2px separator dot, title + tertiary summary hierarchy at 14px/24px |
 | `packages/client/ui-primitives/src/markdown/CodeBlock.module.css` | Code block radius 12px, sticky banner |
 | `packages/client/ui-primitives/src/markdown/MarkdownText.module.css` | Markdown spacing (16px paragraph rhythm), link color = business blue |
 
@@ -271,3 +273,21 @@ failed. The narrative state independently selects the AICSS Orb geometry:
 
 A user-selected fixed pattern overrides this automatic mapping. Recoverable tool
 errors remain in Execution Trace and do not change the lifecycle to failed.
+
+### Activity row proposal
+
+DeepSeek Harness renders reasoning and tool progress as quiet, borderless rows.
+Its `ReasoningRow.module.css` and `ToolRow.module.css` use a 400-weight title and
+a tertiary summary at 14px/24px, with no surrounding card border. Pi-Science
+uses the same borderless hierarchy, adapted to two vertical lines so long task
+names remain readable:
+
+- primary Activity title: 14px/20px, regular weight, primary text;
+- current task detail: 12px/18px, regular weight, tertiary text;
+- row padding: 4px vertical, no outer background or border;
+- expanded Execution Trace may keep its own quiet inset surface;
+- semantic progress glyph: 20px and `--accent` in both light and dark themes.
+
+The 12px secondary line is a Pi-Science proposal. The upstream row keeps both
+fragments at 14px/24px on one line; the smaller second line preserves the same
+visual hierarchy after changing to a stacked layout.

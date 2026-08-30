@@ -34,7 +34,7 @@ export function ProgressVisual({ slot, config, state = "running", activityState,
   const pattern = config.patterns[slot];
   const definition = PROGRESS_PATTERN_CATALOG.find((item) => item.id === pattern && item.slots.includes(slot)) ?? PROGRESS_PATTERN_CATALOG.find((item) => item.slots.includes(slot)) ?? PROGRESS_PATTERN_CATALOG[0];
   const paused = config.motion === "off" || (config.motion === "system" && typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
-  const color = config.colorMode === "custom" && config.customColor ? config.customColor : "var(--color-accent)";
+  const color = config.colorMode === "custom" && config.customColor ? config.customColor : "var(--accent)";
   const speed = Number.isFinite(config.speed) && config.speed > 0 ? config.speed : 1;
 
   const visualText = compact ? text.slice(0, 3) : text;

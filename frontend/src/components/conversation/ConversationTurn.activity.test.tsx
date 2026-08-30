@@ -149,7 +149,7 @@ describe("turn-level activity through the history path", () => {
 });
 
 describe("activity over time (PRD v1.2 §26/§28)", () => {
-  it("never surfaces narration, keeps one phase row, and confirms the answer only at session.idle", async () => {
+  it("streams provisional text, keeps one phase row, and confirms the answer at session.idle", async () => {
     stubWorkspace();
     await useRuntimeStore.getState().connect("/workspace", SESSION);
     vi.useFakeTimers();
@@ -165,14 +165,15 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       emit("agent_start", {});
       emit("text.updated", { partId: "m1", text: "我先检查一下。" });
       rerender(view());
-      // Provisional narration: invisible from the very first token, not just
-      // after a tool supersedes it.
-      expect(screen.queryByText("我先检查一下。")).not.toBeInTheDocument();
+      // The newest provisional block streams immediately. A later tool can
+      // still supersede it as narration.
+      expect(screen.getByLabelText("我先检查一下。")).toBeInTheDocument();
       expect(screen.queryByText("Reviewing the implementation")).not.toBeInTheDocument();
 
       emit("tool.updated", { callId: "r1", tool: "read", status: "running", input: { path: "a.ts" } });
       rerender(view());
       expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
+      expect(screen.queryByLabelText("我先检查一下。")).not.toBeInTheDocument();
 
       emit("tool.updated", { callId: "r1", tool: "read", status: "done" });
       emit("tool.updated", { callId: "r2", tool: "grep", status: "running", input: { pattern: "x" } });
@@ -197,8 +198,8 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       emit("tool.updated", { callId: "b1", tool: "bash", status: "done" });
       emit("text.updated", { partId: "m2", text: "这是最终回答。" });
       rerender(view());
-      // Streaming answer prose stays hidden until the lifecycle confirms it.
-      expect(screen.queryByText("这是最终回答。")).not.toBeInTheDocument();
+      // The final answer is visible while its text is still streaming.
+      expect(screen.getByLabelText("这是最终回答。")).toBeInTheDocument();
       expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
 
       emit("session.idle", {});

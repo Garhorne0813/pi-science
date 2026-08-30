@@ -14,9 +14,8 @@ export function finalAgentInCompletedTurn(blocks: ThreadBlock[]): AgentMessageBl
   return trailingPlan && !executionBeforeCandidate ? null : candidate;
 }
 
-/** The newest agent block of an ACTIVE turn that no visible tool has taken
- *  over yet. It may still turn out to be narration: the UI keeps it out of
- *  the main transcript until the turn lifecycle confirms the final answer. */
+/** The newest streaming agent block of an ACTIVE turn that no visible tool
+ *  has taken over yet. A later tool can still supersede it as narration. */
 export function provisionalAgentInActiveTurn(blocks: ThreadBlock[]): AgentMessageBlock | null {
   return latestUnsupersededAgent(blocks);
 }

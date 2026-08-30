@@ -22,7 +22,7 @@ export function AgentActivity({ blocks, lifecycle = "active" }: { blocks: ToolCa
 
   const canExpand = activities.length > 0;
   const state = lifecycle === "failed" || shown?.state === "error" ? "error" : lifecycle === "aborted" ? "stopped" : lifecycle === "settled" ? "completed" : lifecycle === "waiting" || shown?.state === "interaction" ? "waiting" : "running";
-  const label = lifecycle === "failed"
+  const title = lifecycle === "failed"
     ? t("conversation.activity.error")
     : lifecycle === "aborted"
       ? t("conversation.activity.stopped")
@@ -33,18 +33,29 @@ export function AgentActivity({ blocks, lifecycle = "active" }: { blocks: ToolCa
           : lifecycle === "waiting" && !shown
             ? t("conversation.activity.waitingInput")
             : shown
-            ? narrativeLabel(shown, t)
-            : t("conversation.activity.continuing");
+              ? narrativeLabel(shown, t)
+              : t("conversation.activity.thinking");
+  const task = lifecycle === "recovering"
+    ? t("conversation.activity.recoveringDetail")
+    : shown
+      ? presentToolActivity(shown.source, t)
+      : state === "running"
+        ? t("conversation.activity.continuing")
+        : null;
+  const detail = task && task !== title ? task : null;
   const visualSlot = state === "waiting" ? "waiting" : shown ? "currentActivity" : "thinking";
 
-  return <div id={blocks.length === 1 ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} className="overflow-hidden scroll-mt-4 rounded-card border border-faint">
-    <button type="button" aria-expanded={canExpand ? expanded : undefined} onClick={() => canExpand && setExpanded((value) => !value)} className={cn("flex w-full items-center gap-2 rounded-card px-3 py-2.5 text-left text-xs text-muted transition-colors", canExpand && "hover:bg-surface-2")}>
-      <ActivityIcon state={state} slot={visualSlot} config={progressAppearance} label={label} activityState={activityStateFor(lifecycle, shown)} />
-      <span aria-live="polite" aria-atomic="true" className={cn("min-w-0 flex-1 truncate", state === "error" && "text-error-text")}>{!progressPatternShowsText(visualSlot, progressAppearance) && label}</span>
-      {lifecycle === "settled" && <span className="shrink-0 font-mono text-[10px] text-muted/60" aria-label={t("conversation.activity.operationCount", { count })}>{count}</span>}
-      {canExpand && <ChevronRight size={13} aria-hidden className={cn("shrink-0 text-muted/60 transition-transform", expanded && "rotate-90")} />}
+  return <div id={blocks.length === 1 ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} className="scroll-mt-4">
+    <button type="button" aria-expanded={canExpand ? expanded : undefined} onClick={() => canExpand && setExpanded((value) => !value)} className={cn("flex w-full items-start gap-2 py-1 text-left transition-colors", canExpand && "rounded-input hover:bg-surface-2/60")}>
+      <span className="mt-0.5 flex h-5 shrink-0 items-center"><ActivityIcon state={state} slot={visualSlot} config={progressAppearance} label={title} activityState={activityStateFor(lifecycle, shown)} /></span>
+      <span aria-live="polite" aria-atomic="true" className="min-w-0 flex-1">
+        <span className={cn("block truncate text-sm font-normal leading-5 text-text", state === "error" && "text-error-text")}>{!progressPatternShowsText(visualSlot, progressAppearance) && title}</span>
+        {detail && <span className="block truncate text-xs font-normal leading-[18px] text-muted">{detail}</span>}
+      </span>
+      {lifecycle === "settled" && <span className="mt-0.5 shrink-0 font-mono text-[10px] text-muted/60" aria-label={t("conversation.activity.operationCount", { count })}>{count}</span>}
+      {canExpand && <ChevronRight size={13} aria-hidden className={cn("mt-1 shrink-0 text-muted/60 transition-transform", expanded && "rotate-90")} />}
     </button>
-    {expanded && canExpand && <div className="rounded-b-card border-t border-faint bg-surface-2/50 px-2 py-1" aria-label={t("conversation.activity.trace")}>{activities.map((block) => <TraceItem key={block.id} block={block} />)}</div>}
+    {expanded && canExpand && <div className="mt-1 rounded-card border border-faint bg-surface-2/50 px-2 py-1" aria-label={t("conversation.activity.trace")}>{activities.map((block) => <TraceItem key={block.id} block={block} />)}</div>}
   </div>;
 }
 

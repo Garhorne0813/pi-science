@@ -17,9 +17,13 @@ describe("AgentActivity data filters", () => {
 });
 
 describe("AgentActivity", () => {
-  it("presents a narrative label and semantic explore orb while precise tool titles stay in Trace", () => {
-    render(<AgentActivity blocks={[tool("read", "read", "done", { path: "ConversationBlocks.tsx" }), tool("todo", "todo"), tool("search", "grep", "running", { pattern: "tool.updated" })]} />);
-    expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
+  it("presents a borderless two-line activity while precise tool titles stay in Trace", () => {
+    const { container } = render(<AgentActivity blocks={[tool("read", "read", "done", { path: "ConversationBlocks.tsx" }), tool("todo", "todo"), tool("search", "grep", "running", { pattern: "tool.updated" })]} />);
+    const title = screen.getByText("Reviewing the implementation");
+    const detail = screen.getByText("Searching for tool.updated");
+    expect(title).toHaveClass("text-sm");
+    expect(detail).toHaveClass("text-xs");
+    expect(container.firstElementChild).not.toHaveClass("border");
     expect(document.querySelector('[data-orb-variant="S4"]')).toBeInTheDocument();
     expect(screen.queryByText("Reading ConversationBlocks.tsx")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Reviewing the implementation/i }));

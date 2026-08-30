@@ -27,11 +27,12 @@ export function renderBlocks(blocks: ThreadBlock[], codeRunner: CodeRunner) {
 }
 
 function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnPresentation; codeRunner: CodeRunner; actionTextByBlock?: Map<string, string> }) {
+  const visibleAgent = turn.finalAgent ?? turn.provisionalAgent;
   return (
     <div data-thread-block-ids={turnBlockIds(turn).join(" ")} className="flex flex-col gap-3 scroll-mt-4">
       {turn.user && <UserMessage block={turn.user} />}
       {turn.activityTools.length > 0 || (turn.active && (turn.lifecycle === "waiting" || turn.lifecycle === "recovering")) ? <AgentActivity blocks={turn.activityTools} lifecycle={turn.lifecycle} /> : null}
-      {turn.finalAgent && <AgentMessage block={turn.finalAgent} actionText={actionTextByBlock?.get(turn.finalAgent.id)} codeRunner={codeRunner} />}
+      {visibleAgent && <AgentMessage block={visibleAgent} actionText={turn.finalAgent ? actionTextByBlock?.get(turn.finalAgent.id) : undefined} codeRunner={codeRunner} />}
       {turn.systemBlocks.map((block) => <SystemBlock key={block.id} block={block} />)}
       {turn.artifacts.map((block) => <TurnArtifactStrip key={block.id} artifacts={block.artifacts} cwd={codeRunner?.cwd} />)}
     </div>
@@ -69,7 +70,7 @@ function AgentMessage({ block, actionText, codeRunner }: { block: AgentMessageBl
       <span className="text-[10px] text-muted">{t("conversation.sources")} ({citations.length})</span>
       {citations.map((citation, index) => <a key={`${citation.kind}:${citation.id}`} href={citation.url} target="_blank" rel="noreferrer" title={citation.id} className="rounded-full border border-border bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-muted hover:text-text">{index + 1} · {shortCitationId(citation.id)}</a>)}
     </div>}
-    {actionText && <MessageActions text={parseSuggestions(actionText).clean} timestamp={block.timestamp} />}
+    {!block.partial && actionText && <MessageActions text={parseSuggestions(actionText).clean} timestamp={block.timestamp} />}
   </div>;
 }
 

@@ -39,7 +39,7 @@ describe("ProgressVisual", () => {
   });
   it("selects the semantic orb for the current activity", () => {
     const { rerender } = render(<ProgressVisual slot="currentActivity" config={defaultProgressAppearance} activityState="explore" text="Reviewing" />);
-    expect(document.querySelector('[data-orb-variant="S4"]')).toBeInTheDocument();
+    expect(document.querySelector('[data-orb-variant="S4"]')).toHaveStyle({ "--orb-fg": "var(--accent)" });
     rerender(<ProgressVisual slot="currentActivity" config={defaultProgressAppearance} activityState="verify" text="Verifying" />);
     expect(document.querySelector('[data-orb-variant="C5"]')).toBeInTheDocument();
   });
