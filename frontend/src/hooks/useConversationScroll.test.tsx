@@ -73,7 +73,7 @@ describe("useConversationScroll history navigation", () => {
     act(() => { result.current.handleNavSelect("u-old"); });
 
     await waitFor(() => expect(loadOlderMessages).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(result.current.virtualFirstItemIndex).toBe(99_996));
+    await waitFor(() => expect(result.current.virtualFirstItemIndex).toBe(99_998));
     expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual([
       "u-old", "a-old", "u-middle", "a-middle", "u-latest", "a-latest",
     ]);
@@ -95,7 +95,7 @@ describe("useConversationScroll history navigation", () => {
       resolvePage(2);
     });
 
-    await waitFor(() => expect(result.current.virtualFirstItemIndex).toBe(99_998));
+    await waitFor(() => expect(result.current.virtualFirstItemIndex).toBe(99_999));
   });
 
   it("shares a prepend between auto-load and navigation so the anchor moves once", async () => {
@@ -115,7 +115,7 @@ describe("useConversationScroll history navigation", () => {
       resolvePage(2);
     });
 
-    await waitFor(() => expect(result.current.virtualFirstItemIndex).toBe(99_998));
+    await waitFor(() => expect(result.current.virtualFirstItemIndex).toBe(99_999));
     expect(loadOlderMessages).toHaveBeenCalledTimes(1);
   });
 
@@ -151,7 +151,7 @@ describe("useConversationScroll history navigation", () => {
     });
 
     await waitFor(() => expect(scrollToIndex).toHaveBeenCalledTimes(1));
-    expect(scrollToIndex).toHaveBeenCalledWith({ index: 2, align: "start", behavior: "auto" });
+    expect(scrollToIndex).toHaveBeenCalledWith({ index: 1, align: "start", behavior: "auto" });
     expect(result.current.navigationLoading).toBe(false);
   });
 

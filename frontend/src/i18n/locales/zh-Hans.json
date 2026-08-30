@@ -75,6 +75,7 @@
   "conversation.activity.webSearch": "正在搜索网页资料：{{target}}",
   "conversation.activity.tool": "正在运行 {{tool}}",
   "conversation.activity.completed": "已完成 · {{count}} 个操作",
+  "conversation.activity.completedWithErrors": "已完成 · {{count}} 个操作，{{failures}} 个失败",
   "conversation.activity.continuing": "正在继续处理…",
   "conversation.activity.waitingApproval": "等待你确认",
   "conversation.activity.trace": "执行记录",
