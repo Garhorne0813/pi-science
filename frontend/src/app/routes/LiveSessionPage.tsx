@@ -17,8 +17,9 @@ import { ConversationComposer } from "../../components/conversation/Conversation
 import { ConversationWelcome } from "../../components/conversation/ConversationWelcome";
 import { InteractionPrompt } from "../../components/conversation/InteractionPrompt";
 import { QuestionnairePrompt } from "../../components/conversation/QuestionnairePrompt";
-import { groupBlocks, renderBlockGroup } from "../../components/conversation/ConversationBlocks";
-import { selectCurrentActivity } from "../../lib/conversation/activity-policy";
+import { renderTurn } from "../../components/conversation/ConversationBlocks";
+import { isVisibleActivity } from "../../lib/conversation/activity-policy";
+import { buildTurnPresentations, type TurnPresentation } from "../../lib/conversation/turn-presentation";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
 import { SessionExecutionButton } from "../../components/conversation/SessionExecutionButton";
 import { visibleUserMessage } from "../../lib/files";
@@ -36,7 +37,7 @@ type ConversationVirtuosoContext = {
   working: boolean;
   pendingInteraction: PendingInteraction | null;
 };
-type ConversationVirtuosoProps = VirtuosoProps<ThreadBlock[], ConversationVirtuosoContext> & { ref?: Ref<VirtuosoHandle> };
+type ConversationVirtuosoProps = VirtuosoProps<TurnPresentation, ConversationVirtuosoContext> & { ref?: Ref<VirtuosoHandle> };
 const LazyVirtuoso = lazy(() => import("react-virtuoso").then(({ Virtuoso }) => ({
   default: Virtuoso as unknown as ComponentType<ConversationVirtuosoProps>,
 })));
@@ -57,7 +58,7 @@ export function ConversationFooter() {
   const blocks = useRuntimeStore((s) => s.thread.blocks);
   const lastUserIndex = blocks.findLastIndex((block) => block.kind === "user");
   const currentTurnTools = blocks.slice(lastUserIndex + 1).filter((block): block is Extract<ThreadBlock, { kind: "tool" }> => block.kind === "tool");
-  const hasCurrentActivity = selectCurrentActivity(currentTurnTools) !== null;
+  const hasTurnActivity = currentTurnTools.some(isVisibleActivity);
 
   return (
     <div className="mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-6 pt-2">
@@ -73,7 +74,7 @@ export function ConversationFooter() {
           onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
         />
       ) : null}
-      {working && !pendingInteraction && !hasCurrentActivity && (
+      {working && !pendingInteraction && !hasTurnActivity && (
         <div className="flex items-center gap-2 py-4 text-sm text-muted" aria-live="polite">
           <Loader2 size={14} className="animate-spin text-accent" />
           {t("conversation.activity.continuing")}
@@ -140,7 +141,7 @@ export function LiveSessionPage() {
     };
   }, [sessionId, workspaceCwd, connect, disconnect]);
 
-  const blockGroups = useMemo(() => groupBlocks(thread.blocks), [thread.blocks]);
+  const turns = useMemo(() => buildTurnPresentations(thread.blocks), [thread.blocks]);
   // Copy-button eligibility computed across the WHOLE thread (not per group):
   // agentActionTextByBlock needs the trailing tool blocks after an agent block
   // to decide whether it is the final answer. A per-group computation would
@@ -360,8 +361,8 @@ export function LiveSessionPage() {
                   ref={virtuosoRef}
                   scrollerRef={attachScroller}
                   firstItemIndex={virtualFirstItemIndex}
-                  data={blockGroups}
-                  initialItemCount={Math.min(blockGroups.length, 20)}
+                  data={turns}
+                  initialItemCount={Math.min(turns.length, 20)}
                   startReached={() => void handleLoadOlder()}
                   increaseViewportBy={{ top: 600, bottom: 800 }}
                   context={{ renderInteractionPrompt, working, pendingInteraction }}
@@ -381,10 +382,10 @@ export function LiveSessionPage() {
                     ),
                     Footer: ConversationFooter,
                   }}
-                  itemContent={(_index, group) => (
+                  itemContent={(_index, turn) => (
                     <div className="mx-auto w-full max-w-[calc(var(--conversation-content-width)+4rem)] px-8 pb-3">
-                      {renderBlockGroup(group, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock)}
-                      {showSuggestions && group.some((block) => block.id === suggestionAnchorBlockId) && (
+                      {renderTurn(turn, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock, working && turn === turns.at(-1))}
+                      {showSuggestions && turn.blocks.some((block) => block.id === suggestionAnchorBlockId) && (
                         <div className="mt-3 flex flex-wrap gap-2" aria-label={t("conversation.suggestions")}>
                           {suggestions.map((suggestion) => (
                             <button

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, CircleCheck, CircleX, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ToolCallBlock } from "../../types/thread";
@@ -6,15 +6,19 @@ import { executionActivities, executionOperationCount, selectCurrentActivity } f
 import { presentToolActivity } from "../../lib/conversation/activity-presenters";
 import { cn } from "../../lib/ui";
 
-export function AgentActivity({ blocks }: { blocks: ToolCallBlock[] }) {
+const MIN_ACTIVITY_VISIBLE_MS = 400;
+const ACTIVITY_SWITCH_DEBOUNCE_MS = 150;
+
+export function AgentActivity({ blocks, completed = false }: { blocks: ToolCallBlock[]; completed?: boolean }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const activities = useMemo(() => executionActivities(blocks), [blocks]);
-  const current = useMemo(() => selectCurrentActivity(blocks), [blocks]);
   const count = useMemo(() => executionOperationCount(blocks), [blocks]);
-  if (!current && activities.length === 0) return null;
-  const state = current?.status === "waiting-approval" ? "waiting" : current?.status === "running" ? "running" : current?.status === "error" ? "error" : "completed";
-  const label = current ? current.status === "waiting-approval" ? t("conversation.activity.waitingApproval") : presentToolActivity(current, t) : t("conversation.activity.completed", { count });
+  const failures = useMemo(() => activities.filter((block) => block.status === "error").length, [activities]);
+  const shown = useDisplayedActivity(blocks, activities, completed);
+  if (!shown && activities.length === 0) return null;
+  const state = shown?.status === "waiting-approval" ? "waiting" : shown?.status === "error" ? "error" : shown && !completed ? "running" : failures > 0 ? "error" : "completed";
+  const label = shown ? shown.status === "waiting-approval" ? t("conversation.activity.waitingApproval") : presentToolActivity(shown, t) : failures > 0 ? t("conversation.activity.completedWithErrors", { count, failures }) : t("conversation.activity.completed", { count });
   return <div id={blocks.length === 1 ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} className="overflow-hidden rounded-input border border-faint bg-surface scroll-mt-4">
     <button type="button" aria-expanded={expanded} onClick={() => activities.length > 0 && setExpanded((value) => !value)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-muted transition-colors hover:bg-surface-2">
       <ActivityIcon state={state} />
@@ -23,6 +27,29 @@ export function AgentActivity({ blocks }: { blocks: ToolCallBlock[] }) {
     </button>
     {expanded && activities.length > 0 && <div className="border-t border-faint bg-surface-2/50 px-2 py-1" aria-label={t("conversation.activity.trace")}>{activities.map((block) => <TraceItem key={block.id} block={block} />)}</div>}
   </div>;
+}
+
+function useDisplayedActivity(blocks: ToolCallBlock[], activities: ToolCallBlock[], completed: boolean): ToolCallBlock | null {
+  const target = completed ? null : selectCurrentActivity(blocks) ?? activities.at(-1) ?? null;
+  const [displayed, setDisplayed] = useState<ToolCallBlock | null>(target);
+  const shownAt = useRef(Date.now());
+  useEffect(() => {
+    if (completed || !target) return;
+    if (target.status === "waiting-approval" || target.status === "error" || displayed?.callId === target.callId) {
+      setDisplayed(target);
+      if (displayed?.callId !== target.callId) shownAt.current = Date.now();
+      return;
+    }
+    const delay = Math.max(ACTIVITY_SWITCH_DEBOUNCE_MS, MIN_ACTIVITY_VISIBLE_MS - (Date.now() - shownAt.current));
+    const timer = window.setTimeout(() => {
+      shownAt.current = Date.now();
+      setDisplayed(target);
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [completed, displayed?.callId, target]);
+  if (completed) return null;
+  if (target?.status === "waiting-approval" || target?.status === "error") return target;
+  return displayed ?? target;
 }
 
 function ActivityIcon({ state }: { state: "waiting" | "running" | "error" | "completed" }) {

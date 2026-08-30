@@ -75,6 +75,7 @@
   "conversation.activity.webSearch": "Searching the web for {{target}}",
   "conversation.activity.tool": "Running {{tool}}",
   "conversation.activity.completed": "Completed · {{count}} operations",
+  "conversation.activity.completedWithErrors": "Completed · {{count}} operations, {{failures}} failed",
   "conversation.activity.continuing": "Continuing work…",
   "conversation.activity.waitingApproval": "Waiting for your approval",
   "conversation.activity.trace": "Execution trace",

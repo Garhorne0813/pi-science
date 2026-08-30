@@ -1,5 +1,5 @@
-import { beforeAll, describe, expect, it } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import i18n from "../../i18n";
 import type { ToolCallBlock } from "../../types/thread";
 import { AgentActivity } from "./AgentActivity";
@@ -19,11 +19,29 @@ describe("AgentActivity", () => {
     fireEvent.click(screen.getByRole("button", { name: /Searching for tool.updated/i }));
     expect(screen.getByLabelText("Execution trace")).toBeInTheDocument(); expect(screen.getByText("Reading ConversationBlocks.tsx")).toBeInTheDocument();
   });
-  it("counts execution only", () => { render(<AgentActivity blocks={[tool("read", "read"), tool("todo", "todo"), tool("search", "grep")]} />); expect(screen.getByText("Completed · 2 operations")).toBeInTheDocument(); });
+  it("counts execution only", () => { render(<AgentActivity completed blocks={[tool("read", "read"), tool("todo", "todo"), tool("search", "grep")]} />); expect(screen.getByText("Completed · 2 operations")).toBeInTheDocument(); });
   it("renders nothing for todo only", () => { const { container } = render(<AgentActivity blocks={[tool("todo", "todo")]} />); expect(container).toBeEmptyDOMElement(); });
   it("folds raw details", () => {
-    render(<AgentActivity blocks={[tool("read", "read", "done", { path: "event-fold.ts" })]} />);
+    render(<AgentActivity completed blocks={[tool("read", "read", "done", { path: "event-fold.ts" })]} />);
     fireEvent.click(screen.getByRole("button", { name: /Completed · 1 operations/i })); fireEvent.click(screen.getByRole("button", { name: /Reading event-fold.ts/i }));
     expect(screen.getByText((_, element) => element?.tagName === "PRE" && element.textContent?.includes('"path": "event-fold.ts"') === true)).toBeInTheDocument();
+  });
+  it("keeps a fast activity stable before switching to a longer action", () => {
+    vi.useFakeTimers();
+    try {
+      const first = tool("read", "read", "running", { path: "first.ts" });
+      const { rerender } = render(<AgentActivity blocks={[first]} />);
+      expect(screen.getByText("Reading first.ts")).toBeInTheDocument();
+      rerender(<AgentActivity blocks={[{ ...first, status: "done" }, tool("grep", "grep", "done", { pattern: "event" }), tool("read-2", "read", "done", { path: "second.ts" }), tool("bash", "bash", "running", { description: "Running conversation tests" })]} />);
+      expect(screen.getByText("Reading first.ts")).toBeInTheDocument();
+      act(() => { vi.advanceTimersByTime(400); });
+      expect(screen.getByText("Running conversation tests")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("summarizes failures after the final answer starts", () => {
+    render(<AgentActivity completed blocks={[tool("failed", "bash", "error"), tool("fixed", "bash", "done")]} />);
+    expect(screen.getByText("Completed · 2 operations, 1 failed")).toBeInTheDocument();
   });
 });

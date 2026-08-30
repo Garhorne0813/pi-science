@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
-import { groupBlocks } from "../components/conversation/ConversationBlocks";
+import { buildTurnPresentations } from "../lib/conversation/turn-presentation";
 import { useRuntimeStore } from "../lib/agent-runtime";
 import type { ThreadBlock } from "../types/thread";
 
@@ -159,18 +159,18 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
     const existing = historyLoadInFlightRef.current;
     if (existing?.key === key) return existing.promise;
 
-    const previousGroups = groupBlocks(initial.thread.blocks);
+    const previousTurns = buildTurnPresentations(initial.thread.blocks);
     const previousBlockIds = new Set(initial.thread.blocks.map((block) => block.id));
     const promise = (async () => {
       const loadedMessages = await loadOlderMessages();
       const current = useRuntimeStore.getState();
       if (current.cwd === cwdAtStart && current.activeSessionId === sessionIdAtStart) {
-        const nextGroups = groupBlocks(current.thread.blocks);
-        const firstExistingGroup = nextGroups.findIndex((group) => group.some((block) => previousBlockIds.has(block.id)));
-        const addedGroups = firstExistingGroup >= 0
-          ? firstExistingGroup
-          : Math.max(0, nextGroups.length - previousGroups.length);
-        if (addedGroups > 0) setVirtualFirstItemIndex((value) => value - addedGroups);
+        const nextTurns = buildTurnPresentations(current.thread.blocks);
+        const firstExistingTurn = nextTurns.findIndex((turn) => turn.blocks.some((block) => previousBlockIds.has(block.id)));
+        const addedTurns = firstExistingTurn >= 0
+          ? firstExistingTurn
+          : Math.max(0, nextTurns.length - previousTurns.length);
+        if (addedTurns > 0) setVirtualFirstItemIndex((value) => value - addedTurns);
       }
       return loadedMessages;
     })();
@@ -207,6 +207,8 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
   const threadBlockElement = useCallback((id: string) => {
     const userMessage = document.getElementById(`user-msg-${id}`);
     if (userMessage) return userMessage;
+    const exactBlock = document.getElementById(`thread-block-${id}`);
+    if (exactBlock) return exactBlock;
     return Array.from(document.querySelectorAll<HTMLElement>("[data-thread-block-ids]"))
       .find((element) => element.dataset.threadBlockIds?.split(" ").includes(id)) ?? null;
   }, []);
@@ -247,12 +249,12 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
       }
       scrollerNow.scrollTop = beforeTop;
     }
-    const groupIndex = groupBlocks(useRuntimeStore.getState().thread.blocks).findIndex((group) => group.some((block) => block.id === id));
-    if (groupIndex >= 0) {
+    const turnIndex = buildTurnPresentations(useRuntimeStore.getState().thread.blocks).findIndex((turn) => turn.blocks.some((block) => block.id === id));
+    if (turnIndex >= 0) {
       // Virtuoso's scrollToIndex takes the 0-based data index (its data index),
       // NOT firstItemIndex + dataIndex — the latter overflows for long
       // conversations and clamps to the last item.
-      virtuosoRef.current?.scrollToIndex({ index: groupIndex, align: "start", behavior: "auto" });
+      virtuosoRef.current?.scrollToIndex({ index: turnIndex, align: "start", behavior: "auto" });
       // After Virtuoso mounts the group, scroll again so the target lands at
       // the top of the viewport exactly (height estimation is inexact).
       scheduleSessionScoped(() => { if (!scrollToExact()) scheduleSessionScoped(scrollToExact, 250); }, 120);
