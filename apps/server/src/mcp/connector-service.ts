@@ -63,10 +63,10 @@ export class McpConnectorService {
     }
   }
 
-  async list(cwd: string): Promise<{ connectors: McpConnector[]; project_id: string; legacy_config_path: string | null; legacy_count: number }> {
-    const project = await this.project(cwd);
+  async list(cwd?: string | null): Promise<{ connectors: McpConnector[]; project_id: string | null; legacy_config_path: string | null; legacy_count: number }> {
     const connectors = await this.repository.list();
-    const bindings = new Map((await this.repository.bindingsForProject(project.project_id)).map((item) => [item.connector_id, item]));
+    const project = cwd ? await this.project(cwd) : null;
+    const bindings = new Map(project ? (await this.repository.bindingsForProject(project.project_id)).map((item) => [item.connector_id, item]) : []);
     const result = await Promise.all(connectors.map(async (item) => this.publicConnector(item, bindings.get(item.connector_id) ?? null)));
     const legacy = await this.legacyDefinitions(cwd);
     const canonicalNames = new Set(connectors.map((item) => item.name.toLowerCase()));
@@ -76,7 +76,7 @@ export class McpConnectorService {
       const sensitive = Boolean(definition.env || definition.headers || definition.bearerToken || definition.oauth || definition.auth);
       return !sensitive && Boolean(definition.url || definition.socket || definition.command);
     }).length;
-    return { connectors: result, project_id: project.project_id, legacy_config_path: legacy.source, legacy_count: legacyCount };
+    return { connectors: result, project_id: project?.project_id ?? null, legacy_config_path: legacy.source, legacy_count: legacyCount };
   }
 
   async get(connectorId: string, cwd: string): Promise<McpConnector & { referenced_projects: Array<{ project_id: string; name: string }> }> {
@@ -158,11 +158,11 @@ export class McpConnectorService {
     return Object.assign(view, reload.length ? { reload_replacements: reload } : {});
   }
 
-  async tools(connectorId: string, cwd: string): Promise<{ tools: McpToolSummary[]; cached_at: number | null }> {
-    const project = await this.project(cwd);
+  async tools(connectorId: string, cwd?: string | null): Promise<{ tools: McpToolSummary[]; cached_at: number | null }> {
+    const project = cwd ? await this.project(cwd) : null;
     await this.requireConnector(connectorId);
     const cache = await this.repository.toolCache(connectorId);
-    const grants = await this.repository.toolGrants(project.project_id, connectorId);
+    const grants = project ? await this.repository.toolGrants(project.project_id, connectorId) : new Map<string, "allow" | "ask" | "deny">();
     return {
       tools: (cache?.tools ?? []).map((tool) => ({ ...tool, decision: grants.get(tool.name) ?? "ask" })),
       cached_at: cache?.fetched_at ?? null,
@@ -312,9 +312,9 @@ export class McpConnectorService {
     return connector;
   }
 
-  private async legacyDefinitions(cwd: string) {
+  private async legacyDefinitions(cwd?: string | null) {
     const config = await this.settings.read();
-    return resolveMcpConfig({ workspaceRoot: cwd, explicitPath: typeof config.mcp_config_path === "string" ? config.mcp_config_path : undefined });
+    return resolveMcpConfig({ ...(cwd ? { workspaceRoot: cwd } : {}), explicitPath: typeof config.mcp_config_path === "string" ? config.mcp_config_path : undefined });
   }
 
   private async reload(): Promise<Array<{ cwd: string; oldId: string; newId: string }>> {

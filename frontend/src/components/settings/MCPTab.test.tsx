@@ -12,7 +12,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
   const url = String(input);
   const method = (init.method || "GET").toUpperCase();
-  if (url.startsWith("/api/mcp/connectors?cwd=") && method === "GET") {
+  if ((url === "/api/mcp/connectors" || url.startsWith("/api/mcp/connectors?cwd=")) && method === "GET") {
     return jsonResponse({
       connectors: [{
         connector_id: "mcp-paper-search",
@@ -59,9 +59,13 @@ afterEach(() => {
 });
 
 describe("MCPTab", () => {
-  it("shows the workspace requirement instead of a loading state for global settings", () => {
+  it("shows global connectors read-only when no workspace is active", async () => {
     renderTab(null);
-    expect(screen.getByText("Open Settings from a workspace to inspect its MCP connectors.")).toBeInTheDocument();
+    expect(await screen.findByText("Paper Search")).toBeInTheDocument();
+    expect(screen.getByText("Open Settings from a workspace to change project enablement, test connectors, or edit tool permissions.")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Enable Paper Search" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Test" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Add connector" })).not.toBeInTheDocument();
     expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
   });
 

@@ -407,7 +407,7 @@
   "settings.mcpPage.enable": "启用 {{name}}",
   "settings.mcpPage.unknown": "未知",
   "settings.mcpPage.empty": "尚未配置 MCP 服务器。",
-  "settings.mcpPage.workspaceRequired": "请从工作区中打开设置，以查看该项目的 MCP 连接器。",
+  "settings.mcpPage.workspaceRequired": "请从工作区中打开设置，以更改项目启用状态、测试连接器或编辑工具权限。",
   "settings.mcpPage.loadError": "无法检查 MCP 连接器",
   "settings.mcpPage.updateError": "无法更新 MCP 服务器：{{error}}",
   "settings.mcpPage.health": "状态",

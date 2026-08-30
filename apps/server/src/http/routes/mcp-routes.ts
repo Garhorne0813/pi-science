@@ -10,6 +10,11 @@ function cwd(request: { query: unknown }): string {
   return typeof value === "string" && value ? value : ".";
 }
 
+function optionalCwd(request: { query: unknown }): string | null {
+  const value = (request.query as { cwd?: unknown }).cwd;
+  return typeof value === "string" && value ? value : null;
+}
+
 function failure(reply: FastifyReply, error: unknown): unknown {
   if (error instanceof McpServiceError) {
     return reply.code(error.status).send({ error: error.message, code: error.code, details: error.details });
@@ -22,7 +27,7 @@ function failure(reply: FastifyReply, error: unknown): unknown {
 
 export function registerMcpRoutes(app: FastifyInstance, service: McpConnectorService): void {
   app.get("/api/mcp/connectors", async (request, reply) => {
-    try { return await service.list(cwd(request)); }
+    try { return await service.list(optionalCwd(request)); }
     catch (error) { return failure(reply, error); }
   });
 
@@ -57,7 +62,7 @@ export function registerMcpRoutes(app: FastifyInstance, service: McpConnectorSer
   });
 
   app.get<{ Params: { connector_id: string } }>("/api/mcp/connectors/:connector_id/tools", async (request, reply) => {
-    try { return await service.tools(request.params.connector_id, cwd(request)); }
+    try { return await service.tools(request.params.connector_id, optionalCwd(request)); }
     catch (error) { return failure(reply, error); }
   });
 

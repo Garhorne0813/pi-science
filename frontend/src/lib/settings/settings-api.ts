@@ -90,10 +90,10 @@ export const mcpCatalogQuery = (cwd: string, errorFallback: string) => ({
   staleTime: 0,
 });
 
-export const mcpConnectorsKey = (cwd: string) => ["mcp", "connectors", cwd];
-export const mcpConnectorsQuery = (cwd: string, errorFallback: string) => ({
+export const mcpConnectorsKey = (cwd: string | null) => ["mcp", "connectors", cwd];
+export const mcpConnectorsQuery = (cwd: string | null, errorFallback: string) => ({
   queryKey: mcpConnectorsKey(cwd),
-  queryFn: () => apiRequest<{ connectors: McpConnector[]; legacy_count?: number; legacy_config_path?: string | null }>(`/api/mcp/connectors?cwd=${encodeURIComponent(cwd)}`, { errorFallback }),
+  queryFn: () => apiRequest<{ connectors: McpConnector[]; legacy_count?: number; legacy_config_path?: string | null }>(`/api/mcp/connectors${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`, { errorFallback }),
   staleTime: 0,
 });
 
@@ -175,8 +175,8 @@ export const settingsApi = {
   probeMcp(cwd: string, connectorId: string) {
     return apiRequest<{ runtime_state: string; auth_state: string; error: string | null; tools: McpToolSummary[] }>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/probe?cwd=${encodeURIComponent(cwd)}`, { method: "POST" });
   },
-  mcpTools(cwd: string, connectorId: string) {
-    return apiRequest<{ tools: McpToolSummary[]; cached_at: number | null }>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/tools?cwd=${encodeURIComponent(cwd)}`);
+  mcpTools(cwd: string | null, connectorId: string) {
+    return apiRequest<{ tools: McpToolSummary[]; cached_at: number | null }>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/tools${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`);
   },
   setMcpToolDecision(cwd: string, connectorId: string, toolName: string, decision: "allow" | "ask" | "deny") {
     return apiRequest(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/tools/${encodeURIComponent(toolName)}?cwd=${encodeURIComponent(cwd)}`, json("PUT", { decision }));

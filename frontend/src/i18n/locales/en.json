@@ -407,7 +407,7 @@
   "settings.mcpPage.enable": "Enable {{name}}",
   "settings.mcpPage.unknown": "unknown",
   "settings.mcpPage.empty": "No MCP servers configured.",
-  "settings.mcpPage.workspaceRequired": "Open Settings from a workspace to inspect its MCP connectors.",
+  "settings.mcpPage.workspaceRequired": "Open Settings from a workspace to change project enablement, test connectors, or edit tool permissions.",
   "settings.mcpPage.loadError": "Unable to inspect MCP connectors",
   "settings.mcpPage.updateError": "Could not update MCP server: {{error}}",
   "settings.mcpPage.health": "Health",

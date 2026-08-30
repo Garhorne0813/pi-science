@@ -76,4 +76,18 @@ describe("canonical MCP routes", () => {
     expect((await app.inject({ method: "DELETE", url: `/api/mcp/connectors/mcp_builtin_paper_search?cwd=${encodeURIComponent(cwd)}` })).statusCode).toBe(403);
     await app.close();
   });
+
+  it("lists global connectors and cached tools without a workspace binding", async () => {
+    const { app, service } = await fixture();
+    await service.ensureBuiltins();
+
+    const listed = await app.inject({ method: "GET", url: "/api/mcp/connectors" });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toMatchObject({ project_id: null, connectors: [expect.objectContaining({ name: "paper-search", source: "builtin", binding: null, tool_count: 3 })] });
+
+    const tools = await app.inject({ method: "GET", url: "/api/mcp/connectors/mcp_builtin_paper_search/tools" });
+    expect(tools.statusCode).toBe(200);
+    expect(tools.json().tools).toHaveLength(3);
+    await app.close();
+  });
 });

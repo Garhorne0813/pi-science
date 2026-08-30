@@ -35,6 +35,9 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
       configured: false,
     }));
   }
+  if (url === "/api/mcp/connectors") {
+    return Promise.resolve(jsonResponse({ connectors: [], legacy_count: 0, project_id: null }));
+  }
   return Promise.resolve(jsonResponse({ error: `unhandled ${method} ${url}` }, 404));
 }
 
@@ -176,7 +179,7 @@ describe("SettingsContent", () => {
     expect(await screen.findByText("Analyze alpha data")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "MCP" }));
-    expect(await screen.findByText("Open Settings from a workspace to inspect its MCP connectors.")).toBeInTheDocument();
+    expect(await screen.findByText("Open Settings from a workspace to change project enablement, test connectors, or edit tool permissions.")).toBeInTheDocument();
     expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
   });
 
