@@ -168,7 +168,7 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       // The newest provisional block streams immediately. A later tool can
       // still supersede it as narration.
       expect(screen.getByText("我先检查一下。")).toBeInTheDocument();
-      expect(screen.getByRole("status")).toHaveTextContent("Responding");
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
       expect(screen.queryByText("Reviewing the implementation")).not.toBeInTheDocument();
 
       emit("tool.updated", { callId: "r1", tool: "read", status: "running", input: { path: "a.ts" } });
@@ -201,7 +201,7 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       rerender(view());
       // The final answer is visible while its text is still streaming.
       expect(screen.getByText("这是最终回答。")).toBeInTheDocument();
-      expect(screen.getByRole("status")).toHaveTextContent("Responding");
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
       expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
 
       emit("session.idle", {});

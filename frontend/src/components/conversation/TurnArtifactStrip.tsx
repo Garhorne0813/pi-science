@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { File, FileText, FileSpreadsheet, FileImage, FileCode2, NotebookPen, ChevronDown, ChevronUp, ArrowUpRight } from "lucide-react";
 import { previewUrl, readArtifact } from "../../lib/files";
-import { fileInspectorForPath } from "../../lib/artifacts";
+import { extOf, extractArtifactRefs, fileInspectorForPath, normalizeArtifactPath, previewKindForName } from "../../lib/artifacts";
 import { useUiStore } from "../../lib/ui";
 import type { TurnArtifactItem } from "../../types/thread";
 import { codeSnippet, markdownSnippet, parseCsvSnippet, parseTsvSnippet, type CsvSnippet } from "../../lib/conversation/turn-artifact-snippet";
@@ -299,7 +299,7 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
 /** Compact strip of files a turn produced, shown after the final assistant
  *  message (Claude Science style). Clicking a card opens the file in the
  *  right-side inspector. */
-export function TurnArtifactStrip({ artifacts, cwd }: { artifacts: TurnArtifactItem[]; cwd?: string }) {
+export function TurnArtifactStrip({ artifacts, cwd, heading = "generated" }: { artifacts: TurnArtifactItem[]; cwd?: string; heading?: "generated" | "referenced" }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const visible = useMemo(() => (expanded ? artifacts : artifacts.slice(0, MAX_VISIBLE)), [artifacts, expanded]);
@@ -307,10 +307,12 @@ export function TurnArtifactStrip({ artifacts, cwd }: { artifacts: TurnArtifactI
 
   if (!artifacts.length) return null;
 
+  const ariaLabel = heading === "referenced" ? t("conversation.referencedFiles") : t("conversation.generatedFiles");
+  const headingLabel = heading === "referenced" ? t("conversation.referencedFilesLabel", { count: artifacts.length }) : t("conversation.generatedFilesLabel", { count: artifacts.length });
   return (
-    <section aria-label={t("conversation.generatedFiles")} className="mt-3.5">
+    <section aria-label={ariaLabel} className="mt-3.5">
       <div className="mb-1.5 text-[10.5px] font-medium tracking-[0.02em] text-muted">
-        {t("conversation.generatedFilesLabel", { count: artifacts.length })}
+        {headingLabel}
       </div>
       <div className="flex flex-wrap gap-2">
         {visible.map((item) => <ArtifactMiniCard key={item.path} item={item} cwd={cwd} />)}
@@ -336,6 +338,39 @@ export function TurnArtifactStrip({ artifacts, cwd }: { artifacts: TurnArtifactI
       </div>
     </section>
   );
+}
+
+function inferredKind(path: string): string {
+  const ext = extOf(path);
+  const preview = previewKindForName(path);
+  if (preview === "molecule") return "structure";
+  if (preview === "image" || preview === "table") return preview;
+  if (ext === "ipynb") return "notebook";
+  if (["py", "r", "js", "ts", "tsx", "jsx", "sh"].includes(ext)) return "code";
+  return "text";
+}
+
+/** Show existing workspace files cited by the final answer, even when the turn
+ *  did not create or modify them and therefore emitted no turn.artifacts event. */
+export function ReferencedArtifactStrip({ text, cwd, exclude = [] }: { text: string; cwd?: string; exclude?: string[] }) {
+  const excludeKey = exclude.join("\0");
+  const refs = useMemo(() => {
+    const skipped = new Set(excludeKey ? excludeKey.split("\0").map(normalizeArtifactPath) : []);
+    return extractArtifactRefs(text).map(normalizeArtifactPath).filter((path) => !skipped.has(path));
+  }, [excludeKey, text]);
+  const [items, setItems] = useState<TurnArtifactItem[]>([]);
+  useEffect(() => {
+    if (!cwd || refs.length === 0) { setItems([]); return; }
+    let cancelled = false;
+    void Promise.all(refs.map(async (path) => {
+      const file = await readArtifact(path, "workspace", cwd, 1);
+      return file ? { path, kind: inferredKind(path), mime: file.mime, size: file.size } : null;
+    })).then((resolved) => {
+      if (!cancelled) setItems(resolved.filter((item): item is TurnArtifactItem => item !== null));
+    });
+    return () => { cancelled = true; };
+  }, [cwd, refs]);
+  return <TurnArtifactStrip artifacts={items} cwd={cwd} heading="referenced" />;
 }
 
 /** Render helper for ConversationBlocks: nothing to prepare here, keeps the

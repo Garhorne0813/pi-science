@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { TurnArtifactStrip } from "./TurnArtifactStrip";
+import { ReferencedArtifactStrip, TurnArtifactStrip } from "./TurnArtifactStrip";
 
 const { openInspector, mockReadArtifact } = vi.hoisted(() => ({ openInspector: vi.fn(), mockReadArtifact: vi.fn() }));
 
@@ -36,6 +36,13 @@ beforeEach(() => {
 });
 
 describe("TurnArtifactStrip", () => {
+  it("renders verified workspace paths cited by the final answer", async () => {
+    mockReadArtifact.mockImplementation(async (path: string) => path === "work/plot.png" ? { path, mime: "image/png", encoding: "base64", data: "x", size: 2048 } : null);
+    render(<ReferencedArtifactStrip cwd="/workspace" text="See `work/plot.png` and missing/file.pdf." />);
+    await waitFor(() => expect(screen.getByLabelText("Referenced files")).toBeInTheDocument());
+    expect(screen.getByText("REFERENCED · 1")).toBeInTheDocument();
+  });
+
   it("renders image thumbnails with workspace preview URLs and file cards", () => {
     render(
       <TurnArtifactStrip

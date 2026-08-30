@@ -6,7 +6,7 @@ import { useRuntimeStore } from "../../lib/agent-runtime";
 import type { AgentMessageBlock, StatusLineBlock, ThreadBlock, UserMessageBlock } from "../../types/thread";
 import { MarkdownViewer, type CodeRunner } from "../markdown-viewer/MarkdownViewer";
 import { fileInspectorFromBlock, refToArtifactBlock } from "../../lib/artifacts";
-import { TurnArtifactStrip } from "./TurnArtifactStrip";
+import { ReferencedArtifactStrip, TurnArtifactStrip } from "./TurnArtifactStrip";
 import { referencesFromMessage, visibleUserMessage } from "../../lib/files";
 import { agentActionTextByBlock } from "../../lib/conversation";
 import { extractCitations } from "../../lib/citations";
@@ -14,7 +14,6 @@ import { parseSuggestions } from "../../lib/conversation";
 import { MessageActions } from "./MessageActions";
 import { buildTurnPresentations, turnBlockIds, type TurnPresentation } from "../../lib/conversation/turn-presentation";
 import { AgentActivity } from "./AgentActivity";
-import { ProgressVisual, useProgressAppearance } from "../progress/ProgressVisual";
 
 export function renderTurn(turn: TurnPresentation, codeRunner: CodeRunner, actionTextByBlock?: Map<string, string>) {
   return <ConversationTurn key={turn.id} turn={turn} codeRunner={codeRunner} actionTextByBlock={actionTextByBlock} />;
@@ -28,6 +27,8 @@ export function renderBlocks(blocks: ThreadBlock[], codeRunner: CodeRunner) {
 
 function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnPresentation; codeRunner: CodeRunner; actionTextByBlock?: Map<string, string> }) {
   const visibleAgent = turn.finalAgent ?? turn.provisionalAgent;
+  const finalText = turn.finalAgent?.parts.map((part) => part.text).join("") ?? "";
+  const publishedPaths = turn.artifacts.flatMap((block) => block.artifacts.map((item) => item.path));
   return (
     <div data-thread-block-ids={turnBlockIds(turn).join(" ")} className="flex flex-col gap-3 scroll-mt-4">
       {turn.user && <UserMessage block={turn.user} />}
@@ -35,6 +36,7 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
       {visibleAgent && <AgentMessage block={visibleAgent} actionText={turn.finalAgent ? actionTextByBlock?.get(turn.finalAgent.id) : undefined} codeRunner={codeRunner} />}
       {turn.systemBlocks.map((block) => <SystemBlock key={block.id} block={block} />)}
       {turn.artifacts.map((block) => <TurnArtifactStrip key={block.id} artifacts={block.artifacts} cwd={codeRunner?.cwd} />)}
+      {finalText && <ReferencedArtifactStrip text={finalText} cwd={codeRunner?.cwd} exclude={publishedPaths} />}
     </div>
   );
 }
@@ -59,13 +61,11 @@ function UserMessage({ block }: { block: UserMessageBlock }) {
 
 function AgentMessage({ block, actionText, codeRunner }: { block: AgentMessageBlock; actionText?: string; codeRunner?: CodeRunner }) {
   const { t } = useTranslation();
-  const progressAppearance = useProgressAppearance();
   const rawText = block.parts.map((part) => part.text).join("");
   if (!rawText) return null;
   const text = parseSuggestions(rawText).clean;
   const citations = extractCitations(text);
   return <div className="group/message">
-    {block.partial && <div className="mb-1 flex h-5 items-center gap-2" role="status"><span aria-hidden><ProgressVisual slot="streamingAnswer" config={progressAppearance} text="AI" compact /></span><span className="text-xs text-muted">{t("conversation.activity.streaming")}</span></div>}
     <MarkdownViewer variant="chat" codeRunner={codeRunner}>{text}</MarkdownViewer>
     {citations.length > 0 && <div className="mt-2 flex flex-wrap items-center gap-1.5">
       <span className="text-[10px] text-muted">{t("conversation.sources")} ({citations.length})</span>

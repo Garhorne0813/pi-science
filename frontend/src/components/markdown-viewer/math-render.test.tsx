@@ -34,6 +34,11 @@ describe("MarkdownViewer math rendering (normalizeMathInput integration)", () =>
     expect(container.querySelector(".katex")).toBeInTheDocument();
   });
 
+  it("renders model-style bracket delimiters as display math", () => {
+    const { container } = render(<MarkdownViewer>{"\\[\nE = mc^2\n\\]"}</MarkdownViewer>);
+    expect(container.querySelector(".katex-display .katex")).toBeInTheDocument();
+  });
+
   it("renders a standalone single-line formula as display math", () => {
     const { container } = render(<MarkdownViewer>{"$$x^2$$"}</MarkdownViewer>);
     expect(container.querySelector(".katex-display .katex")).toBeInTheDocument();
