@@ -57,6 +57,7 @@ beforeAll(async () => {
 beforeEach(() => {
   cleanup();
   fetchMock.mockClear();
+  fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => defaultFetch(String(input), init));
   putCalls.length = 0;
   vi.stubGlobal("fetch", fetchMock);
   queryClient.clear();
@@ -161,6 +162,22 @@ describe("SettingsContent", () => {
     expect(screen.queryByRole("columnheader", { name: "Actions" })).not.toBeInTheDocument();
     expect(screen.queryByText("Scientific Environment")).not.toBeInTheDocument();
     expect(screen.queryByText("Project Skills")).not.toBeInTheDocument();
+  });
+
+  it("does not block Skills or MCP while the shared config request is pending", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      if (url.startsWith("/api/settings/config")) return new Promise<Response>(() => undefined);
+      return defaultFetch(url, init);
+    });
+    renderContent(null);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Skills" }));
+    expect(await screen.findByText("Analyze alpha data")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "MCP" }));
+    expect(await screen.findByText("Open Settings from a workspace to inspect its MCP connectors.")).toBeInTheDocument();
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
   });
 
   it("supports arrow-key navigation between tabs", async () => {

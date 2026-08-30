@@ -59,6 +59,12 @@ afterEach(() => {
 });
 
 describe("MCPTab", () => {
+  it("shows the workspace requirement instead of a loading state for global settings", () => {
+    renderTab(null);
+    expect(screen.getByText("Open Settings from a workspace to inspect its MCP connectors.")).toBeInTheDocument();
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+  });
+
   it("presents canonical MCP connectors with explicit runtime state", async () => {
     renderTab("/tmp/ws");
 

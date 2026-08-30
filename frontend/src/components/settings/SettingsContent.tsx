@@ -32,7 +32,7 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
   const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>("general");
   const [config, setConfig] = useState<SettingsConfig | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [configLoading, setConfigLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState<Record<string, string>>({});
   const [showKey, setShowKey] = useState<Record<string, boolean>>({});
@@ -76,11 +76,12 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
       setError(message);
       throw e;
     } finally {
-      setLoading(false);
+      setConfigLoading(false);
     }
   }, [scope]);
 
   useEffect(() => {
+    setConfigLoading(true);
     void loadConfig().catch(() => undefined);
   }, [loadConfig]);
 
@@ -193,14 +194,14 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
             />
           </header>
           <div className="min-h-0 flex-1 px-card py-card md:px-0 md:py-6">
-            {loading ? (
+            {error && <p role="alert" className="mb-card rounded-input bg-error/10 px-panel py-2 text-ui-caption text-error-text">{error}</p>}
+            {tab === "llm" && configLoading ? (
               <div className="flex min-h-[240px] items-center justify-center text-sm text-muted">
                 <Icon icon={Loader2} size={18} className="mr-2 animate-spin" />
                 {t("common.loading")}
               </div>
             ) : (
               <>
-                {error && <p role="alert" className="mb-card rounded-input bg-error/10 px-panel py-2 text-ui-caption text-error-text">{error}</p>}
                 {tab === "general" && <GeneralTab />}
                 {tab === "llm" && <LLMTab config={config} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} saveModel={saveModel} saveCompaction={saveCompaction} onConfigReload={loadConfig} />}
                 {tab === "skills" && <SkillsTab workspaceCwd={scope} />}
