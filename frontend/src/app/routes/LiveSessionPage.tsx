@@ -106,6 +106,7 @@ export function LiveSessionPage() {
     : { blocks: [] as ThreadBlock[], index: {} as Record<string, number>, loaded: true };
   const sessions = useRuntimeStore((s) => s.sessions);
   const working = useRuntimeStore((s) => s.working);
+  const progressAppearance = useProgressAppearance();
   const turnLifecycle = useRuntimeStore((s) => s.turnLifecycle);
   const historyLoading = useRuntimeStore((s) => s.historyLoading);
   const loadOlderMessages = useRuntimeStore((s) => s.loadOlderMessages);
@@ -421,7 +422,7 @@ export function LiveSessionPage() {
                 {renderInteractionPrompt()}
                 {working && !pendingInteraction && (
                   <div className="flex items-center gap-2 py-4 text-sm text-muted">
-                    <Loader2 size={14} className="animate-spin text-accent" />
+                    <ProgressVisual slot="thinking" config={progressAppearance} text={t("conversation.activity.continuing")} />
                     {t("conversation.activity.continuing")}
                   </div>
                 )}

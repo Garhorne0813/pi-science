@@ -79,7 +79,7 @@
   "conversation.activity.operationCount_other": "{{count}} operations",
   "conversation.activity.error": "Encountered a problem",
   "conversation.activity.stopped": "Stopped",
-  "conversation.activity.continuing": "Understanding the context",
+  "conversation.activity.continuing": "Analyzing the request",
   "conversation.activity.waitingApproval": "Needs your approval",
   "conversation.activity.waitingInput": "Needs your input",
   "conversation.activity.narrative.explore": "Reviewing related content",

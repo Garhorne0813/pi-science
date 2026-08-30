@@ -79,7 +79,7 @@
   "conversation.activity.operationCount_other": "{{count}} 项操作",
   "conversation.activity.error": "遇到问题",
   "conversation.activity.stopped": "已停止",
-  "conversation.activity.continuing": "了解上下文",
+  "conversation.activity.continuing": "分析问题",
   "conversation.activity.waitingApproval": "需要你的确认",
   "conversation.activity.waitingInput": "需要你的输入",
   "conversation.activity.narrative.explore": "检查相关内容",
