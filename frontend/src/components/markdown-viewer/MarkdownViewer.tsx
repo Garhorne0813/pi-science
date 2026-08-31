@@ -222,10 +222,12 @@ function restoreCodeSpans(text: string, spans: string[]): string {
  *  1. drop a stray closing `}` that models sometimes leave at the end of a
  *     display formula (`...\right\} }$$`), which makes KaTeX fail and the
  *     whole formula degrade to raw TeX (single- and multi-line forms);
- *  2. single-line `$$...$$` blocks are parsed by remark-math as INLINE math
+ *  2. convert model-style `\\[...\\]` and `\\(...\\)` delimiters to the
+ *     dollar delimiters supported by remark-math;
+ *  3. single-line `$$...$$` blocks are parsed by remark-math as INLINE math
  *     (never display), so expand them to the multi-line block form
  *     (`$$\n...\n$$`) that remark-math reliably classifies as display.
- *  Fix 2 applies ONLY to formulas that stand alone on their own line
+ *  Fix 3 applies ONLY to formulas that stand alone on their own line
  *  (opening `$$` at line start, closing `$$` followed only by line end).
  *  Formulas inside a sentence, blockquote (`> $$…$$`) or list (`- $$…$$`)
  *  are left untouched — expanding them would corrupt the surrounding text
@@ -234,12 +236,15 @@ function restoreCodeSpans(text: string, spans: string[]): string {
  *  so example TeX inside code is never rewritten. */
 export function normalizeMathInput(md: string): string {
   const { text, spans } = protectCodeSpans(md);
-  const fixed = text.replace(/\$\$([\s\S]*?)\$\$/g, (whole, inner: string, offset: number) => {
+  const delimited = text
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_whole, inner: string) => `$$\n${stripStrayClosingBrace(inner).trim()}\n$$`)
+    .replace(/\\\(([^\n]*?)\\\)/g, (_whole, inner: string) => `$${inner}$`);
+  const fixed = delimited.replace(/\$\$([\s\S]*?)\$\$/g, (whole, inner: string, offset: number) => {
     // Standalone-line check: nothing before the opening `$$` on its line and
     // nothing but whitespace after the closing `$$` until the line end.
-    const lineStart = text.lastIndexOf("\n", offset - 1);
-    const prefix = text.slice(lineStart + 1, offset);
-    const after = text.slice(offset + whole.length);
+    const lineStart = delimited.lastIndexOf("\n", offset - 1);
+    const prefix = delimited.slice(lineStart + 1, offset);
+    const after = delimited.slice(offset + whole.length);
     if (prefix !== "" || !/^[ \t]*(?:\n|$)/.test(after)) return whole;
     const braced = stripStrayClosingBrace(String(inner));
     const trimmed = braced.replace(/^[ \t]+/, "").replace(/[ \t]+$/, "");

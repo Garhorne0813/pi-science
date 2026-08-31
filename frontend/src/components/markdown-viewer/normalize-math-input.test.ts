@@ -27,6 +27,11 @@ describe("stripStrayClosingBrace", () => {
 });
 
 describe("normalizeMathInput", () => {
+  it("converts bracket and parenthesis TeX delimiters", () => {
+    expect(normalizeMathInput("\\[\nE = mc^2\n\\]")).toBe("$$\nE = mc^2\n$$");
+    expect(normalizeMathInput("Energy \\(E = mc^2\\).")).toBe("Energy $E = mc^2$.");
+  });
+
   it("expands a single-line display formula to the block form", () => {
     expect(normalizeMathInput("$$x^2$$")).toBe("$$\nx^2\n$$");
   });
@@ -78,7 +83,7 @@ describe("normalizeMathInput", () => {
   });
 
   it("never rewrites TeX inside an inline code span", () => {
-    const input = "Use `$$x$$` literally.";
+    const input = "Use `$$x$$`, `\\[y\\]`, and `\\(z\\)` literally.";
     expect(normalizeMathInput(input)).toBe(input);
   });
 

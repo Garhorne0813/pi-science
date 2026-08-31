@@ -626,7 +626,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
       const canonicalProviders = await modelResources.listProviders();
       for (const provider of canonicalProviders.filter((item) => item.kind === "user")) {
         const authKind = provider.auth_kind;
-        providers.push({
+        const entry: ProviderInventoryEntry = {
           id: provider.id,
           name: provider.name,
           models: provider.models,
@@ -635,7 +635,11 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
           enabled: provider.enabled,
           has_key: provider.has_key,
           custom: true,
-        });
+        };
+        const identity = provider.id.replace(/^(?:user|custom)-/, "");
+        const existing = providers.findIndex((item) => item.id === provider.id || item.id.replace(/^(?:user|custom)-/, "") === identity);
+        if (existing >= 0) providers[existing] = entry;
+        else providers.push(entry);
       }
     }
     const apiKeys = Object.fromEntries(providers.map((provider) => [provider.id, provider.has_key]));
