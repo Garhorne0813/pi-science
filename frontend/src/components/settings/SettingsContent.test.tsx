@@ -85,10 +85,10 @@ describe("SettingsContent", () => {
     const nav = await screen.findByRole("tablist", { name: "Settings" });
     expect(nav).toHaveClass("gap-1");
     const general = screen.getByRole("tab", { name: "General" });
-    const llm = screen.getByRole("tab", { name: "LLM" });
+    const models = screen.getByRole("tab", { name: "AI Models" });
     expect(general).toHaveClass("bg-surface-selected");
-    expect(llm).not.toHaveClass("bg-surface-selected");
-    expect(llm).toHaveClass("hover:bg-surface-hover");
+    expect(models).not.toHaveClass("bg-surface-selected");
+    expect(models).toHaveClass("hover:bg-surface-hover");
   });
 
   it("renders the DeepSeek-style sidebar chrome with distinct outline icons", async () => {
@@ -111,7 +111,7 @@ describe("SettingsContent", () => {
     // Every nav item uses a different outline icon (distinct svg content).
     const icons = screen.getAllByRole("tab").map((tab) => tab.querySelector("svg")?.innerHTML ?? null);
     expect(icons.every(Boolean)).toBe(true);
-    expect(new Set(icons).size).toBe(8);
+    expect(new Set(icons).size).toBe(9);
   });
 
   it("moves the close control into the content header, outside the sidebar", async () => {
@@ -142,11 +142,11 @@ describe("SettingsContent", () => {
   it("switches tabs and resets aria-selected", async () => {
     renderContent(null);
     await screen.findByRole("tablist", { name: "Settings" });
-    fireEvent.click(screen.getByRole("tab", { name: "LLM" }));
-    expect(screen.getByRole("tab", { name: "LLM" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByRole("tab", { name: "AI Models" }));
+    expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "false");
-    expect(screen.getByRole("tabpanel", { name: "LLM" })).toHaveAttribute("aria-labelledby", "settings-tab-llm");
-    expect(await screen.findByText("Models")).toBeInTheDocument();
+    expect(screen.getByRole("tabpanel", { name: "AI Models" })).toHaveAttribute("aria-labelledby", "settings-tab-models");
+    expect(await screen.findByText("Connected services")).toBeInTheDocument();
   });
 
   it("shows separate Built-in and User Skills tables inside Settings", async () => {
@@ -169,9 +169,9 @@ describe("SettingsContent", () => {
     const general = screen.getByRole("tab", { name: "General" });
     general.focus();
     fireEvent.keyDown(nav, { key: "ArrowDown" });
-    await waitFor(() => expect(screen.getByRole("tab", { name: "LLM" })).toHaveAttribute("aria-selected", "true"));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "AI Models" })).toHaveAttribute("aria-selected", "true"));
     // Keyboard navigation moves focus into the newly activated tab.
-    await waitFor(() => expect(screen.getByRole("tab", { name: "LLM" })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole("tab", { name: "AI Models" })).toHaveFocus());
     fireEvent.keyDown(nav, { key: "End" });
     await waitFor(() => expect(screen.getByRole("tab", { name: "Compute" })).toHaveAttribute("aria-selected", "true"));
     fireEvent.keyDown(nav, { key: "ArrowUp" });
@@ -180,37 +180,19 @@ describe("SettingsContent", () => {
     await waitFor(() => expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true"));
   });
 
-  it("saves the selected model with the workspace scope query", async () => {
-    renderContent("proj");
-    await screen.findByRole("tablist", { name: "Settings" });
-    fireEvent.click(screen.getByRole("tab", { name: "LLM" }));
-    const trigger = await screen.findByLabelText(/Default model/);
-    const configCallsBefore = fetchMock.mock.calls.filter(([url]) => String(url).startsWith("/api/settings/config")).length;
-    fireEvent.pointerDown(trigger);
-    fireEvent.click(trigger);
-    fireEvent.click(await screen.findByRole("menuitemradio", { name: "DeepSeek V4 Flash" }));
-    await waitFor(() => expect(putCalls.length).toBe(1));
-    expect(putCalls[0].url).toContain("?cwd=proj");
-    expect(putCalls[0].body).toMatchObject({ model: "deepseek/deepseek-v4-flash", thinking: "high" });
-    // The save handler reloads the config (loadConfig) after the PUT.
-    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith("/api/settings/config")).length).toBe(configCallsBefore + 1));
+  it("keeps runtime model controls out of Settings", async () => {
+    renderContent(null);
+    fireEvent.click(await screen.findByRole("tab", { name: "AI Models" }));
+    expect(await screen.findByText("Connected services")).toBeInTheDocument();
+    expect(screen.queryByText("Default model")).not.toBeInTheDocument();
+    expect(screen.queryByText("Thinking Level")).not.toBeInTheDocument();
+    expect(screen.queryByText("Context Management")).not.toBeInTheDocument();
   });
 
-  it("shows a save failure as an alert and keeps the dialog usable", async () => {
-    renderContent("proj");
-    await screen.findByRole("tablist", { name: "Settings" });
-    fireEvent.click(screen.getByRole("tab", { name: "LLM" }));
-    const trigger = await screen.findByLabelText(/Default model/);
-    // Switch the fetch mock to failing mode for the PUT.
-    vi.mocked(fetchMock).mockImplementationOnce(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
-      return defaultFetch("/api/settings/model?fail=1", init);
-    });
-    fireEvent.pointerDown(trigger);
-    fireEvent.click(trigger);
-    fireEvent.click(await screen.findByRole("menuitemradio", { name: "DeepSeek V4 Flash" }));
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("boom");
-    // The saving flag resets in finally, so the trigger is usable again.
-    await waitFor(() => expect(screen.getByLabelText(/Default model/)).toBeEnabled());
+  it("opens Agent with context management controls", async () => {
+    renderContent(null);
+    fireEvent.click(await screen.findByRole("tab", { name: "Agent" }));
+    expect(await screen.findByText("Control how Pi manages long-running work.")).toBeInTheDocument();
+    expect(screen.getByText("Context Management")).toBeInTheDocument();
   });
 });

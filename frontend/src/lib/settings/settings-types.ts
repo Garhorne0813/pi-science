@@ -4,8 +4,8 @@ import type { ProgressAppearance } from "@pi-science/contracts";
  *  model domain lives under `lib/model-resources`; legacy fields remain only
  *  for migration responses consumed by older clients. */
 
-export type ProviderAuthKind = "api_key" | "oauth" | "api_key_or_oauth";
-export type ProviderCredentialStatus = "configured" | "connected" | "needs_key" | "needs_login";
+export type ProviderAuthKind = "api_key" | "oauth" | "api_key_or_oauth" | "none";
+export type ProviderCredentialStatus = "configured" | "connected" | "needs_key" | "needs_login" | "invalid";
 
 export interface ProviderAuthInfo {
   kind: ProviderAuthKind;
@@ -19,8 +19,9 @@ export interface Provider {
   name: string;
   models: string[];
   has_key: boolean;
-  /** Dynamic pi-ai provider metadata. Absent in legacy API responses, so the
-   *  UI falls back to the `has_key`-only behavior when it is missing. */
+  custom?: boolean;
+  /** Runtime catalog authentication metadata. Absent in legacy API responses,
+   *  so the UI falls back to the `has_key`-only behavior when it is missing. */
   auth?: ProviderAuthInfo;
   credential_status?: ProviderCredentialStatus;
   enabled?: boolean;
@@ -48,6 +49,11 @@ export interface AvailableModel {
   reasoning: boolean;
   thinking_levels: string[];
   capability_source: string;
+  max_output_tokens?: number | null;
+  vision?: boolean;
+  tools?: boolean;
+  structured_output?: boolean;
+  input_formats?: string[];
   context_window?: number | null;
 }
 
@@ -64,6 +70,7 @@ export interface SettingsConfig {
   compaction_threshold_percent: number;
   model_context_window?: number | null;
   progress_appearance?: ProgressAppearance;
+  model_max_output_tokens?: number | null;
 }
 
 export interface RuntimeExtension {
