@@ -637,7 +637,7 @@ export function registerSettingsRoutes(app: FastifyInstance, nodeSessionService:
           custom: true,
         };
         const identity = provider.id.replace(/^(?:user|custom)-/, "");
-        const existing = providers.findIndex((item) => item.id === provider.id || item.id.replace(/^(?:user|custom)-/, "") === identity);
+        const existing = providers.findIndex((item) => item.id === provider.id || (/^(?:user|custom)-/.test(item.id) && item.id.replace(/^(?:user|custom)-/, "") === identity));
         if (existing >= 0) providers[existing] = entry;
         else providers.push(entry);
       }
