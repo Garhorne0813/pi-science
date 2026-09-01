@@ -24,16 +24,32 @@ const ARTIFACT_PROBE_CONCURRENCY = 6;
 let activeArtifactProbes = 0;
 const artifactProbeWaiters: Array<() => void> = [];
 
-async function withArtifactProbeSlot<T>(run: () => Promise<T>): Promise<T> {
-  if (activeArtifactProbes >= ARTIFACT_PROBE_CONCURRENCY) {
-    await new Promise<void>((resolve) => artifactProbeWaiters.push(resolve));
+async function acquireArtifactProbeSlot(): Promise<void> {
+  if (activeArtifactProbes < ARTIFACT_PROBE_CONCURRENCY) {
+    activeArtifactProbes += 1;
+    return;
   }
-  activeArtifactProbes += 1;
+  await new Promise<void>((resolve) => artifactProbeWaiters.push(resolve));
+}
+
+function releaseArtifactProbeSlot(): void {
+  const next = artifactProbeWaiters.shift();
+  if (next) {
+    // Transfer ownership directly to the oldest waiter. The slot remains
+    // counted as active, so a newcomer cannot steal it before the waiter's
+    // promise continuation runs.
+    next();
+    return;
+  }
+  activeArtifactProbes -= 1;
+}
+
+async function withArtifactProbeSlot<T>(run: () => Promise<T>): Promise<T> {
+  await acquireArtifactProbeSlot();
   try {
     return await run();
   } finally {
-    activeArtifactProbes -= 1;
-    artifactProbeWaiters.shift()?.();
+    releaseArtifactProbeSlot();
   }
 }
 
