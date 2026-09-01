@@ -25,6 +25,7 @@ import { createServerModules, type ServerModules } from "./server-modules.js";
 import { registerEnvironmentRoutes } from "../http/routes/environment-routes.js";
 import { serveFrontend } from "../http/frontend-static.js";
 import { validateWorkspaceCwd } from "../security/workspace-security.js";
+import { isArtifactSurfaceablePath } from "../runtime/artifacts/artifact-surface-policy.js";
 import { AiTitleService, PiTitleRuntimeFactory } from "../runtime/title/ai-title-service.js";
 import { importLegacyState } from "../storage/sqlite/legacy-state.js";
 import { internalAuthCookie, requestInternalToken, tokensMatch } from "../security/internal-auth.js";
@@ -59,6 +60,17 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     const boundary = routeBoundary(pathname);
     if (request.url.startsWith("/api/") && !boundary) {
       return reply.code(404).send({ error: `Unknown API route: ${request.method} ${pathname}` });
+    }
+    // `/files/probe` is used by automatic referenced-artifact discovery. Keep
+    // its metadata lookup behind the same surface policy as workspace snapshots
+    // so model-authored paths cannot turn credentials into preview cards.
+    if (request.method === "GET" && pathname.startsWith("/api/files/probe/")) {
+      const rawPath = pathname.slice("/api/files/probe/".length);
+      let candidate = rawPath;
+      try { candidate = rawPath.split("/").map(decodeURIComponent).join("/"); } catch { /* route will reject malformed encoding */ }
+      if (!isArtifactSurfaceablePath(candidate)) {
+        return reply.code(404).send({ error: "File is not available for automatic artifact discovery" });
+      }
     }
     const needsWorkspaceEnvironment = request.method === "POST" && (
       pathname === "/api/kernels/execute"
