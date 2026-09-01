@@ -7,8 +7,8 @@ import { basename, extname, join, relative, resolve } from "node:path";
  *  re-scans and diffs the two snapshots so files created/modified by the turn
  *  (bash/Python runs, scripts, downloads) become preview cards even when no
  *  explicit artifact publication happened. The scan is deliberately bounded:
- *  shallow depth, an entry cap, ignored dependency/cache directories, and
- *  oversized files dropped, so a large workspace never stalls a turn. */
+ *  shallow depth, entry/node caps, ignored dependency/cache/hidden directories,
+ *  and oversized files dropped, so a large workspace never stalls a turn. */
 
 export interface WorkspaceSnapshotEntry {
   path: string;
@@ -18,6 +18,7 @@ export interface WorkspaceSnapshotEntry {
 }
 
 export const MAX_SNAPSHOT_ENTRIES = 2_000;
+export const MAX_SNAPSHOT_VISITED_NODES = 10_000;
 export const MAX_SNAPSHOT_DEPTH = 3;
 export const MAX_SNAPSHOT_FILE_BYTES = 100 * 1024 * 1024;
 
@@ -28,6 +29,14 @@ export function snapshotEntryCap(): number {
   return Number.isInteger(value) && value > 0 ? value : MAX_SNAPSHOT_ENTRIES;
 }
 
+/** Total directory entries inspected during a snapshot. Unlike the artifact
+ * entry cap, this also bounds directories, symlinks, sensitive files and
+ * oversized files, so those cannot make the walk effectively unbounded. */
+export function snapshotNodeCap(): number {
+  const value = Number(process.env.PI_SCIENCE_SNAPSHOT_NODE_CAP ?? 0);
+  return Number.isInteger(value) && value > 0 ? value : MAX_SNAPSHOT_VISITED_NODES;
+}
+
 const IGNORED_DIRS = new Set([
   ".git", ".hg", ".svn", "node_modules", ".venv", "venv", ".pi-science", ".pi",
   ".cache", "dist", "build", "out", "target", ".next", ".turbo",
@@ -36,21 +45,27 @@ const IGNORED_DIRS = new Set([
   ".parquet-cache", ".mpl-config", ".jupyter",
 ]);
 
+const SENSITIVE_FILE_NAMES = new Set([
+  ".env", ".netrc", ".pgpass", ".npmrc", ".pypirc",
+  "credentials", "credentials.json", "secrets.json", "secrets.yaml", "secrets.yml", "token.json",
+  "application_default_credentials.json",
+  "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa",
+]);
+
+const SENSITIVE_FILE_SUFFIXES = [".pem", ".key", ".p12", ".pfx", ".jks", ".keystore"];
+
 function isIgnoredDir(name: string): boolean {
+  if (name.startsWith(".")) return true;
   if (IGNORED_DIRS.has(name)) return true;
   return name.endsWith(".egg-info");
 }
 
 function isSensitiveFile(path: string): boolean {
   const name = basename(path).toLowerCase();
-  return name === ".env"
+  return name.startsWith(".")
+    || SENSITIVE_FILE_NAMES.has(name)
     || name.startsWith(".env.")
-    || name === ".netrc"
-    || name === ".pgpass"
-    || name === "id_rsa"
-    || name === "id_ed25519"
-    || name.endsWith(".pem")
-    || name.endsWith(".key");
+    || SENSITIVE_FILE_SUFFIXES.some((suffix) => name.endsWith(suffix));
 }
 
 /** Whether a file could surface with a rich preview rather than a generic card. */
@@ -101,16 +116,32 @@ export function previewMime(path: string): string {
   return table[extname(path).toLowerCase()] ?? "application/octet-stream";
 }
 
-async function walk(root: string, dir: string, depth: number, entries: WorkspaceSnapshotEntry[]): Promise<void> {
-  if (depth > MAX_SNAPSHOT_DEPTH || entries.length >= snapshotEntryCap()) return;
+type WalkState = {
+  entryCap: number;
+  nodeCap: number;
+  visited: number;
+  truncated: boolean;
+};
+
+function reserveNode(state: WalkState, entries: WorkspaceSnapshotEntry[]): boolean {
+  if (state.visited >= state.nodeCap || entries.length >= state.entryCap) {
+    state.truncated = true;
+    return false;
+  }
+  state.visited += 1;
+  return true;
+}
+
+async function walk(root: string, dir: string, depth: number, entries: WorkspaceSnapshotEntry[], state: WalkState): Promise<void> {
+  if (depth > MAX_SNAPSHOT_DEPTH || state.truncated) return;
   let names: string[];
   try {
-    names = await readdir(dir);
+    names = (await readdir(dir)).sort((left, right) => left.localeCompare(right));
   } catch {
     return;
   }
   for (const name of names) {
-    if (entries.length >= snapshotEntryCap()) return;
+    if (!reserveNode(state, entries)) return;
     if (isIgnoredDir(name)) continue;
     const absolute = join(dir, name);
     let info;
@@ -121,7 +152,8 @@ async function walk(root: string, dir: string, depth: number, entries: Workspace
     }
     if (info.isSymbolicLink()) continue;
     if (info.isDirectory()) {
-      await walk(root, absolute, depth + 1, entries);
+      await walk(root, absolute, depth + 1, entries, state);
+      if (state.truncated) return;
       continue;
     }
     if (!info.isFile() || info.size > MAX_SNAPSHOT_FILE_BYTES) continue;
@@ -133,20 +165,23 @@ async function walk(root: string, dir: string, depth: number, entries: Workspace
 
 /** Bounded snapshot of regular workspace files. Directory names and preview
  *  support do not decide whether a turn produced a file: every non-ignored
- *  directory is walked up to the depth/entry caps, while sensitive paths and
- *  symlinks are excluded. Unknown formats can still surface as generic cards.
- *  Never throws: a scan failure returns `null` so callers degrade to no diff. */
+ *  directory is walked up to the depth/entry/node caps, while sensitive paths
+ *  and symlinks are excluded. Unknown formats can still surface as generic
+ *  cards. If a cap is hit, return `null` rather than diffing two incomplete
+ *  subsets and risking false "created" artifacts. Never throws: scan failures
+ *  likewise return `null` so callers degrade to no diff. */
 export async function snapshotWorkspace(cwd: string): Promise<WorkspaceSnapshotEntry[] | null> {
   const root = resolve(cwd);
   let names: string[];
   try {
-    names = await readdir(root);
+    names = (await readdir(root)).sort((left, right) => left.localeCompare(right));
   } catch {
     return null;
   }
   const entries: WorkspaceSnapshotEntry[] = [];
+  const state: WalkState = { entryCap: snapshotEntryCap(), nodeCap: snapshotNodeCap(), visited: 0, truncated: false };
   for (const name of names) {
-    if (entries.length >= snapshotEntryCap()) break;
+    if (!reserveNode(state, entries)) break;
     if (isIgnoredDir(name)) continue;
     const absolute = join(root, name);
     let info;
@@ -157,7 +192,8 @@ export async function snapshotWorkspace(cwd: string): Promise<WorkspaceSnapshotE
     }
     if (info.isSymbolicLink()) continue;
     if (info.isDirectory()) {
-      await walk(root, absolute, 1, entries);
+      await walk(root, absolute, 1, entries, state);
+      if (state.truncated) break;
       continue;
     }
     if (!info.isFile() || info.size > MAX_SNAPSHOT_FILE_BYTES) continue;
@@ -165,7 +201,7 @@ export async function snapshotWorkspace(cwd: string): Promise<WorkspaceSnapshotE
     if (isSensitiveFile(path)) continue;
     entries.push({ path, size: info.size, mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs });
   }
-  return entries;
+  return state.truncated ? null : entries;
 }
 
 export interface WorkspaceDiff {

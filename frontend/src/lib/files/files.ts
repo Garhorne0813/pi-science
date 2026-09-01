@@ -89,18 +89,11 @@ export async function writeArtifact(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path, content }),
   });
-  // A write changes every preview-size variant of this file. Invalidate the
-  // path prefix rather than only the exact maxBytes used by the editor.
   await queryClient.invalidateQueries({ queryKey: ["artifact-file", cwd, root ?? null, path] });
   return result;
 }
 
-/** URL for browser-native preview (PDF, images, HTML, video).
- *  Uses /serve/ instead of /{path}/raw so relative references
- *  (CSS, JS, images) in HTML resolve back to the same prefix.
- *  Each path segment is encoded individually so / separators stay
- *  literal — otherwise the browser sees %2F as part of a single
- *  filename and relative resolution breaks. */
+/** URL for browser-native preview (PDF, images, HTML, video). */
 export function previewUrl(path: string, root: FileRoot | undefined, cwd: string): string {
   const params = new URLSearchParams({ cwd });
   if (root) params.set("root", root);
@@ -108,8 +101,7 @@ export function previewUrl(path: string, root: FileRoot | undefined, cwd: string
   return `${API}/files/serve/${encodedPath}?${params}`;
 }
 
-/** Open a file in the OS default app — web fallback: open in new tab.
- *  serve URLs are excluded because the right-side inspector previews them inline. */
+/** Open a file in the OS default app — web fallback: open in new tab. */
 export async function openArtifactExternally(
   path: string,
   root: FileRoot | undefined,
@@ -148,8 +140,12 @@ export function base64ToBytes(b64: string): ArrayBuffer {
 export interface LargeFilePointer {
   error?: string;
   format?: string;
-  size?: string;
+  path?: string;
+  name?: string;
+  size?: string | number;
   size_bytes?: number;
+  modified?: number;
+  is_dir?: boolean;
   note?: string | null;
   hint?: string;
   gzipped?: boolean;
@@ -168,6 +164,9 @@ export interface LargeFilePointer {
   datasets?: Array<{ path: string; shape: Array<number | string>; dtype: string }>;
 }
 
+/** Probe metadata/structure without reading the whole file. This is also the
+ * preferred existence check for referenced artifacts because it works for
+ * files larger than the normal 50 MB content-read limit. */
 export async function probeLargeFile(
   path: string,
   root: FileRoot | undefined,

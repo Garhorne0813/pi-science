@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { File, FileText, FileSpreadsheet, FileImage, FileCode2, NotebookPen, ChevronDown, ChevronUp, ArrowUpRight } from "lucide-react";
-import { previewUrl, readArtifact } from "../../lib/files";
+import { previewUrl, probeLargeFile, readArtifact } from "../../lib/files";
 import { extOf, extractArtifactRefs, fileInspectorForPath, normalizeArtifactPath, previewKindForName } from "../../lib/artifacts";
 import { useUiStore } from "../../lib/ui";
 import type { TurnArtifactItem } from "../../types/thread";
@@ -11,6 +11,8 @@ import { MoleculeThumb } from "./MoleculeThumb";
 
 const MAX_VISIBLE = 6;
 const SNIPPET_BYTES = 8192;
+const MAX_REFERENCED_REFS = 50;
+const REFERENCE_PROBE_CONCURRENCY = 6;
 const PREVIEW_HEIGHT = "h-[55px]";
 
 /** Claude Science card shell: solid surface, 12px radius, inset ring only
@@ -351,23 +353,37 @@ function inferredKind(path: string): string {
 }
 
 /** Show existing workspace files cited by the final answer, even when the turn
- *  did not create or modify them and therefore emitted no turn.artifacts event. */
+ *  did not create or modify them and therefore emitted no turn.artifacts event.
+ *  Candidate count and probe concurrency are bounded because model output is
+ *  untrusted and may contain many file-like paths. */
 export function ReferencedArtifactStrip({ text, cwd, exclude = [] }: { text: string; cwd?: string; exclude?: string[] }) {
   const excludeKey = exclude.join("\0");
   const refs = useMemo(() => {
     const skipped = new Set(excludeKey ? excludeKey.split("\0").map(normalizeArtifactPath) : []);
-    return extractArtifactRefs(text).map(normalizeArtifactPath).filter((path) => !skipped.has(path));
+    return extractArtifactRefs(text)
+      .map(normalizeArtifactPath)
+      .filter((path) => !skipped.has(path))
+      .slice(0, MAX_REFERENCED_REFS);
   }, [excludeKey, text]);
   const [items, setItems] = useState<TurnArtifactItem[]>([]);
   useEffect(() => {
     if (!cwd || refs.length === 0) { setItems([]); return; }
     let cancelled = false;
-    void Promise.all(refs.map(async (path) => {
-      const file = await readArtifact(path, "workspace", cwd, 1);
-      return file ? { path, kind: inferredKind(path), mime: file.mime, size: file.size } : null;
-    })).then((resolved) => {
+    void (async () => {
+      const resolved: Array<TurnArtifactItem | null> = [];
+      for (let index = 0; index < refs.length; index += REFERENCE_PROBE_CONCURRENCY) {
+        const batch = refs.slice(index, index + REFERENCE_PROBE_CONCURRENCY);
+        const batchItems = await Promise.all(batch.map(async (path) => {
+          const probe = await probeLargeFile(path, "workspace", cwd);
+          if (!probe || probe.is_dir === true) return null;
+          const size = Number(probe.size_bytes ?? probe.size ?? 0);
+          return { path, kind: inferredKind(path), mime: "application/octet-stream", size: Number.isFinite(size) ? size : 0 };
+        }));
+        resolved.push(...batchItems);
+        if (cancelled) return;
+      }
       if (!cancelled) setItems(resolved.filter((item): item is TurnArtifactItem => item !== null));
-    });
+    })();
     return () => { cancelled = true; };
   }, [cwd, refs]);
   return <TurnArtifactStrip artifacts={items} cwd={cwd} heading="referenced" />;

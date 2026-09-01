@@ -3,7 +3,11 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ReferencedArtifactStrip, TurnArtifactStrip } from "./TurnArtifactStrip";
 
-const { openInspector, mockReadArtifact } = vi.hoisted(() => ({ openInspector: vi.fn(), mockReadArtifact: vi.fn() }));
+const { openInspector, mockReadArtifact, mockProbeLargeFile } = vi.hoisted(() => ({
+  openInspector: vi.fn(),
+  mockReadArtifact: vi.fn(),
+  mockProbeLargeFile: vi.fn(),
+}));
 
 vi.mock("../../lib/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/ui")>();
@@ -18,6 +22,7 @@ vi.mock("../../lib/files", async (importOriginal) => {
   return {
     ...actual,
     readArtifact: mockReadArtifact,
+    probeLargeFile: mockProbeLargeFile,
   };
 });
 
@@ -31,16 +36,25 @@ function snippetFile(encoding: "utf8" | "base64" = "utf8") {
 
 beforeEach(() => {
   mockReadArtifact.mockReset();
-  // Default: snippet reads fail → cards degrade to icon-only.
+  mockProbeLargeFile.mockReset();
   mockReadArtifact.mockResolvedValue(null);
+  mockProbeLargeFile.mockResolvedValue(null);
 });
 
 describe("TurnArtifactStrip", () => {
   it("renders verified workspace paths cited by the final answer", async () => {
-    mockReadArtifact.mockImplementation(async (path: string) => path === "work/plot.png" ? { path, mime: "image/png", encoding: "base64", data: "x", size: 2048 } : null);
+    mockProbeLargeFile.mockImplementation(async (path: string) => path === "work/plot.png" ? { path, name: "plot.png", size: 2048, is_dir: false } : null);
     render(<ReferencedArtifactStrip cwd="/workspace" text="See `work/plot.png` and missing/file.pdf." />);
     await waitFor(() => expect(screen.getByLabelText("Referenced files")).toBeInTheDocument());
     expect(screen.getByText("REFERENCED · 1")).toBeInTheDocument();
+    expect(mockReadArtifact).not.toHaveBeenCalledWith("work/plot.png", "workspace", "/workspace", 1);
+  });
+
+  it("bounds referenced-file probes from model output", async () => {
+    mockProbeLargeFile.mockImplementation(async (path: string) => ({ path, name: path.split("/").at(-1), size: 1, is_dir: false }));
+    const text = Array.from({ length: 80 }, (_, index) => `results/f${index}.csv`).join(" ");
+    render(<ReferencedArtifactStrip cwd="/workspace" text={text} />);
+    await waitFor(() => expect(mockProbeLargeFile).toHaveBeenCalledTimes(50));
   });
 
   it("renders image thumbnails with workspace preview URLs and file cards", () => {
@@ -58,7 +72,6 @@ describe("TurnArtifactStrip", () => {
     const image = screen.getByAltText("plot.png");
     expect(image).toHaveAttribute("src", expect.stringContaining("/api/files/serve/work/plot.png"));
     expect(image).toHaveAttribute("loading", "lazy");
-    // Claude Science style: contain (never crop) inside the darker preview area.
     expect(image.className).toContain("object-contain");
     expect(screen.getByLabelText("summary.csv (results/summary.csv)")).toBeInTheDocument();
   });
@@ -106,12 +119,10 @@ describe("TurnArtifactStrip", () => {
       />,
     );
     expect(await screen.findByText("3+ rows · 5 columns")).toBeInTheDocument();
-    // First three column names are rendered as chips, the rest collapse to +N more.
     expect(screen.getByText("gene")).toBeInTheDocument();
     expect(screen.getByText("value")).toBeInTheDocument();
     expect(screen.getByText("fc")).toBeInTheDocument();
     expect(screen.getByText("+2 more")).toBeInTheDocument();
-    // Numeric columns show the 123 hint, text columns the abc hint.
     expect(screen.getAllByText("123").length).toBeGreaterThan(0);
     expect(screen.getAllByText("abc").length).toBeGreaterThan(0);
     expect(mockReadArtifact).toHaveBeenCalledWith("results/summary.csv", "workspace", "/workspace", 8192);
@@ -220,7 +231,6 @@ describe("TurnArtifactStrip", () => {
     expect(row!.className).toContain("flex");
     expect(row!.className).toContain("flex-wrap");
     expect(row!.className).toContain("gap-2");
-    // Every card uses the solid shell: fixed 128px, inset ring, no glass blur.
     const cards = container.querySelectorAll("section > div:last-child > button");
     expect(cards.length).toBe(2);
     cards.forEach((card) => {
@@ -230,7 +240,6 @@ describe("TurnArtifactStrip", () => {
       expect(card.className).not.toContain("backdrop-blur");
       expect(card.className).not.toContain("bg-white/45");
     });
-    // Each card carries the hover/focus open affordance, theme-adaptive.
     expect(container.querySelectorAll("[class*='group-hover:opacity-100']").length).toBe(2);
     const affordance = container.querySelector("[class*='bg-white/90']");
     expect(affordance).not.toBeNull();
@@ -260,8 +269,6 @@ describe("TurnArtifactStrip", () => {
     await screen.findByLabelText("script.py (work/script.py)");
     const fades = container.querySelectorAll("[class*='bg-gradient-to-l']");
     expect(fades.length).toBe(1);
-    // No token-opacity utilities (they are no-ops with CSS-variable colors);
-    // native-color opacities like ring-black/10 are valid.
     const buttons = container.querySelectorAll("button");
     buttons.forEach((button) => {
       expect(button.className).not.toMatch(/(?:muted|surface|accent|border|text|ok|warn|error)\/\d{2}\b/);
@@ -290,7 +297,6 @@ describe("TurnArtifactStrip", () => {
     );
     expect(screen.getByTestId("molecule-thumb")).toBeTruthy();
     expect(screen.getByLabelText("protein.pdb (work/protein.pdb)")).toBeTruthy();
-    // Structure cards must not trigger the 8KB snippet reader.
     expect(mockReadArtifact).not.toHaveBeenCalled();
   });
 

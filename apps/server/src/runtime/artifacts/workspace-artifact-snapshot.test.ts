@@ -8,6 +8,8 @@ const cleanup: string[] = [];
 
 afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
+  delete process.env.PI_SCIENCE_SNAPSHOT_CAP;
+  delete process.env.PI_SCIENCE_SNAPSHOT_NODE_CAP;
 });
 
 async function workspace(): Promise<string> {
@@ -38,15 +40,19 @@ describe("workspace artifact snapshot", () => {
     expect(paths).toEqual(["README.md", "downloads/proteins/1abc.custom", "work/figures/umap.csv", "work/plot.png"]);
   });
 
-  it("does not follow symlinks or surface sensitive files", async () => {
+  it("does not follow symlinks or surface credential-like files and hidden directories", async () => {
     const cwd = await workspace();
     const outside = join(tmpdir(), `pi-science-snapshot-outside-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(outside);
     await mkdir(outside, { recursive: true });
     await writeFile(join(outside, "secret.txt"), "secret", "utf8");
     await symlink(outside, join(cwd, "linked-outside"), "dir");
+    await mkdir(join(cwd, ".aws"), { recursive: true });
+    await writeFile(join(cwd, ".aws", "credentials"), "secret", "utf8");
     await writeFile(join(cwd, ".env"), "TOKEN=secret", "utf8");
     await writeFile(join(cwd, "server.key"), "key", "utf8");
+    await writeFile(join(cwd, "credentials.json"), "{}", "utf8");
+    await writeFile(join(cwd, "secrets.yaml"), "token: secret", "utf8");
     await writeFile(join(cwd, "safe.unknown"), "safe", "utf8");
 
     const snapshot = await snapshotWorkspace(cwd);
@@ -54,6 +60,9 @@ describe("workspace artifact snapshot", () => {
     expect(paths).toContain("safe.unknown");
     expect(paths).not.toContain(".env");
     expect(paths).not.toContain("server.key");
+    expect(paths).not.toContain("credentials.json");
+    expect(paths).not.toContain("secrets.yaml");
+    expect(paths.some((path) => path.startsWith(".aws/"))).toBe(false);
     expect(paths.some((path) => path.startsWith("linked-outside/"))).toBe(false);
   });
 
@@ -72,8 +81,8 @@ describe("workspace artifact snapshot", () => {
     await writeFile(join(cwd, "work", "b.md"), "old", "utf8");
     const before = await snapshotWorkspace(cwd);
 
-    await writeFile(join(cwd, "work", "a.csv"), "1\n2\n", "utf8"); // modified
-    await writeFile(join(cwd, "work", "c.png"), "img", "utf8"); // created
+    await writeFile(join(cwd, "work", "a.csv"), "1\n2\n", "utf8");
+    await writeFile(join(cwd, "work", "c.png"), "img", "utf8");
     const after = await snapshotWorkspace(cwd);
 
     const diff = diffWorkspaceSnapshots(before, after!);
@@ -113,20 +122,35 @@ describe("workspace artifact snapshot", () => {
     expect(diff.modified).toEqual([]);
   });
 
-  it("bounded: stops collecting after the entry cap (env override)", async () => {
+  it("degrades to null instead of diffing an entry-capped partial snapshot", async () => {
     const cwd = await workspace();
     await mkdir(join(cwd, "work", "many"), { recursive: true });
     for (let index = 0; index < 30; index += 1) {
-      await writeFile(join(cwd, "work", "many", `f${index}.txt`), String(index), "utf8");
+      await writeFile(join(cwd, "work", "many", `f${String(index).padStart(2, "0")}.txt`), String(index), "utf8");
     }
-    const original = process.env.PI_SCIENCE_SNAPSHOT_CAP;
     process.env.PI_SCIENCE_SNAPSHOT_CAP = "10";
-    try {
-      const snapshot = await snapshotWorkspace(cwd);
-      expect((snapshot ?? []).length).toBeLessThanOrEqual(10);
-    } finally {
-      if (original === undefined) delete process.env.PI_SCIENCE_SNAPSHOT_CAP;
-      else process.env.PI_SCIENCE_SNAPSHOT_CAP = original;
+    expect(await snapshotWorkspace(cwd)).toBeNull();
+  });
+
+  it("bounds visited nodes even when entries are directories, symlinks, or excluded files", async () => {
+    const cwd = await workspace();
+    const many = join(cwd, "many-nodes");
+    await mkdir(many, { recursive: true });
+    for (let index = 0; index < 20; index += 1) {
+      await mkdir(join(many, `dir-${String(index).padStart(2, "0")}`), { recursive: true });
     }
+    process.env.PI_SCIENCE_SNAPSHOT_NODE_CAP = "8";
+    expect(await snapshotWorkspace(cwd)).toBeNull();
+  });
+
+  it("returns stable path order for complete snapshots", async () => {
+    const cwd = await workspace();
+    await mkdir(join(cwd, "z-dir"), { recursive: true });
+    await mkdir(join(cwd, "a-dir"), { recursive: true });
+    await writeFile(join(cwd, "z-dir", "b.txt"), "b", "utf8");
+    await writeFile(join(cwd, "a-dir", "a.txt"), "a", "utf8");
+    const first = await snapshotWorkspace(cwd);
+    const second = await snapshotWorkspace(cwd);
+    expect(first?.map((entry) => entry.path)).toEqual(second?.map((entry) => entry.path));
   });
 });

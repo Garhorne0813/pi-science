@@ -41,9 +41,9 @@ function extToKind(ext: string): ArtifactKind {
 
 /** Extensions we treat as workspace artifacts worth surfacing/previewing. */
 const REF_EXTS = [
-  "pdf", "html", "htm", "svg", "png", "jpg", "jpeg", "gif", "webp",
-  "csv", "tsv", "md", "tex", "json", "py", "ipynb", "r",
-  "docx", "docm", "dotx", "xlsx", "xlsm", "xltx", "pptx", "pptm", "potx",
+  "pdf", "html", "htm", "svg", "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff",
+  "csv", "tsv", "parquet", "md", "txt", "rtf", "tex", "json", "yaml", "yml", "xml", "py", "ipynb", "r", "sh", "jl", "m",
+  "docx", "docm", "dotx", "xlsx", "xls", "xlsm", "xltx", "pptx", "pptm", "potx",
   "mp4", "webm", "mov", "m4v",
   "mol", "mol2", "sdf", "smi", "smiles", "cif", "mcif", "mmcif", "pdb", "pqr", "xyz", "cube",
   "bed", "bedgraph", "bdg", "gff", "gff3", "gtf", "vcf",

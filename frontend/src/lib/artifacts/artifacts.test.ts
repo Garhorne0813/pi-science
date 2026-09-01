@@ -34,6 +34,15 @@ describe("artifact inspector routing", () => {
     expect(extractArtifactRefs("See `./work/plot.png` and `work/plot.png`.")).toEqual(["work/plot.png"]);
   });
 
+  it("recognizes referenced formats that the workspace snapshot can surface", () => {
+    expect(extractArtifactRefs("See results/notes.txt, results/config.yaml, data/output.parquet, and scripts/run.sh.")).toEqual([
+      "results/notes.txt",
+      "results/config.yaml",
+      "data/output.parquet",
+      "scripts/run.sh",
+    ]);
+  });
+
   it("ignores file-like references inside hidden HTML comments", () => {
     expect(extractArtifactRefs("Visible answer. <!--suggest: open results/report.pdf -->")).toEqual([]);
   });
