@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ProgressAppearance } from "@pi-science/contracts";
@@ -16,6 +16,7 @@ const PRESET_PATTERNS: Record<Exclude<ProgressAppearance["preset"], "custom">, P
 };
 
 const PROGRESS_SELECT_CLASS = "max-w-none border-transparent focus-visible:border-transparent focus-visible:ring-0 data-[state=open]:border-transparent";
+const SAVE_DEBOUNCE_MS = 250;
 
 const SLOTS: Array<{ id: ProgressSlot; labelKey: string; sample: string }> = [
   { id: "thinking", labelKey: "settings.progress.slot.thinking", sample: "Thinking" },
@@ -32,12 +33,44 @@ function configFrom(input: ProgressAppearance | undefined): ProgressAppearance {
 export function ProgressTab({ config, saving, onSave }: { config: SettingsConfig; saving: boolean; onSave: (next: ProgressAppearance) => Promise<void> }) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState(() => configFrom(config.progress_appearance));
+  const onSaveRef = useRef(onSave);
+  const pendingSaveRef = useRef<ProgressAppearance | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const writeInFlightRef = useRef(false);
+
+  useEffect(() => { onSaveRef.current = onSave; }, [onSave]);
   useEffect(() => { const next = configFrom(config.progress_appearance); setDraft(next); setProgressAppearance(next); }, [config.progress_appearance]);
+
+  const flushSave = async () => {
+    if (writeInFlightRef.current) return;
+    writeInFlightRef.current = true;
+    try {
+      while (pendingSaveRef.current) {
+        const next = pendingSaveRef.current;
+        pendingSaveRef.current = null;
+        await onSaveRef.current(next);
+      }
+    } finally {
+      writeInFlightRef.current = false;
+      if (pendingSaveRef.current) void flushSave();
+    }
+  };
+
+  useEffect(() => () => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = null;
+    if (pendingSaveRef.current) void flushSave();
+  }, []);
 
   const save = (next: ProgressAppearance) => {
     setDraft(next);
     setProgressAppearance(next);
-    void onSave(next);
+    pendingSaveRef.current = structuredClone(next);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveTimerRef.current = null;
+      void flushSave();
+    }, SAVE_DEBOUNCE_MS);
   };
   const update = (patch: Partial<ProgressAppearance>) => save({ ...draft, ...patch });
   const updatePreset = (preset: ProgressAppearance["preset"]) => save({ ...draft, preset, ...(preset === "custom" ? {} : { patterns: PRESET_PATTERNS[preset] }) });

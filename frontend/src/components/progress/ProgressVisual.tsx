@@ -1,29 +1,19 @@
-import { useEffect, useSyncExternalStore, type CSSProperties } from "react";
+import { lazy, Suspense, useEffect, useSyncExternalStore, type CSSProperties } from "react";
 import { Check } from "lucide-react";
-import { ImageLoader, InlineLoader, TextLoader } from "generative-loaders";
 import { Orb } from "./aicss/orbs";
 import type { ProgressAppearance } from "@pi-science/contracts";
 import { hydrateProgressAppearance, subscribeProgressAppearance, getProgressAppearance } from "./progress-settings-store";
 import type { ProgressSlot } from "./ProgressPatternCatalog";
 import { PROGRESS_PATTERN_CATALOG } from "./ProgressPatternCatalog";
 import { aicssOrbForActivity, type ProgressActivityState } from "./progress-activity-map";
-import "generative-loaders/styles.css";
+
+const GenerativeProgressVisual = lazy(() => import("./GenerativeProgressVisual"));
 
 export function useProgressAppearance(): ProgressAppearance {
   useEffect(() => { void hydrateProgressAppearance(); }, []);
   return useSyncExternalStore(subscribeProgressAppearance, getProgressAppearance, getProgressAppearance);
 }
 const AICSS_ORB_VARIANTS = Object.fromEntries(["S1", "S2", "S3", "S4", "S5", "B1", "B2", "B3", "B4", "B5", "C1", "C2", "C3", "C4", "C5", "G1", "G2", "G3", "G4", "G5", "M1", "M2", "M3", "M4", "M5"].map((name) => [`aicss-orb-${name}`, name])) as Record<string, import("./aicss/orbs").OrbVariant>;
-
-const INLINE_VARIANTS = {
-  "inline-glyph": "glyph", "inline-matrix": "matrix", "inline-orbit": "orbit", "inline-ripple": "ripple", "inline-signal": "signal", "inline-spark": "spark", "inline-rotor": "rotor", "inline-pixel-drift": "pixel-drift", "inline-chomp": "chomp", "inline-snake": "snake", "inline-fold": "fold", "inline-gravity": "gravity", "inline-domino": "domino", "inline-aperture": "aperture",
-} as const;
-const TEXT_VARIANTS = {
-  "text-decode": "decode", "text-typewriter": "typewriter", "text-skeleton": "skeleton", "text-cascade": "cascade", "text-focus": "focus", "text-wipe": "wipe", "text-flip": "flip", "text-redact": "redact", "text-line": "line", "text-terminal": "terminal", "text-wave": "wave", "text-dissolve": "dissolve", "text-slice": "slice", "text-tracking": "tracking", "text-coalesce": "coalesce", "text-fragments": "fragments",
-} as const;
-const IMAGE_VARIANTS = {
-  "image-skeleton": "skeleton", "image-bands": "bands", "image-tiles": "tiles", "image-scan": "scan", "image-pixel-grid": "pixel-grid", "image-resolution": "resolution", "image-focus": "focus", "image-shutter": "shutter", "image-contour": "contour",
-} as const;
 
 export function progressPatternShowsText(slot: ProgressSlot, config: ProgressAppearance): boolean {
   const pattern = config.patterns[slot];
@@ -37,24 +27,15 @@ export function ProgressVisual({ slot, config, state = "running", activityState,
   const color = config.colorMode === "custom" && config.customColor ? config.customColor : "var(--accent)";
   const speed = Number.isFinite(config.speed) && config.speed > 0 ? config.speed : 1;
 
-  const visualText = compact ? text.slice(0, 3) : text;
   if (state === "completed") return <Check size={14} aria-hidden className="shrink-0 text-ok-text" />;
   if (definition.kind === "static") return <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" aria-hidden />;
   if (definition.kind === "orb") {
     const variant = definition.id === "aicss-auto" ? aicssOrbForActivity(slot, activityState) : AICSS_ORB_VARIANTS[definition.id];
     return variant ? <Orb variant={variant} size={compact ? 16 : 20} paused={paused} style={{ "--orb-fg": color } as CSSProperties} /> : null;
   }
-  if (definition.kind === "inline") {
-    const variant = INLINE_VARIANTS[definition.id as keyof typeof INLINE_VARIANTS];
-    return variant ? <InlineLoader variant={variant} size={compact ? "1rem" : "1.15rem"} speed={speed} color={color} paused={paused} label={slot === "waiting" ? text : undefined} /> : null;
-  }
-  if (definition.kind === "text") {
-    const variant = TEXT_VARIANTS[definition.id as keyof typeof TEXT_VARIANTS];
-    return variant ? <TextLoader text={visualText} variant={variant} speed={speed} color={color} paused={paused} aria-label={text} className={compact ? "h-7 w-16 overflow-hidden" : undefined} /> : null;
-  }
-  if (definition.kind === "image") {
-    const variant = IMAGE_VARIANTS[definition.id as keyof typeof IMAGE_VARIANTS];
-    return variant ? <ImageLoader variant={variant} speed={speed} color={color} paused={paused} size={compact ? "2rem" : "7rem"} radius={compact ? "0.25rem" : "0.5rem"} label={text} /> : null;
-  }
-  return <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" aria-hidden />;
+  return (
+    <Suspense fallback={<span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" aria-hidden />}>
+      <GenerativeProgressVisual definition={definition} slot={slot} speed={speed} color={color} paused={paused} text={text} compact={compact} />
+    </Suspense>
+  );
 }

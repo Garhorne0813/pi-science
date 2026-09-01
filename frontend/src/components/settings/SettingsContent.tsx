@@ -135,7 +135,7 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
     setError(null);
     try {
       await settingsApi.saveProgress(progress);
-      await loadConfig();
+      setConfig((previous) => previous ? { ...previous, progress_appearance: progress } : previous);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

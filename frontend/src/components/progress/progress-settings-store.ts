@@ -10,7 +10,7 @@ export function hydrateProgressAppearance(): Promise<void> {
   if (!hydration) {
     hydration = apiRequest<{ progress_appearance?: ProgressAppearance }>("/api/settings/config")
       .then((data) => { if (data.progress_appearance) setProgressAppearance(data.progress_appearance); })
-      .catch(() => undefined);
+      .catch(() => { hydration = null; });
   }
   return hydration;
 }
