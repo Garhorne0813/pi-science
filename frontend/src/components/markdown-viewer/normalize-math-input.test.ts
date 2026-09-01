@@ -89,6 +89,16 @@ describe("normalizeMathInput", () => {
     expect(normalizeMathInput(input)).toBe(input);
   });
 
+  it("never rewrites TeX inside an indented CommonMark code block", () => {
+    const input = "before\n\n    const s = \\\"\\\\(x\\\\)\\\";\n    const display = \\\"\\\\[y\\\\]\\\";\n\nafter";
+    expect(normalizeMathInput(input)).toBe(input);
+  });
+
+  it("never rewrites TeX inside a tab-indented CommonMark code block", () => {
+    const input = "\tconst s = \\\"\\\\(x\\\\)\\\";";
+    expect(normalizeMathInput(input)).toBe(input);
+  });
+
   it("never rewrites TeX inside an inline code span", () => {
     const input = "Use `$$x$$`, `\\[y\\]`, and `\\(z\\)` literally.";
     expect(normalizeMathInput(input)).toBe(input);
