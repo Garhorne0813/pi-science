@@ -60,7 +60,12 @@ const REF_RE = new RegExp(`[\\w./-]+\\.(?:${REF_EXTS.join("|")})\\b`, "gi");
 export function extractArtifactRefs(markdown: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
-  const visibleMarkdown = markdown.replace(/<!--[\s\S]*?-->/g, "");
+  let visibleMarkdown = markdown;
+  let previous: string;
+  do {
+    previous = visibleMarkdown;
+    visibleMarkdown = visibleMarkdown.replace(/<!--[\s\S]*?-->/g, "");
+  } while (visibleMarkdown !== previous);
   for (const m of visibleMarkdown.matchAll(REF_RE)) {
     const raw = m[0].replace(/^[`'"(]+|[`'".,)]+$/g, "");
     if (!raw || /^https?:\/\//i.test(raw) || raw.startsWith("//")) continue;
