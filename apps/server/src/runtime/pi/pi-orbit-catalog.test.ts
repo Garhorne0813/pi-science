@@ -22,6 +22,23 @@ describe("PiOrbitCatalogService", () => {
     expect(manager.getCatalog).toHaveBeenCalledTimes(1);
   });
 
+  it("folds split runtime providers back onto their canonical provider", async () => {
+    const model = (id: string) => ({ id, name: id, api: "openai-completions", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 });
+    const manager = { getCatalog: vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      providers: [
+        { id: "user-lab--ep-a", name: "Lab", baseUrl: "http://127.0.0.1:8001/v1", auth: { apiKey: true, oauth: false, subscription: false, configured: true }, models: [model("model-a")] },
+        { id: "user-lab--ep-b", name: "Lab", baseUrl: "http://127.0.0.1:8002/v1", auth: { apiKey: true, oauth: false, subscription: false, configured: true }, models: [model("model-b")] },
+      ],
+    })) };
+    const service = new PiOrbitCatalogService(manager, () => options, () => ["user-lab"]);
+
+    await expect(service.getCatalog()).resolves.toMatchObject({
+      schemaVersion: 1,
+      providers: [{ id: "user-lab", baseUrl: null, models: [{ id: "model-a" }, { id: "model-b" }] }],
+    });
+  });
+
   it("rejects an unsupported catalog schema", async () => {
     const manager = { getCatalog: vi.fn(async () => ({ schemaVersion: 2 as const, providers: [] })) } as unknown as Pick<PiManager, "getCatalog">;
     const service = new PiOrbitCatalogService(manager, () => options);
