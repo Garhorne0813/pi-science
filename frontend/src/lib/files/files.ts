@@ -18,6 +18,24 @@ const API = "/api";
  */
 const ARTIFACT_FILE_STALE_MS = 5_000;
 const ARTIFACT_FILE_GC_MS = 30_000;
+const ARTIFACT_PROBE_STALE_MS = 30_000;
+const ARTIFACT_PROBE_GC_MS = 60_000;
+const ARTIFACT_PROBE_CONCURRENCY = 6;
+let activeArtifactProbes = 0;
+const artifactProbeWaiters: Array<() => void> = [];
+
+async function withArtifactProbeSlot<T>(run: () => Promise<T>): Promise<T> {
+  if (activeArtifactProbes >= ARTIFACT_PROBE_CONCURRENCY) {
+    await new Promise<void>((resolve) => artifactProbeWaiters.push(resolve));
+  }
+  activeArtifactProbes += 1;
+  try {
+    return await run();
+  } finally {
+    activeArtifactProbes -= 1;
+    artifactProbeWaiters.shift()?.();
+  }
+}
 
 export const artifactFileKey = (
   cwd: string,
@@ -164,18 +182,28 @@ export interface LargeFilePointer {
   datasets?: Array<{ path: string; shape: Array<number | string>; dtype: string }>;
 }
 
-/** Probe metadata/structure without reading the whole file. This is also the
- * preferred existence check for referenced artifacts because it works for
- * files larger than the normal 50 MB content-read limit. */
+function artifactProbeQuery(path: string, root: FileRoot | undefined, cwd: string) {
+  const params = new URLSearchParams({ cwd });
+  if (root) params.set("root", root);
+  return {
+    queryKey: ["artifact-probe", cwd, root ?? null, path] as const,
+    queryFn: () => withArtifactProbeSlot(() => apiRequest<LargeFilePointer>(`${API}/files/probe/${encodeWorkspacePath(path)}?${params}`)),
+    staleTime: ARTIFACT_PROBE_STALE_MS,
+    gcTime: ARTIFACT_PROBE_GC_MS,
+    retry: false,
+  };
+}
+
+/** Probe metadata/structure without reading the whole file. Calls are shared
+ * through the query cache and pass through a module-level semaphore, so many
+ * mounted historical turns cannot multiply the effective concurrency. */
 export async function probeLargeFile(
   path: string,
   root: FileRoot | undefined,
   cwd: string,
 ): Promise<LargeFilePointer | null> {
   try {
-    const params = new URLSearchParams({ cwd });
-    if (root) params.set("root", root);
-    return await apiRequest<LargeFilePointer>(`${API}/files/probe/${encodeWorkspacePath(path)}?${params}`);
+    return await queryClient.fetchQuery(artifactProbeQuery(path, root, cwd));
   } catch {
     return null;
   }
