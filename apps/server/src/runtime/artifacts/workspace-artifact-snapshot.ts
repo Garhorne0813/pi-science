@@ -1,5 +1,6 @@
 import { lstat, readdir } from "node:fs/promises";
-import { basename, extname, join, relative, resolve } from "node:path";
+import { extname, join, relative, resolve } from "node:path";
+import { isArtifactSurfaceablePath } from "./artifact-surface-policy.js";
 
 /** Bounded workspace snapshot for turn-level artifact detection.
  *
@@ -7,7 +8,7 @@ import { basename, extname, join, relative, resolve } from "node:path";
  *  re-scans and diffs the two snapshots so files created/modified by the turn
  *  (bash/Python runs, scripts, downloads) become preview cards even when no
  *  explicit artifact publication happened. The scan is deliberately bounded:
- *  shallow depth, entry/node caps, ignored dependency/cache/hidden directories,
+ *  shallow depth, artifact/node caps, ignored dependency/cache/hidden directories,
  *  and oversized files dropped, so a large workspace never stalls a turn. */
 
 export interface WorkspaceSnapshotEntry {
@@ -17,12 +18,12 @@ export interface WorkspaceSnapshotEntry {
   ctimeMs: number;
 }
 
-export const MAX_SNAPSHOT_ENTRIES = 2_000;
-export const MAX_SNAPSHOT_VISITED_NODES = 10_000;
+export const MAX_SNAPSHOT_ENTRIES = 10_000;
+export const MAX_SNAPSHOT_VISITED_NODES = 50_000;
 export const MAX_SNAPSHOT_DEPTH = 3;
 export const MAX_SNAPSHOT_FILE_BYTES = 100 * 1024 * 1024;
 
-/** Entry cap, overridable via PI_SCIENCE_SNAPSHOT_CAP (positive integer).
+/** Artifact-candidate cap, overridable via PI_SCIENCE_SNAPSHOT_CAP.
  *  Read per call so tests can shrink it without module re-import. */
 export function snapshotEntryCap(): number {
   const value = Number(process.env.PI_SCIENCE_SNAPSHOT_CAP ?? 0);
@@ -30,8 +31,8 @@ export function snapshotEntryCap(): number {
 }
 
 /** Total directory entries inspected during a snapshot. Unlike the artifact
- * entry cap, this also bounds directories, symlinks, sensitive files and
- * oversized files, so those cannot make the walk effectively unbounded. */
+ * cap, this bounds all directories, symlinks, sensitive files and unknown
+ * formats, so non-artifact workspace content cannot make the walk unbounded. */
 export function snapshotNodeCap(): number {
   const value = Number(process.env.PI_SCIENCE_SNAPSHOT_NODE_CAP ?? 0);
   return Number.isInteger(value) && value > 0 ? value : MAX_SNAPSHOT_VISITED_NODES;
@@ -45,27 +46,10 @@ const IGNORED_DIRS = new Set([
   ".parquet-cache", ".mpl-config", ".jupyter",
 ]);
 
-const SENSITIVE_FILE_NAMES = new Set([
-  ".env", ".netrc", ".pgpass", ".npmrc", ".pypirc",
-  "credentials", "credentials.json", "secrets.json", "secrets.yaml", "secrets.yml", "token.json",
-  "application_default_credentials.json",
-  "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa",
-]);
-
-const SENSITIVE_FILE_SUFFIXES = [".pem", ".key", ".p12", ".pfx", ".jks", ".keystore"];
-
 function isIgnoredDir(name: string): boolean {
   if (name.startsWith(".")) return true;
   if (IGNORED_DIRS.has(name)) return true;
   return name.endsWith(".egg-info");
-}
-
-function isSensitiveFile(path: string): boolean {
-  const name = basename(path).toLowerCase();
-  return name.startsWith(".")
-    || SENSITIVE_FILE_NAMES.has(name)
-    || name.startsWith(".env.")
-    || SENSITIVE_FILE_SUFFIXES.some((suffix) => name.endsWith(suffix));
 }
 
 /** Whether a file could surface with a rich preview rather than a generic card. */
@@ -123,12 +107,21 @@ type WalkState = {
   truncated: boolean;
 };
 
-function reserveNode(state: WalkState, entries: WorkspaceSnapshotEntry[]): boolean {
-  if (state.visited >= state.nodeCap || entries.length >= state.entryCap) {
+function reserveNode(state: WalkState): boolean {
+  if (state.visited >= state.nodeCap) {
     state.truncated = true;
     return false;
   }
   state.visited += 1;
+  return true;
+}
+
+function addEntry(entries: WorkspaceSnapshotEntry[], state: WalkState, entry: WorkspaceSnapshotEntry): boolean {
+  if (entries.length >= state.entryCap) {
+    state.truncated = true;
+    return false;
+  }
+  entries.push(entry);
   return true;
 }
 
@@ -141,7 +134,7 @@ async function walk(root: string, dir: string, depth: number, entries: Workspace
     return;
   }
   for (const name of names) {
-    if (!reserveNode(state, entries)) return;
+    if (!reserveNode(state)) return;
     if (isIgnoredDir(name)) continue;
     const absolute = join(dir, name);
     let info;
@@ -158,18 +151,17 @@ async function walk(root: string, dir: string, depth: number, entries: Workspace
     }
     if (!info.isFile() || info.size > MAX_SNAPSHOT_FILE_BYTES) continue;
     const path = relative(root, absolute).replaceAll("\\", "/");
-    if (isSensitiveFile(path)) continue;
-    entries.push({ path, size: info.size, mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs });
+    if (!isArtifactSurfaceablePath(path) || !isPreviewableFile(path)) continue;
+    if (!addEntry(entries, state, { path, size: info.size, mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs })) return;
   }
 }
 
-/** Bounded snapshot of regular workspace files. Directory names and preview
- *  support do not decide whether a turn produced a file: every non-ignored
- *  directory is walked up to the depth/entry/node caps, while sensitive paths
- *  and symlinks are excluded. Unknown formats can still surface as generic
- *  cards. If a cap is hit, return `null` rather than diffing two incomplete
- *  subsets and risking false "created" artifacts. Never throws: scan failures
- *  likewise return `null` so callers degrade to no diff. */
+/** Bounded snapshot of artifact candidates. Every non-ignored directory is
+ * walked up to the depth/node caps, but only previewable, surfaceable files
+ * consume the artifact entry cap. This keeps ordinary source/data trees from
+ * disabling generated-file detection while still bounding memory and I/O.
+ * If either cap is exceeded, return `null` rather than diffing incomplete
+ * subsets and risking false "created" artifacts. */
 export async function snapshotWorkspace(cwd: string): Promise<WorkspaceSnapshotEntry[] | null> {
   const root = resolve(cwd);
   let names: string[];
@@ -181,7 +173,7 @@ export async function snapshotWorkspace(cwd: string): Promise<WorkspaceSnapshotE
   const entries: WorkspaceSnapshotEntry[] = [];
   const state: WalkState = { entryCap: snapshotEntryCap(), nodeCap: snapshotNodeCap(), visited: 0, truncated: false };
   for (const name of names) {
-    if (!reserveNode(state, entries)) break;
+    if (!reserveNode(state)) break;
     if (isIgnoredDir(name)) continue;
     const absolute = join(root, name);
     let info;
@@ -198,8 +190,8 @@ export async function snapshotWorkspace(cwd: string): Promise<WorkspaceSnapshotE
     }
     if (!info.isFile() || info.size > MAX_SNAPSHOT_FILE_BYTES) continue;
     const path = relative(root, absolute).replaceAll("\\", "/");
-    if (isSensitiveFile(path)) continue;
-    entries.push({ path, size: info.size, mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs });
+    if (!isArtifactSurfaceablePath(path) || !isPreviewableFile(path)) continue;
+    if (!addEntry(entries, state, { path, size: info.size, mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs })) break;
   }
   return state.truncated ? null : entries;
 }
