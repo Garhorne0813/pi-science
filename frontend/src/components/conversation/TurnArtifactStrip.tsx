@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { File, FileText, FileSpreadsheet, FileImage, FileCode2, NotebookPen, ChevronDown, ChevronUp, ArrowUpRight } from "lucide-react";
 import { previewUrl, probeLargeFile, readArtifact } from "../../lib/files";
-import { extOf, extractArtifactRefs, fileInspectorForPath, normalizeArtifactPath, previewKindForName } from "../../lib/artifacts";
+import { extractArtifactRefs, fileInspectorForPath, normalizeArtifactPath } from "../../lib/artifacts";
 import { useUiStore } from "../../lib/ui";
 import type { TurnArtifactItem } from "../../types/thread";
 import { codeSnippet, markdownSnippet, parseCsvSnippet, parseTsvSnippet, type CsvSnippet } from "../../lib/conversation/turn-artifact-snippet";
@@ -342,20 +342,11 @@ export function TurnArtifactStrip({ artifacts, cwd, heading = "generated" }: { a
   );
 }
 
-function inferredKind(path: string): string {
-  const ext = extOf(path);
-  const preview = previewKindForName(path);
-  if (preview === "molecule") return "structure";
-  if (preview === "image" || preview === "table") return preview;
-  if (ext === "ipynb") return "notebook";
-  if (["py", "r", "js", "ts", "tsx", "jsx", "sh"].includes(ext)) return "code";
-  return "text";
-}
-
 /** Show existing workspace files cited by the final answer, even when the turn
- *  did not create or modify them and therefore emitted no turn.artifacts event.
- *  Candidate count and probe concurrency are bounded because model output is
- *  untrusted and may contain many file-like paths. */
+ * did not create or modify them and therefore emitted no turn.artifacts event.
+ * Referenced cards are intentionally metadata-only: model-authored paths may
+ * trigger a bounded existence probe, but content is not read or served until
+ * the user explicitly opens the inspector. */
 export function ReferencedArtifactStrip({ text, cwd, exclude = [] }: { text: string; cwd?: string; exclude?: string[] }) {
   const excludeKey = exclude.join("\0");
   const refs = useMemo(() => {
@@ -377,7 +368,7 @@ export function ReferencedArtifactStrip({ text, cwd, exclude = [] }: { text: str
           const probe = await probeLargeFile(path, "workspace", cwd);
           if (!probe || probe.is_dir === true) return null;
           const size = Number(probe.size_bytes ?? probe.size ?? 0);
-          return { path, kind: inferredKind(path), mime: "application/octet-stream", size: Number.isFinite(size) ? size : 0 };
+          return { path, kind: "file", mime: "application/octet-stream", size: Number.isFinite(size) ? size : 0 };
         }));
         resolved.push(...batchItems);
         if (cancelled) return;
