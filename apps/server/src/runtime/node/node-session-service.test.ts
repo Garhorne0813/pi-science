@@ -302,12 +302,15 @@ describe("Node session lifecycle", () => {
     const defaultSkills = values(launches[0]!, "--skill");
     const defaultExtensions = values(launches[0]!, "-e");
     expect(defaultSkills).toContain(defaultSkill);
-    for (const extension of defaults.extensions) expect(defaultExtensions).toContain(extension);
+    for (const extension of defaults.extensions.filter((path) => !path.includes("pi-mcp-adapter"))) expect(defaultExtensions).toContain(extension);
+    expect(defaultExtensions).toContain(join(import.meta.dirname, "../pi/extensions/pi-science-mcp.ts"));
     expect(values(launches[1]!, "--skill")).toContain(explicitSkill);
     expect(values(launches[1]!, "--skill")).not.toContain(defaultSkill);
     expect(values(launches[1]!, "-e")).toEqual([
       explicitExtension,
       join(import.meta.dirname, "../pi/extensions/pi-science-notebook.ts"),
+      join(import.meta.dirname, "../pi/extensions/pi-science-research.ts"),
+      join(import.meta.dirname, "../pi/extensions/pi-science-mcp.ts"),
     ]);
     await service.shutdownAll();
   });

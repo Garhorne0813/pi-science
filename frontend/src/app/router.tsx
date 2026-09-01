@@ -4,10 +4,10 @@ import { ProjectsLayout } from "./layout/ProjectsLayout";
 import { RoutedErrorBoundary } from "../components/ErrorBoundary";
 import { WorkspaceProvider } from "../lib/workspace";
 import { useTranslation } from "react-i18next";
+import { SettingsPage } from "./routes/SettingsPage";
 
 const ProjectsPage = lazy(() => import("./routes/ProjectsPage").then((m) => ({ default: m.ProjectsPage })));
 const LiveSessionPage = lazy(() => import("./routes/LiveSessionPage").then((m) => ({ default: m.LiveSessionPage })));
-const SettingsPage = lazy(() => import("./routes/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 const FilesPage = lazy(() => import("./routes/FilesPage").then((m) => ({ default: m.FilesPage })));
 const RunsPage = lazy(() => import("./routes/RunsPage").then((m) => ({ default: m.RunsPage })));
 const KnowledgePage = lazy(() => import("./routes/KnowledgePage").then((m) => ({ default: m.KnowledgePage })));
@@ -30,7 +30,7 @@ export const router = createBrowserRouter([
     element: <RoutedErrorBoundary><WorkspaceProvider><ProjectsLayout /></WorkspaceProvider></RoutedErrorBoundary>,
     children: [
       { index: true, element: wrap(<ProjectsPage />) },
-      { path: "settings", element: wrap(<SettingsPage />) },
+      { path: "settings", element: <SettingsPage /> },
       { path: "workspace/:cwd", element: wrap(<LiveSessionPage />) },
       { path: "workspace/:cwd/session/:sessionId", element: wrap(<LiveSessionPage />) },
       { path: "workspace/:cwd/files", element: wrap(<FilesPage />) },
@@ -38,7 +38,7 @@ export const router = createBrowserRouter([
       { path: "workspace/:cwd/runs", element: wrap(<RunsPage />) },
       { path: "workspace/:cwd/knowledge", element: wrap(<KnowledgePage />) },
       { path: "workspace/:cwd/research", element: wrap(<ResearchPage />) },
-      { path: "workspace/:cwd/settings", element: wrap(<SettingsPage />) },
+      { path: "workspace/:cwd/settings", element: <SettingsPage /> },
     ],
   },
 ]);

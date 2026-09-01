@@ -270,7 +270,9 @@ export class ConversationEventHub {
     });
     process.on("malformed", (line: string) => {
       const sessionId = options.activeSessionId();
-      if (sessionId) void this.publish(cwd, sessionId, { type: "error", sessionId, message: `Malformed Pi RPC output: ${cap(line, 500)}`, recoverable: true });
+      if (sessionId) void this.publish(cwd, sessionId, { type: "error", sessionId, message: `Malformed Pi RPC output: ${cap(line, 500)}`, recoverable: true }).catch((error: unknown) => {
+        this.log("warn", `Failed to publish malformed-output event: ${String(error)}`);
+      });
     });
     process.on("event", (event: PiEvent) => {
       const sessionId = this.eventSessionId(event) ?? options.activeSessionId();
@@ -314,6 +316,8 @@ export class ConversationEventHub {
           terminal: true,
         });
         await this.publish(cwd, sessionId, { type: "session.idle", sessionId });
+      }).catch((error: unknown) => {
+        this.log("warn", `Failed to publish unexpected Pi exit: ${String(error)}`);
       });
     });
   }

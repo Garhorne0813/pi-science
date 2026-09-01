@@ -18,7 +18,8 @@ flowchart LR
     CP -->|spawn on demand| K[Native Python and R kernels]
     CP --> DB[(Global state.sqlite)]
     CP --> WS[(Workspace files and .pi-science metadata)]
-    CP -->|bounded outbound HTTP| EXT[Configured model and literature services]
+    CP -->|bounded outbound HTTP| EXT[Configured model services]
+    PH -->|paper-search MCP| LIT[Literature services]
     PH --> WS
     K --> WS
 ```
@@ -35,6 +36,25 @@ service the browser calls directly.
 | Node-native scientific runtime | Workspace-bound Python/R kernels and optional JupyterLab tooling |
 | Global SQLite state | Workspace locations, environment revisions, durable jobs, leases, and legacy-import markers |
 | Workspace | User files plus project-local instructions, skills, environments, sessions, artifacts, and provenance |
+
+### MCP control plane
+
+MCP connector definitions, global enablement, tool grants, and metadata caches are
+canonical rows in `state.sqlite`. The settings UI and compatibility endpoints use
+the same `McpConnectorService`; legacy MCP files are import sources only.
+
+For each workspace, the control plane writes a derived
+`.pi-science/mcp-runtime.json` snapshot. Managed Pi runtimes always load the
+Pi-Science MCP wrapper, which calls `createMcpAdapter({ config })` with that
+snapshot. Ambient global and project MCP files are therefore not merged into a
+managed runtime. Connector changes regenerate all known workspace snapshots and reload
+active sessions. The adapter still owns MCP transport lifecycle and first-phase
+OAuth credentials; control-plane OAuth and live runtime status are a later phase.
+
+`paper-search` is seeded idempotently as an immutable built-in connector. Its
+repository-owned Node MCP server exposes read-only PubMed, arXiv, and Crossref
+search tools without depending on a user Python environment. It remains
+enabled globally by default.
 
 ## Pi Orbit runtime model
 
@@ -290,7 +310,7 @@ new writes use the canonical resource services.
 - Project-local metadata uses validated paths, atomic writes, and advisory locks
   where multiple writers may update the same record. Global state mutations are
   serialized through repository operations in the SQLite worker.
-- Model providers and explicit literature/connector actions may send requests
+- Model providers and explicit MCP/connector actions may send requests
   outside the machine. Endpoint URLs reject embedded credentials; health probes
   have redirect, response-size, and timeout limits, and cross-origin redirects
   cannot retain sensitive headers. Private endpoints are allowed by default for

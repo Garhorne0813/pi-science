@@ -17,7 +17,7 @@ import {
 } from "@pi-science/contracts";
 import type { PiOrbitCatalogService } from "../runtime/pi/pi-orbit-catalog.js";
 import { egressAuditEnabled, recordEgress } from "../security/egress-audit.js";
-import { safeConnectorFetch, validateOutboundHttpUrl } from "../security/outbound-security.js";
+import { privateProviderAccessEnabled, safeConnectorFetch, validateOutboundHttpUrl } from "../security/outbound-security.js";
 import { SettingsStore } from "../storage/settings-store.js";
 import { CredentialStore } from "./credential-store.js";
 import { resolveCapabilities, normalizeContextWindow, normalizeThinkingLevels, type CapabilityPatch } from "./capability-resolver.js";
@@ -433,7 +433,7 @@ export class ModelResourceService {
   /** Custom-provider aggregate: create credential/endpoint/provider/binding as
    *  one use case. On failure every resource created here is compensated so
    *  the UI's single "Add provider" action cannot leave orphan data behind. */
-  async createCustomProvider(input: { name: string; base_url: string; protocol?: Endpoint["protocol"]; api?: Endpoint["api"]; data_egress?: Endpoint["data_egress"]; auth?: { kind: "api_key" | "none"; secret?: string } | null; models?: string[] }): Promise<{ provider: Provider; endpoint: Endpoint; credential: CredentialMetadata | null; binding: ProviderEndpointBinding; discovery?: { model_count: number }; discovery_error?: string }> {
+  async createCustomProvider(input: { name: string; base_url: string; protocol?: Endpoint["protocol"]; api?: Endpoint["api"]; data_egress?: Endpoint["data_egress"]; allow_private?: boolean; auth?: { kind: "api_key" | "none"; secret?: string } | null; models?: string[] }): Promise<{ provider: Provider; endpoint: Endpoint; credential: CredentialMetadata | null; binding: ProviderEndpointBinding; discovery?: { model_count: number }; discovery_error?: string }> {
     await this.ensureMigrated();
     const providerId = ModelResourceRepository.providerId(input.name);
     if ((await this.repository.read()).providers.some((item) => item.id === providerId)) throw resourceError("provider_id_conflict", `Provider ID '${providerId}' already exists`);
@@ -460,6 +460,7 @@ export class ModelResourceService {
         credential_ref: credential?.id ?? null,
         enabled: true,
         data_egress: input.data_egress ?? (input.base_url.startsWith("http://127.") || input.base_url.includes("localhost") ? "local" : "remote"),
+        network_policy: { allow_private: input.allow_private === true },
         owner_provider_id: providerId,
       });
       provider = await this.createProvider({ name: input.name, adapter: adapterForEndpoint(protocol), catalog_mode: "hybrid", auth_kind: input.auth?.kind ?? "none", enabled: true });
@@ -488,7 +489,7 @@ export class ModelResourceService {
 
   /** Edit a custom provider's connection: name, base URL, API format, or key.
    *  The canonical split stays hidden from the caller. */
-  async updateCustomProvider(id: string, input: { name?: string; base_url?: string; api?: Endpoint["api"]; auth?: { kind?: "api_key" | "none"; secret?: string } | null }): Promise<{ provider: Provider; endpoint: Endpoint; binding: ProviderEndpointBinding }> {
+  async updateCustomProvider(id: string, input: { name?: string; base_url?: string; api?: Endpoint["api"]; allow_private?: boolean; auth?: { kind?: "api_key" | "none"; secret?: string } | null }): Promise<{ provider: Provider; endpoint: Endpoint; binding: ProviderEndpointBinding }> {
     await this.ensureMigrated();
     const state = await this.repository.read();
     const provider = state.providers.find((item) => item.id === id);
@@ -498,7 +499,7 @@ export class ModelResourceService {
     const endpoint = state.endpoints.find((item) => item.id === binding.endpoint_id);
     if (!endpoint) throw resourceError("resource_not_found", `Provider '${id}' connection endpoint was not found`);
     await this.updateProvider(id, { ...(input.name ? { name: input.name } : {}) });
-    await this.updateEndpoint(endpoint.id, { ...(input.base_url ? { base_url: input.base_url } : {}), ...(input.api ? { api: input.api } : {}) });
+    await this.updateEndpoint(endpoint.id, { ...(input.base_url ? { base_url: input.base_url } : {}), ...(input.api ? { api: input.api } : {}), ...(input.allow_private !== undefined ? { network_policy: { allow_private: input.allow_private } } : {}) });
     if (input.auth?.kind === "api_key" && input.auth.secret) {
       if (endpoint.credential_ref) {
         await this.credentials.put({ id: endpoint.credential_ref, kind: "api_key", backend: "managed", secret: input.auth.secret, owner_provider_id: provider.id });
@@ -583,13 +584,13 @@ export class ModelResourceService {
   /** Probe a prospective provider configuration without persisting anything:
    *  fetch its model list and report the rows. Used by the UI's
    *  "Test & Discover" step before the aggregate create. */
-  async testProviderConfiguration(input: { protocol: Endpoint["protocol"]; base_url: string; api?: Endpoint["api"]; auth?: { kind: "api_key" | "none"; secret?: string } | null }): Promise<{ ok: true; health: "ready"; models: Array<{ id: string; display_name: string }> }> {
+  async testProviderConfiguration(input: { protocol: Endpoint["protocol"]; base_url: string; api?: Endpoint["api"]; allow_private?: boolean; auth?: { kind: "api_key" | "none"; secret?: string } | null }): Promise<{ ok: true; health: "ready"; models: Array<{ id: string; display_name: string }> }> {
     const protocol = normalizeProtocol(input.protocol);
     const baseUrl = normalizeBaseUrl(input.base_url);
     const endpoint = { protocol, base_url: baseUrl };
     const secret = input.auth?.kind === "api_key" ? input.auth.secret : undefined;
     const settings = await this.settings.read();
-    const allowPrivate = settings.allow_private_providers !== false && process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0";
+    const allowPrivate = privateProviderAccessEnabled(input.allow_private ?? settings.allow_private_providers);
     const response = await safeConnectorFetch(discoveryPath(endpoint), {
       allowPrivate,
       maxRedirects: 3,
@@ -700,7 +701,7 @@ export class ModelResourceService {
     }
     try {
       const settings = await this.settings.read();
-      const allowPrivate = endpoint.network_policy?.allow_private ?? (settings.allow_private_providers !== false && process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0");
+      const allowPrivate = endpoint.network_policy?.allow_private ?? privateProviderAccessEnabled(settings.allow_private_providers);
       await validateOutboundHttpUrl(endpoint.base_url, { allowPrivate });
       if (await egressAuditEnabled()) await recordEgress({ connector_type: "connector", connector_id: `endpoint-health:${endpoint.id}`, target_domain: endpoint.base_url, approved: true, note: `endpoint_id=${endpoint.id}` });
       const credential = endpoint.credential_ref ? await this.credentials.getForRuntime(endpoint.credential_ref) : null;
@@ -885,7 +886,7 @@ export class ModelResourceService {
     const credential = endpoint.credential_ref ? await this.credentials.getForRuntime(endpoint.credential_ref) : null;
     if (provider.auth_kind !== "none" && (!credential || !credential.secret)) throw resourceError("no_routable_endpoint", "Provider endpoint credential is not configured");
     const settings = await this.settings.read();
-    const allowPrivate = endpoint.network_policy?.allow_private ?? (settings.allow_private_providers !== false && process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS !== "0");
+    const allowPrivate = endpoint.network_policy?.allow_private ?? privateProviderAccessEnabled(settings.allow_private_providers);
     const response = await safeConnectorFetch(discoveryPath(endpoint), {
       allowPrivate,
       maxRedirects: 3,

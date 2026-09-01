@@ -7,4 +7,3 @@ export const ACTIVITY_SWITCH_DEBOUNCE_MS = 250;
 export function selectDisplayedActivity(blocks: ToolCallBlock[]): PresentedActivity | null {
   return selectNarrativeActivity(blocks);
 }
-

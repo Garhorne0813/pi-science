@@ -3,7 +3,7 @@ import { ArrowRight, FlaskConical, MessageSquareText } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
-import { useResearchLoops } from "../../lib/knowledge";
+import { useResearchGraphs } from "../../lib/research";
 import { EmptyState } from "./EmptyState";
 
 /** Knowledge only summarizes research. New workflows start in conversation and
@@ -11,9 +11,9 @@ import { EmptyState } from "./EmptyState";
 export function ResearchTab({ cwd, onError }: { cwd: string; onError: (message: string | null) => void }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const loopsRead = useResearchLoops(cwd);
-  const loops = loopsRead.data?.loops ?? [];
-  const loadError = loopsRead.error;
+  const graphsRead = useResearchGraphs(cwd);
+  const graphs = graphsRead.data?.research ?? [];
+  const loadError = graphsRead.error;
 
   useEffect(() => {
     if (loadError) onError(loadError instanceof Error ? loadError.message : t("research.loadError"));
@@ -39,18 +39,18 @@ export function ResearchTab({ cwd, onError }: { cwd: string; onError: (message: 
         </div>
       </section>
 
-      {loops.length === 0 ? (
+      {graphs.length === 0 ? (
         <EmptyState icon={<FlaskConical size={28} />} title={t("knowledge.researchEmpty")} text={t("knowledge.researchEmptyConversationText")} />
       ) : (
         <div className="space-y-3">
-          {loops.map((loop) => (
-            <button key={loop.loop_id} type="button" onClick={openResearch} className="ui-card-flat block w-full rounded-card p-5 text-left transition-colors hover:border-accent/40">
+          {graphs.map((graph) => (
+            <button key={graph.research_id} type="button" onClick={openResearch} className="ui-card-flat block w-full rounded-card p-5 text-left transition-colors hover:border-accent/40">
               <div className="flex flex-wrap items-center gap-2">
-                <h3 className="font-semibold text-text">{loop.title}</h3>
-                <span className="rounded-full bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-muted">{t(`research.status.${loop.status}`, { defaultValue: loop.status })}</span>
-                <span className="rounded-full bg-accent/5 px-2 py-0.5 text-[10px] text-accent">{t(`research.mode.${loop.task_type ?? "research_loop"}.label`)}</span>
+                <h3 className="font-semibold text-text">{graph.title}</h3>
+                <span className="rounded-full bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-muted">{graph.status}</span>
+                <span className="rounded-full bg-accent/5 px-2 py-0.5 text-[10px] text-accent">{graph.nodes.length} nodes</span>
               </div>
-              <p className="mt-2 text-sm leading-6 text-muted">{loop.objective}</p>
+              <p className="mt-2 text-sm leading-6 text-muted">{graph.objective}</p>
               <div className="mt-3 flex items-center gap-1 text-xs text-accent">{t("research.details")} <ArrowRight size={12} /></div>
             </button>
           ))}

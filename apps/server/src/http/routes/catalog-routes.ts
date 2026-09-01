@@ -11,11 +11,12 @@ import { sessionRepository } from "../../runtime/node/session-repository.js";
 import { catalog as skillCatalog, getSkillContent, getSkillInfo, validateDirectory as validateSkillDir } from "../../catalog/skill-catalog.js";
 import { probeRequirements } from "../../catalog/skill-requirements.js";
 import type { JobCoordinator } from "../../runtime/jobs/job-coordinator.js";
-import type { ResearchLoopCoordinator } from "../../research-loop/coordinator.js";
 import type { WorkspaceRepository } from "../../storage/sqlite/repositories/workspace-repository.js";
+import type { McpConnectorService } from "../../mcp/connector-service.js";
 import { findExecutable, pathIsInside, userHome } from "../../support/platform-utils.js";
 import { defaultPythonExecutable } from "../../runtime/workspace/workspace-environment.js";
 import { ensureProject, updateProject } from "../../project/project-registry.js";
+import { resolveMcpConfig } from "../../catalog/mcp-config.js";
 
 function q(request: { query: unknown }, key: string, fallback = "."): string { const value = (request.query as Record<string, unknown>)[key]; return typeof value === "string" && value ? value : fallback; }
 async function ws(request: { query: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): Promise<string | null> { try { return await validateWorkspaceCwd(q(request, "cwd")); } catch (error) { reply.code(403).send({ error: String(error) }); return null; } }
@@ -234,7 +235,7 @@ const DEMOS: Record<string, { source: string; workspace: string }> = {
   climate: { source: "demos/climate-trends", workspace: "Climate Trends" },
 };
 
-export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinator, research?: ResearchLoopCoordinator, workspaceRepository?: WorkspaceRepository): void {
+export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinator, research?: { hasActive(cwd: string): Promise<boolean> }, workspaceRepository?: WorkspaceRepository, mcp?: McpConnectorService): void {
   // ── Skills (delegated to skill-catalog service) ──
   app.get("/api/skills", async (request, reply) => {
     const root = await ws(request, reply);
@@ -297,14 +298,8 @@ export function registerCatalogRoutes(app: FastifyInstance, jobs?: JobCoordinato
   });
 
 async function loadMcpDefinitions(root: string): Promise<{ definitions: Record<string, unknown>; source: string | null }> {
-  const paths = [join(root, ".mcp.json"), join(root, ".pi", "mcp.json"), configPath("mcp.json")];
-  for (const path of paths) {
-    try {
-      const definitions = ((JSON.parse(await readFile(path, "utf8")) as { mcpServers?: unknown }).mcpServers ?? {}) as Record<string, unknown>;
-      return { definitions, source: path };
-    } catch { /* try next */ }
-  }
-  return { definitions: {}, source: null };
+  const config = await readJson<{ mcp_config_path?: unknown }>(configPath("config.json"), {});
+  return resolveMcpConfig({ workspaceRoot: root, explicitPath: typeof config.mcp_config_path === "string" ? config.mcp_config_path : undefined });
 }
 
 function summarizeMcpServers(definitions: Record<string, unknown>, enabled: ReadonlySet<string>): Array<Record<string, unknown>> {
@@ -334,10 +329,11 @@ async function mcpEnabledSet(definitions: Record<string, unknown>): Promise<Set<
 }
 
 // ── MCP catalog ──
-  app.get("/api/mcp/catalog", async (request, reply) => { const root = await ws(request, reply); if (!root) return; const { definitions, source } = await loadMcpDefinitions(root); const servers = summarizeMcpServers(definitions, await mcpEnabledSet(definitions)); return { servers, config_path: source }; });
+  app.get("/api/mcp/catalog", async (request, reply) => { const root = await ws(request, reply); if (!root) return; if (mcp) { const result = await mcp.list(); return { servers: result.connectors.map((item) => ({ id: item.connector_id, name: item.display_name, description: item.description, transport: item.transport, enabled: item.settings.enabled, health: item.runtime_state, auth: item.auth_state, data_egress: item.endpoint_url ? "remote" : "local", terms_url: item.runtime_config.terms_url ?? null, privacy_url: item.runtime_config.privacy_url ?? null, tools: [] })), config_path: null, deprecated: true }; } const { definitions, source } = await loadMcpDefinitions(root); const servers = summarizeMcpServers(definitions, await mcpEnabledSet(definitions)); return { servers, config_path: source }; });
   app.get<{ Params: { server_id: string } }>("/api/mcp/health/:server_id", async (request, reply) => {
     const root = await ws(request, reply);
     if (!root) return;
+    if (mcp) return mcp.probe(request.params.server_id);
     const { definitions } = await loadMcpDefinitions(root);
     const definition = definitions[request.params.server_id];
     if (!definition) return reply.code(404).send({ error: "MCP server not found" });

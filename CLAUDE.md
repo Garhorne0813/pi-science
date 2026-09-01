@@ -8,8 +8,8 @@ builtin agent skills in `skills/`. Compute environments are managed through Micr
 and kernels are spawned directly by Node.
 
 ## Security boundary
-- The main control agent must never read, write, or execute files outside the project checkout
-  (`/Users/cyq/codex/pi-science`) without the user's explicit permission. This includes but is
+- The main control agent must never read, write, or execute files outside the current project checkout
+  (resolve it with `git rev-parse --show-toplevel`) without the user's explicit permission. This includes but is
   not limited to: `~/`, `/tmp/`, `/etc/`, other repositories, and system directories.
 - When a task genuinely requires accessing a path outside the project, ask first and state the
   exact path and reason before proceeding.
@@ -35,8 +35,12 @@ pnpm smoke                           # control-plane smoke test
 pnpm --filter frontend test:uat:conversation   # UAT scripts (also :knowledge :notebook :office)
 ```
 
-Current green baseline, known build warnings, and the characterization-test inventory are recorded
-in `docs/refactoring-baseline.md`. The batch plan is `docs/refactoring-plan.md`.
+Architecture and subsystem boundaries are documented in `docs/architecture.md` and
+`docs/architecture.zh-CN.md`.
+
+When a feature replaces an existing subsystem, remove the obsolete production implementation and
+its obsolete tests in the same change. If compatibility code must remain, document its live caller
+and removal condition explicitly.
 
 ## UI design standard
 - All frontend UI changes must follow `docs/ui/deepseek-harness-reference.md`, which freezes design

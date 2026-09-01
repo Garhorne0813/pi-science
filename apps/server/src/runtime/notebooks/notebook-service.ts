@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { join, resolve, sep } from "node:path";
 import { configPath } from "../../storage/persistence.js";
 import { environmentPythonExecutable, type EnvironmentRevision, type WorkspaceEnvironmentService } from "../workspace/workspace-environment.js";
+import { sanitizeRuntimeEnvironment } from "../workspace/runtime-environment.js";
 
 export interface NotebookFile {
   path: string;
@@ -42,6 +43,7 @@ export interface NotebookServiceDependencies {
   micromambaResolver?: () => Promise<string>;
   environments?: Pick<WorkspaceEnvironmentService, "installPackages"> & Partial<Pick<WorkspaceEnvironmentService, "list">>;
   now?: () => Date;
+  jupyterStopGraceMs?: number;
 }
 
 async function pathExists(target: string): Promise<boolean> {
@@ -86,11 +88,13 @@ export class NotebookService {
   private setupInProgress = false;
   private startQueue: Promise<unknown> = Promise.resolve();
   private lifecycleGeneration = 0;
+  private readonly jupyterStopGraceMs: number;
 
   constructor(deps: NotebookServiceDependencies = {}) {
     this.configPath = deps.configPath ?? configPath;
     this.platform = deps.platform ?? process.platform;
     this.environments = deps.environments;
+    this.jupyterStopGraceMs = deps.jupyterStopGraceMs ?? 2_000;
     this.micromambaResolver = deps.micromambaResolver;
     const configuredMicromamba = deps.micromambaExecutable ?? process.env.PI_SCIENCE_MICROMAMBA_EXECUTABLE;
     this.micromambaConfigured = Boolean(configuredMicromamba);
@@ -204,13 +208,24 @@ export class NotebookService {
     this.jupyterToken = null;
   }
 
-  private stopProcess(): void {
+  private async stopProcess(): Promise<void> {
     const process = this.jupyterProcess;
     if (process && process.exitCode === null) {
-      process.kill("SIGTERM");
-      try { process.kill("SIGKILL"); } catch { /* best effort */ }
+      const exited = new Promise<void>((resolveExit) => process.once("exit", () => resolveExit()));
+      try { process.kill("SIGTERM"); } catch { /* best effort */ }
+      const graceful = await Promise.race([
+        exited.then(() => true),
+        new Promise<false>((resolveTimeout) => setTimeout(() => resolveTimeout(false), this.jupyterStopGraceMs)),
+      ]);
+      if (!graceful && process.exitCode === null) {
+        try { process.kill("SIGKILL"); } catch { /* best effort */ }
+        await Promise.race([
+          exited,
+          new Promise<void>((resolveTimeout) => setTimeout(resolveTimeout, 1_000)),
+        ]);
+      }
     }
-    this.clearJupyterState();
+    if (this.jupyterProcess === process) this.clearJupyterState();
   }
 
   private async startUnlocked(cwd: string, generation: number): Promise<JupyterStatusPayload> {
@@ -222,7 +237,7 @@ export class NotebookService {
       if (this.jupyterCwd === workspace) return { ...this.status(), message: "Already running" };
       throw new Error(`Jupyter Lab is already running for another workspace: ${this.jupyterCwd ?? "unknown"}`);
     }
-    this.stopProcess();
+    await this.stopProcess();
     this.assertStartActive(generation);
     if (!(await pathExists(this.jupyterBin))) throw new Error("The application Jupyter runtime is not installed");
     this.assertStartActive(generation);
@@ -253,23 +268,23 @@ export class NotebookService {
     await new Promise((resolveWait) => setImmediate(resolveWait));
     this.assertStartActive(generation);
     if (jupyter.exitCode !== null) {
-      this.stopProcess();
+      await this.stopProcess();
       throw new Error("Jupyter Lab exited during startup");
     }
     return this.status();
   }
 
-  stop(cwd?: string): JupyterStatusPayload {
+  async stop(cwd?: string): Promise<JupyterStatusPayload> {
     if (cwd !== undefined && this.jupyterProcess && this.jupyterProcess.exitCode === null && this.jupyterCwd !== resolve(cwd)) {
       throw new Error("Cannot stop Jupyter Lab owned by another workspace");
     }
     this.lifecycleGeneration += 1;
-    this.stopProcess();
+    await this.stopProcess();
     return { running: false, port: null, url: null, cwd: null, matches_workspace: true };
   }
 
   async shutdown(): Promise<void> {
-    this.stop();
+    await this.stop();
     await this.startQueue;
   }
 
@@ -329,21 +344,7 @@ export class NotebookService {
   }
 
   private micromambaEnvironment(): NodeJS.ProcessEnv {
-    const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => {
-      const normalized = key.toUpperCase();
-      return normalized !== "VIRTUAL_ENV"
-        && normalized !== "UV_PROJECT_ENVIRONMENT"
-        && normalized !== "CONDA_DEFAULT_ENV"
-        && normalized !== "CONDA_EXE"
-        && normalized !== "CONDA_PYTHON_EXE"
-        && normalized !== "CONDA_SHLVL"
-        && normalized !== "CONDA_PROMPT_MODIFIER"
-        && normalized !== "CONDARC"
-        && normalized !== "MAMBARC"
-        && normalized !== "MAMBA_ROOT_PREFIX"
-        && normalized !== "MAMBA_EXE"
-        && !/^CONDA_PREFIX(?:_\d+)?$/.test(normalized);
-    }));
+    const environment = sanitizeRuntimeEnvironment();
     environment.MAMBA_ROOT_PREFIX = this.configPath("micromamba");
     environment.MAMBA_NO_RC = "true";
     return environment;

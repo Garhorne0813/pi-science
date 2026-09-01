@@ -513,7 +513,10 @@ export const candidateProposalSchema = z.object({
   entrypoint: z.string().min(1).max(500).default("solve.sh"),
   parent_candidate_ids: z.array(z.string()).max(100).default([]),
   expected_artifacts: z.array(z.object({ path: z.string(), kind: z.string().default("data") })).default([]),
-});
+}).refine(
+  (candidate) => Object.keys(candidate.files).includes(candidate.entrypoint),
+  "entrypoint must be included in candidate files",
+);
 
 export const metricValueSchema = z.object({
   value: z.number().finite(),
@@ -555,6 +558,269 @@ export type CreateResearchLoop = z.infer<typeof createResearchLoopSchema>;
 export type CandidateProposal = z.infer<typeof candidateProposalSchema>;
 export type CandidateEvaluation = z.infer<typeof candidateEvaluationSchema>;
 export type ResearchAgentResult = z.infer<typeof researchAgentResultSchema>;
+
+// ── Auto Research Graph ───────────────────────────────────────────
+
+export const researchIdSchema = z.string().regex(/^research-[a-z0-9]{16}$/);
+export const researchNodeIdSchema = z.string().regex(/^node-[a-z0-9]{16}$/);
+export const researchEdgeIdSchema = z.string().regex(/^edge-[a-z0-9]{16}$/);
+export const researchActionIdSchema = z.string().min(1).max(120);
+
+export const researchGraphStatusSchema = z.enum([
+  "draft", "running", "pausing", "paused", "input_required",
+  "completed", "failed", "cancelled",
+]);
+
+export const researchNodeStatusSchema = z.enum([
+  "proposed", "ready", "running", "blocked", "succeeded", "failed",
+  "rejected", "verified",
+]);
+
+export const researchNodeKindSchema = z.enum([
+  "question", "hypothesis", "literature", "experiment", "analysis",
+  "verification", "decision", "synthesis",
+]);
+
+export const researchEdgeRelationSchema = z.enum([
+  "decomposes", "tests", "depends_on", "refines", "supports",
+  "contradicts", "derived_from", "supersedes",
+]);
+
+export const autoResearchBudgetSchema = z.object({
+  max_experiments: z.number().int().min(1).max(10_000).default(20),
+  max_wall_seconds: z.number().int().min(1).max(31_536_000).default(7200),
+  max_model_tokens: z.number().int().positive().nullable().default(null),
+  max_cost_usd: z.number().nonnegative().nullable().default(null),
+  max_parallel: z.number().int().min(1).max(32).default(2),
+});
+
+export const autoResearchUsageSchema = z.object({
+  experiments_started: z.number().int().nonnegative().default(0),
+  experiments_completed: z.number().int().nonnegative().default(0),
+  model_tokens: z.number().int().nonnegative().default(0),
+  cost_usd: z.number().nonnegative().default(0),
+  active_wall_ms: z.number().int().nonnegative().default(0),
+});
+
+export const experimentSpecSchema = z.object({
+  objective: z.string().min(1).max(8000),
+  expected_metrics: z.array(z.string().min(1).max(120)).max(100).default([]),
+  constraints: z.array(z.string().max(1000)).max(100).default([]),
+  estimated_cost: z.record(z.string(), z.number().nonnegative()).optional(),
+  materialization: z.literal("pi_candidate").default("pi_candidate"),
+});
+
+const researchNodeBaseShape = {
+  node_id: researchNodeIdSchema,
+  status: researchNodeStatusSchema,
+  priority: z.number().finite().default(0),
+  created_at: z.string(),
+  updated_at: z.string(),
+};
+
+export const questionNodeSchema = z.object({
+  ...researchNodeBaseShape,
+  kind: z.literal("question"),
+  question: z.string().min(1).max(8000),
+});
+
+export const hypothesisNodeSchema = z.object({
+  ...researchNodeBaseShape,
+  kind: z.literal("hypothesis"),
+  statement: z.string().min(1).max(8000),
+  assumptions: z.array(z.string().max(2000)).max(100).default([]),
+});
+
+export const literatureNodeSchema = z.object({
+  ...researchNodeBaseShape,
+  kind: z.literal("literature"),
+  question: z.string().min(1).max(8000),
+  findings: z.array(z.record(z.string(), z.unknown())).default([]),
+});
+
+export const experimentNodeSchema = z.object({
+  ...researchNodeBaseShape,
+  kind: z.literal("experiment"),
+  hypothesis_id: researchNodeIdSchema,
+  spec: experimentSpecSchema,
+  candidate_id: z.string().nullable().default(null),
+  execution_id: z.string().nullable().default(null),
+  result_node_id: researchNodeIdSchema.nullable().default(null),
+  result: z.record(z.string(), z.unknown()).nullable().default(null),
+});
+
+export const analysisNodeSchema = z.object({
+  ...researchNodeBaseShape,
+  kind: z.literal("analysis"),
+  target_node_ids: z.array(researchNodeIdSchema).min(1),
+  findings: z.array(z.record(z.string(), z.unknown())).default([]),
+});
+
+export const verificationNodeSchema = z.object({
+  ...researchNodeBaseShape,
+  kind: z.literal("verification"),
+  target_node_id: researchNodeIdSchema,
+  verdict: z.enum(["pending", "verified", "failed"]).default("pending"),
+  details: z.record(z.string(), z.unknown()).default({}),
+});
+
+export const decisionNodeSchema = z.object({
+  ...researchNodeBaseShape,
+  kind: z.literal("decision"),
+  reason: z.string().min(1).max(8000),
+  options: z.array(z.string().max(2000)).max(50).default([]),
+  resolution: z.string().max(8000).nullable().default(null),
+});
+
+export const synthesisNodeSchema = z.object({
+  ...researchNodeBaseShape,
+  kind: z.literal("synthesis"),
+  summary: z.string().max(50_000).default(""),
+  claim_ids: z.array(z.string()).default([]),
+});
+
+export const researchNodeSchema = z.discriminatedUnion("kind", [
+  questionNodeSchema, hypothesisNodeSchema, literatureNodeSchema,
+  experimentNodeSchema, analysisNodeSchema, verificationNodeSchema,
+  decisionNodeSchema, synthesisNodeSchema,
+]);
+
+export const researchEdgeSchema = z.object({
+  edge_id: researchEdgeIdSchema,
+  from: researchNodeIdSchema,
+  to: researchNodeIdSchema,
+  relation: researchEdgeRelationSchema,
+  created_at: z.string(),
+});
+
+export const researchClaimSchema = z.object({
+  claim_id: z.string().regex(/^claim-[a-z0-9]{16}$/),
+  statement: z.string().min(1).max(20_000),
+  scope: z.string().max(4000).nullable().default(null),
+  confidence: z.number().min(0).max(1).default(0.5),
+  status: z.enum(["proposed", "verified", "qualified", "rejected"]),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const researchEvidenceSchema = z.object({
+  evidence_id: z.string().regex(/^evidence-[a-z0-9]{16}$/),
+  kind: z.enum(["paper", "citation", "artifact", "execution", "metric", "file", "dataset", "observation"]),
+  locator: z.record(z.string(), z.unknown()),
+  digest: z.string().nullable().default(null),
+  created_at: z.string(),
+});
+
+export const claimEvidenceSchema = z.object({
+  claim_id: z.string(),
+  evidence_id: z.string(),
+  relation: z.enum(["supports", "contradicts", "derives_from"]),
+  strength: z.number().min(0).max(1).default(0.5),
+});
+
+export const researchNodeRefSchema = z.union([
+  z.object({ node_id: researchNodeIdSchema }),
+  z.object({ action_id: researchActionIdSchema }),
+]);
+
+const actionBase = { action_id: researchActionIdSchema };
+export const researchActionSchema = z.discriminatedUnion("type", [
+  z.object({ ...actionBase, type: z.literal("question.add"), question: z.string().min(1).max(8000) }),
+  z.object({ ...actionBase, type: z.literal("hypothesis.add"), statement: z.string().min(1).max(8000), assumptions: z.array(z.string().max(2000)).max(100).default([]), parent_refs: z.array(researchNodeRefSchema).default([]) }),
+  z.object({ ...actionBase, type: z.literal("experiment.propose"), hypothesis_ref: researchNodeRefSchema, spec: experimentSpecSchema, priority: z.number().finite().default(0) }),
+  z.object({ ...actionBase, type: z.literal("literature.request"), question: z.string().min(1).max(8000), parent_refs: z.array(researchNodeRefSchema).default([]), priority: z.number().finite().default(0) }),
+  z.object({ ...actionBase, type: z.literal("node.prioritize"), node_id: researchNodeIdSchema, priority: z.number().finite() }),
+  z.object({ ...actionBase, type: z.literal("branch.close"), node_id: researchNodeIdSchema, reason: z.string().min(1).max(8000) }),
+  z.object({ ...actionBase, type: z.literal("verification.request"), target_node_id: researchNodeIdSchema, priority: z.number().finite().default(0) }),
+  z.object({ ...actionBase, type: z.literal("synthesis.request"), target_node_ids: z.array(researchNodeIdSchema).default([]), priority: z.number().finite().default(0) }),
+  z.object({ ...actionBase, type: z.literal("user_input.request"), reason: z.string().min(1).max(8000), options: z.array(z.string().max(2000)).max(50).default([]) }),
+  z.object({ ...actionBase, type: z.literal("claim.propose"), statement: z.string().min(1).max(20_000), scope: z.string().max(4000).nullable().default(null), confidence: z.number().min(0).max(1).default(0.5) }),
+  z.object({ ...actionBase, type: z.literal("research.stop_recommended"), reason: z.string().min(1).max(8000) }),
+]);
+
+export const researchCommitSchema = z.object({
+  research_id: researchIdSchema,
+  base_revision: z.number().int().nonnegative(),
+  rationale: z.string().max(20_000).default(""),
+  actions: z.array(researchActionSchema).min(1).max(100),
+});
+
+export const createAutoResearchSchema = z.object({
+  title: z.string().min(1).max(200),
+  objective: z.string().min(1).max(8000),
+  project_id: z.string().min(1).max(200).default("workspace"),
+  origin_session_id: z.string().min(1).nullable().default(null),
+  origin_message_id: z.string().min(1).nullable().default(null),
+  constraints: z.array(z.string().max(1000)).max(100).default([]),
+  budget: autoResearchBudgetSchema.partial().default({}),
+  target_metrics: z.record(z.string(), z.object({ value: z.number().finite(), direction: z.enum(["maximize", "minimize"]) })).default({}),
+});
+
+export const autoResearchSnapshotSchema = z.object({
+  schema_version: z.literal(1),
+  research_id: researchIdSchema,
+  project_id: z.string(),
+  origin_session_id: z.string().nullable(),
+  origin_message_id: z.string().nullable(),
+  revision: z.number().int().nonnegative(),
+  title: z.string(),
+  objective: z.string(),
+  status: researchGraphStatusSchema,
+  constraints: z.array(z.string()),
+  budget: autoResearchBudgetSchema,
+  usage: autoResearchUsageSchema,
+  target_metrics: z.record(z.string(), z.object({ value: z.number(), direction: z.enum(["maximize", "minimize"]) })),
+  nodes: z.array(researchNodeSchema),
+  edges: z.array(researchEdgeSchema),
+  claims: z.array(researchClaimSchema),
+  evidence: z.array(researchEvidenceSchema),
+  claim_evidence: z.array(claimEvidenceSchema),
+  current_activity: z.string().nullable(),
+  best_result: z.record(z.string(), z.unknown()).nullable(),
+  report_path: z.string().nullable().default(null),
+  stop_reason: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  started_at: z.string().nullable(),
+  completed_at: z.string().nullable(),
+});
+
+export const researchSseEventSchema = z.object({
+  id: z.string(),
+  type: z.enum([
+    "research.created", "research.started", "research.snapshot",
+    "research.progress.updated", "research.activity.changed",
+    "research.best_result.updated", "research.input.required",
+    "research.finding.created", "research.completed", "research.failed",
+  ]),
+  timestamp: z.string(),
+  project_id: z.string(),
+  session_id: z.string().optional(),
+  message_id: z.string().optional(),
+  research_id: researchIdSchema,
+  node_id: researchNodeIdSchema.optional(),
+  execution_id: z.string().optional(),
+  revision: z.number().int().nonnegative(),
+  data: z.record(z.string(), z.unknown()),
+});
+
+export type ResearchGraphStatus = z.infer<typeof researchGraphStatusSchema>;
+export type ResearchNodeStatus = z.infer<typeof researchNodeStatusSchema>;
+export type ResearchNodeKind = z.infer<typeof researchNodeKindSchema>;
+export type ResearchNode = z.infer<typeof researchNodeSchema>;
+export type ResearchEdge = z.infer<typeof researchEdgeSchema>;
+export type ResearchClaim = z.infer<typeof researchClaimSchema>;
+export type ResearchEvidence = z.infer<typeof researchEvidenceSchema>;
+export type ClaimEvidence = z.infer<typeof claimEvidenceSchema>;
+export type ResearchNodeRef = z.infer<typeof researchNodeRefSchema>;
+export type ResearchAction = z.infer<typeof researchActionSchema>;
+export type ResearchCommit = z.infer<typeof researchCommitSchema>;
+export type CreateAutoResearch = z.infer<typeof createAutoResearchSchema>;
+export type AutoResearchBudget = z.infer<typeof autoResearchBudgetSchema>;
+export type AutoResearchUsage = z.infer<typeof autoResearchUsageSchema>;
+export type AutoResearchSnapshot = z.infer<typeof autoResearchSnapshotSchema>;
+export type ExperimentSpec = z.infer<typeof experimentSpecSchema>;
+export type ResearchSseEvent = z.infer<typeof researchSseEventSchema>;
 
 // ── Skill catalog contracts (aligned with backend/models/skill.py) ──
 
@@ -666,3 +932,4 @@ export type SkillContent = z.infer<typeof skillContentSchema>;
 export type SkillInfo = z.infer<typeof skillInfoSchema>;
 
 export * from "./model-resources.js";
+export * from "./mcp.js";

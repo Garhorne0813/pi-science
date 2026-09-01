@@ -71,16 +71,16 @@ export const modelResourcesApi = {
     return apiRequest(`/api/endpoints/${encodeURIComponent(endpointId)}/health`, { method: "POST" });
   },
   /** Aggregate custom-provider surface: one call owns the whole lifecycle. */
-  createCustomProvider(body: { name: string; base_url: string; protocol: string; api?: string; auth?: { kind: "api_key" | "none"; secret?: string } | null; models?: string[] }): Promise<CustomProviderResult> {
+  createCustomProvider(body: { name: string; base_url: string; protocol: string; api?: string; allow_private?: boolean; auth?: { kind: "api_key" | "none"; secret?: string } | null; models?: string[] }): Promise<CustomProviderResult> {
     return apiRequest("/api/custom-providers", { ...json("POST", body) });
   },
-  updateCustomProvider(providerId: string, body: { name?: string; base_url?: string; api?: string; auth?: { kind: "api_key"; secret: string } | { kind: "none" } }): Promise<CustomProviderResult> {
+  updateCustomProvider(providerId: string, body: { name?: string; base_url?: string; api?: string; allow_private?: boolean; auth?: { kind: "api_key"; secret: string } | { kind: "none" } }): Promise<CustomProviderResult> {
     return apiRequest(`/api/custom-providers/${encodeURIComponent(providerId)}`, { ...json("PUT", body) });
   },
   deleteCustomProvider(providerId: string): Promise<unknown> {
     return apiRequest(`/api/custom-providers/${encodeURIComponent(providerId)}`, { method: "DELETE" });
   },
-  testCustomProvider(body: { base_url: string; protocol: string; auth?: { kind: "api_key" | "none"; secret?: string } | null }): Promise<{ ok: true; health: "ready"; models: Array<{ id: string; display_name: string }> }> {
+  testCustomProvider(body: { base_url: string; protocol: string; allow_private?: boolean; auth?: { kind: "api_key" | "none"; secret?: string } | null }): Promise<{ ok: true; health: "ready"; models: Array<{ id: string; display_name: string }> }> {
     return apiRequest("/api/custom-providers/test", { ...json("POST", body) });
   },
   refreshCustomProviderModels(providerId: string): Promise<unknown> {

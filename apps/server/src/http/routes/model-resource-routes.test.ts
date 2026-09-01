@@ -35,7 +35,7 @@ describe("model resource routes", () => {
     registerModelResourceRoutes(app, service, session);
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ data: [{ id: "model-a" }] }), { status: 200, headers: { "content-type": "application/json" } }));
 
-    const created = await app.inject({ method: "POST", url: "/api/custom-providers", payload: { name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", auth: { kind: "api_key", secret: "route-secret" } } });
+    const created = await app.inject({ method: "POST", url: "/api/custom-providers", payload: { name: "Lab", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", allow_private: true, auth: { kind: "api_key", secret: "route-secret" } } });
     expect(created.statusCode).toBe(200);
     const providerId = created.json().provider.id as string;
     const credentialId = created.json().credential.id as string;
@@ -95,7 +95,7 @@ describe("model resource routes", () => {
     expect(credential.statusCode).toBe(200);
     expect(credential.body).not.toContain("route-secret");
     const credentialId = credential.json().credential.id as string;
-    const endpoint = await app.inject({ method: "POST", url: "/api/endpoints", payload: { name: "Lab connection", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", credential_ref: credentialId, data_egress: "local" } });
+    const endpoint = await app.inject({ method: "POST", url: "/api/endpoints", payload: { name: "Lab connection", base_url: "http://127.0.0.1:8000/v1", protocol: "openai", credential_ref: credentialId, data_egress: "local", network_policy: { allow_private: true } } });
     expect(endpoint.statusCode).toBe(200);
     const endpointId = endpoint.json().endpoint.id as string;
     const binding = await app.inject({ method: "POST", url: "/api/provider-endpoint-bindings", payload: { provider_id: providerId, endpoint_id: endpointId, priority: 10, enabled: true } });

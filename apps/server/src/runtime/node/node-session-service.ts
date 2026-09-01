@@ -182,6 +182,7 @@ export class NodeSessionService {
   private readonly statsProjector = new SessionStatsProjector();
   private hostReloadPending = false;
   private log: (level: "info" | "warn" | "error", message: string) => void = () => {};
+  private beforeRuntimeStart: ((cwd: string) => Promise<void>) | null = null;
 
   constructor(
     private readonly eventHub: ConversationEventHub = conversationEventHub,
@@ -195,6 +196,10 @@ export class NodeSessionService {
 
   configureLogging(log: (level: "info" | "warn" | "error", message: string) => void): void {
     this.log = log;
+  }
+
+  configureBeforeRuntimeStart(hook: ((cwd: string) => Promise<void>) | null): void {
+    this.beforeRuntimeStart = hook;
   }
 
   async create(body: CreateSessionRequest): Promise<{ id: string; cwd: string; project_id: string } | RuntimeFailure & { sessionId?: string }> {
@@ -775,6 +780,8 @@ export class NodeSessionService {
   }
 
   private async startRuntime(cwd: string, config: PiConfig, sessionPath?: string, preparedOptions?: PiProcessOptions): Promise<RuntimeRecord | RuntimeFailure> {
+    try { await this.beforeRuntimeStart?.(cwd); }
+    catch (error) { return { error: `unable to materialize runtime configuration: ${String(error)}`, code: "configuration_failed" }; }
     const migration = await this.ensureModelResources();
     if (migration) return migration;
     if (this.modelResources && config.model && config.model.startsWith("user-") && !(await this.modelResources.isModelAvailable(config.model))) {
@@ -827,7 +834,11 @@ export class NodeSessionService {
           // silently dead stream is detected and revived mid-turn.
           this.scheduleEventWatchdog(runtime);
         } else if (runtime.restartPending) {
-          queueMicrotask(() => { void this.reloadRuntimeAfterTurn(runtime); });
+          queueMicrotask(() => {
+            void this.reloadRuntimeAfterTurn(runtime).catch((error: unknown) => {
+              this.log("error", `failed to reload Pi runtime after turn: ${error instanceof Error ? error.message : String(error)}`);
+            });
+          });
         } else {
           this.scheduleIdleCleanup(runtime);
         }
@@ -847,7 +858,9 @@ export class NodeSessionService {
         // after each completed assistant message and completed tool execution;
         // agent_settled below stays the final authoritative refresh.
         if (event.type === "message_end" || event.type === "tool_execution_end") {
-          void this.refreshAndPublishStats(runtime, sessionId);
+          void this.refreshAndPublishStats(runtime, sessionId).catch((error: unknown) => {
+            this.log("warn", `failed to refresh session stats for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+          });
         }
         if (event.type === "agent_start") {
           runtime.turnId = randomUUID();
@@ -876,7 +889,9 @@ export class NodeSessionService {
         if (event.type === "agent_settled") {
           await this.finishTurnArtifacts(runtime, event, sessionId);
           this.scheduleAutoReview(cwd, sessionId);
-          void this.refreshAndPublishStats(runtime, sessionId);
+          void this.refreshAndPublishStats(runtime, sessionId).catch((error: unknown) => {
+            this.log("warn", `failed to refresh settled session stats for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+          });
         }
       },
     });
@@ -959,7 +974,10 @@ export class NodeSessionService {
     if (runtime.closing || (!runtime.busy && !runtime.operationPending)) return;
     runtime.watchdogTimer = setTimeout(() => {
       runtime.watchdogTimer = undefined;
-      void this.runEventWatchdog(runtime);
+      void this.runEventWatchdog(runtime).catch((error: unknown) => {
+        this.log("error", `Pi Orbit event watchdog failed: ${error instanceof Error ? error.message : String(error)}`);
+        if (!runtime.closing) this.scheduleEventWatchdog(runtime);
+      });
     }, intervalMs);
   }
 
@@ -1160,6 +1178,17 @@ export class NodeSessionService {
           }, () => runtime.operationToken === operationToken);
         }
         this.clearPendingOperation(runtime);
+      }).catch(async (error: unknown) => {
+        this.log("error", `operation reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
+        if (!this.isCurrentPendingOperation(runtime, operationToken)) return;
+        const sessionId = runtime.activeSessionId;
+        this.clearPendingOperation(runtime);
+        await this.eventHub.publish(runtime.cwd, sessionId, {
+          type: "error",
+          sessionId,
+          message: `Unable to reconcile the accepted operation: ${error instanceof Error ? error.message : String(error)}`,
+          terminal: true,
+        }).catch(() => undefined);
       });
     }, timerDelay);
   }

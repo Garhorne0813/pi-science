@@ -28,6 +28,10 @@ describe("validateConnectorOutboundUrl", () => {
     }
   });
 
+  it("rejects private destinations by default", async () => {
+    await expect(validateConnectorOutboundUrl("http://127.0.0.1:8000")).rejects.toThrow("private or reserved address");
+  });
+
   it("accepts public literal addresses", async () => {
     await expect(validateConnectorOutboundUrl("https://93.184.216.34/")).resolves.toBeInstanceOf(URL);
   });
@@ -203,11 +207,11 @@ describe("safeConnectorFetch", () => {
     await expect(safeConnectorFetch(`${baseUrl}/ok`, { allowPrivate: true, allowedContentTypes: ["application/json"] })).resolves.toBeInstanceOf(Response);
   });
 
-  it("honors the environment default for private access", async () => {
+  it("requires an explicit environment opt-in for private access", async () => {
     const previous = process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS;
-    process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS = "0";
+    process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS = "1";
     try {
-      await expect(safeConnectorFetch(`${baseUrl}/ok`)).rejects.toThrow("private or reserved address");
+      await expect(safeConnectorFetch(`${baseUrl}/ok`)).resolves.toBeInstanceOf(Response);
     } finally {
       if (previous === undefined) delete process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS;
       else process.env.PI_SCIENCE_ALLOW_PRIVATE_PROVIDERS = previous;

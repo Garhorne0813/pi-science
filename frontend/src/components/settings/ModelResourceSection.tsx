@@ -14,9 +14,10 @@ type ProviderForm = {
   protocol: "openai" | "anthropic" | "ollama";
   authKind: "api_key" | "none";
   apiKey: string;
+  allowPrivate: boolean;
 };
 
-const EMPTY_FORM: ProviderForm = { name: "", baseUrl: "", protocol: "openai", authKind: "api_key", apiKey: "" };
+const EMPTY_FORM: ProviderForm = { name: "", baseUrl: "", protocol: "openai", authKind: "api_key", apiKey: "", allowPrivate: false };
 
 type TestResult = { ok: true; health: "ready"; models: Array<{ id: string; display_name: string }> };
 
@@ -80,7 +81,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
   const openEdit = (provider: ModelProvider) => {
     const connection = connectionFor(provider.id);
     const protocol = provider.adapter === "anthropic-compatible" ? "anthropic" : provider.adapter === "ollama" ? "ollama" : "openai";
-    setForm({ name: provider.name, baseUrl: connection?.base_url ?? "", protocol, authKind: provider.auth_kind === "none" ? "none" : "api_key", apiKey: "" });
+    setForm({ name: provider.name, baseUrl: connection?.base_url ?? "", protocol, authKind: provider.auth_kind === "none" ? "none" : "api_key", apiKey: "", allowPrivate: connection?.network_policy?.allow_private === true });
     setTestResult(null);
     if (modal?.mode === "edit" && modal.provider.id === provider.id) {
       // Keep the previous selection when the modal is already open for it.
@@ -105,6 +106,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
       const result = await modelResourcesApi.testCustomProvider({
         base_url: form.baseUrl.trim(),
         protocol: form.protocol,
+        allow_private: form.allowPrivate,
         auth: form.authKind === "api_key" ? { kind: "api_key", secret: form.apiKey.trim() } : { kind: "none" },
       });
       setTestResult(result);
@@ -131,6 +133,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
           name: form.name.trim(),
           base_url: form.baseUrl.trim(),
           protocol: form.protocol,
+          allow_private: form.allowPrivate,
           auth: form.authKind === "api_key" ? { kind: "api_key", secret: form.apiKey.trim() } : { kind: "none" },
           models: testResult ? [...selectedModels] : undefined,
         });
@@ -142,6 +145,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
         await modelResourcesApi.updateCustomProvider(modal.provider.id, {
           name: form.name.trim(),
           base_url: form.baseUrl.trim(),
+          allow_private: form.allowPrivate,
           ...auth,
         });
         if (testResult) {
@@ -415,6 +419,13 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
                 className="min-h-10 w-full rounded-input border border-border bg-bg px-3 py-2 font-mono text-xs text-text outline-none focus:border-accent"
               />
             )}
+            <label className="flex items-start gap-2 rounded-input border border-faint px-3 py-2 text-[11px] text-text">
+              <input type="checkbox" className="mt-0.5 accent-accent" checked={form.allowPrivate} onChange={(event) => { setForm({ ...form, allowPrivate: event.target.checked }); invalidateTestResult(); }} />
+              <span>
+                {t("settings.resources.allowPrivate", { defaultValue: "Allow this provider to access localhost and private-network addresses" })}
+                <span className="mt-0.5 block text-muted">{t("settings.resources.allowPrivateHelp", { defaultValue: "Enable only for a provider you trust, such as a local Ollama or vLLM server." })}</span>
+              </span>
+            </label>
 
             <button
               type="button"

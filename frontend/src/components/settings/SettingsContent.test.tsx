@@ -35,6 +35,9 @@ function defaultFetch(url: string, init: RequestInit): Promise<Response> {
       configured: false,
     }));
   }
+  if (url === "/api/mcp/connectors") {
+    return Promise.resolve(jsonResponse({ connectors: [], legacy_count: 0 }));
+  }
   return Promise.resolve(jsonResponse({ error: `unhandled ${method} ${url}` }, 404));
 }
 
@@ -57,6 +60,7 @@ beforeAll(async () => {
 beforeEach(() => {
   cleanup();
   fetchMock.mockClear();
+  fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => defaultFetch(String(input), init));
   putCalls.length = 0;
   vi.stubGlobal("fetch", fetchMock);
   queryClient.clear();
@@ -161,6 +165,27 @@ describe("SettingsContent", () => {
     expect(screen.queryByRole("columnheader", { name: "Actions" })).not.toBeInTheDocument();
     expect(screen.queryByText("Scientific Environment")).not.toBeInTheDocument();
     expect(screen.queryByText("Project Skills")).not.toBeInTheDocument();
+  });
+
+  it("does not block Skills or MCP while the shared config request is pending", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      if (url.startsWith("/api/settings/config")) return new Promise<Response>(() => undefined);
+      return defaultFetch(url, init);
+    });
+    renderContent(null);
+
+    for (const name of ["AI Models", "Agent"]) {
+      fireEvent.click(screen.getByRole("tab", { name }));
+      expect(screen.getByText(i18n.t("common.loading"))).toBeInTheDocument();
+    }
+
+    fireEvent.click(screen.getByRole("tab", { name: "Skills" }));
+    expect(await screen.findByText("Analyze alpha data")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "MCP" }));
+    expect(await screen.findByText("Manage canonical MCP connectors here. They are projected into each Pi runtime.")).toBeInTheDocument();
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
   });
 
   it("supports arrow-key navigation between tabs", async () => {

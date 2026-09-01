@@ -12,6 +12,7 @@ import { queryClient } from "../../lib/client/query-client";
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { useRequiredWorkspaceCwd } from "../../lib/workspace";
 import { openJsonEventStream } from "../../lib/client/event-stream";
+import { workspaceEnvironmentQuery, type WorkspaceEnvironment } from "../../lib/environments";
 
 interface Notebook {
   path: string; name: string; size: number; modified: string;
@@ -26,13 +27,6 @@ interface JupyterStatus {
   env_ready?: boolean;
 }
 
-interface WorkspaceEnvironment {
-  ready: boolean;
-  prefix: string;
-  python: string;
-  error?: string;
-}
-
 interface JupyterSetupEvent {
   status: "done" | "error" | string;
   text: string;
@@ -42,7 +36,6 @@ const IDLE_JUPYTER: JupyterStatus = { running: false, port: null, url: null, cwd
 
 const notebooksQuery = (cwd: string) => ({ queryKey: ["notebooks", cwd], queryFn: () => apiRequest<Notebook[]>(`/api/notebooks?cwd=${encodeURIComponent(cwd)}`), staleTime: 0 });
 const jupyterQuery = (cwd: string) => ({ queryKey: ["notebooks", "jupyter", cwd], queryFn: () => apiRequest<JupyterStatus>(`/api/notebooks/jupyter/status?cwd=${encodeURIComponent(cwd)}`), staleTime: 0 });
-const environmentQuery = (cwd: string) => ({ queryKey: ["environments", cwd], queryFn: () => apiRequest<WorkspaceEnvironment>(`/api/environments/workspace?cwd=${encodeURIComponent(cwd)}`), staleTime: 0 });
 
 export function NotebooksPage() {
   const { t } = useTranslation();
@@ -52,7 +45,7 @@ export function NotebooksPage() {
   // and provision actions, so the cache — not local state — holds the current value.
   const notebooksResult = useQuery(notebooksQuery(workspaceCwd));
   const jupyterResult = useQuery(jupyterQuery(workspaceCwd));
-  const environmentResult = useQuery(environmentQuery(workspaceCwd));
+  const environmentResult = useQuery(workspaceEnvironmentQuery(workspaceCwd));
   const notebooks = notebooksResult.data ?? [];
   const loading = notebooksResult.isFetching;
   const jupyter = jupyterResult.data ?? IDLE_JUPYTER;
@@ -73,7 +66,7 @@ export function NotebooksPage() {
     setProvisioningEnvironment(true);
     try {
       const data = await apiRequest<WorkspaceEnvironment>(`/api/environments/workspace?cwd=${encodeURIComponent(workspaceCwd)}`, { method: "POST" });
-      queryClient.setQueryData(environmentQuery(workspaceCwd).queryKey, data);
+      queryClient.setQueryData(workspaceEnvironmentQuery(workspaceCwd).queryKey, data);
       toast(t("notebooks.environmentReady"), "success");
     } catch (error) {
       toast(error instanceof Error ? error.message : t("notebooks.environmentCreateError"), "error");

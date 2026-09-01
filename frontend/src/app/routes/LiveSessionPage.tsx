@@ -34,6 +34,7 @@ import type { ThreadBlock } from "../../types/thread";
 
 type ConversationVirtuosoContext = {
   renderInteractionPrompt: () => ReactNode;
+  renderResearchPanel: () => ReactNode;
   working: boolean;
   pendingInteraction: PendingInteraction | null;
 };
@@ -49,7 +50,7 @@ const SessionRunsPage = lazy(() => import("./RunsPage").then((m) => ({ default: 
  * scroll update re-renders the page, unmounting the questionnaire and losing
  * its local answer state.
  */
-export function ConversationFooter() {
+export function ConversationFooter({ context }: { context: ConversationVirtuosoContext }) {
   const { t } = useTranslation();
   const pendingInteraction = useRuntimeStore((s) => s.pendingInteraction);
   const pendingQuestionnaire = useRuntimeStore((s) => s.pendingQuestionnaire);
@@ -62,6 +63,7 @@ export function ConversationFooter() {
 
   return (
     <div className="mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-6 pt-2">
+      {context.renderResearchPanel()}
       {pendingQuestionnaire && pendingInteraction?.questionnaire ? (
         <QuestionnairePrompt
           questionnaire={pendingQuestionnaire}
@@ -208,7 +210,7 @@ export function LiveSessionPage() {
     }
   }, [activeSessionId, workspaceCwd]);
 
-  const research = useResearchLoop(workspaceCwd);
+  const research = useResearchLoop(workspaceCwd, sessionId ?? activeSessionId ?? undefined);
   const composer = useComposer({
     cwd: workspaceCwd,
     conversationKey: sessionId ?? null,
@@ -247,6 +249,31 @@ export function LiveSessionPage() {
       />
     );
   };
+
+  const renderResearchPanel = () => (
+    <>
+      {research.draft && (
+        <ResearchLoopDraftCard
+          draft={research.draft}
+          busy={research.busy}
+          onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }}
+          onConfirm={() => void research.confirm()}
+        />
+      )}
+      {research.activeLoop && (
+        <ResearchLoopStatusCard
+          loop={research.activeLoop}
+          cwd={workspaceCwd}
+          busy={research.busy}
+          onRefresh={() => void research.refresh(research.activeLoop!.research_id)}
+          onAction={(action) => void research.action(action)}
+          onResolveInput={(nodeId, resolution) => void research.resolveInput(nodeId, resolution)}
+          onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)}
+        />
+      )}
+      {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{research.error}</div>}
+    </>
+  );
 
   const handleProjectReview = async () => {
     if (reviewingProject || working || interactionPending) return;
@@ -293,7 +320,6 @@ export function LiveSessionPage() {
   const showSuggestions = suggestions.length > 0
     && !working
     && !research.draft
-    && !research.activeLoop
     && !composer.input.trim();
 
   return (
@@ -366,7 +392,7 @@ export function LiveSessionPage() {
                   initialItemCount={Math.min(turns.length, 20)}
                   startReached={() => void handleLoadOlder()}
                   increaseViewportBy={{ top: 600, bottom: 800 }}
-                  context={{ renderInteractionPrompt, working, pendingInteraction }}
+                  context={{ renderInteractionPrompt, renderResearchPanel, working, pendingInteraction }}
                   components={{
                     Header: () => (
                       <div className="mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-2 pt-6">
@@ -376,9 +402,6 @@ export function LiveSessionPage() {
                             {navigationLoading ? "Locating message…" : "Loading earlier messages…"}
                           </div>
                         )}
-                        {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
-                        {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
-                        {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{research.error}</div>}
                       </div>
                     ),
                     Footer: ConversationFooter,
@@ -413,9 +436,7 @@ export function LiveSessionPage() {
               </Suspense>
             ) : (
               <>
-                {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
-                {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
-                {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{research.error}</div>}
+                {renderResearchPanel()}
                 {renderInteractionPrompt()}
                 {working && !pendingInteraction && (
                   <div className="flex items-center gap-2 py-4 text-sm text-muted">

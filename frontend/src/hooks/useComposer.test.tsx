@@ -115,7 +115,7 @@ describe("useComposer onSend", () => {
     expect(order).toEqual(["onSend", "sendPrompt"]);
   });
 
-  it("does not fire onSend when the research intent detours into a draft", async () => {
+  it("keeps the normal send path when research also prepares a status form", async () => {
     const onSend = vi.fn();
     const sendPrompt = vi.fn(async (_message: string): Promise<string | null> => null);
     useRuntimeStore.setState({ draft: "explore X", sendPrompt });
@@ -123,8 +123,8 @@ describe("useComposer onSend", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "send" }));
 
-    await vi.waitFor(() => expect(useRuntimeStore.getState().draft).toBe(""));
-    expect(onSend).not.toHaveBeenCalled();
-    expect(sendPrompt).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(sendPrompt).toHaveBeenCalledWith("explore X"));
+    expect(useRuntimeStore.getState().draft).toBe("");
+    expect(onSend).toHaveBeenCalledTimes(1);
   });
 });

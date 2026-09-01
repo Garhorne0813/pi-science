@@ -4,7 +4,7 @@ import { notebookRuntime, type CellResult } from "../../lib/notebook";
 import { useTranslation } from "react-i18next";
 import { sessionRunsQuery } from "../../lib/runs";
 import { subscribeExecutionInvalidation } from "../../lib/runs/execution-events";
-import { apiRequest } from "../../lib/client/api";
+import { workspaceEnvironmentQuery } from "../../lib/environments";
 import { Braces, ChevronDown, Loader2, Pencil, Play, Square, TerminalSquare, Trash2, X } from "lucide-react";
 import { NotebookCodePreview } from "../notebook/NotebookCodePreview";
 import { NotebookMimeOutput } from "../notebook/NotebookMimeOutput";
@@ -46,8 +46,7 @@ export function NotebookPanel({ onClose, cwd, notebookId: requestedNotebookId, s
     enabled: Boolean(sessionId && cwd),
   });
   const { data: environment } = useQuery({
-    queryKey: ["project-environment", cwd || "."],
-    queryFn: () => apiRequest<{ display_name?: string; revision_id?: string; manager?: string }>(`/api/environments/workspace?cwd=${encodeURIComponent(cwd || ".")}`),
+    ...workspaceEnvironmentQuery(cwd || "."),
     enabled: Boolean(cwd),
   });
 
