@@ -80,6 +80,41 @@ describe("workspace file context", () => {
     expect(maxActive).toBe(6);
   });
 
+  it("hands a released probe slot directly to an existing waiter", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const releases: Array<() => void> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      active -= 1;
+      return new Response(JSON.stringify({ path: String(input), size: 1, is_dir: false }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const initial = Array.from({ length: 7 }, (_, index) => probeLargeFile(`handoff/initial-${index}.csv`, "workspace", "/workspace"));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6));
+
+    releases.shift()?.();
+    const newcomer = probeLargeFile("handoff/newcomer.csv", "workspace", "/workspace");
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(7));
+    expect(maxActive).toBe(6);
+
+    while (initial.some(() => releases.length > 0) || releases.length > 0) {
+      const pending = releases.splice(0);
+      if (!pending.length) break;
+      pending.forEach((release) => release());
+      await Promise.resolve();
+    }
+    while (releases.length) releases.splice(0).forEach((release) => release());
+    await Promise.all([...initial, newcomer]);
+    expect(maxActive).toBe(6);
+  });
+
   it("uses the inspector's explicit cwd — the module keeps no ambient workspace state", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       path: "report.docx",
