@@ -64,7 +64,7 @@ export function buildServices(config: SettingsConfig): Service[] {
     custom: false,
     provider,
   }));
-  const canonicalCustom = config.providers.filter((provider) => provider.custom);
+  const canonicalCustom = mergeCustomProviders(config.providers.filter((provider) => provider.custom));
   const custom = [
     ...canonicalCustom.filter(isConnected).map((provider) => ({
       id: provider.id,
@@ -74,7 +74,7 @@ export function buildServices(config: SettingsConfig): Service[] {
       custom: true,
     })),
     ...(config.custom_providers || [])
-      .filter((provider) => provider.has_key && !canonicalCustom.some((item) => item.id === provider.id || item.id === `user-${provider.id}`))
+      .filter((provider) => provider.has_key && !canonicalCustom.some((item) => customProviderId(item.id) === customProviderId(provider.id)))
       .map((provider) => ({
         id: provider.id,
         name: provider.name,
@@ -84,6 +84,23 @@ export function buildServices(config: SettingsConfig): Service[] {
       })),
   ];
   return [...builtin, ...custom];
+}
+
+function customProviderId(id: string): string {
+  return id.replace(/^(?:user|custom)-/, "");
+}
+
+function mergeCustomProviders(providers: SettingsProvider[]): SettingsProvider[] {
+  const merged = new Map<string, SettingsProvider>();
+  for (const provider of providers) {
+    const identity = customProviderId(provider.id);
+    const current = merged.get(identity);
+    if (!current) { merged.set(identity, provider); continue; }
+    const preferred = provider.id.startsWith("user-") ? provider : current;
+    const fallback = preferred === provider ? current : provider;
+    merged.set(identity, { ...fallback, ...preferred, models: [...new Set([...current.models, ...provider.models])], has_key: current.has_key || provider.has_key });
+  }
+  return [...merged.values()];
 }
 
 export function shortModelName(label: string, model: string) {

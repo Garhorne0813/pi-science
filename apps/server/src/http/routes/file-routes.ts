@@ -1,9 +1,10 @@
 import { createReadStream } from "node:fs";
-import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { isUtf8 } from "node:buffer";
 import { basename, dirname, extname, join, relative, sep } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/workspace-security.js";
+import { isArtifactSurfaceablePath } from "../../runtime/artifacts/artifact-surface-policy.js";
 import { recordProvenance } from "./artifact-routes.js";
 import { appendJsonLine, workspaceFile } from "../../storage/persistence.js";
 
@@ -67,6 +68,30 @@ async function safeWorkspace(request: { query: unknown }): Promise<string> {
 function normalizeApiPath(path: string): string { return path.replaceAll("\\", "/"); }
 function apiPath(root: string, target: string): string { return relative(root, target).split(sep).join("/"); }
 async function resolveApiFile(root: string, path: string): Promise<string> { return resolveWorkspaceFile(root, normalizeApiPath(path)); }
+
+/** Automatic artifact surfaces must never follow symlinks. Validate every
+ * lexical component with lstat, then apply the sensitive-path policy again to
+ * the canonical relative path returned by resolveWorkspaceFile. This second
+ * check is intentionally performed on every automatic read/serve request so a
+ * file swapped after an earlier probe cannot create a TOCTOU disclosure. */
+async function resolveSurfaceableApiFile(root: string, path: string): Promise<string> {
+  const normalized = normalizeApiPath(path).replace(/^\.\//, "");
+  if (!normalized || normalized.startsWith("/") || normalized.split("/").some((part) => part === "..") || !isArtifactSurfaceablePath(normalized)) {
+    throw new Error("File is not available for automatic artifact discovery");
+  }
+  let lexical = root;
+  for (const part of normalized.split("/").filter((entry) => entry && entry !== ".")) {
+    lexical = join(lexical, part);
+    const info = await lstat(lexical);
+    if (info.isSymbolicLink()) throw new Error("Symlinks are not available for automatic artifact discovery");
+  }
+  const target = await resolveApiFile(root, normalized);
+  const canonicalPath = apiPath(root, target);
+  if (!isArtifactSurfaceablePath(canonicalPath)) {
+    throw new Error("File is not available for automatic artifact discovery");
+  }
+  return target;
+}
 
 export function registerFileReadRoutes(app: FastifyInstance): void {
   // Keep the public upload contract used by the browser without bringing a
@@ -190,7 +215,7 @@ export function registerFileReadRoutes(app: FastifyInstance): void {
     try {
       const root = await safeWorkspace(request);
       const wildcard = (request.params as { path?: string; "*"?: string }).path ?? (request.params as { "*"?: string })["*"] ?? "";
-      const target = await resolveApiFile(root, wildcard);
+      const target = await resolveSurfaceableApiFile(root, wildcard);
       const info = await stat(target);
       return { path: apiPath(root, target), name: basename(target), size: info.size, modified: info.mtimeMs / 1000, is_dir: info.isDirectory() };
     } catch (error) { return reply.code(404).send({ error: String(error) }); }
@@ -225,8 +250,16 @@ async function readWorkspaceFile(
   let root: string;
   try { root = await safeWorkspace(request); }
   catch (error) { return reply.code(403).send({ error: String(error) }); }
+  let maxBytes: number | null = null;
+  const maxBytesRaw = queryValue(request, "maxBytes", "");
+  if (maxBytesRaw !== "") {
+    if (!/^\d+$/.test(maxBytesRaw)) return reply.code(400).send({ error: "maxBytes must be a positive integer" });
+    const parsed = Number(maxBytesRaw);
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) return reply.code(400).send({ error: "maxBytes must be a positive integer" });
+    maxBytes = parsed;
+  }
   let target: string;
-  try { target = await resolveApiFile(root, path); }
+  try { target = maxBytes === null ? await resolveApiFile(root, path) : await resolveSurfaceableApiFile(root, path); }
   catch (error) { return reply.code(403).send({ error: String(error) }); }
   try {
     const metadata = await stat(target);
@@ -234,15 +267,8 @@ async function readWorkspaceFile(
     if (metadata.size > 50 * 1024 * 1024) return reply.code(400).send({ error: `File too large to read (${metadata.size} bytes). Use /api/files/probe for structure.` });
     // Optional snippet read: cap the response to the first N bytes (used by
     // per-turn artifact cards to preview file content without transferring
-    // the whole file). Reads only the requested window from disk.
-    let maxBytes: number | null = null;
-    const maxBytesRaw = queryValue(request, "maxBytes", "");
-    if (maxBytesRaw !== "") {
-      if (!/^\d+$/.test(maxBytesRaw)) return reply.code(400).send({ error: "maxBytes must be a positive integer" });
-      const parsed = Number(maxBytesRaw);
-      if (!Number.isSafeInteger(parsed) || parsed <= 0) return reply.code(400).send({ error: "maxBytes must be a positive integer" });
-      maxBytes = parsed;
-    }
+    // the whole file). Automatic snippets re-run the surface policy here so a
+    // path cannot become a sensitive symlink between probe and read.
     const truncated = maxBytes !== null && metadata.size > maxBytes;
     const data = maxBytes !== null ? await readFileChunk(target, maxBytes) : await readFile(target);
     const forceBase64 = queryValue(request, "format", "text") === "base64";
@@ -288,7 +314,7 @@ async function readFileChunk(path: string, maxBytes: number): Promise<Buffer> {
 async function previewFile(request: { query: unknown }, reply: { code: (status: number) => { send: (body: unknown) => unknown } }, path: string) {
   try {
     const root = await safeWorkspace(request);
-    const target = await resolveApiFile(root, path);
+    const target = await resolveSurfaceableApiFile(root, path);
     const info = await stat(target);
     if (!info.isFile()) return reply.code(400).send({ error: "Not a file" });
     return { path: apiPath(root, target), name: basename(target), size: info.size, modified: info.mtimeMs / 1000, extension: extname(target), preview: null };
@@ -317,7 +343,7 @@ async function serveFile(request: { params: { path?: string }; query: unknown },
     const root = await safeWorkspace(request);
     const path = normalizeApiPath(request.params.path ?? (request.params as { "*"?: string })["*"] ?? "");
     const relativePath = prefix === "raw" ? path.replace(/\/raw$/, "") : path;
-    const file = await resolveApiFile(root, relativePath);
+    const file = prefix === "raw" ? await resolveApiFile(root, relativePath) : await resolveSurfaceableApiFile(root, relativePath);
     const metadata = await stat(file);
     if (!metadata.isFile()) return reply.code(400).send({ error: "Not a file" });
     const extension = file.slice(file.lastIndexOf(".")).toLowerCase();
