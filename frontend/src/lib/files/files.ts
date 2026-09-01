@@ -18,6 +18,40 @@ const API = "/api";
  */
 const ARTIFACT_FILE_STALE_MS = 5_000;
 const ARTIFACT_FILE_GC_MS = 30_000;
+const ARTIFACT_PROBE_STALE_MS = 30_000;
+const ARTIFACT_PROBE_GC_MS = 60_000;
+const ARTIFACT_PROBE_CONCURRENCY = 6;
+let activeArtifactProbes = 0;
+const artifactProbeWaiters: Array<() => void> = [];
+
+async function acquireArtifactProbeSlot(): Promise<void> {
+  if (activeArtifactProbes < ARTIFACT_PROBE_CONCURRENCY) {
+    activeArtifactProbes += 1;
+    return;
+  }
+  await new Promise<void>((resolve) => artifactProbeWaiters.push(resolve));
+}
+
+function releaseArtifactProbeSlot(): void {
+  const next = artifactProbeWaiters.shift();
+  if (next) {
+    // Transfer ownership directly to the oldest waiter. The slot remains
+    // counted as active, so a newcomer cannot steal it before the waiter's
+    // promise continuation runs.
+    next();
+    return;
+  }
+  activeArtifactProbes -= 1;
+}
+
+async function withArtifactProbeSlot<T>(run: () => Promise<T>): Promise<T> {
+  await acquireArtifactProbeSlot();
+  try {
+    return await run();
+  } finally {
+    releaseArtifactProbeSlot();
+  }
+}
 
 export const artifactFileKey = (
   cwd: string,
@@ -89,18 +123,11 @@ export async function writeArtifact(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path, content }),
   });
-  // A write changes every preview-size variant of this file. Invalidate the
-  // path prefix rather than only the exact maxBytes used by the editor.
   await queryClient.invalidateQueries({ queryKey: ["artifact-file", cwd, root ?? null, path] });
   return result;
 }
 
-/** URL for browser-native preview (PDF, images, HTML, video).
- *  Uses /serve/ instead of /{path}/raw so relative references
- *  (CSS, JS, images) in HTML resolve back to the same prefix.
- *  Each path segment is encoded individually so / separators stay
- *  literal — otherwise the browser sees %2F as part of a single
- *  filename and relative resolution breaks. */
+/** URL for browser-native preview (PDF, images, HTML, video). */
 export function previewUrl(path: string, root: FileRoot | undefined, cwd: string): string {
   const params = new URLSearchParams({ cwd });
   if (root) params.set("root", root);
@@ -108,8 +135,7 @@ export function previewUrl(path: string, root: FileRoot | undefined, cwd: string
   return `${API}/files/serve/${encodedPath}?${params}`;
 }
 
-/** Open a file in the OS default app — web fallback: open in new tab.
- *  serve URLs are excluded because the right-side inspector previews them inline. */
+/** Open a file in the OS default app — web fallback: open in new tab. */
 export async function openArtifactExternally(
   path: string,
   root: FileRoot | undefined,
@@ -148,8 +174,12 @@ export function base64ToBytes(b64: string): ArrayBuffer {
 export interface LargeFilePointer {
   error?: string;
   format?: string;
-  size?: string;
+  path?: string;
+  name?: string;
+  size?: string | number;
   size_bytes?: number;
+  modified?: number;
+  is_dir?: boolean;
   note?: string | null;
   hint?: string;
   gzipped?: boolean;
@@ -168,15 +198,28 @@ export interface LargeFilePointer {
   datasets?: Array<{ path: string; shape: Array<number | string>; dtype: string }>;
 }
 
+function artifactProbeQuery(path: string, root: FileRoot | undefined, cwd: string) {
+  const params = new URLSearchParams({ cwd });
+  if (root) params.set("root", root);
+  return {
+    queryKey: ["artifact-probe", cwd, root ?? null, path] as const,
+    queryFn: () => withArtifactProbeSlot(() => apiRequest<LargeFilePointer>(`${API}/files/probe/${encodeWorkspacePath(path)}?${params}`)),
+    staleTime: ARTIFACT_PROBE_STALE_MS,
+    gcTime: ARTIFACT_PROBE_GC_MS,
+    retry: false,
+  };
+}
+
+/** Probe metadata/structure without reading the whole file. Calls are shared
+ * through the query cache and pass through a module-level semaphore, so many
+ * mounted historical turns cannot multiply the effective concurrency. */
 export async function probeLargeFile(
   path: string,
   root: FileRoot | undefined,
   cwd: string,
 ): Promise<LargeFilePointer | null> {
   try {
-    const params = new URLSearchParams({ cwd });
-    if (root) params.set("root", root);
-    return await apiRequest<LargeFilePointer>(`${API}/files/probe/${encodeWorkspacePath(path)}?${params}`);
+    return await queryClient.fetchQuery(artifactProbeQuery(path, root, cwd));
   } catch {
     return null;
   }

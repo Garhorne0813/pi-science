@@ -6,7 +6,7 @@ import { useRuntimeStore } from "../../lib/agent-runtime";
 import type { AgentMessageBlock, StatusLineBlock, ThreadBlock, UserMessageBlock } from "../../types/thread";
 import { MarkdownViewer, type CodeRunner } from "../markdown-viewer/MarkdownViewer";
 import { fileInspectorFromBlock, refToArtifactBlock } from "../../lib/artifacts";
-import { TurnArtifactStrip } from "./TurnArtifactStrip";
+import { ReferencedArtifactStrip, TurnArtifactStrip } from "./TurnArtifactStrip";
 import { referencesFromMessage, visibleUserMessage } from "../../lib/files";
 import { agentActionTextByBlock } from "../../lib/conversation";
 import { extractCitations } from "../../lib/citations";
@@ -26,6 +26,8 @@ export function renderBlocks(blocks: ThreadBlock[], codeRunner: CodeRunner) {
 }
 
 function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnPresentation; codeRunner: CodeRunner; actionTextByBlock?: Map<string, string> }) {
+  const finalText = turn.finalAgent?.parts.map((part) => part.text).join("") ?? "";
+  const publishedPaths = turn.artifacts.flatMap((block) => block.artifacts.map((item) => item.path));
   return (
     <div data-thread-block-ids={turnBlockIds(turn).join(" ")} className="flex flex-col gap-3 scroll-mt-4">
       {turn.user && <UserMessage block={turn.user} />}
@@ -33,6 +35,7 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
       {turn.finalAgent && <AgentMessage block={turn.finalAgent} actionText={actionTextByBlock?.get(turn.finalAgent.id)} codeRunner={codeRunner} />}
       {turn.systemBlocks.map((block) => <SystemBlock key={block.id} block={block} />)}
       {turn.artifacts.map((block) => <TurnArtifactStrip key={block.id} artifacts={block.artifacts} cwd={codeRunner?.cwd} />)}
+      {finalText && <ReferencedArtifactStrip text={finalText} cwd={codeRunner?.cwd} exclude={publishedPaths} />}
     </div>
   );
 }
