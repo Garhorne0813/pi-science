@@ -14,22 +14,14 @@ import { fileInspectorForPath } from "@/lib/artifacts";
 import { resolveMarkdownResource, type MarkdownResourceContext } from "@/lib/files/markdown-resources";
 import { useUiStore } from "@/lib/ui";
 
-/** Two contexts render markdown: chat bubbles (theme colors, compact) and the
- *  file-preview "paper" (editorial colors on a paper canvas whose background
- *  and ink follow the appearance setting — warm near-white in light mode, warm
- *  dark in dark mode). */
 type Variant = "chat" | "document";
 
 const STYLES: Record<Variant, Record<string, string>> = {
   chat: {
-    // Assistant prose reads in the app sans stack (reference: DeepSeek
-    // Harness uses a system UI font for messages); code stays mono.
     root: "text-[15px] leading-[1.65] text-text",
     p: "my-2 first:mt-0 last:mb-0",
     a: "text-link underline underline-offset-2 [overflow-wrap:anywhere]",
     code: "rounded bg-surface-selected px-1 py-0.5 font-mono text-[13px] text-text [overflow-wrap:anywhere]",
-    // Radius/background live on the CodeBlockFrame shell; this class only
-    // styles the <pre> content inside it (chat), or the plain pre (document).
     pre: "overflow-x-auto p-3 font-mono text-[13px] leading-5 [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-text",
     ul: "my-2 ml-5 list-disc space-y-1",
     ol: "my-2 ml-5 list-decimal space-y-1",
@@ -45,12 +37,6 @@ const STYLES: Record<Variant, Record<string, string>> = {
     th: "border border-border bg-surface-2 px-3 py-1.5 text-left font-semibold",
     td: "border border-border px-3 py-1.5",
   },
-  // Document "paper": a reading surface that follows the appearance setting
-  // (light = warm ink on near-white, dark = light ink on warm dark paper) so
-  // long-form previews read like a document rather than app UI while still
-  // adapting to the active theme. The colors are paper tones declared as the
-  // --doc-* variables in index.css, not app-brand colors — the app brand is
-  // the DeepSeek-inspired accent blue and does not leak into document bodies.
   document: {
     root: "text-[15px] leading-[1.65] text-[var(--doc-ink)] antialiased [font-feature-settings:'liga','kern'] [font-family:-apple-system,'SF_Pro_Text','Segoe_UI','PingFang_SC','Microsoft_YaHei',sans-serif] selection:bg-[var(--doc-selection)]",
     p: "my-1.5 tracking-[0.006em] [text-wrap:pretty] first:mt-0 last:mb-0",
@@ -59,9 +45,6 @@ const STYLES: Record<Variant, Record<string, string>> = {
     pre: "my-3 overflow-x-auto rounded-lg bg-[var(--doc-pre-bg)] p-3 font-mono text-[13px] leading-5 ring-1 ring-[var(--doc-pre-ring)] [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-[var(--doc-pre-ink)] [&_code]:ring-0",
     ul: "my-2 ml-5 list-disc space-y-1 marker:text-[var(--doc-marker)]",
     ol: "my-2 ml-5 list-decimal space-y-1 marker:text-[13px] marker:font-medium marker:text-[var(--doc-marker)]",
-    // Serif display headings give the editorial/blog feel; the stack falls back
-    // to system CJK serif so Chinese posts read as editorial too. Tracking stays
-    // near-zero — negative tracking crams CJK glyphs.
     h1: "mb-3 mt-5 text-2xl font-bold leading-[1.25] tracking-[-0.01em] text-[var(--doc-ink-strong)] [text-wrap:balance] first:mt-0 [font-family:'Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
     h2: "mb-2 mt-5 flex items-baseline gap-2 text-xl font-semibold leading-snug tracking-[-0.005em] text-[var(--doc-ink-strong)] [text-wrap:balance] before:relative before:top-[0.14em] before:h-[0.82em] before:w-[3px] before:shrink-0 before:rounded-full before:bg-[var(--doc-h2-bar)] before:content-[''] first:mt-0 [font-family:'Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
     h3: "mb-2 mt-4 text-lg font-semibold leading-snug text-[var(--doc-ink)] first:mt-0 [font-family:'Iowan_Old_Style','Charter',Georgia,'Songti_SC','Noto_Serif_CJK_SC',serif]",
@@ -76,10 +59,8 @@ const STYLES: Record<Variant, Record<string, string>> = {
   },
 };
 
-/** Workspace context that lets chat python fences execute on the kernel bridge. */
 export type CodeRunner = { cwd: string; sessionId: string };
 
-/** Flatten a rendered code element's children back into the fence's source text. */
 function reactText(node: React.ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
   if (Array.isArray(node)) return node.map(reactText).join("");
@@ -87,7 +68,6 @@ function reactText(node: React.ReactNode): string {
   return "";
 }
 
-/** Extract the original TeX that rehype-katex keeps in its MathML annotation. */
 function mathSource(node: React.ReactNode): string | null {
   if (Array.isArray(node)) {
     for (const child of node) {
@@ -142,7 +122,6 @@ function MathBlock({ children, variant }: { children?: React.ReactNode; variant:
 
 const FILE_HREF = /^(?!(?:https?:\/\/|mailto:|#|data:|file:))/i;
 
-/** Workspace/external image with a graceful failure placeholder. */
 function ResourceImage({ src, alt }: { src: string; alt?: string }) {
   const { t } = useTranslation();
   const [failed, setFailed] = useState(false);
@@ -164,18 +143,7 @@ function ResourceImage({ src, alt }: { src: string; alt?: string }) {
   );
 }
 
-/** Tolerate a trailing stray `}` that some models append after the closing
- *  `\right\}` of a display formula (e.g. `...\right\} }$$`). KaTeX treats the
- *  stray brace as a parse error and (with throwOnError: false) silently drops
- *  the whole formula, leaving raw TeX on screen. Strip exactly one trailing
- *  `}` when it is preceded by a space and the formula otherwise ends with a
- *  balanced construct (`\right}`, `]`, `)`, or `}`). */
 export function stripStrayClosingBrace(tex: string): string {
-  // Match a space/tab-separated closing brace, optionally followed by
-  // newlines (multi-line display formulas: `$$\n...\right\} }\n$$`). The
-  // balanced-construct check keeps legitimate trailing braces (`\right\}`)
-  // intact. Non-matching input is returned byte-identical, so structural
-  // newlines of a display formula are never consumed.
   const match = /^(.*?)[ \t]+\}\s*$/s.exec(tex);
   if (!match) return tex;
   const before = match[1] ?? "";
@@ -183,23 +151,13 @@ export function stripStrayClosingBrace(tex: string): string {
   return tex;
 }
 
-/** Fenced code block (``` or ~~~) and inline code span matchers. Fences match
- *  only at line start so indented paragraphs are untouched. Inline spans use
- *  CommonMark-style equal-length backtick runs (`` `...` `` and `` ``...`` ``
- *  both close correctly; a lone unclosed backtick is left alone). */
 const FENCE_PATTERN = /^(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1[ \t]*$/gm;
 const INLINE_CODE_PATTERN = /(`+)[^`\n]*?\1/g;
 
-/** Unlikely salt inside the private-use-area placeholder so literal user text
- *  that happens to contain \uE000…\uE001 can never be mistaken for a guard
- *  token. Regenerated once per module load; tests share a single instance. */
 const PLACEHOLDER_SALT = Math.random().toString(36).slice(2, 8);
 const placeholder = (index: number): string => `\uE000${PLACEHOLDER_SALT}${index}\uE001`;
 const PLACEHOLDER_RE = new RegExp(`\uE000${PLACEHOLDER_SALT}(\\d+)\uE001`, "g");
 
-/** Replace fenced code blocks and inline code spans with private-use-area
- *  placeholders so the math normalizer never rewrites example TeX inside
- *  code. Returns the guarded text plus the captured spans in order. */
 function protectCodeSpans(md: string): { text: string; spans: string[] } {
   const spans: string[] = [];
   const protect = (match: string) => {
@@ -217,40 +175,24 @@ function restoreCodeSpans(text: string, spans: string[]): string {
   });
 }
 
-/** Normalize math input before remark-math / rehype-katex sees the text.
- *  Two fixes for model output, applied only outside code:
- *  1. drop a stray closing `}` that models sometimes leave at the end of a
- *     display formula (`...\right\} }$$`), which makes KaTeX fail and the
- *     whole formula degrade to raw TeX (single- and multi-line forms);
- *  2. convert model-style `\\[...\\]` and `\\(...\\)` delimiters to the
- *     dollar delimiters supported by remark-math;
- *  3. single-line `$$...$$` blocks are parsed by remark-math as INLINE math
- *     (never display), so expand them to the multi-line block form
- *     (`$$\n...\n$$`) that remark-math reliably classifies as display.
- *  Fix 3 applies ONLY to formulas that stand alone on their own line
- *  (opening `$$` at line start, closing `$$` followed only by line end).
- *  Formulas inside a sentence, blockquote (`> $$…$$`) or list (`- $$…$$`)
- *  are left untouched — expanding them would corrupt the surrounding text
- *  (remark-math already renders those cases without data loss).
- *  Fenced code blocks and inline code spans are placeholder-protected first,
- *  so example TeX inside code is never rewritten. */
+/** Normalize model-style math delimiters without changing Markdown structure. */
 export function normalizeMathInput(md: string): string {
   const { text, spans } = protectCodeSpans(md);
+  // Display-style \[...\] is converted only when the opening delimiter starts
+  // its own Markdown line and the closing delimiter ends its line. Rewriting a
+  // bracket formula inside prose, a blockquote, or a list by inserting newlines
+  // would move the formula body out of that Markdown container.
   const delimited = text
-    .replace(/\\\[([\s\S]*?)\\\]/g, (_whole, inner: string) => `$$\n${stripStrayClosingBrace(inner).trim()}\n$$`)
+    .replace(/(^|\n)\\\[([\s\S]*?)\\\](?=[ \t]*(?:\n|$))/g, (_whole, lead: string, inner: string) =>
+      `${lead}$$\n${stripStrayClosingBrace(inner).trim()}\n$$`)
     .replace(/\\\(([^\n]*?)\\\)/g, (_whole, inner: string) => `$${inner}$`);
   const fixed = delimited.replace(/\$\$([\s\S]*?)\$\$/g, (whole, inner: string, offset: number) => {
-    // Standalone-line check: nothing before the opening `$$` on its line and
-    // nothing but whitespace after the closing `$$` until the line end.
     const lineStart = delimited.lastIndexOf("\n", offset - 1);
     const prefix = delimited.slice(lineStart + 1, offset);
     const after = delimited.slice(offset + whole.length);
     if (prefix !== "" || !/^[ \t]*(?:\n|$)/.test(after)) return whole;
     const braced = stripStrayClosingBrace(String(inner));
     const trimmed = braced.replace(/^[ \t]+/, "").replace(/[ \t]+$/, "");
-    // Multi-line content is already display-form; keep it untouched (the
-    // stray-brace strip may have consumed the structural trailing newline,
-    // so restore it to keep the closing $$ on its own line).
     if (trimmed.includes("\n")) {
       return `$$${braced.endsWith("\n") ? braced : `${braced}\n`}$$`;
     }
@@ -270,22 +212,14 @@ export function MarkdownViewer({
   children: string;
   className?: string;
   variant?: Variant;
-  /** When set (chat variant only), python fences get a Run affordance. */
   codeRunner?: CodeRunner;
-  /** Document/workspace context for resolving relative image and file links.
-   *  Chat mode derives it from codeRunner.cwd when omitted. */
   resourceContext?: MarkdownResourceContext;
-  /** Chat code blocks get the sticky banner shell (language/copy/run).
-   *  Defaults to true for the chat variant; compact previews (artifact
-   *  cards) opt out to keep their tiny surface. */
   codeChrome?: boolean;
 }) {
   const s = STYLES[variant];
   const cwd = codeRunner?.cwd;
   const openInspector = useUiStore((s) => s.openInspector);
   const { t } = useTranslation();
-  // Chat bubbles resolve workspace-relative references against the workspace
-  // root; document previews carry their own file context.
   const context = useMemo<MarkdownResourceContext | undefined>(
     () => resourceContext ?? (cwd ? { cwd, documentPath: undefined } : undefined),
     [cwd, resourceContext],
@@ -302,9 +236,6 @@ export function MarkdownViewer({
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[[rehypeKatex, { throwOnError: false }]]}
-        // Markdown files use HTML comments for internal metadata. Raw HTML is
-        // not part of the supported preview surface, so omit it rather than
-        // showing comments/tags as literal document text.
         skipHtml
         components={{
           p: ({ children }) => <p className={s.p}>{children}</p>,
@@ -362,11 +293,6 @@ export function MarkdownViewer({
               </span>
             );
           },
-          // Block code: chat gets the sticky banner shell (language/copy and,
-          // with a codeRunner, Run for python fences); document keeps the
-          // plain editorial pre. Without chrome (artifact previews) the chat
-          // pre keeps its own card shell — background, border and margins —
-          // so fenced code never collapses onto the surrounding text.
           pre: ({ children }) => {
             const codeEl = Array.isArray(children) ? children[0] : children;
             const codeProps = isValidElement(codeEl) ? (codeEl.props as { className?: string; children?: React.ReactNode }) : null;
@@ -397,8 +323,6 @@ export function MarkdownViewer({
           ul: ({ children }) => <ul className={s.ul}>{children}</ul>,
           ol: ({ children }) => <ol className={s.ol}>{children}</ol>,
           li: ({ children }) => <li>{children}</li>,
-          // Document elements (headings, quotes, tables, rules) — Tailwind's
-          // preflight strips the browser defaults, so each needs explicit style.
           h1: ({ children }) => <h1 className={s.h1}>{children}</h1>,
           h2: ({ children }) => <h2 className={s.h2}>{children}</h2>,
           h3: ({ children }) => <h3 className={s.h3}>{children}</h3>,
@@ -412,10 +336,6 @@ export function MarkdownViewer({
               <table className={s.table}>{children}</table>
             </div>
           ),
-          // remark-gfm maps the pipe alignment row to an inline textAlign
-          // style. Preserve it: the class intentionally supplies the default
-          // left alignment, while an inline style must win for right/center
-          // aligned scientific columns.
           th: ({ children, style }) => <th className={s.th} style={style}>{children}</th>,
           td: ({ children, style }) => <td className={s.td} style={style}>{children}</td>,
         }}

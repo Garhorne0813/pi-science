@@ -14,9 +14,7 @@ describe("stripStrayClosingBrace", () => {
   });
 
   it("keeps a legitimate trailing brace intact", () => {
-    // No whitespace before the brace: not a stray brace.
     expect(stripStrayClosingBrace("x = \\right\\}")).toBe("x = \\right\\}");
-    // The brace belongs to the formula (no space before it).
     expect(stripStrayClosingBrace("\\{a\\}")).toBe("\\{a\\}");
   });
 
@@ -27,9 +25,20 @@ describe("stripStrayClosingBrace", () => {
 });
 
 describe("normalizeMathInput", () => {
-  it("converts bracket and parenthesis TeX delimiters", () => {
+  it("converts standalone bracket and parenthesis TeX delimiters", () => {
     expect(normalizeMathInput("\\[\nE = mc^2\n\\]")).toBe("$$\nE = mc^2\n$$");
     expect(normalizeMathInput("Energy \\(E = mc^2\\).")).toBe("Energy $E = mc^2$.");
+  });
+
+  it("keeps bracket display delimiters inside prose, blockquotes, and lists structurally intact", () => {
+    expect(normalizeMathInput("Result: \\[x^2\\] here")).toBe("Result: \\[x^2\\] here");
+    expect(normalizeMathInput("> \\[x^2\\]")).toBe("> \\[x^2\\]");
+    expect(normalizeMathInput("- \\[x^2\\]")).toBe("- \\[x^2\\]");
+    expect(normalizeMathInput("1. \\[x^2\\]")).toBe("1. \\[x^2\\]");
+  });
+
+  it("converts a standalone single-line bracket display", () => {
+    expect(normalizeMathInput("before\n\n\\[x^2\\]\n\nafter")).toBe("before\n\n$$\nx^2\n$$\n\nafter");
   });
 
   it("expands a single-line display formula to the block form", () => {
@@ -46,8 +55,6 @@ describe("normalizeMathInput", () => {
   });
 
   it("keeps inline formulas untouched (no sentence corruption)", () => {
-    // Formulas inside a sentence are already rendered by remark-math without
-    // data loss; expanding them used to corrupt the surrounding text.
     expect(normalizeMathInput("A $$x_1$$ and B $$x_2$$")).toBe("A $$x_1$$ and B $$x_2$$");
   });
 
@@ -111,8 +118,6 @@ describe("normalizeMathInput", () => {
   });
 
   it("leaves user text that resembles a placeholder untouched", () => {
-    // Literal private-use-area sequences without the module salt must survive
-    // both directions (protect + restore) byte-identically.
     const input = "before \uE0000\uE001 after";
     expect(normalizeMathInput(input)).toBe(input);
   });

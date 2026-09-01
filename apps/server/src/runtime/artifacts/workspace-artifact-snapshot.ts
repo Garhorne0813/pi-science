@@ -1,5 +1,5 @@
-import { readdir, stat } from "node:fs/promises";
-import { extname, join, relative, resolve } from "node:path";
+import { lstat, readdir } from "node:fs/promises";
+import { basename, extname, join, relative, resolve } from "node:path";
 
 /** Bounded workspace snapshot for turn-level artifact detection.
  *
@@ -36,15 +36,24 @@ const IGNORED_DIRS = new Set([
   ".parquet-cache", ".mpl-config", ".jupyter",
 ]);
 
-/** Directories at the workspace root whose contents matter for artifacts. */
-const ROOT_INCLUDE_DIRS = new Set(["work", "output", "outputs", "results", "figures", "plots", "data", "scripts", "reports", "assets", "docs", "notebooks", "structures", "docking", "pdb", "ligands", "molecules", "models", "input", "report", "logs", "experiments", "timing", "notes"]);
-
 function isIgnoredDir(name: string): boolean {
   if (IGNORED_DIRS.has(name)) return true;
   return name.endsWith(".egg-info");
 }
 
-/** Whether a file could surface as a previewable artifact card. */
+function isSensitiveFile(path: string): boolean {
+  const name = basename(path).toLowerCase();
+  return name === ".env"
+    || name.startsWith(".env.")
+    || name === ".netrc"
+    || name === ".pgpass"
+    || name === "id_rsa"
+    || name === "id_ed25519"
+    || name.endsWith(".pem")
+    || name.endsWith(".key");
+}
+
+/** Whether a file could surface with a rich preview rather than a generic card. */
 export function isPreviewableFile(path: string): boolean {
   const ext = extname(path).toLowerCase();
   if (!ext) return false;
@@ -53,25 +62,25 @@ export function isPreviewableFile(path: string): boolean {
     ".csv", ".tsv", ".json", ".yaml", ".yml", ".xml", ".parquet", ".xlsx", ".xls",
     ".txt", ".md", ".html", ".htm", ".pdf", ".docx", ".pptx", ".rtf",
     ".py", ".r", ".ipynb", ".sh", ".jl", ".m",
-    ".pdb", ".cif", ".mol", ".sdf", ".xyz",
+    ".pdb", ".cif", ".mcif", ".mmcif", ".mol", ".sdf", ".xyz",
   ]);
   return previewable.has(ext);
 }
 
-/** Coarse artifact kind for a previewable file (mirrors node-event-observer). */
+/** Coarse artifact kind for a snapshot file (mirrors node-event-observer). */
 export function previewKind(path: string): string {
   const ext = extname(path).toLowerCase();
   if ([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".tif", ".tiff"].includes(ext)) return "image";
   if ([".csv", ".tsv", ".xlsx", ".xls", ".parquet"].includes(ext)) return "table";
   if ([".pdf", ".docx", ".pptx", ".rtf"].includes(ext)) return "document";
   if ([".ipynb"].includes(ext)) return "notebook";
-  if ([".pdb", ".cif", ".mol", ".sdf", ".xyz"].includes(ext)) return "structure";
+  if ([".pdb", ".cif", ".mcif", ".mmcif", ".mol", ".sdf", ".xyz"].includes(ext)) return "structure";
   if ([".py", ".r", ".sh", ".jl", ".m"].includes(ext)) return "code";
   if ([".txt", ".md", ".html", ".htm", ".json", ".yaml", ".yml", ".xml"].includes(ext)) return "text";
   return "file";
 }
 
-/** Lightweight MIME guess for previewable files. */
+/** Lightweight MIME guess for snapshot files. */
 export function previewMime(path: string): string {
   const table: Record<string, string> = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
@@ -86,6 +95,7 @@ export function previewMime(path: string): string {
     ".rtf": "application/rtf", ".py": "text/x-python", ".r": "text/x-r-source",
     ".sh": "text/x-shellscript", ".jl": "text/x-julia", ".m": "text/x-matlab",
     ".ipynb": "application/x-ipynb+json", ".pdb": "chemical/x-pdb", ".cif": "chemical/x-cif",
+    ".mcif": "chemical/x-cif", ".mmcif": "chemical/x-cif",
     ".mol": "chemical/x-mdl-molfile", ".sdf": "chemical/x-mdl-sdfile", ".xyz": "chemical/x-xyz",
   };
   return table[extname(path).toLowerCase()] ?? "application/octet-stream";
@@ -105,25 +115,27 @@ async function walk(root: string, dir: string, depth: number, entries: Workspace
     const absolute = join(dir, name);
     let info;
     try {
-      info = await stat(absolute);
+      info = await lstat(absolute);
     } catch {
       continue;
     }
+    if (info.isSymbolicLink()) continue;
     if (info.isDirectory()) {
       await walk(root, absolute, depth + 1, entries);
       continue;
     }
-    if (!info.isFile()) continue;
-    if (info.size > MAX_SNAPSHOT_FILE_BYTES) continue;
+    if (!info.isFile() || info.size > MAX_SNAPSHOT_FILE_BYTES) continue;
     const path = relative(root, absolute).replaceAll("\\", "/");
-    if (!isPreviewableFile(path)) continue;
+    if (isSensitiveFile(path)) continue;
     entries.push({ path, size: info.size, mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs });
   }
 }
 
-/** Bounded snapshot of previewable workspace files (top-level + common
- *  artifact directories, ignored dirs/caps enforced). Never throws: a scan
- *  failure returns `null` so the caller can degrade to no diff. */
+/** Bounded snapshot of regular workspace files. Directory names and preview
+ *  support do not decide whether a turn produced a file: every non-ignored
+ *  directory is walked up to the depth/entry caps, while sensitive paths and
+ *  symlinks are excluded. Unknown formats can still surface as generic cards.
+ *  Never throws: a scan failure returns `null` so callers degrade to no diff. */
 export async function snapshotWorkspace(cwd: string): Promise<WorkspaceSnapshotEntry[] | null> {
   const root = resolve(cwd);
   let names: string[];
@@ -139,17 +151,18 @@ export async function snapshotWorkspace(cwd: string): Promise<WorkspaceSnapshotE
     const absolute = join(root, name);
     let info;
     try {
-      info = await stat(absolute);
+      info = await lstat(absolute);
     } catch {
       continue;
     }
+    if (info.isSymbolicLink()) continue;
     if (info.isDirectory()) {
-      if (ROOT_INCLUDE_DIRS.has(name)) await walk(root, absolute, 1, entries);
+      await walk(root, absolute, 1, entries);
       continue;
     }
     if (!info.isFile() || info.size > MAX_SNAPSHOT_FILE_BYTES) continue;
     const path = relative(root, absolute).replaceAll("\\", "/");
-    if (!isPreviewableFile(path)) continue;
+    if (isSensitiveFile(path)) continue;
     entries.push({ path, size: info.size, mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs });
   }
   return entries;

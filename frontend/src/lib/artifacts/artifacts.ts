@@ -54,21 +54,24 @@ const REF_RE = new RegExp(`[\\w./-]+\\.(?:${REF_EXTS.join("|")})\\b`, "gi");
 /**
  * Extract workspace file paths mentioned in an agent message so a file produced by
  * running code (e.g. `canvas-project/canvas.pdf` from a python run) becomes clickable,
- * not just prose. Strips surrounding backticks/quotes; dedupes; ignores URLs.
+ * not just prose. HTML comments are hidden by the renderer, so ignore them here too;
+ * normalize path spelling before deduping so equivalent references produce one card.
  */
 export function extractArtifactRefs(markdown: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const m of markdown.matchAll(REF_RE)) {
+  const visibleMarkdown = markdown.replace(/<!--[\s\S]*?-->/g, "");
+  for (const m of visibleMarkdown.matchAll(REF_RE)) {
     const raw = m[0].replace(/^[`'"(]+|[`'".,)]+$/g, "");
     if (!raw || /^https?:\/\//i.test(raw) || raw.startsWith("//")) continue;
+    const path = normalizeArtifactPath(raw);
     // A bare filename in prose may only be an example (for example main.py or
     // SKILL.md). Tool events and the file browser surface real root-level files;
     // chat text needs an explicit directory component before it is clickable.
-    if (!raw.includes("/")) continue;
-    if (seen.has(raw)) continue;
-    seen.add(raw);
-    out.push(raw);
+    if (!path.includes("/")) continue;
+    if (seen.has(path)) continue;
+    seen.add(path);
+    out.push(path);
   }
   return out;
 }
