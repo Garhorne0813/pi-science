@@ -99,6 +99,15 @@ describe("normalizeMathInput", () => {
     expect(normalizeMathInput(input)).toBe(input);
   });
 
+  it("preserves the newline after indented code so adjacent display math still normalizes", () => {
+    expect(normalizeMathInput("    code\n$$x^2$$")).toBe("    code\n$$\nx^2\n$$");
+    expect(normalizeMathInput("    code\n\\[x^2\\]")).toBe("    code\n$$\nx^2\n$$");
+  });
+
+  it("normalizes math in a four-space list continuation instead of treating it as top-level code", () => {
+    expect(normalizeMathInput("- item\n    \\(x\\)")).toBe("- item\n    $x$");
+  });
+
   it("never rewrites TeX inside an inline code span", () => {
     const input = "Use `$$x$$`, `\\[y\\]`, and `\\(z\\)` literally.";
     expect(normalizeMathInput(input)).toBe(input);
