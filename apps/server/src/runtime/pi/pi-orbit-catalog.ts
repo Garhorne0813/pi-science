@@ -49,39 +49,15 @@ function canonicalProviderIds(): string[] {
 /**
  * Pi runtime projection may split one canonical user provider into multiple
  * runtime providers (`user-lab--ep-a`, `user-lab--ep-b`) because Pi providers
- * each carry one base URL. The catalog is UI/control-plane data, so fold those
- * route-local IDs back onto the canonical provider identity from model-resource
- * state instead of asking settings/UI code to infer identity from strings.
+ * each carry one base URL. Those route-local entries are an implementation
+ * detail: canonical model-resource providers are exposed separately by the
+ * control plane, so remove their projected runtime aliases from this catalog
+ * instead of duplicating them as apparent system providers.
  */
-export function canonicalizeProjectedProviders(catalog: PiOrbitCatalog, canonicalIds: readonly string[]): PiOrbitCatalog {
+export function withoutProjectedUserProviders(catalog: PiOrbitCatalog, canonicalIds: readonly string[]): PiOrbitCatalog {
   if (!canonicalIds.length) return catalog;
-  const orderedCanonicalIds = [...canonicalIds].sort((left, right) => right.length - left.length);
-  const byId = new Map<string, PiOrbitCatalogProvider>();
-
-  for (const provider of catalog.providers) {
-    const canonicalId = orderedCanonicalIds.find((id) => provider.id === id || provider.id.startsWith(`${id}--`)) ?? provider.id;
-    const current = byId.get(canonicalId);
-    if (!current) {
-      byId.set(canonicalId, { ...provider, id: canonicalId, models: [...provider.models] });
-      continue;
-    }
-
-    const models = new Map(current.models.map((model) => [model.id, model]));
-    for (const model of provider.models) if (!models.has(model.id)) models.set(model.id, model);
-    byId.set(canonicalId, {
-      ...current,
-      baseUrl: current.baseUrl === provider.baseUrl ? current.baseUrl : null,
-      auth: {
-        apiKey: current.auth.apiKey || provider.auth.apiKey,
-        oauth: current.auth.oauth || provider.auth.oauth,
-        subscription: current.auth.subscription || provider.auth.subscription,
-        configured: current.auth.configured || provider.auth.configured,
-      },
-      models: [...models.values()],
-    });
-  }
-
-  return { schemaVersion: 1, providers: [...byId.values()] };
+  const projected = (providerId: string) => canonicalIds.some((id) => providerId === id || providerId.startsWith(`${id}--`));
+  return { schemaVersion: 1, providers: catalog.providers.filter((provider) => !projected(provider.id)) };
 }
 
 export class PiOrbitCatalogService {
@@ -106,7 +82,7 @@ export class PiOrbitCatalogService {
     if (!options) throw new PiOrbitCatalogError("runtime_catalog_unavailable", "Pi Orbit runtime is not installed or configured");
     try {
       const catalog = parseCatalog(await this.manager.getCatalog(options));
-      return canonicalizeProjectedProviders(catalog, this.canonicalProviderIdsFactory());
+      return withoutProjectedUserProviders(catalog, this.canonicalProviderIdsFactory());
     } catch (error) {
       if (error instanceof PiOrbitCatalogError) throw error;
       throw new PiOrbitCatalogError("runtime_catalog_unavailable", error instanceof Error ? error.message : String(error));
