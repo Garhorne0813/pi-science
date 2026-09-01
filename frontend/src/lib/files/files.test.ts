@@ -104,13 +104,9 @@ describe("workspace file context", () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(7));
     expect(maxActive).toBe(6);
 
-    while (initial.some(() => releases.length > 0) || releases.length > 0) {
-      const pending = releases.splice(0);
-      if (!pending.length) break;
-      pending.forEach((release) => release());
-      await Promise.resolve();
-    }
-    while (releases.length) releases.splice(0).forEach((release) => release());
+    releases.splice(0).forEach((release) => release());
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(8));
+    releases.splice(0).forEach((release) => release());
     await Promise.all([...initial, newcomer]);
     expect(maxActive).toBe(6);
   });
