@@ -23,7 +23,7 @@ async function workspace(): Promise<string> {
 }
 
 describe("workspace artifact snapshot", () => {
-  it("records regular files recursively and ignores dependency/cache directories", async () => {
+  it("records previewable files recursively and ignores dependency/cache directories", async () => {
     const cwd = await workspace();
     await mkdir(join(cwd, "downloads", "proteins"), { recursive: true });
     await writeFile(join(cwd, "work", "plot.png"), "png", "utf8");
@@ -37,7 +37,7 @@ describe("workspace artifact snapshot", () => {
     const snapshot = await snapshotWorkspace(cwd);
     expect(snapshot).not.toBeNull();
     const paths = (snapshot ?? []).map((entry) => entry.path).sort();
-    expect(paths).toEqual(["README.md", "downloads/proteins/1abc.custom", "work/figures/umap.csv", "work/plot.png"]);
+    expect(paths).toEqual(["README.md", "work/figures/umap.csv", "work/plot.png"]);
   });
 
   it("does not follow symlinks or surface credential-like files and hidden directories", async () => {
@@ -53,11 +53,11 @@ describe("workspace artifact snapshot", () => {
     await writeFile(join(cwd, "server.key"), "key", "utf8");
     await writeFile(join(cwd, "credentials.json"), "{}", "utf8");
     await writeFile(join(cwd, "secrets.yaml"), "token: secret", "utf8");
-    await writeFile(join(cwd, "safe.unknown"), "safe", "utf8");
+    await writeFile(join(cwd, "safe.txt"), "safe", "utf8");
 
     const snapshot = await snapshotWorkspace(cwd);
     const paths = (snapshot ?? []).map((entry) => entry.path).sort();
-    expect(paths).toContain("safe.unknown");
+    expect(paths).toContain("safe.txt");
     expect(paths).not.toContain(".env");
     expect(paths).not.toContain("server.key");
     expect(paths).not.toContain("credentials.json");
@@ -122,7 +122,7 @@ describe("workspace artifact snapshot", () => {
     expect(diff.modified).toEqual([]);
   });
 
-  it("degrades to null instead of diffing an entry-capped partial snapshot", async () => {
+  it("degrades to null instead of diffing an artifact-capped partial snapshot", async () => {
     const cwd = await workspace();
     await mkdir(join(cwd, "work", "many"), { recursive: true });
     for (let index = 0; index < 30; index += 1) {
@@ -130,6 +130,19 @@ describe("workspace artifact snapshot", () => {
     }
     process.env.PI_SCIENCE_SNAPSHOT_CAP = "10";
     expect(await snapshotWorkspace(cwd)).toBeNull();
+  });
+
+  it("does not spend the artifact entry cap on ordinary unknown-format files", async () => {
+    const cwd = await workspace();
+    await mkdir(join(cwd, "mixed"), { recursive: true });
+    for (let index = 0; index < 30; index += 1) {
+      await writeFile(join(cwd, "mixed", `frame-${String(index).padStart(2, "0")}.rawdata`), String(index), "utf8");
+    }
+    await writeFile(join(cwd, "mixed", "summary.txt"), "summary", "utf8");
+    await writeFile(join(cwd, "mixed", "plot.png"), "png", "utf8");
+    process.env.PI_SCIENCE_SNAPSHOT_CAP = "2";
+    const snapshot = await snapshotWorkspace(cwd);
+    expect(snapshot?.map((entry) => entry.path).sort()).toEqual(["mixed/plot.png", "mixed/summary.txt"]);
   });
 
   it("bounds visited nodes even when entries are directories, symlinks, or excluded files", async () => {
