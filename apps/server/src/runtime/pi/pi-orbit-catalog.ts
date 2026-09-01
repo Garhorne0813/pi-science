@@ -4,6 +4,7 @@ import type { PiManager } from "./pi-manager.js";
 import type { PiProcessOptions } from "./pi-process.js";
 import { buildPiProcessOptions, loadDefaultPiConfig } from "./pi-runtime-launch.js";
 import { configRoot } from "../../storage/persistence.js";
+import { ModelResourceRepository } from "../../model-resources/model-resource-repository.js";
 
 export type PiOrbitCatalogModel = {
   id: string;
@@ -35,12 +36,37 @@ export class PiOrbitCatalogError extends Error {
   }
 }
 
+function canonicalProviderIds(): string[] {
+  try {
+    return new ModelResourceRepository().readSync().providers
+      .filter((provider) => provider.kind === "user")
+      .map((provider) => provider.id);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Pi runtime projection may split one canonical user provider into multiple
+ * runtime providers (`user-lab--ep-a`, `user-lab--ep-b`) because Pi providers
+ * each carry one base URL. Those route-local entries are an implementation
+ * detail: canonical model-resource providers are exposed separately by the
+ * control plane, so remove their projected runtime aliases from this catalog
+ * instead of duplicating them as apparent system providers.
+ */
+export function withoutProjectedUserProviders(catalog: PiOrbitCatalog, canonicalIds: readonly string[]): PiOrbitCatalog {
+  if (!canonicalIds.length) return catalog;
+  const projected = (providerId: string) => canonicalIds.some((id) => providerId === id || providerId.startsWith(`${id}--`));
+  return { schemaVersion: 1, providers: catalog.providers.filter((provider) => !projected(provider.id)) };
+}
+
 export class PiOrbitCatalogService {
   private pending: Promise<PiOrbitCatalog> | undefined;
 
   constructor(
     private readonly manager: Pick<PiManager, "getCatalog">,
     private readonly optionsFactory: () => PiProcessOptions | null = defaultCatalogOptions,
+    private readonly canonicalProviderIdsFactory: () => readonly string[] = canonicalProviderIds,
   ) {}
 
   async getCatalog(): Promise<PiOrbitCatalog> {
@@ -54,8 +80,10 @@ export class PiOrbitCatalogService {
   private async load(): Promise<PiOrbitCatalog> {
     const options = this.optionsFactory();
     if (!options) throw new PiOrbitCatalogError("runtime_catalog_unavailable", "Pi Orbit runtime is not installed or configured");
-    try { return parseCatalog(await this.manager.getCatalog(options)); }
-    catch (error) {
+    try {
+      const catalog = parseCatalog(await this.manager.getCatalog(options));
+      return withoutProjectedUserProviders(catalog, this.canonicalProviderIdsFactory());
+    } catch (error) {
       if (error instanceof PiOrbitCatalogError) throw error;
       throw new PiOrbitCatalogError("runtime_catalog_unavailable", error instanceof Error ? error.message : String(error));
     }

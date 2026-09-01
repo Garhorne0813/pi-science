@@ -47,6 +47,33 @@ describe("model resource routes", () => {
     expect(await service.credentials.metadata(credentialId)).toBeNull();
   });
 
+  it("keeps a builtin provider when a custom provider has the same basename", async () => {
+    const session = { reloadConfiguration: vi.fn().mockResolvedValue([]) } as unknown as NodeSessionService;
+    const service = new ModelResourceService();
+    const app = Fastify({ logger: false });
+    registerModelResourceRoutes(app, service, session);
+    registerSettingsRoutes(app, session, new SettingsStore(), service, {
+      getCatalog: vi.fn().mockResolvedValue({
+        schemaVersion: 1,
+        providers: [{
+          id: "lab",
+          name: "Builtin Lab",
+          baseUrl: null,
+          auth: { apiKey: false, oauth: false, subscription: false, configured: true },
+          models: [{ id: "builtin-model", name: "Builtin Model", api: "openai-completions", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 }],
+        }],
+      }),
+    });
+
+    const created = await app.inject({ method: "POST", url: "/api/providers", payload: { id: "lab", name: "Custom Lab", adapter: "openai-compatible", catalog_mode: "hybrid", auth_kind: "none" } });
+    expect(created.statusCode).toBe(200);
+    expect(created.json()).toMatchObject({ provider: { id: "user-lab" } });
+
+    const response = await app.inject({ method: "GET", url: "/api/settings/config" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().providers.map((provider: { id: string }) => provider.id)).toEqual(expect.arrayContaining(["lab", "user-lab"]));
+  });
+
   it("runs provider → credential → endpoint → binding → discovery and fails closed when disabled", async () => {
     const reloadConfiguration = vi.fn().mockResolvedValue([]);
     const session = { reloadConfiguration } as unknown as NodeSessionService;
