@@ -48,6 +48,32 @@ describe("canonical MCP routes", () => {
     await app.close();
   });
 
+  it("rejects unsupported credential and literal bindings at the API boundary", async () => {
+    const { app } = await fixture();
+    for (const extra of [
+      { credential_ref: "secret" },
+      { runtime_config: { environment: { TOKEN: { kind: "credential", credential_ref: "secret" } } } },
+      { runtime_config: { environment: { TOKEN: { kind: "literal", value: "secret" } } } },
+    ]) {
+      const response = await app.inject({ method: "POST", url: "/api/mcp/connectors", payload: {
+        name: "unsupported", display_name: "Unsupported", transport: "stdio", command: process.execPath, runtime_config: {}, ...extra,
+      } });
+      expect(response.statusCode).toBe(400);
+      expect(response.json().code).toBe("unsupported_binding");
+    }
+    await app.close();
+  });
+
+  it("keeps unknown tools approval-gated without a discovery cache", async () => {
+    const { app, cwd, service } = await fixture();
+    const connector = await service.create({ name: "uncached", display_name: "Uncached", transport: "stdio", command: process.execPath, runtime_config: {}, enabled: true });
+    await service.setToolGrant(connector.connector_id, "explicitly_allowed", "allow");
+    const snapshot = JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8"));
+    expect(snapshot.mcpServers.uncached).toMatchObject({ approveTools: true, __piScienceAllowedTools: ["explicitly_allowed"] });
+    expect(await service.tools(connector.connector_id)).toMatchObject({ tools: [] });
+    await app.close();
+  });
+
   it("rejects local connector working directories that escape the workspace", async () => {
     const { app } = await fixture();
     const response = await app.inject({ method: "POST", url: "/api/mcp/connectors", payload: {
@@ -93,8 +119,8 @@ describe("canonical MCP routes", () => {
     const grant = await app.inject({ method: "PUT", url: "/api/mcp/connectors/mcp_builtin_paper_search/tools/search_pubmed", payload: { decision: "allow" } });
     expect(grant.statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/api/mcp/connectors" })).json().connectors[0].settings.approval_mode).toBe("custom");
-    expect(JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8")).mcpServers["paper-search"].approveTools.sort())
-      .toEqual(["search_arxiv", "search_crossref"]);
+    expect(JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8")).mcpServers["paper-search"])
+      .toMatchObject({ approveTools: true, __piScienceAllowedTools: ["search_pubmed"] });
     await app.close();
   });
 });

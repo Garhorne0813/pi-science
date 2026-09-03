@@ -1,3 +1,4 @@
+import { createMcpFetch } from "../runtime-fetch.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -59,7 +60,7 @@ async function searchArxiv(query: string, limit: number) {
 function result(records: unknown[]) { return { content: [{ type: "text" as const, text: JSON.stringify({ retrieved_at: new Date().toISOString(), count: records.length, records }, null, 2) }], structuredContent: { records } }; }
 async function json(url: URL): Promise<unknown> { return (await request(url)).json(); }
 async function text(url: URL): Promise<string> { return (await request(url)).text(); }
-async function request(url: URL): Promise<Response> { const response = await fetch(url, { headers: { "user-agent": "Pi-Science paper-search/1.0 (mailto:research@example.invalid)", accept: "application/json, application/atom+xml, text/xml" }, signal: AbortSignal.timeout(20_000) }); if (!response.ok) throw new Error(`${url.hostname} returned HTTP ${response.status}`); return response; }
+async function request(url: URL): Promise<Response> { const response = await createMcpFetch({ connectorId: "mcp_builtin_paper_search", endpoint: url.origin, allowPrivate: false })(url, { headers: { "user-agent": "Pi-Science paper-search/1.0 (mailto:research@example.invalid)", accept: "application/json, application/atom+xml, text/xml" }, signal: AbortSignal.timeout(20_000) }); if (!response.ok) throw new Error(`${url.hostname} returned HTTP ${response.status}`); return response; }
 function first(value: unknown): unknown { return Array.isArray(value) ? value[0] ?? null : value ?? null; }
 function authors(value: unknown): string[] { return Array.isArray(value) ? value.map((item) => { const author = item as { given?: unknown; family?: unknown }; return [author.given, author.family].filter(Boolean).join(" "); }).filter(Boolean) : []; }
 function dateYear(value: unknown): number | null { const parts = value && typeof value === "object" ? (value as { [key: string]: unknown })["date-parts"] : null; const year = Array.isArray(parts) && Array.isArray(parts[0]) ? Number(parts[0][0]) : NaN; return Number.isFinite(year) ? year : null; }

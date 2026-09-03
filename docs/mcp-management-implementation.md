@@ -1124,3 +1124,16 @@ docs/architecture.zh-CN.md                                  update at M2/M5
 6. Legacy 配置：是否接受两版本 compatibility window，而非首次启动自动迁移？
 
 除第 5 项外，这些选择不会改变模块拆分，只影响校验、默认值和迁移节奏。
+
+## 合并前安全修复（2026-09-04）
+
+- `custom` 始终投影 `approveTools: true`，只有显式 `allow` 的精确工具名写入 `__piScienceAllowedTools`。未缓存的新工具仍需审批，通配符不会扩展授权。
+- 凭证送达通道尚未实现。因此 API 明确拒绝 connector-level / binding-level credential 引用以及 literal env/header；请使用环境变量引用。既有不支持配置显示 invalid/error，并从新快照中排除。旧数据库中的 literal 值不会自动删除，需要用户编辑或删除旧连接器。缺失环境变量在运行时明确报错。
+- 探针和适配器 stdio 子进程只继承基本系统变量、审计目录和显式绑定。托管绑定按原值传递，不执行适配器的 `!command` 或 `${VAR}` 二次解释。
+- HTTP/SSE 的真实请求经过共同的出站策略及审计，包括握手、SSE 消息发送、工具请求。默认拒绝私网，并在实际建连 DNS lookup 再次检查地址；显式 `allow_private` 保留本地服务支持。拒绝重定向和跨源请求以防凭证外泄，这也意味着跨源 OAuth discovery/token 服务目前不能使用，需配置同源认证或环境变量 Authorization。
+- 内置 paper-search 的 HTTP 请求也接入同一策略。任意第三方 stdio/socket 程序仍属于受信任的本地代码；其自行发起的网络访问需要操作系统沙箱才能强制限制，不能由 MCP transport 包装器拦截。
+- `scripts/patch-mcp-adapter.mjs` 在 fetch-pi 安装后应用可重复的适配器补丁；遇到未知源代码布局报错。运行时检查补丁标记，缺失时拒绝加载。适配器入口由启动器按选定 CLI 的安装目录解析并通过绝对路径传递，移除扩展中的六层相对路径依赖。
+- 无 UI 时 ask 继续拒绝调用；无人值守任务应逐项授权，不自动降级为 allow_all。测试覆盖真实适配器的无 UI 拒绝和 UI select 审批分支；尚未执行真实浏览器端到端审批验收。
+- SQLite 关闭时，旧设置接口第一次 toggle 以全部已配置服务作为默认启用集合。
+
+验证包含 API/快照、无缓存工具授权、真实 stdio 握手及环境隔离、真实适配器 HTTP 拦截、重定向/跨源拦截和连接阶段 DNS rebinding 回归测试。

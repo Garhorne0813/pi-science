@@ -36,6 +36,7 @@ install_runtime_extensions() {
     "context-mode@$CONTEXT_MODE_VERSION" \
     "@juicesharp/rpiv-ask-user-question@$RPIV_ASK_USER_QUESTION_VERSION" \
     "@juicesharp/rpiv-todo@$RPIV_TODO_VERSION"
+  node "$SCRIPT_DIR/patch-mcp-adapter.mjs"
 }
 
 # Local source is an explicit development override. This avoids silently using

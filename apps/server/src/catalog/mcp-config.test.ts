@@ -77,6 +77,16 @@ describe("MCP configuration resolution", () => {
     await app.close();
   });
 
+  it("preserves other default-enabled servers on the first legacy toggle", async () => {
+    await writeMcp(join(home, ".config", "mcp", "mcp.json"), { first: { command: "node" }, second: { command: "node" } });
+    const session = { reloadConfiguration: vi.fn().mockResolvedValue([]) } as unknown as NodeSessionService;
+    const app = Fastify({ logger: false });
+    registerSettingsRoutes(app, session, new SettingsStore());
+    expect((await app.inject({ method: "PUT", url: "/api/settings/mcp/first?enabled=false" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/settings/mcp" })).json().servers).toEqual(["second"]);
+    await app.close();
+  });
+
   it("uses the same standard user-level configuration in the MCP Catalog", async () => {
     const standardPath = join(home, ".config", "mcp", "mcp.json");
     const workspace = join(home, "workspace");

@@ -1,3 +1,4 @@
+import { bindingError } from "./bindings.js";
 import { lstat, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { McpEnvironmentBinding } from "./runtime-projection-types.js";
@@ -8,6 +9,9 @@ import { metadataRoot, writeJsonAtomic } from "../storage/persistence.js";
 export const MCP_RUNTIME_SNAPSHOT = ".pi-science/mcp-runtime.json";
 
 export interface ProjectedMcpServer {
+  __piScienceAllowedTools?: string[];
+  __piScienceConnectorId?: string;
+  __piScienceAllowPrivate?: boolean;
   command?: string;
   args?: string[];
   socket?: string;
@@ -34,14 +38,15 @@ export class McpRuntimeProjection {
     const connectors = (await this.repository.list()).filter((item) => item.enabled);
     const mcpServers: Record<string, ProjectedMcpServer> = {};
     for (const connector of connectors) {
+      if (bindingError(connector.runtime_config, connector.credential_ref)) continue;
       const grants = await this.repository.toolGrants(connector.connector_id);
-      const cache = await this.repository.toolCache(connector.connector_id);
       const denied = [...grants].filter(([, decision]) => decision === "deny").map(([name]) => name);
-      const asked = (cache?.tools ?? []).filter((tool) => (grants.get(tool.name) ?? "ask") === "ask").map((tool) => tool.name);
+      const allowed = [...grants].filter(([, decision]) => decision === "allow").map(([name]) => name);
       const includeTools = unique([...connector.runtime_config.include_tools, ...connector.include_tools]);
       const excludeTools = unique([...connector.runtime_config.exclude_tools, ...connector.exclude_tools, ...denied]);
       mcpServers[connector.name] = projectServer(connector, includeTools, excludeTools,
-        connector.approval_mode === "allow_all" ? false : connector.approval_mode === "ask" ? true : asked);
+        connector.approval_mode !== "allow_all");
+      if (connector.approval_mode === "custom") mcpServers[connector.name]!.__piScienceAllowedTools = allowed;
     }
     await atomicSnapshot(workspace, { version: 1, project_id: projectId, generated_at: Date.now(), mcpServers });
   }
@@ -50,6 +55,8 @@ export class McpRuntimeProjection {
 function projectServer(connector: StoredMcpConnector, includeTools: string[], excludeTools: string[], approveTools: boolean | string[]): ProjectedMcpServer {
   const runtime = connector.runtime_config;
   return {
+    __piScienceConnectorId: connector.connector_id,
+    __piScienceAllowPrivate: runtime.allow_private,
     ...(connector.transport === "stdio" ? { command: connector.command!, args: connector.args } : {}),
     ...(connector.transport === "socket" ? { socket: connector.socket_path! } : {}),
     ...(connector.transport === "streamable_http" || connector.transport === "sse" ? { url: connector.endpoint_url! } : {}),

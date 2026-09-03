@@ -512,7 +512,7 @@
   "settings.mcpPage.terms": "Terms",
   "settings.mcpPage.privacy": "Privacy",
   "settings.mcpPage.canonicalDescription": "Manage canonical MCP connectors here. They are projected into each Pi runtime.",
-  "settings.mcpPage.stateHint": "Enablement and tool permissions apply to every workspace. Authentication and runtime health are managed independently.",
+  "settings.mcpPage.stateHint": "Enablement and tool permissions apply to every workspace. Tools set to Ask require an interactive approval dialog; for unattended runs, explicitly allow individual tools.",
   "settings.mcpPage.importLegacy": "Import old configuration ({{count}})",
   "settings.mcpPage.importNone": "No safe connectors are available to import from the old configuration.",
   "settings.mcpPage.importFailed": "Some connectors could not be imported: {{error}}",

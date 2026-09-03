@@ -1,3 +1,4 @@
+import { bindingError } from "./bindings.js";
 import { createHash } from "node:crypto";
 import { isAbsolute, normalize } from "node:path";
 import {
@@ -16,7 +17,6 @@ import type { NodeSessionService } from "../runtime/node/node-session-service.js
 import { validateConnectorOutboundUrl } from "../security/outbound-security.js";
 import { probeMcpHealth } from "../security/mcp-health.js";
 import { validateWorkspaceCwd } from "../security/workspace-security.js";
-import { egressAuditEnabled, recordEgress } from "../security/egress-audit.js";
 import type { McpRepository, StoredMcpConnector, StoredMcpSettings } from "../storage/sqlite/repositories/mcp-repository.js";
 import type { WorkspaceRepository } from "../storage/sqlite/repositories/workspace-repository.js";
 import type { SettingsStore } from "../storage/settings-store.js";
@@ -130,6 +130,7 @@ export class McpConnectorService {
   async setSettings(connectorId: string, raw: unknown): Promise<McpConnector> {
     const input = mcpConnectorSettingsUpdateSchema.parse(raw) as McpConnectorSettingsUpdate;
     const connector = await this.requireConnector(connectorId);
+    if (input.enabled) await this.validate(connector);
     const settings = await this.repository.updateSettings(connectorId, input);
     if (!settings) throw new McpServiceError("revision_conflict", "Connector settings were changed by another request", 409);
     await this.materializeKnownWorkspaces();
@@ -175,7 +176,6 @@ export class McpConnectorService {
     const checkedAt = Date.now();
     if (result.health === "error") { const safeError = redactMcpError(result.error); return { connector_id: connectorId, runtime_state: "error", auth_state: this.authState(connector), error_code: classifyProbeError(safeError), error: safeError, tools: [], checked_at: checkedAt }; }
     try {
-      if (connector.endpoint_url && await egressAuditEnabled()) await recordEgress({ connector_type: "mcp", connector_id: connectorId, target_domain: connector.endpoint_url, approved: true, note: "mcp_probe" });
       const tools = await connectAndListMcpTools(connector, process.cwd());
       await this.repository.replaceToolCache({ connector_id: connectorId, config_revision: connector.revision, fingerprint: mcpConnectorFingerprint(connector), tools, fetched_at: checkedAt, expires_at: checkedAt + 5 * 60_000 });
       return { connector_id: connectorId, runtime_state: "ready", auth_state: this.authState(connector), error_code: null, error: null, tools, checked_at: checkedAt };
@@ -229,6 +229,8 @@ export class McpConnectorService {
   }
 
   private async validate(input: McpConnectorCreate): Promise<void> {
+    const invalid = bindingError(input.runtime_config, input.credential_ref);
+    if (invalid) throw new McpServiceError("unsupported_binding", invalid);
     if (input.transport === "streamable_http" || input.transport === "sse") {
       try { await validateConnectorOutboundUrl(input.endpoint_url!, { allowPrivate: input.runtime_config.allow_private }); }
       catch (error) { throw new McpServiceError("network_blocked", error instanceof Error ? error.message : String(error)); }
@@ -242,11 +244,7 @@ export class McpConnectorService {
         if (normalized === ".." || normalized.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) throw new McpServiceError("workspace_escape", "Local MCP cwd must remain inside the workspace");
       }
     }
-    for (const [name, binding] of Object.entries(input.runtime_config.headers)) {
-      if (/^(authorization|proxy-authorization|x-api-key)$/i.test(name) && binding.kind === "literal") {
-        throw new McpServiceError("secret_literal_forbidden", `${name} must use an environment or credential reference`);
-      }
-    }
+
   }
 
   private async publicConnector(connector: StoredMcpConnector): Promise<McpConnector> {
@@ -261,18 +259,20 @@ export class McpConnectorService {
         headers: redactLiteralBindings(connector.runtime_config.headers),
       },
       settings,
-      config_state: "valid",
+      config_state: bindingError(connector.runtime_config, connector.credential_ref) ? "invalid" : "valid",
       auth_state: this.authState(connector),
-      runtime_state: connector.enabled ? cache ? "ready" : "unknown" : "disabled",
+      runtime_state: bindingError(connector.runtime_config, connector.credential_ref) ? "error" : connector.enabled ? cache ? "ready" : "unknown" : "disabled",
       tool_count: cache?.tools.length ?? 0,
-      error: null,
+      error: bindingError(connector.runtime_config, connector.credential_ref),
     };
   }
 
   private authState(connector: StoredMcpConnector): "not-required" | "configured" | "needs-auth" {
+    if (bindingError(connector.runtime_config, connector.credential_ref)) return "needs-auth";
     const auth = connector.runtime_config.auth;
     if (connector.transport === "stdio" || connector.transport === "socket" || auth === "none") return "not-required";
-    if (connector.credential_ref) return "configured";
+    const authorization = Object.entries(connector.runtime_config.headers).find(([name]) => name.toLowerCase() === "authorization")?.[1];
+    if (authorization?.kind === "environment" && process.env[authorization.name]) return "configured";
     return auth === "oauth" || auth === "bearer" ? "needs-auth" : "not-required";
   }
 

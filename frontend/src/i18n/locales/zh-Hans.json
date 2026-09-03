@@ -512,7 +512,7 @@
   "settings.mcpPage.terms": "服务条款",
   "settings.mcpPage.privacy": "隐私政策",
   "settings.mcpPage.canonicalDescription": "在这里统一管理 MCP 连接器；配置会自动投影到各个 Pi 运行时。",
-  "settings.mcpPage.stateHint": "启用状态和工具权限适用于所有工作区；身份认证和运行状态独立管理。",
+  "settings.mcpPage.stateHint": "启用状态和工具权限适用于所有工作区。设为“询问”的工具需要交互式审批；无人值守运行请逐项明确允许所需工具。",
   "settings.mcpPage.importLegacy": "导入旧配置（{{count}}）",
   "settings.mcpPage.importNone": "旧配置中没有可安全导入的连接器。",
   "settings.mcpPage.importFailed": "部分连接器导入失败：{{error}}",

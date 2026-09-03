@@ -1,3 +1,5 @@
+import { bindingError, resolveBindings as bindings, mcpBaseEnvironment } from "./bindings.js";
+import { createMcpFetch } from "./runtime-fetch.js";
 import { resolve } from "node:path";
 import { createConnection, type Socket } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -11,6 +13,9 @@ import type { McpToolSummary } from "@pi-science/contracts";
 import type { StoredMcpConnector } from "../storage/sqlite/repositories/mcp-repository.js";
 
 export async function connectAndListMcpTools(connector: StoredMcpConnector, workspace: string): Promise<McpToolSummary[]> {
+  const invalid = bindingError(connector.runtime_config, connector.credential_ref);
+  if (invalid) throw new Error(invalid);
+  const guardedFetch = createMcpFetch({ connectorId: connector.connector_id, endpoint: connector.endpoint_url, allowPrivate: connector.runtime_config.allow_private, note: "mcp_probe" });
   const timeoutMs = connector.runtime_config.request_timeout_ms ?? 15_000;
   const headers = bindings(connector.runtime_config.headers);
   let transport: Transport;
@@ -20,12 +25,12 @@ export async function connectAndListMcpTools(connector: StoredMcpConnector, work
     transport = new StdioClientTransport({
       command: connector.command!, args: connector.args,
       cwd: resolve(workspace, connector.runtime_config.cwd ?? "."),
-      env: { ...definedEnvironment(), ...bindings(connector.runtime_config.environment) }, stderr: "pipe",
+      env: { ...mcpBaseEnvironment(), ...bindings(connector.runtime_config.environment) }, stderr: "pipe",
     });
   } else if (connector.transport === "sse") {
-    transport = new SSEClientTransport(new URL(connector.endpoint_url!), { requestInit: { headers } });
+    transport = new SSEClientTransport(new URL(connector.endpoint_url!), { requestInit: { headers }, fetch: guardedFetch });
   } else {
-    transport = new StreamableHTTPClientTransport(new URL(connector.endpoint_url!), { requestInit: { headers } });
+    transport = new StreamableHTTPClientTransport(new URL(connector.endpoint_url!), { requestInit: { headers }, fetch: guardedFetch });
   }
   const client = new Client({ name: "pi-science-control-plane", version: "0.1.0" });
   try {
@@ -61,19 +66,6 @@ class UnixSocketClientTransport implements Transport {
   }
   async close(): Promise<void> { const socket = this.socket; this.socket = undefined; this.buffer.clear(); if (!socket || socket.destroyed) return; await new Promise<void>((resolveClose) => { const timer = setTimeout(() => socket.destroy(), 2_000); timer.unref(); socket.once("close", () => { clearTimeout(timer); resolveClose(); }); socket.end(); }); }
   async send(message: JSONRPCMessage): Promise<void> { const socket = this.socket; if (!socket || socket.destroyed) throw new Error("Unix socket is not connected"); await new Promise<void>((resolveSend, reject) => socket.write(serializeMessage(message), (error) => error ? reject(error) : resolveSend())); }
-}
-
-function bindings(values: Record<string, { kind: string; value?: string; name?: string }>): Record<string, string> {
-  const output: Record<string, string> = {};
-  for (const [key, binding] of Object.entries(values)) {
-    if (binding.kind === "literal" && binding.value !== undefined) output[key] = binding.value;
-    if (binding.kind === "environment" && binding.name && process.env[binding.name] !== undefined) output[key] = process.env[binding.name]!;
-  }
-  return output;
-}
-
-function definedEnvironment(): Record<string, string> {
-  return Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
 }
 
 async function limited<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
