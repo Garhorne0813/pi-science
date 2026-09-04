@@ -77,10 +77,9 @@ describe("MCPTab", () => {
     expect(within(table).getByRole("columnheader", { name: "Name" })).toBeInTheDocument();
     expect(within(table).getByRole("columnheader", { name: "Description" })).toBeInTheDocument();
     expect(within(table).getByRole("columnheader", { name: "Status" })).toBeInTheDocument();
-    expect(within(table).getByRole("columnheader", { name: "Tools" })).toBeInTheDocument();
-    expect(within(table).getByRole("columnheader", { name: "Enabled" })).toBeInTheDocument();
+    expect(within(table).getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
     expect(within(table).getByText("Paper Search")).toBeInTheDocument();
-    expect(within(table).getByText("2 tools")).toBeInTheDocument();
+    expect(within(table).getByText(/2 tools/)).toBeInTheDocument();
     expect(within(table).getByRole("checkbox", { name: "Enable Paper Search" })).toBeChecked();
   });
 
@@ -129,6 +128,39 @@ describe("MCPTab", () => {
     expect(screen.getByRole("button", { name: "测试" })).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "启用 Paper Search" })).toBeChecked();
     expect(screen.getByText("就绪")).toBeInTheDocument();
-    expect(screen.getByText("2 个工具")).toBeInTheDocument();
+    expect(screen.getByText(/2 个工具/)).toBeInTheDocument();
+  });
+
+  it("hides the raw launch command for built-in connectors in the detail panel", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      const method = (init.method || "GET").toUpperCase();
+      if (url === "/api/mcp/connectors" && method === "GET") {
+        return jsonResponse({
+          connectors: [{
+            connector_id: "mcp-paper-search",
+            name: "paper-search",
+            display_name: "Paper Search",
+            description: "Search scientific literature",
+            source: "builtin", transport: "stdio", endpoint_url: null, command: "/repo/apps/server/node_modules/.bin/tsx", args: ["/repo/apps/server/src/mcp/builtin/paper-search-server.ts"], socket_path: null,
+            runtime_config: { lifecycle: "lazy", expose_resources: true, include_tools: [], exclude_tools: [], environment: {}, headers: {}, auth: "none", allow_private: false },
+            credential_ref: null, revision: 1, created_at: 1, updated_at: 1,
+            settings: { connector_id: "mcp-paper-search", enabled: true, include_tools: [], exclude_tools: [], approval_mode: "ask", revision: 1, created_at: 1, updated_at: 1 },
+            config_state: "valid", auth_state: "not-required", runtime_state: "ready", tool_count: 3, error: null,
+          }],
+          legacy_count: 0,
+        });
+      }
+      if (url === "/api/mcp/connectors/mcp-paper-search/tools" && method === "GET") {
+        return jsonResponse({ tools: [], cached_at: null });
+      }
+      return jsonResponse({ error: `unhandled ${method} ${url}` }, 404);
+    });
+    renderTab("/tmp/ws");
+
+    fireEvent.click(await screen.findByRole("button", { name: /Paper Search/ }));
+
+    expect(await screen.findByText("Built into Pi-Science and shipped with the app — no manual configuration needed.")).toBeInTheDocument();
+    expect(screen.queryByText(/tsx/)).not.toBeInTheDocument();
   });
 });
