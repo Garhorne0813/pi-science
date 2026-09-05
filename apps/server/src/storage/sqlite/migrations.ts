@@ -7,6 +7,7 @@ const migrationFiles = [
   { version: 1, name: "0001_initial.sql", url: new URL("./migrations/0001_initial.sql", import.meta.url) },
   { version: 2, name: "0002_mcp_connectors.sql", url: new URL("./migrations/0002_mcp_connectors.sql", import.meta.url) },
   { version: 3, name: "0003_global_mcp_settings.sql", url: new URL("./migrations/0003_global_mcp_settings.sql", import.meta.url) },
+  { version: 4, name: "0004_project_mcp_tool_grants.sql", url: new URL("./migrations/0004_project_mcp_tool_grants.sql", import.meta.url) },
 ] as const;
 
 export async function loadMigrations(): Promise<Migration[]> {

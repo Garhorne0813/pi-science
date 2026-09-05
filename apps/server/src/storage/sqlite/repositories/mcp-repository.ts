@@ -2,6 +2,17 @@ import { randomUUID } from "node:crypto";
 import { mcpRuntimeConfigSchema, type McpConnectorCreate, type McpConnectorSettingsUpdate, type McpRuntimeConfig, type McpToolSummary } from "@pi-science/contracts";
 import type { SqliteStateStore } from "../state-store.js";
 
+export type McpToolDecision = "allow" | "ask" | "deny";
+
+export interface StoredMcpMigrationConflict {
+  connector_id: string;
+  kind: "enabled" | "include_tools" | "exclude_tools" | "approval_mode" | "tool_grant";
+  tool_name: string | null;
+  project_ids: string[];
+  details: string;
+  created_at: number;
+}
+
 export interface StoredMcpConnector {
   connector_id: string;
   name: string;
@@ -138,7 +149,7 @@ export class McpRepository {
     return Number(result.changes) > 0 ? this.settings(connectorId) : null;
   }
 
-  async setToolGrant(connectorId: string, toolName: string, decision: "allow" | "ask" | "deny"): Promise<void> {
+  async setGlobalToolGrant(connectorId: string, toolName: string, decision: McpToolDecision): Promise<void> {
     const now = Date.now();
     await this.store.batch([
       {
@@ -150,9 +161,62 @@ export class McpRepository {
     ]);
   }
 
-  async toolGrants(connectorId: string): Promise<Map<string, "allow" | "ask" | "deny">> {
-    const rows = await this.store.all<{ tool_name: string; decision: "allow" | "ask" | "deny" }>("SELECT tool_name, decision FROM mcp_global_tool_grants WHERE connector_id = ?", [connectorId]);
+  /** Kept as the compatibility name for callers that do not provide a workspace. */
+  async setToolGrant(connectorId: string, toolName: string, decision: McpToolDecision): Promise<void> {
+    return this.setGlobalToolGrant(connectorId, toolName, decision);
+  }
+
+  async clearGlobalToolGrant(connectorId: string, toolName: string): Promise<void> {
+    await this.store.run("DELETE FROM mcp_global_tool_grants WHERE connector_id = ? AND tool_name = ?", [connectorId, toolName]);
+  }
+
+  async setProjectToolGrant(projectId: string, connectorId: string, toolName: string, decision: McpToolDecision): Promise<void> {
+    await this.store.run(
+      `INSERT INTO mcp_project_tool_grants (project_id, connector_id, tool_name, decision, updated_at) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(project_id, connector_id, tool_name) DO UPDATE SET decision = excluded.decision, updated_at = excluded.updated_at`,
+      [projectId, connectorId, toolName, decision, Date.now()],
+    );
+  }
+
+  async clearProjectToolGrant(projectId: string, connectorId: string, toolName: string): Promise<void> {
+    await this.store.run("DELETE FROM mcp_project_tool_grants WHERE project_id = ? AND connector_id = ? AND tool_name = ?", [projectId, connectorId, toolName]);
+  }
+
+  async globalToolGrants(connectorId: string): Promise<Map<string, McpToolDecision>> {
+    const rows = await this.store.all<{ tool_name: string; decision: McpToolDecision }>("SELECT tool_name, decision FROM mcp_global_tool_grants WHERE connector_id = ?", [connectorId]);
     return new Map(rows.map((row) => [row.tool_name, row.decision]));
+  }
+
+  /** Compatibility alias for the global-default view. */
+  async toolGrants(connectorId: string): Promise<Map<string, McpToolDecision>> {
+    return this.globalToolGrants(connectorId);
+  }
+
+  async projectToolGrants(projectId: string, connectorId: string): Promise<Map<string, McpToolDecision>> {
+    const rows = await this.store.all<{ tool_name: string; decision: McpToolDecision }>(
+      "SELECT tool_name, decision FROM mcp_project_tool_grants WHERE project_id = ? AND connector_id = ?",
+      [projectId, connectorId],
+    );
+    return new Map(rows.map((row) => [row.tool_name, row.decision]));
+  }
+
+  async migrationConflicts(): Promise<StoredMcpMigrationConflict[]> {
+    const rows = await this.store.all<{
+      connector_id: string;
+      conflict_kind: StoredMcpMigrationConflict["kind"];
+      tool_name: string;
+      project_ids_json: string;
+      details: string;
+      created_at: number;
+    }>("SELECT connector_id, conflict_kind, tool_name, project_ids_json, details, created_at FROM mcp_scope_migration_conflicts ORDER BY connector_id, conflict_kind, tool_name");
+    return rows.map((row) => ({
+      connector_id: row.connector_id,
+      kind: row.conflict_kind,
+      tool_name: row.tool_name || null,
+      project_ids: JSON.parse(row.project_ids_json) as string[],
+      details: row.details,
+      created_at: row.created_at,
+    }));
   }
 
   async toolCache(connectorId: string): Promise<StoredMcpToolCache | null> {

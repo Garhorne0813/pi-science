@@ -2,7 +2,7 @@ import { applySessionReplacements, type SessionReplacement } from "../agent-runt
 import { apiRequest } from "../client/api";
 import { queryClient } from "../client/query-client";
 import type { AgentProfile, McpServer, ProjectSubagent, RuntimeExtension, WebAccessConfig } from "./settings-types";
-import type { McpConnector, McpConnectorCreate, McpConnectorSettingsUpdate, McpToolSummary } from "@pi-science/contracts";
+import type { McpConnector, McpConnectorCreate, McpConnectorSettingsUpdate, McpMigrationConflict, McpToolSummary } from "@pi-science/contracts";
 
 export const settingsKey = (...selector: Array<string | null>) => ["settings", ...selector];
 
@@ -93,7 +93,7 @@ export const mcpCatalogQuery = (cwd: string, errorFallback: string) => ({
 export const mcpConnectorsKey = ["mcp", "connectors"] as const;
 export const mcpConnectorsQuery = (errorFallback: string) => ({
   queryKey: mcpConnectorsKey,
-  queryFn: () => apiRequest<{ connectors: McpConnector[]; legacy_count?: number; legacy_config_path?: string | null }>("/api/mcp/connectors", { errorFallback }),
+  queryFn: () => apiRequest<{ connectors: McpConnector[]; migration_conflicts?: McpMigrationConflict[]; legacy_count?: number; legacy_config_path?: string | null }>("/api/mcp/connectors", { errorFallback }),
   staleTime: 0,
 });
 
@@ -175,11 +175,17 @@ export const settingsApi = {
   probeMcp(connectorId: string) {
     return apiRequest<{ runtime_state: string; auth_state: string; error: string | null; tools: McpToolSummary[] }>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/probe`, { method: "POST" });
   },
-  mcpTools(connectorId: string) {
-    return apiRequest<{ tools: McpToolSummary[]; cached_at: number | null }>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/tools`);
+  mcpTools(connectorId: string, cwd?: string | null) {
+    const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
+    return apiRequest<{ tools: McpToolSummary[]; cached_at: number | null; scope?: "global" | "project" }>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/tools${query}`);
   },
-  setMcpToolDecision(connectorId: string, toolName: string, decision: "allow" | "ask" | "deny") {
-    return apiRequest(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/tools/${encodeURIComponent(toolName)}`, json("PUT", { decision }));
+  setMcpToolDecision(connectorId: string, toolName: string, decision: "allow" | "ask" | "deny", cwd?: string | null) {
+    const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
+    return apiRequest(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/tools/${encodeURIComponent(toolName)}${query}`, json("PUT", { decision }));
+  },
+  clearMcpToolDecision(connectorId: string, toolName: string, cwd?: string | null) {
+    const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
+    return apiRequest<void>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/tools/${encodeURIComponent(toolName)}${query}`, { method: "DELETE" });
   },
   previewMcpImport(cwd: string | null) {
     return apiRequest<{ source: string | null; entries: Array<{ name: string; importable: boolean; conflict: boolean; contains_sensitive_fields: boolean }> }>(`/api/mcp/import/preview${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`, { method: "POST" });

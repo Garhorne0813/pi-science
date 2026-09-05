@@ -4,7 +4,7 @@
 >
 > 适用基线：当前 `main`，Node 控制面 + React 设置页 + Pi Orbit + `pi-mcp-adapter@2.18.0`
 >
-> 目标：将现有“读取 MCP JSON 并显示开关”的功能改造成由 Pi-Science 控制面统一管理配置、项目启用策略、认证引用、运行时投影、健康状态和工具授权的 MCP Connector 子系统。
+> 目标：将现有“读取 MCP JSON 并显示开关”的功能改造成由 Pi-Science 控制面统一管理配置、全局启用策略、项目级工具覆盖、认证引用、运行时投影、健康状态和工具授权的 MCP Connector 子系统。
 
 ## 1. 摘要
 
@@ -124,11 +124,11 @@ Node 控制面只读取第一个配置文件，adapter 会合并六层配置。�
 ### 3.1 目标
 
 1. 设置页可以添加 Remote URL、Local command 和 Unix socket MCP。
-2. Connector 配置在全局注册，按当前 workspace/project 启用。
+2. Connector 配置和启用状态在用户级全局注册；项目只提供工具权限覆盖。
 3. Node 控制面成为规范状态与公开 API 的唯一写入者。
 4. runtime 使用控制面生成的隔离配置，UI 状态与实际运行配置一致。
 5. 支持真实 connect/probe、工具发现、错误分类和工具缓存。
-6. 支持项目级工具过滤和 Allow/Ask/Deny/Allow all 策略。
+6. 支持全局工具默认、项目级 Allow/Ask/Deny 覆盖，以及全局 Allow all 策略。
 7. 密钥不写入 Connector 表、runtime 配置快照、日志或浏览器响应。
 8. 支持现有 MCP 文件的预览、显式导入、冲突检测和渐进迁移。
 9. 配置变化能够安全刷新当前 workspace 的 runtime；繁忙 runtime 延迟重启，不中断当前 turn。
@@ -138,7 +138,7 @@ Node 控制面只读取第一个配置文件，adapter 会合并六层配置。�
 
 - 不接入 Claude Connectors Directory；这是 claude.ai 专有数据源。后续如需市场能力，应定义 Pi-Science 自有 registry/provider 接口。
 - 不在本期实现 Organization/Admin 下发。
-- 不在本期实现 per-Agent attachment。当前项目级 binding 对项目内所有会话和 subagent 生效。
+- 不在本期实现 per-Agent attachment，也不实现项目级 Connector 启用状态。项目级工具覆盖对该项目内所有会话和 subagent 生效。
 - 不自行实现 MCP transport、sampling、elicitation、Apps renderer 或 output guard。
 - 不允许浏览器直接连接 MCP server。
 - 不支持在 UI 中保存任意明文 Authorization header；认证必须使用 Credential 引用、环境变量引用、OAuth 或受控 helper。
@@ -306,9 +306,13 @@ interface McpToolGrant {
   decision: "allow" | "ask" | "deny";
   updated_at: number;
 }
+
+interface McpProjectToolGrant extends McpToolGrant {
+  project_id: string;
+}
 ```
 
-`allow_all` 是 connector settings 级显式状态，不使用工具名 `*` 冒充普通 grant。
+`McpToolGrant` 是全局默认，`McpProjectToolGrant` 是当前 workspace 所属项目的覆盖。项目覆盖可以改变全局 allow/ask，但全局 deny 是不可提升的安全边界。`allow_all` 是 connector settings 级显式状态，不使用工具名 `*` 冒充普通 grant。
 
 ### 5.4 Tool metadata cache
 
@@ -328,7 +332,7 @@ interface McpToolCacheEntry {
 
 ## 6. SQLite schema
 
-`0002_mcp_connectors.sql` 建立初始结构；`0003_global_mcp_settings.sql` 将项目绑定迁移为全局设置，并注册到 `apps/server/src/storage/sqlite/migrations.ts`。
+`0002_mcp_connectors.sql` 建立初始结构；`0003_global_mcp_settings.sql` 将项目绑定迁移为全局设置并记录冲突；`0004_project_mcp_tool_grants.sql` 建立独立的项目级工具覆盖表。三个 migration 均注册到 `apps/server/src/storage/sqlite/migrations.ts`。
 
 建议 schema：
 
@@ -367,6 +371,17 @@ CREATE TABLE mcp_global_tool_grants (
   decision TEXT NOT NULL CHECK (decision IN ('allow', 'ask', 'deny')),
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (connector_id, tool_name),
+  FOREIGN KEY (connector_id) REFERENCES mcp_connectors(connector_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE mcp_project_tool_grants (
+  project_id TEXT NOT NULL,
+  connector_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  decision TEXT NOT NULL CHECK (decision IN ('allow', 'ask', 'deny')),
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, connector_id, tool_name),
+  FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE,
   FOREIGN KEY (connector_id) REFERENCES mcp_connectors(connector_id) ON DELETE CASCADE
 ) STRICT;
 
@@ -411,9 +426,10 @@ apps/server/src/mcp/
 - `deleteConnector`
 - `listConnectors`
 - `getConnector`
-- `upsertProjectBinding`
-- `listEffectiveConnectors(projectId)`
-- `setToolGrant`
+- `getGlobalSettings`
+- `setGlobalToolGrant` / `clearGlobalToolGrant`
+- `setProjectToolGrant` / `clearProjectToolGrant`
+- `listMigrationConflicts`
 - `replaceToolCache`
 
 所有 update 使用 revision 乐观锁。冲突返回 `409 revision_conflict`，避免两个设置页相互覆盖。
@@ -422,10 +438,10 @@ apps/server/src/mcp/
 
 负责：
 
-- workspace → stable project_id 解析；
+- workspace → stable project_id 解析（仅用于项目级工具覆盖）；
 - DTO 校验和错误分类；
 - credential_ref 验证；
-- Connector 与 binding 协调；
+- 全局 Connector/settings 与项目级 tool grant 协调；
 - import preview/commit；
 - runtime projection invalidation；
 - 配置变化后的 runtime reload；
@@ -483,13 +499,14 @@ socket：
 | `DELETE` | `/api/mcp/connectors/:id` | 删除自定义 Connector；内置返回 403 |
 | `PUT` | `/api/mcp/connectors/:id/settings` | 全局启停和默认工具策略 |
 | `POST` | `/api/mcp/connectors/:id/probe` | 有界真实握手 + tools/list |
-| `GET` | `/api/mcp/connectors/:id/tools` | 工具缓存和全局权限 |
-| `PUT` | `/api/mcp/connectors/:id/tools/:tool` | Allow/Ask/Deny |
+| `GET` | `/api/mcp/connectors/:id/tools[?cwd=]` | 工具缓存和 effective 权限；带 cwd 时返回项目覆盖 |
+| `PUT` | `/api/mcp/connectors/:id/tools/:tool[?cwd=]` | 无 cwd 写全局默认，带 cwd 写项目覆盖 |
+| `DELETE` | `/api/mcp/connectors/:id/tools/:tool[?cwd=]` | 清除对应作用域的 grant，恢复继承 |
 | `POST` | `/api/mcp/connectors/:id/disconnect` | 删除/撤销认证 |
 
 写 API 使用 JSON body，不使用 `?enabled=true` 表达 mutation。
 
-绑定请求示例：
+全局 settings 请求示例：
 
 ```json
 {
@@ -512,7 +529,7 @@ socket：
       "display_name": "Paper Search",
       "source": "custom",
       "transport": "stdio",
-      "binding": { "enabled": true, "approval_mode": "ask", "revision": 2 },
+      "settings": { "enabled": true, "approval_mode": "ask", "revision": 2 },
       "config_state": "valid",
       "auth_state": "not-required",
       "runtime_state": "ready",
@@ -630,8 +647,8 @@ apps/server/src/runtime/pi/extensions/pi-science-mcp.ts
 
 职责：
 
-1. 从 `PI_SCIENCE_MCP_SNAPSHOT_PATH` 读取控制面生成的快照；
-2. 校验 version、project_id、revision 和 schema；
+1. 从当前 workspace 的 `.pi-science/mcp-runtime.json` 读取控制面生成的快照；
+2. 校验 version、project_id 和 schema；
 3. 调用 `createMcpAdapter({ config })`；
 4. 订阅 adapter status event；
 5. 不暴露 adapter 的 `/mcp setup` 和文件写入路径作为规范配置入口。
@@ -642,8 +659,8 @@ apps/server/src/runtime/pi/extensions/pi-science-mcp.ts
 import { createMcpAdapter } from "pi-mcp-adapter";
 import { readFileSync } from "node:fs";
 
-const snapshot = parseSnapshot(readFileSync(requiredEnv("PI_SCIENCE_MCP_SNAPSHOT_PATH"), "utf8"));
-export default createMcpAdapter({ config: snapshot.config });
+const snapshot = parseSnapshot(readFileSync(join(workspace, ".pi-science/mcp-runtime.json"), "utf8"));
+export default createMcpAdapter({ config: { mcpServers: snapshot.mcpServers } });
 ```
 
 实际实现必须避免模块加载时跨 runtime 共享 snapshot：若 Pi Orbit extension 模块会被 Host 缓存，应在 extension factory 初始化时按当前 runtime env 读取，并添加多 runtime characterization test。
@@ -652,10 +669,10 @@ export default createMcpAdapter({ config: snapshot.config });
 
 `McpRuntimeProjection` 输入：
 
-- workspace project_id（只写入快照标识，不参与设置选择）；
+- workspace project_id（写入快照标识，并用于出站审计归属）；
 - globally enabled connectors；
 - connector revisions；
-- tool grants；
+- global tool grants 和当前项目的 tool grant overrides；
 - credential runtime values；
 - application MCP defaults。
 
@@ -665,9 +682,8 @@ export default createMcpAdapter({ config: snapshot.config });
 interface McpRuntimeSnapshot {
   version: 1;
   project_id: string;
-  fingerprint: string;
   generated_at: number;
-  config: McpConfig;
+  mcpServers: Record<string, McpServer>;
 }
 ```
 
@@ -686,13 +702,13 @@ interface McpRuntimeSnapshot {
 }
 ```
 
-每个 Connector 的 binding 投影规则：
+每个 Connector 的全局设置和项目工具覆盖投影规则：
 
 - `enabled=false`：不写入 snapshot；
 - include/exclude：写入 adapter `includeTools`/`excludeTools`；
-- `approval_mode=ask`：`approveTools: true`；
-- `approval_mode=allow_all`：`approveTools: false`；
-- `approval_mode=custom`：Deny 工具合并进入 `excludeTools`，Ask 工具写入 adapter `approveTools` 列表，其余 Allow 工具保持暴露且无需审批；
+- `approval_mode=ask/custom`：`approveTools: true`；
+- `approval_mode=allow_all`：`approveTools: false`，如果存在显式 Ask 覆盖则只对这些精确工具名启用审批；
+- 显式 Deny 工具合并进入 `excludeTools`；显式 Allow 工具写入精确的 `__piScienceAllowedTools`，项目覆盖优先于全局 allow/ask，但不能提升全局 Deny；
 - lifecycle 默认 lazy；
 - `directTools` 默认 false，只有产品明确允许的 Connector 才能开启。
 
@@ -722,7 +738,7 @@ OAuth refresh 需要长会话更新时，改用 runtime 专属 credential helper
 
 ### 10.5 配置变更与 runtime reload
 
-Connector 或 binding mutation 成功后：
+Connector、全局 settings 或项目 tool grant mutation 成功后：
 
 1. 提交 SQLite/credential 更新；
 2. 失效 projection cache；
@@ -763,7 +779,7 @@ Credential 种类至少支持：
 - 校验 issuer；
 - 动态客户端注册可选；无 registration endpoint 时要求用户填写 client ID；
 - access/refresh/client secret 只进入 CredentialStore；
-- URL origin 或 OAuth server 修改时自动 sever 旧 grant；
+- URL origin 或 OAuth server 修改时自动失效旧 grant；
 - refresh 使用单飞锁；
 - `invalid_grant` 转为 needs-auth；短暂网络失败不得删除 refresh token；
 - callback 页面只显示成功/失败，不输出 code、token、state；
@@ -879,7 +895,7 @@ note:
 
 只记录 connector id、origin、时间、project id、操作类型和 approved；不记录 path/query、请求体、tool args/result 或 secret。
 
-adapter 的真实 tool call egress 若无法从控制面拦截，第一阶段必须在文档和 UI 标明“runtime call audit unavailable”，不能把 probe audit 表述为完整数据面审计。第二阶段通过 wrapper extension 上报 metadata-only call event。
+Remote HTTP/SSE 的握手、SSE 消息和工具请求都经过控制面出站 guard，并记录 metadata-only audit；stdio/socket 程序自行发起的网络请求仍无法由 transport wrapper 拦截，必须标明 runtime call audit unavailable。
 
 ### 14.3 日志和错误
 
@@ -893,12 +909,12 @@ adapter 的真实 tool call egress 若无法从控制面拦截，第一阶段必
 ## 15. 并发与失败语义
 
 - Connector update：revision optimistic lock。
-- Binding update：独立 revision optimistic lock。
+- Global settings 使用独立的 settings revision；项目 tool grant 是按 `(project_id, connector_id, tool_name)` 幂等 upsert，不伪造 Connector revision。
 - Probe：按 connector serialized，全局 semaphore=4。
 - OAuth refresh：按 credential single-flight。
-- Runtime projection：以 `(project_id, effective_revision_hash)` 去重。
+- Runtime projection：按 workspace/project 生成原子快照；全局变更 fan-out 到所有已知 workspace，项目 tool grant 只更新所属 workspace。
 - Import commit：SQLite batch；Credential 创建失败时回滚 Connector 创建，已创建 secret 必须补偿删除。
-- Remove：Connector 与 binding/tool cache 由 FK cascade；Credential 默认不自动删除共享项，只删除 owner 独占且无引用项。
+- Remove：Connector、project tool grant、global tool grant 和 tool cache 由 FK cascade；删除项目时 project tool grant 由 FK cascade 清理。
 - runtime reload 失败不回滚规范配置，返回 partial success。
 - SQLite disabled 模式下 MCP 写 API 返回 `503 canonical_state_unavailable`；不要新建第二套文件写实现。
 
@@ -906,16 +922,17 @@ adapter 的真实 tool call egress 若无法从控制面拦截，第一阶段必
 
 ### 16.1 Contracts
 
-- Connector create/update/binding/tool grant schema；
+- Connector create/update/settings/tool grant/project override schema；
 - secret 字段不出现在 public DTO；
 - invalid union 和 transport exclusivity；
 - stable error code。
 
 ### 16.2 Repository
 
-- migration 0002；
+- migrations 0002–0004；
 - CRUD、cascade、revision conflict；
-- project deletion cascade；
+- project tool grant deletion cascade；
+- legacy scope conflict records and fail-closed defaults；
 - connector deletion引用冲突；
 - cache revision/fingerprint。
 
@@ -950,7 +967,7 @@ adapter 的真实 tool call egress 若无法从控制面拦截，第一阶段必
 
 ### 16.5 Runtime projection
 
-- 只包含全局 enabled connectors；
+- 只包含全局 enabled connectors，并合并当前项目的 tool grant overrides；
 - ambient `.mcp.json` 不会进入 programmatic config；
 - include/exclude/approval 映射正确；
 - snapshot 不含 credential value；
@@ -962,7 +979,8 @@ adapter 的真实 tool call egress 若无法从控制面拦截，第一阶段必
 - 列表、搜索、过滤、空态和错误态；
 - Remote/Local/Socket 表单；
 - Advanced 渐进披露；
-- optimistic binding toggle 回滚；
+- optimistic global settings toggle 回滚；
+- project override and inherit/reset；
 - revision conflict；
 - Probe/Connect/Disconnect/Remove；
 - per-tool permission；
@@ -1001,7 +1019,7 @@ pnpm build
 
 交付：
 
-- migration 0002；
+- migrations 0002–0004；
 - repository/service/contracts/routes；
 - Connector list/add/edit/remove；
 - global connector settings；
@@ -1022,7 +1040,7 @@ pnpm build
 - ambient config 隔离；
 - effective config diagnostics。
 
-完成标准：Agent 可调用的 Connector 集合严格等于当前项目的 enabled binding。
+完成标准：Agent 可调用的 Connector 集合严格等于全局 enabled connectors；工具调用权限再叠加当前项目的 tool grant overrides。
 
 ### M3：真实 Probe + Tools + Permissions
 
@@ -1032,6 +1050,7 @@ pnpm build
 - tool/resource cache；
 - 工具详情；
 - Allow/Ask/Deny/Allow all；
+- global default 与 project override/inherit；
 - adapter policy projection；
 - 有界子进程和 HTTP 测试 fixtures。
 
@@ -1070,6 +1089,8 @@ packages/contracts/src/mcp.ts                              new
 packages/contracts/src/index.ts                            export
 
 apps/server/src/storage/sqlite/migrations/0002_mcp_connectors.sql  new
+apps/server/src/storage/sqlite/migrations/0003_global_mcp_settings.sql  update
+apps/server/src/storage/sqlite/migrations/0004_project_mcp_tool_grants.sql  new
 apps/server/src/storage/sqlite/migrations.ts                update
 apps/server/src/storage/sqlite/repositories/mcp-repository.ts      new
 apps/server/src/mcp/*                                       new
@@ -1112,28 +1133,26 @@ docs/architecture.zh-CN.md                                  update at M2/M5
 14. 旧 API 在迁移期有明确兼容投影和删除条件。
 15. typecheck、unit、integration、build、视觉和 accessibility 验证通过。
 
-## 20. 待评审决策
+## 20. 已确认的边界
 
-实施前只需确认以下产品决策；其余技术边界可直接按本文推进：
+本轮按 Claude Science 的作用域和出站策略实现以下决定：
 
-1. Connector 默认作用域：本文建议“全局注册、项目默认不启用”。是否接受？
-2. 私网 Remote MCP：本文建议默认禁止，逐 Connector 显式允许。是否需要兼容本地 `localhost` MCP URL？
-3. Local command：是否允许用户选择 workspace 外 cwd？本文建议首期禁止。
-4. 工具权限默认：本文建议 `Ask`，而不是 Allow all。
-5. OAuth 首发范围：M1/M2 是否允许暂时保留 adapter-owned OAuth，M4 再迁移到设置页？
-6. Legacy 配置：是否接受两版本 compatibility window，而非首次启动自动迁移？
-
-除第 5 项外，这些选择不会改变模块拆分，只影响校验、默认值和迁移节奏。
+1. Connector 注册、启用状态和默认工具权限是用户级全局配置；不实现项目级 Connector enablement。
+2. 工具权限可以按项目覆盖全局 allow/ask；全局 deny 是不可提升的安全边界；清除项目 grant 后恢复继承。
+3. Remote HTTP/SSE 默认拒绝私网；每次实际请求、OAuth discovery、动态注册和 token/refresh 请求都经过同一出站 guard。
+4. Local command 的 cwd 必须位于 workspace 内，命令不经 shell；本轮不引入 stdio 子进程的 OS sandbox，第三方 stdio/socket 程序自行发起的网络访问仍不受 transport wrapper 控制。
+5. OAuth 首发继续由 adapter 承担；跨 origin 的 OAuth 服务因凭证转发边界暂不允许，需配置同源认证或环境变量 Authorization。
+6. 旧 project binding 迁移遇到分歧时记录 conflict，并将受影响的连接器禁用或重置为 Ask，交由用户显式复核。
 
 ## 合并前安全修复（2026-09-04）
 
-- `custom` 始终投影 `approveTools: true`，只有显式 `allow` 的精确工具名写入 `__piScienceAllowedTools`。未缓存的新工具仍需审批，通配符不会扩展授权。
+- `custom` 和 `ask` 投影 `approveTools: true`，显式 allow（包括项目覆盖）才写入 `__piScienceAllowedTools`；`allow_all` 只对显式 Ask 工具启用精确审批。未缓存的新工具不会因为缓存缺失而获得额外授权，通配符不会扩展 grant。
 - 凭证送达通道尚未实现。因此 API 明确拒绝 connector-level / binding-level credential 引用以及 literal env/header；请使用环境变量引用。既有不支持配置显示 invalid/error，并从新快照中排除。旧数据库中的 literal 值不会自动删除，需要用户编辑或删除旧连接器。缺失环境变量在运行时明确报错。
 - 探针和适配器 stdio 子进程只继承基本系统变量、审计目录和显式绑定。托管绑定按原值传递，不执行适配器的 `!command` 或 `${VAR}` 二次解释。
-- HTTP/SSE 的真实请求经过共同的出站策略及审计，包括握手、SSE 消息发送、工具请求。默认拒绝私网，并在实际建连 DNS lookup 再次检查地址；显式 `allow_private` 保留本地服务支持。拒绝重定向和跨源请求以防凭证外泄，这也意味着跨源 OAuth discovery/token 服务目前不能使用，需配置同源认证或环境变量 Authorization。
-- 内置 paper-search 的 HTTP 请求也接入同一策略。任意第三方 stdio/socket 程序仍属于受信任的本地代码；其自行发起的网络访问需要操作系统沙箱才能强制限制，不能由 MCP transport 包装器拦截。
-- `scripts/patch-mcp-adapter.mjs` 在 fetch-pi 安装后应用可重复的适配器补丁；遇到未知源代码布局报错。运行时检查补丁标记，缺失时拒绝加载。适配器入口由启动器按选定 CLI 的安装目录解析并通过绝对路径传递，移除扩展中的六层相对路径依赖。
+- HTTP/SSE 的真实请求经过共同的出站策略及审计，包括握手、SSE 消息发送、工具请求以及 OAuth discovery/dynamic registration/token/refresh。默认拒绝私网，并在实际建连 DNS lookup 再次检查地址；显式 `allow_private` 保留本地服务支持。拒绝重定向和跨源请求以防凭证外泄，因此跨源 OAuth 服务目前不能使用，需配置同源认证或环境变量 Authorization。
+- 内置 paper-search 的 HTTP 请求也接入同一策略。任意第三方 stdio/socket 程序仍属于受信任的本地代码；本轮明确不做其 OS sandbox，故其自行发起的网络访问不能由 MCP transport 包装器拦截。
+- `scripts/patch-mcp-adapter.mjs` 在 fetch-pi 安装后应用可重复的适配器补丁；遇到未知源代码布局报错。运行时检查 transport、project-audit、OAuth 和 tool-approval 补丁标记，缺失时拒绝加载。适配器入口由启动器按选定 CLI 的安装目录解析并通过绝对路径传递，移除扩展中的六层相对路径依赖。
 - 无 UI 时 ask 继续拒绝调用；无人值守任务应逐项授权，不自动降级为 allow_all。测试覆盖真实适配器的无 UI 拒绝和 UI select 审批分支；尚未执行真实浏览器端到端审批验收。
 - SQLite 关闭时，旧设置接口第一次 toggle 以全部已配置服务作为默认启用集合。
 
-验证包含 API/快照、无缓存工具授权、真实 stdio 握手及环境隔离、真实适配器 HTTP 拦截、重定向/跨源拦截和连接阶段 DNS rebinding 回归测试。
+验证包含 API/快照、全局/项目 grant 覆盖与迁移冲突、无缓存工具授权、真实 stdio 握手及环境隔离、真实适配器 HTTP/OAuth 拦截、重定向/跨源拦截和连接阶段 DNS rebinding 回归测试；stdio OS sandbox 留待后续变更。

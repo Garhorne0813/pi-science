@@ -74,6 +74,37 @@ describe("canonical MCP routes", () => {
     await app.close();
   });
 
+  it("stores project tool overrides separately from global defaults", async () => {
+    const { app, cwd, service } = await fixture();
+    const otherCwd = await mkdtemp(join(tmpdir(), "pi-science-mcp-routes-other-"));
+    directories.push(otherCwd);
+    await mkdir(join(otherCwd, ".pi-science"));
+    await service.materializeWorkspace(otherCwd);
+    const connector = await service.create({ name: "scoped", display_name: "Scoped", transport: "stdio", command: process.execPath, runtime_config: {}, enabled: true });
+    await service.repository.replaceToolCache({ connector_id: connector.connector_id, config_revision: connector.revision, fingerprint: "test", tools: [{ name: "safe", title: "Safe", description: "", read_only: true, decision: "ask" }], fetched_at: 1, expires_at: Number.MAX_SAFE_INTEGER });
+    await service.setToolGrant(connector.connector_id, "safe", "allow");
+
+    const projectDeny = await app.inject({ method: "PUT", url: `/api/mcp/connectors/${connector.connector_id}/tools/safe?cwd=${encodeURIComponent(cwd)}`, payload: { decision: "deny" } });
+    expect(projectDeny.statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: `/api/mcp/connectors/${connector.connector_id}/tools?cwd=${encodeURIComponent(cwd)}` })).json().tools)
+      .toEqual([expect.objectContaining({ name: "safe", decision: "deny", decision_scope: "project" })]);
+
+    const otherProjectView = await app.inject({ method: "GET", url: `/api/mcp/connectors/${connector.connector_id}/tools?cwd=${encodeURIComponent(otherCwd)}` });
+    expect(otherProjectView.json().scope).toBe("project");
+    expect(otherProjectView.json().tools).toEqual([expect.objectContaining({ decision: "allow", decision_scope: "global" })]);
+    const currentSnapshot = JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8"));
+    const otherSnapshot = JSON.parse(await readFile(join(otherCwd, ".pi-science", "mcp-runtime.json"), "utf8"));
+    expect(currentSnapshot.mcpServers.scoped).toMatchObject({ excludeTools: ["safe"] });
+    expect(otherSnapshot.mcpServers.scoped).toMatchObject({ __piScienceAllowedTools: ["safe"] });
+
+    const reset = await app.inject({ method: "DELETE", url: `/api/mcp/connectors/${connector.connector_id}/tools/safe?cwd=${encodeURIComponent(cwd)}` });
+    expect(reset.statusCode).toBe(204);
+    expect((await service.tools(connector.connector_id, cwd)).tools).toEqual([expect.objectContaining({ decision: "allow", decision_scope: "global" })]);
+    expect(JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8")).mcpServers.scoped)
+      .toMatchObject({ __piScienceAllowedTools: ["safe"] });
+    await app.close();
+  });
+
   it("rejects local connector working directories that escape the workspace", async () => {
     const { app } = await fixture();
     const response = await app.inject({ method: "POST", url: "/api/mcp/connectors", payload: {

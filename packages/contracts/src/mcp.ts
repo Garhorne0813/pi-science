@@ -82,6 +82,17 @@ export const mcpToolSummarySchema = z.object({
   description: z.string().nullish(),
   read_only: z.boolean().nullish(),
   decision: mcpToolDecisionSchema.default("ask"),
+  decision_scope: z.enum(["project", "global", "default"]).optional(),
+});
+
+export const mcpMigrationConflictKindSchema = z.enum(["enabled", "include_tools", "exclude_tools", "approval_mode", "tool_grant"]);
+export const mcpMigrationConflictSchema = z.object({
+  connector_id: z.string().min(1),
+  kind: mcpMigrationConflictKindSchema,
+  tool_name: z.string().nullish(),
+  project_ids: z.array(z.string().min(1)),
+  details: z.string().min(1),
+  created_at: z.number().int().nonnegative(),
 });
 
 export const mcpConnectorSchema = z.object({
@@ -108,7 +119,12 @@ export const mcpConnectorSchema = z.object({
   error: z.string().nullable(),
 });
 
-export const mcpConnectorListSchema = z.object({ connectors: z.array(mcpConnectorSchema) });
+export const mcpConnectorListSchema = z.object({
+  connectors: z.array(mcpConnectorSchema),
+  migration_conflicts: z.array(mcpMigrationConflictSchema).default([]),
+  legacy_config_path: z.string().nullish(),
+  legacy_count: z.number().int().nonnegative().default(0),
+});
 export const mcpToolGrantUpdateSchema = z.object({ decision: mcpToolDecisionSchema });
 export const mcpProbeResultSchema = z.object({
   connector_id: z.string(),
@@ -127,4 +143,5 @@ export type McpConnectorSettings = z.infer<typeof mcpConnectorSettingsSchema>;
 export type McpConnectorSettingsUpdate = z.infer<typeof mcpConnectorSettingsUpdateSchema>;
 export type McpRuntimeConfig = z.infer<typeof mcpRuntimeConfigSchema>;
 export type McpToolSummary = z.infer<typeof mcpToolSummarySchema>;
+export type McpMigrationConflict = z.infer<typeof mcpMigrationConflictSchema>;
 export type McpProbeResult = z.infer<typeof mcpProbeResultSchema>;

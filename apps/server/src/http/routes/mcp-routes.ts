@@ -62,15 +62,22 @@ export function registerMcpRoutes(app: FastifyInstance, service: McpConnectorSer
   });
 
   app.get<{ Params: { connector_id: string } }>("/api/mcp/connectors/:connector_id/tools", async (request, reply) => {
-    try { return await service.tools(request.params.connector_id); }
+    try { return await service.tools(request.params.connector_id, optionalCwd(request)); }
     catch (error) { return failure(reply, error); }
   });
 
   app.put<{ Params: { connector_id: string; tool_name: string } }>("/api/mcp/connectors/:connector_id/tools/:tool_name", async (request, reply) => {
     try {
       const { decision } = mcpToolGrantUpdateSchema.parse(request.body);
-      await service.setToolGrant(request.params.connector_id, request.params.tool_name, decision);
+      await service.setToolGrant(request.params.connector_id, request.params.tool_name, decision, optionalCwd(request));
       return { ok: true };
+    } catch (error) { return failure(reply, error); }
+  });
+
+  app.delete<{ Params: { connector_id: string; tool_name: string } }>("/api/mcp/connectors/:connector_id/tools/:tool_name", async (request, reply) => {
+    try {
+      await service.clearToolGrant(request.params.connector_id, request.params.tool_name, optionalCwd(request));
+      return reply.code(204).send();
     } catch (error) { return failure(reply, error); }
   });
 

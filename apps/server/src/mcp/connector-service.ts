@@ -17,7 +17,7 @@ import type { NodeSessionService } from "../runtime/node/node-session-service.js
 import { validateConnectorOutboundUrl } from "../security/outbound-security.js";
 import { probeMcpHealth } from "../security/mcp-health.js";
 import { validateWorkspaceCwd } from "../security/workspace-security.js";
-import type { McpRepository, StoredMcpConnector, StoredMcpSettings } from "../storage/sqlite/repositories/mcp-repository.js";
+import type { McpRepository, McpToolDecision, StoredMcpConnector, StoredMcpMigrationConflict, StoredMcpSettings } from "../storage/sqlite/repositories/mcp-repository.js";
 import type { WorkspaceRepository } from "../storage/sqlite/repositories/workspace-repository.js";
 import type { SettingsStore } from "../storage/settings-store.js";
 import type { McpRuntimeProjection } from "./runtime-projection.js";
@@ -62,9 +62,10 @@ export class McpConnectorService {
     }
   }
 
-  async list(cwd?: string | null): Promise<{ connectors: McpConnector[]; legacy_config_path: string | null; legacy_count: number }> {
+  async list(cwd?: string | null): Promise<{ connectors: McpConnector[]; migration_conflicts: StoredMcpMigrationConflict[]; legacy_config_path: string | null; legacy_count: number }> {
     const connectors = await this.repository.list();
     const result = await Promise.all(connectors.map((item) => this.publicConnector(item)));
+    const migrationConflicts = await this.repository.migrationConflicts();
     const legacy = await this.legacyDefinitions(cwd);
     const canonicalNames = new Set(connectors.map((item) => item.name.toLowerCase()));
     const legacyCount = Object.entries(legacy.definitions).filter(([name, raw]) => {
@@ -73,7 +74,7 @@ export class McpConnectorService {
       const sensitive = Boolean(definition.env || definition.headers || definition.bearerToken || definition.oauth || definition.auth);
       return !sensitive && Boolean(definition.url || definition.socket || definition.command);
     }).length;
-    return { connectors: result, legacy_config_path: legacy.source, legacy_count: legacyCount };
+    return { connectors: result, migration_conflicts: migrationConflicts, legacy_config_path: legacy.source, legacy_count: legacyCount };
   }
 
   async get(connectorId: string): Promise<McpConnector> {
@@ -139,20 +140,42 @@ export class McpConnectorService {
     return Object.assign(view, reload.length ? { reload_replacements: reload } : {});
   }
 
-  async tools(connectorId: string): Promise<{ tools: McpToolSummary[]; cached_at: number | null }> {
-    await this.requireConnector(connectorId);
+  async tools(connectorId: string, cwd?: string | null): Promise<{ tools: McpToolSummary[]; cached_at: number | null; scope: "global" | "project" }> {
+    const connector = await this.requireConnector(connectorId);
+    const project = cwd ? await this.project(cwd) : null;
     const cache = await this.repository.toolCache(connectorId);
-    const grants = await this.repository.toolGrants(connectorId);
+    const globalGrants = await this.repository.globalToolGrants(connectorId);
+    const projectGrants = project ? await this.repository.projectToolGrants(project.project_id, connectorId) : new Map<string, McpToolDecision>();
     return {
-      tools: (cache?.tools ?? []).map((tool) => ({ ...tool, decision: grants.get(tool.name) ?? "ask" })),
+      tools: (cache?.tools ?? []).map((tool) => ({ ...tool, ...effectiveToolDecision(connector, tool.name, globalGrants, projectGrants) })),
       cached_at: cache?.fetched_at ?? null,
+      scope: project ? "project" : "global",
     };
   }
 
-  async setToolGrant(connectorId: string, toolName: string, decision: "allow" | "ask" | "deny"): Promise<void> {
+  async setToolGrant(connectorId: string, toolName: string, decision: McpToolDecision, cwd?: string | null): Promise<void> {
     await this.requireConnector(connectorId);
-    await this.repository.setToolGrant(connectorId, toolName, decision);
-    await this.materializeKnownWorkspaces();
+    if (cwd) {
+      const project = await this.project(cwd);
+      await this.repository.setProjectToolGrant(project.project_id, connectorId, toolName, decision);
+      await this.projection?.materialize(project.canonical_path, project.project_id);
+    } else {
+      await this.repository.setGlobalToolGrant(connectorId, toolName, decision);
+      await this.materializeKnownWorkspaces();
+    }
+    await this.reload();
+  }
+
+  async clearToolGrant(connectorId: string, toolName: string, cwd?: string | null): Promise<void> {
+    await this.requireConnector(connectorId);
+    if (cwd) {
+      const project = await this.project(cwd);
+      await this.repository.clearProjectToolGrant(project.project_id, connectorId, toolName);
+      await this.projection?.materialize(project.canonical_path, project.project_id);
+    } else {
+      await this.repository.clearGlobalToolGrant(connectorId, toolName);
+      await this.materializeKnownWorkspaces();
+    }
     await this.reload();
   }
 
@@ -342,4 +365,20 @@ function sqliteConflict(error: unknown): McpServiceError {
 
 export function mcpConnectorFingerprint(connector: StoredMcpConnector): string {
   return createHash("sha256").update(JSON.stringify({ transport: connector.transport, endpoint_url: connector.endpoint_url, command: connector.command, args: connector.args, socket_path: connector.socket_path, runtime_config: connector.runtime_config, revision: connector.revision })).digest("hex");
+}
+
+function effectiveToolDecision(
+  connector: StoredMcpConnector,
+  toolName: string,
+  globalGrants: Map<string, McpToolDecision>,
+  projectGrants: Map<string, McpToolDecision>,
+): { decision: McpToolDecision; decision_scope: "project" | "global" | "default" } {
+  const global = globalGrants.get(toolName);
+  const project = projectGrants.get(toolName);
+  // A global deny is a hard safety boundary. Project settings may make a
+  // global default more restrictive or more permissive, but cannot lift it.
+  if (global === "deny") return { decision: "deny", decision_scope: "global" };
+  if (project) return { decision: project, decision_scope: "project" };
+  if (global) return { decision: global, decision_scope: "global" };
+  return { decision: connector.approval_mode === "allow_all" ? "allow" : "ask", decision_scope: "default" };
 }

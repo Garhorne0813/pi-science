@@ -18,6 +18,7 @@ const publicDispatcher = new Agent({ connect: {
 
 export interface McpFetchPolicy {
   connectorId: string;
+  projectId?: string | null;
   endpoint?: string | null;
   allowPrivate: boolean;
   note?: string;
@@ -37,16 +38,16 @@ export function createMcpFetch(policy: McpFetchPolicy): typeof fetch {
       }
       await validateConnectorOutboundUrl(request.url, { allowPrivate: policy.allowPrivate });
     } catch (error) {
-      if (audit) await recordEgress({ connector_type: "mcp", connector_id: policy.connectorId, target_domain: request.url, approved: false, note: "mcp_network_blocked" });
+      if (audit) await recordEgress({ connector_type: "mcp", connector_id: policy.connectorId, project_id: policy.projectId, target_domain: request.url, approved: false, note: "mcp_network_blocked" });
       throw error;
     }
-    if (audit) await recordEgress({ connector_type: "mcp", connector_id: policy.connectorId, target_domain: request.url, approved: true, note: policy.note ?? "mcp_runtime" });
+    if (audit) await recordEgress({ connector_type: "mcp", connector_id: policy.connectorId, project_id: policy.projectId, target_domain: request.url, approved: true, note: policy.note ?? "mcp_runtime" });
     const response = await transportFetch(request.url, {
       method: request.method, headers: [...request.headers.entries()], body: request.body,
       signal: request.signal, redirect: "manual", duplex: "half",
       ...(!policy.allowPrivate ? { dispatcher: publicDispatcher } : {}),
     }).catch(async (error: unknown) => {
-      if (audit) await recordEgress({ connector_type: "mcp", connector_id: policy.connectorId, target_domain: request.url, approved: false, note: "mcp_connection_failed" });
+      if (audit) await recordEgress({ connector_type: "mcp", connector_id: policy.connectorId, project_id: policy.projectId, target_domain: request.url, approved: false, note: "mcp_connection_failed" });
       throw error;
     });
     if (response.status >= 300 && response.status < 400 && response.headers.has("location")) {

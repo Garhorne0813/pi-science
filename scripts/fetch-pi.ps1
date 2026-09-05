@@ -76,6 +76,15 @@ function Install-RuntimeExtensions {
     if ($LASTEXITCODE -ne 0) {
         throw "npm exited with code $LASTEXITCODE while installing Pi runtime extensions."
     }
+
+    $nodePath = Get-CommandPath "node"
+    if (-not $nodePath) {
+        throw "node is required to apply MCP adapter security patches."
+    }
+    & $nodePath (Join-Path $ScriptDir "patch-mcp-adapter.mjs")
+    if ($LASTEXITCODE -ne 0) {
+        throw "node exited with code $LASTEXITCODE while applying MCP adapter security patches."
+    }
 }
 
 function Get-ReleaseArchitecture {

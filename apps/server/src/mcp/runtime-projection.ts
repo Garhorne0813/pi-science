@@ -2,7 +2,7 @@ import { bindingError } from "./bindings.js";
 import { lstat, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { McpEnvironmentBinding } from "./runtime-projection-types.js";
-import type { McpRepository, StoredMcpConnector } from "../storage/sqlite/repositories/mcp-repository.js";
+import type { McpRepository, McpToolDecision, StoredMcpConnector } from "../storage/sqlite/repositories/mcp-repository.js";
 import { validateWorkspaceCwd } from "../security/workspace-security.js";
 import { metadataRoot, writeJsonAtomic } from "../storage/persistence.js";
 
@@ -12,6 +12,7 @@ export interface ProjectedMcpServer {
   __piScienceAllowedTools?: string[];
   __piScienceConnectorId?: string;
   __piScienceAllowPrivate?: boolean;
+  __piScienceProjectId?: string;
   command?: string;
   args?: string[];
   socket?: string;
@@ -39,24 +40,32 @@ export class McpRuntimeProjection {
     const mcpServers: Record<string, ProjectedMcpServer> = {};
     for (const connector of connectors) {
       if (bindingError(connector.runtime_config, connector.credential_ref)) continue;
-      const grants = await this.repository.toolGrants(connector.connector_id);
-      const denied = [...grants].filter(([, decision]) => decision === "deny").map(([name]) => name);
-      const allowed = [...grants].filter(([, decision]) => decision === "allow").map(([name]) => name);
+      const globalGrants = await this.repository.globalToolGrants(connector.connector_id);
+      const projectGrants = await this.repository.projectToolGrants(projectId, connector.connector_id);
+      const decisions = new Map<string, McpToolDecision>();
+      for (const toolName of new Set([...globalGrants.keys(), ...projectGrants.keys()])) {
+        decisions.set(toolName, effectiveToolDecision(connector, toolName, globalGrants, projectGrants));
+      }
+      const denied = [...decisions].filter(([, decision]) => decision === "deny").map(([name]) => name);
+      const allowed = [...decisions].filter(([, decision]) => decision === "allow").map(([name]) => name);
+      const asks = [...decisions].filter(([, decision]) => decision === "ask").map(([name]) => name);
       const includeTools = unique([...connector.runtime_config.include_tools, ...connector.include_tools]);
       const excludeTools = unique([...connector.runtime_config.exclude_tools, ...connector.exclude_tools, ...denied]);
-      mcpServers[connector.name] = projectServer(connector, includeTools, excludeTools,
-        connector.approval_mode !== "allow_all");
-      if (connector.approval_mode === "custom") mcpServers[connector.name]!.__piScienceAllowedTools = allowed;
+      const approveTools: boolean | string[] = connector.approval_mode === "allow_all" ? (asks.length ? unique(asks) : false) : true;
+      const server = projectServer(connector, includeTools, excludeTools, approveTools, projectId);
+      if (allowed.length && approveTools === true) server.__piScienceAllowedTools = unique(allowed);
+      mcpServers[connector.name] = server;
     }
     await atomicSnapshot(workspace, { version: 1, project_id: projectId, generated_at: Date.now(), mcpServers });
   }
 }
 
-function projectServer(connector: StoredMcpConnector, includeTools: string[], excludeTools: string[], approveTools: boolean | string[]): ProjectedMcpServer {
+function projectServer(connector: StoredMcpConnector, includeTools: string[], excludeTools: string[], approveTools: boolean | string[], projectId: string): ProjectedMcpServer {
   const runtime = connector.runtime_config;
   return {
     __piScienceConnectorId: connector.connector_id,
     __piScienceAllowPrivate: runtime.allow_private,
+    __piScienceProjectId: projectId,
     ...(connector.transport === "stdio" ? { command: connector.command!, args: connector.args } : {}),
     ...(connector.transport === "socket" ? { socket: connector.socket_path! } : {}),
     ...(connector.transport === "streamable_http" || connector.transport === "sse" ? { url: connector.endpoint_url! } : {}),
@@ -84,3 +93,17 @@ async function atomicSnapshot(cwd: string, payload: unknown): Promise<void> {
 }
 
 function unique(values: string[]): string[] { return [...new Set(values)].sort(); }
+
+function effectiveToolDecision(
+  connector: StoredMcpConnector,
+  toolName: string,
+  globalGrants: Map<string, McpToolDecision>,
+  projectGrants: Map<string, McpToolDecision>,
+): McpToolDecision {
+  const global = globalGrants.get(toolName);
+  const project = projectGrants.get(toolName);
+  if (global === "deny" || project === "deny") return "deny";
+  if (project) return project;
+  if (global) return global;
+  return connector.approval_mode === "allow_all" ? "allow" : "ask";
+}
