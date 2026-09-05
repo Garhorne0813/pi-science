@@ -21,6 +21,7 @@ import { registerNotebookRoutes } from "../http/routes/notebook-routes.js";
 import { knownWorkspacePaths, registerCatalogRoutes, rootDir } from "../http/routes/catalog-routes.js";
 import { registerProjectRoutes } from "../http/routes/project-routes.js";
 import { registerLiteratureRoutes } from "../http/routes/literature-routes.js";
+import { registerMcpRoutes } from "../http/routes/mcp-routes.js";
 import { createServerModules, type ServerModules } from "./server-modules.js";
 import { registerEnvironmentRoutes } from "../http/routes/environment-routes.js";
 import { serveFrontend } from "../http/frontend-static.js";
@@ -31,7 +32,7 @@ import { importLegacyState } from "../storage/sqlite/legacy-state.js";
 import { internalAuthCookie, requestInternalToken, tokensMatch } from "../security/internal-auth.js";
 
 export function buildApp(config: ServerConfig, modules: ServerModules = createServerModules(config)): FastifyInstance {
-  const { sessions: nodeSessionService, events, sessionRepository, piManager, runtimeCatalog, settings, modelResources, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
+  const { sessions: nodeSessionService, events, sessionRepository, piManager, runtimeCatalog, settings, modelResources, mcp, jobs, research, projectReview, environments, kernels, notebooks, stateStore, workspaces, environmentRepository, jobRepository, sqliteEnabled } = modules;
   let stateReady = !sqliteEnabled;
   let stateError: unknown;
   const app = Fastify({
@@ -161,7 +162,8 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   registerEnvironmentRoutes(app, environments);
   if (config.nodeArtifacts !== false) registerArtifactRoutes(app);
   if (config.nodeArtifacts !== false) registerTurnArtifactRoutes(app);
-  if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings, modelResources, runtimeCatalog);
+  if (config.nodeSettings !== false) registerSettingsRoutes(app, nodeSessionService, settings, modelResources, runtimeCatalog, sqliteEnabled ? mcp : undefined);
+  if (config.nodeSettings !== false && sqliteEnabled) registerMcpRoutes(app, mcp);
   if (config.nodeSettings !== false) {
     registerModelResourceRoutes(app, modelResources, nodeSessionService);
     registerModelEndpointRoutes(app, { service: modelResources, nodeSessionService });
@@ -169,7 +171,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   if (config.nodeExecutions !== false) registerExecutionRoutes(app, jobs);
   if (config.nodeExecutions !== false) registerKernelExecutionRoutes(app, config, environments, kernels);
   registerNotebookRoutes(app, notebooks);
-  if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, research, sqliteEnabled ? workspaces : undefined);
+  if (config.nodeCatalog !== false) registerCatalogRoutes(app, jobs, research, sqliteEnabled ? workspaces : undefined, sqliteEnabled ? mcp : undefined);
   if (config.nodeProject !== false) registerProjectRoutes(app, research, projectReview);
   if (config.nodeLiterature !== false) registerLiteratureRoutes(app);
   app.addHook("onReady", async () => {
@@ -177,6 +179,7 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
       try {
         await stateStore.start();
         await importLegacyState({ store: stateStore, workspaces, environments: environmentRepository, jobs: jobRepository, managedRoot: rootDir(), logger: (message, details) => app.log.info({ ...details }, message) });
+        await mcp.ensureBuiltins();
         stateReady = true;
       } catch (error) {
         stateError = error;

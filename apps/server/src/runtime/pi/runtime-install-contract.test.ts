@@ -16,6 +16,11 @@ describe("Pi runtime installation contract", () => {
     expect(fetchScript).not.toContain("PI_AI_VERSION");
     expect(fetchScript).not.toContain("@earendil-works/pi-ai@");
     expect(fetchScript).toContain('pi-mcp-adapter@$PI_MCP_ADAPTER_VERSION');
+    const mcpPatchScript = await readFile(resolve(projectRoot, "scripts/patch-mcp-adapter.mjs"), "utf8");
+    expect(mcpPatchScript).toContain("PI_SCIENCE_SESSION_CONFIG_FACTORY_V1");
+    expect(mcpPatchScript).toContain("PI_SCIENCE_MCP_ACTION_ENUM_V1");
+    expect(mcpPatchScript).toContain('Type.Literal("ui-messages")');
+    expect(mcpPatchScript).toContain('error: "invalid_action"');
     expect(fetchScript).toContain('pi-subagents@$PI_SUBAGENTS_VERSION');
     expect(fetchScript).toContain('pi-web-access@$PI_WEB_ACCESS_VERSION');
     expect(fetchScript).toContain('context-mode@$CONTEXT_MODE_VERSION');

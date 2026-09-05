@@ -43,6 +43,7 @@ const NOTEBOOK_EXTENSION = join(
   "extensions",
   "pi-science-notebook.ts",
 );
+const MCP_EXTENSION = join(PROJECT_ROOT, "apps", "server", "src", "runtime", "pi", "extensions", "pi-science-mcp.ts");
 
 function webPort(): number {
   if (sharedWebPort === null) sharedWebPort = randomInt(20_000, 60_000);
@@ -117,7 +118,7 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
   if (effectiveThinking) args.push("--thinking", effectiveThinking);
   if (useRpcMode && sessionPath) args.push("--session", sessionPath);
   for (const skill of useRpcMode ? [...seededSkills, ...config.skills] : config.skills) args.push("--skill", skill);
-  const extensionPaths = ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(config.extensions));
+  const extensionPaths = ensureMcpExtension(ensureNotebookExtension(ensureBrowserQuestionnaireAdapter(config.extensions)));
   for (const extension of extensionPaths) args.push("-e", extension);
   const workspaceKey = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 12);
   let agentDir = join(dataRoot, "pi-agent", useRpcMode ? workspaceKey : "web-host");
@@ -136,6 +137,7 @@ export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPat
     PI_CODING_AGENT_DIR: agentDir,
     PI_CONFIG_DIR: agentDir,
     PI_WORKSPACE_DIR: resolve(cwd),
+    PI_SCIENCE_MCP_ADAPTER_PATH: findRuntimeExtension("pi-mcp-adapter", cliPath, []) ?? join(PROJECT_ROOT, "runtime", "pi", "node_modules", "pi-mcp-adapter", "index.ts"),
     CONTEXT_MODE_DATA_DIR: agentDir,
     CONTEXT_MODE_DIR: join(agentDir, "context-mode"),
     ...(!useRpcMode ? { PI_ORBIT_AUTH_TOKEN: reservedWebToken } : {}),
@@ -496,6 +498,13 @@ function ensureNotebookExtension(paths: string[]): string[] {
     ...paths.filter((path) => path !== NOTEBOOK_EXTENSION),
     NOTEBOOK_EXTENSION,
   ];
+}
+
+/** MCP is always loaded through Pi-Science's programmatic snapshot adapter.
+ * This prevents pi-mcp-adapter from merging ambient global/project files. */
+function ensureMcpExtension(paths: string[]): string[] {
+  if (process.env.PI_SCIENCE_DISABLE_MCP === "1" || !existsSync(MCP_EXTENSION)) return paths;
+  return [...paths.filter((path) => path !== MCP_EXTENSION && !path.includes("pi-mcp-adapter")), MCP_EXTENSION];
 }
 
 function readSettings(dataRoot: string): Record<string, any> {

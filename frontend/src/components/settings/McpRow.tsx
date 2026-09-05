@@ -1,50 +1,26 @@
+import { AlertTriangle, Loader2, Server, ShieldCheck } from "lucide-react";
+import type { McpConnector } from "@pi-science/contracts";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/ui";
-import type { McpServer } from "../../lib/settings";
 
-export function McpRow({ server, onToggle }: { server: McpServer; onToggle: (id: string, on: boolean) => void }) {
+export function McpRow({ connector, busy, selected, actionsEnabled, onSelect, onToggle, onProbe }: {
+  connector: McpConnector;
+  busy: boolean;
+  selected: boolean;
+  actionsEnabled: boolean;
+  onSelect: () => void;
+  onToggle: (enabled: boolean) => void;
+  onProbe: () => void;
+}) {
   const { t } = useTranslation();
-  return (
-    <div className="flex min-h-14 items-start justify-between gap-panel border-b border-faint py-2">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-ui-label font-medium text-text">{server.name}</span>
-            <span className="rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] text-muted">{server.transport}</span>
-          </div>
-          <p className="mt-0.5 text-ui-caption text-muted">{server.description || server.id}</p>
-          <div className="mt-1 flex items-center gap-2">
-            <span className={cn("text-[10px]", server.health === "ready" ? "text-ok-text" : server.health === "error" ? "text-error-text" : "text-muted")}>
-              {t("settings.mcpPage.health")}: {server.health}
-            </span>
-            <span className={cn("text-[10px]", server.auth === "missing" ? "text-warn-text" : "text-muted")}>
-              {t("settings.mcpPage.auth")}: {server.auth}
-            </span>
-            <span className={cn("text-[10px]", server.data_egress === "remote" ? "text-warn-text" : "text-muted")}>
-              {t("settings.mcpPage.data")}: {server.data_egress}
-            </span>
-            <span className="text-[10px] text-muted">{t("settings.mcpPage.toolCount", { count: server.tools.length })}</span>
-          </div>
-          {server.error && <p className="mt-1 text-[10px] text-error-text">{server.error}</p>}
-          {(server.terms_url || server.privacy_url) && (
-            <div className="mt-1 flex gap-2 text-[10px]">
-              {server.terms_url && (
-                <a href={server.terms_url} target="_blank" className="text-link hover:underline">
-                  {t("settings.mcpPage.terms")}
-                </a>
-              )}
-              {server.privacy_url && (
-                <a href={server.privacy_url} target="_blank" className="text-link hover:underline">
-                  {t("settings.mcpPage.privacy")}
-                </a>
-              )}
-            </div>
-          )}
-        </div>
-        <button onClick={() => onToggle(server.id, !server.enabled)} className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors", server.enabled ? "bg-ok-fill text-accent-fg" : "bg-surface-2 text-muted hover:bg-surface hover:text-text")}>
-          {server.enabled ? t("settings.actions.on") : t("settings.actions.off")}
-        </button>
-      </div>
-    </div>
-  );
+  const ready = connector.runtime_state === "ready" || connector.runtime_state === "connected";
+  const description = connector.source === "builtin" && connector.name === "paper-search"
+    ? t("settings.mcpPage.paperSearchDescription")
+    : connector.description || "—";
+  return <tr className={cn("align-top hover:bg-surface-2/30", selected && "bg-surface-2/50")}>
+    <td className="px-4 py-3"><button type="button" onClick={onSelect} className="flex min-w-0 items-start gap-2 text-left"><Server size={16} className="mt-0.5 shrink-0 text-muted" /><span className="min-w-0"><span className="flex items-center gap-1.5"><span className="block truncate text-sm font-medium text-text">{connector.display_name}</span>{connector.source === "builtin" && <span className="shrink-0 whitespace-nowrap rounded bg-surface-2 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted">{t("settings.mcpPage.builtin")}</span>}</span><span className="text-[10px] text-muted">{connector.name}</span></span></button></td>
+    <td className="hidden px-4 py-3 text-xs text-muted md:table-cell"><p className="line-clamp-2">{description}</p></td>
+    <td className="px-4 py-3"><span className={cn("inline-flex items-center gap-1.5 text-xs", ready ? "text-ok-text" : connector.runtime_state === "error" ? "text-error-text" : "text-muted")}>{ready ? <ShieldCheck size={13} /> : <AlertTriangle size={13} />}{t(`settings.mcpPage.runtimeState.${connector.runtime_state}`)}</span><p className="mt-1 text-[10px] text-muted">{t(`settings.mcpPage.authState.${connector.auth_state}`)} · {t(`settings.mcpPage.transport.${connector.transport}`)} · {t("settings.mcpPage.toolCount", { count: connector.tool_count })}</p></td>
+    <td className="px-4 py-3"><span className="inline-flex items-center gap-3"><button type="button" disabled={busy || !actionsEnabled} onClick={onProbe} className="text-xs text-link hover:underline disabled:text-muted disabled:no-underline">{t("settings.mcpPage.test")}</button>{busy && <Loader2 size={12} className="animate-spin text-muted" />}<input type="checkbox" aria-label={t("settings.mcpPage.enable", { name: connector.display_name })} checked={connector.settings.enabled} disabled={busy || !actionsEnabled} onChange={(event) => onToggle(event.target.checked)} className="h-4 w-4 accent-[var(--accent)]" /></span></td>
+  </tr>;
 }
