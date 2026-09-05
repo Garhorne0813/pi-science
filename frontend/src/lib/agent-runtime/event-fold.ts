@@ -139,6 +139,7 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
         startedAt: (event.startedAt as string | undefined) ?? previous?.startedAt,
         endedAt: (event.endedAt as string | undefined) ?? previous?.endedAt,
         childSessionId: (event.childSessionId as string | undefined) ?? previous?.childSessionId,
+        interactionResolved: previous?.interactionResolved,
       };
       if (existingIdx !== undefined) {
         blocks[existingIdx] = block;
@@ -325,6 +326,17 @@ export function prependHistoryMessages(current: Thread, messages: HistoryMessage
   return { blocks, index, loaded: true };
 }
 
+export function replaceHistoryTail(current: Thread, messages: HistoryMessage[]): Thread {
+  const authoritative = threadFromMessages(messages);
+  if (authoritative.blocks.length === 0) return current;
+  const authoritativeIds = new Set(authoritative.blocks.map((block) => block.id));
+  const firstOverlap = current.blocks.findIndex((block) => authoritativeIds.has(block.id));
+  if (firstOverlap < 0) return authoritative;
+  const blocks = [...current.blocks.slice(0, firstOverlap), ...authoritative.blocks];
+  const index: Record<string, number> = {};
+  blocks.forEach((block, position) => { index[block.id] = position; });
+  return { blocks, index, loaded: true };
+}
 export function mergeHistoryWithLive(history: Thread, live: Thread): Thread {
   if (live.blocks.length === 0) return history;
   const ids = new Set(history.blocks.map((block) => block.id));

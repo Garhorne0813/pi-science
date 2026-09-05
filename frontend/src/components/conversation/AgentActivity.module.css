@@ -1,0 +1,149 @@
+.root {
+  --activity-color: var(--accent);
+  --activity-cycle: 3.2s;
+  --activity-beat: 1.2s;
+}
+
+.summary {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.glyph {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 2rem;
+  align-items: center;
+  justify-content: center;
+}
+
+.glyph > * { position: relative; z-index: 1; }
+
+.root:is([data-state="running"], [data-state="waiting"]) .glyph::before,
+.root:is([data-state="running"], [data-state="waiting"]) .glyph::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at 25% 35%, color-mix(in srgb, var(--activity-color) 60%, transparent), transparent 65%);
+  filter: blur(5px);
+  animation: orbit var(--activity-cycle) linear infinite;
+}
+
+.root:is([data-state="running"], [data-state="waiting"]) .glyph::after {
+  inset: 4px -2px;
+  opacity: 0.65;
+  animation-direction: reverse;
+  animation-duration: calc(var(--activity-cycle) * 1.5);
+}
+
+.root[data-state="waiting"] .glyph::before,
+.root[data-state="waiting"] .glyph::after { animation-duration: calc(var(--activity-cycle) * 2); }
+
+.title { animation: reveal var(--motion-slow) var(--ease-standard) both; }
+.detail { animation: reveal var(--motion-normal) var(--ease-standard) both; }
+
+@supports (background-clip: text) {
+  .root[data-state="running"] .title {
+    background-image: linear-gradient(110deg, var(--text) 20%, var(--activity-color) 40%, var(--text) 60%);
+    background-size: 250% 100%;
+    background-clip: text;
+    color: transparent;
+    animation: sheen var(--activity-cycle) linear infinite;
+  }
+}
+
+.trace {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.75rem 0 0.25rem 2.5rem;
+  animation: reveal var(--motion-slow) var(--ease-standard) both;
+}
+
+.entry { animation: reveal var(--motion-slow) var(--ease-standard) both; }
+.narration { padding-block: 0.25rem; }
+.narration ~ .narration { margin-top: 0.75rem; }
+.narration:last-of-type > div { color: var(--text); }
+
+.toolButton {
+  transition: color var(--motion-normal) var(--ease-standard);
+}
+.toolButton:hover, .toolButton:focus-visible { color: var(--text); }
+.tool[data-running="true"] .toolButton { color: var(--activity-color); }
+
+.chevron {
+  opacity: 0.55;
+  transition: transform var(--motion-normal) var(--ease-standard), opacity var(--motion-normal) var(--ease-standard);
+}
+button:hover > .chevron, button:focus-visible > .chevron { opacity: 1; }
+
+.wave {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  align-items: center;
+  justify-content: space-between;
+}
+.wave i {
+  width: 2px;
+  height: 12px;
+  border-radius: 2px;
+  background: currentColor;
+  transform: scaleY(0.35);
+  animation: wave var(--activity-beat) ease-in-out infinite;
+}
+.wave i:nth-child(2) { animation-delay: calc(var(--activity-beat) * -0.75); }
+.wave i:nth-child(3) { animation-delay: calc(var(--activity-beat) * -0.5); }
+.wave i:nth-child(4) { animation-delay: calc(var(--activity-beat) * -0.25); }
+.toolCheck { animation: resolve var(--motion-slow) var(--ease-standard) both; }
+.details { animation: reveal var(--motion-normal) var(--ease-standard) both; }
+.root[data-state="completed"] .glyph { animation: resolve var(--motion-slow) var(--ease-standard) both; }
+
+@keyframes orbit {
+  0% { transform: rotate(0deg) scale(0.85); opacity: 0.65; }
+  50% { transform: rotate(180deg) scale(1.25); opacity: 1; }
+  100% { transform: rotate(360deg) scale(0.85); opacity: 0.65; }
+}
+@keyframes sheen {
+  from { background-position: 160% 50%; }
+  to { background-position: -90% 50%; }
+}
+@keyframes wave {
+  0%, 100% { transform: scaleY(0.3); opacity: 0.55; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+@keyframes reveal {
+  from { opacity: 0; transform: translateY(6px); filter: blur(3px); }
+  to { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+@keyframes resolve {
+  from { opacity: 0; transform: scale(0.7); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* Explicit app preference also disables entrance motion, not just loaders. */
+.root[data-motion="off"] *,
+.root[data-motion="off"] *::before,
+.root[data-motion="off"] *::after {
+  animation: none !important;
+  transition: none !important;
+}
+.root[data-motion="off"] .title { background: none; color: var(--text); }
+.root[data-state="error"][data-motion="off"] .title { color: var(--error-text); }
+.root[data-motion="off"] .wave i { transform: scaleY(0.6); }
+
+@media (prefers-reduced-motion: reduce) {
+  .root *, .root *::before, .root *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  .root .title { background: none; color: var(--text); }
+  .root[data-state="error"] .title { color: var(--error-text); }
+  .wave i { transform: scaleY(0.6); }
+}

@@ -25,7 +25,7 @@ describe("Narrative Progress reducer", () => {
       tool("edit", "edit-2"),
       tool("bash", "typecheck", "done", { input: { description: "Check TypeScript types" } }),
     ];
-    expect(transitions(blocks)).toEqual(["explore:code", "implementation:code", "error:code", "implementation:code"]);
+    expect(transitions(blocks)).toEqual(["explore:code", "implementation:code"]);
     expect(selectDisplayedActivity(blocks)).toMatchObject({ state: "implementation", domain: "code" });
   });
 
@@ -64,6 +64,10 @@ describe("Narrative Progress reducer", () => {
     expect(transitions(blocks)).toEqual(["explore:science", "implementation:science"]);
   });
 
+  it("uses a generation epoch for image output", () => {
+    expect(selectDisplayedActivity([tool("image_gen", "image", "running")])).toMatchObject({ state: "generate", domain: "document" });
+  });
+
   it("uses standalone verify when no mutation epoch exists", () => {
     expect(selectDisplayedActivity([tool("bash", "b", "running", { input: { description: "Run tests" } })])).toMatchObject({ state: "verify", domain: "code" });
   });
@@ -74,11 +78,16 @@ describe("Narrative Progress reducer", () => {
     expect(selectDisplayedActivity([tool("read"), tool("future_extension", "x", "running")])?.state).toBe("explore");
   });
 
-  it("surfaces interactions, errors, and recovery as forced states", () => {
+  it("keeps the current narrative when a tool fails and later work continues", () => {
+    expect(selectDisplayedActivity([tool("edit", "e"), tool("bash", "b", "error"), tool("read", "r", "running")])?.state).toBe("implementation");
+  });
+
+  it("surfaces interactions and recovery as forced states", () => {
     expect(selectDisplayedActivity([tool("read"), tool("ask_user_question", "a", "waiting-approval")])).toMatchObject({ state: "interaction", forced: true });
-    expect(selectDisplayedActivity([tool("read"), tool("bash", "b", "error")])).toMatchObject({ state: "error", forced: true });
     expect(selectDisplayedActivity([tool("runtime_recovery", "rr", "running")])).toMatchObject({ state: "recover", forced: true });
   });
+
+
 
   it("ignores todo and answered interactions", () => {
     expect(selectDisplayedActivity([tool("todo", "t1"), tool("todo", "t2")])).toBeNull();

@@ -1,9 +1,9 @@
 import type { ToolCallBlock } from "../../types/thread";
 import { activityPolicy } from "./activity-policy";
 
-export type NarrativeState = "orient" | "explore" | "research" | "analyze" | "implementation" | "compute" | "verify" | "interaction" | "recover" | "error" | "complete";
+export type NarrativeState = "orient" | "explore" | "research" | "analyze" | "implementation" | "compute" | "verify" | "generate" | "interaction" | "recover" | "error" | "complete";
 export type NarrativeDomain = "code" | "research" | "science" | "document" | "data" | "generic";
-export type OperationKind = "read" | "search" | "fetch" | "edit" | "execute" | "compute" | "verify" | "interaction" | "recover" | "other";
+export type OperationKind = "read" | "search" | "fetch" | "edit" | "execute" | "compute" | "verify" | "generate" | "interaction" | "recover" | "other";
 
 export interface ToolActivityPresentation {
   kind: OperationKind;
@@ -12,7 +12,7 @@ export interface ToolActivityPresentation {
   importance: "micro" | "stage" | "interrupt";
   domain: NarrativeDomain;
   finalVerification?: boolean;
-  narrativeHint?: Extract<NarrativeState, "explore" | "research" | "analyze" | "implementation" | "compute" | "verify">;
+  narrativeHint?: Extract<NarrativeState, "explore" | "research" | "analyze" | "implementation" | "compute" | "verify" | "generate">;
 }
 
 export interface PresentedActivity {
@@ -32,6 +32,7 @@ const NOTEBOOK_READ_TOOLS = new Set(["notebook_read"]);
 const NOTEBOOK_EDIT_TOOLS = new Set(["notebook_edit"]);
 const NOTEBOOK_RUN_TOOLS = new Set(["notebook", "notebook_run", "run_cell", "execute_code"]);
 const FINAL_VERIFY_FIELDS = ["finalVerification", "final_verification"] as const;
+const GENERATE_TOOLS = new Set(["image_gen", "image_generation", "generate_image", "create_image", "render_image"]);
 
 /** Fold precise tool events into one quiet, task-level progress narrative. */
 export function selectNarrativeActivity(blocks: ToolCallBlock[]): PresentedActivity | null {
@@ -96,6 +97,7 @@ export function toolActivityPresentation(block: ToolCallBlock): ToolActivityPres
     if (tool === "runtime_recovery" || tool === "reconnect") return presentation("recover", block, "interrupt", "generic");
     return null;
   }
+  if (GENERATE_TOOLS.has(tool)) return presentation("generate", block, "stage", "document");
   if (NOTEBOOK_READ_TOOLS.has(tool)) return presentation("read", block, "micro", "science");
   if (NOTEBOOK_EDIT_TOOLS.has(tool)) return presentation("edit", block, "stage", "science");
   if (NOTEBOOK_RUN_TOOLS.has(tool)) return presentation("compute", block, "stage", "science");
@@ -113,7 +115,8 @@ export function toolActivityPresentation(block: ToolCallBlock): ToolActivityPres
 
 function fromToolPresentation(presentation: ToolCallBlock["presentation"]): ToolActivityPresentation | null {
   if (!presentation) return null;
-  if (presentation.kind === "artifact" || presentation.kind === "other") return null;
+  if (presentation.kind === "other") return null;
+  if (presentation.kind === "artifact") return { kind: "generate", title: presentation.title, ...(presentation.description ? { description: presentation.description } : {}), importance: presentation.importance, domain: presentation.domain, narrativeHint: "generate" };
   if (presentation.kind === "system") return { kind: "recover", title: presentation.title, importance: presentation.importance, domain: presentation.domain };
   return {
     kind: presentation.kind,
@@ -127,7 +130,7 @@ function fromToolPresentation(presentation: ToolCallBlock["presentation"]): Tool
 }
 
 function narrativeFor(block: ToolCallBlock, presentation: ToolActivityPresentation, implementationSeen: boolean): PresentedActivity | null {
-  if (block.status === "error") return activity("error", presentation.domain, block, true);
+  if (block.status === "error") return null;
   if (presentation.kind === "interaction") return activity("interaction", presentation.domain, block, true);
   if (presentation.kind === "recover") return activity("recover", presentation.domain, block, true);
   if (presentation.narrativeHint) {
@@ -135,6 +138,7 @@ function narrativeFor(block: ToolCallBlock, presentation: ToolActivityPresentati
     return activity(presentation.narrativeHint, presentation.domain, block);
   }
   if (presentation.kind === "edit") return activity("implementation", presentation.domain, block);
+  if (presentation.kind === "generate") return activity("generate", presentation.domain, block);
   if (presentation.kind === "compute") return activity(implementationSeen && presentation.domain === "science" ? "implementation" : "compute", presentation.domain, block);
   if (presentation.kind === "verify") {
     const finalVerification = presentation.finalVerification === true || FINAL_VERIFY_FIELDS.some((field) => block.input?.[field] === true);

@@ -95,8 +95,16 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
     if (scrollRef.current) {
       // Keep the stable class hook used by the conversation rail and by
       // integrations that locate the active conversation scroller.
-      scrollRef.current.classList.add("conversation-scroller", "overflow-y-auto");
-      scrollRef.current.addEventListener("scroll", handleThreadScroll);
+      const scroller = scrollRef.current;
+      scroller.classList.add("conversation-scroller", "overflow-y-auto");
+      scroller.addEventListener("scroll", handleThreadScroll);
+      if (followOutputRef.current) {
+        window.requestAnimationFrame(() => {
+          if (scrollRef.current !== scroller || !followOutputRef.current) return;
+          scroller.scrollTop = scroller.scrollHeight;
+          virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "auto" });
+        });
+      }
     }
   }, [handleThreadScroll]);
 

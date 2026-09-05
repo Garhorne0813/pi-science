@@ -33,6 +33,8 @@ source, and so values we invent are clearly marked as our own proposals.
 | `packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css` | Chat content width 748px, composer width = content + 32px, 36px fade mask, tabs 13px/2px active bar |
 | `packages/client/ui-conversation/src/client/skeleton/InputBar.module.css` | Composer card: radius 22px, 1px border `rgba(0,0,0,0.10)` light / `rgba(255,255,255,0.06)` dark, send button 34px circular `#4176e6` (dark `#679efe`) |
 | `packages/client/ui-conversation/src/client/chat/MessageItem.module.css` | User bubble: max-width `min(525px, 82%)`, radius 22px, padding 10px 16px |
+| `packages/client/ui-conversation/src/client/chat/ReasoningRow.module.css` | Borderless reasoning row, title weight 400, muted summary at 14px/24px, running sweep overlay |
+| `packages/client/ui-tool/src/client/tool/components/ToolRow.module.css` | Borderless tool summary row, 2px separator dot, title + tertiary summary hierarchy at 14px/24px |
 | `packages/client/ui-primitives/src/markdown/CodeBlock.module.css` | Code block radius 12px, sticky banner |
 | `packages/client/ui-primitives/src/markdown/MarkdownText.module.css` | Markdown spacing (16px paragraph rhythm), link color = business blue |
 
@@ -229,3 +231,87 @@ owner should confirm or revise them:
 - Do not copy upstream source files wholesale; only parameter values and
   interaction patterns (collapse motion, sticky code banner) are in scope.
 - Pi-Science keeps its own product name and "Pi" identity.
+
+## Progress pattern proposal
+
+The progress-pattern layer uses bundled MIT-licensed primitives from
+[Generative Loaders](https://generativeloaders.com/docs) v0.1.1. It exposes only
+allowlisted variants through `ProgressPatternCatalog.ts`; remote pages and
+runtime CDN assets are never loaded. AICSS free components remain a visual
+reference for agent states and may be copied only under its MIT terms; licensed
+AICSS components are excluded until a commercial license is recorded. The public
+AICSS React package is vendored at commit `4556a918fd8c9358d42d2b24a3866301b8ea10a2`
+under `frontend/src/components/progress/aicss/`; Activity uses the MIT-licensed
+`packages/react/src/orbs/Orb.tsx` component and its CSS module. Website-only and
+Pro components are not copied.
+
+The imported loader stylesheet owns only the internal animation geometry. The
+application owns layout, semantic colors, typography, radii, accessibility
+labels, reduced-motion behavior, and the settings contract. Current Activity
+keeps its narrative text outside the loader so the animation cannot replace
+meaning or affect Markdown and KaTeX rendering.
+
+### Semantic Activity mapping
+
+`aicss-auto` is the default pattern for Thinking, Current Activity, and Waiting.
+The turn lifecycle controls whether progress is running, waiting, completed, or
+failed. The narrative state independently selects the AICSS Orb geometry:
+
+| Narrative state | Orb | Meaning |
+| --- | --- | --- |
+| orient | S1 | Understand the request |
+| explore | S4 | Read or search local context |
+| research | B2 | Search external sources |
+| analyze | C4 | Analyze information |
+| implementation | B4 | Edit or solve |
+| compute | G1 | Run scientific computation |
+| verify | C5 | Test, build, or validate |
+| generate | B3 | Generate images or other outputs |
+| interaction | C2 | Wait for user input |
+| recover | G4 | Reconnect or restore state |
+| complete | S5 | Finalize the turn |
+
+A user-selected fixed pattern overrides this automatic mapping. Recoverable tool
+errors remain in Execution Trace and do not change the lifecycle to failed.
+
+### Activity row proposal
+
+DeepSeek Harness renders reasoning and tool progress as quiet, borderless rows.
+Its `ReasoningRow.module.css` and `ToolRow.module.css` use a 400-weight title,
+a 2px separator dot, and a tertiary summary on one borderless line. Pi-Science
+uses the same horizontal hierarchy:
+
+- semantic progress glyph: 20px and `--accent` in both light and dark themes;
+- primary Activity title: 14px/20px, regular weight, primary text;
+- separator: 2px round dot with 8px spacing on each side;
+- current task detail: 12px/18px, regular weight, tertiary text, truncating first;
+- row padding: 4px vertical, no outer background or border;
+- expanded Execution Trace may keep its own quiet inset surface.
+
+The 12px task detail is a Pi-Science proposal. Upstream keeps the summary at
+14px/24px; the smaller value preserves the requested title/task hierarchy.
+
+### Live process disclosure (Pi-Science proposal)
+
+The activity panel opens automatically while a turn is running. Intermediate
+assistant prose and execution tools appear in event order without enclosing
+borders, rails, dividers, or hover cards. Indentation and spacing establish
+the hierarchy, using the existing Markdown viewer and semantic text tokens.
+The current streaming answer stays outside the panel. Completion, failure, or
+stop collapses the process; the status row remains available to reopen it.
+History starts collapsed. Manual disclosure changes survive tool updates,
+waiting, and recovery, and reset when a run starts or ends.
+
+The process uses `ui-body` prose, `ui-label` tool labels, and `min-h-control`
+disclosure targets (`min-h-primary` on phones). The 20px semantic glyph sits
+in a 32px stage with two soft, rotating accent glows; the title uses 500 weight
+and a moving accent highlight. Running tools use a four-bar waveform and
+completed tools use a quiet checkmark. Prose is indented 40px, with 12px
+between narrative paragraphs.
+
+Proposed motion values: 3.2s glow/title cycle, 1.2s waveform cycle, both scaled
+by the existing progress speed setting; 200–300ms content reveals translate
+6px and resolve 3px blur. Glows use 5px blur, 0.85–1.25 scale, and the configured
+accent color. The animations use local CSS only. App motion-off and system
+reduced-motion preferences disable the new effects. Terminal states stop all
+running effects; completion gets a single 300ms checkmark reveal.

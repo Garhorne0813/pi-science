@@ -8,6 +8,7 @@ describe("toolActivityTitle", () => {
   it("returns replayable semantics for built-in and opaque tools", () => {
     expect(toolActivityPresentation("notebook_run", {})).toMatchObject({ version: 1, kind: "compute", domain: "science", importance: "stage" });
     expect(toolActivityPresentation("bash", { description: "Run frontend tests" })).toMatchObject({ kind: "verify", domain: "code", description: "Run frontend tests" });
+    expect(toolActivityPresentation("image_gen", {})).toMatchObject({ kind: "artifact", domain: "document", narrativeHint: { state: "generate" } });
     expect(toolActivityPresentation("bash", { command: "git status" })).toBeUndefined();
   });
 });

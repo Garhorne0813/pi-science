@@ -61,6 +61,11 @@ export default defineConfig({
             id.includes("node_modules/remark-gfm") ||
             id.includes("node_modules/highlight.js")
           ) return "vendor-markdown";
+          // Generative Loaders is only reached through ProgressVisual's lazy
+          // renderer. Keep its animation runtime in the same async graph instead
+          // of folding ~135 KB of Framer Motion back into the initial common
+          // vendor chunk.
+          if (/[\\/]node_modules[\\/](?:generative-loaders|framer-motion|motion-dom|motion-utils)[\\/]/.test(id)) return "vendor-progress";
           // Keep Mol* and its parser/runtime dependencies in the molecule-only
           // dynamic graph. Everything else can share the existing common vendor
           // chunk without pulling the molecular viewer into the initial bundle.

@@ -2,6 +2,7 @@ import { applySessionReplacements, type SessionReplacement } from "../agent-runt
 import { apiRequest } from "../client/api";
 import { queryClient } from "../client/query-client";
 import type { AgentProfile, McpServer, ProjectSubagent, RuntimeExtension, WebAccessConfig } from "./settings-types";
+import type { ProgressAppearance } from "@pi-science/contracts";
 
 export const settingsKey = (...selector: Array<string | null>) => ["settings", ...selector];
 
@@ -129,7 +130,12 @@ export const settingsApi = {
     return result;
   },
 
-  /* ── Web access ── */
+  async saveProgress(progress: ProgressAppearance): Promise<void> {
+    unwrapSettings(await apiRequest<SettingsEnvelope>("/api/settings/progress", json("PUT", progress)), "Unable to save progress appearance");
+    await invalidateSettings();
+  },
+
+
 
   saveWebAccess(body: { provider: string; workflow: string; api_keys: Record<string, string>; remove_keys: string[] }, fallback: string) {
     return writeSettings<WebAccessConfig>("/api/settings/web-access", json("PUT", body), fallback);

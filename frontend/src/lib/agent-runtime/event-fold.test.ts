@@ -1,13 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { convertHistoryToBlocks, useRuntimeStore } from "./index";
+import { convertHistoryToBlocks, replaceHistoryTail, useRuntimeStore } from "./index";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
 
 installRuntimeTestEnvironment();
 
-
 describe("transport event folding", () => {
+
+  it("preserves older user messages when a settled tail is refreshed", () => {
+    const current = { blocks: convertHistoryToBlocks([
+      { id: "user-old", role: "user", content: [{ type: "text", text: "old question" }] },
+      { id: "tool-old", role: "toolResult", toolCallId: "call-old", toolName: "read", content: [{ type: "text", text: "old result" }] },
+      { id: "tool-tail", role: "toolResult", toolCallId: "call-tail", toolName: "read", content: [{ type: "text", text: "tail result" }] },
+    ]), index: {}, loaded: true };
+    const next = replaceHistoryTail(current, [
+      { id: "tool-tail", role: "toolResult", toolCallId: "call-tail", toolName: "read", content: [{ type: "text", text: "fresh tail result" }] },
+    ]);
+    expect(next.blocks.map((block) => block.id)).toEqual(["user-old", "tool-call-old", "tool-call-tail"]);
+    expect(next.blocks.at(-1)).toMatchObject({ output: "fresh tail result" });
+  });
+
   it("merges durable user history with replayed live output during a mid-turn reload", async () => {
     let resolveMessages!: (response: Response) => void;
     let resolveState!: (response: Response) => void;

@@ -15,10 +15,9 @@ export interface TurnPresentation {
   activityTools: ToolCallBlock[];
   systemBlocks: ThreadBlock[];
   intermediateAgents: AgentMessageBlock[];
-  /** Active turn: newest agent text that no tool has superseded yet. Hidden
-   *  from the transcript until the turn lifecycle confirms it as the answer. */
+  /** Active turn: newest streaming agent text that no tool has superseded yet. */
   provisionalAgent: AgentMessageBlock | null;
-  /** Confirmed answer. Always null while the turn is still active. */
+  /** Answer explicitly marked final, or selected after a settled lifecycle. */
   finalAgent: AgentMessageBlock | null;
   artifacts: TurnArtifactSummaryBlock[];
   /** Explicit terminal state prevents abort/failure text from becoming final. */
@@ -63,7 +62,8 @@ function buildTurnPresentation(blocks: ThreadBlock[], lifecycle: TurnLifecycle):
   const artifacts = blocks.filter((block): block is TurnArtifactSummaryBlock => block.kind === "artifact-summary");
   const finalAgent = blocks.findLast((block): block is AgentMessageBlock => block.kind === "agent" && block.presentationRole === "final")
     ?? (lifecycle === "settled" ? finalAgentInCompletedTurn(blocks) : null);
-  const provisionalAgent = active && !finalAgent ? provisionalAgentInActiveTurn(blocks) : null;
+  const hasTerminalError = lifecycle === "failed" && blocks.some((block) => block.kind === "status-line" && block.level === "error");
+  const provisionalAgent = !finalAgent && (active || hasTerminalError) ? provisionalAgentInActiveTurn(blocks) : null;
   const systemBlocks = blocks.filter((block) => block.kind !== "user" && block.kind !== "agent" && block.kind !== "artifact-summary" && (block.kind !== "tool" || activityPolicy(block).plane === "system"));
   const settled = activityTools.length > 0 && activityTools.every((block) => block.status === "done" || block.status === "error");
   return {

@@ -68,6 +68,7 @@ export interface ToolCallBlock {
   startedAt?: string;
   endedAt?: string;
   childSessionId?: string;
+  interactionResolved?: boolean;
 }
 
 export type ToolStatus = "running" | "done" | "error" | "waiting-approval";

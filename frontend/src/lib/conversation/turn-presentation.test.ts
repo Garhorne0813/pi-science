@@ -99,6 +99,13 @@ describe("buildTurnPresentations", () => {
     }
   });
 
+  it("keeps partial answer text beside a terminal stream error", () => {
+    const blocks = [user("u1"), agent("partial-answer"), { kind: "status-line" as const, id: "error-1", text: "stream closed", level: "error" as const }];
+    const turn = buildTurnPresentations(blocks, { lastTurnLifecycle: "failed" })[0];
+    expect(turn.finalAgent).toBeNull();
+    expect(turn.provisionalAgent?.id).toBe("partial-answer");
+  });
+
   it("does not promote narration in a todo-only settled or failed turn", () => {
     for (const lifecycle of ["settled", "failed"] as const) {
       const turn = buildTurnPresentations([user("u1"), agent("planning"), tool("todo", "todo")], { lastTurnLifecycle: lifecycle })[0];

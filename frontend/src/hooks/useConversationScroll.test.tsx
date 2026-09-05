@@ -59,6 +59,26 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("useConversationScroll follow output", () => {
+  it("starts a newly attached Virtuoso scroller at the latest turn", () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { callback(0); return 1; });
+    const { result } = renderHook(() => useConversationScroll(options(vi.fn(async () => 0))));
+    const scrollToIndex = vi.fn();
+    result.current.virtuosoRef.current = { scrollToIndex } as unknown as VirtuosoHandle;
+    const scroller = document.createElement("div");
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 400 },
+      scrollHeight: { configurable: true, value: 1_600 },
+      scrollTop: { configurable: true, value: 0, writable: true },
+    });
+
+    act(() => { result.current.attachScroller(scroller); });
+
+    expect(scroller.scrollTop).toBe(1_600);
+    expect(scrollToIndex).toHaveBeenCalledWith({ index: "LAST", align: "end", behavior: "auto" });
+  });
+});
+
 describe("useConversationScroll history navigation", () => {
   it("loads older pages sequentially and keeps the virtual index aligned", async () => {
     let page = 0;

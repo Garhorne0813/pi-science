@@ -111,7 +111,7 @@ describe("turn-level activity through the live event path", () => {
     render(<>{buildTurnPresentations(runtime.thread.blocks, { lastTurnLifecycle: runtime.turnLifecycle }).map((turn) => renderTurn(turn, codeRunner))}</>);
     // Narrative label, not the per-tool title: the title stays in the trace.
     expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
-    expect(screen.queryByText("我先读取实现。")).not.toBeInTheDocument();
+    expect(screen.getByText("我先读取实现。")).toBeInTheDocument();
     expect(screen.queryByText("Complete")).not.toBeInTheDocument();
   });
 
@@ -149,7 +149,7 @@ describe("turn-level activity through the history path", () => {
 });
 
 describe("activity over time (PRD v1.2 §26/§28)", () => {
-  it("never surfaces narration, keeps one phase row, and confirms the answer only at session.idle", async () => {
+  it("streams provisional text, keeps one phase row, and confirms the answer at session.idle", async () => {
     stubWorkspace();
     await useRuntimeStore.getState().connect("/workspace", SESSION);
     vi.useFakeTimers();
@@ -165,14 +165,16 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       emit("agent_start", {});
       emit("text.updated", { partId: "m1", text: "我先检查一下。" });
       rerender(view());
-      // Provisional narration: invisible from the very first token, not just
-      // after a tool supersedes it.
-      expect(screen.queryByText("我先检查一下。")).not.toBeInTheDocument();
+      // Prose streams immediately, then joins the open process when a tool arrives.
+      expect(screen.getByText("我先检查一下。")).toBeInTheDocument();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
       expect(screen.queryByText("Reviewing the implementation")).not.toBeInTheDocument();
 
       emit("tool.updated", { callId: "r1", tool: "read", status: "running", input: { path: "a.ts" } });
       rerender(view());
       expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
+      expect(screen.getByText("我先检查一下。")).toBeInTheDocument();
+      expect(screen.getByLabelText("Execution trace")).toHaveTextContent("我先检查一下。");
 
       emit("tool.updated", { callId: "r1", tool: "read", status: "done" });
       emit("tool.updated", { callId: "r2", tool: "grep", status: "running", input: { pattern: "x" } });
@@ -197,8 +199,9 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       emit("tool.updated", { callId: "b1", tool: "bash", status: "done" });
       emit("text.updated", { partId: "m2", text: "这是最终回答。" });
       rerender(view());
-      // Streaming answer prose stays hidden until the lifecycle confirms it.
-      expect(screen.queryByText("这是最终回答。")).not.toBeInTheDocument();
+      // The final answer is visible while its text is still streaming.
+      expect(screen.getByText("这是最终回答。")).toBeInTheDocument();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
       expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
 
       emit("session.idle", {});
@@ -207,6 +210,11 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       expect(screen.getByText("Complete")).toBeInTheDocument();
       expect(screen.getByLabelText("4 operations")).toBeInTheDocument();
       expect(screen.queryByText("我先检查一下。")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: /Complete/ }));
+      expect(screen.getByLabelText("Execution trace")).toHaveTextContent("我先检查一下。");
+      expect(screen.getAllByText("这是最终回答。")).toHaveLength(1);
+      expect(screen.getByLabelText("Execution trace")).not.toHaveTextContent("这是最终回答。");
     } finally {
       vi.useRealTimers();
     }

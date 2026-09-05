@@ -2,7 +2,7 @@
  *  stream attach or a transport failure, and the missing-session reset. */
 
 import { clearCachedMessages, clearAiTitle, clearSessionName, getClient, type PiScienceClient, type SessionState } from "../client/pi-science-client";
-import { attachTurnArtifacts, emptyThread, mergeHistoryWithLive, resetTurnBuffer, threadFromMessages } from "./event-fold";
+import { attachTurnArtifacts, emptyThread, mergeHistoryWithLive, replaceHistoryTail, resetTurnBuffer, threadFromMessages } from "./event-fold";
 import { fetchPersistedTurnArtifacts } from "./turn-artifacts";
 import { markWorkspaceFilesChanged } from "./file-revision";
 import { generations, turnState } from "./generations";
@@ -108,7 +108,7 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
     if (history.messages.length === 0 && current.thread.blocks.length > 0) return;
     const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
     useRuntimeStore.setState({
-      thread: attachTurnArtifacts(threadFromMessages(history.messages), turns, { windowComplete: !history.has_more }),
+      thread: attachTurnArtifacts(replaceHistoryTail(current.thread, history.messages), turns, { windowComplete: !history.has_more }),
       historyCursor: history.next_cursor,
       historyHasMore: history.has_more,
       historyLoading: false,
