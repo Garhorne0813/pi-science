@@ -676,6 +676,19 @@ describe("stable Virtuoso footer", () => {
     expect(footerView.container).toHaveTextContent("Thinking");
     expect(footerView.container).toHaveTextContent("Analyzing the request");
 
+    act(() => { useRuntimeStore.setState({
+      thread: { blocks: [
+        userBlock("u1", "Earlier question"),
+        { kind: "agent", id: "process", parts: [{ id: "p1", text: "Checking the request." }] },
+        { kind: "agent", id: "answer", partial: true, parts: [{ id: "p2", text: "Here is the answer." }] },
+      ], index: {}, loaded: true },
+    }); });
+    expect(footerView.container).not.toHaveTextContent("Thinking");
+    act(() => { useRuntimeStore.setState({
+      thread: { blocks: [...useRuntimeStore.getState().thread.blocks, userBlock("u2", "Next question")], index: {}, loaded: true },
+    }); });
+    expect(footerView.container).toHaveTextContent("Thinking");
+
     const interaction: PendingInteraction = {
       requestId: "questionnaire-request",
       method: "input",

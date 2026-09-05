@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import i18n from "../../i18n";
 import type { ToolCallBlock } from "../../types/thread";
 import { AgentActivity } from "./AgentActivity";
@@ -17,20 +17,23 @@ describe("AgentActivity data filters", () => {
 });
 
 describe("AgentActivity", () => {
-  it("presents a borderless two-line activity while precise tool titles stay in Trace", () => {
+  it("automatically expands the live trace below a borderless activity summary", () => {
     const { container } = render(<AgentActivity blocks={[tool("read", "read", "done", { path: "ConversationBlocks.tsx" }), tool("todo", "todo"), tool("search", "grep", "running", { pattern: "tool.updated" })]} />);
     const title = screen.getByText("Reviewing the implementation");
-    const detail = screen.getByText("Searching for tool.updated");
+    const summary = screen.getByRole("button", { name: /Reviewing the implementation/i });
+    const detail = within(summary).getByText("Searching for tool.updated");
     expect(title).toHaveClass("text-sm");
     expect(detail).toHaveClass("text-xs");
     expect(title.parentElement).toBe(detail.parentElement);
     expect(title.nextElementSibling).toHaveAttribute("aria-hidden");
     expect(container.firstElementChild).not.toHaveClass("border");
     expect(document.querySelector('[data-orb-variant="S4"]')).toBeInTheDocument();
-    expect(screen.queryByText("Reading ConversationBlocks.tsx")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Reviewing the implementation/i }));
+    expect(summary).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
     expect(screen.getByText("Reading ConversationBlocks.tsx")).toBeInTheDocument();
+    fireEvent.click(summary);
+    expect(summary).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
   });
 
   it("shows completion as the main copy and operation count as metadata", () => {
@@ -40,6 +43,30 @@ describe("AgentActivity", () => {
   });
 
   it("renders nothing for todo only", () => { const { container } = render(<AgentActivity blocks={[tool("todo", "todo")]} />); expect(container).toBeEmptyDOMElement(); });
+
+  it.each(["settled", "aborted", "failed"] as const)("collapses on %s, allows review, and reopens for the next run", (lifecycle) => {
+    const blocks = [tool("read", "read", "running", { path: "a.ts" })];
+    const { rerender, container } = render(<AgentActivity blocks={blocks} />);
+    fireEvent.click(screen.getByRole("button", { name: /Reviewing the implementation/ }));
+    rerender(<AgentActivity blocks={[...blocks, tool("search", "grep", "running")]} lifecycle="waiting" />);
+    expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
+    rerender(<AgentActivity blocks={blocks} lifecycle="recovering" />);
+    expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Resuming the task/ }));
+    expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
+
+    rerender(<AgentActivity blocks={blocks} lifecycle={lifecycle} />);
+    expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
+    const summary = screen.getByRole("button", { expanded: false });
+    expect(summary).not.toHaveTextContent("Reading a.ts");
+    fireEvent.click(summary);
+    expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
+    expect(container.querySelector(".animate-spin")).toBeNull();
+    fireEvent.click(summary);
+
+    rerender(<AgentActivity blocks={blocks} lifecycle="active" />);
+    expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
+  });
 
   it("uses the generation narrative and orb for image generation", () => {
     render(<AgentActivity blocks={[tool("image", "image_gen", "running")]} />);

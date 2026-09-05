@@ -46,11 +46,11 @@ describe("turn-level conversation rendering", () => {
     expect(screen.getByText("done")).toBeInTheDocument();
   });
 
-  it("keeps tool-only unfinished narration hidden and shows the phase label", () => {
+  it("shows process narration while tools are running", () => {
     const turn = buildTurnPresentations([user("u1"), agent("a1", "I will inspect it."), tool("read", "read", "running", { path: "event-fold.ts" })], { lastTurnLifecycle: "active" })[0];
     render(<>{renderTurn(turn, codeRunner)}</>);
     expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
-    expect(screen.queryByText("I will inspect it.")).not.toBeInTheDocument();
+    expect(screen.getByText("I will inspect it.")).toBeInTheDocument();
   });
 
   it("shows streaming answer prose before the turn lifecycle settles", () => {

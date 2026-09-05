@@ -57,8 +57,10 @@ export function ConversationFooter() {
   const respondToInteraction = useRuntimeStore((s) => s.respondToInteraction);
   const blocks = useRuntimeStore((s) => s.thread.blocks);
   const lastUserIndex = blocks.findLastIndex((block) => block.kind === "user");
-  const currentTurnTools = blocks.slice(lastUserIndex + 1).filter((block): block is Extract<ThreadBlock, { kind: "tool" }> => block.kind === "tool");
-  const hasTurnActivity = currentTurnTools.some(isVisibleActivity);
+  const currentTurnBlocks = blocks.slice(lastUserIndex + 1);
+  const currentTurnTools = currentTurnBlocks.filter((block): block is Extract<ThreadBlock, { kind: "tool" }> => block.kind === "tool");
+  const hasProcessProse = currentTurnBlocks.filter((block) => block.kind === "agent" && block.parts.some((part) => part.text.trim())).length > 1;
+  const hasTurnActivity = currentTurnTools.some(isVisibleActivity) || hasProcessProse;
 
   return (
     <div className="mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-6 pt-2">

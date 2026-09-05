@@ -290,3 +290,28 @@ uses the same horizontal hierarchy:
 
 The 12px task detail is a Pi-Science proposal. Upstream keeps the summary at
 14px/24px; the smaller value preserves the requested title/task hierarchy.
+
+### Live process disclosure (Pi-Science proposal)
+
+The activity panel opens automatically while a turn is running. Intermediate
+assistant prose and execution tools appear in event order without enclosing
+borders, rails, dividers, or hover cards. Indentation and spacing establish
+the hierarchy, using the existing Markdown viewer and semantic text tokens.
+The current streaming answer stays outside the panel. Completion, failure, or
+stop collapses the process; the status row remains available to reopen it.
+History starts collapsed. Manual disclosure changes survive tool updates,
+waiting, and recovery, and reset when a run starts or ends.
+
+The process uses `ui-body` prose, `ui-label` tool labels, and `min-h-control`
+disclosure targets (`min-h-primary` on phones). The 20px semantic glyph sits
+in a 32px stage with two soft, rotating accent glows; the title uses 500 weight
+and a moving accent highlight. Running tools use a four-bar waveform and
+completed tools use a quiet checkmark. Prose is indented 40px, with 12px
+between narrative paragraphs.
+
+Proposed motion values: 3.2s glow/title cycle, 1.2s waveform cycle, both scaled
+by the existing progress speed setting; 200–300ms content reveals translate
+6px and resolve 3px blur. Glows use 5px blur, 0.85–1.25 scale, and the configured
+accent color. The animations use local CSS only. App motion-off and system
+reduced-motion preferences disable the new effects. Terminal states stop all
+running effects; completion gets a single 300ms checkmark reveal.
