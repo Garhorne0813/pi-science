@@ -53,10 +53,10 @@ describe("turn-level conversation rendering", () => {
     expect(screen.queryByText("I will inspect it.")).not.toBeInTheDocument();
   });
 
-  it("hides streaming answer prose until the turn lifecycle settles", () => {
+  it("renders answer prose while the turn is still streaming", () => {
     const turn = buildTurnPresentations([user("u1"), tool("read", "read"), agent("a1", "streaming answer")], { lastTurnLifecycle: "active" })[0];
     render(<>{renderTurn(turn, codeRunner)}</>);
-    expect(screen.queryByText("streaming answer")).not.toBeInTheDocument();
+    expect(screen.getByText("streaming answer")).toBeInTheDocument();
     expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
     cleanup();
     const settled = buildTurnPresentations([user("u1"), tool("read", "read"), agent("a1", "streaming answer")])[0];
@@ -64,6 +64,13 @@ describe("turn-level conversation rendering", () => {
     expect(screen.getByText("streaming answer")).toBeInTheDocument();
     expect(screen.getByText("Complete")).toBeInTheDocument();
     expect(screen.getByLabelText("1 operation")).toBeInTheDocument();
+  });
+
+  it("renders a direct answer before an active turn settles", () => {
+    const turn = buildTurnPresentations([user("u1"), agent("a1", "first tokens", true)], { lastTurnLifecycle: "active" })[0];
+    render(<>{renderTurn(turn, codeRunner)}</>);
+    expect(screen.getByText("first tokens")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(1);
   });
 
   it("shows a completed summary when a settled turn ends on a tool", () => {
