@@ -26,9 +26,9 @@ export function builtinMcpConnectors(): BuiltinMcpConnector[] {
       credential_ref: null,
     },
     tools: [
-      { name: "search_pubmed", title: "Search PubMed", description: "Search PubMed for biomedical literature metadata.", read_only: true, decision: "ask" },
-      { name: "search_arxiv", title: "Search arXiv", description: "Search arXiv for scientific preprints and metadata.", read_only: true, decision: "ask" },
-      { name: "search_crossref", title: "Search Crossref", description: "Search Crossref for scholarly works and DOI metadata.", read_only: true, decision: "ask" },
+      { name: "search_pubmed", title: "Search PubMed", description: "Search PubMed metadata with field, date, sort, and pagination controls.", read_only: true, decision: "ask" },
+      { name: "search_arxiv", title: "Search arXiv", description: "Search arXiv preprints with category, field, date-sort, ID, and pagination controls.", read_only: true, decision: "ask" },
+      { name: "search_crossref", title: "Search Crossref", description: "Search Crossref metadata with fielded queries, filters, sorting, and pagination.", read_only: true, decision: "ask" },
     ],
   }];
 }

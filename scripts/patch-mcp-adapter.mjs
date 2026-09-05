@@ -17,6 +17,61 @@ patch("tool-approval.ts", "PI_SCIENCE_EXACT_TOOL_GRANTS_V1", [[
   "  if (approval === true) return true;",
   '  const allowed = (definition as { __piScienceAllowedTools?: string[] } | undefined)?.__piScienceAllowedTools;\n  if (approval === true && allowed?.includes(toolMeta.originalName)) return false;\n  if (approval === true) return true;',
 ]]);
+
+// Pi Orbit hosts many workspace sessions in one process. Allow the managed
+// wrapper to resolve its in-memory config from the current session context;
+// a config captured while the host boots would otherwise use orbit-host cwd.
+patch("types.ts", "PI_SCIENCE_SESSION_CONFIG_FACTORY_TYPES_V1", [[
+  "  config?: McpConfig;\n  configPath?: string;",
+  "  config?: McpConfig;\n  configPath?: string;\n  configFactory?: (ctx: { cwd: string }) => McpConfig;",
+]]);
+patch("index.ts", "PI_SCIENCE_SESSION_CONFIG_FACTORY_V1", [
+  [
+    "const programmaticConfig = sessionConfig !== undefined;",
+    "const programmaticConfig = sessionConfig !== undefined || options.configFactory !== undefined;",
+  ],
+  [
+    "  const earlyConfig = programmaticConfig\n    ? cloneMcpConfig(sessionConfig)\n    : loadMcpConfig(earlyConfigPath);",
+    "  const earlyConfig = options.configFactory !== undefined\n    ? { mcpServers: {} } as McpConfig\n    : programmaticConfig\n      ? cloneMcpConfig(sessionConfig!)\n      : loadMcpConfig(earlyConfigPath);",
+  ],
+  [
+    "  function startInitialization(ctx: ExtensionContext, owner: McpRuntimeOwner, oauthRuntime: McpOAuthRuntime, generation: number, staleReason: string): Promise<void> {\n    const promise = initializeMcp(pi, ctx, owner, {\n      ...(programmaticConfig || options.configPath !== undefined\n        ? { configPath: earlyConfigPath, config: sessionConfig }\n        : {}),",
+    "  function startInitialization(ctx: ExtensionContext, owner: McpRuntimeOwner, oauthRuntime: McpOAuthRuntime, generation: number, staleReason: string): Promise<void> {\n    const resolvedSessionConfig = options.configFactory?.(ctx) ?? sessionConfig;\n    const promise = initializeMcp(pi, ctx, owner, {\n      ...(resolvedSessionConfig !== undefined\n        ? { config: resolvedSessionConfig }\n        : options.configPath !== undefined\n          ? { configPath: earlyConfigPath }\n          : {}),",
+  ],
+  [
+    "      configPath: options.configPath,\n      config: factoryConfig !== undefined ? cloneMcpConfig(factoryConfig) : undefined,",
+    "      configPath: options.configPath,\n      config: factoryConfig !== undefined ? cloneMcpConfig(factoryConfig) : undefined,\n      configFactory: options.configFactory,",
+  ],
+]);
+
+// `action` is only the dispatcher for UI/OAuth operations. Leaving it as an
+// unconstrained string lets a plausible but invalid `{ action: "connect" }`
+// pass schema validation and then fall through to the unrelated `server`
+// listing branch. Constrain the model-facing schema and keep a runtime guard
+// for hosts that do not enforce TypeBox validation.
+patch("index.ts", "PI_SCIENCE_MCP_ACTION_ENUM_V1", [
+  [
+    '        action: Type.Optional(Type.String({ description: "Action: \'ui-messages\', \'auth-start\', or \'auth-complete\'" })),',
+    `        action: Type.Optional(Type.Union([
+          Type.Literal("ui-messages"),
+          Type.Literal("auth-start"),
+          Type.Literal("auth-complete"),
+        ], { description: "Special action for UI/OAuth only; use the top-level connect field to connect a server" })),`,
+  ],
+  [
+    "        if (params.action === \"ui-messages\") {",
+    `        if (params.action !== undefined && params.action !== "ui-messages" && params.action !== "auth-start" && params.action !== "auth-complete") {
+          const correction = params.action === "connect" && params.server
+            ? \` To connect that server, use mcp({ connect: \"\${params.server}\" }).\`
+            : "";
+          return {
+            content: [{ type: "text" as const, text: \`Unknown MCP action \"\${params.action}\". Supported actions: ui-messages, auth-start, auth-complete.\${correction}\` }],
+            details: { mode: "action", error: "invalid_action", action: params.action },
+          };
+        }
+        if (params.action === "ui-messages") {`,
+  ],
+]);
 patch("server-manager.ts", "PI_SCIENCE_TRANSPORT_POLICY_V1", [
   ["    const serverUrl = resolveServerUrl(definition)!;", `    const policy = definition as ServerDefinition & { __piScienceFetchModule?: string; __piScienceConnectorId?: string; __piScienceAllowPrivate?: boolean };
     const guardedFetch = policy.__piScienceFetchModule
