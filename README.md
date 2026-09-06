@@ -124,7 +124,7 @@ from **Settings → MCP**; only Paper Search is enabled on a fresh installation.
 
 ## Scientific MCP Connectors
 
-Pi-Science includes 14 managed MCP connectors backed by public scientific data
+Pi-Science includes 18 managed MCP connectors backed by public scientific data
 services. They run as local MCP processes and expose compact, typed, read-only
 tools to the agent; the upstream searches still make outbound network requests.
 
@@ -144,8 +144,12 @@ tools to the agent; the upstream searches still make outbound network requests.
 | BioMart | Ensembl BioMart | Disabled |
 | Drug Regulatory | openFDA, Drugs@FDA | Disabled |
 | Human Genetics | NHGRI-EBI GWAS Catalog | Disabled |
+| Protein Records | UniProtKB | Disabled |
+| Nucleotide Archives | NCBI GenBank, ENA | Disabled |
+| Target Discovery | Open Targets Platform | Disabled |
+| ChEMBL | ChEMBL | Disabled |
 
-Together they expose 39 tools. Enable only the domains you need from
+Together they expose 50 tools. Enable only the domains you need from
 **Settings → MCP**, where you can inspect discovered tools, test a connection,
 filter exposed tools, and choose `Ask`, `Allow`, or `Deny` decisions. Built-in
 definitions are read-only, while custom `stdio`, Streamable HTTP, SSE, and

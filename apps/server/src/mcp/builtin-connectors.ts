@@ -163,6 +163,45 @@ const scientificDomains = [
       tool("get_gwas_study", "Get GWAS Study", "Retrieve a GWAS Catalog study by GCST accession."),
     ],
   },
+  {
+    id: "protein_records", name: "protein-records", display: "Protein Records",
+    description: "Search and retrieve UniProtKB protein records and sequences.",
+    terms: "https://www.uniprot.org/help/terms",
+    tools: [
+      tool("search_uniprot_proteins", "Search UniProt Proteins", "Search UniProtKB with organism, review-status, pagination, and sorting controls."),
+      tool("get_uniprot_entry", "Get UniProt Entry", "Retrieve a compact UniProtKB entry by accession."),
+      tool("get_uniprot_sequence", "Get UniProt Sequence", "Retrieve a bounded UniProtKB FASTA sequence by accession."),
+    ],
+  },
+  {
+    id: "nucleotide_archives", name: "nucleotide-archives", display: "Nucleotide Archives",
+    description: "Search NCBI GenBank and retrieve bounded sequence records from NCBI and ENA.",
+    terms: "https://www.ncbi.nlm.nih.gov/home/about/policies/",
+    tools: [
+      tool("search_genbank_sequences", "Search GenBank Sequences", "Search NCBI Nucleotide records with organism, date, sorting, and pagination controls."),
+      tool("get_genbank_sequence", "Get GenBank Sequence", "Retrieve a bounded GenBank or FASTA record by accession, optionally for a sequence interval."),
+      tool("get_ena_sequence", "Get ENA Sequence", "Retrieve a bounded FASTA record from the European Nucleotide Archive."),
+    ],
+  },
+  {
+    id: "target_discovery", name: "target-discovery", display: "Target Discovery",
+    description: "Search Open Targets entities and retrieve ranked target-disease associations.",
+    terms: "https://www.opentargets.org/terms-and-conditions",
+    tools: [
+      tool("search_open_targets_entities", "Search Open Targets", "Search Open Targets genes, diseases, drugs, variants, and studies with controlled entity filters."),
+      tool("get_open_targets_target", "Get Open Targets Target", "Retrieve target metadata and ranked disease associations by Ensembl gene ID."),
+    ],
+  },
+  {
+    id: "chembl", name: "chembl", display: "ChEMBL",
+    description: "Search ChEMBL compounds, targets, and measured bioactivities.",
+    terms: "https://www.ebi.ac.uk/about/terms-of-use",
+    tools: [
+      tool("search_chembl_molecules", "Search ChEMBL Molecules", "Search ChEMBL compounds with development-phase and molecule-type filters."),
+      tool("search_chembl_targets", "Search ChEMBL Targets", "Search ChEMBL targets with organism and target-type filters."),
+      tool("search_chembl_activities", "Search ChEMBL Activities", "Search measured ChEMBL bioactivities for an explicit molecule or target."),
+    ],
+  },
 ] as const;
 
 function scientificDataConnectors(): BuiltinMcpConnector[] {

@@ -119,7 +119,7 @@ skills 可在 **设置 → Skills** 中启用、禁用或重置。内置和自�
 
 ## 科学 MCP 连接器
 
-Pi-Science 内置 14 个由公共科学数据服务驱动的 MCP 连接器。它们以本地 MCP
+Pi-Science 内置 18 个由公共科学数据服务驱动的 MCP 连接器。它们以本地 MCP
 进程运行，向 Agent 提供紧凑、带类型、只读的工具；实际检索仍会向上游服务发送网络请求。
 
 | 连接器 | 上游服务 | 默认状态 |
@@ -138,8 +138,12 @@ Pi-Science 内置 14 个由公共科学数据服务驱动的 MCP 连接器。它
 | BioMart | Ensembl BioMart | 关闭 |
 | Drug Regulatory | openFDA、Drugs@FDA | 关闭 |
 | Human Genetics | NHGRI-EBI GWAS Catalog | 关闭 |
+| Protein Records | UniProtKB | 关闭 |
+| Nucleotide Archives | NCBI GenBank、ENA | 关闭 |
+| Target Discovery | Open Targets Platform | 关闭 |
+| ChEMBL | ChEMBL | 关闭 |
 
-这些连接器共提供 39 个工具。可在 **设置 → MCP** 中仅启用需要的科研领域，查看已发现
+这些连接器共提供 50 个工具。可在 **设置 → MCP** 中仅启用需要的科研领域，查看已发现
 工具、测试连接、筛选暴露的工具，并为工具选择 `询问`、`允许` 或 `拒绝`。内置连接器
 定义只读；也可以注册自定义 `stdio`、Streamable HTTP、SSE 和 socket 连接器。连接器
 设置全局生效，单个项目可以覆盖工具决策。配置变更会自动投影到活跃 Agent runtime，

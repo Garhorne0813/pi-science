@@ -21,6 +21,14 @@ import {
   searchMgnifyStudies, searchOpenFdaLabels, searchPrideProjects, searchPubchemCompounds,
   stringNetworkInput,
 } from "./scientific-data-secondary.js";
+import {
+  chemblActivitySearchInput, chemblMoleculeSearchInput, chemblTargetSearchInput, enaSequenceInput,
+  genbankSearchInput, genbankSequenceInput, getEnaSequence, getGenbankSequence, getOpenTargetsTarget,
+  getUniprotEntry, getUniprotSequence, openTargetsSearchInput, openTargetsTargetInput,
+  searchChemblActivities, searchChemblMolecules, searchChemblTargets, searchGenbankSequences,
+  searchOpenTargetsEntities, searchUniprotProteins, uniprotEntryInput, uniprotSearchInput,
+  uniprotSequenceInput,
+} from "./scientific-data-tertiary.js";
 
 const domain = process.argv[2];
 const server = new McpServer({ name: `pi-science-${domain ?? "scientific-data"}`, version: "1.0.0" });
@@ -88,6 +96,25 @@ switch (domain) {
     server.registerTool("search_gwas_studies", { title: "Search GWAS Studies", description: "Search GWAS Catalog v2 studies by reported trait, EFO trait, PubMed ID, or GCST accession.", inputSchema: gwasStudiesInput, annotations }, async (input) => result(await searchGwasStudies(input)));
     server.registerTool("search_gwas_associations", { title: "Search GWAS Associations", description: "Search GWAS Catalog v2 associations by EFO trait, rsID, mapped gene, or GCST accession.", inputSchema: gwasAssociationsInput, annotations }, async (input) => result(await searchGwasAssociations(input)));
     server.registerTool("get_gwas_study", { title: "Get GWAS Study", description: "Retrieve one GWAS Catalog v2 study by GCST accession.", inputSchema: gwasStudyInput, annotations }, async (input) => result(await getGwasStudy(input)));
+    break;
+  case "protein_records":
+    server.registerTool("search_uniprot_proteins", { title: "Search UniProt Proteins", description: "Search UniProtKB with a query plus controlled organism, review-status, isoform, sorting, and cursor-pagination parameters.", inputSchema: uniprotSearchInput, annotations }, async (input) => result(await searchUniprotProteins(input)));
+    server.registerTool("get_uniprot_entry", { title: "Get UniProt Entry", description: "Retrieve compact UniProtKB protein, gene, organism, function, and sequence metadata by accession.", inputSchema: uniprotEntryInput, annotations }, async (input) => result(await getUniprotEntry(input)));
+    server.registerTool("get_uniprot_sequence", { title: "Get UniProt Sequence", description: "Retrieve a UniProtKB FASTA record with a strict output-size bound.", inputSchema: uniprotSequenceInput, annotations }, async (input) => result(await getUniprotSequence(input)));
+    break;
+  case "nucleotide_archives":
+    server.registerTool("search_genbank_sequences", { title: "Search GenBank Sequences", description: "Search NCBI Nucleotide records with organism, publication-date, sorting, and pagination controls.", inputSchema: genbankSearchInput, annotations }, async (input) => result(await searchGenbankSequences(input)));
+    server.registerTool("get_genbank_sequence", { title: "Get GenBank Sequence", description: "Retrieve a bounded GenBank or FASTA record by accession with optional interval and strand controls.", inputSchema: genbankSequenceInput, annotations }, async (input) => result(await getGenbankSequence(input)));
+    server.registerTool("get_ena_sequence", { title: "Get ENA Sequence", description: "Retrieve a bounded FASTA record by European Nucleotide Archive accession.", inputSchema: enaSequenceInput, annotations }, async (input) => result(await getEnaSequence(input)));
+    break;
+  case "target_discovery":
+    server.registerTool("search_open_targets_entities", { title: "Search Open Targets", description: "Search Open Targets entities with controlled entity-type and pagination parameters.", inputSchema: openTargetsSearchInput, annotations }, async (input) => result(await searchOpenTargetsEntities(input)));
+    server.registerTool("get_open_targets_target", { title: "Get Open Targets Target", description: "Retrieve target metadata, tractability, and ranked disease associations by Ensembl gene ID.", inputSchema: openTargetsTargetInput, annotations }, async (input) => result(await getOpenTargetsTarget(input)));
+    break;
+  case "chembl":
+    server.registerTool("search_chembl_molecules", { title: "Search ChEMBL Molecules", description: "Search ChEMBL molecules with type, development-phase, and pagination filters.", inputSchema: chemblMoleculeSearchInput, annotations }, async (input) => result(await searchChemblMolecules(input)));
+    server.registerTool("search_chembl_targets", { title: "Search ChEMBL Targets", description: "Search ChEMBL targets with organism, target-type, and pagination filters.", inputSchema: chemblTargetSearchInput, annotations }, async (input) => result(await searchChemblTargets(input)));
+    server.registerTool("search_chembl_activities", { title: "Search ChEMBL Activities", description: "Search measured ChEMBL bioactivities for an explicit molecule or target with assay and potency filters.", inputSchema: chemblActivitySearchInput, annotations }, async (input) => result(await searchChemblActivities(input)));
     break;
   default:
     throw new Error(`Unknown scientific data connector '${domain ?? ""}'`);

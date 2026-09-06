@@ -1187,3 +1187,14 @@ docs/architecture.zh-CN.md                                  update at M2/M5
 | `human-genetics` | NHGRI-EBI GWAS Catalog | 3 |
 
 STRING 使用固定 v12 服务并遵守一秒请求间隔。BioMart 使用不会发生版本归档重定向的 Ensembl 官方 Asia mirror；ENCODE 详情通过同源搜索精确定位 accession，不放宽全局的重定向阻断。openFDA 不暴露原始查询语法，只允许受控字段并转义用户输入。GWAS Catalog 搜索使用 v2 API；详情读取使用相同 Catalog 的稳定记录端点，以规避 v2 详情端点当前的高延迟。
+
+第三批增加 4 个默认关闭的连接器和 11 个只读工具：
+
+| Connector | 数据源 | 工具数 |
+|---|---|---:|
+| `protein-records` | UniProtKB | 3 |
+| `nucleotide-archives` | NCBI GenBank、ENA | 3 |
+| `target-discovery` | Open Targets Platform GraphQL | 2 |
+| `chembl` | ChEMBL Data Web Services | 3 |
+
+UniProt 搜索支持 review 状态、物种、排序和 cursor，详情与 FASTA 输出均压缩或限长。GenBank 搜索通过 NCBI ESearch → ESummary，记录读取支持格式、区间与链方向；NCBI 请求使用共享节流并支持 `NCBI_API_KEY`。Open Targets 只发送代码内固定的 GraphQL document，用户输入始终作为 variables，不允许注入任意 GraphQL。ChEMBL 活性检索必须显式指定 molecule 或 target，并对分页、pChEMBL 范围和返回字段设置边界。Synapse、Benchling 和 10x 等需要账号、租户或私有工作区上下文的连接器不作为零配置内置项加入。

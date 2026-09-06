@@ -214,14 +214,18 @@ let cellGuideCache: { value: { snapshot: string; metadata: Record<string, Json> 
 const connectorIds: Record<string, string> = {
   literature_graph: "mcp_builtin_literature_graph", clinical_trials: "mcp_builtin_clinical_trials", structures: "mcp_builtin_structures", genes_ontologies: "mcp_builtin_genes_ontologies", genomes: "mcp_builtin_genomes", cellguide: "mcp_builtin_cellguide",
   protein_annotation: "mcp_builtin_protein_annotation", omics_archives: "mcp_builtin_omics_archives", chemistry: "mcp_builtin_chemistry", regulation: "mcp_builtin_regulation", biomart: "mcp_builtin_biomart", drug_regulatory: "mcp_builtin_drug_regulatory", human_genetics: "mcp_builtin_human_genetics",
+  protein_records: "mcp_builtin_protein_records", nucleotide_archives: "mcp_builtin_nucleotide_archives", target_discovery: "mcp_builtin_target_discovery", chembl: "mcp_builtin_chembl",
 };
 export async function getJson(domain: string, url: URL, dependencies: ScientificDependencies) { return requestJson(domain, url, dependencies, { headers: { accept: "application/json" } }); }
 export async function requestJson(domain: string, url: URL, dependencies: ScientificDependencies, init: RequestInit = {}): Promise<unknown> { return JSON.parse(await requestText(domain, url, dependencies, init)); }
 export async function requestText(domain: string, url: URL, dependencies: ScientificDependencies, init: RequestInit = {}): Promise<string> {
+  return (await requestTextWithHeaders(domain, url, dependencies, init)).text;
+}
+export async function requestTextWithHeaders(domain: string, url: URL, dependencies: ScientificDependencies, init: RequestInit = {}): Promise<{ text: string; headers: Headers }> {
   const fetcher = dependencies.fetch ?? createMcpFetch({ connectorId: connectorIds[domain] ?? `mcp_builtin_${domain}`, endpoint: url.origin, allowPrivate: false }); const sleep = dependencies.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const response = await fetcher(url, { ...init, headers: { "user-agent": "Pi-Science scientific-data/1.0", ...Object.fromEntries(new Headers(init.headers).entries()) }, signal: init.signal ?? AbortSignal.timeout(25_000) });
-    if (response.ok) { const text = await response.text(); if (text.length > 15_000_000) throw new Error(`${url.hostname} response exceeded 15 MB`); return text; }
+    if (response.ok) { const text = await response.text(); if (text.length > 15_000_000) throw new Error(`${url.hostname} response exceeded 15 MB`); return { text, headers: response.headers }; }
     if (attempt < 2 && (response.status === 429 || response.status >= 500)) { const retry = Number(response.headers.get("retry-after")); await response.body?.cancel(); await sleep(Number.isFinite(retry) ? Math.min(retry * 1_000, 30_000) : 500 * 2 ** attempt); continue; }
     const detail = (await response.text()).slice(0, 300).replace(/\s+/g, " "); throw new Error(`${url.hostname} returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
   }

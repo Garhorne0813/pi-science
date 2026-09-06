@@ -297,11 +297,11 @@ flowchart LR
     H --> D
 ```
 
-- Startup idempotently seeds 14 built-in definitions and their known tool
+- Startup idempotently seeds 18 built-in definitions and their known tool
   metadata. Definition upgrades preserve the user's enablement and approval
-  settings. Paper Search is enabled by default; the other 13 domain connectors
+  settings. Paper Search is enabled by default; the other 17 domain connectors
   are opt-in. Built-in definitions cannot be edited or deleted.
-- The built-ins expose 39 read-only tools. Paper Search has a dedicated MCP
+- The built-ins expose 50 read-only tools. Paper Search has a dedicated MCP
   process; the other domains share one implementation entry point but are
   launched with separate domain arguments, so each connector advertises only
   its own tools. Processes use lazy lifecycle management.
