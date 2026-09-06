@@ -1156,3 +1156,20 @@ docs/architecture.zh-CN.md                                  update at M2/M5
 - SQLite 关闭时，旧设置接口第一次 toggle 以全部已配置服务作为默认启用集合。
 
 验证包含 API/快照、全局/项目 grant 覆盖与迁移冲突、无缓存工具授权、真实 stdio 握手及环境隔离、真实适配器 HTTP/OAuth 拦截、重定向/跨源拦截和连接阶段 DNS rebinding 回归测试；stdio OS sandbox 留待后续变更。
+
+## 内置科学数据连接器（2026-09-06）
+
+内置连接器支持独立的 `enabled_by_default` 种子策略：该值只在首次创建时生效，后续升级不会覆盖用户已经保存的启停选择。`paper-search` 保持默认开启；新增科学数据连接器默认关闭，以避免一次性把大量工具加入所有会话。
+
+首批连接器使用官方公开 API 独立实现，不依赖 Claude 托管 MCP 端点，也不复制来源不明的第三方 MCP 实现：
+
+| Connector | 数据源 | 首批工具数 |
+|---|---|---:|
+| `literature-graph` | OpenAlex | 3 |
+| `clinical-trials` | ClinicalTrials.gov | 2 |
+| `structures-interactions` | RCSB PDB、AlphaFold DB | 3 |
+| `genes-ontologies` | MyGene.info、EBI OLS、Reactome | 3 |
+| `genomes` | Ensembl REST、VEP | 3 |
+| `cellguide` | CELLxGENE CellGuide | 2 |
+
+所有 15 个工具均为只读、默认 Ask、严格 JSON Schema（拒绝未知字段），经共享出站安全策略访问固定的公开 origin，并返回来源、检索时间、有效请求参数和结构化记录。网络请求使用超时、有限重试和响应大小上限；CellGuide 的版本化元数据在 server 进程内缓存一小时。受限授权资源（包括 KEGG、CADD、PanglaoDB 和 Sanger Cell Model Passports）不在本批范围内。

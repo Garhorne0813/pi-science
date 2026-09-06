@@ -42,7 +42,7 @@ export class McpConnectorService {
 
   async ensureBuiltins(): Promise<void> {
     for (const builtin of builtinMcpConnectors()) {
-      const connector = await this.repository.upsertBuiltin(builtin.connector_id, builtin.definition);
+      const connector = await this.repository.upsertBuiltin(builtin.connector_id, builtin.definition, builtin.enabled_by_default);
       const cache = await this.repository.toolCache(connector.connector_id);
       const fingerprint = mcpConnectorFingerprint(connector);
       const cachedToolNames = cache?.tools.map((tool) => tool.name).sort().join("\0");
@@ -58,8 +58,8 @@ export class McpConnectorService {
           expires_at: Number.MAX_SAFE_INTEGER,
         });
       }
-      await this.materializeKnownWorkspaces();
     }
+    await this.materializeKnownWorkspaces();
   }
 
   async list(cwd?: string | null): Promise<{ connectors: McpConnector[]; migration_conflicts: StoredMcpMigrationConflict[]; legacy_config_path: string | null; legacy_count: number }> {

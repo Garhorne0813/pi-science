@@ -74,15 +74,15 @@ export class McpRepository {
     return (await this.get(connectorId))!;
   }
 
-  async upsertBuiltin(connectorId: string, input: Omit<McpConnectorCreate, "enabled">): Promise<StoredMcpConnector> {
+  async upsertBuiltin(connectorId: string, input: Omit<McpConnectorCreate, "enabled">, enabledByDefault = true): Promise<StoredMcpConnector> {
     const existing = await this.getByName(input.name);
     if (!existing) {
       const now = Date.now();
       await this.store.run(
         `INSERT INTO mcp_connectors
          (connector_id, name, display_name, description, source, transport, endpoint_url, command, args_json, socket_path, runtime_config_json, credential_ref, enabled, revision, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'builtin', ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)`,
-        [connectorId, input.name, input.display_name, input.description, input.transport, input.endpoint_url ?? null, input.command ?? null, JSON.stringify(input.args), input.socket_path ?? null, JSON.stringify(input.runtime_config), input.credential_ref ?? null, now, now],
+         VALUES (?, ?, ?, ?, 'builtin', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+        [connectorId, input.name, input.display_name, input.description, input.transport, input.endpoint_url ?? null, input.command ?? null, JSON.stringify(input.args), input.socket_path ?? null, JSON.stringify(input.runtime_config), input.credential_ref ?? null, enabledByDefault ? 1 : 0, now, now],
       );
       return (await this.get(connectorId))!;
     }

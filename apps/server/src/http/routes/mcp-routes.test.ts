@@ -116,12 +116,22 @@ describe("canonical MCP routes", () => {
     await app.close();
   });
 
-  it("seeds paper-search as an immutable builtin with three discoverable tools", async () => {
+  it("seeds paper-search enabled and scientific domain connectors disabled", async () => {
     const { app, cwd, service } = await fixture();
     await service.ensureBuiltins();
     await service.ensureBuiltins();
     const listed = await app.inject({ method: "GET", url: `/api/mcp/connectors?cwd=${encodeURIComponent(cwd)}` });
-    expect(listed.json().connectors).toEqual([expect.objectContaining({ connector_id: "mcp_builtin_paper_search", name: "paper-search", source: "builtin", transport: "stdio", tool_count: 3 })]);
+    const connectors = listed.json().connectors as Array<{ connector_id: string; name: string; tool_count: number; settings: { enabled: boolean; revision: number } }>;
+    expect(connectors).toHaveLength(7);
+    expect(connectors.find((item) => item.name === "paper-search")).toMatchObject({ connector_id: "mcp_builtin_paper_search", tool_count: 3, settings: { enabled: true } });
+    expect(connectors.filter((item) => item.name !== "paper-search")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "literature-graph", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "clinical-trials", tool_count: 2, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "structures-interactions", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "genes-ontologies", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "genomes", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "cellguide", tool_count: 2, settings: expect.objectContaining({ enabled: false }) }),
+    ]));
 
     const cachedTools = await app.inject({ method: "GET", url: `/api/mcp/connectors/mcp_builtin_paper_search/tools?cwd=${encodeURIComponent(cwd)}` });
     expect(cachedTools.statusCode).toBe(200);
@@ -132,6 +142,12 @@ describe("canonical MCP routes", () => {
     expect(probe.json().tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["search_arxiv", "search_crossref", "search_pubmed"]);
 
     expect((await app.inject({ method: "DELETE", url: "/api/mcp/connectors/mcp_builtin_paper_search" })).statusCode).toBe(403);
+
+    const literature = connectors.find((item) => item.name === "literature-graph")!;
+    const enabled = await app.inject({ method: "PUT", url: `/api/mcp/connectors/${literature.connector_id}/settings`, payload: { enabled: true, include_tools: [], exclude_tools: [], approval_mode: "ask", revision: literature.settings.revision } });
+    expect(enabled.statusCode).toBe(200);
+    await service.ensureBuiltins();
+    expect((await service.get(literature.connector_id)).settings.enabled).toBe(true);
     await app.close();
   });
 
@@ -141,7 +157,7 @@ describe("canonical MCP routes", () => {
 
     const listed = await app.inject({ method: "GET", url: "/api/mcp/connectors" });
     expect(listed.statusCode).toBe(200);
-    expect(listed.json()).toMatchObject({ connectors: [expect.objectContaining({ name: "paper-search", source: "builtin", settings: expect.objectContaining({ enabled: true }), tool_count: 3 })] });
+    expect(listed.json().connectors).toEqual(expect.arrayContaining([expect.objectContaining({ name: "paper-search", source: "builtin", settings: expect.objectContaining({ enabled: true }), tool_count: 3 })]));
 
     const tools = await app.inject({ method: "GET", url: "/api/mcp/connectors/mcp_builtin_paper_search/tools" });
     expect(tools.statusCode).toBe(200);
@@ -149,7 +165,7 @@ describe("canonical MCP routes", () => {
 
     const grant = await app.inject({ method: "PUT", url: "/api/mcp/connectors/mcp_builtin_paper_search/tools/search_pubmed", payload: { decision: "allow" } });
     expect(grant.statusCode).toBe(200);
-    expect((await app.inject({ method: "GET", url: "/api/mcp/connectors" })).json().connectors[0].settings.approval_mode).toBe("custom");
+    expect((await app.inject({ method: "GET", url: "/api/mcp/connectors" })).json().connectors.find((item: { name: string }) => item.name === "paper-search").settings.approval_mode).toBe("custom");
     expect(JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8")).mcpServers["paper-search"])
       .toMatchObject({ approveTools: true, __piScienceAllowedTools: ["search_pubmed"] });
     await app.close();
