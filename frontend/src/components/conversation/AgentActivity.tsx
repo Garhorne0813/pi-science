@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 
 import { ChevronRight, Check, CircleX } from "lucide-react";
 import type { ProgressAppearance } from "@pi-science/contracts";
 import { useTranslation } from "react-i18next";
-import type { AgentMessageBlock, ToolCallBlock } from "../../types/thread";
+import type { AgentMessageBlock, ThreadBlock, ToolCallBlock } from "../../types/thread";
 import { activityPolicy, executionOperationCount } from "../../lib/conversation/activity-policy";
 import { ACTIVITY_SWITCH_DEBOUNCE_MS, MIN_ACTIVITY_VISIBLE_MS, selectDisplayedActivity } from "../../lib/conversation/activity-display-policy";
 import type { PresentedActivity } from "../../lib/conversation/activity-narrative";
@@ -13,6 +13,7 @@ import type { ProgressActivityState } from "../progress/progress-activity-map";
 import { cn } from "../../lib/ui";
 import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
 import { parseSuggestions } from "../../lib/conversation";
+import { selectActivityTask } from "../../lib/conversation/activity-task";
 import styles from "./AgentActivity.module.css";
 
 export type ActivityBlock = AgentMessageBlock | ToolCallBlock;
@@ -28,7 +29,7 @@ export function ThinkingActivity({ className }: { className?: string }) {
   </div>;
 }
 
-export function AgentActivity({ blocks, lifecycle = "active", cwd }: { blocks: ActivityBlock[]; lifecycle?: TurnLifecycle; cwd?: string }) {
+export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "active", cwd }: { blocks: ActivityBlock[]; contextBlocks?: ThreadBlock[]; lifecycle?: TurnLifecycle; cwd?: string }) {
   const { t } = useTranslation();
   const progressAppearance = useProgressAppearance();
   const traceId = useId();
@@ -44,7 +45,8 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd }: { blocks: A
     : activityPolicy(block).visibleInExecutionTrace), [blocks]);
   const count = useMemo(() => executionOperationCount(tools), [tools]);
   const shown = useDisplayedActivity(tools, lifecycle);
-  if (!shown && activities.length === 0 && lifecycle !== "recovering" && lifecycle !== "waiting") return null;
+  const task = useMemo(() => selectActivityTask(contextBlocks), [contextBlocks]);
+  if (!live && activities.length === 0) return null;
 
   const canExpand = activities.length > 0;
   const state = lifecycle === "failed" || shown?.state === "error" ? "error" : lifecycle === "aborted" ? "stopped" : lifecycle === "settled" ? "completed" : lifecycle === "waiting" || shown?.state === "interaction" ? "waiting" : "running";
@@ -58,17 +60,16 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd }: { blocks: A
           ? t("conversation.activity.narrative.recover")
           : lifecycle === "waiting" && !shown
             ? t("conversation.activity.waitingInput")
-            : shown
+            : task.responding
+              ? t("conversation.activity.streaming")
+              : shown
               ? narrativeLabel(shown, t)
               : t("conversation.activity.thinking");
-  const task = lifecycle === "recovering"
+  const detail = !live ? null : lifecycle === "recovering"
     ? t("conversation.activity.recoveringDetail")
-    : shown
-      ? presentToolActivity(shown.source, t)
-      : state === "running"
-        ? t("conversation.activity.continuing")
-        : null;
-  const detail = task && task !== title ? task : null;
+    : lifecycle === "waiting"
+      ? t("conversation.activity.task.interaction")
+      : task.text ?? t(`conversation.activity.task.${task.fallback}`);
   const visualSlot = state === "waiting" ? "waiting" : shown ? "currentActivity" : "thinking";
 
   return <div id={blocks.length === 1 && blocks[0].kind === "tool" ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
@@ -78,18 +79,17 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd }: { blocks: A
       {lifecycle === "settled" && count > 0 && <span className="shrink-0 font-mono text-ui-micro text-muted" aria-label={t("conversation.activity.operationCount", { count })}>{count}</span>}
       {canExpand && <ChevronRight size={13} aria-hidden className={cn(styles.chevron, "shrink-0 text-muted", expanded && "rotate-90")} />}
     </button>
-    {expanded && canExpand && <div id={traceId} role="region" className={styles.trace} aria-label={t("conversation.activity.trace")}>{activities.map((block) => block.kind === "agent"
-      ? <div key={block.id} id={`thread-block-${block.id}`} className={cn(styles.entry, styles.narration, "min-w-0")}><MarkdownViewer variant="chat" className="text-ui-body leading-relaxed text-muted [overflow-wrap:anywhere]" resourceContext={cwd ? { cwd } : undefined}>{parseSuggestions(block.parts.map((part) => part.text).join("")).clean}</MarkdownViewer></div>
-      : <TraceItem key={block.id} block={block} live={live} />)}</div>}
+    {expanded && canExpand && <div id={traceId} role="region" className={styles.trace} aria-label={t("conversation.activity.trace")}>
+      {activities.filter((block): block is AgentMessageBlock => block.kind === "agent" && (!live || block.id !== task.sourceId)).map((block) =>
+        <div key={block.id} id={`thread-block-${block.id}`} className={cn(styles.entry, styles.narration, "min-w-0")}><MarkdownViewer variant="chat" className="text-ui-body leading-relaxed text-muted [overflow-wrap:anywhere]" resourceContext={cwd ? { cwd } : undefined}>{parseSuggestions(block.parts.map((part) => part.text).join("")).clean}</MarkdownViewer></div>)}
+      <ExecutionDetails blocks={activities.filter((block): block is ToolCallBlock => block.kind === "tool")} live={live} />
+    </div>}
   </div>;
 }
 
 function activityStyle(config: ProgressAppearance): CSSProperties {
-  const speed = Number.isFinite(config.speed) && config.speed > 0 ? config.speed : 1;
   return {
     "--activity-color": config.colorMode === "custom" && config.customColor ? config.customColor : "var(--accent)",
-    "--activity-cycle": `${3.2 / speed}s`,
-    "--activity-beat": `${1.2 / speed}s`,
   } as CSSProperties;
 }
 
@@ -128,7 +128,7 @@ function useDisplayedActivity(blocks: ToolCallBlock[], lifecycle: TurnLifecycle)
     }, delay);
     return () => window.clearTimeout(timer);
   }, [displayedKey, live, targetForced, targetKey]);
-  return live ? displayed : null;
+  return live ? target?.mergeKey === displayed?.mergeKey ? target : displayed : null;
 }
 
 function narrativeLabel(activity: PresentedActivity, t: (key: string) => string): string {
@@ -141,10 +141,23 @@ function narrativeLabel(activity: PresentedActivity, t: (key: string) => string)
 }
 
 function ActivityLabel({ title, detail, error = false }: { title: string; detail: string | null; error?: boolean }) {
-  return <span aria-live="polite" aria-atomic="true" className="flex min-w-0 flex-1 items-center">
-    <span key={title} title={title} className={cn(styles.title, "min-w-0 truncate text-sm font-medium leading-5 text-text", error && "text-error-text")}>{title}</span>
-    {detail && <><span aria-hidden className="mx-2 h-0.5 w-0.5 shrink-0 rounded-full bg-muted" /><span key={detail} className={cn(styles.detail, "min-w-0 flex-1 truncate text-xs font-normal leading-[18px] text-muted")}>{detail}</span></>}
+  return <span aria-live="polite" aria-atomic="true" className={styles.label}>
+    <span className={cn(styles.title, "text-text", error && "text-error-text")}>{title}</span>
+    {detail && <span className={cn(styles.detail, "text-muted")}>{detail}</span>}
   </span>;
+}
+
+function ExecutionDetails({ blocks, live }: { blocks: ToolCallBlock[]; live: boolean }) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  if (blocks.length === 0) return null;
+  return <div className={styles.execution}>
+    <button type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)} className="flex min-h-control items-center gap-2 rounded-input text-ui-caption text-muted hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+      <ChevronRight size={12} aria-hidden className={cn(styles.chevron, expanded && "rotate-90")} />
+      {t("conversation.activity.executionDetails", { count: blocks.length })}
+    </button>
+    {expanded && <div className={styles.entry}>{blocks.map((block) => <TraceItem key={block.id} block={block} live={live} />)}</div>}
+  </div>;
 }
 
 function activityStateFor(lifecycle: TurnLifecycle, activity: PresentedActivity | null): ProgressActivityState {
@@ -169,7 +182,7 @@ function TraceItem({ block, live }: { block: ToolCallBlock; live: boolean }) {
   const running = live && block.status === "running";
   return <div className={cn(styles.entry, styles.tool)} data-running={running}>
     <button type="button" disabled={!hasDetails} aria-expanded={hasDetails ? expanded : undefined} onClick={() => hasDetails && setExpanded((value) => !value)} className={cn(styles.toolButton, "flex min-h-primary max-w-full items-center gap-2 rounded-input py-1.5 text-left text-ui-label text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default sm:min-h-control")}>
-      {running ? <span aria-hidden className={styles.wave}><i /><i /><i /><i /></span> : block.status === "running" ? <CircleX size={14} aria-hidden className="shrink-0 text-muted" /> : block.status === "error" ? <CircleX size={14} aria-hidden className="shrink-0 text-error-text" /> : <Check size={14} aria-hidden className={cn(styles.toolCheck, "shrink-0 text-muted")} />}
+      {running ? <span aria-hidden className="mx-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : block.status === "running" ? <CircleX size={14} aria-hidden className="shrink-0 text-muted" /> : block.status === "error" ? <CircleX size={14} aria-hidden className="shrink-0 text-error-text" /> : <Check size={14} aria-hidden className="shrink-0 text-muted" />}
       <span className="min-w-0 flex-1 truncate">{presentToolActivity(block, t)}</span>
       {hasDetails && <ChevronRight size={12} aria-hidden className={cn(styles.chevron, "shrink-0", expanded && "rotate-90")} />}
     </button>

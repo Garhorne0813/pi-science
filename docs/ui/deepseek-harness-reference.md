@@ -274,44 +274,47 @@ failed. The narrative state independently selects the AICSS Orb geometry:
 A user-selected fixed pattern overrides this automatic mapping. Recoverable tool
 errors remain in Execution Trace and do not change the lifecycle to failed.
 
-### Activity row proposal
+### Activity hierarchy (Pi-Science proposal)
 
-DeepSeek Harness renders reasoning and tool progress as quiet, borderless rows.
-Its `ReasoningRow.module.css` and `ToolRow.module.css` use a 400-weight title,
-a 2px separator dot, and a tertiary summary on one borderless line. Pi-Science
-uses the same horizontal hierarchy:
+DeepSeek Harness uses quiet, borderless reasoning and tool rows. Pi-Science
+keeps that treatment and uses a stacked hierarchy for the requested live status:
 
-- semantic progress glyph: 20px and `--accent` in both light and dark themes;
-- primary Activity title: 14px/20px, regular weight, primary text;
-- separator: 2px round dot with 8px spacing on each side;
-- current task detail: 12px/18px, regular weight, tertiary text, truncating first;
-- row padding: 4px vertical, no outer background or border;
-- expanded Execution Trace may keep its own quiet inset surface.
+- one existing semantic progress glyph in a 32px stage;
+- phase title: 20px, 1.4 line height, 500 weight, primary text;
+- current task: 13px, 1.6 line height, muted text, wrapping on narrow screens;
+- 6px between title and task, 8px vertical padding, no enclosing border or fill;
+- completed/stopped/error status contracts to a 14px title.
 
-The 12px task detail is a Pi-Science proposal. Upstream keeps the summary at
-14px/24px; the smaller value preserves the requested title/task hierarchy.
+The title holds a stable phase while the subtitle updates with each tool or
+plan event. Purpose comes from an explicit task description, current model
+narration, or the latest in-progress plan. File names and raw tool labels stay
+in Execution details. A localized phase description is used when the model
+has not supplied a task description; the UI does not invent a task from a path.
 
-### Live process disclosure (Pi-Science proposal)
+### Live process disclosure
 
-The activity panel opens automatically while a turn is running. Intermediate
-assistant prose and execution tools appear in event order without enclosing
-borders, rails, dividers, or hover cards. Indentation and spacing establish
-the hierarchy, using the existing Markdown viewer and semantic text tokens.
-The current streaming answer stays outside the panel. Completion, failure, or
-stop collapses the process; the status row remains available to reopen it.
-History starts collapsed. Manual disclosure changes survive tool updates,
-waiting, and recovery, and reset when a run starts or ends.
+Each active turn owns one status header, including the initial thinking state.
+The virtual list footer contains only interaction controls. The current answer
+streams outside the process panel. Intermediate prose is available in the
+process panel; short prose used as the current subtitle is not repeated there.
+Execution details are a separate, initially collapsed disclosure. Completion,
+failure, and stop collapse the process; its status row can reopen it for review.
+Manual disclosure survives phase updates and resets at the run boundary.
 
-The process uses `ui-body` prose, `ui-label` tool labels, and `min-h-control`
-disclosure targets (`min-h-primary` on phones). The 20px semantic glyph sits
-in a 32px stage with two soft, rotating accent glows; the title uses 500 weight
-and a moving accent highlight. Running tools use a four-bar waveform and
-completed tools use a quiet checkmark. Prose is indented 40px, with 12px
-between narrative paragraphs.
+The existing progress pattern is the only continuous animation. No external
+rotating glow, second loader, title shimmer, or tool waveform is layered over
+it. Content enters with the existing normal-motion duration and easing, using
+a 3px translation and opacity. Motion-off and reduced-motion disable these
+effects. Existing progress settings continue to select the pattern and color.
 
-Proposed motion values: 3.2s glow/title cycle, 1.2s waveform cycle, both scaled
-by the existing progress speed setting; 200–300ms content reveals translate
-6px and resolve 3px blur. Glows use 5px blur, 0.85–1.25 scale, and the configured
-accent color. The animations use local CSS only. App motion-off and system
-reduced-motion preferences disable the new effects. Terminal states stop all
-running effects; completion gets a single 300ms checkmark reveal.
+### Conversation following
+
+Virtuoso owns scrolling; native scroll writes are only a fallback before its
+handle exists. Sending a message resumes following immediately and subsequent
+list-height measurements keep the new turn pinned through token growth and
+activity collapse. Scroll position changes alone never disable following:
+wheel, touch, keyboard, scrollbar dragging, and history navigation supply user
+intent. Scrolling upward pauses, scrolling down to the bottom resumes, and
+Back to latest explicitly resumes. A pending follow frame is cancelled when
+the user pauses. This avoids stale scroll events from the first answer trapping
+the second turn above the viewport.

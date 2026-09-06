@@ -13,7 +13,7 @@ import { extractCitations } from "../../lib/citations";
 import { parseSuggestions } from "../../lib/conversation";
 import { MessageActions } from "./MessageActions";
 import { buildTurnPresentations, turnBlockIds, type TurnPresentation } from "../../lib/conversation/turn-presentation";
-import { AgentActivity, type ActivityBlock } from "./AgentActivity";
+import { AgentActivity } from "./AgentActivity";
 
 export function renderTurn(turn: TurnPresentation, codeRunner: CodeRunner, actionTextByBlock?: Map<string, string>) {
   return <ConversationTurn key={turn.id} turn={turn} codeRunner={codeRunner} actionTextByBlock={actionTextByBlock} />;
@@ -27,17 +27,12 @@ export function renderBlocks(blocks: ThreadBlock[], codeRunner: CodeRunner) {
 
 function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnPresentation; codeRunner: CodeRunner; actionTextByBlock?: Map<string, string> }) {
   const visibleAgent = turn.finalAgent ?? turn.provisionalAgent;
-  // Keep process prose and tools in their original order. The current answer
-  // stays outside the disclosure so it streams and survives auto-collapse.
-  const activityToolIds = new Set(turn.activityTools.map((block) => block.id));
-  const activityBlocks = turn.blocks.filter((block): block is ActivityBlock =>
-    (block.kind === "tool" && activityToolIds.has(block.id)) || (block.kind === "agent" && block.id !== visibleAgent?.id));
   const finalText = turn.finalAgent?.parts.map((part) => part.text).join("") ?? "";
   const publishedPaths = turn.artifacts.flatMap((block) => block.artifacts.map((item) => item.path));
   return (
     <div data-thread-block-ids={turnBlockIds(turn).join(" ")} className="flex flex-col gap-3 scroll-mt-4">
       {turn.user && <UserMessage block={turn.user} />}
-      {activityBlocks.length > 0 || (turn.active && (turn.lifecycle === "waiting" || turn.lifecycle === "recovering")) ? <AgentActivity blocks={activityBlocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} /> : null}
+      {(turn.active || turn.activityBlocks.length > 0) && <AgentActivity blocks={turn.activityBlocks} contextBlocks={turn.blocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} />}
       {visibleAgent && <AgentMessage block={visibleAgent} actionText={turn.finalAgent ? actionTextByBlock?.get(turn.finalAgent.id) : undefined} codeRunner={codeRunner} />}
       {turn.systemBlocks.map((block) => <SystemBlock key={block.id} block={block} />)}
       {turn.artifacts.map((block) => <TurnArtifactStrip key={block.id} artifacts={block.artifacts} cwd={codeRunner?.cwd} />)}

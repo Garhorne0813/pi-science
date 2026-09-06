@@ -18,7 +18,6 @@ import { ConversationWelcome } from "../../components/conversation/ConversationW
 import { InteractionPrompt } from "../../components/conversation/InteractionPrompt";
 import { QuestionnairePrompt } from "../../components/conversation/QuestionnairePrompt";
 import { renderTurn } from "../../components/conversation/ConversationBlocks";
-import { isVisibleActivity } from "../../lib/conversation/activity-policy";
 import { buildTurnPresentations, type TurnPresentation } from "../../lib/conversation/turn-presentation";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
 import { SessionExecutionButton } from "../../components/conversation/SessionExecutionButton";
@@ -53,14 +52,7 @@ const SessionRunsPage = lazy(() => import("./RunsPage").then((m) => ({ default: 
 export function ConversationFooter() {
   const pendingInteraction = useRuntimeStore((s) => s.pendingInteraction);
   const pendingQuestionnaire = useRuntimeStore((s) => s.pendingQuestionnaire);
-  const working = useRuntimeStore((s) => s.working);
   const respondToInteraction = useRuntimeStore((s) => s.respondToInteraction);
-  const blocks = useRuntimeStore((s) => s.thread.blocks);
-  const lastUserIndex = blocks.findLastIndex((block) => block.kind === "user");
-  const currentTurnBlocks = blocks.slice(lastUserIndex + 1);
-  const currentTurnTools = currentTurnBlocks.filter((block): block is Extract<ThreadBlock, { kind: "tool" }> => block.kind === "tool");
-  const hasProcessProse = currentTurnBlocks.filter((block) => block.kind === "agent" && block.parts.some((part) => part.text.trim())).length > 1;
-  const hasTurnActivity = currentTurnTools.some(isVisibleActivity) || hasProcessProse;
 
   return (
     <div className="mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-6 pt-2">
@@ -76,7 +68,6 @@ export function ConversationFooter() {
           onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
         />
       ) : null}
-      {working && !pendingInteraction && !hasTurnActivity && <ThinkingActivity className="py-4" />}
     </div>
   );
 }
@@ -358,6 +349,8 @@ export function LiveSessionPage() {
                   key={`${workspaceCwd}:${activeSessionId ?? "new"}`}
                   ref={virtuosoRef}
                   scrollerRef={attachScroller}
+                  followOutput={scroll.followOutput}
+                  totalListHeightChanged={scroll.handleListHeightChanged}
                   firstItemIndex={virtualFirstItemIndex}
                   data={turns}
                   computeItemKey={(_index, turn) => turn.id}

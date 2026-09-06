@@ -17,19 +17,29 @@ describe("AgentActivity data filters", () => {
 });
 
 describe("AgentActivity", () => {
+  it("updates the task immediately when consecutive tools share the same phase", () => {
+    const read = tool("read", "read", "running", { path: "a.ts", description: "Find why the second reply stops following" });
+    const { rerender } = render(<AgentActivity blocks={[read]} />);
+    expect(screen.getByText("Find why the second reply stops following")).toBeInTheDocument();
+    rerender(<AgentActivity blocks={[{ ...read, status: "done" }, tool("next", "read", "running", { path: "b.ts", description: "Check how virtual list measurements update" })]} />);
+    expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
+    expect(screen.getByText("Check how virtual list measurements update")).toBeInTheDocument();
+    expect(screen.queryByText("Find why the second reply stops following")).not.toBeInTheDocument();
+  });
+
   it("automatically expands the live trace below a borderless activity summary", () => {
     const { container } = render(<AgentActivity blocks={[tool("read", "read", "done", { path: "ConversationBlocks.tsx" }), tool("todo", "todo"), tool("search", "grep", "running", { pattern: "tool.updated" })]} />);
     const title = screen.getByText("Reviewing the implementation");
     const summary = screen.getByRole("button", { name: /Reviewing the implementation/i });
-    const detail = within(summary).getByText("Searching for tool.updated");
-    expect(title).toHaveClass("text-sm");
-    expect(detail).toHaveClass("text-xs");
+    const detail = within(summary).getByText("Locating evidence for the current task");
     expect(title.parentElement).toBe(detail.parentElement);
-    expect(title.nextElementSibling).toHaveAttribute("aria-hidden");
+    expect(title.nextElementSibling).toBe(detail);
     expect(container.firstElementChild).not.toHaveClass("border");
     expect(document.querySelector('[data-orb-variant="S4"]')).toBeInTheDocument();
     expect(summary).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
+    expect(screen.queryByText("Reading ConversationBlocks.tsx")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Execution details/ }));
     expect(screen.getByText("Reading ConversationBlocks.tsx")).toBeInTheDocument();
     fireEvent.click(summary);
     expect(summary).toHaveAttribute("aria-expanded", "false");
@@ -42,7 +52,7 @@ describe("AgentActivity", () => {
     expect(screen.getByLabelText("2 operations")).toHaveTextContent("2");
   });
 
-  it("renders nothing for todo only", () => { const { container } = render(<AgentActivity blocks={[tool("todo", "todo")]} />); expect(container).toBeEmptyDOMElement(); });
+  it("keeps the active status visible for todo-only turns", () => { render(<AgentActivity blocks={[tool("todo", "todo")]} />); expect(screen.getByText("Thinking")).toBeInTheDocument(); expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument(); });
 
   it.each(["settled", "aborted", "failed"] as const)("collapses on %s, allows review, and reopens for the next run", (lifecycle) => {
     const blocks = [tool("read", "read", "running", { path: "a.ts" })];
@@ -76,8 +86,8 @@ describe("AgentActivity", () => {
 
   it("uses the thinking pattern when a tool has no semantics", () => {
     render(<AgentActivity blocks={[tool("bash", "bash", "running", { command: "git status" })]} />);
-    expect(screen.getByText("Analyzing the request")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Analyzing the request/i })).toBeInTheDocument();
+    expect(screen.getByText("Understanding your request and deciding what to do next")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Thinking/i })).toBeInTheDocument();
   });
 
   it("holds implementation through test and corrective reads", () => {

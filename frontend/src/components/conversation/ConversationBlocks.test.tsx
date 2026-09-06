@@ -58,7 +58,7 @@ describe("turn-level conversation rendering", () => {
     render(<>{renderTurn(turn, codeRunner)}</>);
     expect(screen.getByText("streaming answer")).toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
-    expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
+    expect(screen.getByText("Responding")).toBeInTheDocument();
     cleanup();
     const settled = buildTurnPresentations([user("u1"), tool("read", "read"), agent("a1", "streaming answer")])[0];
     render(<>{renderTurn(settled, codeRunner)}</>);

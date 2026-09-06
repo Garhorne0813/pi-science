@@ -13,6 +13,8 @@ export interface TurnPresentation {
   interactionTools: ToolCallBlock[];
   /** Execution + interaction + failing system tools: what AgentActivity shows. */
   activityTools: ToolCallBlock[];
+  /** Ordered process history, separate from the current/final answer. */
+  activityBlocks: (AgentMessageBlock | ToolCallBlock)[];
   systemBlocks: ThreadBlock[];
   intermediateAgents: AgentMessageBlock[];
   /** Active turn: newest streaming agent text that no tool has superseded yet. */
@@ -64,6 +66,10 @@ function buildTurnPresentation(blocks: ThreadBlock[], lifecycle: TurnLifecycle):
     ?? (lifecycle === "settled" ? finalAgentInCompletedTurn(blocks) : null);
   const hasTerminalError = lifecycle === "failed" && blocks.some((block) => block.kind === "status-line" && block.level === "error");
   const provisionalAgent = !finalAgent && (active || hasTerminalError) ? provisionalAgentInActiveTurn(blocks) : null;
+  const visibleAgent = finalAgent ?? provisionalAgent;
+  const activityToolIds = new Set(activityTools.map((block) => block.id));
+  const activityBlocks = blocks.filter((block): block is AgentMessageBlock | ToolCallBlock =>
+    (block.kind === "tool" && activityToolIds.has(block.id)) || (block.kind === "agent" && block.id !== visibleAgent?.id));
   const systemBlocks = blocks.filter((block) => block.kind !== "user" && block.kind !== "agent" && block.kind !== "artifact-summary" && (block.kind !== "tool" || activityPolicy(block).plane === "system"));
   const settled = activityTools.length > 0 && activityTools.every((block) => block.status === "done" || block.status === "error");
   return {
@@ -74,6 +80,7 @@ function buildTurnPresentation(blocks: ThreadBlock[], lifecycle: TurnLifecycle):
     planControlTools,
     interactionTools,
     activityTools,
+    activityBlocks,
     systemBlocks,
     intermediateAgents: intermediateAgentsInTurn(blocks),
     provisionalAgent,

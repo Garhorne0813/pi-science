@@ -123,6 +123,7 @@ describe("turn-level activity through the live event path", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Complete/ }));
     expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Execution details/ }));
     const traceLabels = Array.from(document.querySelectorAll("[aria-label='Execution trace'] button > span"));
     expect(traceLabels.map((node) => node.textContent)).toEqual([
       "Reading turn-presentation.ts",
@@ -174,7 +175,7 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       rerender(view());
       expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
       expect(screen.getByText("我先检查一下。")).toBeInTheDocument();
-      expect(screen.getByLabelText("Execution trace")).toHaveTextContent("我先检查一下。");
+      expect(screen.getByLabelText("Execution trace")).not.toHaveTextContent("我先检查一下。");
 
       emit("tool.updated", { callId: "r1", tool: "read", status: "done" });
       emit("tool.updated", { callId: "r2", tool: "grep", status: "running", input: { pattern: "x" } });
@@ -202,7 +203,7 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       // The final answer is visible while its text is still streaming.
       expect(screen.getByText("这是最终回答。")).toBeInTheDocument();
       expect(screen.queryByRole("status")).not.toBeInTheDocument();
-      expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
+      expect(screen.getByText("Responding")).toBeInTheDocument();
 
       emit("session.idle", {});
       rerender(view());
