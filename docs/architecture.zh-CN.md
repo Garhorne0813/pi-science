@@ -14,10 +14,12 @@ flowchart LR
     PH --> R1[对话 runtime A]
     PH --> R2[对话 runtime B]
     PH --> RN[后台 agent runtime]
+    PH -->|按需启动| MCP[已启用的 MCP 连接器]
     CP -->|按需 spawn| K[原生 Python 和 R 内核]
     CP --> DB[(全局 state.sqlite)]
     CP --> WS[(工作区文件和 .pi-science 元数据)]
-    CP -->|有界出站 HTTP| EXT[已配置的模型与文献服务]
+    CP -->|有界的模型与探测 HTTP| EXT[已配置的模型与科学数据服务]
+    MCP -->|有界的科学 API HTTP| EXT
     PH --> WS
     K --> WS
 ```
@@ -28,10 +30,11 @@ React 应用是 Node 控制面的客户端。控制面拥有应用 API、协调�
 | 组件 | 职责 |
 |---|---|
 | React Web 应用 | 对话、项目知识、文件、Notebook、实验运行、技能、设置和科学文件查看器 |
-| Node 控制面 | Session、事件流、文件、任务、谱系、项目状态、设置、SQLite 协调、runtime 生命周期和路由鉴权 |
+| Node 控制面 | Session、事件流、文件、任务、谱系、项目状态、设置、托管 MCP 连接器、SQLite 协调、runtime 生命周期和路由鉴权 |
 | Pi Orbit Web Host | Agent session，以及面向对话和有界后台 agent 的隔离 runtime |
+| MCP 连接器进程 | 延迟启动的本地工具服务，以及通往公共科学服务的受保护 transport |
 | Node 原生科学运行时 | 绑定 Workspace 的 Python/R 内核，以及可选 JupyterLab 工具环境 |
-| 全局 SQLite 状态 | Workspace 位置、环境 revision、持久任务、租约和旧状态导入标记 |
+| 全局 SQLite 状态 | Workspace 位置、环境 revision、MCP 定义与策略、持久任务、租约和旧状态导入标记 |
 | 工作区 | 用户文件，以及项目级指令、技能、环境、session、产物和谱系 |
 
 ## Pi Orbit 运行时模型
@@ -138,6 +141,7 @@ project/
 │   │   └── ledger.json       # 项目记忆规范存储（记录、提案、决策）
 │   ├── sessions/             # 持久化的 Pi session JSONL 文件
 │   ├── agent/                # 项目级 runtime 配置回退目录
+│   ├── mcp-runtime.json      # 生成的已启用连接器与有效工具策略
 │   ├── runs/                 # 执行工作区与输出
 │   ├── solutions/            # 不可变 research candidate
 │   ├── session-titles.jsonl
@@ -228,6 +232,50 @@ flowchart LR
 
 旧的 `custom_providers`、提供方 API key 字段和 `model-endpoints.json` 只作为迁移输入或
 兼容投影。新写入统一使用模型资源服务。
+
+## MCP 连接器域和运行时投影
+
+MCP 配置由 Node 控制面托管，不需要手工编辑 Pi runtime 文件。连接器定义、全局启用与
+筛选、全局工具决策、项目级工具覆盖和工具发现缓存都是 SQLite 中的规范资源。
+
+```mermaid
+flowchart LR
+    UI[设置页面 / MCP API] --> S[McpConnectorService]
+    S --> DB[(MCP SQLite repositories)]
+    S --> P[探测和 tools/list]
+    DB --> RP[McpRuntimeProjection]
+    RP --> F[workspace/.pi-science/mcp-runtime.json]
+    F --> A[Pi MCP adapter]
+    A --> L[本地 stdio 或 socket server]
+    A --> H[远程 HTTP 或 SSE server]
+    L --> D[科学数据 API]
+    H --> D
+```
+
+- 启动时幂等写入 14 个内置定义及其已知工具元数据。定义升级会保留用户的启用和审批
+  设置。Paper Search 默认开启，其他 13 个领域连接器需要显式启用；内置定义不能编辑
+  或删除。
+- 内置连接器共暴露 39 个只读工具。Paper Search 使用独立 MCP 进程；其他领域共用一个
+  实现入口，但以不同领域参数分别启动，因此每个连接器只公布自己的工具。进程采用
+  lazy 生命周期管理。
+- 自定义和从旧配置导入的连接器使用同一资源模型，支持 `stdio`、Streamable HTTP、SSE
+  和 socket transport。导入预览会拒绝包含敏感字段的旧配置；MCP 环境变量与 header
+  目前只接受环境变量引用，不接受字面值或凭据存储引用。
+- 启用状态、include/exclude 筛选和审批模式全局生效。工具的精确名称 `允许`、`询问`、
+  `拒绝` 决策既可以全局设置，也可以按项目覆盖；优先级依次是 `拒绝`、项目决策、全局
+  决策、连接器审批模式。除非连接器显式允许全部工具，未知工具仍需要审批。
+- 影响 runtime 的定义或策略变更会为所有已知 workspace 生成权限为 0600、原子替换的
+  `.pi-science/mcp-runtime.json`，并重载活跃 runtime。快照只保存启用的定义和策略，不
+  保存解析后的密钥。多个项目共享一个 Pi Orbit Host，因此 Pi 扩展会从每个 Session
+  自己的 workspace 加载快照。
+- 探测流程执行 MCP handshake 和 `tools/list`，合并并发探测，并按连接器 revision 与
+  fingerprint 缓存结果。内置工具元数据使用启动时写入的长期缓存，在线探测可以刷新它。
+- 远程 transport 和内置上游客户端都经过受保护的 MCP fetch 路径：连接前校验 URL，
+  公网端点启用 DNS rebinding 防护，拒绝跨 origin 请求和 HTTP 重定向，对请求设置边界，
+  并将结果写入出站审计。
+
+详细 API、schema、迁移和 UI 约定见
+[MCP 管理实现](mcp-management-implementation.md)。
 
 ## 信任与安全边界
 
