@@ -1173,3 +1173,17 @@ docs/architecture.zh-CN.md                                  update at M2/M5
 | `cellguide` | CELLxGENE CellGuide | 2 |
 
 所有 15 个工具均为只读、默认 Ask、严格 JSON Schema（拒绝未知字段），经共享出站安全策略访问固定的公开 origin，并返回来源、检索时间、有效请求参数和结构化记录。网络请求使用超时、有限重试和响应大小上限；CellGuide 的版本化元数据在 server 进程内缓存一小时。受限授权资源（包括 KEGG、CADD、PanglaoDB 和 Sanger Cell Model Passports）不在本批范围内。
+
+第二批继续按领域默认关闭，增加 20 个只读工具：
+
+| Connector | 数据源 | 工具数 |
+|---|---|---:|
+| `protein-annotation` | InterPro、STRING v12 | 3 |
+| `omics-archives` | NCBI GEO、PRIDE Archive、MGnify | 3 |
+| `chemistry` | PubChem、ChEBI | 3 |
+| `regulation` | ENCODE、JASPAR | 3 |
+| `biomart` | Ensembl BioMart | 2 |
+| `drug-regulatory` | openFDA Labels、Drugs@FDA | 3 |
+| `human-genetics` | NHGRI-EBI GWAS Catalog | 3 |
+
+STRING 使用固定 v12 服务并遵守一秒请求间隔。BioMart 使用不会发生版本归档重定向的 Ensembl 官方 Asia mirror；ENCODE 详情通过同源搜索精确定位 accession，不放宽全局的重定向阻断。openFDA 不暴露原始查询语法，只允许受控字段并转义用户输入。GWAS Catalog 搜索使用 v2 API；详情读取使用相同 Catalog 的稳定记录端点，以规避 v2 详情端点当前的高延迟。

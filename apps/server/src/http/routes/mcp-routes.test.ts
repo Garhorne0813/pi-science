@@ -122,7 +122,7 @@ describe("canonical MCP routes", () => {
     await service.ensureBuiltins();
     const listed = await app.inject({ method: "GET", url: `/api/mcp/connectors?cwd=${encodeURIComponent(cwd)}` });
     const connectors = listed.json().connectors as Array<{ connector_id: string; name: string; tool_count: number; settings: { enabled: boolean; revision: number } }>;
-    expect(connectors).toHaveLength(7);
+    expect(connectors).toHaveLength(14);
     expect(connectors.find((item) => item.name === "paper-search")).toMatchObject({ connector_id: "mcp_builtin_paper_search", tool_count: 3, settings: { enabled: true } });
     expect(connectors.filter((item) => item.name !== "paper-search")).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "literature-graph", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
@@ -131,6 +131,13 @@ describe("canonical MCP routes", () => {
       expect.objectContaining({ name: "genes-ontologies", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
       expect.objectContaining({ name: "genomes", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
       expect.objectContaining({ name: "cellguide", tool_count: 2, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "protein-annotation", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "omics-archives", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "chemistry", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "regulation", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "biomart", tool_count: 2, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "drug-regulatory", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "human-genetics", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
     ]));
 
     const cachedTools = await app.inject({ method: "GET", url: `/api/mcp/connectors/mcp_builtin_paper_search/tools?cwd=${encodeURIComponent(cwd)}` });

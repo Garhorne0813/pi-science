@@ -9,6 +9,18 @@ import {
   reactomePathwayInput, runEnsemblVep, searchCellTypes, searchClinicalTrials, searchOntologyTerms,
   searchOpenAlexWorks, searchPdbEntries,
 } from "./scientific-data.js";
+import {
+  biomartDatasetsInput, biomartQueryInput, chebiSearchInput, drugsFdaSearchInput, encodeRecordInput,
+  encodeSearchInput, geoSearchInput, getEncodeRecord, getGwasStudy, getInterproProteinAnnotations,
+  getOpenFdaLabel, getPubchemCompound, getStringNetwork, gwasAssociationsInput, gwasStudiesInput,
+  gwasStudyInput, interproProteinInput, interproSearchInput, jasparSearchInput, listBiomartDatasets,
+  mgnifySearchInput, openFdaLabelInput, openFdaLabelSearchInput, prideSearchInput,
+  pubchemCompoundInput, pubchemSearchInput,
+  queryBiomart, searchChebiEntities, searchDrugsFda, searchEncodeRecords, searchGeoDatasets,
+  searchGwasAssociations, searchGwasStudies, searchInterproEntries, searchJasparMatrices,
+  searchMgnifyStudies, searchOpenFdaLabels, searchPrideProjects, searchPubchemCompounds,
+  stringNetworkInput,
+} from "./scientific-data-secondary.js";
 
 const domain = process.argv[2];
 const server = new McpServer({ name: `pi-science-${domain ?? "scientific-data"}`, version: "1.0.0" });
@@ -42,6 +54,40 @@ switch (domain) {
   case "cellguide":
     server.registerTool("search_cell_types", { title: "Search Cell Types", description: "Search the current CELLxGENE CellGuide snapshot by name, synonym, description, or Cell Ontology ID.", inputSchema: cellTypeSearchInput, annotations }, async (input) => result(await searchCellTypes(input)));
     server.registerTool("get_cell_type", { title: "Get Cell Type", description: "Retrieve CellGuide metadata for a Cell Ontology identifier.", inputSchema: cellTypeInput, annotations }, async (input) => result(await getCellType(input)));
+    break;
+  case "protein_annotation":
+    server.registerTool("search_interpro_entries", { title: "Search InterPro Entries", description: "Search InterPro protein families, domains, repeats, sites, and homologous superfamilies with cursor pagination.", inputSchema: interproSearchInput, annotations }, async (input) => result(await searchInterproEntries(input)));
+    server.registerTool("get_interpro_protein_annotations", { title: "Get Protein Annotations", description: "Retrieve InterPro entries and locations matching a UniProt accession.", inputSchema: interproProteinInput, annotations }, async (input) => result(await getInterproProteinAnnotations(input)));
+    server.registerTool("get_string_network", { title: "Get STRING Network", description: "Retrieve a version-pinned STRING v12 interaction network with species, score, network-type, and expansion controls.", inputSchema: stringNetworkInput, annotations }, async (input) => result(await getStringNetwork(input)));
+    break;
+  case "omics_archives":
+    server.registerTool("search_geo_datasets", { title: "Search GEO Datasets", description: "Search NCBI GEO DataSets with relevance/date sorting and pagination.", inputSchema: geoSearchInput, annotations }, async (input) => result(await searchGeoDatasets(input)));
+    server.registerTool("search_pride_projects", { title: "Search PRIDE Projects", description: "Search public PRIDE Archive proteomics projects with pagination.", inputSchema: prideSearchInput, annotations }, async (input) => result(await searchPrideProjects(input)));
+    server.registerTool("search_mgnify_studies", { title: "Search MGnify Studies", description: "Search public MGnify metagenomics studies with pagination.", inputSchema: mgnifySearchInput, annotations }, async (input) => result(await searchMgnifyStudies(input)));
+    break;
+  case "chemistry":
+    server.registerTool("search_pubchem_compounds", { title: "Search PubChem Compounds", description: "Resolve a chemical name to PubChem compound identifiers and physicochemical properties.", inputSchema: pubchemSearchInput, annotations }, async (input) => result(await searchPubchemCompounds(input)));
+    server.registerTool("get_pubchem_compound", { title: "Get PubChem Compound", description: "Retrieve physicochemical properties and bounded synonyms for a PubChem CID.", inputSchema: pubchemCompoundInput, annotations }, async (input) => result(await getPubchemCompound(input)));
+    server.registerTool("search_chebi_entities", { title: "Search ChEBI Entities", description: "Search ChEBI chemical entities with page and result-size controls.", inputSchema: chebiSearchInput, annotations }, async (input) => result(await searchChebiEntities(input)));
+    break;
+  case "regulation":
+    server.registerTool("search_encode_records", { title: "Search ENCODE Records", description: "Search public ENCODE experiments, biosamples, files, or annotations by status.", inputSchema: encodeSearchInput, annotations }, async (input) => result(await searchEncodeRecords(input)));
+    server.registerTool("get_encode_record", { title: "Get ENCODE Record", description: "Retrieve a public ENCODE object by accession.", inputSchema: encodeRecordInput, annotations }, async (input) => result(await getEncodeRecord(input)));
+    server.registerTool("search_jaspar_matrices", { title: "Search JASPAR Matrices", description: "Search JASPAR transcription-factor profiles with collection, taxonomy, ordering, and pagination controls.", inputSchema: jasparSearchInput, annotations }, async (input) => result(await searchJasparMatrices(input)));
+    break;
+  case "biomart":
+    server.registerTool("list_biomart_datasets", { title: "List BioMart Datasets", description: "List datasets in an Ensembl BioMart mart.", inputSchema: biomartDatasetsInput, annotations }, async (input) => result(await listBiomartDatasets(input)));
+    server.registerTool("query_biomart", { title: "Query BioMart", description: "Query Ensembl BioMart with validated dataset, attribute, filter, uniqueness, and row-limit parameters.", inputSchema: biomartQueryInput, annotations }, async (input) => result(await queryBiomart(input)));
+    break;
+  case "drug_regulatory":
+    server.registerTool("search_openfda_labels", { title: "Search Drug Labels", description: "Search openFDA structured product labels by a controlled label field.", inputSchema: openFdaLabelSearchInput, annotations }, async (input) => result(await searchOpenFdaLabels(input)));
+    server.registerTool("get_openfda_label", { title: "Get Drug Label", description: "Retrieve one compact openFDA structured product label by SPL set identifier.", inputSchema: openFdaLabelInput, annotations }, async (input) => result(await getOpenFdaLabel(input)));
+    server.registerTool("search_drugs_fda", { title: "Search Drugs@FDA", description: "Search approved drug application records by ingredient, sponsor, or application number.", inputSchema: drugsFdaSearchInput, annotations }, async (input) => result(await searchDrugsFda(input)));
+    break;
+  case "human_genetics":
+    server.registerTool("search_gwas_studies", { title: "Search GWAS Studies", description: "Search GWAS Catalog v2 studies by reported trait, EFO trait, PubMed ID, or GCST accession.", inputSchema: gwasStudiesInput, annotations }, async (input) => result(await searchGwasStudies(input)));
+    server.registerTool("search_gwas_associations", { title: "Search GWAS Associations", description: "Search GWAS Catalog v2 associations by EFO trait, rsID, mapped gene, or GCST accession.", inputSchema: gwasAssociationsInput, annotations }, async (input) => result(await searchGwasAssociations(input)));
+    server.registerTool("get_gwas_study", { title: "Get GWAS Study", description: "Retrieve one GWAS Catalog v2 study by GCST accession.", inputSchema: gwasStudyInput, annotations }, async (input) => result(await getGwasStudy(input)));
     break;
   default:
     throw new Error(`Unknown scientific data connector '${domain ?? ""}'`);

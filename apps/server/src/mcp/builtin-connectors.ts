@@ -94,6 +94,75 @@ const scientificDomains = [
       tool("get_cell_type", "Get Cell Type", "Retrieve CELLxGENE CellGuide metadata for a Cell Ontology identifier."),
     ],
   },
+  {
+    id: "protein_annotation", name: "protein-annotation", display: "Protein Annotation",
+    description: "Query InterPro protein families and STRING interaction networks.",
+    terms: "https://www.ebi.ac.uk/interpro/about/license/",
+    tools: [
+      tool("search_interpro_entries", "Search InterPro Entries", "Search InterPro families, domains, sites, and other protein signatures."),
+      tool("get_interpro_protein_annotations", "Get Protein Annotations", "Retrieve InterPro annotations for a UniProt accession."),
+      tool("get_string_network", "Get STRING Network", "Retrieve a scored STRING protein-interaction network."),
+    ],
+  },
+  {
+    id: "omics_archives", name: "omics-archives", display: "Omics Archives",
+    description: "Search GEO, PRIDE Archive, and MGnify study metadata.",
+    terms: "https://www.ebi.ac.uk/about/terms-of-use",
+    tools: [
+      tool("search_geo_datasets", "Search GEO Datasets", "Search NCBI GEO DataSets metadata."),
+      tool("search_pride_projects", "Search PRIDE Projects", "Search public PRIDE proteomics projects."),
+      tool("search_mgnify_studies", "Search MGnify Studies", "Search public MGnify metagenomics studies."),
+    ],
+  },
+  {
+    id: "chemistry", name: "chemistry", display: "Chemistry",
+    description: "Resolve PubChem compounds and search ChEBI chemical entities.",
+    terms: "https://www.ncbi.nlm.nih.gov/home/about/policies/",
+    tools: [
+      tool("search_pubchem_compounds", "Search PubChem Compounds", "Resolve a chemical name to PubChem compound properties."),
+      tool("get_pubchem_compound", "Get PubChem Compound", "Retrieve PubChem properties and synonyms for a CID."),
+      tool("search_chebi_entities", "Search ChEBI Entities", "Search ChEBI names, identifiers, formulae, and structures."),
+    ],
+  },
+  {
+    id: "regulation", name: "regulation", display: "Regulation",
+    description: "Search ENCODE experiments and JASPAR transcription-factor profiles.",
+    terms: "https://www.encodeproject.org/help/rest-api/",
+    tools: [
+      tool("search_encode_records", "Search ENCODE Records", "Search released ENCODE experiments, biosamples, files, and annotations."),
+      tool("get_encode_record", "Get ENCODE Record", "Retrieve a public ENCODE metadata record by accession."),
+      tool("search_jaspar_matrices", "Search JASPAR Matrices", "Search JASPAR transcription-factor binding profiles."),
+    ],
+  },
+  {
+    id: "biomart", name: "biomart", display: "BioMart",
+    description: "List and query Ensembl BioMart datasets with explicit attributes and filters.",
+    terms: "https://www.ensembl.org/info/about/legal/disclaimer.html",
+    tools: [
+      tool("list_biomart_datasets", "List BioMart Datasets", "List datasets in an Ensembl BioMart mart."),
+      tool("query_biomart", "Query BioMart", "Query an Ensembl BioMart dataset using validated attributes and filters."),
+    ],
+  },
+  {
+    id: "drug_regulatory", name: "drug-regulatory", display: "Drug Regulatory",
+    description: "Search public openFDA drug labels and Drugs@FDA application records.",
+    terms: "https://open.fda.gov/terms/",
+    tools: [
+      tool("search_openfda_labels", "Search Drug Labels", "Search openFDA structured product labels by a controlled field."),
+      tool("get_openfda_label", "Get Drug Label", "Retrieve an openFDA label by SPL set identifier."),
+      tool("search_drugs_fda", "Search Drugs@FDA", "Search Drugs@FDA applications by ingredient, sponsor, or application number."),
+    ],
+  },
+  {
+    id: "human_genetics", name: "human-genetics", display: "Human Genetics",
+    description: "Search curated NHGRI-EBI GWAS Catalog studies and associations.",
+    terms: "https://www.ebi.ac.uk/about/terms-of-use",
+    tools: [
+      tool("search_gwas_studies", "Search GWAS Studies", "Search curated GWAS Catalog studies by trait, publication, or accession."),
+      tool("search_gwas_associations", "Search GWAS Associations", "Search GWAS Catalog associations by trait, variant, gene, or study."),
+      tool("get_gwas_study", "Get GWAS Study", "Retrieve a GWAS Catalog study by GCST accession."),
+    ],
+  },
 ] as const;
 
 function scientificDataConnectors(): BuiltinMcpConnector[] {
