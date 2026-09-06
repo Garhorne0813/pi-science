@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  cellTypeSearchInput, clinicalTrialsSearchInput, ensemblVepInput, getAlphaFoldPrediction,
-  getClinicalTrial, getOpenAlexCitations, myGeneInput, openAlexSearchInput, pdbSearchInput,
-  queryMyGene, runEnsemblVep, searchCellTypes, searchClinicalTrials, searchOpenAlexWorks,
-  searchOntologyTerms, searchPdbEntries, type ScientificDependencies,
+  analyzeClinicalTrialEndpoints, cellTypeSearchInput, clinicalTrialEligibilityInput,
+  clinicalTrialsSearchInput, ensemblVepInput, getAlphaFoldPrediction, getClinicalTrial,
+  getOpenAlexCitations, getOpenAlexReferences, myGeneInput, openAlexAuthorSearchInput,
+  openAlexReferencesInput, openAlexSearchInput, pdbSearchInput, queryMyGene, runEnsemblVep,
+  searchCellTypes, searchClinicalTrialEligibility, searchClinicalTrials, searchOpenAlexAuthors,
+  searchOpenAlexWorks, searchOntologyTerms, searchPdbEntries, type ScientificDependencies,
 } from "./scientific-data.js";
 
 const now = () => new Date("2026-09-06T00:00:00.000Z");
@@ -15,6 +17,9 @@ function responses(...bodies: unknown[]): ScientificDependencies & { requests: A
 describe("scientific data schemas", () => {
   it("rejects unknown parameters and invalid enum values", () => {
     expect(openAlexSearchInput.safeParse({ query: "CRISPR", max_results: 10 }).success).toBe(false);
+    expect(openAlexReferencesInput.safeParse({ work_id: "W1", limit: 101 }).success).toBe(false);
+    expect(openAlexAuthorSearchInput.safeParse({ query: "Jane Doe", cursor: "*" }).success).toBe(false);
+    expect(clinicalTrialEligibilityInput.safeParse({ criteria: "adult", unknown: true }).success).toBe(false);
     expect(clinicalTrialsSearchInput.safeParse({ condition: "cancer", overall_status: ["OPEN"] }).success).toBe(false);
     expect(ensemblVepInput.safeParse({ region: "9:1-1", allele: "not-an-allele" }).success).toBe(false);
   });
@@ -42,6 +47,21 @@ describe("scientific data provider mappings", () => {
     expect(result).toMatchObject({ next_page_token: "next", records: [{ title: "Citing" }] });
   });
 
+  it("retrieves bounded OpenAlex references and searches authors", async () => {
+    const dependencies = responses(
+      { id: "https://openalex.org/W42", referenced_works: ["https://openalex.org/W1", "https://openalex.org/W2", "https://openalex.org/W3"] },
+      { results: [{ id: "https://openalex.org/W1", title: "Reference" }] },
+      { meta: { count: 1 }, results: [{ id: "https://openalex.org/A1", display_name: "Jane Doe", works_count: 5 }] },
+    );
+    const references = await getOpenAlexReferences({ work_id: "W42", limit: 2 }, dependencies);
+    expect(dependencies.requests[1]!.url.searchParams.get("filter")).toBe("openalex_id:W1|W2");
+    expect(references).toMatchObject({ total: 2, records: [{ title: "Reference" }] });
+    const authors = await searchOpenAlexAuthors({ query: "Jane Doe", per_page: 10, page: 2 }, dependencies);
+    expect(dependencies.requests[2]!.url.pathname).toBe("/authors");
+    expect(dependencies.requests[2]!.url.searchParams.get("page")).toBe("2");
+    expect(authors).toMatchObject({ total: 1, records: [{ display_name: "Jane Doe", works_count: 5 }] });
+  });
+
   it("maps ClinicalTrials.gov field filters and compacts results", async () => {
     const dependencies = responses({ totalCount: 1, nextPageToken: "token", studies: [{ protocolSection: { identificationModule: { nctId: "NCT12345678", briefTitle: "Trial" }, statusModule: { overallStatus: "RECRUITING" }, designModule: { phases: ["PHASE2"], studyType: "INTERVENTIONAL" }, conditionsModule: { conditions: ["Cancer"] } } }] });
     const result = await searchClinicalTrials(clinicalTrialsSearchInput.parse({ condition: "cancer", intervention: "drug", overall_status: ["RECRUITING"], phase: ["PHASE2"], study_type: "INTERVENTIONAL", page_size: 5, sort_by: "last_update" }), dependencies);
@@ -54,6 +74,18 @@ describe("scientific data provider mappings", () => {
     const dependencies = responses({ protocolSection: { identificationModule: { nctId: "NCT12345678" } } });
     await getClinicalTrial({ nct_id: "nct12345678" }, dependencies);
     expect(dependencies.requests[0]!.url.pathname.endsWith("/NCT12345678")).toBe(true);
+  });
+
+  it("searches eligibility modules and extracts trial endpoints", async () => {
+    const dependencies = responses(
+      { totalCount: 1, studies: [{ protocolSection: { identificationModule: { nctId: "NCT12345678" } } }] },
+      { protocolSection: { identificationModule: { nctId: "NCT12345678" }, designModule: { phases: ["PHASE2"], enrollmentInfo: { count: 120 } }, outcomesModule: { primaryOutcomes: [{ measure: "Overall survival" }], secondaryOutcomes: [{ measure: "Safety" }] } } },
+    );
+    const eligibility = await searchClinicalTrialEligibility({ criteria: "adult", condition: "cancer", page_size: 5 }, dependencies);
+    expect(dependencies.requests[0]!.url.searchParams.get("query.term")).toBe("AREA[EligibilityCriteria]adult");
+    expect(eligibility).toMatchObject({ total: 1, records: [{ nct_id: "NCT12345678" }] });
+    const endpoints = await analyzeClinicalTrialEndpoints({ nct_id: "NCT12345678" }, dependencies);
+    expect(endpoints).toMatchObject({ record: { nct_id: "NCT12345678", primary_outcomes: [{ measure: "Overall survival" }], phases: ["PHASE2"] } });
   });
 
   it("sends the documented RCSB full-text POST payload", async () => {

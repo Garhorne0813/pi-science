@@ -51,11 +51,24 @@ export const crossrefSearchInput = z.strictObject({
   if (value.published_from && value.published_to && value.published_from > value.published_to) context.addIssue({ code: "custom", message: "published_from must not be after published_to" });
 });
 
+export const biorxivSearchInput = z.strictObject({
+  server: z.enum(["biorxiv", "medrxiv"]).default("biorxiv"),
+  date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  category: z.string().trim().regex(/^[A-Za-z][A-Za-z &-]{0,99}$/).optional(),
+  cursor: z.number().int().min(0).max(1_000_000).default(0),
+  limit: z.number().int().min(1).max(30).default(30),
+}).refine((value) => value.date_from <= value.date_to, { message: "date_from must not be after date_to" });
+export const europePmcFullTextInput = z.strictObject({
+  pmcid: z.string().trim().regex(/^PMC\d+$/i).transform((value) => value.toUpperCase()),
+  max_characters: z.number().int().min(1_000).max(100_000).default(50_000),
+});
+
 export type ArxivSearchInput = z.infer<typeof arxivSearchInput>;
 export type PubmedSearchInput = z.infer<typeof pubmedSearchInput>;
 export type CrossrefSearchInput = z.infer<typeof crossrefSearchInput>;
 
-type Provider = "arxiv" | "pubmed" | "crossref";
+type Provider = "arxiv" | "pubmed" | "crossref" | "biorxiv" | "europepmc";
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 export interface SearchDependencies {
@@ -82,7 +95,7 @@ export interface SearchEnvelope extends Record<string, unknown> {
 
 const lastRequestAt = new Map<Provider, number>();
 const throttleTails = new Map<Provider, Promise<void>>();
-const minimumInterval: Record<Provider, number> = { arxiv: 3_000, pubmed: 350, crossref: 50 };
+const minimumInterval: Record<Provider, number> = { arxiv: 3_000, pubmed: 350, crossref: 50, biorxiv: 350, europepmc: 350 };
 
 export async function searchArxiv(input: ArxivSearchInput, dependencies: SearchDependencies = {}): Promise<SearchEnvelope> {
   const field = { all: "all", title: "ti", abstract: "abs", author: "au" }[input.search_field];
@@ -152,6 +165,19 @@ export async function searchCrossref(input: CrossrefSearchInput, dependencies: S
   return envelope("crossref", input, records, number(payload.message?.["total-results"]), dependencies, { effective_query: input.query, sort_by: input.sort_by, sort_order: input.sort_order, filters });
 }
 
+export async function searchBiorxivPreprints(input: z.infer<typeof biorxivSearchInput>, dependencies: SearchDependencies = {}): Promise<SearchEnvelope> {
+  const url = new URL(`https://api.biorxiv.org/details/${input.server}/${input.date_from}/${input.date_to}/${input.cursor}/json`);
+  if (input.category) url.searchParams.set("category", input.category.toLowerCase().replace(/\s+/g, "_"));
+  const payload = await requestJson("biorxiv", url, dependencies) as { messages?: Array<{ total?: number | string; status?: string }>; collection?: Array<Record<string, unknown>> };
+  const total = number(payload.messages?.[0]?.total); const records = (payload.collection ?? []).slice(0, input.limit).map((item) => ({ source: input.server, ...item, url: item.doi ? `https://doi.org/${item.doi}` : null }));
+  return { retrieved_at: (dependencies.now?.() ?? new Date()).toISOString(), count: records.length, total, request: { provider: "biorxiv", query: `${input.date_from}:${input.date_to}`, limit: input.limit, offset: input.cursor, server: input.server, category: input.category }, warnings: payload.collection && payload.collection.length > input.limit ? ["The upstream page was truncated by limit; advance cursor by count to continue."] : [], records };
+}
+
+export async function getEuropePmcFullText(input: z.infer<typeof europePmcFullTextInput>, dependencies: SearchDependencies = {}): Promise<SearchEnvelope> {
+  const url = new URL(`https://www.ebi.ac.uk/europepmc/webservices/rest/${input.pmcid}/fullTextXML`); const xml = await requestText("europepmc", url, dependencies); const title = clean(tag(xml, "article-title")); const plain = clean(xml.replace(/<ref-list[\s\S]*?<\/ref-list>/gi, " ").replace(/<[^>]+>/g, " ")); const text = plain.slice(0, input.max_characters);
+  return { retrieved_at: (dependencies.now?.() ?? new Date()).toISOString(), count: 1, total: 1, request: { provider: "europepmc", query: input.pmcid, limit: 1, offset: 0, max_characters: input.max_characters }, warnings: plain.length > input.max_characters ? ["Full text was truncated by max_characters."] : [], records: [{ source: "europepmc", pmcid: input.pmcid, title, text, truncated: plain.length > input.max_characters, total_characters: plain.length, url: `https://europepmc.org/articles/${input.pmcid}` }] };
+}
+
 function envelope(provider: Provider, input: { query: string; limit: number; offset: number }, records: Array<Record<string, unknown>>, total: number | null, dependencies: SearchDependencies, effective: Record<string, unknown>): SearchEnvelope { return { retrieved_at: (dependencies.now?.() ?? new Date()).toISOString(), count: records.length, total, request: { provider, query: input.query, limit: input.limit, offset: input.offset, ...effective }, warnings: [], records }; }
 async function requestJson(provider: Provider, url: URL, dependencies: SearchDependencies): Promise<unknown> { return (await request(provider, url, dependencies)).json(); }
 async function requestText(provider: Provider, url: URL, dependencies: SearchDependencies): Promise<string> { return (await request(provider, url, dependencies)).text(); }
@@ -160,7 +186,7 @@ async function request(provider: Provider, url: URL, dependencies: SearchDepende
   const sleep = dependencies.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (!dependencies.fetch) await throttle(provider, sleep);
-    const response = await fetcher(url, { headers: { "user-agent": userAgent(), accept: "application/json, application/atom+xml, text/xml" }, signal: AbortSignal.timeout(20_000) });
+    const response = await fetcher(url, { headers: { "user-agent": userAgent(), accept: "application/json, application/atom+xml, application/xml, text/xml, */*" }, signal: AbortSignal.timeout(20_000) });
     if (response.ok) return response;
     if (attempt < 2 && (response.status === 429 || response.status >= 500)) { const header = response.headers.get("retry-after"); const retryAfter = header === null ? Number.NaN : Number(header); await response.body?.cancel(); await sleep(Number.isFinite(retryAfter) ? Math.min(retryAfter * 1_000, 30_000) : 500 * 2 ** attempt); continue; }
     throw new Error(`${url.hostname} returned HTTP ${response.status}`);
@@ -185,7 +211,7 @@ async function throttle(provider: Provider, sleep: (milliseconds: number) => Pro
   }
 }
 function contactEmail(): string | null { const value = process.env.PI_SCIENCE_CONTACT_EMAIL?.trim(); return value && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value) ? value : null; }
-function userAgent(): string { const email = contactEmail(); return `Pi-Science paper-search/1.1${email ? ` (mailto:${email})` : ""}`; }
+function userAgent(): string { const email = contactEmail(); return `Pi-Science paper-search/1.2${email ? ` (mailto:${email})` : ""}`; }
 function addNcbiIdentity(url: URL): void { url.searchParams.set("tool", "pi_science"); const email = contactEmail(); if (email) url.searchParams.set("email", email); const apiKey = process.env.NCBI_API_KEY?.trim(); if (apiKey) url.searchParams.set("api_key", apiKey); }
 function arxivPlainQuery(value: string, field: string): string { const terms = [...value.matchAll(/"[^"]+"|\S+/g)].map((match) => match[0]); return terms.map((term) => `${field}:${term}`).join(" AND "); }
 function first(value: unknown): unknown { return Array.isArray(value) ? value[0] ?? null : value ?? null; }

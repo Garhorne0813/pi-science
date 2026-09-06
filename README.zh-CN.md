@@ -124,26 +124,26 @@ Pi-Science 内置 18 个由公共科学数据服务驱动的 MCP 连接器。它
 
 | 连接器 | 上游服务 | 默认状态 |
 |---|---|---|
-| Paper Search | PubMed、arXiv、Crossref | 启用 |
+| Paper Search | PubMed、arXiv、Crossref、bioRxiv、medRxiv、Europe PMC | 启用 |
 | Literature Graph | OpenAlex | 关闭 |
 | Clinical Trials | ClinicalTrials.gov | 关闭 |
-| Structures & Interactions | RCSB PDB、AlphaFold DB | 关闭 |
-| Genes & Ontologies | MyGene.info、EBI OLS、Reactome | 关闭 |
-| Genomes | Ensembl REST | 关闭 |
+| Structures & Interactions | RCSB PDB、AlphaFold DB、EMDB、IntAct、Complex Portal | 关闭 |
+| Genes & Ontologies | MyGene.info、EBI OLS、QuickGO、Reactome | 关闭 |
+| Genomes | Ensembl REST、UCSC Genome Browser | 关闭 |
 | CellGuide | CELLxGENE CellGuide | 关闭 |
-| Protein Annotation | InterPro、STRING v12 | 关闭 |
-| Omics Archives | NCBI GEO、PRIDE Archive、MGnify | 关闭 |
-| Chemistry | PubChem、ChEBI | 关闭 |
-| Regulation | ENCODE、JASPAR | 关闭 |
+| Protein Annotation | InterPro、STRING v12、Human Protein Atlas | 关闭 |
+| Omics Archives | NCBI GEO、PRIDE、MGnify、ArrayExpress、MetaboLights | 关闭 |
+| Chemistry | PubChem、ChEBI、BindingDB、Rhea | 关闭 |
+| Regulation | ENCODE、JASPAR、UniBind | 关闭 |
 | BioMart | Ensembl BioMart | 关闭 |
 | Drug Regulatory | openFDA、Drugs@FDA | 关闭 |
-| Human Genetics | NHGRI-EBI GWAS Catalog | 关闭 |
+| Human Genetics | NHGRI-EBI GWAS Catalog、FinnGen PheWAS | 关闭 |
 | Protein Records | UniProtKB | 关闭 |
 | Nucleotide Archives | NCBI GenBank、ENA | 关闭 |
 | Target Discovery | Open Targets Platform | 关闭 |
 | ChEMBL | ChEMBL | 关闭 |
 
-这些连接器共提供 50 个工具。可在 **设置 → MCP** 中仅启用需要的科研领域，查看已发现
+这些连接器共提供 85 个工具。可在 **设置 → MCP** 中仅启用需要的科研领域，查看已发现
 工具、测试连接、筛选暴露的工具，并为工具选择 `询问`、`允许` 或 `拒绝`。内置连接器
 定义只读；也可以注册自定义 `stdio`、Streamable HTTP、SSE 和 socket 连接器。连接器
 设置全局生效，单个项目可以覆盖工具决策。配置变更会自动投影到活跃 Agent runtime，

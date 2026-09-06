@@ -123,34 +123,34 @@ describe("canonical MCP routes", () => {
     const listed = await app.inject({ method: "GET", url: `/api/mcp/connectors?cwd=${encodeURIComponent(cwd)}` });
     const connectors = listed.json().connectors as Array<{ connector_id: string; name: string; tool_count: number; settings: { enabled: boolean; revision: number } }>;
     expect(connectors).toHaveLength(18);
-    expect(connectors.find((item) => item.name === "paper-search")).toMatchObject({ connector_id: "mcp_builtin_paper_search", tool_count: 3, settings: { enabled: true } });
+    expect(connectors.find((item) => item.name === "paper-search")).toMatchObject({ connector_id: "mcp_builtin_paper_search", tool_count: 5, settings: { enabled: true } });
     expect(connectors.filter((item) => item.name !== "paper-search")).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: "literature-graph", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
-      expect.objectContaining({ name: "clinical-trials", tool_count: 2, settings: expect.objectContaining({ enabled: false }) }),
-      expect.objectContaining({ name: "structures-interactions", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
-      expect.objectContaining({ name: "genes-ontologies", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
-      expect.objectContaining({ name: "genomes", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
-      expect.objectContaining({ name: "cellguide", tool_count: 2, settings: expect.objectContaining({ enabled: false }) }),
-      expect.objectContaining({ name: "protein-annotation", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
-      expect.objectContaining({ name: "omics-archives", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
-      expect.objectContaining({ name: "chemistry", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
-      expect.objectContaining({ name: "regulation", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
-      expect.objectContaining({ name: "biomart", tool_count: 2, settings: expect.objectContaining({ enabled: false }) }),
-      expect.objectContaining({ name: "drug-regulatory", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
-      expect.objectContaining({ name: "human-genetics", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "literature-graph", tool_count: 5, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "clinical-trials", tool_count: 4, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "structures-interactions", tool_count: 7, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "genes-ontologies", tool_count: 5, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "genomes", tool_count: 5, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "cellguide", tool_count: 5, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "protein-annotation", tool_count: 4, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "omics-archives", tool_count: 7, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "chemistry", tool_count: 7, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "regulation", tool_count: 5, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "biomart", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "drug-regulatory", tool_count: 4, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "human-genetics", tool_count: 5, settings: expect.objectContaining({ enabled: false }) }),
       expect.objectContaining({ name: "protein-records", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
       expect.objectContaining({ name: "nucleotide-archives", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
-      expect.objectContaining({ name: "target-discovery", tool_count: 2, settings: expect.objectContaining({ enabled: false }) }),
-      expect.objectContaining({ name: "chembl", tool_count: 3, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "target-discovery", tool_count: 4, settings: expect.objectContaining({ enabled: false }) }),
+      expect.objectContaining({ name: "chembl", tool_count: 4, settings: expect.objectContaining({ enabled: false }) }),
     ]));
 
     const cachedTools = await app.inject({ method: "GET", url: `/api/mcp/connectors/mcp_builtin_paper_search/tools?cwd=${encodeURIComponent(cwd)}` });
     expect(cachedTools.statusCode).toBe(200);
-    expect(cachedTools.json().tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["search_arxiv", "search_crossref", "search_pubmed"]);
+    expect(cachedTools.json().tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["get_europe_pmc_full_text", "search_arxiv", "search_biorxiv_preprints", "search_crossref", "search_pubmed"]);
 
     const probe = await app.inject({ method: "POST", url: "/api/mcp/connectors/mcp_builtin_paper_search/probe" });
     expect(probe.statusCode).toBe(200);
-    expect(probe.json().tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["search_arxiv", "search_crossref", "search_pubmed"]);
+    expect(probe.json().tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["get_europe_pmc_full_text", "search_arxiv", "search_biorxiv_preprints", "search_crossref", "search_pubmed"]);
 
     expect((await app.inject({ method: "DELETE", url: "/api/mcp/connectors/mcp_builtin_paper_search" })).statusCode).toBe(403);
 
@@ -168,11 +168,11 @@ describe("canonical MCP routes", () => {
 
     const listed = await app.inject({ method: "GET", url: "/api/mcp/connectors" });
     expect(listed.statusCode).toBe(200);
-    expect(listed.json().connectors).toEqual(expect.arrayContaining([expect.objectContaining({ name: "paper-search", source: "builtin", settings: expect.objectContaining({ enabled: true }), tool_count: 3 })]));
+    expect(listed.json().connectors).toEqual(expect.arrayContaining([expect.objectContaining({ name: "paper-search", source: "builtin", settings: expect.objectContaining({ enabled: true }), tool_count: 5 })]));
 
     const tools = await app.inject({ method: "GET", url: "/api/mcp/connectors/mcp_builtin_paper_search/tools" });
     expect(tools.statusCode).toBe(200);
-    expect(tools.json().tools).toHaveLength(3);
+    expect(tools.json().tools).toHaveLength(5);
 
     const grant = await app.inject({ method: "PUT", url: "/api/mcp/connectors/mcp_builtin_paper_search/tools/search_pubmed", payload: { decision: "allow" } });
     expect(grant.statusCode).toBe(200);

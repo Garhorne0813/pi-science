@@ -23,6 +23,8 @@ export const openAlexSearchInput = z.strictObject({
 });
 export const openAlexWorkInput = z.strictObject({ work_id: identifier.describe("OpenAlex W-id, DOI, PMID, or canonical URL.") });
 export const openAlexCitationsInput = z.strictObject({ work_id: identifier, per_page: pageSize, cursor: z.string().min(1).max(2_000).default("*") });
+export const openAlexReferencesInput = z.strictObject({ work_id: identifier, limit: z.number().int().min(1).max(100).default(50) });
+export const openAlexAuthorSearchInput = z.strictObject({ query: searchText, per_page: pageSize, page: z.number().int().min(1).max(10_000).default(1) });
 
 export const clinicalTrialsSearchInput = z.strictObject({
   query: searchText.optional().describe("General AREA/Essie query."),
@@ -37,6 +39,7 @@ export const clinicalTrialsSearchInput = z.strictObject({
   sort_by: z.enum(["relevance", "last_update", "start_date"]).default("relevance"),
 }).refine((value) => Boolean(value.query || value.condition || value.intervention || value.location || value.overall_status?.length || value.phase?.length || value.study_type), { message: "Provide at least one query or filter" });
 export const clinicalTrialInput = z.strictObject({ nct_id: z.string().trim().regex(/^NCT\d{8}$/i) });
+export const clinicalTrialEligibilityInput = z.strictObject({ criteria: searchText, condition: z.string().trim().min(1).max(500).optional(), location: z.string().trim().min(1).max(500).optional(), page_size: pageSize, page_token: z.string().min(1).max(2_000).optional() });
 
 export const pdbSearchInput = z.strictObject({
   query: searchText,
@@ -120,12 +123,24 @@ export async function getOpenAlexCitations(input: z.infer<typeof openAlexCitatio
   return envelope("openalex", { ...input, resolved_work_id: workId }, (payload.results ?? []).map(compactOpenAlexWork), numeric(payload.meta?.count), dependencies, payload.meta?.next_cursor);
 }
 
+export async function getOpenAlexReferences(input: z.infer<typeof openAlexReferencesInput>, dependencies: ScientificDependencies = {}) {
+  const resolved = await getOpenAlexWork({ work_id: input.work_id }, dependencies); const ids = Array.isArray((resolved.record as Json).referenced_works) ? ((resolved.record as Json).referenced_works as unknown[]).map(String).slice(0, input.limit) : [];
+  if (!ids.length) return envelope("openalex", input, [], 0, dependencies);
+  const url = new URL("https://api.openalex.org/works"); url.searchParams.set("filter", `openalex_id:${ids.map(openAlexId).join("|")}`); url.searchParams.set("per-page", String(ids.length)); addOpenAlexIdentity(url); const payload = await getJson("literature_graph", url, dependencies) as { results?: Json[] };
+  return envelope("openalex", input, (payload.results ?? []).map(compactOpenAlexWork), ids.length, dependencies);
+}
+
+export async function searchOpenAlexAuthors(input: z.infer<typeof openAlexAuthorSearchInput>, dependencies: ScientificDependencies = {}) {
+  const url = new URL("https://api.openalex.org/authors"); url.searchParams.set("search", input.query); url.searchParams.set("per-page", String(input.per_page)); url.searchParams.set("page", String(input.page)); addOpenAlexIdentity(url); const payload = await getJson("literature_graph", url, dependencies) as { meta?: Json; results?: Json[] };
+  const records = (payload.results ?? []).map((author) => ({ openalex_id: author.id, display_name: author.display_name, orcid: author.orcid, works_count: author.works_count, cited_by_count: author.cited_by_count, last_known_institutions: author.last_known_institutions, topics: author.topics })); return envelope("openalex", input, records, numeric(payload.meta?.count), dependencies);
+}
+
 export async function searchClinicalTrials(input: z.infer<typeof clinicalTrialsSearchInput>, dependencies: ScientificDependencies = {}) {
   const url = new URL("https://clinicaltrials.gov/api/v2/studies");
   if (input.query) url.searchParams.set("query.term", input.query); if (input.condition) url.searchParams.set("query.cond", input.condition); if (input.intervention) url.searchParams.set("query.intr", input.intervention); if (input.location) url.searchParams.set("query.locn", input.location);
   if (input.overall_status?.length) url.searchParams.set("filter.overallStatus", input.overall_status.join("|"));
   const advanced = [input.phase?.length && `AREA[Phase](${input.phase.join(" OR ")})`, input.study_type && `AREA[StudyType]${input.study_type}`].filter(Boolean).join(" AND ");
-  if (advanced) url.searchParams.set("filter.advanced", advanced); url.searchParams.set("pageSize", String(input.page_size)); if (input.page_token) url.searchParams.set("pageToken", input.page_token); url.searchParams.set("format", "json");
+  if (advanced) url.searchParams.set("filter.advanced", advanced); url.searchParams.set("pageSize", String(input.page_size)); if (input.page_token) url.searchParams.set("pageToken", input.page_token); url.searchParams.set("countTotal", "true"); url.searchParams.set("format", "json");
   if (input.sort_by !== "relevance") url.searchParams.set("sort", input.sort_by === "last_update" ? "LastUpdatePostDate:desc" : "StudyStartDate:desc");
   const payload = await getJson("clinical_trials", url, dependencies) as { studies?: Json[]; totalCount?: number; nextPageToken?: string };
   return envelope("clinicaltrials.gov", input, (payload.studies ?? []).map(compactTrial), payload.totalCount ?? null, dependencies, payload.nextPageToken);
@@ -134,6 +149,15 @@ export async function searchClinicalTrials(input: z.infer<typeof clinicalTrialsS
 export async function getClinicalTrial(input: z.infer<typeof clinicalTrialInput>, dependencies: ScientificDependencies = {}) {
   const url = new URL(`https://clinicaltrials.gov/api/v2/studies/${input.nct_id.toUpperCase()}`); url.searchParams.set("format", "json");
   return singleEnvelope("clinicaltrials.gov", input, compactTrial(await getJson("clinical_trials", url, dependencies) as Json), dependencies);
+}
+
+export async function searchClinicalTrialEligibility(input: z.infer<typeof clinicalTrialEligibilityInput>, dependencies: ScientificDependencies = {}) {
+  const url = new URL("https://clinicaltrials.gov/api/v2/studies"); url.searchParams.set("query.term", `AREA[EligibilityCriteria]${input.criteria}`); if (input.condition) url.searchParams.set("query.cond", input.condition); if (input.location) url.searchParams.set("query.locn", input.location); url.searchParams.set("pageSize", String(input.page_size)); if (input.page_token) url.searchParams.set("pageToken", input.page_token); url.searchParams.set("countTotal", "true"); url.searchParams.set("format", "json"); const payload = await getJson("clinical_trials", url, dependencies) as { studies?: Json[]; totalCount?: number; nextPageToken?: string };
+  return envelope("clinicaltrials.gov", input, (payload.studies ?? []).map(compactTrial), payload.totalCount ?? null, dependencies, payload.nextPageToken);
+}
+
+export async function analyzeClinicalTrialEndpoints(input: z.infer<typeof clinicalTrialInput>, dependencies: ScientificDependencies = {}) {
+  const url = new URL(`https://clinicaltrials.gov/api/v2/studies/${input.nct_id.toUpperCase()}`); url.searchParams.set("format", "json"); const study = await getJson("clinical_trials", url, dependencies) as Json; const protocol = object(study.protocolSection); const outcomes = object(protocol.outcomesModule); const design = object(protocol.designModule); return singleEnvelope("clinicaltrials.gov", input, { nct_id: input.nct_id.toUpperCase(), primary_outcomes: outcomes.primaryOutcomes, secondary_outcomes: outcomes.secondaryOutcomes, other_outcomes: outcomes.otherOutcomes, enrollment: design.enrollmentInfo, phases: design.phases, design_info: design.designInfo }, dependencies);
 }
 
 export async function searchPdbEntries(input: z.infer<typeof pdbSearchInput>, dependencies: ScientificDependencies = {}) {
@@ -237,7 +261,7 @@ function normalizeOpenAlexWorkId(value: string) { const trimmed = value.trim(); 
 function openAlexId(value: string) { return value.split("/").at(-1)?.toUpperCase() ?? value; }
 function compactOpenAlexWork(work: Json) { const primary = object(work.primary_location); const source = object(primary.source); return { openalex_id: work.id, doi: work.doi, title: work.title ?? work.display_name, publication_year: work.publication_year, publication_date: work.publication_date, type: work.type, cited_by_count: work.cited_by_count, open_access: work.open_access, authors: Array.isArray(work.authorships) ? work.authorships.slice(0, 50).map((item) => object(object(item).author).display_name).filter(Boolean) : [], source: source.display_name, landing_page_url: primary.landing_page_url, referenced_works: work.referenced_works }; }
 function compactTrial(study: Json) { const protocol = object(study.protocolSection); const identification = object(protocol.identificationModule); const status = object(protocol.statusModule); const design = object(protocol.designModule); const conditions = object(protocol.conditionsModule); const contacts = object(protocol.contactsLocationsModule); return { nct_id: identification.nctId, brief_title: identification.briefTitle, official_title: identification.officialTitle, overall_status: status.overallStatus, start_date: object(status.startDateStruct).date, completion_date: object(status.completionDateStruct).date, phases: design.phases, study_type: design.studyType, conditions: conditions.conditions, keywords: conditions.keywords, locations: Array.isArray(contacts.locations) ? contacts.locations.slice(0, 20) : [], url: identification.nctId ? `https://clinicaltrials.gov/study/${identification.nctId}` : null }; }
-export function envelope(source: string, request: Json, records: Json[], total: number | null, dependencies: ScientificDependencies, next?: unknown) { return { source, retrieved_at: (dependencies.now?.() ?? new Date()).toISOString(), request, count: records.length, total, ...(next ? { next_page_token: next } : {}), records }; }
+export function envelope(source: string, request: Json, records: Json[], total: number | null, dependencies: ScientificDependencies, next?: unknown, warnings: string[] = []) { return { source, retrieved_at: (dependencies.now?.() ?? new Date()).toISOString(), request, count: records.length, total, ...(next ? { next_page_token: next } : {}), ...(warnings.length ? { warnings } : {}), records }; }
 export function singleEnvelope(source: string, request: Json, record: Json, dependencies: ScientificDependencies) { return { source, retrieved_at: (dependencies.now?.() ?? new Date()).toISOString(), request, record }; }
 export function object(value: unknown): Json { return value && typeof value === "object" && !Array.isArray(value) ? value as Json : {}; }
 export function numeric(value: unknown): number | null { const result = Number(value); return Number.isFinite(result) ? result : null; }

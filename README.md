@@ -130,26 +130,26 @@ tools to the agent; the upstream searches still make outbound network requests.
 
 | Connector | Upstream services | Default |
 |---|---|---|
-| Paper Search | PubMed, arXiv, Crossref | Enabled |
+| Paper Search | PubMed, arXiv, Crossref, bioRxiv, medRxiv, Europe PMC | Enabled |
 | Literature Graph | OpenAlex | Disabled |
 | Clinical Trials | ClinicalTrials.gov | Disabled |
-| Structures & Interactions | RCSB PDB, AlphaFold DB | Disabled |
-| Genes & Ontologies | MyGene.info, EBI OLS, Reactome | Disabled |
-| Genomes | Ensembl REST | Disabled |
+| Structures & Interactions | RCSB PDB, AlphaFold DB, EMDB, IntAct, Complex Portal | Disabled |
+| Genes & Ontologies | MyGene.info, EBI OLS, QuickGO, Reactome | Disabled |
+| Genomes | Ensembl REST, UCSC Genome Browser | Disabled |
 | CellGuide | CELLxGENE CellGuide | Disabled |
-| Protein Annotation | InterPro, STRING v12 | Disabled |
-| Omics Archives | NCBI GEO, PRIDE Archive, MGnify | Disabled |
-| Chemistry | PubChem, ChEBI | Disabled |
-| Regulation | ENCODE, JASPAR | Disabled |
+| Protein Annotation | InterPro, STRING v12, Human Protein Atlas | Disabled |
+| Omics Archives | NCBI GEO, PRIDE, MGnify, ArrayExpress, MetaboLights | Disabled |
+| Chemistry | PubChem, ChEBI, BindingDB, Rhea | Disabled |
+| Regulation | ENCODE, JASPAR, UniBind | Disabled |
 | BioMart | Ensembl BioMart | Disabled |
 | Drug Regulatory | openFDA, Drugs@FDA | Disabled |
-| Human Genetics | NHGRI-EBI GWAS Catalog | Disabled |
+| Human Genetics | NHGRI-EBI GWAS Catalog, FinnGen PheWAS | Disabled |
 | Protein Records | UniProtKB | Disabled |
 | Nucleotide Archives | NCBI GenBank, ENA | Disabled |
 | Target Discovery | Open Targets Platform | Disabled |
 | ChEMBL | ChEMBL | Disabled |
 
-Together they expose 50 tools. Enable only the domains you need from
+Together they expose 85 tools. Enable only the domains you need from
 **Settings → MCP**, where you can inspect discovered tools, test a connection,
 filter exposed tools, and choose `Ask`, `Allow`, or `Deny` decisions. Built-in
 definitions are read-only, while custom `stdio`, Streamable HTTP, SSE, and

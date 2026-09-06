@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arxivSearchInput, crossrefSearchInput, pubmedSearchInput, searchArxiv, searchCrossref, searchPubmed, type SearchDependencies } from "./paper-search.js";
+import { arxivSearchInput, biorxivSearchInput, crossrefSearchInput, europePmcFullTextInput, getEuropePmcFullText, pubmedSearchInput, searchArxiv, searchBiorxivPreprints, searchCrossref, searchPubmed, type SearchDependencies } from "./paper-search.js";
 
 const now = () => new Date("2026-09-06T00:00:00.000Z");
 
@@ -28,6 +28,11 @@ describe("paper-search input schemas", () => {
   it("validates paired PubMed dates and incompatible relative dates", () => {
     expect(pubmedSearchInput.safeParse({ query: "cancer", date_from: "2025-01-01" }).success).toBe(false);
     expect(pubmedSearchInput.safeParse({ query: "cancer", date_from: "2025-01-01", date_to: "2026-01-01", relative_days: 30 }).success).toBe(false);
+  });
+
+  it("validates bioRxiv intervals and Europe PMC identifiers", () => {
+    expect(biorxivSearchInput.safeParse({ date_from: "2026-09-07", date_to: "2026-09-06" }).success).toBe(false);
+    expect(europePmcFullTextInput.safeParse({ pmcid: "123" }).success).toBe(false);
   });
 });
 
@@ -91,5 +96,13 @@ describe("paper-search provider mapping", () => {
     await searchCrossref(crossrefSearchInput.parse({ query: "test" }), dependencies);
     expect(dependencies.urls).toHaveLength(2);
     expect(waits).toEqual([1_000]);
+  });
+
+  it("maps bioRxiv pagination and bounds Europe PMC full text", async () => {
+    const biorxiv = responses({ body: JSON.stringify({ messages: [{ status: "ok", total: "40" }], collection: [{ doi: "10.1101/1", title: "One" }, { doi: "10.1101/2", title: "Two" }] }) });
+    const listed = await searchBiorxivPreprints(biorxivSearchInput.parse({ server: "medrxiv", date_from: "2026-09-01", date_to: "2026-09-06", category: "Epidemiology", cursor: 30, limit: 1 }), biorxiv);
+    expect(biorxiv.urls[0]!.pathname).toContain("/details/medrxiv/2026-09-01/2026-09-06/30/json"); expect(biorxiv.urls[0]!.searchParams.get("category")).toBe("epidemiology"); expect(listed).toMatchObject({ total: 40, count: 1, records: [{ url: "https://doi.org/10.1101/1" }] });
+    const europe = responses({ body: `<article><article-title>Example</article-title><body><p>${"x".repeat(1_100)}</p></body><ref-list><p>refs</p></ref-list></article>` });
+    const full = await getEuropePmcFullText(europePmcFullTextInput.parse({ pmcid: "PMC12345", max_characters: 1_000 }), europe); expect(europe.urls[0]!.pathname).toContain("/PMC12345/fullTextXML"); expect(full.records[0]).toMatchObject({ title: "Example", truncated: true, total_characters: 1_108 });
   });
 });

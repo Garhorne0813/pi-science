@@ -1198,3 +1198,7 @@ STRING 使用固定 v12 服务并遵守一秒请求间隔。BioMart 使用不会
 | `chembl` | ChEMBL Data Web Services | 3 |
 
 UniProt 搜索支持 review 状态、物种、排序和 cursor，详情与 FASTA 输出均压缩或限长。GenBank 搜索通过 NCBI ESearch → ESummary，记录读取支持格式、区间与链方向；NCBI 请求使用共享节流并支持 `NCBI_API_KEY`。Open Targets 只发送代码内固定的 GraphQL document，用户输入始终作为 variables，不允许注入任意 GraphQL。ChEMBL 活性检索必须显式指定 molecule 或 target，并对分页、pChEMBL 范围和返回字段设置边界。Synapse、Benchling 和 10x 等需要账号、租户或私有工作区上下文的连接器不作为零配置内置项加入。
+
+现有连接器覆盖补全新增 35 个工具，总工具数提升到 85。Paper Search 加入 bioRxiv/medRxiv 日期区间检索和 Europe PMC 开放全文限长读取；Literature Graph 加入 OpenAlex references 和 author search；Clinical Trials 加入 eligibility search 和 endpoint extraction；Structures & Interactions 加入 EMDB、IntAct、Complex Portal；Genes & Ontologies 加入 OLS 详情和 QuickGO；Genomes 加入 UCSC track 搜索与有界区间读取；CellGuide 加入 marker、来源和组织查询；Protein Annotation 加入 Human Protein Atlas；Omics Archives 加入 BioStudies ArrayExpress 与 MetaboLights；Chemistry 加入 BindingDB 与 Rhea；Regulation 加入 UniBind；BioMart 增加 attribute/filter introspection；Drug Regulatory 增加精确 Drugs@FDA application 读取；Human Genetics 增加 FinnGen PheWAS；Open Targets 增加 disease/drug 详情；ChEMBL 增加 mechanism 查询。
+
+所有新增 schema 使用 strict object，并限制自由字符串、分页、基因组区间和最大返回条数。Rhea 和 Open Targets 仅发送代码内固定查询，模型输入不能提供任意 SPARQL/GraphQL。UCSC track 目录改用官方 `/search` 端点，而不是下载超过 15 MB 的完整 track tree。Claude Science 旧实现使用的 eQTL Catalogue v2 API 在本次验证时已返回 HTTP 410，因此没有加入失效工具；KEGG、CADD、PanglaoDB 和 Sanger 模型仍遵循上游许可限制，不纳入零配置内置能力。
