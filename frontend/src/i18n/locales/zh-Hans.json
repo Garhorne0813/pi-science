@@ -532,6 +532,8 @@
   "settings.mcpPage.createAndEnable": "创建并启用",
   "settings.mcpPage.discardConfirm": "放弃尚未保存的连接器更改吗？",
   "settings.mcpPage.test": "测试",
+  "settings.mcpPage.showDetails": "展开 {{name}} 的详情",
+  "settings.mcpPage.hideDetails": "收起 {{name}} 的详情",
   "settings.mcpPage.builtin": "内置",
   "settings.mcpPage.builtinHint": "Pi-Science 内置连接器，随应用一起提供，无需手动配置。",
   "settings.mcpPage.paperSearchDescription": "搜索 PubMed、arXiv 和 Crossref，获取可验证的科研文献元数据。",

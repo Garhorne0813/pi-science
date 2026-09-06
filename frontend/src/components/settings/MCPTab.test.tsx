@@ -9,7 +9,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
-const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+const defaultFetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
   const url = String(input);
   const method = (init.method || "GET").toUpperCase();
   if (url === "/api/mcp/connectors" && method === "GET") {
@@ -32,7 +32,8 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {})
     return jsonResponse({ ok: true });
   }
   return jsonResponse({ error: `unhandled ${method} ${url}` }, 404);
-});
+};
+const fetchMock = vi.fn(defaultFetch);
 
 function renderTab(cwd: string | null) {
   return render(
@@ -49,7 +50,8 @@ beforeAll(async () => {
 beforeEach(async () => {
   cleanup();
   await i18n.changeLanguage("en");
-  fetchMock.mockClear();
+  fetchMock.mockReset();
+  fetchMock.mockImplementation(defaultFetch);
   vi.stubGlobal("fetch", fetchMock);
   queryClient.clear();
 });
@@ -81,6 +83,39 @@ describe("MCPTab", () => {
     expect(within(table).getByText("Paper Search")).toBeInTheDocument();
     expect(within(table).getByText(/2 tools/)).toBeInTheDocument();
     expect(within(table).getByRole("checkbox", { name: "Enable Paper Search" })).toBeChecked();
+  });
+
+  it("expands connector details directly below its row and collapses in place", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      const method = (init.method || "GET").toUpperCase();
+      if (url === "/api/mcp/connectors" && method === "GET") return jsonResponse({
+        connectors: [{
+          connector_id: "mcp-paper-search", name: "paper-search", display_name: "Paper Search", description: "Search scientific literature",
+          source: "builtin", transport: "stdio", endpoint_url: null, command: "node", args: ["server.js"], socket_path: null,
+          runtime_config: { lifecycle: "lazy", expose_resources: true, include_tools: [], exclude_tools: [], environment: {}, headers: {}, auth: "none", allow_private: false },
+          credential_ref: null, revision: 1, created_at: 1, updated_at: 1,
+          settings: { connector_id: "mcp-paper-search", enabled: true, include_tools: [], exclude_tools: [], approval_mode: "ask", revision: 1, created_at: 1, updated_at: 1 },
+          config_state: "valid", auth_state: "not-required", runtime_state: "ready", tool_count: 1, error: null,
+        }], legacy_count: 0,
+      });
+      if (url === "/api/mcp/connectors/mcp-paper-search/tools?cwd=%2Ftmp%2Fws" && method === "GET") return jsonResponse({ tools: [{ name: "search_pubmed", title: "Search PubMed", description: "Search papers", read_only: true, decision: "ask", decision_scope: "global" }], cached_at: 1 });
+      return jsonResponse({ error: `unhandled ${method} ${url}` }, 404);
+    });
+    renderTab("/tmp/ws");
+
+    const toggle = await screen.findByRole("button", { name: "Show details for Paper Search" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+
+    const permission = await screen.findByLabelText("Permission for search_pubmed");
+    const summaryRow = toggle.closest("tr");
+    const detailRow = permission.closest("tr");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(summaryRow?.nextElementSibling).toBe(detailRow);
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide details for Paper Search" }));
+    expect(screen.queryByLabelText("Permission for search_pubmed")).not.toBeInTheDocument();
   });
 
   it("toggles a server with the enabled checkbox", async () => {

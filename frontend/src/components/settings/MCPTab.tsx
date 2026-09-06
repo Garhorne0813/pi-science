@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
+import { Loader2, Plus, Upload } from "lucide-react";
 import type { McpConnector, McpConnectorCreate, McpToolSummary } from "@pi-science/contracts";
 import { useTranslation } from "react-i18next";
 import { queryClient } from "../../lib/client/query-client";
 import { mcpConnectorsKey, mcpConnectorsQuery, settingsApi } from "../../lib/settings";
 import { McpRow } from "./McpRow";
+import { McpConnectorDetails } from "./McpConnectorDetails";
 
 type Transport = McpConnectorCreate["transport"];
 const blank = { name: "", display_name: "", description: "", transport: "streamable_http" as Transport, location: "", args: "" };
@@ -18,6 +19,7 @@ export function MCPTab({ workspaceCwd }: { workspaceCwd: string | null }) {
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const toolRequest = useRef(0);
 
   const connectorRead = useQuery(mcpConnectorsQuery(t("settings.mcpPage.loadError")));
   const connectors = connectorRead.data?.connectors ?? [];
@@ -28,7 +30,6 @@ export function MCPTab({ workspaceCwd }: { workspaceCwd: string | null }) {
     const guard = (event: BeforeUnloadEvent) => { if (!adding || !formDirty) return; event.preventDefault(); };
     window.addEventListener("beforeunload", guard); return () => window.removeEventListener("beforeunload", guard);
   }, [adding, formDirty]);
-  const selected = connectors.find((item) => item.connector_id === selectedId) ?? null;
   const mutate = async (id: string, action: () => Promise<unknown>) => { setBusy(id); setError(null); try { await action(); await connectorRead.refetch(); } catch (cause) { setError(message(cause)); } finally { setBusy(null); } };
   const toggle = async (connector: McpConnector, enabled: boolean) => {
     const key = mcpConnectorsKey;
@@ -52,8 +53,19 @@ export function MCPTab({ workspaceCwd }: { workspaceCwd: string | null }) {
     await mutate("new", async () => { await settingsApi.createMcp(body); setAdding(false); setForm(blank); });
   };
 
-  const select = useCallback(async (connector: McpConnector) => { setSelectedId(connector.connector_id); try { setTools((await settingsApi.mcpTools(connector.connector_id, workspaceCwd)).tools); } catch { setTools([]); } }, [workspaceCwd]);
-  useEffect(() => { if (selected) void select(selected); }, [selected, select]);
+  const select = useCallback(async (connector: McpConnector) => {
+    const request = ++toolRequest.current;
+    setSelectedId(connector.connector_id);
+    try {
+      const next = (await settingsApi.mcpTools(connector.connector_id, workspaceCwd)).tools;
+      if (request === toolRequest.current) setTools(next);
+    } catch { if (request === toolRequest.current) setTools([]); }
+  }, [workspaceCwd]);
+  const toggleDetails = (connector: McpConnector) => {
+    if (selectedId === connector.connector_id) { toolRequest.current += 1; setSelectedId(null); setTools([]); return; }
+    void select(connector);
+  };
+  useEffect(() => { toolRequest.current += 1; setSelectedId(null); setTools([]); }, [workspaceCwd]);
   const importLegacy = async () => { await mutate("import", async () => { const preview = await settingsApi.previewMcpImport(workspaceCwd); const names = preview.entries.filter((item) => item.importable && !item.conflict).map((item) => item.name); if (!names.length) throw new Error(t("settings.mcpPage.importNone")); const result = await settingsApi.commitMcpImport(workspaceCwd, names); if (result.failed.length) throw new Error(t("settings.mcpPage.importFailed", { error: result.failed.map((item) => `${item.name}: ${item.error}`).join("; ") })); }); };
 
   if (connectorRead.isLoading) return <div className="flex min-h-[240px] items-center justify-center text-sm text-muted"><Loader2 size={18} className="mr-2 animate-spin" />{t("settings.mcpPage.loading")}</div>;
@@ -70,11 +82,7 @@ export function MCPTab({ workspaceCwd }: { workspaceCwd: string | null }) {
       <label className="text-xs text-muted md:col-span-2">{t("settings.mcpPage.fieldDescription")}<textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} className="mt-1 w-full rounded-input border border-border bg-surface px-3 py-2 text-text" /></label>
       <div className="md:col-span-2 flex justify-end gap-2"><button type="button" onClick={() => { if (!formDirty || window.confirm(t("settings.mcpPage.discardConfirm"))) { setAdding(false); setForm(blank); } }} className="px-3 py-2 text-xs text-muted">{t("settings.mcpPage.cancel")}</button><button type="button" disabled={busy !== null || !form.name || !form.display_name || !form.location} onClick={() => void create()} className="rounded-input bg-accent px-3 py-2 text-xs text-white">{t("settings.mcpPage.createAndEnable")}</button></div>
     </div>}
-    <section className="ui-card-flat overflow-hidden rounded-card"><table className="w-full table-fixed text-left"><thead className="border-b border-border bg-surface-2/50"><tr><th className="w-[30%] px-4 py-2.5 text-xs text-muted">{t("settings.mcpPage.tableName")}</th><th className="hidden w-[30%] px-4 py-2.5 text-xs text-muted md:table-cell">{t("settings.mcpPage.tableDescription")}</th><th className="w-[24%] px-4 py-2.5 text-xs text-muted">{t("settings.mcpPage.tableStatus")}</th><th className="w-[16%] px-4 py-2.5 text-xs text-muted">{t("settings.mcpPage.tableActions")}</th></tr></thead><tbody className="divide-y divide-border">{connectors.length ? connectors.map((connector) => <McpRow key={connector.connector_id} connector={connector} selected={selectedId === connector.connector_id} busy={busy === connector.connector_id} actionsEnabled onSelect={() => void select(connector)} onProbe={() => void mutate(connector.connector_id, async () => { const result = await settingsApi.probeMcp(connector.connector_id); if (result.error) throw new Error(result.error); })} onToggle={(enabled) => void toggle(connector, enabled)} />) : <tr><td colSpan={4} className="px-4 py-8 text-center text-sm text-muted">{t("settings.mcpPage.empty")}</td></tr>}</tbody></table></section>
-    {selected && <aside className="ui-card-flat rounded-card p-4"><div className="flex items-start justify-between"><div className="min-w-0"><h3 className="font-semibold text-text">{selected.display_name}</h3>{selected.source === "builtin" ? <p className="mt-1 text-xs text-muted">{t("settings.mcpPage.builtinHint")}</p> : <p className="mt-1 truncate font-mono text-xs text-muted" title={selected.endpoint_url || [selected.command, ...selected.args].filter(Boolean).join(" ") || selected.socket_path || undefined}>{selected.endpoint_url || [selected.command, ...selected.args].filter(Boolean).join(" ") || selected.socket_path}</p>}</div>{selected.source !== "builtin" && <button type="button" aria-label={t("settings.mcpPage.delete", { name: selected.display_name })} onClick={() => { if (window.confirm(t("settings.mcpPage.deleteConfirm", { name: selected.display_name }))) void mutate(selected.connector_id, async () => { await settingsApi.deleteMcp(selected.connector_id); setSelectedId(null); }); }} className="shrink-0 text-error-text"><Trash2 size={16} /></button>}</div>
-      <div className="mt-4 flex items-center justify-between"><div><h4 className="text-xs font-semibold text-text">{t("settings.mcpPage.toolPermissions")}</h4>{workspaceCwd && <p className="mt-1 text-[10px] text-muted">{t("settings.mcpPage.projectOverrideHint")}</p>}</div><button type="button" aria-label={t("settings.mcpPage.refreshTools")} onClick={() => void select(selected)} className="text-muted"><RefreshCw size={14} /></button></div>
-      <div className="mt-2 divide-y divide-border">{tools.length ? tools.map((tool) => <div key={tool.name} className="flex items-center justify-between gap-3 py-2"><div><p className="text-xs text-text">{tool.title || tool.name}</p><p className="line-clamp-1 text-[10px] text-muted">{tool.description}</p></div><select aria-label={t("settings.mcpPage.permissionFor", { name: tool.name })} value={workspaceCwd ? tool.decision_scope === "project" ? tool.decision : "inherit" : tool.decision} onChange={(event) => void mutate(selected.connector_id, async () => { const value = event.target.value; if (workspaceCwd && value === "inherit") await settingsApi.clearMcpToolDecision(selected.connector_id, tool.name, workspaceCwd); else await settingsApi.setMcpToolDecision(selected.connector_id, tool.name, value as "allow" | "ask" | "deny", workspaceCwd); await select(selected); })} className="rounded-input border border-border bg-surface px-2 py-1 text-xs text-text">{workspaceCwd && <option value="inherit">{t("settings.mcpPage.permissionInherit")}</option>}<option value="allow">{t("settings.mcpPage.permissionAllow")}</option><option value="ask">{t("settings.mcpPage.permissionAsk")}</option><option value="deny">{t("settings.mcpPage.permissionDeny")}</option></select></div>) : <p className="py-3 text-xs text-muted">{t("settings.mcpPage.noToolMetadata")}</p>}</div>
-    </aside>}
+    <section className="ui-card-flat overflow-hidden rounded-card"><table className="w-full table-fixed text-left"><thead className="border-b border-border bg-surface-2/50"><tr><th className="w-[30%] px-4 py-2.5 text-xs text-muted">{t("settings.mcpPage.tableName")}</th><th className="hidden w-[30%] px-4 py-2.5 text-xs text-muted md:table-cell">{t("settings.mcpPage.tableDescription")}</th><th className="w-[24%] px-4 py-2.5 text-xs text-muted">{t("settings.mcpPage.tableStatus")}</th><th className="w-[16%] px-4 py-2.5 text-xs text-muted">{t("settings.mcpPage.tableActions")}</th></tr></thead><tbody className="divide-y divide-border">{connectors.length ? connectors.map((connector) => <Fragment key={connector.connector_id}><McpRow connector={connector} selected={selectedId === connector.connector_id} busy={busy === connector.connector_id} actionsEnabled onSelect={() => toggleDetails(connector)} onProbe={() => void mutate(connector.connector_id, async () => { const result = await settingsApi.probeMcp(connector.connector_id); if (result.error) throw new Error(result.error); })} onToggle={(enabled) => void toggle(connector, enabled)} />{selectedId === connector.connector_id && <McpConnectorDetails connector={connector} tools={tools} workspaceCwd={workspaceCwd} onRefresh={() => void select(connector)} onDelete={() => { if (window.confirm(t("settings.mcpPage.deleteConfirm", { name: connector.display_name }))) void mutate(connector.connector_id, async () => { await settingsApi.deleteMcp(connector.connector_id); setSelectedId(null); }); }} onSetDecision={(tool, decision) => void mutate(connector.connector_id, async () => { if (workspaceCwd && decision === "inherit") await settingsApi.clearMcpToolDecision(connector.connector_id, tool.name, workspaceCwd); else await settingsApi.setMcpToolDecision(connector.connector_id, tool.name, decision as "allow" | "ask" | "deny", workspaceCwd); await select(connector); })} />}</Fragment>) : <tr><td colSpan={4} className="px-4 py-8 text-center text-sm text-muted">{t("settings.mcpPage.empty")}</td></tr>}</tbody></table></section>
   </div>;
 }
 

@@ -532,6 +532,8 @@
   "settings.mcpPage.createAndEnable": "Create and enable",
   "settings.mcpPage.discardConfirm": "Discard unsaved connector changes?",
   "settings.mcpPage.test": "Test",
+  "settings.mcpPage.showDetails": "Show details for {{name}}",
+  "settings.mcpPage.hideDetails": "Hide details for {{name}}",
   "settings.mcpPage.builtin": "Built-in",
   "settings.mcpPage.builtinHint": "Built into Pi-Science and shipped with the app — no manual configuration needed.",
   "settings.mcpPage.paperSearchDescription": "Search PubMed, arXiv, and Crossref for verifiable scientific literature metadata.",
