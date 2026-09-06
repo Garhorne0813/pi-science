@@ -86,15 +86,23 @@ export class McpRepository {
       );
       return (await this.get(connectorId))!;
     }
+    const preserveCredential = existing.source === "builtin" && Boolean(existing.credential_ref);
+    const runtimeConfig = preserveCredential ? {
+      ...input.runtime_config,
+      auth: existing.runtime_config.auth,
+      environment: existing.runtime_config.environment,
+      headers: existing.runtime_config.headers,
+    } : input.runtime_config;
+    const credentialRef = preserveCredential ? existing.credential_ref : (input.credential_ref ?? null);
     const unchanged = existing.source === "builtin" && existing.display_name === input.display_name && existing.description === input.description
       && existing.transport === input.transport && existing.endpoint_url === (input.endpoint_url ?? null) && existing.command === (input.command ?? null)
       && JSON.stringify(existing.args) === JSON.stringify(input.args) && existing.socket_path === (input.socket_path ?? null)
-      && JSON.stringify(existing.runtime_config) === JSON.stringify(input.runtime_config) && existing.credential_ref === (input.credential_ref ?? null);
+      && JSON.stringify(existing.runtime_config) === JSON.stringify(runtimeConfig) && existing.credential_ref === credentialRef;
     if (unchanged) return existing;
     const now = Date.now();
     await this.store.run(
       `UPDATE mcp_connectors SET display_name = ?, description = ?, source = 'builtin', transport = ?, endpoint_url = ?, command = ?, args_json = ?, socket_path = ?, runtime_config_json = ?, credential_ref = ?, revision = revision + 1, updated_at = ? WHERE connector_id = ?`,
-      [input.display_name, input.description, input.transport, input.endpoint_url ?? null, input.command ?? null, JSON.stringify(input.args), input.socket_path ?? null, JSON.stringify(input.runtime_config), input.credential_ref ?? null, now, existing.connector_id],
+      [input.display_name, input.description, input.transport, input.endpoint_url ?? null, input.command ?? null, JSON.stringify(input.args), input.socket_path ?? null, JSON.stringify(runtimeConfig), credentialRef, now, existing.connector_id],
     );
     await this.store.run("DELETE FROM mcp_tool_cache WHERE connector_id = ?", [existing.connector_id]);
     return (await this.get(existing.connector_id))!;
@@ -126,6 +134,18 @@ export class McpRepository {
     if (Number(result.changes) === 0) return null;
     await this.store.run("DELETE FROM mcp_tool_cache WHERE connector_id = ?", [connectorId]);
     return this.get(connectorId);
+  }
+
+  /** Authentication bindings do not change the connector's tool contract, so keep
+   * its discovery cache while still advancing the optimistic-lock revision. */
+  async updateCredential(connectorId: string, expectedRevision: number, runtimeConfig: McpRuntimeConfig, credentialRef: string | null): Promise<StoredMcpConnector | null> {
+    const now = Date.now();
+    const result = await this.store.run(
+      `UPDATE mcp_connectors SET runtime_config_json = ?, credential_ref = ?, revision = revision + 1, updated_at = ?
+       WHERE connector_id = ? AND revision = ?`,
+      [JSON.stringify(runtimeConfig), credentialRef, now, connectorId, expectedRevision],
+    );
+    return Number(result.changes) > 0 ? this.get(connectorId) : null;
   }
 
   async delete(connectorId: string): Promise<boolean> {

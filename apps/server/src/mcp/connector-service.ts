@@ -2,16 +2,21 @@ import { bindingError } from "./bindings.js";
 import { createHash } from "node:crypto";
 import { isAbsolute, normalize } from "node:path";
 import {
+  mcpCredentialUpdateSchema,
   mcpConnectorCreateSchema,
   mcpConnectorUpdateSchema,
   mcpConnectorSettingsUpdateSchema,
   type McpConnector,
+  type McpCredentialStatus,
+  type McpCredentialUpdate,
   type McpConnectorCreate,
   type McpConnectorUpdate,
   type McpProbeResult,
+  type McpRuntimeConfig,
   type McpConnectorSettingsUpdate,
   type McpToolSummary,
 } from "@pi-science/contracts";
+import { CredentialStore } from "../model-resources/credential-store.js";
 import { resolveMcpConfig } from "../catalog/mcp-config.js";
 import type { NodeSessionService } from "../runtime/node/node-session-service.js";
 import { validateConnectorOutboundUrl } from "../security/outbound-security.js";
@@ -38,6 +43,7 @@ export class McpConnectorService {
     private readonly settings: SettingsStore,
     private readonly sessions?: NodeSessionService,
     private readonly projection?: McpRuntimeProjection,
+    private readonly credentials: CredentialStore = new CredentialStore(),
   ) {}
 
   async ensureBuiltins(): Promise<void> {
@@ -81,6 +87,50 @@ export class McpConnectorService {
     return this.publicConnector(await this.requireConnector(connectorId));
   }
 
+  async credential(connectorId: string): Promise<McpCredentialStatus> {
+    return this.credentialStatus(await this.requireConnector(connectorId));
+  }
+
+  async setCredential(connectorId: string, raw: unknown): Promise<McpCredentialStatus> {
+    const input = mcpCredentialUpdateSchema.parse(raw) as McpCredentialUpdate;
+    const connector = await this.requireConnector(connectorId);
+    if (input.revision !== connector.revision) throw new McpServiceError("revision_conflict", "Connector was changed by another request", 409);
+    const credentialId = connector.credential_ref ?? `mcp_${connector.connector_id}`;
+    const existing = await this.credentials.getForRuntime(credentialId);
+    if (existing && (existing.metadata.owner_kind !== "mcp" || existing.metadata.owner_id !== connectorId)) throw new McpServiceError("credential_in_use", "Credential belongs to another resource", 409);
+    if (input.backend === "managed" && !input.secret && !existing?.secret) throw new McpServiceError("credential_required", "API key or token is required");
+    await this.credentials.put({
+      id: credentialId, kind: "api_key", backend: input.backend, label: `${connector.display_name} MCP credential`,
+      ...(input.secret ? { secret: input.secret } : {}),
+      ...(input.environment_variable ? { environment_variable: input.environment_variable } : {}),
+      owner_kind: "mcp", owner_id: connectorId,
+    });
+    const runtime = clearCredentialBindings(connector.runtime_config, connector.credential_ref);
+    const binding = { kind: "credential" as const, credential_ref: credentialId, ...(input.delivery === "bearer" ? { prefix: "Bearer " } : {}) };
+    if (input.delivery === "environment") runtime.environment[input.target_name] = binding;
+    else runtime.headers[input.delivery === "bearer" ? "Authorization" : input.target_name] = binding;
+    runtime.auth = input.delivery === "bearer" ? "bearer" : "auto";
+    const updated = await this.repository.updateCredential(connectorId, connector.revision, runtime, credentialId);
+    if (!updated) throw new McpServiceError("revision_conflict", "Connector was changed by another request", 409);
+    await this.materializeKnownWorkspaces(); await this.reload();
+    return this.credentialStatus(updated);
+  }
+
+  async removeCredential(connectorId: string): Promise<McpCredentialStatus> {
+    const connector = await this.requireConnector(connectorId);
+    const credentialRef = connector.credential_ref;
+    const runtime = clearCredentialBindings(connector.runtime_config, credentialRef);
+    runtime.auth = "auto";
+    const updated = await this.repository.updateCredential(connectorId, connector.revision, runtime, null);
+    if (!updated) throw new McpServiceError("revision_conflict", "Connector was changed by another request", 409);
+    if (credentialRef) {
+      const metadata = await this.credentials.metadata(credentialRef);
+      if (metadata?.owner_kind === "mcp" && metadata.owner_id === connectorId) await this.credentials.remove(credentialRef);
+    }
+    await this.materializeKnownWorkspaces(); await this.reload();
+    return this.credentialStatus(updated);
+  }
+
   async create(raw: unknown, source: "custom" | "imported" = "custom"): Promise<McpConnector> {
     const input = mcpConnectorCreateSchema.parse(raw);
     await this.validate(input);
@@ -109,7 +159,7 @@ export class McpConnectorService {
       credential_ref: patch.credential_ref === undefined ? current.credential_ref : patch.credential_ref,
       enabled: current.enabled,
     });
-    await this.validate(merged);
+    await this.validate(merged, connectorId);
     const duplicate = await this.repository.getByName(merged.name);
     if (duplicate && duplicate.connector_id !== connectorId) throw new McpServiceError("name_conflict", `Connector '${merged.name}' already exists`, 409);
     const { enabled: _enabled, ...updateInput } = merged;
@@ -124,6 +174,10 @@ export class McpConnectorService {
     const connector = await this.requireConnector(connectorId);
     if (connector.source === "builtin") throw new McpServiceError("read_only", "Builtin connectors cannot be removed", 403);
     await this.repository.delete(connectorId);
+    if (connector.credential_ref) {
+      const metadata = await this.credentials.metadata(connector.credential_ref);
+      if (metadata?.owner_kind === "mcp" && metadata.owner_id === connectorId) await this.credentials.remove(connector.credential_ref);
+    }
     await this.materializeKnownWorkspaces();
     await this.reload();
   }
@@ -131,7 +185,7 @@ export class McpConnectorService {
   async setSettings(connectorId: string, raw: unknown): Promise<McpConnector> {
     const input = mcpConnectorSettingsUpdateSchema.parse(raw) as McpConnectorSettingsUpdate;
     const connector = await this.requireConnector(connectorId);
-    if (input.enabled) await this.validate(connector);
+    if (input.enabled) await this.validate(connector, connectorId);
     const settings = await this.repository.updateSettings(connectorId, input);
     if (!settings) throw new McpServiceError("revision_conflict", "Connector settings were changed by another request", 409);
     await this.materializeKnownWorkspaces();
@@ -251,9 +305,14 @@ export class McpConnectorService {
     return { imported, failed };
   }
 
-  private async validate(input: McpConnectorCreate): Promise<void> {
+  private async validate(input: McpConnectorCreate, connectorId?: string): Promise<void> {
     const invalid = bindingError(input.runtime_config, input.credential_ref);
     if (invalid) throw new McpServiceError("unsupported_binding", invalid);
+    if (input.credential_ref) {
+      if (!connectorId) throw new McpServiceError("unsupported_binding", "Configure credentials from the connector authentication settings after creating the connector");
+      const credential = await this.credentials.metadata(input.credential_ref);
+      if (!credential || credential.owner_kind !== "mcp" || credential.owner_id !== connectorId) throw new McpServiceError("invalid_credential", "Connector credential is missing or belongs to another resource");
+    }
     if (input.transport === "streamable_http" || input.transport === "sse") {
       try { await validateConnectorOutboundUrl(input.endpoint_url!, { allowPrivate: input.runtime_config.allow_private }); }
       catch (error) { throw new McpServiceError("network_blocked", error instanceof Error ? error.message : String(error)); }
@@ -292,11 +351,28 @@ export class McpConnectorService {
 
   private authState(connector: StoredMcpConnector): "not-required" | "configured" | "needs-auth" {
     if (bindingError(connector.runtime_config, connector.credential_ref)) return "needs-auth";
+    if (connector.credential_ref) return this.credentials.readSync(connector.credential_ref)?.secret ? "configured" : "needs-auth";
     const auth = connector.runtime_config.auth;
     if (connector.transport === "stdio" || connector.transport === "socket" || auth === "none") return "not-required";
     const authorization = Object.entries(connector.runtime_config.headers).find(([name]) => name.toLowerCase() === "authorization")?.[1];
     if (authorization?.kind === "environment" && process.env[authorization.name]) return "configured";
     return auth === "oauth" || auth === "bearer" ? "needs-auth" : "not-required";
+  }
+
+  private async credentialStatus(connector: StoredMcpConnector): Promise<McpCredentialStatus> {
+    const suggestion = suggestedCredential(connector.name, connector.transport);
+    const reference = connector.credential_ref;
+    const value = reference ? await this.credentials.getForRuntime(reference) : null;
+    const environment = Object.entries(connector.runtime_config.environment).find(([, binding]) => binding.kind === "credential" && binding.credential_ref === reference);
+    const header = Object.entries(connector.runtime_config.headers).find(([, binding]) => binding.kind === "credential" && binding.credential_ref === reference);
+    const delivery = environment ? "environment" : header?.[0].toLowerCase() === "authorization" && header[1].kind === "credential" && header[1].prefix === "Bearer " ? "bearer" : header ? "header" : null;
+    return {
+      credential_ref: reference, configured: Boolean(value?.secret),
+      backend: value?.metadata.backend === "managed" || value?.metadata.backend === "environment" ? value.metadata.backend : null,
+      delivery, target_name: environment?.[0] ?? header?.[0] ?? null,
+      environment_variable: value?.metadata.environment_variable ?? null,
+      suggested_delivery: suggestion.delivery, suggested_target_name: suggestion.target,
+    };
   }
 
   private async project(cwd: string) {
@@ -332,6 +408,24 @@ export class McpConnectorService {
 
 function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function clearCredentialBindings(config: McpRuntimeConfig, credentialRef?: string | null): McpRuntimeConfig {
+  const keep = (binding: McpRuntimeConfig["environment"][string]) => binding.kind !== "credential" || binding.credential_ref !== credentialRef;
+  return {
+    ...config,
+    environment: Object.fromEntries(Object.entries(config.environment).filter(([, binding]) => keep(binding))),
+    headers: Object.fromEntries(Object.entries(config.headers).filter(([, binding]) => keep(binding))),
+  };
+}
+
+function suggestedCredential(name: string, transport: StoredMcpConnector["transport"]): { delivery: "environment" | "header" | "bearer"; target: string } {
+  const targets: Record<string, string> = {
+    "paper-search": "NCBI_API_KEY", "literature-graph": "OPENALEX_API_KEY",
+    "omics-archives": "NCBI_API_KEY", "nucleotide-archives": "NCBI_API_KEY",
+    "drug-regulatory": "OPENFDA_API_KEY",
+  };
+  return targets[name] ? { delivery: "environment", target: targets[name] } : transport === "stdio" ? { delivery: "environment", target: "API_KEY" } : { delivery: "bearer", target: "Authorization" };
 }
 
 function requiredEnvironment(connector: StoredMcpConnector): string[] {

@@ -46,6 +46,21 @@ export function registerMcpRoutes(app: FastifyInstance, service: McpConnectorSer
     catch (error) { return failure(reply, error); }
   });
 
+  app.get<{ Params: { connector_id: string } }>("/api/mcp/connectors/:connector_id/credential", async (request, reply) => {
+    try { return await service.credential(request.params.connector_id); }
+    catch (error) { return failure(reply, error); }
+  });
+
+  app.put<{ Params: { connector_id: string } }>("/api/mcp/connectors/:connector_id/credential", async (request, reply) => {
+    try { return await service.setCredential(request.params.connector_id, request.body); }
+    catch (error) { return failure(reply, error); }
+  });
+
+  app.delete<{ Params: { connector_id: string } }>("/api/mcp/connectors/:connector_id/credential", async (request, reply) => {
+    try { return await service.removeCredential(request.params.connector_id); }
+    catch (error) { return failure(reply, error); }
+  });
+
   app.delete<{ Params: { connector_id: string } }>("/api/mcp/connectors/:connector_id", async (request, reply) => {
     try { await service.remove(request.params.connector_id); return reply.code(204).send(); }
     catch (error) { return failure(reply, error); }

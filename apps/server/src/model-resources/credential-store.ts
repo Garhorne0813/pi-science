@@ -88,6 +88,8 @@ function metadataFrom(input: {
   externalProvider?: string;
   externalRef?: string;
   ownerProviderId?: string;
+  ownerKind?: CredentialMetadata["owner_kind"];
+  ownerId?: string;
   secret?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -104,6 +106,8 @@ function metadataFrom(input: {
     ...(input.externalProvider ? { external_provider: input.externalProvider } : {}),
     ...(input.externalRef ? { external_ref: input.externalRef } : {}),
     ...(input.ownerProviderId ? { owner_provider_id: input.ownerProviderId } : {}),
+    ...(input.ownerKind ? { owner_kind: input.ownerKind } : {}),
+    ...(input.ownerId ? { owner_id: input.ownerId } : {}),
     created_at: input.createdAt ?? now,
     updated_at: input.updatedAt ?? now,
     last_validated_at: input.lastValidatedAt ?? null,
@@ -170,6 +174,8 @@ export class CredentialStore {
         externalProvider: input.external_provider ?? existing?.metadata.external_provider,
         externalRef: input.external_ref ?? existing?.metadata.external_ref,
         ownerProviderId: input.owner_provider_id ?? existing?.metadata.owner_provider_id,
+        ownerKind: input.owner_kind ?? existing?.metadata.owner_kind,
+        ownerId: input.owner_id ?? existing?.metadata.owner_id,
         secret,
         createdAt: existing?.metadata.created_at,
         lastValidatedAt: existing?.metadata.last_validated_at,
@@ -213,6 +219,8 @@ export class CredentialStore {
         externalProvider: metadata.external_provider,
         externalRef: metadata.external_ref,
         ownerProviderId: metadata.owner_provider_id,
+        ownerKind: metadata.owner_kind,
+        ownerId: metadata.owner_id,
         secret,
         createdAt: existing?.metadata.created_at,
       });

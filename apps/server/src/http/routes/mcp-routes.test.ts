@@ -12,10 +12,12 @@ import { registerMcpRoutes } from "./mcp-routes.js";
 
 const stores: InMemorySqliteStateStore[] = [];
 const directories: string[] = [];
-afterEach(async () => { await Promise.allSettled(stores.splice(0).map((store) => store.close())); await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
+const originalHome = process.env.PI_SCIENCE_HOME;
+afterEach(async () => { await Promise.allSettled(stores.splice(0).map((store) => store.close())); await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); if (originalHome === undefined) delete process.env.PI_SCIENCE_HOME; else process.env.PI_SCIENCE_HOME = originalHome; });
 
 async function fixture() {
   const cwd = await mkdtemp(join(tmpdir(), "pi-science-mcp-routes-")); directories.push(cwd); await mkdir(join(cwd, "src")); await mkdir(join(cwd, ".pi-science"));
+  process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
   const store = new InMemorySqliteStateStore(); stores.push(store); await store.start();
   const repository = new McpRepository(store);
   const service = new McpConnectorService(repository, new WorkspaceRepository(store), { read: async () => ({}) } as never, undefined, new McpRuntimeProjection(repository));
@@ -61,6 +63,27 @@ describe("canonical MCP routes", () => {
       expect(response.statusCode).toBe(400);
       expect(response.json().code).toBe("unsupported_binding");
     }
+    await app.close();
+  });
+
+  it("manages connector credentials without exposing them in runtime snapshots", async () => {
+    const { app, cwd, service } = await fixture();
+    const connector = await service.create({ name: "remote-auth", display_name: "Remote auth", transport: "streamable_http", endpoint_url: "https://example.com/mcp", runtime_config: {}, enabled: false });
+    await service.repository.replaceToolCache({ connector_id: connector.connector_id, config_revision: connector.revision, fingerprint: "stable", tools: [{ name: "search", title: "Search", description: "", read_only: true, decision: "ask" }], fetched_at: 1, expires_at: Number.MAX_SAFE_INTEGER });
+    const saved = await app.inject({ method: "PUT", url: `/api/mcp/connectors/${connector.connector_id}/credential`, payload: { backend: "managed", delivery: "bearer", target_name: "Authorization", secret: "super-secret-token", revision: connector.revision } });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({ configured: true, backend: "managed", delivery: "bearer", target_name: "Authorization" });
+    expect(JSON.stringify(saved.json())).not.toContain("super-secret-token");
+    await service.setSettings(connector.connector_id, { enabled: true, include_tools: [], exclude_tools: [], approval_mode: "ask", revision: connector.settings.revision });
+    const snapshot = await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8");
+    expect(snapshot).not.toContain("super-secret-token");
+    expect(JSON.parse(snapshot).mcpServers["remote-auth"].__piScienceHeaders.Authorization).toMatchObject({ kind: "credential", prefix: "Bearer " });
+    expect((await service.repository.toolCache(connector.connector_id))?.tools).toHaveLength(1);
+    const updated = (await service.get(connector.connector_id));
+    const removed = await app.inject({ method: "DELETE", url: `/api/mcp/connectors/${connector.connector_id}/credential` });
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json()).toMatchObject({ credential_ref: null, configured: false });
+    expect(updated.revision).toBeGreaterThan(connector.revision);
     await app.close();
   });
 
@@ -121,7 +144,7 @@ describe("canonical MCP routes", () => {
     await service.ensureBuiltins();
     await service.ensureBuiltins();
     const listed = await app.inject({ method: "GET", url: `/api/mcp/connectors?cwd=${encodeURIComponent(cwd)}` });
-    const connectors = listed.json().connectors as Array<{ connector_id: string; name: string; tool_count: number; settings: { enabled: boolean; revision: number } }>;
+    const connectors = listed.json().connectors as Array<{ connector_id: string; name: string; revision: number; tool_count: number; settings: { enabled: boolean; revision: number } }>;
     expect(connectors).toHaveLength(18);
     expect(connectors.find((item) => item.name === "paper-search")).toMatchObject({ connector_id: "mcp_builtin_paper_search", tool_count: 5, settings: { enabled: true } });
     expect(connectors.filter((item) => item.name !== "paper-search")).toEqual(expect.arrayContaining([
@@ -157,8 +180,10 @@ describe("canonical MCP routes", () => {
     const literature = connectors.find((item) => item.name === "literature-graph")!;
     const enabled = await app.inject({ method: "PUT", url: `/api/mcp/connectors/${literature.connector_id}/settings`, payload: { enabled: true, include_tools: [], exclude_tools: [], approval_mode: "ask", revision: literature.settings.revision } });
     expect(enabled.statusCode).toBe(200);
+    await service.setCredential(literature.connector_id, { backend: "managed", delivery: "environment", target_name: "OPENALEX_API_KEY", secret: "catalog-preserved-secret", revision: literature.revision });
     await service.ensureBuiltins();
     expect((await service.get(literature.connector_id)).settings.enabled).toBe(true);
+    expect(await service.credential(literature.connector_id)).toMatchObject({ configured: true, delivery: "environment", target_name: "OPENALEX_API_KEY" });
     await app.close();
   });
 

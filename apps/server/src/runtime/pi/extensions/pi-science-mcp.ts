@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
+import { CredentialStore } from "../../../model-resources/credential-store.js";
 
-type Binding = { kind: "literal"; value: string } | { kind: "environment"; name: string } | { kind: "credential"; credential_ref: string };
+type Binding = { kind: "literal"; value: string } | { kind: "environment"; name: string } | { kind: "credential"; credential_ref: string; prefix?: string };
 type ProjectedServer = Record<string, unknown> & { __piScienceEnvironment?: Record<string, Binding>; __piScienceHeaders?: Record<string, Binding> };
 type ProjectedSnapshot = { version: 1; project_id: string; mcpServers: Record<string, ProjectedServer> };
 
@@ -63,10 +64,12 @@ export function loadProjectedServers(workspace: string): Record<string, Record<s
 function materialize(bindings?: Record<string, Binding>): Record<string, string> | undefined {
   if (!bindings || !Object.keys(bindings).length) return undefined;
   const output: Record<string, string> = {};
+  const credentials = new CredentialStore();
   for (const [key, binding] of Object.entries(bindings)) {
-    if (binding.kind !== "environment") throw new Error("Unsupported MCP binding; use an environment reference");
-    if (process.env[binding.name] === undefined) throw new Error(`Missing MCP environment variable: ${binding.name}`);
-    output[key] = process.env[binding.name]!;
+    if (binding.kind === "literal") throw new Error("Unsupported MCP literal binding");
+    const value = binding.kind === "environment" ? process.env[binding.name] : credentials.readSync(binding.credential_ref)?.secret;
+    if (value === undefined || value === null) throw new Error(binding.kind === "environment" ? `Missing MCP environment variable: ${binding.name}` : `Missing MCP credential: ${binding.credential_ref}`);
+    output[key] = `${binding.kind === "credential" ? binding.prefix ?? "" : ""}${value}`;
   }
   return output;
 }

@@ -157,6 +157,14 @@ socket connectors can also be registered. Settings apply globally; individual
 projects may override tool decisions. Connector changes are projected into
 active agent runtimes without manually editing Pi configuration files.
 
+Connector details also contain authentication settings modeled after Claude
+Science: an API key or token can be saved in Pi-Science's local mode-0600
+credential store, or referenced from an existing environment variable, then
+delivered as a process environment variable, an HTTP header, or a Bearer token.
+The workspace runtime snapshot contains only the credential reference; the
+secret is resolved in memory by the Pi process. OAuth login/refresh remains a
+separate follow-up rather than being represented as a partially working option.
+
 ## Scientific Viewers
 
 Pi-Science renders common research formats directly in the browser.

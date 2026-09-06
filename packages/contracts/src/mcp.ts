@@ -12,7 +12,7 @@ export const mcpRuntimeStateSchema = z.enum(["unknown", "checking", "ready", "co
 export const mcpEnvironmentBindingSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("literal"), value: z.string().max(8192) }),
   z.object({ kind: z.literal("environment"), name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/) }),
-  z.object({ kind: z.literal("credential"), credential_ref: z.string().min(1).max(200) }),
+  z.object({ kind: z.literal("credential"), credential_ref: z.string().min(1).max(200), prefix: z.string().max(100).optional() }),
 ]);
 
 export const mcpRuntimeConfigSchema = z.object({
@@ -136,6 +136,31 @@ export const mcpProbeResultSchema = z.object({
   checked_at: z.number().int().nonnegative(),
 });
 
+export const mcpCredentialDeliverySchema = z.enum(["environment", "header", "bearer"]);
+export const mcpCredentialBackendSchema = z.enum(["managed", "environment"]);
+export const mcpCredentialUpdateSchema = z.object({
+  backend: mcpCredentialBackendSchema,
+  delivery: mcpCredentialDeliverySchema,
+  target_name: z.string().min(1).max(200),
+  secret: z.string().min(1).max(32_768).optional(),
+  environment_variable: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).optional(),
+  revision: z.number().int().positive(),
+}).superRefine((value, context) => {
+  if (value.delivery === "environment" && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value.target_name)) context.addIssue({ code: "custom", path: ["target_name"], message: "environment target must be a valid variable name" });
+  if (value.delivery !== "environment" && !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(value.target_name)) context.addIssue({ code: "custom", path: ["target_name"], message: "header target must be a valid HTTP header name" });
+  if (value.backend === "environment" && !value.environment_variable) context.addIssue({ code: "custom", path: ["environment_variable"], message: "environment_variable is required" });
+});
+export const mcpCredentialStatusSchema = z.object({
+  credential_ref: z.string().nullable(),
+  configured: z.boolean(),
+  backend: mcpCredentialBackendSchema.nullable(),
+  delivery: mcpCredentialDeliverySchema.nullable(),
+  target_name: z.string().nullable(),
+  environment_variable: z.string().nullable(),
+  suggested_delivery: mcpCredentialDeliverySchema,
+  suggested_target_name: z.string(),
+});
+
 export type McpConnectorCreate = z.infer<typeof mcpConnectorCreateSchema>;
 export type McpConnectorUpdate = z.infer<typeof mcpConnectorUpdateSchema>;
 export type McpConnector = z.infer<typeof mcpConnectorSchema>;
@@ -145,3 +170,5 @@ export type McpRuntimeConfig = z.infer<typeof mcpRuntimeConfigSchema>;
 export type McpToolSummary = z.infer<typeof mcpToolSummarySchema>;
 export type McpMigrationConflict = z.infer<typeof mcpMigrationConflictSchema>;
 export type McpProbeResult = z.infer<typeof mcpProbeResultSchema>;
+export type McpCredentialUpdate = z.infer<typeof mcpCredentialUpdateSchema>;
+export type McpCredentialStatus = z.infer<typeof mcpCredentialStatusSchema>;

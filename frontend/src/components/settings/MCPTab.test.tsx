@@ -31,6 +31,9 @@ const defaultFetch = async (input: RequestInfo | URL, init: RequestInit = {}) =>
   if (url === "/api/mcp/connectors/mcp-paper-search/settings" && method === "PUT") {
     return jsonResponse({ ok: true });
   }
+  if (url === "/api/mcp/connectors/mcp-paper-search/tools" && method === "GET") return jsonResponse({ tools: [], cached_at: null });
+  if (url === "/api/mcp/connectors/mcp-paper-search/credential" && method === "GET") return jsonResponse({ credential_ref: null, configured: false, backend: null, delivery: null, target_name: null, environment_variable: null, suggested_delivery: "environment", suggested_target_name: "NCBI_API_KEY" });
+  if (url === "/api/mcp/connectors/mcp-paper-search/credential" && method === "PUT") return jsonResponse({ credential_ref: "mcp-paper-search", configured: true, backend: "managed", delivery: "environment", target_name: "NCBI_API_KEY", environment_variable: null, suggested_delivery: "environment", suggested_target_name: "NCBI_API_KEY" });
   return jsonResponse({ error: `unhandled ${method} ${url}` }, 404);
 };
 const fetchMock = vi.fn(defaultFetch);
@@ -100,6 +103,7 @@ describe("MCPTab", () => {
         }], legacy_count: 0,
       });
       if (url === "/api/mcp/connectors/mcp-paper-search/tools?cwd=%2Ftmp%2Fws" && method === "GET") return jsonResponse({ tools: [{ name: "search_pubmed", title: "Search PubMed", description: "Search papers", read_only: true, decision: "ask", decision_scope: "global" }], cached_at: 1 });
+      if (url === "/api/mcp/connectors/mcp-paper-search/credential" && method === "GET") return jsonResponse({ credential_ref: null, configured: false, backend: null, delivery: null, target_name: null, environment_variable: null, suggested_delivery: "environment", suggested_target_name: "NCBI_API_KEY" });
       return jsonResponse({ error: `unhandled ${method} ${url}` }, 404);
     });
     renderTab("/tmp/ws");
@@ -130,6 +134,20 @@ describe("MCPTab", () => {
         expect.objectContaining({ method: "PUT", body: expect.stringContaining('"enabled":false') }),
       );
     });
+  });
+
+  it("saves connector authentication without displaying the secret again", async () => {
+    renderTab(null);
+    fireEvent.click(await screen.findByRole("button", { name: "Show details for Paper Search" }));
+    const secret = await screen.findByLabelText("API key or token");
+    fireEvent.change(secret, { target: { value: "test-secret-value" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save authentication" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/mcp/connectors/mcp-paper-search/credential",
+      expect.objectContaining({ method: "PUT", body: expect.stringContaining('"secret":"test-secret-value"') }),
+    ));
+    await waitFor(() => expect(secret).toHaveValue(""));
+    expect(screen.queryByDisplayValue("test-secret-value")).not.toBeInTheDocument();
   });
 
   it("keeps the Skills-style empty table when no server is configured", async () => {
@@ -189,13 +207,14 @@ describe("MCPTab", () => {
       if (url === "/api/mcp/connectors/mcp-paper-search/tools" && method === "GET") {
         return jsonResponse({ tools: [], cached_at: null });
       }
+      if (url === "/api/mcp/connectors/mcp-paper-search/credential" && method === "GET") return jsonResponse({ credential_ref: null, configured: false, backend: null, delivery: null, target_name: null, environment_variable: null, suggested_delivery: "environment", suggested_target_name: "NCBI_API_KEY" });
       return jsonResponse({ error: `unhandled ${method} ${url}` }, 404);
     });
     renderTab("/tmp/ws");
 
     fireEvent.click(await screen.findByRole("button", { name: /Paper Search/ }));
 
-    expect(await screen.findByText("Built into Pi-Science and shipped with the app — no manual configuration needed.")).toBeInTheDocument();
+    expect(await screen.findByText(/Built into Pi-Science/)).toBeInTheDocument();
     expect(screen.queryByText(/tsx/)).not.toBeInTheDocument();
   });
 });

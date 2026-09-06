@@ -27,6 +27,20 @@ afterEach(async () => {
 });
 
 describe("model resource routes", () => {
+  it("keeps MCP-owned credentials behind connector-specific routes", async () => {
+    const session = { reloadConfiguration: vi.fn().mockResolvedValue([]) } as unknown as NodeSessionService;
+    const service = new ModelResourceService();
+    await service.credentials.put({ id: "mcp_owned", kind: "api_key", backend: "managed", secret: "mcp-secret", owner_kind: "mcp", owner_id: "connector-1" });
+    const app = Fastify({ logger: false });
+    registerModelResourceRoutes(app, service, session);
+
+    expect((await app.inject({ method: "GET", url: "/api/credentials" })).json().credentials).toEqual([]);
+    expect((await app.inject({ method: "PUT", url: "/api/credentials/mcp_owned", payload: { secret: "replacement" } })).statusCode).toBe(409);
+    expect((await app.inject({ method: "DELETE", url: "/api/credentials/mcp_owned" })).statusCode).toBe(409);
+    expect((await app.inject({ method: "POST", url: "/api/credentials", payload: { kind: "api_key", backend: "managed", secret: "bad", owner_kind: "mcp", owner_id: "connector-2" } })).statusCode).toBe(403);
+    expect((await service.credentials.getForRuntime("mcp_owned"))?.secret).toBe("mcp-secret");
+  });
+
   it("switches an aggregate provider to no authentication", async () => {
     const reloadConfiguration = vi.fn().mockResolvedValue([]);
     const session = { reloadConfiguration } as unknown as NodeSessionService;

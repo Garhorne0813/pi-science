@@ -1141,13 +1141,13 @@ docs/architecture.zh-CN.md                                  update at M2/M5
 2. 工具权限可以按项目覆盖全局 allow/ask；全局 deny 是不可提升的安全边界；清除项目 grant 后恢复继承。
 3. Remote HTTP/SSE 默认拒绝私网；每次实际请求、OAuth discovery、动态注册和 token/refresh 请求都经过同一出站 guard。
 4. Local command 的 cwd 必须位于 workspace 内，命令不经 shell；本轮不引入 stdio 子进程的 OS sandbox，第三方 stdio/socket 程序自行发起的网络访问仍不受 transport wrapper 控制。
-5. OAuth 首发继续由 adapter 承担；跨 origin 的 OAuth 服务因凭证转发边界暂不允许，需配置同源认证或环境变量 Authorization。
+5. 当前设置页支持 API Key、Bearer、Header 和环境变量引用；OAuth PKCE、callback 与 refresh 生命周期仍是后续独立阶段，不在 UI 中伪装成可用能力。
 6. 旧 project binding 迁移遇到分歧时记录 conflict，并将受影响的连接器禁用或重置为 Ask，交由用户显式复核。
 
 ## 合并前安全修复（2026-09-04）
 
 - `custom` 和 `ask` 投影 `approveTools: true`，显式 allow（包括项目覆盖）才写入 `__piScienceAllowedTools`；`allow_all` 只对显式 Ask 工具启用精确审批。未缓存的新工具不会因为缓存缺失而获得额外授权，通配符不会扩展 grant。
-- 凭证送达通道尚未实现。因此 API 明确拒绝 connector-level / binding-level credential 引用以及 literal env/header；请使用环境变量引用。既有不支持配置显示 invalid/error，并从新快照中排除。旧数据库中的 literal 值不会自动删除，需要用户编辑或删除旧连接器。缺失环境变量在运行时明确报错。
+- 凭证送达通道已于 2026-09-07 实现。设置页可将密钥保存在独立的 mode-0600 `CredentialStore`，或只保存来源环境变量名；可投递到 stdio 环境变量、HTTP Header 或带 `Bearer ` 前缀的 Authorization Header。SQLite 与 workspace runtime 快照只保存 credential reference，Pi 扩展在进程内解析实际值。literal env/header 仍被拒绝，缺失引用会明确报错并阻止连接器运行。
 - 探针和适配器 stdio 子进程只继承基本系统变量、审计目录和显式绑定。托管绑定按原值传递，不执行适配器的 `!command` 或 `${VAR}` 二次解释。
 - HTTP/SSE 的真实请求经过共同的出站策略及审计，包括握手、SSE 消息发送、工具请求以及 OAuth discovery/dynamic registration/token/refresh。默认拒绝私网，并在实际建连 DNS lookup 再次检查地址；显式 `allow_private` 保留本地服务支持。拒绝重定向和跨源请求以防凭证外泄，因此跨源 OAuth 服务目前不能使用，需配置同源认证或环境变量 Authorization。
 - 内置 paper-search 的 HTTP 请求也接入同一策略。任意第三方 stdio/socket 程序仍属于受信任的本地代码；本轮明确不做其 OS sandbox，故其自行发起的网络访问不能由 MCP transport 包装器拦截。
@@ -1156,6 +1156,21 @@ docs/architecture.zh-CN.md                                  update at M2/M5
 - SQLite 关闭时，旧设置接口第一次 toggle 以全部已配置服务作为默认启用集合。
 
 验证包含 API/快照、全局/项目 grant 覆盖与迁移冲突、无缓存工具授权、真实 stdio 握手及环境隔离、真实适配器 HTTP/OAuth 拦截、重定向/跨源拦截和连接阶段 DNS rebinding 回归测试；stdio OS sandbox 留待后续变更。
+
+## Connector 凭据配置（2026-09-07）
+
+该实现采用 Claude Science 的“连接器定义与凭据分离”方案：Connector 详情页负责选择凭据来源与投递方式，密钥本身不进入连接器 JSON、SQLite、浏览器响应或 workspace 快照。
+
+- `managed`：密钥只写入 Pi-Science 用户级 `credentials.json`（0600），API 后续只返回状态和 metadata，不回传 secret。
+- `environment`：只记录环境变量名，运行时从 Pi-Science 进程环境读取值。
+- `environment` delivery：将值注入 stdio MCP 子进程的指定环境变量。
+- `header` delivery：将值注入指定 HTTP Header。
+- `bearer` delivery：固定注入 `Authorization: Bearer <token>`。
+- 内置连接器提供目标名称建议，例如 OpenAlex 的 `OPENALEX_API_KEY`、NCBI 的 `NCBI_API_KEY` 和 openFDA 的 `OPENFDA_API_KEY`；这些凭据均为可选，是否必需由上游服务决定。
+- 凭据带有 `owner_kind=mcp` / `owner_id=<connector_id>`，只能通过所属 Connector 的认证 API 管理；删除自定义 Connector 时同步清理其自有凭据。
+- 更新认证绑定不会清空工具发现缓存；内置 Connector 目录升级也会保留用户绑定。
+
+本阶段不实现 OAuth 授权码 + PKCE、callback、refresh token 单飞刷新或 OS keychain。这些能力应按 11.2 的完整安全要求一次性实现，不能把静态 Bearer Token 表单标记为 OAuth。
 
 ## 内置科学数据连接器（2026-09-06）
 

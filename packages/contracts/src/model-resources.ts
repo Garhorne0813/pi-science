@@ -106,6 +106,8 @@ export const credentialMetadataSchema = z.object({
   updated_at: z.string(),
   last_validated_at: z.string().nullable().optional(),
   owner_provider_id: z.string().min(1).optional(),
+  owner_kind: z.enum(["provider", "mcp"]).optional(),
+  owner_id: z.string().min(1).optional(),
 });
 
 export const bindingSchema = z.object({
@@ -210,6 +212,8 @@ export const createCredentialRequestSchema = z.object({
   external_provider: z.string().max(200).optional(),
   external_ref: z.string().max(500).optional(),
   owner_provider_id: z.string().min(1).optional(),
+  owner_kind: z.enum(["provider", "mcp"]).optional(),
+  owner_id: z.string().min(1).optional(),
 });
 
 export const updateCredentialRequestSchema = createCredentialRequestSchema.partial().omit({ id: true });

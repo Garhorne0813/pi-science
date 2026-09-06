@@ -307,9 +307,14 @@ flowchart LR
   its own tools. Processes use lazy lifecycle management.
 - Custom and legacy-imported connectors use the same resource model and may use
   `stdio`, Streamable HTTP, SSE, or socket transport. Import preview rejects
-  sensitive legacy fields; MCP environment variables and headers currently
-  accept environment references only, not literal values or credential-store
-  references.
+  sensitive legacy fields. Connector authentication can use a managed secret or
+  an environment-variable reference and deliver it as a process variable, an
+  HTTP header, or a Bearer token. Literal secret bindings remain rejected.
+- MCP credentials live in the separate mode-0600 `CredentialStore` and carry an
+  `owner_kind=mcp` / connector owner. General model-credential routes neither
+  list nor mutate them. Runtime snapshots contain only credential references;
+  the Pi extension resolves values in process memory. Built-in definition
+  upgrades preserve these bindings.
 - Enablement, include/exclude filters, and approval mode are global. Exact-name
   `Allow`, `Ask`, and `Deny` tool decisions can be global or project-specific;
   `Deny` wins, then the project decision, then the global decision, then the

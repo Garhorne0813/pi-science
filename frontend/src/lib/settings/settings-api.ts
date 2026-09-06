@@ -2,7 +2,7 @@ import { applySessionReplacements, type SessionReplacement } from "../agent-runt
 import { apiRequest } from "../client/api";
 import { queryClient } from "../client/query-client";
 import type { AgentProfile, McpServer, ProjectSubagent, RuntimeExtension, WebAccessConfig } from "./settings-types";
-import type { McpConnector, McpConnectorCreate, McpConnectorSettingsUpdate, McpMigrationConflict, McpToolSummary } from "@pi-science/contracts";
+import type { McpConnector, McpConnectorCreate, McpConnectorSettingsUpdate, McpCredentialStatus, McpCredentialUpdate, McpMigrationConflict, McpToolSummary } from "@pi-science/contracts";
 
 export const settingsKey = (...selector: Array<string | null>) => ["settings", ...selector];
 
@@ -178,6 +178,15 @@ export const settingsApi = {
   mcpTools(connectorId: string, cwd?: string | null) {
     const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
     return apiRequest<{ tools: McpToolSummary[]; cached_at: number | null; scope?: "global" | "project" }>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/tools${query}`);
+  },
+  mcpCredential(connectorId: string) {
+    return apiRequest<McpCredentialStatus>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/credential`);
+  },
+  setMcpCredential(connectorId: string, body: McpCredentialUpdate) {
+    return apiRequest<McpCredentialStatus>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/credential`, json("PUT", body));
+  },
+  deleteMcpCredential(connectorId: string) {
+    return apiRequest<McpCredentialStatus>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/credential`, { method: "DELETE" });
   },
   setMcpToolDecision(connectorId: string, toolName: string, decision: "allow" | "ask" | "deny", cwd?: string | null) {
     const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
