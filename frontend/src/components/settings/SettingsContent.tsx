@@ -130,19 +130,6 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
     }
   };
 
-  const saveProgress = async (progress: import("@pi-science/contracts").ProgressAppearance) => {
-    setSaving("progress");
-    setError(null);
-    try {
-      await settingsApi.saveProgress(progress);
-      setConfig((previous) => previous ? { ...previous, progress_appearance: progress } : previous);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSaving(null);
-    }
-  };
-
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       {/* Settings navigation: a light rail on mobile (56px icon column) and a
@@ -204,7 +191,7 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
                 {tab === "general" && <GeneralTab />}
                 {tab === "models" && <AIModelsTab config={config} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} onConfigReload={loadConfig} />}
                 {tab === "agent" && <AgentTab config={config} saving={saving === "compaction"} onSave={saveCompaction} />}
-                {tab === "progress" && config && <ProgressTab config={config} saving={saving === "progress"} onSave={saveProgress} />}
+                {tab === "progress" && config && <ProgressTab config={config} />}
                 {tab === "skills" && <SkillsTab workspaceCwd={scope} />}
                 {tab === "extensions" && <ExtensionsTab workspaceCwd={scope} />}
                 {tab === "mcp" && <MCPTab workspaceCwd={scope} />}

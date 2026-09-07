@@ -293,6 +293,8 @@
   "settings.progress.slot.image": "Image generation",
   "settings.progress.slot.waiting": "Waiting for input",
   "settings.progress.slot.completed": "Completed",
+  "settings.progress.saveError": "Unsaved — retrying automatically",
+  "settings.progress.sample.activity": "Reviewing related content",
   "settings.progress.pattern.static": "Static dot",
   "settings.progress.pattern.aicss.auto": "AICSS Auto · semantic",
   "settings.progress.pattern.aicss.S1": "AICSS Lattice · Thinking",

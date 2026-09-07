@@ -130,9 +130,10 @@ export const settingsApi = {
     return result;
   },
 
-  async saveProgress(progress: ProgressAppearance): Promise<void> {
-    unwrapSettings(await apiRequest<SettingsEnvelope>("/api/settings/progress", json("PUT", progress)), "Unable to save progress appearance");
+  async saveProgress(progress: ProgressAppearance): Promise<ProgressAppearance> {
+    const data = unwrapSettings(await apiRequest<{ ok?: boolean; progress_appearance?: ProgressAppearance } & SettingsEnvelope>("/api/settings/progress", json("PUT", progress)), "Unable to save progress appearance");
     await invalidateSettings();
+    return data.progress_appearance ?? progress;
   },
 
 

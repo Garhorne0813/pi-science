@@ -28,13 +28,11 @@ export function patternsForSlot(slot: ProgressSlot): ProgressPatternDefinition[]
   return PROGRESS_PATTERN_CATALOG.filter((pattern) => pattern.slots.includes(slot));
 }
 
+/** Input validation only: an illegal slot value falls back to the slot
+ *  default. Legal explicit choices are never rewritten — migration of old
+ *  shapes is a separate, versioned concern, not a guess from a legal value. */
 export function normalizeProgressAppearance(config: ProgressAppearance): ProgressAppearance {
   const next = structuredClone(config);
-  if (next.preset !== "custom") {
-    if (next.patterns.thinking === "static-check" || next.patterns.thinking === "inline-spark") next.patterns.thinking = "aicss-auto";
-    if (next.patterns.currentActivity === "inline-signal") next.patterns.currentActivity = "aicss-auto";
-    if (next.patterns.waiting === "static-check") next.patterns.waiting = "aicss-auto";
-  }
   for (const slot of Object.keys(next.patterns) as ProgressSlot[]) {
     const options = patternsForSlot(slot);
     if (!options.some((pattern) => pattern.id === next.patterns[slot])) next.patterns[slot] = defaultProgressAppearance.patterns[slot];

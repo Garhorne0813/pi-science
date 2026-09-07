@@ -293,6 +293,8 @@
   "settings.progress.slot.image": "生成图片",
   "settings.progress.slot.waiting": "等待输入",
   "settings.progress.slot.completed": "已完成",
+  "settings.progress.saveError": "尚未保存，正在自动重试",
+  "settings.progress.sample.activity": "正在查看相关内容",
   "settings.progress.pattern.static": "静态圆点",
   "settings.progress.pattern.aicss.auto": "AICSS 自动 · 按任务切换",
   "settings.progress.pattern.aicss.S1": "AICSS 格点 · 思考",

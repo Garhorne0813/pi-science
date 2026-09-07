@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { defaultProgressAppearance } from "@pi-science/contracts";
 import { ProgressVisual } from "./ProgressVisual";
@@ -52,7 +52,7 @@ describe("ProgressVisual", () => {
 
 describe("ProgressTab", () => {
   it("loads the saved config into the local progress store", () => {
-    render(<ProgressTab config={config} saving={false} onSave={vi.fn(async () => undefined)} />);
+    render(<ProgressTab config={config} />);
     expect(getProgressAppearance().patterns.currentActivity).toBe("aicss-auto");
     expect(screen.getByText("Built-in patterns")).toBeInTheDocument();
   });
