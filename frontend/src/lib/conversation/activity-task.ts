@@ -8,6 +8,8 @@ export interface ActivityTask {
   text: string | null;
   fallback: string;
   responding: boolean;
+  /** The tool the projection currently stands on (running one if any). */
+  currentTool: ToolCallBlock | null;
   sourceId?: string;
 }
 
@@ -20,24 +22,24 @@ export function selectActivityTask(blocks: ThreadBlock[]): ActivityTask {
   const currentIndex = current ? blocks.indexOf(current) : blocks.length;
   const agent = blocks.findLast((block) => block.kind === "agent" && block.parts.some((part) => part.text.trim()));
   const responding = !running && agent?.kind === "agent" && agent.presentationRole !== "intermediate" && (!current || blocks.indexOf(agent) > currentIndex);
-  if (responding) return { text: null, fallback: "respond", responding: true };
+  if (responding) return { text: null, fallback: "respond", responding: true, currentTool: null };
 
   const semantics = current ? toolActivityPresentation(current) : null;
   const fallback = semantics?.kind ?? "orient";
   const explicit = purpose(current?.presentation?.description) || purpose(current?.input?.description)
     || purpose(current?.presentation?.title) || purpose(current?.title);
-  if (explicit) return { text: explicit, fallback, responding: false };
+  if (explicit) return { text: explicit, fallback, responding: false, currentTool: current ?? null };
 
   const narration = blocks.findLast((block) => block.kind === "agent" && block.presentationRole !== "final" && block.parts.some((part) => part.text.trim()));
   const plan = extractTodoSnapshot(blocks)?.tasks.find((task) => task.status === "in_progress");
   const planIndex = blocks.findLastIndex((block) => block.kind === "tool" && block.tool === "todo");
   const planText = purpose(plan?.activeForm) || purpose(plan?.subject);
-  if (planText && (!narration || planIndex > blocks.indexOf(narration))) return { text: planText, fallback, responding: false };
+  if (planText && (!narration || planIndex > blocks.indexOf(narration))) return { text: planText, fallback, responding: false, currentTool: current ?? null };
   const prose = narration?.kind === "agent" ? narration.parts.map((part) => part.text).join("").trim() : "";
   const narrationText = purpose(prose);
   // Longer progress reports must remain available in full in the process body.
   const subtitleContainsReport = prose.length <= 160 && !prose.includes("\n");
-  return { text: narrationText || planText, fallback, responding: false, ...(narrationText && narration && subtitleContainsReport ? { sourceId: narration.id } : {}) };
+  return { text: narrationText || planText, fallback, responding: false, currentTool: current ?? null, ...(narrationText && narration && subtitleContainsReport ? { sourceId: narration.id } : {}) };
 }
 
 function purpose(value: unknown): string | null {

@@ -27,6 +27,32 @@ describe("AgentActivity", () => {
     expect(screen.queryByText("Find why the second reply stops following")).not.toBeInTheDocument();
   });
 
+  it("names a running tool that carries no task description", () => {
+    render(<AgentActivity blocks={[tool("bash-1", "bash", "running")]} />);
+    expect(screen.getByText("Running bash")).toBeInTheDocument();
+    expect(screen.queryByText("Understanding your request and deciding what to do next")).not.toBeInTheDocument();
+  });
+
+  it("keeps the curated task text ahead of the mechanical tool label", () => {
+    render(<AgentActivity blocks={[tool("bash-1", "bash", "running", { description: "Install the pinned toolchain" })]} />);
+    expect(screen.getByText("Install the pinned toolchain")).toBeInTheDocument();
+    expect(screen.queryByText("Running bash")).not.toBeInTheDocument();
+  });
+
+  it("shows a live turn elapsed timer that stops when the turn settles", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const { container, rerender } = render(<AgentActivity blocks={[tool("read-1", "read", "running", { path: "a.ts" })]} />);
+      act(() => { vi.advanceTimersByTime(2_400); });
+      expect(container.querySelector('[aria-hidden="true"].font-mono')?.textContent).toMatch(/^\d+\.\ds$/);
+      rerender(<AgentActivity blocks={[tool("read-1", "read", "done", { path: "a.ts" })]} lifecycle="settled" />);
+      expect(container.querySelector('[aria-hidden="true"].font-mono')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("automatically expands the live trace below a borderless activity summary", () => {
     const { container } = render(<AgentActivity blocks={[tool("read", "read", "done", { path: "ConversationBlocks.tsx" }), tool("todo", "todo"), tool("search", "grep", "running", { pattern: "tool.updated" })]} />);
     const title = screen.getByText("Reviewing the implementation");
@@ -86,7 +112,9 @@ describe("AgentActivity", () => {
 
   it("uses the thinking pattern when a tool has no semantics", () => {
     render(<AgentActivity blocks={[tool("bash", "bash", "running", { command: "git status" })]} />);
-    expect(screen.getByText("Understanding your request and deciding what to do next")).toBeInTheDocument();
+    // The row keeps the thinking visual, and the detail names the running
+    // tool instead of a generic orient sentence.
+    expect(screen.getByText("Running bash")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Thinking/i })).toBeInTheDocument();
   });
 

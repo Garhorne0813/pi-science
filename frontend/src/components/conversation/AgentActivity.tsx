@@ -39,6 +39,12 @@ export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "act
   const [disclosure, setDisclosure] = useState({ live, expanded: live });
   if (disclosure.live !== live) setDisclosure({ live, expanded: live });
   const expanded = disclosure.live === live ? disclosure.expanded : live;
+  // Turn elapsed clock: starts when the live row appears, resets when the
+  // turn settles. Visual-only (aria-hidden) so the aria-live label never
+  // announces a ticking number.
+  const liveSinceRef = useRef<number | null>(null);
+  if (live && liveSinceRef.current === null) liveSinceRef.current = Date.now();
+  if (!live) liveSinceRef.current = null;
   const tools = useMemo(() => blocks.filter((block): block is ToolCallBlock => block.kind === "tool"), [blocks]);
   const activities = useMemo(() => blocks.filter((block) => block.kind === "agent"
     ? Boolean(parseSuggestions(block.parts.map((part) => part.text).join("")).clean.trim())
@@ -69,13 +75,19 @@ export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "act
     ? t("conversation.activity.recoveringDetail")
     : lifecycle === "waiting"
       ? t("conversation.activity.task.interaction")
-      : task.text ?? t(`conversation.activity.task.${task.fallback}`);
+      // The mechanical label only fills the truly-empty case: a running tool
+      // with no description and no phase narration. A curated phase text
+      // always wins over "Running bash".
+      : task.text ?? (task.fallback === "orient" && task.currentTool
+        ? presentToolActivity(task.currentTool, t)
+        : t(`conversation.activity.task.${task.fallback}`));
   const visualSlot = state === "waiting" ? "waiting" : shown ? "currentActivity" : "thinking";
 
   return <div id={blocks.length === 1 && blocks[0].kind === "tool" ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
     <button type="button" disabled={!canExpand} aria-expanded={canExpand ? expanded : undefined} aria-controls={canExpand && expanded ? traceId : undefined} onClick={() => setDisclosure({ live, expanded: !expanded })} className={cn(styles.summary, "flex min-h-primary w-full items-center gap-2 rounded-input py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default sm:min-h-control")}>
       <span key={state} className={styles.glyph}><ActivityIcon state={state} slot={visualSlot} config={progressAppearance} label={title} activityState={activityStateFor(lifecycle, shown)} /></span>
       <ActivityLabel title={title} detail={detail} error={state === "error"} />
+      <LiveElapsed startedAt={liveSinceRef.current} live={live} />
       {lifecycle === "settled" && count > 0 && <span className="shrink-0 font-mono text-ui-micro text-muted" aria-label={t("conversation.activity.operationCount", { count })}>{count}</span>}
       {canExpand && <ChevronRight size={13} aria-hidden className={cn(styles.chevron, "shrink-0 text-muted", expanded && "rotate-90")} />}
     </button>
@@ -145,6 +157,27 @@ function ActivityLabel({ title, detail, error = false }: { title: string; detail
     <span className={cn(styles.title, "text-text", error && "text-error-text")}>{title}</span>
     {detail && <span className={cn(styles.detail, "text-muted")}>{detail}</span>}
   </span>;
+}
+
+/** Self-ticking turn clock. Lives in its own component so the 4 Hz tick
+ *  re-renders only this chip, never the activity row's narration tree. */
+function LiveElapsed({ startedAt, live }: { startedAt: number | null; live: boolean }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!live) return;
+    const timer = window.setInterval(() => tick((value) => value + 1), 250);
+    return () => window.clearInterval(timer);
+  }, [live]);
+  if (!live || startedAt === null) return null;
+  return <span aria-hidden="true" className="shrink-0 font-mono text-ui-micro tabular-nums text-muted">{formatElapsed(startedAt, Date.now())}</span>;
+}
+
+function formatElapsed(startedAt: number, now: number): string {
+  const totalSeconds = Math.max(0, (now - startedAt) / 1000);
+  if (totalSeconds < 10) return `${totalSeconds.toFixed(1)}s`;
+  if (totalSeconds < 60) return `${Math.floor(totalSeconds)}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  return `${minutes}m${String(Math.floor(totalSeconds % 60)).padStart(2, "0")}s`;
 }
 
 function ExecutionDetails({ blocks, live }: { blocks: ToolCallBlock[]; live: boolean }) {
