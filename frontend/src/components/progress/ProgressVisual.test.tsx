@@ -57,6 +57,11 @@ describe("ProgressVisual", () => {
     const normalized = normalizeProgressAppearance({ ...defaultProgressAppearance, patterns: { ...defaultProgressAppearance.patterns, thinking: "text-skeleton" } });
     expect(normalized.patterns.thinking).toBe("aicss-auto");
   });
+  it("maps every catalog pattern to a translated label", () => {
+    for (const pattern of PROGRESS_PATTERN_CATALOG) {
+      expect(i18n.t(pattern.labelKey, { lng: "en" })).not.toBe(pattern.labelKey);
+    }
+  });
 });
 
 describe("ProgressVisualErrorBoundary", () => {

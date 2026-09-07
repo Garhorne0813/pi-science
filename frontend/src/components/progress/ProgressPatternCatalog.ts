@@ -20,7 +20,7 @@ const FAMILY_SOURCE: Record<ProgressPatternFamily, ProgressPatternDefinition["so
 
 function labelKeyFor(id: string): string {
   if (id === "static-check") return "settings.progress.pattern.static";
-  const suffix = id.replace(/^(?:aicss-orb-|inline-|text-|image-)/, "");
+  const suffix = id.replace(/^(?:aicss-(?:orb-)?|inline-|text-|image-)/, "");
   if (id.startsWith("aicss")) return `settings.progress.pattern.aicss.${suffix}`;
   return `settings.progress.pattern.${suffix}`;
 }
