@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { artifactManifestSchema, createResearchLoopSchema, createSessionRequestSchema, executionEventSchema, executionRecordSchema, gatewayHealthSchema, jobRecordSchema, piRpcCommandSchema, researchLoopSchema, sessionEventSchema, sessionMessagePageSchema, sessionStatsSchema, sessionUserMessageIndexSchema, skillContentSchema } from "./index.js";
+import { artifactManifestSchema, createResearchLoopSchema, createSessionRequestSchema, defaultProgressAppearance, executionEventSchema, executionRecordSchema, gatewayHealthSchema, jobRecordSchema, piRpcCommandSchema, progressAppearanceInputSchema, progressAppearanceSchema, researchLoopSchema, sessionEventSchema, sessionMessagePageSchema, sessionStatsSchema, sessionUserMessageIndexSchema, skillContentSchema } from "./index.js";
 
 describe("gateway contracts", () => {
   it("accepts a healthy Node gateway response", () => {
@@ -105,5 +105,35 @@ describe("gateway contracts", () => {
       skill_id: "s1", name: "alpha", digest: "0123456789abcdef",
       source: "builtin", location: "alpha/SKILL.md",
     })).toThrow();
+  });
+});
+
+describe("progress appearance schemas", () => {
+  it("rejects a legal-in-another-slot pattern on the write path", () => {
+    const body = { preset: "quiet", patterns: { ...defaultProgressAppearance.patterns, thinking: "text-decode" } };
+    expect(() => progressAppearanceInputSchema.parse(body)).toThrow();
+  });
+
+  it("recovers per-field defaults when reading invalid stored values", () => {
+    const stored = {
+      version: 1,
+      preset: "quiet",
+      motion: "full",
+      speed: 9,
+      colorMode: "custom",
+      customColor: "not-a-color",
+      patterns: { ...defaultProgressAppearance.patterns, thinking: "text-decode", currentActivity: "inline-signal" },
+    };
+    const parsed = progressAppearanceSchema.parse(stored);
+    expect(parsed.speed).toBe(1);
+    expect(parsed.customColor).toBeNull();
+    expect(parsed.patterns.thinking).toBe("aicss-auto");
+    expect(parsed.patterns.currentActivity).toBe("inline-signal");
+  });
+
+  it("keeps legal explicit pattern choices on both paths", () => {
+    const body = { patterns: { ...defaultProgressAppearance.patterns, waiting: "inline-spark" } };
+    expect(progressAppearanceInputSchema.parse(body).patterns.waiting).toBe("inline-spark");
+    expect(progressAppearanceSchema.parse(body).patterns.waiting).toBe("inline-spark");
   });
 });

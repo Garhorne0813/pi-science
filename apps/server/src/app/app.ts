@@ -2,7 +2,7 @@ import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
-import { gatewayHealthSchema, progressAppearanceSchema } from "@pi-science/contracts";
+import { gatewayHealthSchema } from "@pi-science/contracts";
 import type { ServerConfig } from "../config/config.js";
 import { routeBoundary, runtimeOwner } from "../http/runtime-boundaries.js";
 import { registerSessionReadRoutes } from "../http/routes/session-routes.js";
@@ -90,19 +90,9 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     }
   });
 
-  // Progress appearance is UI-only state. Short-circuit the legacy settings
-  // handler before it can reload Pi runtimes and replace active sessions.
-  app.addHook("preHandler", async (request, reply) => {
-    const pathname = request.url.split("?")[0] ?? request.url;
-    if (request.method !== "PUT" || pathname !== "/api/settings/progress") return;
-    const parsed = progressAppearanceSchema.safeParse(request.body ?? {});
-    if (!parsed.success) {
-      return reply.code(400).send({ error: "Invalid progress appearance settings", details: parsed.error.flatten() });
-    }
-    await settings.update((current) => { current.progress_appearance = parsed.data; });
-    return reply.send({ ok: true, progress_appearance: parsed.data });
-  });
-
+  // Progress appearance is UI-only state: the dedicated settings-routes
+  // handler persists it through the SettingsStore without reloading Pi
+  // runtimes or replacing active sessions.
   app.addHook("onSend", async (request, reply, payload) => {
     if (request.url.startsWith("/api/")) {
       reply.header("x-pi-science-runtime", runtimeOwner(request.url.split("?")[0] ?? request.url));

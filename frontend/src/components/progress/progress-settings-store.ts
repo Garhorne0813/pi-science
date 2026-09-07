@@ -147,7 +147,7 @@ export function hydrateProgressAppearance(): Promise<void> {
   const atRevision = revision;
   hydration = (async () => {
     try {
-      const data = await apiRequest<{ progress_appearance?: ProgressAppearance }>("/api/settings/config");
+      const data = await apiRequest<{ progress_appearance?: ProgressAppearance }>("/api/settings/progress");
       // A snapshot read at request start must not roll back edits made while
       // it was in flight (or unsaved edits from a failed save).
       if (data.progress_appearance && atRevision === revision && !dirty && !inFlight) {

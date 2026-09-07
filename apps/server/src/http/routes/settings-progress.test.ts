@@ -42,4 +42,42 @@ describe("progress appearance settings", () => {
     expect(reload).not.toHaveBeenCalled();
     await expect(modules.settings.read()).resolves.toMatchObject({ progress_appearance: progress });
   });
+
+  it("reads the stored appearance from the dedicated lightweight route", async () => {
+    const home = join(tmpdir(), `pi-science-progress-settings-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    tempDirs.push(home);
+    await mkdir(home, { recursive: true });
+    process.env.PI_SCIENCE_HOME = home;
+
+    const modules = createServerModules(config());
+    const app = buildApp(config(), modules);
+    apps.push(app);
+    const progress = { ...structuredClone(defaultProgressAppearance), speed: 0.75, motion: "full" as const };
+
+    await app.inject({ method: "PUT", url: "/api/settings/progress", payload: progress });
+    const response = await app.inject({ method: "GET", url: "/api/settings/progress" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ progress_appearance: progress });
+  });
+
+  it("rejects invalid appearances without writing and keeps other settings", async () => {
+    const home = join(tmpdir(), `pi-science-progress-settings-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    tempDirs.push(home);
+    await mkdir(home, { recursive: true });
+    process.env.PI_SCIENCE_HOME = home;
+
+    const modules = createServerModules(config());
+    const reload = vi.spyOn(modules.sessions, "reloadConfiguration").mockResolvedValue([]);
+    const app = buildApp(config(), modules);
+    apps.push(app);
+
+    const invalid = { ...structuredClone(defaultProgressAppearance), speed: 9 };
+    const response = await app.inject({ method: "PUT", url: "/api/settings/progress", payload: invalid });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toHaveProperty("error", "Invalid progress appearance settings");
+    await expect(modules.settings.read()).resolves.not.toHaveProperty("progress_appearance.speed", 9);
+    expect(reload).not.toHaveBeenCalled();
+  });
 });
