@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import i18n from "../../i18n";
 import type { ToolCallBlock } from "../../types/thread";
 import { AgentActivity } from "./AgentActivity";
+import { useRuntimeStore } from "../../lib/agent-runtime";
 import { executionActivities, executionOperationCount } from "../../lib/conversation/activity-policy";
 import { defaultProgressAppearance } from "@pi-science/contracts";
 import { setProgressAppearance } from "../progress/progress-settings-store";
@@ -50,6 +51,39 @@ describe("AgentActivity", () => {
       expect(container.querySelector('[aria-hidden="true"].font-mono')).toBeNull();
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("leaves a visible trail of the last steps after settling", () => {
+    const blocks = [
+      tool("t1", "read", "done", { path: "one.ts" }),
+      tool("t2", "read", "done", { path: "two.ts" }),
+      tool("t3", "grep", "done", { pattern: "x" }),
+      tool("t4", "bash", "done"),
+      tool("t5", "bash", "done"),
+    ];
+    render(<AgentActivity blocks={blocks} lifecycle="settled" />);
+    expect(screen.queryByText("Reading one.ts")).not.toBeInTheDocument();
+    expect(screen.getByText("Reading two.ts")).toBeInTheDocument();
+    expect(screen.getByText("Searching for x")).toBeInTheDocument();
+    expect(screen.getAllByText("Running bash")).toHaveLength(2);
+  });
+
+  it("shows a per-step duration when the block carries timestamps", () => {
+    render(<AgentActivity blocks={[{ ...tool("t1", "bash", "done"), startedAt: "2026-09-08T00:00:00.000Z", endedAt: "2026-09-08T00:00:02.400Z" }]} lifecycle="settled" />);
+    expect(screen.getByText("2.4s")).toBeInTheDocument();
+  });
+
+  it("offers an interrupt affordance while the turn runs", async () => {
+    const abort = vi.fn().mockResolvedValue(undefined);
+    const previous = useRuntimeStore.getState().abort;
+    useRuntimeStore.setState({ abort: abort as typeof previous });
+    try {
+      render(<AgentActivity blocks={[tool("bash-1", "bash", "running")]} />);
+      await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+      expect(abort).toHaveBeenCalledTimes(1);
+    } finally {
+      useRuntimeStore.setState({ abort: previous });
     }
   });
 

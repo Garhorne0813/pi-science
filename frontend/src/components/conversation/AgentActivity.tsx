@@ -1,9 +1,10 @@
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
-import { ChevronRight, Check, CircleX } from "lucide-react";
+import { ChevronRight, Check, CircleX, Square } from "lucide-react";
 import type { ProgressAppearance } from "@pi-science/contracts";
 import { useTranslation } from "react-i18next";
 import type { AgentMessageBlock, ThreadBlock, ToolCallBlock } from "../../types/thread";
 import { activityPolicy, executionOperationCount } from "../../lib/conversation/activity-policy";
+import { useRuntimeStore } from "../../lib/agent-runtime";
 import { ACTIVITY_SWITCH_DEBOUNCE_MS, MIN_ACTIVITY_VISIBLE_MS, selectDisplayedActivity } from "../../lib/conversation/activity-display-policy";
 import type { PresentedActivity } from "../../lib/conversation/activity-narrative";
 import type { TurnLifecycle } from "../../lib/conversation/turn-presentation";
@@ -32,6 +33,7 @@ export function ThinkingActivity({ className }: { className?: string }) {
 export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "active", cwd }: { blocks: ActivityBlock[]; contextBlocks?: ThreadBlock[]; lifecycle?: TurnLifecycle; cwd?: string }) {
   const { t } = useTranslation();
   const progressAppearance = useProgressAppearance();
+  const abort = useRuntimeStore((state) => state.abort);
   const traceId = useId();
   const live = isLive(lifecycle);
   // Reset only when a run starts/ends. Tool updates and waiting/recovery must
@@ -49,6 +51,7 @@ export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "act
   const activities = useMemo(() => blocks.filter((block) => block.kind === "agent"
     ? Boolean(parseSuggestions(block.parts.map((part) => part.text).join("")).clean.trim())
     : activityPolicy(block).visibleInExecutionTrace), [blocks]);
+  const traceTools = useMemo(() => activities.filter((block): block is ToolCallBlock => block.kind === "tool"), [activities]);
   const count = useMemo(() => executionOperationCount(tools), [tools]);
   const shown = useDisplayedActivity(tools, lifecycle);
   const task = useMemo(() => selectActivityTask(contextBlocks), [contextBlocks]);
@@ -88,13 +91,15 @@ export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "act
       <span key={state} className={styles.glyph}><ActivityIcon state={state} slot={visualSlot} config={progressAppearance} label={title} activityState={activityStateFor(lifecycle, shown)} /></span>
       <ActivityLabel title={title} detail={detail} error={state === "error"} />
       <LiveElapsed startedAt={liveSinceRef.current} live={live} />
+      {(lifecycle === "active" || lifecycle === "queued") && <button type="button" onClick={() => void abort().catch(() => undefined)} className="flex shrink-0 items-center gap-1 rounded-input px-1.5 py-0.5 text-ui-micro text-muted transition-colors hover:bg-surface-hover hover:text-text"><Square size={9} aria-hidden className="fill-current" />{t("conversation.activity.stop")}</button>}
       {lifecycle === "settled" && count > 0 && <span className="shrink-0 font-mono text-ui-micro text-muted" aria-label={t("conversation.activity.operationCount", { count })}>{count}</span>}
       {canExpand && <ChevronRight size={13} aria-hidden className={cn(styles.chevron, "shrink-0 text-muted", expanded && "rotate-90")} />}
     </button>
+    {!live && canExpand && <CompletedSteps blocks={traceTools} />}
     {expanded && canExpand && <div id={traceId} role="region" className={styles.trace} aria-label={t("conversation.activity.trace")}>
       {activities.filter((block): block is AgentMessageBlock => block.kind === "agent" && (!live || block.id !== task.sourceId)).map((block) =>
         <div key={block.id} id={`thread-block-${block.id}`} className={cn(styles.entry, styles.narration, "min-w-0")}><MarkdownViewer variant="chat" className="text-ui-body leading-relaxed text-muted [overflow-wrap:anywhere]" resourceContext={cwd ? { cwd } : undefined}>{parseSuggestions(block.parts.map((part) => part.text).join("")).clean}</MarkdownViewer></div>)}
-      <ExecutionDetails blocks={activities.filter((block): block is ToolCallBlock => block.kind === "tool")} live={live} />
+      <ExecutionDetails blocks={traceTools} live={live} />
     </div>}
   </div>;
 }
@@ -169,15 +174,45 @@ function LiveElapsed({ startedAt, live }: { startedAt: number | null; live: bool
     return () => window.clearInterval(timer);
   }, [live]);
   if (!live || startedAt === null) return null;
-  return <span aria-hidden="true" className="shrink-0 font-mono text-ui-micro tabular-nums text-muted">{formatElapsed(startedAt, Date.now())}</span>;
+  return <span aria-hidden="true" className="shrink-0 font-mono text-ui-micro tabular-nums text-muted">{formatSeconds(Math.max(0, (Date.now() - startedAt) / 1000))}</span>;
 }
 
-function formatElapsed(startedAt: number, now: number): string {
-  const totalSeconds = Math.max(0, (now - startedAt) / 1000);
+const VISIBLE_STEP_COUNT = 4;
+
+/** ZCode-style step trail: after the turn settles, the most recent steps
+ *  stay visible as one quiet line each; older steps live in the trace. */
+function CompletedSteps({ blocks }: { blocks: ToolCallBlock[] }) {
+  if (blocks.length === 0) return null;
+  return <div className={styles.steps}>
+    {blocks.slice(-VISIBLE_STEP_COUNT).map((block) => <StepLine key={block.id} block={block} />)}
+  </div>;
+}
+
+function StepLine({ block }: { block: ToolCallBlock }) {
+  const { t } = useTranslation();
+  const duration = stepDuration(block);
+  return <div className={styles.step}>
+    {block.status === "error"
+      ? <CircleX size={11} aria-hidden className="shrink-0 text-error-text" />
+      : <Check size={11} aria-hidden className="shrink-0 text-muted" />}
+    <span className="min-w-0 flex-1 truncate text-ui-caption text-muted">{presentToolActivity(block, t)}</span>
+    {duration && <span aria-hidden="true" className="shrink-0 font-mono text-[10px] tabular-nums text-muted">{duration}</span>}
+  </div>;
+}
+
+function formatSeconds(totalSeconds: number): string {
   if (totalSeconds < 10) return `${totalSeconds.toFixed(1)}s`;
   if (totalSeconds < 60) return `${Math.floor(totalSeconds)}s`;
   const minutes = Math.floor(totalSeconds / 60);
   return `${minutes}m${String(Math.floor(totalSeconds % 60)).padStart(2, "0")}s`;
+}
+
+function stepDuration(block: ToolCallBlock): string | null {
+  if (!block.startedAt || !block.endedAt) return null;
+  const start = Date.parse(block.startedAt);
+  const end = Date.parse(block.endedAt);
+  if (Number.isNaN(start) || Number.isNaN(end)) return null;
+  return formatSeconds(Math.max(0, (end - start) / 1000));
 }
 
 function ExecutionDetails({ blocks, live }: { blocks: ToolCallBlock[]; live: boolean }) {
@@ -213,10 +248,12 @@ function TraceItem({ block, live }: { block: ToolCallBlock; live: boolean }) {
   const hasDetails = Boolean(block.input || block.output || block.partialOutput || block.diff);
   const output = block.output || block.partialOutput;
   const running = live && block.status === "running";
+  const duration = running ? null : stepDuration(block);
   return <div className={cn(styles.entry, styles.tool)} data-running={running}>
     <button type="button" disabled={!hasDetails} aria-expanded={hasDetails ? expanded : undefined} onClick={() => hasDetails && setExpanded((value) => !value)} className={cn(styles.toolButton, "flex min-h-primary max-w-full items-center gap-2 rounded-input py-1.5 text-left text-ui-label text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default sm:min-h-control")}>
       {running ? <span aria-hidden className="mx-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : block.status === "running" ? <CircleX size={14} aria-hidden className="shrink-0 text-muted" /> : block.status === "error" ? <CircleX size={14} aria-hidden className="shrink-0 text-error-text" /> : <Check size={14} aria-hidden className="shrink-0 text-muted" />}
       <span className="min-w-0 flex-1 truncate">{presentToolActivity(block, t)}</span>
+      {duration && <span aria-hidden="true" className="shrink-0 font-mono text-[10px] tabular-nums text-muted">{duration}</span>}
       {hasDetails && <ChevronRight size={12} aria-hidden className={cn(styles.chevron, "shrink-0", expanded && "rotate-90")} />}
     </button>
     {expanded && hasDetails && <div className={cn(styles.details, "space-y-2 pb-2 pl-6 text-xs")}>

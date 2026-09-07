@@ -79,6 +79,7 @@
   "conversation.activity.operationCount_other": "{{count}} 项操作",
   "conversation.activity.error": "遇到问题",
   "conversation.activity.stopped": "已停止",
+  "conversation.activity.stop": "停止",
   "conversation.activity.thinking": "思考中",
   "conversation.activity.continuing": "分析问题",
   "conversation.activity.task.orient": "理解你的问题，确定接下来的处理步骤",

@@ -123,12 +123,16 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
       const previous = existingIdx !== undefined && blocks[existingIdx].kind === "tool"
         ? blocks[existingIdx]
         : undefined;
+      const status = event.status as ThreadBlock extends { status: infer S } ? S : never;
+      // Runtimes rarely ship wall-clock fields. Arrival times are the honest
+      // fallback: first sight starts the clock, a terminal status ends it.
+      const nowIso = new Date().toISOString();
       const block: ThreadBlock = {
         kind: "tool",
         id: blockId,
         callId,
         tool: (event.tool as string) || previous?.tool || "unknown",
-        status: event.status as ThreadBlock extends { status: infer S } ? S : never,
+        status,
         title: (event.title as string | undefined) ?? previous?.title,
         input: (event.input as Record<string, unknown> | undefined) ?? previous?.input,
         output: (event.output as string | undefined) ?? previous?.output,
@@ -136,8 +140,9 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
         presentation: (event.presentation as ToolCallBlock["presentation"] | undefined) ?? previous?.presentation,
         partialOutput: (event.partialOutput as string | undefined) ?? previous?.partialOutput,
         diff: (event.diff as string | undefined) ?? previous?.diff,
-        startedAt: (event.startedAt as string | undefined) ?? previous?.startedAt,
-        endedAt: (event.endedAt as string | undefined) ?? previous?.endedAt,
+        startedAt: (event.startedAt as string | undefined) ?? previous?.startedAt ?? nowIso,
+        endedAt: (event.endedAt as string | undefined) ?? previous?.endedAt
+          ?? ((status === "done" || status === "error") ? nowIso : undefined),
         childSessionId: (event.childSessionId as string | undefined) ?? previous?.childSessionId,
         interactionResolved: previous?.interactionResolved,
       };
@@ -326,8 +331,34 @@ export function prependHistoryMessages(current: Thread, messages: HistoryMessage
   return { blocks, index, loaded: true };
 }
 
+/** Preserve UI-observed tool timing across authoritative rebuilds. History
+ *  rows carry no wall-clock fields, so step durations would silently vanish
+ *  on every settle-time resync without this carry-over. Only missing fields
+ *  are filled: explicit runtime timestamps stay authoritative. */
+function carryToolTiming(current: Thread, authoritative: Thread): Thread {
+  if (authoritative.blocks.length === 0) return authoritative;
+  const timingByCallId = new Map<string, { startedAt?: string; endedAt?: string }>();
+  for (const block of current.blocks) {
+    if (block.kind !== "tool" || (!block.startedAt && !block.endedAt)) continue;
+    timingByCallId.set(block.callId, { startedAt: block.startedAt, endedAt: block.endedAt });
+  }
+  if (timingByCallId.size === 0) return authoritative;
+  let changed = false;
+  const blocks = authoritative.blocks.map((block) => {
+    if (block.kind !== "tool") return block;
+    const timing = timingByCallId.get(block.callId);
+    if (!timing || (block.startedAt && block.endedAt)) return block;
+    changed = true;
+    return { ...block, ...(block.startedAt ? {} : { startedAt: timing.startedAt }), ...(block.endedAt ? {} : { endedAt: timing.endedAt }) };
+  });
+  if (!changed) return authoritative;
+  const index: Record<string, number> = {};
+  blocks.forEach((block, position) => { index[block.id] = position; });
+  return { blocks, index, loaded: authoritative.loaded };
+}
+
 export function replaceHistoryTail(current: Thread, messages: HistoryMessage[]): Thread {
-  const authoritative = threadFromMessages(messages);
+  const authoritative = carryToolTiming(current, threadFromMessages(messages));
   if (authoritative.blocks.length === 0) return current;
   const authoritativeIds = new Set(authoritative.blocks.map((block) => block.id));
   const firstOverlap = current.blocks.findIndex((block) => authoritativeIds.has(block.id));
@@ -356,7 +387,7 @@ export interface HistoryWindowMerge {
  *  text, just-finished tools) — used by mid-stream recovery paths. Without
  *  it the settled snapshot is authoritative and live extras are dropped. */
 export function mergeHistoryWindow(current: Thread, messages: HistoryMessage[], opts: { keepLiveExtras: boolean }): HistoryWindowMerge {
-  const authoritative = threadFromMessages(messages);
+  const authoritative = carryToolTiming(current, threadFromMessages(messages));
   if (authoritative.blocks.length === 0) return { thread: current, retainedOlderPrefix: true };
   const authoritativeIds = new Set(authoritative.blocks.map((block) => block.id));
   const firstOverlap = current.blocks.findIndex((block) => authoritativeIds.has(block.id));

@@ -125,10 +125,14 @@ describe("turn-level activity through the live event path", () => {
     expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Execution details/ }));
     const traceLabels = Array.from(document.querySelectorAll("[aria-label='Execution trace'] button > span"));
+    // Each trace row carries its per-step duration next to the label.
     expect(traceLabels.map((node) => node.textContent)).toEqual([
       "Reading turn-presentation.ts",
+      "1.0s",
       "Reading event-fold.ts",
+      "1.0s",
       "运行 turn 呈现层测试",
+      "1.0s",
     ]);
     // Todo never leaks as a trace row or an aria-live announcement source.
     expect(screen.queryByText(/Created #1|Updated #1/)).not.toBeInTheDocument();

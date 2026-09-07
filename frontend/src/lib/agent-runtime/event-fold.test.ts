@@ -24,6 +24,24 @@ describe("transport event folding", () => {
     expect(next.blocks.at(-1)).toMatchObject({ output: "fresh tail result" });
   });
 
+  it("carries observed tool timing across a settle-time resync", () => {
+    const current = threadFromMessages([
+      { id: "user-1", role: "user", content: [{ type: "text", text: "run" }] },
+    ]);
+    current.blocks.push({
+      kind: "tool", id: "tool-call-1", callId: "call-1", tool: "bash", status: "done",
+      output: "ok", startedAt: "2026-09-08T00:00:00.000Z", endedAt: "2026-09-08T00:00:02.400Z",
+    } as ThreadBlock);
+    const merged = replaceHistoryTail(current, [
+      { id: "user-1", role: "user", content: [{ type: "text", text: "run" }] },
+      { id: "assistant-1", role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "bash" }] },
+      { id: "result-1", role: "toolResult", toolCallId: "call-1", toolName: "bash", content: [{ type: "text", text: "ok" }], timestamp: "2026-09-08T00:00:03.000Z" },
+    ]);
+    const tool = merged.blocks.find((block) => block.kind === "tool" && block.callId === "call-1") as { startedAt?: string; endedAt?: string };
+    expect(tool.startedAt).toBe("2026-09-08T00:00:00.000Z");
+    expect(tool.endedAt).toBe("2026-09-08T00:00:02.400Z");
+  });
+
   it("merges durable user history with replayed live output during a mid-turn reload", async () => {
     let resolveMessages!: (response: Response) => void;
     let resolveState!: (response: Response) => void;
@@ -114,6 +132,26 @@ describe("transport event folding", () => {
     expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
       expect.objectContaining({ kind: "tool", callId: "call-1", tool: "bash", status: "done", title: "Running conversation tests", details: { exitCode: 0 } }),
     );
+  });
+
+  it("stamps arrival times so finished steps carry a duration", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-a"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    await useRuntimeStore.getState().connect("/workspace", "session-a");
+    const source = FakeEventSource.instances[0];
+    source.emit("tool.updated", { type: "tool.updated", sessionId: "session-a", callId: "call-1", tool: "bash", status: "running" });
+    const running = useRuntimeStore.getState().thread.blocks.find((block) => block.kind === "tool" && block.callId === "call-1") as { startedAt?: string };
+    expect(typeof running.startedAt).toBe("string");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    source.emit("tool.updated", { type: "tool.updated", sessionId: "session-a", callId: "call-1", tool: "bash", status: "done" });
+    const done = useRuntimeStore.getState().thread.blocks.find((block) => block.kind === "tool" && block.callId === "call-1") as { startedAt?: string; endedAt?: string };
+    expect(typeof done.endedAt).toBe("string");
+    expect(Date.parse(done.endedAt!) - Date.parse(done.startedAt!)).toBeGreaterThanOrEqual(0);
   });
 
   it("keeps tool presentation metadata across live updates", async () => {

@@ -59,7 +59,9 @@ export function ProgressVisual({ slot, config, state = "running", activityState,
   if (definition.kind === "static") return STATIC_MARKER;
   if (definition.kind === "orb") {
     const variant = definition.id === "aicss-auto" ? aicssOrbForActivity(slot, activityState) : AICSS_ORB_VARIANTS[definition.id];
-    return variant ? <Orb variant={variant} size={compact ? 16 : 20} paused={paused} speed={speed} decorative style={{ "--orb-fg": color } as CSSProperties} /> : null;
+    // 24px keeps the orb families distinguishable at inline size (the 28px
+    // design grid loses its geometry at 20px); compact previews stay small.
+    return variant ? <Orb variant={variant} size={compact ? 16 : 24} paused={paused} speed={speed} decorative style={{ "--orb-fg": color } as CSSProperties} /> : null;
   }
   return (
     <ProgressVisualErrorBoundary>

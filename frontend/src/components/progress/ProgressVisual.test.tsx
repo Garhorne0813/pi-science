@@ -37,7 +37,10 @@ describe("ProgressVisual", () => {
     render(<ProgressVisual slot="currentActivity" config={config} text="Working" />);
     // The glyph is decorative next to the localized status text: it must not
     // announce an internal English task name to assistive technology.
-    expect(document.querySelector('[data-orb-variant] [aria-hidden="true"]')).toBeInTheDocument();
+    const glyph = document.querySelector('[data-orb-variant] [aria-hidden="true"]');
+    expect(glyph).toBeInTheDocument();
+    // 24px keeps the orb families distinguishable inline.
+    expect(glyph).toHaveStyle({ width: "24px", height: "24px" });
   });
   it("forwards the speed setting to the orb", () => {
     const config = { ...defaultProgressAppearance, speed: 2 };
