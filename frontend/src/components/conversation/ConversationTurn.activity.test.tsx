@@ -85,9 +85,12 @@ describe("turn-level activity through the live event path", () => {
 
     // One user turn => exactly one Current Activity row.
     expect(container.querySelectorAll("span[aria-live='polite']")).toHaveLength(1);
-    // Execution tools only: 2 reads + 1 bash. Todo is plan-control.
-    expect(screen.getByText("Complete")).toBeInTheDocument();
-    expect(screen.getByLabelText("3 operations")).toBeInTheDocument();
+    // Execution tools only: 2 reads + 1 bash. Todo is plan-control. The
+    // settled row presents the steps themselves — no header, no count.
+    expect(screen.getByText("Reading turn-presentation.ts")).toBeInTheDocument();
+    expect(screen.getByText("Reading event-fold.ts")).toBeInTheDocument();
+    expect(screen.getByText("运行 turn 呈现层测试")).toBeInTheDocument();
+    expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
     // Intermediate narration is suppressed; only the final answer is prose.
     expect(screen.queryByText("我先读取 turn-presentation.ts。")).not.toBeInTheDocument();
     expect(screen.queryByText("接下来看事件折叠。")).not.toBeInTheDocument();
@@ -112,7 +115,7 @@ describe("turn-level activity through the live event path", () => {
     // Narrative label, not the per-tool title: the title stays in the trace.
     expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
     expect(screen.getByText("我先读取实现。")).toBeInTheDocument();
-    expect(screen.queryByText("Complete")).not.toBeInTheDocument();
+    expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
   });
 
   it("keeps todo bookkeeping out of the trace while the plan still shows", async () => {
@@ -121,7 +124,7 @@ describe("turn-level activity through the live event path", () => {
     emitTurn();
     render(<>{renderBlocks(useRuntimeStore.getState().thread.blocks, codeRunner)}</>);
 
-    fireEvent.click(screen.getByRole("button", { name: /Complete/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Reading turn-presentation/ }));
     expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Execution details/ }));
     const traceLabels = Array.from(document.querySelectorAll("[aria-label='Execution trace'] button > span"));
@@ -145,8 +148,9 @@ describe("turn-level activity through the history path", () => {
     const { container } = render(<>{renderBlocks(thread.blocks, codeRunner)}</>);
 
     expect(container.querySelectorAll("span[aria-live='polite']")).toHaveLength(1);
-    expect(screen.getByText("Complete")).toBeInTheDocument();
-    expect(screen.getByLabelText("3 operations")).toBeInTheDocument();
+    expect(screen.getAllByText("Reading file")).toHaveLength(2);
+    expect(screen.getByText("Running bash")).toBeInTheDocument();
+    expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
     expect(screen.queryByText("我先读取 turn-presentation.ts。")).not.toBeInTheDocument();
     expect(screen.getByText(/实现符合方案/)).toBeInTheDocument();
     expect(todoViewModel(thread.blocks)?.allCompleted).toBe(true);
@@ -212,11 +216,11 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       emit("session.idle", {});
       rerender(view());
       expect(screen.getByText("这是最终回答。")).toBeInTheDocument();
-      expect(screen.getByText("Complete")).toBeInTheDocument();
-      expect(screen.getByLabelText("4 operations")).toBeInTheDocument();
+      // The settled row presents the steps themselves — no header, no count.
+      expect(screen.getByText("运行测试", { ignore: ".sr-only" })).toBeInTheDocument();
       expect(screen.queryByText("我先检查一下。")).not.toBeInTheDocument();
       expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name: /Complete/ }));
+      fireEvent.click(screen.getByRole("button", { expanded: false }));
       expect(screen.getByLabelText("Execution trace")).toHaveTextContent("我先检查一下。");
       expect(screen.getAllByText("这是最终回答。")).toHaveLength(1);
       expect(screen.getByLabelText("Execution trace")).not.toHaveTextContent("这是最终回答。");

@@ -106,10 +106,13 @@ describe("AgentActivity", () => {
     expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
   });
 
-  it("shows completion as the main copy and operation count as metadata", () => {
+  it("presents settled steps as the row itself without a header or count", () => {
     render(<AgentActivity lifecycle="settled" blocks={[tool("read", "read"), tool("todo", "todo"), tool("search", "grep")]} />);
-    expect(screen.getByText("Complete")).toBeInTheDocument();
-    expect(screen.getByLabelText("2 operations")).toHaveTextContent("2");
+    // The settled-state announcement survives as sr-only copy; no visible header.
+    expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
+    expect(screen.getByText("Reading file")).toBeInTheDocument();
+    expect(screen.getByText("Searching for matching code")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/operation/)).not.toBeInTheDocument();
   });
 
   it("keeps the active status visible for todo-only turns", () => { render(<AgentActivity blocks={[tool("todo", "todo")]} />); expect(screen.getByText("Thinking")).toBeInTheDocument(); expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument(); });
@@ -128,7 +131,10 @@ describe("AgentActivity", () => {
     rerender(<AgentActivity blocks={blocks} lifecycle={lifecycle} />);
     expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
     const summary = screen.getByRole("button", { expanded: false });
-    expect(summary).not.toHaveTextContent("Reading a.ts");
+    // Settled turns present their steps as the row; aborted and failed ones
+    // keep the state headline.
+    if (lifecycle === "settled") expect(summary).toHaveTextContent("Reading a.ts");
+    else expect(summary).toHaveTextContent(lifecycle === "aborted" ? "Stopped" : "Encountered a problem");
     fireEvent.click(summary);
     expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
     expect(container.querySelector(".animate-spin")).toBeNull();

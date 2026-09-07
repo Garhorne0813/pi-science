@@ -3,7 +3,7 @@ import { ChevronRight, Check, CircleX, Square } from "lucide-react";
 import type { ProgressAppearance } from "@pi-science/contracts";
 import { useTranslation } from "react-i18next";
 import type { AgentMessageBlock, ThreadBlock, ToolCallBlock } from "../../types/thread";
-import { activityPolicy, executionOperationCount } from "../../lib/conversation/activity-policy";
+import { activityPolicy } from "../../lib/conversation/activity-policy";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { ACTIVITY_SWITCH_DEBOUNCE_MS, MIN_ACTIVITY_VISIBLE_MS, selectDisplayedActivity } from "../../lib/conversation/activity-display-policy";
 import type { PresentedActivity } from "../../lib/conversation/activity-narrative";
@@ -52,12 +52,15 @@ export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "act
     ? Boolean(parseSuggestions(block.parts.map((part) => part.text).join("")).clean.trim())
     : activityPolicy(block).visibleInExecutionTrace), [blocks]);
   const traceTools = useMemo(() => activities.filter((block): block is ToolCallBlock => block.kind === "tool"), [activities]);
-  const count = useMemo(() => executionOperationCount(tools), [tools]);
   const shown = useDisplayedActivity(tools, lifecycle);
   const task = useMemo(() => selectActivityTask(contextBlocks), [contextBlocks]);
   if (!live && activities.length === 0) return null;
 
   const canExpand = activities.length > 0;
+  // A settled turn with visible steps presents the steps themselves as the
+  // row (one line each) — no separate "Complete" header, no count. Aborted
+  // and failed turns keep their state headline instead.
+  const settledSteps = lifecycle === "settled" && canExpand && traceTools.length > 0;
   const state = lifecycle === "failed" || shown?.state === "error" ? "error" : lifecycle === "aborted" ? "stopped" : lifecycle === "settled" ? "completed" : lifecycle === "waiting" || shown?.state === "interaction" ? "waiting" : "running";
   const title = lifecycle === "failed"
     ? t("conversation.activity.error")
@@ -87,15 +90,23 @@ export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "act
   const visualSlot = state === "waiting" ? "waiting" : shown ? "currentActivity" : "thinking";
 
   return <div id={blocks.length === 1 && blocks[0].kind === "tool" ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
-    <button type="button" disabled={!canExpand} aria-expanded={canExpand ? expanded : undefined} aria-controls={canExpand && expanded ? traceId : undefined} onClick={() => setDisclosure({ live, expanded: !expanded })} className={cn(styles.summary, "flex min-h-primary w-full items-center gap-2 rounded-input py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default sm:min-h-control")}>
-      <span key={state} className={styles.glyph}><ActivityIcon state={state} slot={visualSlot} config={progressAppearance} label={title} activityState={activityStateFor(lifecycle, shown)} /></span>
-      <ActivityLabel title={title} detail={detail} error={state === "error"} />
-      <LiveElapsed startedAt={liveSinceRef.current} live={live} />
-      {(lifecycle === "active" || lifecycle === "queued") && <button type="button" onClick={() => void abort().catch(() => undefined)} className="flex shrink-0 items-center gap-1 rounded-input px-1.5 py-0.5 text-ui-micro text-muted transition-colors hover:bg-surface-hover hover:text-text"><Square size={9} aria-hidden className="fill-current" />{t("conversation.activity.stop")}</button>}
-      {lifecycle === "settled" && count > 0 && <span className="shrink-0 font-mono text-ui-micro text-muted" aria-label={t("conversation.activity.operationCount", { count })}>{count}</span>}
-      {canExpand && <ChevronRight size={13} aria-hidden className={cn(styles.chevron, "shrink-0 text-muted", expanded && "rotate-90")} />}
-    </button>
-    {!live && canExpand && <CompletedSteps blocks={traceTools} />}
+    {settledSteps ? (
+      <button type="button" aria-expanded={expanded} aria-controls={traceId} onClick={() => setDisclosure({ live, expanded: !expanded })} className={cn(styles.summary, "flex min-h-primary w-full items-center gap-2 rounded-input py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-control")}>
+        <span className={cn(styles.steps, "min-w-0 flex-1")}>
+          {traceTools.slice(-VISIBLE_STEP_COUNT).map((block) => <StepLine key={block.id} block={block} />)}
+        </span>
+        <span className="sr-only" aria-live="polite">{t("conversation.activity.completed")}</span>
+        <ChevronRight size={13} aria-hidden className={cn(styles.chevron, "shrink-0 text-muted", expanded && "rotate-90")} />
+      </button>
+    ) : (
+      <button type="button" disabled={!canExpand} aria-expanded={canExpand ? expanded : undefined} aria-controls={canExpand && expanded ? traceId : undefined} onClick={() => setDisclosure({ live, expanded: !expanded })} className={cn(styles.summary, "flex min-h-primary w-full items-center gap-2 rounded-input py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default sm:min-h-control")}>
+        <span key={state} className={styles.glyph}><ActivityIcon state={state} slot={visualSlot} config={progressAppearance} label={title} activityState={activityStateFor(lifecycle, shown)} /></span>
+        <ActivityLabel title={title} detail={detail} error={state === "error"} />
+        <LiveElapsed startedAt={liveSinceRef.current} live={live} />
+        {(lifecycle === "active" || lifecycle === "queued") && <button type="button" onClick={() => void abort().catch(() => undefined)} className="flex shrink-0 items-center gap-1 rounded-input px-1.5 py-0.5 text-ui-micro text-muted transition-colors hover:bg-surface-hover hover:text-text"><Square size={9} aria-hidden className="fill-current" />{t("conversation.activity.stop")}</button>}
+        {canExpand && <ChevronRight size={13} aria-hidden className={cn(styles.chevron, "shrink-0 text-muted", expanded && "rotate-90")} />}
+      </button>
+    )}
     {expanded && canExpand && <div id={traceId} role="region" className={styles.trace} aria-label={t("conversation.activity.trace")}>
       {activities.filter((block): block is AgentMessageBlock => block.kind === "agent" && (!live || block.id !== task.sourceId)).map((block) =>
         <div key={block.id} id={`thread-block-${block.id}`} className={cn(styles.entry, styles.narration, "min-w-0")}><MarkdownViewer variant="chat" className="text-ui-body leading-relaxed text-muted [overflow-wrap:anywhere]" resourceContext={cwd ? { cwd } : undefined}>{parseSuggestions(block.parts.map((part) => part.text).join("")).clean}</MarkdownViewer></div>)}
@@ -179,25 +190,16 @@ function LiveElapsed({ startedAt, live }: { startedAt: number | null; live: bool
 
 const VISIBLE_STEP_COUNT = 4;
 
-/** ZCode-style step trail: after the turn settles, the most recent steps
- *  stay visible as one quiet line each; older steps live in the trace. */
-function CompletedSteps({ blocks }: { blocks: ToolCallBlock[] }) {
-  if (blocks.length === 0) return null;
-  return <div className={styles.steps}>
-    {blocks.slice(-VISIBLE_STEP_COUNT).map((block) => <StepLine key={block.id} block={block} />)}
-  </div>;
-}
-
 function StepLine({ block }: { block: ToolCallBlock }) {
   const { t } = useTranslation();
   const duration = stepDuration(block);
-  return <div className={styles.step}>
+  return <span className={styles.step}>
     {block.status === "error"
       ? <CircleX size={11} aria-hidden className="shrink-0 text-error-text" />
       : <Check size={11} aria-hidden className="shrink-0 text-muted" />}
     <span className="min-w-0 flex-1 truncate text-ui-caption text-muted">{presentToolActivity(block, t)}</span>
     {duration && <span aria-hidden="true" className="shrink-0 font-mono text-[10px] tabular-nums text-muted">{duration}</span>}
-  </div>;
+  </span>;
 }
 
 function formatSeconds(totalSeconds: number): string {
