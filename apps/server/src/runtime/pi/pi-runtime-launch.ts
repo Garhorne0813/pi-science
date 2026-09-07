@@ -64,6 +64,34 @@ export function resetWebRuntimeAllocation(): void {
   sharedWebToken = null;
 }
 
+/**
+ * Build a copy of web-mode options with a fresh port and bearer token.
+ *
+ * Windows can reject an otherwise valid-looking port with EACCES when it is
+ * in an excluded/reserved range. The host manager uses this helper only for
+ * that recoverable bind failure; the original options remain safe to reuse
+ * for runtime creation because web requests go through the host instance.
+ */
+export function refreshWebRuntimeAllocation(options: PiProcessOptions): PiProcessOptions {
+  if (!options.web) return options;
+  resetWebRuntimeAllocation();
+  const port = webPort();
+  const authToken = webAuthToken();
+  const args = [...options.args];
+  const portFlag = args.indexOf("--port");
+  if (portFlag >= 0 && portFlag + 1 < args.length) args[portFlag + 1] = String(port);
+  return {
+    ...options,
+    args,
+    env: { ...options.env, PI_ORBIT_AUTH_TOKEN: authToken },
+    web: {
+      ...options.web,
+      baseUrl: `http://127.0.0.1:${port}`,
+      authToken,
+    },
+  };
+}
+
 export function buildPiProcessOptions(cwd: string, config?: PiConfig, sessionPath?: string, workspaceEnvironment: NodeJS.ProcessEnv = {}, sessionDirectory?: string): PiProcessOptions | null {
   config ??= { skills: [], extensions: [] };
   const cliPath = process.env.PI_CLI_PATH;
