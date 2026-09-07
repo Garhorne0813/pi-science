@@ -91,3 +91,9 @@ function buildTurnPresentation(blocks: ThreadBlock[], lifecycle: TurnLifecycle):
     completed: lifecycle === "settled" && (finalAgent !== null || settled),
   };
 }
+
+/** A turn whose presentation is still in flight (streaming, waiting, or
+ *  recovering) — its activity streams open with a pinned status row. */
+export function isLiveLifecycle(lifecycle: TurnLifecycle): boolean {
+  return lifecycle === "queued" || lifecycle === "active" || lifecycle === "waiting" || lifecycle === "recovering";
+}

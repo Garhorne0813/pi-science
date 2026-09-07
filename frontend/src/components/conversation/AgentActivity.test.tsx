@@ -30,13 +30,14 @@ describe("AgentActivity", () => {
 
   it("names a running tool that carries no task description", () => {
     render(<AgentActivity blocks={[tool("bash-1", "bash", "running")]} />);
-    expect(screen.getByText("Running bash")).toBeInTheDocument();
+    // The status detail and the tool's own line both name the running tool.
+    expect(screen.getAllByText("Running bash")).toHaveLength(2);
     expect(screen.queryByText("Understanding your request and deciding what to do next")).not.toBeInTheDocument();
   });
 
   it("keeps the curated task text ahead of the mechanical tool label", () => {
     render(<AgentActivity blocks={[tool("bash-1", "bash", "running", { description: "Install the pinned toolchain" })]} />);
-    expect(screen.getByText("Install the pinned toolchain")).toBeInTheDocument();
+    expect(screen.getAllByText("Install the pinned toolchain")).toHaveLength(2);
     expect(screen.queryByText("Running bash")).not.toBeInTheDocument();
   });
 
@@ -87,23 +88,20 @@ describe("AgentActivity", () => {
     }
   });
 
-  it("automatically expands the live trace below a borderless activity summary", () => {
+  it("streams the live trace open with the status row pinned after it", () => {
     const { container } = render(<AgentActivity blocks={[tool("read", "read", "done", { path: "ConversationBlocks.tsx" }), tool("todo", "todo"), tool("search", "grep", "running", { pattern: "tool.updated" })]} />);
+    // Status row: narrative title and task detail share one line, no toggle.
     const title = screen.getByText("Reviewing the implementation");
-    const summary = screen.getByRole("button", { name: /Reviewing the implementation/i });
-    const detail = within(summary).getByText("Locating evidence for the current task");
+    const statusRow = title.closest("div[data-state]")!;
+    const detail = within(statusRow as HTMLElement).getByText("Locating evidence for the current task");
     expect(title.parentElement).toBe(detail.parentElement);
-    expect(title.nextElementSibling).toBe(detail);
     expect(container.firstElementChild).not.toHaveClass("border");
     expect(document.querySelector('[data-orb-variant="S4"]')).toBeInTheDocument();
-    expect(summary).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
-    expect(screen.queryByText("Reading ConversationBlocks.tsx")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Execution details/ }));
-    expect(screen.getByText("Reading ConversationBlocks.tsx")).toBeInTheDocument();
-    fireEvent.click(summary);
-    expect(summary).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
+    // The stream is open by default: every tool is its own line, no fold.
+    const trace = screen.getByLabelText("Execution trace");
+    expect(within(trace).getByText("Reading ConversationBlocks.tsx")).toBeInTheDocument();
+    expect(within(trace).getByText("Searching for tool.updated")).toBeInTheDocument();
+    expect(within(trace).queryByRole("button", { name: /Execution details/i })).not.toBeInTheDocument();
   });
 
   it("presents settled steps as the row itself without a header or count", () => {
@@ -120,13 +118,12 @@ describe("AgentActivity", () => {
   it.each(["settled", "aborted", "failed"] as const)("collapses on %s, allows review, and reopens for the next run", (lifecycle) => {
     const blocks = [tool("read", "read", "running", { path: "a.ts" })];
     const { rerender, container } = render(<AgentActivity blocks={blocks} />);
-    fireEvent.click(screen.getByRole("button", { name: /Reviewing the implementation/ }));
-    rerender(<AgentActivity blocks={[...blocks, tool("search", "grep", "running")]} lifecycle="waiting" />);
-    expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
-    rerender(<AgentActivity blocks={blocks} lifecycle="recovering" />);
-    expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Resuming the task/ }));
+    // The live stream stays open through waiting and recovery.
     expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
+    rerender(<AgentActivity blocks={[...blocks, tool("search", "grep", "running")]} lifecycle="waiting" />);
+    expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
+    rerender(<AgentActivity blocks={blocks} lifecycle="recovering" />);
+    expect(screen.getByText("Resuming the task")).toBeInTheDocument();
 
     rerender(<AgentActivity blocks={blocks} lifecycle={lifecycle} />);
     expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
@@ -154,8 +151,8 @@ describe("AgentActivity", () => {
     render(<AgentActivity blocks={[tool("bash", "bash", "running", { command: "git status" })]} />);
     // The row keeps the thinking visual, and the detail names the running
     // tool instead of a generic orient sentence.
-    expect(screen.getByText("Running bash")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Thinking/i })).toBeInTheDocument();
+    expect(screen.getAllByText("Running bash")).toHaveLength(2);
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
   });
 
   it("holds implementation through test and corrective reads", () => {

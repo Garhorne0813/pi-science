@@ -126,7 +126,6 @@ describe("turn-level activity through the live event path", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Reading turn-presentation/ }));
     expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Execution details/ }));
     const traceLabels = Array.from(document.querySelectorAll("[aria-label='Execution trace'] button > span"));
     // Each trace row carries its per-step duration next to the label.
     expect(traceLabels.map((node) => node.textContent)).toEqual([

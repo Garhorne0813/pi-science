@@ -14,6 +14,7 @@ import { parseSuggestions } from "../../lib/conversation";
 import { MessageActions } from "./MessageActions";
 import { buildTurnPresentations, turnBlockIds, type TurnPresentation } from "../../lib/conversation/turn-presentation";
 import { AgentActivity } from "./AgentActivity";
+import { isLiveLifecycle } from "../../lib/conversation/turn-presentation";
 
 export function renderTurn(turn: TurnPresentation, codeRunner: CodeRunner, actionTextByBlock?: Map<string, string>) {
   return <ConversationTurn key={turn.id} turn={turn} codeRunner={codeRunner} actionTextByBlock={actionTextByBlock} />;
@@ -32,8 +33,9 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
   return (
     <div data-thread-block-ids={turnBlockIds(turn).join(" ")} className="flex flex-col gap-3 scroll-mt-4">
       {turn.user && <UserMessage block={turn.user} />}
-      {(turn.active || turn.activityBlocks.length > 0) && <AgentActivity blocks={turn.activityBlocks} contextBlocks={turn.blocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} />}
+      {(turn.active || turn.activityBlocks.length > 0) && <AgentActivity blocks={turn.activityBlocks} contextBlocks={turn.blocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} part={isLiveLifecycle(turn.lifecycle) ? "content" : "both"} />}
       {visibleAgent && <AgentMessage block={visibleAgent} actionText={turn.finalAgent ? actionTextByBlock?.get(turn.finalAgent.id) : undefined} codeRunner={codeRunner} />}
+      {(turn.active || turn.activityBlocks.length > 0) && isLiveLifecycle(turn.lifecycle) && <AgentActivity blocks={turn.activityBlocks} contextBlocks={turn.blocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} part="status" />}
       {turn.systemBlocks.map((block) => <SystemBlock key={block.id} block={block} />)}
       {turn.artifacts.map((block) => <TurnArtifactStrip key={block.id} artifacts={block.artifacts} cwd={codeRunner?.cwd} />)}
       {finalText && <ReferencedArtifactStrip text={finalText} cwd={codeRunner?.cwd} exclude={publishedPaths} />}
