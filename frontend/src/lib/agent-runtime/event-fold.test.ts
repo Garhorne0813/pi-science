@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { convertHistoryToBlocks, replaceHistoryTail, useRuntimeStore } from "./index";
+import { convertHistoryToBlocks, mergeHistoryWindow, replaceHistoryTail, useRuntimeStore } from "./index";
+import { threadFromMessages, type Thread } from "./event-fold";
+import type { HistoryMessage } from "../client/types";
+import type { ThreadBlock } from "../../types/thread";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
 
@@ -162,6 +165,44 @@ describe("transport event folding", () => {
   });
 });
 
+
+describe("history window merges", () => {
+  const loadedPage = (ids: Array<[string, string]>): HistoryMessage[] => ids.map(([id, text]) => ({ id, role: "user", content: [{ type: "text", text }] }) as HistoryMessage);
+  const blockIds = (thread: Thread) => thread.blocks.map((block) => block.id);
+
+  it("keeps the older boundary when a tail refresh retains loaded pages", () => {
+    // Loaded window u1..u10 describes the whole history (no older pages).
+    // A later tail page only returns u9..u10; its cursor must not pull the
+    // boundary back into the already-loaded pages.
+    const current = threadFromMessages(loadedPage([["u1", "a"], ["u2", "b"], ["u9", "i"], ["u10", "j"]]));
+    const merged = mergeHistoryWindow(current, loadedPage([["u9", "i-refreshed"], ["u10", "j-refreshed"]]), { keepLiveExtras: false });
+    expect(merged.retainedOlderPrefix).toBe(true);
+    expect(blockIds(merged.thread)).toEqual(["u1", "u2", "u9", "u10"]);
+    expect(merged.thread.blocks[2]).toMatchObject({ text: "i-refreshed" });
+  });
+
+  it("re-derives the boundary when the snapshot shares no lineage", () => {
+    const current = threadFromMessages(loadedPage([["u1", "old"]]));
+    const merged = mergeHistoryWindow(current, loadedPage([["rewritten-1", "new"]]), { keepLiveExtras: false });
+    expect(merged.retainedOlderPrefix).toBe(false);
+    expect(blockIds(merged.thread)).toEqual(["rewritten-1"]);
+  });
+
+  it("keeps live extras behind the snapshot during mid-stream recovery", () => {
+    const current = threadFromMessages(loadedPage([["u1", "older"], ["u2", "older2"]]));
+    current.blocks.push({ kind: "agent", id: "assistant-live", parts: [{ id: "assistant-live", text: "streaming…" }], partial: true } as ThreadBlock);
+    const merged = mergeHistoryWindow(current, loadedPage([["u2", "older2"], ["u3", "newer"]]), { keepLiveExtras: true });
+    expect(merged.retainedOlderPrefix).toBe(true);
+    expect(blockIds(merged.thread)).toEqual(["u1", "u2", "u3", "assistant-live"]);
+  });
+
+  it("lets a settled snapshot drop live extras covered by authoritative history", () => {
+    const current = threadFromMessages(loadedPage([["u1", "older"]]));
+    current.blocks.push({ kind: "agent", id: "assistant-live", parts: [{ id: "assistant-live", text: "partial…" }], partial: true } as ThreadBlock);
+    const merged = mergeHistoryWindow(current, loadedPage([["u1", "older"], ["assistant-final", "done text"]]), { keepLiveExtras: false });
+    expect(blockIds(merged.thread)).toEqual(["u1", "assistant-final"]);
+  });
+});
 
 describe("conversation history conversion", () => {
   it("maps tool results by toolCallId instead of using the previous tool or unknown", () => {

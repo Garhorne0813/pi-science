@@ -283,8 +283,9 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         || current.cwd !== cwd
         || current.historyCursor !== before
       ) return 0;
+      const merged = prependHistoryMessages(current.thread, page.messages);
       set({
-        thread: prependHistoryMessages(current.thread, page.messages),
+        thread: merged,
         historyCursor: page.next_cursor,
         historyHasMore: page.has_more,
         historySnapshotVersion: page.snapshot_version,
@@ -304,7 +305,10 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           thread: attachTurnArtifacts(latest.thread, turns, { windowComplete: !latest.historyHasMore }),
         });
       });
-      return page.messages.length;
+      // Report what is actually new. A duplicate page (a boundary that
+      // drifted into already-loaded history) must not scroll-anchor as if
+      // fresh content arrived; the received count is page.messages.length.
+      return merged.blocks.length - current.thread.blocks.length;
     } catch (error) {
       const current = get();
       if (current.activeSessionId === sessionId && current.cwd === cwd) {
@@ -574,10 +578,14 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         ) {
           const resolvedBlocks = current.thread.blocks.map((block) => {
             if (block.kind !== "tool" || block.status !== "waiting-approval") return block;
+            // Resolve only the block this request is tied to. Without a
+            // toolCallId the requestId itself is the only trustworthy link;
+            // batch-resolving every waiting block would retire prompts the
+            // user has not answered.
             const matches = pendingInteraction.toolCallId
               ? block.callId === pendingInteraction.toolCallId
               : block.callId === requestId;
-            return matches || !pendingInteraction.toolCallId ? { ...block, interactionResolved: true } : block;
+            return matches ? { ...block, interactionResolved: true } : block;
           });
           const thread = resolvedBlocks.some((block, index) => block !== current.thread.blocks[index])
             ? { ...current.thread, blocks: resolvedBlocks, index: Object.fromEntries(resolvedBlocks.map((block, index) => [block.id, index])) }

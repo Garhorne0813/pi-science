@@ -2,7 +2,7 @@
  *  stream attach or a transport failure, and the missing-session reset. */
 
 import { clearCachedMessages, clearAiTitle, clearSessionName, getClient, type PiScienceClient, type SessionState } from "../client/pi-science-client";
-import { attachTurnArtifacts, emptyThread, mergeHistoryWithLive, replaceHistoryTail, resetTurnBuffer, threadFromMessages } from "./event-fold";
+import { attachTurnArtifacts, emptyThread, mergeHistoryWindow, resetTurnBuffer } from "./event-fold";
 import { fetchPersistedTurnArtifacts } from "./turn-artifacts";
 import { markWorkspaceFilesChanged } from "./file-revision";
 import { generations, turnState } from "./generations";
@@ -107,10 +107,16 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
     // snapshot is authoritative. An empty snapshot can still race the flush.
     if (history.messages.length === 0 && current.thread.blocks.length > 0) return;
     const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
+    // The latest page only describes its own slice of history. When the
+    // merged window keeps the previously loaded older prefix, that prefix's
+    // pagination boundary stays the truth about "is there more to load" —
+    // adopting the tail page's cursor would point it back into loaded pages.
+    const merged = mergeHistoryWindow(current.thread, history.messages, { keepLiveExtras: false });
+    const historyHasMore = merged.retainedOlderPrefix ? current.historyHasMore : history.has_more;
     useRuntimeStore.setState({
-      thread: attachTurnArtifacts(replaceHistoryTail(current.thread, history.messages), turns, { windowComplete: !history.has_more }),
-      historyCursor: history.next_cursor,
-      historyHasMore: history.has_more,
+      thread: attachTurnArtifacts(merged.thread, turns, { windowComplete: !historyHasMore }),
+      historyCursor: merged.retainedOlderPrefix ? current.historyCursor : history.next_cursor,
+      historyHasMore,
       historyLoading: false,
       historySnapshotVersion: history.snapshot_version,
     });
@@ -218,14 +224,16 @@ async function runConnectionRecovery(
     if (historyResult.status === "fulfilled") {
       const history = historyResult.value;
       const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
-      const restored = mergeHistoryWithLive(
-        attachTurnArtifacts(threadFromMessages(history.messages), turns, { windowComplete: !history.has_more }),
-        useRuntimeStore.getState().thread,
-      );
+      // Rebuild the window around the REST snapshot: an older prefix already
+      // loaded stays in place (and keeps its pagination boundary), live
+      // blocks the snapshot does not cover survive the merge.
+      const merged = mergeHistoryWindow(useRuntimeStore.getState().thread, history.messages, { keepLiveExtras: true });
+      const historyHasMore = merged.retainedOlderPrefix ? current.historyHasMore : history.has_more;
+      const restored = attachTurnArtifacts(merged.thread, turns, { windowComplete: !historyHasMore });
       useRuntimeStore.setState({
         thread: restored,
-        historyCursor: history.next_cursor,
-        historyHasMore: history.has_more,
+        historyCursor: merged.retainedOlderPrefix ? current.historyCursor : history.next_cursor,
+        historyHasMore,
         historyLoading: false,
         historySnapshotVersion: history.snapshot_version,
       });
@@ -293,7 +301,7 @@ export function reconcileAfterConnectionLoss(
   return promise;
 }
 
-/** Recover the authoritative conversation snapshot after a `stream.gap`:"}]} Беларусь.functions.edit  code...  (json) $1? Wrong? Tool output omitted? Need see. ["}]} NakneАҞӘА 全民彩票天天атәуп 天天彩票网.functions.edit  code￣色жәк 彩神争霸输钱json  suliaq  񟿿 เกมสล็อตԥсҭазаара? Unclear JSON valid? Actually tool returned? Need inspect. Wait no output likely? Let's check. уҳәа. [
+/** Recover the authoritative conversation snapshot after a `stream.gap`:
  *  re-read both the message history and the runtime state in parallel, and
  *  base `working` on the authoritative state rather than blindly clearing it.
  *  The new SSE subscription (rebuilt by the client transport) only carries
@@ -326,16 +334,17 @@ export async function reconcileAfterGap(
   }
   // History recovery is independent from busy state. Merge the REST snapshot
   // with live blocks so a text.updated arriving during this request is kept.
+  // An older prefix loaded before the gap stays first and keeps its boundary;
+  // the tail page's cursor must not point back into loaded pages.
   if (historyResult.status === "fulfilled") {
     const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
-    const merged = mergeHistoryWithLive(
-      attachTurnArtifacts(threadFromMessages(historyResult.value.messages), turns, { windowComplete: !historyResult.value.has_more }),
-      useRuntimeStore.getState().thread,
-    );
+    const merged = mergeHistoryWindow(current.thread, historyResult.value.messages, { keepLiveExtras: true });
+    const historyHasMore = merged.retainedOlderPrefix ? current.historyHasMore : historyResult.value.has_more;
+    const restored = attachTurnArtifacts(merged.thread, turns, { windowComplete: !historyHasMore });
     useRuntimeStore.setState({
-      thread: merged,
-      historyCursor: historyResult.value.next_cursor,
-      historyHasMore: historyResult.value.has_more,
+      thread: restored,
+      historyCursor: merged.retainedOlderPrefix ? current.historyCursor : historyResult.value.next_cursor,
+      historyHasMore,
       historyLoading: false,
       historySnapshotVersion: historyResult.value.snapshot_version,
     });

@@ -337,6 +337,42 @@ export function replaceHistoryTail(current: Thread, messages: HistoryMessage[]):
   blocks.forEach((block, position) => { index[block.id] = position; });
   return { blocks, index, loaded: true };
 }
+
+export interface HistoryWindowMerge {
+  thread: Thread;
+  /** True when the merged window still starts with the previously loaded
+   *  older prefix. The caller must then keep its older pagination boundary
+   *  (cursor/hasMore): the fresh latest-page metadata only describes the
+   *  tail page, not the whole merged window. */
+  retainedOlderPrefix: boolean;
+}
+
+/** Rebuild the loaded window around a fresh latest-page snapshot while
+ *  reporting which pagination boundary describes the result.
+ *
+ *  A prefix of the previous window whose block ids overlap the snapshot is
+ *  same-lineage history and stays in place. With `keepLiveExtras` the merge
+ *  also preserves live blocks the snapshot does not cover yet (streaming
+ *  text, just-finished tools) — used by mid-stream recovery paths. Without
+ *  it the settled snapshot is authoritative and live extras are dropped. */
+export function mergeHistoryWindow(current: Thread, messages: HistoryMessage[], opts: { keepLiveExtras: boolean }): HistoryWindowMerge {
+  const authoritative = threadFromMessages(messages);
+  if (authoritative.blocks.length === 0) return { thread: current, retainedOlderPrefix: true };
+  const authoritativeIds = new Set(authoritative.blocks.map((block) => block.id));
+  const firstOverlap = current.blocks.findIndex((block) => authoritativeIds.has(block.id));
+  if (firstOverlap < 0) {
+    // No shared lineage: the snapshot replaces the window wholesale and the
+    // old boundary is meaningless — the caller must re-derive it.
+    return { thread: opts.keepLiveExtras ? mergeHistoryWithLive(authoritative, current) : authoritative, retainedOlderPrefix: false };
+  }
+  const tail = opts.keepLiveExtras
+    ? mergeHistoryWithLive(authoritative, { blocks: current.blocks.slice(firstOverlap), index: {}, loaded: true })
+    : authoritative;
+  const blocks = [...current.blocks.slice(0, firstOverlap), ...tail.blocks];
+  const index: Record<string, number> = {};
+  blocks.forEach((block, position) => { index[block.id] = position; });
+  return { thread: { blocks, index, loaded: true }, retainedOlderPrefix: true };
+}
 export function mergeHistoryWithLive(history: Thread, live: Thread): Thread {
   if (live.blocks.length === 0) return history;
   const ids = new Set(history.blocks.map((block) => block.id));

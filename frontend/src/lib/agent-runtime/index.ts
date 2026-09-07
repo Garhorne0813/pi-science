@@ -8,7 +8,8 @@
 
 export { useRuntimeStore } from "./store";
 export { applySessionReplacements } from "./session-replacement";
-export { convertHistoryToBlocks, replaceHistoryTail } from "./event-fold";
+export { convertHistoryToBlocks, mergeHistoryWindow, replaceHistoryTail } from "./event-fold";
+export type { HistoryWindowMerge } from "./event-fold";
 export type {
   PendingInteraction,
   PendingQuestionnaire,

@@ -9,4 +9,22 @@ describe("activityPolicy", () => {
   it("counts execution tools", () => { expect(activityPolicy(block("read"))).toEqual({ plane: "execution", visibleInCurrentActivity: true, visibleInExecutionTrace: true, countsAsOperation: true }); });
   it("keeps approval out of the execution trace", () => { expect(activityPolicy(block("bash", "waiting-approval"))).toEqual({ plane: "interaction", visibleInCurrentActivity: true, visibleInExecutionTrace: false, countsAsOperation: false }); });
   it("hides a resolved interaction from Activity", () => { expect(activityPolicy({ ...block("ask_user_question", "waiting-approval"), interactionResolved: true })).toEqual({ plane: "plan-control", visibleInCurrentActivity: false, visibleInExecutionTrace: false, countsAsOperation: false }); });
+  it("keeps an approved execution visible once it runs", () => {
+    const resolved = { ...block("bash", "running"), interactionResolved: true };
+    expect(activityPolicy(resolved)).toEqual({ plane: "execution", visibleInCurrentActivity: true, visibleInExecutionTrace: true, countsAsOperation: true });
+  });
+  it("keeps approved execution output and errors in the trace", () => {
+    for (const status of ["done", "error"] as const) {
+      const resolved = { ...block("bash", status), interactionResolved: true };
+      expect(activityPolicy(resolved)).toEqual({ plane: "execution", visibleInCurrentActivity: true, visibleInExecutionTrace: true, countsAsOperation: true });
+    }
+  });
+  it("still retires the stale prompt of an approved execution before it runs", () => {
+    const resolved = { ...block("bash", "waiting-approval"), interactionResolved: true };
+    expect(activityPolicy(resolved)).toEqual({ plane: "plan-control", visibleInCurrentActivity: false, visibleInExecutionTrace: false, countsAsOperation: false });
+  });
+  it("hides a resolved interaction even after the runtime finalizes it", () => {
+    const resolved = { ...block("ask_user_question", "done"), interactionResolved: true };
+    expect(activityPolicy(resolved)).toEqual({ plane: "plan-control", visibleInCurrentActivity: false, visibleInExecutionTrace: false, countsAsOperation: false });
+  });
 });
