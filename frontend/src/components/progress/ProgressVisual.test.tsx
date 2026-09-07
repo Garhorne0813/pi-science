@@ -35,7 +35,16 @@ describe("ProgressVisual", () => {
   it("renders an internalized AICSS orb", () => {
     const config = { ...defaultProgressAppearance, patterns: { ...defaultProgressAppearance.patterns, currentActivity: "aicss-orb-S1" as const } };
     render(<ProgressVisual slot="currentActivity" config={config} text="Working" />);
-    expect(document.querySelector('[role="img"]')).toBeInTheDocument();
+    // The glyph is decorative next to the localized status text: it must not
+    // announce an internal English task name to assistive technology.
+    expect(document.querySelector('[data-orb-variant] [aria-hidden="true"]')).toBeInTheDocument();
+  });
+  it("forwards the speed setting to the orb", () => {
+    const config = { ...defaultProgressAppearance, speed: 2 };
+    render(<ProgressVisual slot="thinking" config={config} text="Thinking" />);
+    const glyph = document.querySelector('[data-orb-variant] [aria-hidden="true"]');
+    expect(glyph).toBeInTheDocument();
+    expect(glyph?.getAttribute("style")).toContain("--orb-speed: 2");
   });
   it("selects the semantic orb for the current activity", () => {
     const { rerender } = render(<ProgressVisual slot="currentActivity" config={defaultProgressAppearance} activityState="explore" text="Reviewing" />);

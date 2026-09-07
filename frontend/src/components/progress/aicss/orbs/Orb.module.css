@@ -126,19 +126,19 @@
    travels, the duration how many cells it holds lit at once - which is to
    say, how wide the band reads. */
 .lattice[data-variant="S1"] .cell {
-  animation: orb-wave 1.7s var(--orb-ease-in-out) infinite both;
+  animation: orb-wave calc(1.7s / var(--orb-speed, 1)) var(--orb-ease-in-out) infinite both;
 }
 
 .lattice[data-variant="S2"] .cell {
-  animation: orb-wave 1.7s var(--orb-ease-in-out) infinite both;
+  animation: orb-wave calc(1.7s / var(--orb-speed, 1)) var(--orb-ease-in-out) infinite both;
 }
 
 .lattice[data-variant="S4"] .cell {
-  animation: orb-wave 1.6s var(--orb-ease-in-out) infinite both;
+  animation: orb-wave calc(1.6s / var(--orb-speed, 1)) var(--orb-ease-in-out) infinite both;
 }
 
 .lattice[data-variant="S3"] .cell {
-  animation: orb-comet 1.7s var(--orb-ease-smooth) infinite both;
+  animation: orb-comet calc(1.7s / var(--orb-speed, 1)) var(--orb-ease-smooth) infinite both;
 }
 
 /* Interior cells sit out `orbit` and drop back, so the ring reads as a
@@ -149,7 +149,7 @@
 }
 
 .lattice[data-variant="S5"] .cell {
-  animation: orb-comet 1.7s var(--orb-ease-smooth) infinite both;
+  animation: orb-comet calc(1.7s / var(--orb-speed, 1)) var(--orb-ease-smooth) infinite both;
 }
 
 .lattice[data-variant="S5"] .cell[data-still] {
@@ -238,7 +238,7 @@
    which is what sends focus round the square clockwise. */
 .lens[data-variant="B1"] .shape {
   --orb-d: 6px;
-  animation: orb-focus 4s var(--orb-ease-smooth) infinite both;
+  animation: orb-focus calc(4s / var(--orb-speed, 1)) var(--orb-ease-smooth) infinite both;
 }
 
 .lens[data-variant="B1"] .shapeA {
@@ -250,19 +250,19 @@
 .lens[data-variant="B1"] .shapeB {
   --orb-ox: 4.5px;
   --orb-oy: -4.5px;
-  animation-delay: -3s;
+  animation-delay: calc(-3s / var(--orb-speed, 1));
 }
 
 .lens[data-variant="B1"] .shapeC {
   --orb-ox: 4.5px;
   --orb-oy: 4.5px;
-  animation-delay: -2s;
+  animation-delay: calc(-2s / var(--orb-speed, 1));
 }
 
 .lens[data-variant="B1"] .shapeD {
   --orb-ox: -4.5px;
   --orb-oy: 4.5px;
-  animation-delay: -1s;
+  animation-delay: calc(-1s / var(--orb-speed, 1));
 }
 
 /* Opacity gradient around the square: active = 1.0, next neighbour = 0.30,
@@ -314,7 +314,7 @@
    blurred away at the back, so the orb reads as looking around. Uniform
    size: the depth cue is doing the work, a size ladder would fight it. */
 .lens[data-variant="B2"] .shape {
-  animation: orb-revolve 3.3s linear infinite both;
+  animation: orb-revolve calc(3.3s / var(--orb-speed, 1)) linear infinite both;
 }
 
 /* Evenly spaced around the track, so one is always at the front. */
@@ -323,11 +323,11 @@
 }
 
 .lens[data-variant="B2"] .shapeB {
-  animation-delay: -1.1s;
+  animation-delay: calc(-1.1s / var(--orb-speed, 1));
 }
 
 .lens[data-variant="B2"] .shapeC {
-  animation-delay: -2.2s;
+  animation-delay: calc(-2.2s / var(--orb-speed, 1));
 }
 
 /* rotate() then translateY() walks a circle. Linear all the way: an eased
@@ -365,7 +365,7 @@
    jump to their large, blurred end state and the orb alternates between
    a heavy blot and an empty haze. */
 .lens[data-variant="B3"] .shape {
-  animation: orb-bloom 4.2s linear infinite both;
+  animation: orb-bloom calc(4.2s / var(--orb-speed, 1)) linear infinite both;
 }
 
 .lens[data-variant="B3"] .shapeA {
@@ -373,11 +373,11 @@
 }
 
 .lens[data-variant="B3"] .shapeB {
-  animation-delay: -1.4s;
+  animation-delay: calc(-1.4s / var(--orb-speed, 1));
 }
 
 .lens[data-variant="B3"] .shapeC {
-  animation-delay: -2.8s;
+  animation-delay: calc(-2.8s / var(--orb-speed, 1));
 }
 
 /* Each ripple dies at 62% and waits out the rest, so the three overlapping
@@ -427,10 +427,10 @@
    vertex, smaller and slightly blurred in transit.  orbB breathes at the
    centroid as a subtle depth cue; orbC is hidden. */
 .lens[data-variant="B4"] .shapeA {
-  animation: orb-converge 3.6s linear infinite both;
+  animation: orb-converge calc(3.6s / var(--orb-speed, 1)) linear infinite both;
 }
 .lens[data-variant="B4"] .shapeB {
-  animation: orb-breathe 3.6s ease-in-out infinite both;
+  animation: orb-breathe calc(3.6s / var(--orb-speed, 1)) ease-in-out infinite both;
 }
 .lens[data-variant="B4"] .shapeC {
   display: none;
@@ -492,7 +492,7 @@
    to right, like work being passed on. The shorthand curve is only a
    fallback; every segment below sets its own. */
 .lens[data-variant="B5"] .shape {
-  animation: orb-handoff 2.8s linear infinite both;
+  animation: orb-handoff calc(2.8s / var(--orb-speed, 1)) linear infinite both;
 }
 
 /* Half a cycle apart, so one is always at the focal plane while the other is
@@ -502,7 +502,7 @@
 }
 
 .lens[data-variant="B5"] .shapeC {
-  animation-delay: -1.4s;
+  animation-delay: calc(-1.4s / var(--orb-speed, 1));
 }
 
 /* The third holds the centre and breathes - a soft depth cue behind the
@@ -589,7 +589,7 @@
 
 .ring[data-variant="C1"] .ringDot {
   opacity: var(--orb-ring-rest);
-  animation: orb-ring-chase 1.6s linear infinite both;
+  animation: orb-ring-chase calc(1.6s / var(--orb-speed, 1)) linear infinite both;
 }
 
 @keyframes orb-ring-chase {
@@ -602,7 +602,7 @@
 }
 
 .ring[data-variant="C2"] .ringDot {
-  animation: orb-ring-pulse 2s ease-in-out infinite both;
+  animation: orb-ring-pulse calc(2s / var(--orb-speed, 1)) ease-in-out infinite both;
 }
 
 @keyframes orb-ring-pulse {
@@ -617,7 +617,7 @@
 }
 
 .ring[data-variant="C3"] .ringDot {
-  animation: orb-ring-comet 1.8s ease-in-out infinite both;
+  animation: orb-ring-comet calc(1.8s / var(--orb-speed, 1)) ease-in-out infinite both;
 }
 
 @keyframes orb-ring-comet {
@@ -641,7 +641,7 @@
 }
 
 .ring[data-variant="C4"] .ringDot {
-  animation: orb-ring-stagger 1.6s ease-in-out infinite both;
+  animation: orb-ring-stagger calc(1.6s / var(--orb-speed, 1)) ease-in-out infinite both;
 }
 
 @keyframes orb-ring-stagger {
@@ -656,7 +656,7 @@
 }
 
 .ring[data-variant="C5"] .ringDot {
-  animation: orb-ring-comet 1.8s ease-in-out infinite both;
+  animation: orb-ring-comet calc(1.8s / var(--orb-speed, 1)) ease-in-out infinite both;
 }
 
 /* ---- Globe (Helix family) ---- */
@@ -679,19 +679,19 @@
 }
 
 .helix[data-variant="G1"] .helixDot {
-  animation: orb-globe-spin 4.5s linear infinite both;
+  animation: orb-globe-spin calc(4.5s / var(--orb-speed, 1)) linear infinite both;
 }
 .helix[data-variant="G2"] .helixDot {
-  animation: orb-globe-spin 3.6s linear infinite both;
+  animation: orb-globe-spin calc(3.6s / var(--orb-speed, 1)) linear infinite both;
 }
 .helix[data-variant="G3"] .helixDot {
-  animation: orb-globe-ringturn 2.8s linear infinite both;
+  animation: orb-globe-ringturn calc(2.8s / var(--orb-speed, 1)) linear infinite both;
 }
 .helix[data-variant="G4"] .helixDot {
-  animation: orb-globe-ringturn 2.8s linear infinite both;
+  animation: orb-globe-ringturn calc(2.8s / var(--orb-speed, 1)) linear infinite both;
 }
 .helix[data-variant="G5"] .helixDot {
-  animation: orb-globe-breathe 3.6s linear infinite both;
+  animation: orb-globe-breathe calc(3.6s / var(--orb-speed, 1)) linear infinite both;
 }
 
 @keyframes orb-globe-spin {
@@ -818,7 +818,7 @@
   margin: -1.5px 0 0 -1.5px;
   border-radius: 50%;
   background: currentColor;
-  animation: orb-morph 4.8s cubic-bezier(0.4, 0, 0.2, 1) infinite both;
+  animation: orb-morph calc(4.8s / var(--orb-speed, 1)) cubic-bezier(0.4, 0, 0.2, 1) infinite both;
 }
 
 @keyframes orb-morph {
@@ -830,15 +830,15 @@
 }
 
 .morph[data-variant="M2"] {
-  animation: orb-morph-twist 9.6s linear infinite;
+  animation: orb-morph-twist calc(9.6s / var(--orb-speed, 1)) linear infinite;
 }
 
 .morph[data-variant="M4"] {
-  animation: orb-morph-twist 9.6s linear infinite;
+  animation: orb-morph-twist calc(9.6s / var(--orb-speed, 1)) linear infinite;
 }
 
 .morph[data-variant="M5"] .morphDot {
-  animation: orb-morph-scatter 2.8s cubic-bezier(0.4, 0, 0.2, 1) infinite both;
+  animation: orb-morph-scatter calc(2.8s / var(--orb-speed, 1)) cubic-bezier(0.4, 0, 0.2, 1) infinite both;
 }
 
 @keyframes orb-morph-scatter {

@@ -98,4 +98,8 @@ button:hover > .chevron, button:focus-visible > .chevron {
   transition: none !important;
 }
 
-@media (prefers-reduced-motion: reduce) { .root *, .root *::before, .root *::after { animation: none !important; transition: none !important; } }
+/* The OS preference only governs users who chose to follow it ("system").
+   "full" is an explicit override and keeps playing; "off" is handled by the
+   data-motion rule above. The subscribed JS policy (useReducedMotion) makes
+   the same decision for the progress glyphs. */
+@media (prefers-reduced-motion: reduce) { .root[data-motion="system"] *, .root[data-motion="system"] *::before, .root[data-motion="system"] *::after { animation: none !important; transition: none !important; } }

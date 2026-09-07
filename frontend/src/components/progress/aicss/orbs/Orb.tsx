@@ -511,7 +511,7 @@ interface MorphDot {
   m2: string;
   m3: string;
   m4: string;
-  delay?: string;
+  delay?: number;
   depth?: string;
 }
 
@@ -529,7 +529,7 @@ function morphDots(v: MorphVariant): MorphDot[] {
       m2: x2.toFixed(1) + "px, " + y2.toFixed(1) + "px",
       m3: x3.toFixed(1) + "px, " + y3.toFixed(1) + "px",
       m4: x4.toFixed(1) + "px, " + y4.toFixed(1) + "px",
-      delay: v === "M5" ? -i * 10 + "ms" : undefined,
+      delay: v === "M5" ? -i * 10 : undefined,
       depth: v === "M5" ? Math.abs(Math.cos((i / MORPH_N) * Math.PI * 2 - Math.PI / 2)).toFixed(2) : undefined,
     });
   }
@@ -546,6 +546,11 @@ export interface OrbProps {
   pill?: boolean;
   /** Pauses all internal animations while keeping the current geometry visible. */
   paused?: boolean;
+  /** Animation rate multiplier: durations and delays divide by this value.
+   *  A single CSS variable keeps every element's phase relationship intact. */
+  speed?: number;
+  /** Removes the glyph from the accessibility tree (decorative usage). */
+  decorative?: boolean;
   className?: string;
   style?: CSSProperties;
 }
@@ -556,10 +561,13 @@ export function Orb({
   label,
   pill,
   paused,
+  speed,
+  decorative,
   className,
   style,
 }: OrbProps) {
   const text = label ?? ORB_TASKS[variant] + "…";
+  const rate = Number.isFinite(speed) && (speed as number) > 0 ? (speed as number) : 1;
   return (
     <span
       className={styles.root + (className ? " " + className : "")}
@@ -570,13 +578,13 @@ export function Orb({
     >
       <span
         className={styles.glyph}
-        // In pill form the visible label already carries the meaning, so
-        // the glyph steps out of the accessibility tree.
-        role={pill ? undefined : "img"}
-        aria-label={pill ? undefined : text}
-        aria-hidden={pill ? true : undefined}
+        // Decorative glyphs step out of the accessibility tree entirely; the
+        // surrounding UI supplies the localized status text.
+        role={pill || decorative ? undefined : "img"}
+        aria-label={pill || decorative ? undefined : text}
+        aria-hidden={pill || decorative ? true : undefined}
         style={
-          { width: size, height: size, "--orb-k": size / STAGE } as CSSProperties
+          { width: size, height: size, "--orb-k": size / STAGE, "--orb-speed": rate } as CSSProperties
         }
       >
         {isLattice(variant) ? (
@@ -591,7 +599,7 @@ export function Orb({
                   {
                     left: c.left,
                     top: c.top,
-                    animationDelay: c.delay + "ms",
+                    animationDelay: c.delay / rate + "ms",
                     "--orb-ax": c.ax + "px",
                     "--orb-ay": c.ay + "px",
                     "--orb-bx": c.bx + "px",
@@ -611,7 +619,7 @@ export function Orb({
                   {
                     "--orb-rx": d.rx + "px",
                     "--orb-ry": d.ry + "px",
-                    animationDelay: d.delay + "ms",
+                    animationDelay: d.delay / rate + "ms",
                   } as CSSProperties
                 }
               />
@@ -640,7 +648,7 @@ export function Orb({
                     "--m-3": d.m3,
                     "--m-4": d.m4,
                     "--m-depth": d.depth,
-                    animationDelay: d.delay,
+                    animationDelay: d.delay === undefined ? undefined : d.delay / rate + "ms",
                   } as CSSProperties
                 }
               />
