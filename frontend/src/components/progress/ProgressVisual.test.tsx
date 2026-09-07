@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { defaultProgressAppearance } from "@pi-science/contracts";
-import { ProgressVisual } from "./ProgressVisual";
+import { ProgressVisual, ProgressVisualErrorBoundary } from "./ProgressVisual";
 import { normalizeProgressAppearance, PROGRESS_PATTERN_CATALOG, patternsForSlot } from "./ProgressPatternCatalog";
 import { getProgressAppearance, setProgressAppearance } from "./progress-settings-store";
 import { ProgressTab } from "../settings/ProgressTab";
@@ -56,6 +56,22 @@ describe("ProgressVisual", () => {
   it("falls back to semantic auto for old text-only settings", () => {
     const normalized = normalizeProgressAppearance({ ...defaultProgressAppearance, patterns: { ...defaultProgressAppearance.patterns, thinking: "text-skeleton" } });
     expect(normalized.patterns.thinking).toBe("aicss-auto");
+  });
+});
+
+describe("ProgressVisualErrorBoundary", () => {
+  it("degrades a throwing animation to the static marker", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    function ThrowingLoader(): never {
+      throw new Error("chunk failed");
+    }
+    render(
+      <ProgressVisualErrorBoundary>
+        <ThrowingLoader />
+      </ProgressVisualErrorBoundary>,
+    );
+    expect(document.querySelector(".rounded-full.bg-accent")).toBeInTheDocument();
+    spy.mockRestore();
   });
 });
 

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useSyncExternalStore, type CSSProperties } from "react";
+import { Component, lazy, Suspense, useEffect, useSyncExternalStore, type CSSProperties, type ErrorInfo, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import { Orb } from "./aicss/orbs";
 import type { ProgressAppearance } from "@pi-science/contracts";
@@ -9,6 +9,24 @@ import { PROGRESS_PATTERN_CATALOG } from "./ProgressPatternCatalog";
 import { aicssOrbForActivity, type ProgressActivityState } from "./progress-activity-map";
 
 const GenerativeProgressVisual = lazy(() => import("./GenerativeProgressVisual"));
+
+const STATIC_MARKER = <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" aria-hidden />;
+
+/** Degrades a failed animation chunk (or a throwing loader) to the static
+ *  marker: status text and the markdown answer stay fully visible, and the
+ *  error does not propagate to higher conversation error boundaries. */
+export class ProgressVisualErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  override state: { failed: boolean } = { failed: false };
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+  override componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error("Progress visual failed; degrading to a static marker", error, info.componentStack);
+  }
+  override render(): ReactNode {
+    return this.state.failed ? STATIC_MARKER : this.props.children;
+  }
+}
 
 export function useProgressAppearance(): ProgressAppearance {
   useEffect(() => { void hydrateProgressAppearance(); }, []);
@@ -38,14 +56,16 @@ export function ProgressVisual({ slot, config, state = "running", activityState,
   const speed = Number.isFinite(config.speed) && config.speed > 0 ? config.speed : 1;
 
   if (state === "completed") return <Check size={14} aria-hidden className="shrink-0 text-ok-text" />;
-  if (definition.kind === "static") return <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" aria-hidden />;
+  if (definition.kind === "static") return STATIC_MARKER;
   if (definition.kind === "orb") {
     const variant = definition.id === "aicss-auto" ? aicssOrbForActivity(slot, activityState) : AICSS_ORB_VARIANTS[definition.id];
     return variant ? <Orb variant={variant} size={compact ? 16 : 20} paused={paused} speed={speed} decorative style={{ "--orb-fg": color } as CSSProperties} /> : null;
   }
   return (
-    <Suspense fallback={<span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" aria-hidden />}>
-      <GenerativeProgressVisual definition={definition} slot={slot} speed={speed} color={color} paused={paused} text={text} compact={compact} />
-    </Suspense>
+    <ProgressVisualErrorBoundary>
+      <Suspense fallback={STATIC_MARKER}>
+        <GenerativeProgressVisual definition={definition} slot={slot} speed={speed} color={color} paused={paused} text={text} compact={compact} />
+      </Suspense>
+    </ProgressVisualErrorBoundary>
   );
 }

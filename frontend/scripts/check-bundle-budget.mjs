@@ -25,8 +25,11 @@ for (const file of initialFiles) {
 }
 const initialBudget = Number(process.env.PI_SCIENCE_INITIAL_JS_BUDGET || 1_500_000);
 const initialTotal = initial.reduce((total, entry) => total + entry.size, 0);
-const lazyOnly = ["vendor-echarts", ...allowedLazyLarge, "molstar-", "vendor-three", "vendor-exceljs", "vendor-docx", "vendor-pptx", "vendor-openchemlib"];
+const lazyOnly = ["vendor-echarts", ...allowedLazyLarge, "molstar-", "vendor-three", "vendor-exceljs", "vendor-docx", "vendor-pptx", "vendor-openchemlib", "vendor-progress"];
 const eagerlyLoadedHeavyChunks = initial.filter((entry) => lazyOnly.some((prefix) => entry.file.startsWith(prefix)));
+// The animation runtime is one async chunk by design; a split means something
+// started reaching into its graph from a static import.
+const progressChunks = files.filter((file) => file.startsWith("vendor-progress") && file.endsWith(".js"));
 for (const entry of entries.sort((a, b) => b.size - a.size)) {
   console.log(`${entry.file}\t${entry.size} bytes`);
 }
@@ -35,8 +38,9 @@ if (failures.length) {
   process.exit(1);
 }
 console.log(`initial-js\t${initialTotal} bytes`);
-if (initialTotal > initialBudget || eagerlyLoadedHeavyChunks.length) {
+if (initialTotal > initialBudget || eagerlyLoadedHeavyChunks.length || progressChunks.length > 1) {
   if (initialTotal > initialBudget) console.error(`Initial JS budget exceeded (${initialBudget} bytes)`);
   if (eagerlyLoadedHeavyChunks.length) console.error(`Lazy-only chunks loaded eagerly: ${eagerlyLoadedHeavyChunks.map((item) => item.file).join(", ")}`);
+  if (progressChunks.length > 1) console.error(`vendor-progress split into ${progressChunks.length} chunks: ${progressChunks.join(", ")}`);
   process.exit(1);
 }
