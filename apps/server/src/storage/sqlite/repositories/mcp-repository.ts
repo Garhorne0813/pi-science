@@ -75,18 +75,22 @@ export class McpRepository {
   }
 
   async upsertBuiltin(connectorId: string, input: Omit<McpConnectorCreate, "enabled">, enabledByDefault = true): Promise<StoredMcpConnector> {
-    const existing = await this.getByName(input.name);
+    const existing = await this.get(connectorId);
     if (!existing) {
+      const nameOwner = await this.getByName(input.name);
+      const name = nameOwner ? collisionSafeBuiltinName(input.name, connectorId) : input.name;
+      if (nameOwner && await this.getByName(name)) throw new Error(`Builtin connector name collision for '${input.name}' (${connectorId})`);
       const now = Date.now();
       await this.store.run(
         `INSERT INTO mcp_connectors
          (connector_id, name, display_name, description, source, transport, endpoint_url, command, args_json, socket_path, runtime_config_json, credential_ref, enabled, revision, created_at, updated_at)
          VALUES (?, ?, ?, ?, 'builtin', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-        [connectorId, input.name, input.display_name, input.description, input.transport, input.endpoint_url ?? null, input.command ?? null, JSON.stringify(input.args), input.socket_path ?? null, JSON.stringify(input.runtime_config), input.credential_ref ?? null, enabledByDefault ? 1 : 0, now, now],
+        [connectorId, name, input.display_name, input.description, input.transport, input.endpoint_url ?? null, input.command ?? null, JSON.stringify(input.args), input.socket_path ?? null, JSON.stringify(input.runtime_config), input.credential_ref ?? null, enabledByDefault ? 1 : 0, now, now],
       );
       return (await this.get(connectorId))!;
     }
-    const preserveCredential = existing.source === "builtin" && Boolean(existing.credential_ref);
+    if (existing.source !== "builtin") throw new Error(`Connector ID '${connectorId}' is owned by a ${existing.source} connector`);
+    const preserveCredential = Boolean(existing.credential_ref);
     const runtimeConfig = preserveCredential ? {
       ...input.runtime_config,
       auth: existing.runtime_config.auth,
@@ -259,6 +263,11 @@ export class McpRepository {
 function connector(row: ConnectorRow): StoredMcpConnector {
   const { args_json, runtime_config_json, include_tools_json, exclude_tools_json, enabled, ...values } = row;
   return { ...values, enabled: enabled === 1, args: JSON.parse(args_json) as string[], runtime_config: mcpRuntimeConfigSchema.parse(JSON.parse(runtime_config_json)), include_tools: JSON.parse(include_tools_json) as string[], exclude_tools: JSON.parse(exclude_tools_json) as string[] };
+}
+
+function collisionSafeBuiltinName(name: string, connectorId: string): string {
+  const suffix = `-builtin-${connectorId.replace(/[^a-z0-9]/gi, "").slice(-6).toLowerCase()}`;
+  return `${name.slice(0, 64 - suffix.length).replace(/-+$/, "")}${suffix}`;
 }
 
 function connectorSettings(connector: StoredMcpConnector): StoredMcpSettings {

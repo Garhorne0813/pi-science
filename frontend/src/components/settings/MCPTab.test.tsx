@@ -78,7 +78,7 @@ describe("MCPTab", () => {
 
     const table = await screen.findByRole("table");
     expect(screen.getByRole("button", { name: "Add connector" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Import old configuration/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Import existing config" })).toBeInTheDocument();
     expect(within(table).getByRole("columnheader", { name: "Name" })).toBeInTheDocument();
     expect(within(table).getByRole("columnheader", { name: "Description" })).toBeInTheDocument();
     expect(within(table).getByRole("columnheader", { name: "Status" })).toBeInTheDocument();
@@ -166,10 +166,132 @@ describe("MCPTab", () => {
     expect(screen.getByRole("button", { name: "Create and enable" })).toBeDisabled();
   });
 
-  it("only offers legacy import when a safe old connector is available", async () => {
+  it("shows the import entry at all times and annotates discovered legacy entries", async () => {
     fetchMock.mockImplementationOnce(async () => jsonResponse({ connectors: [], legacy_count: 1 }));
     renderTab("/tmp/ws");
-    expect(await screen.findByRole("button", { name: "Import old configuration (1)" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Import existing config (1)" })).toBeInTheDocument();
+  });
+
+  it("clears transport-specific values when transport changes", async () => {
+    renderTab("/tmp/ws");
+    fireEvent.click(await screen.findByRole("button", { name: "Add connector" }));
+    fireEvent.change(screen.getByLabelText("Endpoint URL"), { target: { value: "https://example.com/mcp" } });
+    fireEvent.change(screen.getByLabelText("Transport"), { target: { value: "stdio" } });
+    expect(screen.getByLabelText("Command")).toHaveValue("");
+  });
+
+  it("rejects malformed remote URLs before submission", async () => {
+    renderTab("/tmp/ws");
+    fireEvent.click(await screen.findByRole("button", { name: "Add connector" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Remote" } });
+    fireEvent.change(screen.getByLabelText("ID"), { target: { value: "remote" } });
+    fireEvent.change(screen.getByLabelText("Endpoint URL"), { target: { value: "not-a-url" } });
+    expect(screen.getByRole("button", { name: "Create and enable" })).toBeDisabled();
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/mcp/connectors", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("searches and filters connectors", async () => {
+    renderTab("/tmp/ws");
+    await screen.findByText("Paper Search");
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search connectors" }), { target: { value: "missing" } });
+    expect(screen.getByText("No connectors match the current search and filter.")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search connectors" }), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Filter connectors"), { target: { value: "remote" } });
+    expect(screen.getByText("No connectors match the current search and filter.")).toBeInTheDocument();
+  });
+
+  it("probes immediately after creating a connector", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input); const method = (init.method || "GET").toUpperCase();
+      if (url === "/api/mcp/connectors" && method === "POST") return jsonResponse({
+        connector_id: "mcp-new", name: "new", display_name: "New", description: "", source: "custom", transport: "streamable_http", endpoint_url: "https://example.com/mcp", command: null, args: [], socket_path: null,
+        runtime_config: { lifecycle: "lazy", expose_resources: true, include_tools: [], exclude_tools: [], environment: {}, headers: {}, auth: "auto", allow_private: false }, credential_ref: null, revision: 1, created_at: 1, updated_at: 1,
+        settings: { connector_id: "mcp-new", enabled: true, include_tools: [], exclude_tools: [], approval_mode: "ask", revision: 1, created_at: 1, updated_at: 1 }, config_state: "valid", auth_state: "not-required", runtime_state: "unknown", tool_count: 0, error: null,
+      }, 201);
+      if (url === "/api/mcp/connectors/mcp-new/probe" && method === "POST") return jsonResponse({ runtime_state: "ready", auth_state: "not-required", error: null, tools: [] });
+      return defaultFetch(input, init);
+    });
+    renderTab("/tmp/ws");
+    fireEvent.click(await screen.findByRole("button", { name: "Add connector" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "New" } });
+    fireEvent.change(screen.getByLabelText("ID"), { target: { value: "new" } });
+    fireEvent.change(screen.getByLabelText("Endpoint URL"), { target: { value: "https://example.com/mcp" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create and enable" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/mcp/connectors/mcp-new/probe", expect.objectContaining({ method: "POST" })));
+  });
+
+  it("opens an editable form for custom connectors", async () => {
+    renderTab(null);
+    fireEvent.click(await screen.findByRole("button", { name: "Show details for Paper Search" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("heading", { name: "Edit connector" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Name")).toHaveValue("Paper Search");
+    expect(screen.getByLabelText("Command")).toHaveValue("node");
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
+  });
+
+  it("previews importable legacy connectors before committing", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input); const method = (init.method || "GET").toUpperCase();
+      if (url === "/api/mcp/import/preview?cwd=%2Ftmp%2Fws" && method === "POST") return jsonResponse({ source: "/tmp/ws/.mcp.json", entries: [{ name: "legacy-tools", transport: "stdio", importable: true, conflict: false, contains_sensitive_fields: false }] });
+      return defaultFetch(input, init);
+    });
+    renderTab("/tmp/ws");
+    fireEvent.click(await screen.findByRole("button", { name: "Import existing config" }));
+    expect(await screen.findByText("/tmp/ws/.mcp.json")).toBeInTheDocument();
+    expect(screen.getByText("legacy-tools")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Import selected (1)" })).toBeEnabled();
+  });
+
+  it("preserves quoted and escaped local command arguments", async () => {
+    renderTab("/tmp/ws");
+    fireEvent.click(await screen.findByRole("button", { name: "Add connector" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Local" } });
+    fireEvent.change(screen.getByLabelText("ID"), { target: { value: "local" } });
+    fireEvent.change(screen.getByLabelText("Transport"), { target: { value: "stdio" } });
+    fireEvent.change(screen.getByLabelText("Command"), { target: { value: "node" } });
+    fireEvent.change(screen.getByLabelText("Arguments"), { target: { value: '--config "/Users/me/My Project/config.json" --label escaped\\ value ""' } });
+    fireEvent.click(screen.getByRole("button", { name: "Create and enable" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/mcp/connectors", expect.objectContaining({ method: "POST" })));
+    const request = fetchMock.mock.calls.find(([url, init]) => url === "/api/mcp/connectors" && (init as RequestInit)?.method === "POST")![1] as RequestInit;
+    expect(JSON.parse(String(request.body)).args).toEqual(["--config", "/Users/me/My Project/config.json", "--label", "escaped value", ""]);
+  });
+
+  it("shows credential request failures instead of an endless loading state", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input); const method = (init.method || "GET").toUpperCase();
+      if (url === "/api/mcp/connectors/mcp-paper-search/credential" && method === "GET") return jsonResponse({ error: "Credential service unavailable" }, 503);
+      return defaultFetch(input, init);
+    });
+    renderTab(null);
+    fireEvent.click(await screen.findByRole("button", { name: "Show details for Paper Search" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Credential service unavailable");
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+  });
+
+  it("does not offer an API key for built-in connectors that cannot consume one", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input); const method = (init.method || "GET").toUpperCase();
+      if (url === "/api/mcp/connectors" && method === "GET") return jsonResponse({ connectors: [{
+        connector_id: "mcp_builtin_clinical_trials", name: "clinical-trials", display_name: "Clinical Trials", description: "Search public trials",
+        source: "builtin", transport: "stdio", endpoint_url: null, command: "node", args: ["server.js", "clinical_trials"], socket_path: null,
+        runtime_config: { lifecycle: "lazy", expose_resources: false, include_tools: [], exclude_tools: [], environment: {}, headers: {}, auth: "none", allow_private: false },
+        credential_ref: null, revision: 1, created_at: 1, updated_at: 1,
+        settings: { connector_id: "mcp_builtin_clinical_trials", enabled: false, include_tools: [], exclude_tools: [], approval_mode: "ask", revision: 1, created_at: 1, updated_at: 1 },
+        config_state: "valid", auth_state: "not-required", runtime_state: "disabled", tool_count: 4, error: null,
+      }], legacy_count: 0 });
+      if (url === "/api/mcp/connectors/mcp_builtin_clinical_trials/tools" && method === "GET") return jsonResponse({ tools: [], cached_at: null });
+      if (url === "/api/mcp/connectors/mcp_builtin_clinical_trials/credential" && method === "GET") return jsonResponse({ capability: "unsupported", credential_ref: null, configured: false, backend: null, delivery: null, target_name: null, environment_variable: null, suggested_delivery: null, suggested_target_name: null });
+      return jsonResponse({ error: `unhandled ${method} ${url}` }, 404);
+    });
+    renderTab(null);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show details for Clinical Trials" }));
+
+    expect(await screen.findByText("This built-in connector uses public upstream endpoints and does not accept an API key.")).toBeInTheDocument();
+    expect(screen.getByText("No key supported")).toBeInTheDocument();
+    expect(screen.queryByLabelText("API key or token")).not.toBeInTheDocument();
+    expect(screen.getByText("MCP connection: no authentication")).toBeInTheDocument();
   });
 
   it("renders the MCP management controls in Simplified Chinese", async () => {

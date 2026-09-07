@@ -53,7 +53,7 @@ export class McpConnectorService {
       const fingerprint = mcpConnectorFingerprint(connector);
       const cachedToolNames = cache?.tools.map((tool) => tool.name).sort().join("\0");
       const builtinToolNames = builtin.tools.map((tool) => tool.name).sort().join("\0");
-      if (!cache || cache.config_revision !== connector.revision || cache.fingerprint !== fingerprint || cachedToolNames !== builtinToolNames) {
+      if (!cache || cache.config_revision !== connector.revision || cache.fingerprint !== fingerprint || cachedToolNames !== builtinToolNames || cache.expires_at !== Number.MAX_SAFE_INTEGER) {
         const now = Date.now();
         await this.repository.replaceToolCache({
           connector_id: connector.connector_id,
@@ -94,6 +94,7 @@ export class McpConnectorService {
   async setCredential(connectorId: string, raw: unknown): Promise<McpCredentialStatus> {
     const input = mcpCredentialUpdateSchema.parse(raw) as McpCredentialUpdate;
     const connector = await this.requireConnector(connectorId);
+    if (suggestedCredential(connector).capability === "unsupported") throw new McpServiceError("credential_unsupported", "This connector does not support an API credential", 400);
     if (input.revision !== connector.revision) throw new McpServiceError("revision_conflict", "Connector was changed by another request", 409);
     const credentialId = connector.credential_ref ?? `mcp_${connector.connector_id}`;
     const existing = await this.credentials.getForRuntime(credentialId);
@@ -350,23 +351,27 @@ export class McpConnectorService {
   }
 
   private authState(connector: StoredMcpConnector): "not-required" | "configured" | "needs-auth" {
+    // Local transports do not authenticate the MCP connection. Any credential
+    // binding on these connectors belongs to an upstream API used by the child.
+    if (connector.transport === "stdio" || connector.transport === "socket") return "not-required";
     if (bindingError(connector.runtime_config, connector.credential_ref)) return "needs-auth";
     if (connector.credential_ref) return this.credentials.readSync(connector.credential_ref)?.secret ? "configured" : "needs-auth";
     const auth = connector.runtime_config.auth;
-    if (connector.transport === "stdio" || connector.transport === "socket" || auth === "none") return "not-required";
+    if (auth === "none") return "not-required";
     const authorization = Object.entries(connector.runtime_config.headers).find(([name]) => name.toLowerCase() === "authorization")?.[1];
     if (authorization?.kind === "environment" && process.env[authorization.name]) return "configured";
     return auth === "oauth" || auth === "bearer" ? "needs-auth" : "not-required";
   }
 
   private async credentialStatus(connector: StoredMcpConnector): Promise<McpCredentialStatus> {
-    const suggestion = suggestedCredential(connector.name, connector.transport);
+    const suggestion = suggestedCredential(connector);
     const reference = connector.credential_ref;
     const value = reference ? await this.credentials.getForRuntime(reference) : null;
     const environment = Object.entries(connector.runtime_config.environment).find(([, binding]) => binding.kind === "credential" && binding.credential_ref === reference);
     const header = Object.entries(connector.runtime_config.headers).find(([, binding]) => binding.kind === "credential" && binding.credential_ref === reference);
     const delivery = environment ? "environment" : header?.[0].toLowerCase() === "authorization" && header[1].kind === "credential" && header[1].prefix === "Bearer " ? "bearer" : header ? "header" : null;
     return {
+      capability: suggestion.capability,
       credential_ref: reference, configured: Boolean(value?.secret),
       backend: value?.metadata.backend === "managed" || value?.metadata.backend === "environment" ? value.metadata.backend : null,
       delivery, target_name: environment?.[0] ?? header?.[0] ?? null,
@@ -419,13 +424,23 @@ function clearCredentialBindings(config: McpRuntimeConfig, credentialRef?: strin
   };
 }
 
-function suggestedCredential(name: string, transport: StoredMcpConnector["transport"]): { delivery: "environment" | "header" | "bearer"; target: string } {
-  const targets: Record<string, string> = {
-    "paper-search": "NCBI_API_KEY", "literature-graph": "OPENALEX_API_KEY",
-    "omics-archives": "NCBI_API_KEY", "nucleotide-archives": "NCBI_API_KEY",
-    "drug-regulatory": "OPENFDA_API_KEY",
+function suggestedCredential(connector: StoredMcpConnector): { capability: "unsupported" | "optional" | "required"; delivery: "environment" | "header" | "bearer" | null; target: string | null } {
+  const builtinTargets: Record<string, string> = {
+    mcp_builtin_paper_search: "NCBI_API_KEY",
+    mcp_builtin_literature_graph: "OPENALEX_API_KEY",
+    mcp_builtin_omics_archives: "NCBI_API_KEY",
+    mcp_builtin_nucleotide_archives: "NCBI_API_KEY",
+    mcp_builtin_drug_regulatory: "OPENFDA_API_KEY",
   };
-  return targets[name] ? { delivery: "environment", target: targets[name] } : transport === "stdio" ? { delivery: "environment", target: "API_KEY" } : { delivery: "bearer", target: "Authorization" };
+  if (connector.source === "builtin") {
+    const target = builtinTargets[connector.connector_id];
+    return target
+      ? { capability: "optional", delivery: "environment", target }
+      : { capability: "unsupported", delivery: null, target: null };
+  }
+  if (connector.transport === "stdio" || connector.transport === "socket") return { capability: "optional", delivery: "environment", target: "API_KEY" };
+  const required = connector.runtime_config.auth === "bearer" || connector.runtime_config.auth === "oauth";
+  return { capability: required ? "required" : "optional", delivery: "bearer", target: "Authorization" };
 }
 
 function requiredEnvironment(connector: StoredMcpConnector): string[] {

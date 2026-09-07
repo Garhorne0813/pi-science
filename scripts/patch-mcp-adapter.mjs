@@ -192,3 +192,65 @@ async function probeAuthDiscovery(serverUrl: string, definition?: ServerEntry, s
     "abortable(runSdkAuth(authProvider, { serverUrl, ...discovery, ...(options.fetchFn ? { fetchFn: options.fetchFn } : {}) }), signal)",
   ],
 ]);
+
+// Managed Pi-Science snapshots carry a runtime cache version. Include it in
+// the adapter's fingerprint so a tool/resource contract change invalidates
+// stale metadata discovered by an older runtime.
+patch("metadata-cache.ts", "PI_SCIENCE_RUNTIME_CACHE_VERSION_V1", [
+  [
+    "    excludeTools: definition.excludeTools,\n  };",
+    "    excludeTools: definition.excludeTools,\n    piScienceCacheVersion: (definition as ServerEntry & { __piScienceCacheVersion?: unknown }).__piScienceCacheVersion,\n  };",
+  ],
+]);
+
+// Managed snapshots can also carry the last canonical tool-cache count. Use
+// it for status before a lazy server has connected, while still preferring
+// live metadata whenever it is available.
+patch("metadata-cache.ts", "PI_SCIENCE_CONFIGURED_TOOL_COUNT_V1", [
+  [
+    "    piScienceCacheVersion: (definition as ServerEntry & { __piScienceCacheVersion?: unknown }).__piScienceCacheVersion,\n  };",
+    "    piScienceCacheVersion: (definition as ServerEntry & { __piScienceCacheVersion?: unknown }).__piScienceCacheVersion,\n    piScienceToolCount: (definition as ServerEntry & { __piScienceToolCount?: unknown }).__piScienceToolCount,\n  };",
+  ],
+]);
+
+// Listing a configured server is an explicit request for its tool inventory.
+// For lazy servers with no valid metadata cache, connect once before deciding
+// that the server is unavailable; this avoids the misleading \"configured but
+// not connected\" result for a server that has simply never been used.
+patch("proxy-modes.ts", "PI_SCIENCE_LAZY_LIST_CONNECT_V1", [
+  [
+    "export function executeList(state: McpExtensionState, server: string): ProxyToolResult {",
+    "export async function executeList(state: McpExtensionState, server: string, signal?: AbortSignal): Promise<ProxyToolResult> {",
+  ],
+  [
+    "  if (isServerDisabled(definition)) return disabledResult(\"list\", server);\n\n  const metadata = state.toolMetadata.get(server);",
+    "  if (isServerDisabled(definition)) return disabledResult(\"list\", server);\n\n  const metadata = state.toolMetadata.get(server);\n  if (metadata === undefined && state.manager.getConnection(server)?.status !== \"connected\") {\n    const connected = await lazyConnect(state, server, signal);\n    if (connected) return executeList(state, server, signal);\n  }",
+  ],
+]);
+
+// Make the aggregate status honest about lazy servers: cached metadata is
+// useful for discovery, but it does not mean a live MCP connection exists.
+patch("proxy-modes.ts", "PI_SCIENCE_STATUS_CACHE_LABEL_V1", [
+  [
+    "  const connectedCount = enabledServers.filter(s => s.status === \"connected\").length;\n\n  let text = `MCP: ${connectedCount}/${enabledServers.length} servers, ${totalTools} tools`;",
+    "  const connectedCount = enabledServers.filter(s => s.status === \"connected\").length;\n  const cachedToolCount = enabledServers.filter(s => s.status === \"cached\").reduce((sum, server) => sum + server.toolCount, 0);\n\n  let text = `MCP: ${connectedCount}/${enabledServers.length} servers connected, ${totalTools} tools available`;\n  if (cachedToolCount > 0) text += ` (${cachedToolCount} cached)`;",
+  ],
+]);
+
+patch("proxy-modes.ts", "PI_SCIENCE_CONFIGURED_TOOL_COUNT_V1", [
+  [
+    "    const toolCount = metadata?.length ?? 0;",
+    "    const configuredToolCount = (definition as { __piScienceToolCount?: unknown }).__piScienceToolCount;\n    const toolCount = metadata?.length ?? (typeof configuredToolCount === \"number\" ? configuredToolCount : 0);",
+  ],
+  [
+    "    text += `○ ${server.name} (not connected)\\n`;",
+    "    text += `○ ${server.name}${server.toolCount > 0 ? ` (${server.toolCount} tools configured, not connected)` : \" (not connected)\"}\\n`;",
+  ],
+]);
+
+patch("mcp-status.ts", "PI_SCIENCE_CONFIGURED_TOOL_COUNT_STATUS_V1", [
+  [
+    "    const toolCount = metadata?.length ?? (connection?.status === \"connected\" ? connection.tools.length : 0);",
+    "    const configuredToolCount = (definition as { __piScienceToolCount?: unknown }).__piScienceToolCount;\n    const toolCount = metadata?.length ?? (connection?.status === \"connected\" ? connection.tools.length : typeof configuredToolCount === \"number\" ? configuredToolCount : 0);",
+  ],
+]);

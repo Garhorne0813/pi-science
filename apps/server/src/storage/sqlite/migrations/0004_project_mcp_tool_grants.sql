@@ -1,4 +1,4 @@
-CREATE TABLE mcp_project_tool_grants (
+CREATE TABLE IF NOT EXISTS mcp_project_tool_grants (
   project_id TEXT NOT NULL,
   connector_id TEXT NOT NULL,
   tool_name TEXT NOT NULL,
@@ -9,5 +9,5 @@ CREATE TABLE mcp_project_tool_grants (
   FOREIGN KEY (connector_id) REFERENCES mcp_connectors(connector_id) ON DELETE CASCADE
 ) STRICT;
 
-CREATE INDEX mcp_project_tool_grants_connector_idx
+CREATE INDEX IF NOT EXISTS mcp_project_tool_grants_connector_idx
   ON mcp_project_tool_grants(project_id, connector_id);

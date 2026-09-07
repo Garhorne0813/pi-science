@@ -142,7 +142,11 @@ describe("canonical MCP routes", () => {
   it("seeds paper-search enabled and scientific domain connectors disabled", async () => {
     const { app, cwd, service } = await fixture();
     await service.ensureBuiltins();
+    const seededPaper = await service.repository.toolCache("mcp_builtin_paper_search");
+    expect(seededPaper?.expires_at).toBe(Number.MAX_SAFE_INTEGER);
+    if (seededPaper) await service.repository.replaceToolCache({ ...seededPaper, expires_at: Date.now() - 1 });
     await service.ensureBuiltins();
+    expect((await service.repository.toolCache("mcp_builtin_paper_search"))?.expires_at).toBe(Number.MAX_SAFE_INTEGER);
     const listed = await app.inject({ method: "GET", url: `/api/mcp/connectors?cwd=${encodeURIComponent(cwd)}` });
     const connectors = listed.json().connectors as Array<{ connector_id: string; name: string; revision: number; tool_count: number; settings: { enabled: boolean; revision: number } }>;
     expect(connectors).toHaveLength(18);
@@ -166,6 +170,17 @@ describe("canonical MCP routes", () => {
       expect.objectContaining({ name: "target-discovery", tool_count: 4, settings: expect.objectContaining({ enabled: false }) }),
       expect.objectContaining({ name: "chembl", tool_count: 4, settings: expect.objectContaining({ enabled: false }) }),
     ]));
+    const runtimeSnapshot = JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8"));
+    expect(runtimeSnapshot.mcpServers["paper-search"]).toMatchObject({ __piScienceCacheVersion: 2, __piScienceToolCount: 5 });
+
+    expect(await service.credential("mcp_builtin_paper_search")).toMatchObject({ capability: "optional", suggested_target_name: "NCBI_API_KEY" });
+    expect(await service.credential("mcp_builtin_literature_graph")).toMatchObject({ capability: "optional", suggested_target_name: "OPENALEX_API_KEY" });
+    expect(await service.credential("mcp_builtin_drug_regulatory")).toMatchObject({ capability: "optional", suggested_target_name: "OPENFDA_API_KEY" });
+    expect(await service.credential("mcp_builtin_clinical_trials")).toMatchObject({ capability: "unsupported", suggested_delivery: null, suggested_target_name: null });
+
+    const unsupportedCredential = await app.inject({ method: "PUT", url: "/api/mcp/connectors/mcp_builtin_clinical_trials/credential", payload: { backend: "managed", delivery: "environment", target_name: "API_KEY", secret: "unused-key", revision: connectors.find((item) => item.name === "clinical-trials")!.revision } });
+    expect(unsupportedCredential.statusCode).toBe(400);
+    expect(unsupportedCredential.json()).toMatchObject({ code: "credential_unsupported" });
 
     const cachedTools = await app.inject({ method: "GET", url: `/api/mcp/connectors/mcp_builtin_paper_search/tools?cwd=${encodeURIComponent(cwd)}` });
     expect(cachedTools.statusCode).toBe(200);
@@ -183,7 +198,25 @@ describe("canonical MCP routes", () => {
     await service.setCredential(literature.connector_id, { backend: "managed", delivery: "environment", target_name: "OPENALEX_API_KEY", secret: "catalog-preserved-secret", revision: literature.revision });
     await service.ensureBuiltins();
     expect((await service.get(literature.connector_id)).settings.enabled).toBe(true);
+    expect((await service.get(literature.connector_id)).auth_state).toBe("not-required");
     expect(await service.credential(literature.connector_id)).toMatchObject({ configured: true, delivery: "environment", target_name: "OPENALEX_API_KEY" });
+    await app.close();
+  });
+
+  it("does not overwrite a custom connector whose name collides with a builtin", async () => {
+    const { app, service } = await fixture();
+    const custom = await service.create({
+      name: "chembl", display_name: "My ChEMBL", description: "user-owned", transport: "stdio", command: process.execPath, args: ["custom-server.js"],
+      runtime_config: { lifecycle: "lazy", expose_resources: true, include_tools: [], exclude_tools: [], environment: {}, headers: {}, auth: "none", allow_private: false }, enabled: false,
+    });
+
+    await service.ensureBuiltins();
+    await service.ensureBuiltins();
+
+    expect(await service.get(custom.connector_id)).toMatchObject({ name: "chembl", display_name: "My ChEMBL", description: "user-owned", source: "custom", command: process.execPath, args: ["custom-server.js"] });
+    expect(await service.get("mcp_builtin_chembl")).toMatchObject({ source: "builtin", display_name: "ChEMBL" });
+    expect((await service.get("mcp_builtin_chembl")).name).toMatch(/^chembl-builtin-/);
+    expect((await service.list()).connectors).toHaveLength(19);
     await app.close();
   });
 

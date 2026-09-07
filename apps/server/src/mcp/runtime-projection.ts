@@ -7,12 +7,18 @@ import { validateWorkspaceCwd } from "../security/workspace-security.js";
 import { metadataRoot, writeJsonAtomic } from "../storage/persistence.js";
 
 export const MCP_RUNTIME_SNAPSHOT = ".pi-science/mcp-runtime.json";
+// Bump when the managed MCP implementation changes its tool/resource contract.
+// The adapter includes this value in its metadata-cache fingerprint so a
+// previously discovered tool list cannot survive a runtime upgrade.
+export const MCP_RUNTIME_CACHE_VERSION = 2;
 
 export interface ProjectedMcpServer {
   __piScienceAllowedTools?: string[];
   __piScienceConnectorId?: string;
   __piScienceAllowPrivate?: boolean;
   __piScienceProjectId?: string;
+  __piScienceCacheVersion?: number;
+  __piScienceToolCount?: number;
   command?: string;
   args?: string[];
   socket?: string;
@@ -52,7 +58,9 @@ export class McpRuntimeProjection {
       const includeTools = unique([...connector.runtime_config.include_tools, ...connector.include_tools]);
       const excludeTools = unique([...connector.runtime_config.exclude_tools, ...connector.exclude_tools, ...denied]);
       const approveTools: boolean | string[] = connector.approval_mode === "allow_all" ? (asks.length ? unique(asks) : false) : true;
-      const server = projectServer(connector, includeTools, excludeTools, approveTools, projectId);
+      const cache = await this.repository.toolCache(connector.connector_id);
+      const configuredToolCount = cache && cache.expires_at > Date.now() ? cache.tools.length : undefined;
+      const server = projectServer(connector, includeTools, excludeTools, approveTools, projectId, configuredToolCount);
       if (allowed.length && approveTools === true) server.__piScienceAllowedTools = unique(allowed);
       mcpServers[connector.name] = server;
     }
@@ -60,12 +68,21 @@ export class McpRuntimeProjection {
   }
 }
 
-function projectServer(connector: StoredMcpConnector, includeTools: string[], excludeTools: string[], approveTools: boolean | string[], projectId: string): ProjectedMcpServer {
+function projectServer(
+  connector: StoredMcpConnector,
+  includeTools: string[],
+  excludeTools: string[],
+  approveTools: boolean | string[],
+  projectId: string,
+  configuredToolCount?: number,
+): ProjectedMcpServer {
   const runtime = connector.runtime_config;
   return {
     __piScienceConnectorId: connector.connector_id,
     __piScienceAllowPrivate: runtime.allow_private,
     __piScienceProjectId: projectId,
+    __piScienceCacheVersion: MCP_RUNTIME_CACHE_VERSION,
+    ...(configuredToolCount !== undefined ? { __piScienceToolCount: configuredToolCount } : {}),
     ...(connector.transport === "stdio" ? { command: connector.command!, args: connector.args } : {}),
     ...(connector.transport === "socket" ? { socket: connector.socket_path! } : {}),
     ...(connector.transport === "streamable_http" || connector.transport === "sse" ? { url: connector.endpoint_url! } : {}),

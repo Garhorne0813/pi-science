@@ -1,10 +1,13 @@
 import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 afterEach(() => vi.unstubAllEnvs());
 
-const adapterUrl = new URL("../../../../runtime/pi/node_modules/pi-mcp-adapter/tool-approval.ts", import.meta.url);
+const adapterUrl = process.env.PI_SCIENCE_TEST_MCP_ADAPTER_PATH
+  ? pathToFileURL(resolve(process.env.PI_SCIENCE_TEST_MCP_ADAPTER_PATH, "tool-approval.ts"))
+  : new URL("../../../../runtime/pi/node_modules/pi-mcp-adapter/tool-approval.ts", import.meta.url);
 // Runtime packages are installed separately from the server workspace.
 describe.skipIf(!existsSync(fileURLToPath(adapterUrl)))("installed MCP adapter approval policy", () => {
   it("requires approval for unknown tools and treats grants as exact names", async () => {
@@ -41,6 +44,12 @@ describe.skipIf(!existsSync(fileURLToPath(adapterUrl)))("installed MCP adapter a
       const connection = await manager.connect("fixture", { command: process.execPath, args: ["-e", script], env: { BOUND_VALUE: "!literal-${MCP_AMBIENT_SECRET}" }, __piScienceRawBindings: true });
       expect(connection.tools).toEqual([expect.objectContaining({ name: "clean", description: "!literal-${MCP_AMBIENT_SECRET}" })]);
     } finally { await manager.closeAll(); }
+  });
+
+  it("invalidates metadata when the managed runtime cache version changes", async () => {
+    const { computeServerHash } = await import(new URL("metadata-cache.ts", adapterUrl).href);
+    const base = { command: process.execPath, args: ["server.js"], __piScienceCacheVersion: 2 };
+    expect(computeServerHash(base)).not.toBe(computeServerHash({ ...base, __piScienceCacheVersion: 3 }));
   });
 
 });

@@ -51,12 +51,14 @@ GROUP BY b.connector_id
 HAVING COUNT(DISTINCT b.approval_mode) > 1;
 
 INSERT INTO mcp_scope_migration_conflicts (connector_id, conflict_kind, tool_name, project_ids_json, details, created_at)
-SELECT g.connector_id, 'tool_grant', g.tool_name, json_group_array(g.project_id),
-       'Project tool grants differed; effective grant reset to ask until reviewed',
+SELECT g.connector_id, 'tool_grant', g.tool_name,
+       (SELECT json_group_array(b.project_id) FROM mcp_project_bindings b WHERE b.connector_id = g.connector_id),
+       'Project tool grants differed or were not present in every project; effective grant reset to ask until reviewed',
        CAST(strftime('%s', 'now') AS INTEGER) * 1000
 FROM mcp_tool_grants g
 GROUP BY g.connector_id, g.tool_name
-HAVING COUNT(DISTINCT g.decision) > 1;
+HAVING COUNT(DISTINCT g.decision) > 1
+    OR COUNT(*) < (SELECT COUNT(*) FROM mcp_project_bindings b WHERE b.connector_id = g.connector_id);
 
 -- Preserve unambiguous values. Any conflicting connector-level binding is
 -- disabled and reset to the least-privileged settings; tool-only conflicts
@@ -118,10 +120,30 @@ CREATE TABLE mcp_global_tool_grants (
 
 INSERT INTO mcp_global_tool_grants (connector_id, tool_name, decision, updated_at)
 SELECT g.connector_id, g.tool_name,
-       CASE WHEN COUNT(DISTINCT g.decision) > 1 THEN 'ask' ELSE MAX(g.decision) END,
+       CASE WHEN EXISTS (
+         SELECT 1 FROM mcp_scope_migration_conflicts c
+         WHERE c.connector_id = g.connector_id AND c.conflict_kind = 'tool_grant' AND c.tool_name = g.tool_name
+       ) THEN 'ask' ELSE MAX(g.decision) END,
        MAX(g.updated_at)
 FROM mcp_tool_grants g
 GROUP BY g.connector_id, g.tool_name;
+
+-- Preserve explicit per-project choices as overrides. Missing rows
+-- intentionally remain inherited ask. Migration 0004 keeps this definition
+-- idempotent for databases that had already reached the old version 3.
+CREATE TABLE mcp_project_tool_grants (
+  project_id TEXT NOT NULL,
+  connector_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  decision TEXT NOT NULL CHECK (decision IN ('allow', 'ask', 'deny')),
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, connector_id, tool_name),
+  FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE,
+  FOREIGN KEY (connector_id) REFERENCES mcp_connectors(connector_id) ON DELETE CASCADE
+) STRICT;
+
+INSERT INTO mcp_project_tool_grants (project_id, connector_id, tool_name, decision, updated_at)
+SELECT project_id, connector_id, tool_name, decision, updated_at FROM mcp_tool_grants;
 
 DROP TABLE mcp_tool_grants;
 DROP TABLE mcp_project_bindings;

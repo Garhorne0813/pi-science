@@ -2,7 +2,7 @@ import { applySessionReplacements, type SessionReplacement } from "../agent-runt
 import { apiRequest } from "../client/api";
 import { queryClient } from "../client/query-client";
 import type { AgentProfile, McpServer, ProjectSubagent, RuntimeExtension, WebAccessConfig } from "./settings-types";
-import type { McpConnector, McpConnectorCreate, McpConnectorSettingsUpdate, McpCredentialStatus, McpCredentialUpdate, McpMigrationConflict, McpToolSummary } from "@pi-science/contracts";
+import type { McpConnector, McpConnectorCreate, McpConnectorSettingsUpdate, McpConnectorUpdate, McpCredentialStatus, McpCredentialUpdate, McpMigrationConflict, McpToolSummary } from "@pi-science/contracts";
 
 export const settingsKey = (...selector: Array<string | null>) => ["settings", ...selector];
 
@@ -166,6 +166,9 @@ export const settingsApi = {
   createMcp(body: McpConnectorCreate) {
     return apiRequest<McpConnector>("/api/mcp/connectors", json("POST", body));
   },
+  updateMcp(connectorId: string, body: McpConnectorUpdate) {
+    return apiRequest<McpConnector>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}`, json("PATCH", body));
+  },
   updateMcpSettings(connectorId: string, body: McpConnectorSettingsUpdate) {
     return apiRequest<McpConnector>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/settings`, json("PUT", body));
   },
@@ -197,7 +200,7 @@ export const settingsApi = {
     return apiRequest<void>(`/api/mcp/connectors/${encodeURIComponent(connectorId)}/tools/${encodeURIComponent(toolName)}${query}`, { method: "DELETE" });
   },
   previewMcpImport(cwd: string | null) {
-    return apiRequest<{ source: string | null; entries: Array<{ name: string; importable: boolean; conflict: boolean; contains_sensitive_fields: boolean }> }>(`/api/mcp/import/preview${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`, { method: "POST" });
+    return apiRequest<{ source: string | null; entries: Array<{ name: string; transport: string; importable: boolean; conflict: boolean; contains_sensitive_fields: boolean }> }>(`/api/mcp/import/preview${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`, { method: "POST" });
   },
   commitMcpImport(cwd: string | null, names: string[]) {
     return apiRequest<{ imported: McpConnector[]; failed: Array<{ name: string; error: string }> }>(`/api/mcp/import/commit${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`, json("POST", { names }));

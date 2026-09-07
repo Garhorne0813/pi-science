@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { KeyRound, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { Edit3, KeyRound, Loader2, PlugZap, RefreshCw, Shield, Trash2 } from "lucide-react";
 import type { McpConnector, McpCredentialStatus, McpToolSummary } from "@pi-science/contracts";
 import { useTranslation } from "react-i18next";
 import { settingsApi } from "../../lib/settings";
@@ -7,11 +7,14 @@ import { settingsApi } from "../../lib/settings";
 type Backend = "managed" | "environment";
 type Delivery = "environment" | "header" | "bearer";
 
-export function McpConnectorDetails({ connector, tools, workspaceCwd, onRefresh, onDelete, onCredentialChanged, onSetDecision }: {
+export function McpConnectorDetails({ connector, tools, toolsCachedAt, workspaceCwd, onRefresh, onProbe, onEdit, onDelete, onCredentialChanged, onSetDecision }: {
   connector: McpConnector;
   tools: McpToolSummary[];
+  toolsCachedAt: number | null;
   workspaceCwd: string | null;
   onRefresh: () => void;
+  onProbe: () => void;
+  onEdit: () => void;
   onDelete: () => void;
   onCredentialChanged: () => Promise<void> | void;
   onSetDecision: (tool: McpToolSummary, decision: "inherit" | "allow" | "ask" | "deny") => void;
@@ -32,13 +35,15 @@ export function McpConnectorDetails({ connector, tools, workspaceCwd, onRefresh,
     setCredential(null); setCredentialError(null); setSecret("");
     settingsApi.mcpCredential(connector.connector_id).then((status) => {
       if (!current) return;
-      const nextDelivery = status.delivery ?? status.suggested_delivery;
+      const defaultDelivery = connector.transport === "stdio" || connector.transport === "socket" ? "environment" : "bearer";
+      const defaultTarget = defaultDelivery === "environment" ? "API_KEY" : "Authorization";
+      const nextDelivery = status.delivery ?? status.suggested_delivery ?? defaultDelivery;
       setCredential(status); setBackend(status.backend ?? "managed"); setDelivery(nextDelivery);
-      setTargetName(status.target_name ?? status.suggested_target_name);
-      setEnvironmentVariable(status.environment_variable ?? status.suggested_target_name);
+      setTargetName(status.target_name ?? status.suggested_target_name ?? defaultTarget);
+      setEnvironmentVariable(status.environment_variable ?? status.suggested_target_name ?? "API_KEY");
     }).catch((error) => { if (current) setCredentialError(message(error)); });
     return () => { current = false; };
-  }, [connector.connector_id]);
+  }, [connector.connector_id, connector.transport]);
 
   const changeDelivery = (next: Delivery) => {
     setDelivery(next);
@@ -71,19 +76,36 @@ export function McpConnectorDetails({ connector, tools, workspaceCwd, onRefresh,
       <div className="rounded-input border border-border bg-surface px-4 py-3 shadow-sm">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0"><h3 className="font-semibold text-text">{connector.display_name}</h3>{connector.source === "builtin" ? <p className="mt-1 text-xs text-muted">{t("settings.mcpPage.builtinHint")}</p> : <p className="mt-1 truncate font-mono text-xs text-muted" title={location || undefined}>{location}</p>}</div>
-          {connector.source !== "builtin" && <button type="button" aria-label={t("settings.mcpPage.delete", { name: connector.display_name })} onClick={onDelete} className="shrink-0 text-error-text"><Trash2 size={16} /></button>}
+          <div className="flex shrink-0 items-center gap-3"><button type="button" onClick={onProbe} className="inline-flex items-center gap-1 text-xs text-link"><PlugZap size={14} />{t("settings.mcpPage.reconnect")}</button>{connector.source !== "builtin" && <><button type="button" onClick={onEdit} className="inline-flex items-center gap-1 text-xs text-link"><Edit3 size={14} />{t("settings.mcpPage.edit")}</button><button type="button" aria-label={t("settings.mcpPage.delete", { name: connector.display_name })} onClick={onDelete} className="text-error-text"><Trash2 size={16} /></button></>}</div>
         </div>
 
+        <section className="mt-4 grid gap-3 rounded-input border border-border bg-surface-2/30 p-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
+          <Info label={t("settings.mcpPage.source")} value={t(`settings.mcpPage.source.${connector.source}`)} />
+          <Info label={t("settings.mcpPage.fieldTransport")} value={t(`settings.mcpPage.transport.${connector.transport}`)} />
+          <Info label={t("settings.mcpPage.connection")} value={t(`settings.mcpPage.runtimeState.${connector.runtime_state}`)} />
+          <Info label={t("settings.mcpPage.auth")} value={t(`settings.mcpPage.authState.${connector.auth_state}`)} />
+        </section>
+
         <section className="mt-4 rounded-input border border-border bg-surface-2/30 p-3">
-          <div className="flex items-start justify-between gap-3"><div><h4 className="flex items-center gap-1.5 text-xs font-semibold text-text"><KeyRound size={13} />{t("settings.mcpPage.credentials")}</h4><p className="mt-1 text-[10px] text-muted">{t("settings.mcpPage.credentialsHint")}</p></div>{credential && <span className={`text-[10px] ${credential.configured ? "text-ok-text" : "text-muted"}`}>{t(credential.configured ? "settings.mcpPage.credentialConfigured" : "settings.mcpPage.credentialNotConfigured")}</span>}</div>
-          {credential ? <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <div className="flex items-start justify-between gap-3"><div><h4 className="flex items-center gap-1.5 text-xs font-semibold text-text"><KeyRound size={13} />{t("settings.mcpPage.credentials")}</h4><p className="mt-1 text-[10px] text-muted">{t(credential?.capability === "unsupported" ? "settings.mcpPage.credentialUnsupported" : "settings.mcpPage.credentialsHint")}</p></div>{credential && <span className={`text-[10px] ${credential.configured && credential.capability !== "unsupported" ? "text-ok-text" : "text-muted"}`}>{t(credential.capability === "unsupported" ? credential.credential_ref ? "settings.mcpPage.credentialUnused" : "settings.mcpPage.credentialNotSupported" : credential.configured ? "settings.mcpPage.credentialConfigured" : credential.capability === "required" ? "settings.mcpPage.credentialRequired" : "settings.mcpPage.credentialOptional")}</span>}</div>
+          {credential?.capability === "unsupported" ? credential.credential_ref && <div className="mt-3 flex justify-end"><button type="button" disabled={credentialBusy} onClick={() => void removeCredential()} className="px-3 py-2 text-xs text-error-text disabled:text-muted">{t("settings.mcpPage.removeUnusedCredential")}</button></div> : credential ? <div className="mt-3 grid gap-3 md:grid-cols-2">
             <label className="text-xs text-muted">{t("settings.mcpPage.credentialBackend")}<select value={backend} onChange={(event) => setBackend(event.target.value as Backend)} className="mt-1 w-full rounded-input border border-border bg-surface px-3 py-2 text-text"><option value="managed">{t("settings.mcpPage.backendManaged")}</option><option value="environment">{t("settings.mcpPage.backendEnvironment")}</option></select></label>
             <label className="text-xs text-muted">{t("settings.mcpPage.credentialDelivery")}<select value={delivery} onChange={(event) => changeDelivery(event.target.value as Delivery)} className="mt-1 w-full rounded-input border border-border bg-surface px-3 py-2 text-text"><option value="environment">{t("settings.mcpPage.deliveryEnvironment")}</option><option value="header">{t("settings.mcpPage.deliveryHeader")}</option><option value="bearer">{t("settings.mcpPage.deliveryBearer")}</option></select></label>
             <label className="text-xs text-muted">{t("settings.mcpPage.credentialTarget")}<input value={delivery === "bearer" ? "Authorization" : targetName} disabled={delivery === "bearer"} onChange={(event) => setTargetName(event.target.value)} className="mt-1 w-full rounded-input border border-border bg-surface px-3 py-2 font-mono text-xs text-text disabled:text-muted" /></label>
             {backend === "managed" ? <label className="text-xs text-muted">{t("settings.mcpPage.credentialSecret")}<input type="password" autoComplete="off" value={secret} placeholder={credential.configured ? t("settings.mcpPage.credentialKeepPlaceholder") : t("settings.mcpPage.credentialEnterPlaceholder")} onChange={(event) => setSecret(event.target.value)} className="mt-1 w-full rounded-input border border-border bg-surface px-3 py-2 text-text" /></label> : <label className="text-xs text-muted">{t("settings.mcpPage.credentialSourceEnv")}<input value={environmentVariable} onChange={(event) => setEnvironmentVariable(event.target.value)} className="mt-1 w-full rounded-input border border-border bg-surface px-3 py-2 font-mono text-xs text-text" /></label>}
             {credentialError && <p role="alert" className="text-xs text-error-text md:col-span-2">{credentialError}</p>}
             <div className="flex justify-end gap-3 md:col-span-2">{credential.credential_ref && <button type="button" disabled={credentialBusy} onClick={() => void removeCredential()} className="px-3 py-2 text-xs text-error-text disabled:text-muted">{t("settings.mcpPage.removeCredential")}</button>}<button type="button" disabled={credentialBusy || !targetName || (backend === "environment" && !environmentVariable) || (backend === "managed" && !secret && !credential.configured)} onClick={() => void saveCredential()} className="inline-flex items-center gap-1 rounded-input bg-accent px-3 py-2 text-xs text-white disabled:opacity-50">{credentialBusy && <Loader2 size={12} className="animate-spin" />}{t("settings.mcpPage.saveCredential")}</button></div>
-          </div> : <div className="mt-3 flex items-center text-xs text-muted"><Loader2 size={12} className="mr-1.5 animate-spin" />{t("settings.mcpPage.loading")}</div>}
+          </div> : credentialError ? <p role="alert" className="mt-3 rounded-input bg-error/10 px-3 py-2 text-xs text-error-text">{credentialError}</p> : <div className="mt-3 flex items-center text-xs text-muted"><Loader2 size={12} className="mr-1.5 animate-spin" />{t("settings.mcpPage.loading")}</div>}
+        </section>
+
+        <section className="mt-4 rounded-input border border-border bg-surface-2/30 p-3">
+          <h4 className="flex items-center gap-1.5 text-xs font-semibold text-text"><Shield size={13} />{t("settings.mcpPage.security")}</h4>
+          <div className="mt-3 grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
+            <Info label={t("settings.mcpPage.dataEgress")} value={t(connector.endpoint_url ? "settings.mcpPage.dataEgress.remote" : "settings.mcpPage.dataEgress.local")} />
+            <Info label={t("settings.mcpPage.lastProbe")} value={toolsCachedAt ? new Date(toolsCachedAt).toLocaleString() : t("settings.mcpPage.never")} />
+            <InfoLink label={t("settings.mcpPage.terms")} href={connector.runtime_config.terms_url} />
+            <InfoLink label={t("settings.mcpPage.privacy")} href={connector.runtime_config.privacy_url} />
+          </div>
         </section>
 
         <div className="mt-4 flex items-center justify-between"><div><h4 className="text-xs font-semibold text-text">{t("settings.mcpPage.toolPermissions")}</h4>{workspaceCwd && <p className="mt-1 text-[10px] text-muted">{t("settings.mcpPage.projectOverrideHint")}</p>}</div><button type="button" aria-label={t("settings.mcpPage.refreshTools")} onClick={onRefresh} className="text-muted"><RefreshCw size={14} /></button></div>
@@ -94,3 +116,5 @@ export function McpConnectorDetails({ connector, tools, workspaceCwd, onRefresh,
 }
 
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
+function Info({ label, value }: { label: string; value: string }) { return <div><p className="text-[10px] uppercase tracking-wide text-muted">{label}</p><p className="mt-1 text-text">{value}</p></div>; }
+function InfoLink({ label, href }: { label: string; href?: string | null }) { const { t } = useTranslation(); return <div><p className="text-[10px] uppercase tracking-wide text-muted">{label}</p>{href ? <a href={href} target="_blank" rel="noreferrer" className="mt-1 block truncate text-link">{href}</a> : <p className="mt-1 text-muted">{t("settings.mcpPage.notProvided")}</p>}</div>; }

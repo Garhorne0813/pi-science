@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +8,12 @@ import { createMcpFetch } from "./runtime-fetch.js";
 import { recordEgress } from "../security/egress-audit.js";
 vi.mock("../security/egress-audit.js", () => ({ egressAuditEnabled: async () => true, recordEgress: vi.fn() }));
 afterEach(() => vi.clearAllMocks());
+
+const adapterFileUrl = (file: string) => process.env.PI_SCIENCE_TEST_MCP_ADAPTER_PATH
+  ? pathToFileURL(resolve(process.env.PI_SCIENCE_TEST_MCP_ADAPTER_PATH, file))
+  : new URL(`../../../../runtime/pi/node_modules/pi-mcp-adapter/${file}`, import.meta.url);
+const serverManagerUrl = adapterFileUrl("server-manager.ts");
+const authFlowUrl = adapterFileUrl("mcp-auth-flow.ts");
 
 describe("MCP transport egress", () => {
   it("blocks private destinations and audits the rejection before sending", async () => {
@@ -33,8 +40,8 @@ describe("MCP transport egress", () => {
       expect(recordEgress).toHaveBeenCalledWith(expect.objectContaining({ note: "mcp_runtime", approved: true, project_id: "project-test" }));
     } finally { server.closeAllConnections(); await new Promise<void>((done) => server.close(() => done())); }
   });
-  it.skipIf(!existsSync(fileURLToPath(new URL("../../../../runtime/pi/node_modules/pi-mcp-adapter/server-manager.ts", import.meta.url))))("installed adapter routes its actual handshake through the guard", async () => {
-    const { McpServerManager } = await import(new URL("../../../../runtime/pi/node_modules/pi-mcp-adapter/server-manager.ts", import.meta.url).href);
+  it.skipIf(!existsSync(fileURLToPath(serverManagerUrl)))("installed adapter routes its actual handshake through the guard", async () => {
+    const { McpServerManager } = await import(serverManagerUrl.href);
     const manager = new McpServerManager();
     try {
       await expect(manager.connect("blocked", {
@@ -45,8 +52,8 @@ describe("MCP transport egress", () => {
       expect(recordEgress).toHaveBeenCalledWith(expect.objectContaining({ connector_id: "blocked", approved: false, note: "mcp_network_blocked" }));
     } finally { await manager.closeAll(); }
   });
-  it.skipIf(!existsSync(fileURLToPath(new URL("../../../../runtime/pi/node_modules/pi-mcp-adapter/mcp-auth-flow.ts", import.meta.url))))("installed adapter routes OAuth discovery and token traffic through the guard", async () => {
-    const { startAuth } = await import(new URL("../../../../runtime/pi/node_modules/pi-mcp-adapter/mcp-auth-flow.ts", import.meta.url).href);
+  it.skipIf(!existsSync(fileURLToPath(authFlowUrl)))("installed adapter routes OAuth discovery and token traffic through the guard", async () => {
+    const { startAuth } = await import(authFlowUrl.href);
     const endpoint = "http://127.0.0.1:1/mcp";
     await expect(startAuth("oauth-blocked", endpoint, {
       url: endpoint,

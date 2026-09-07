@@ -138,6 +138,7 @@ export const mcpProbeResultSchema = z.object({
 
 export const mcpCredentialDeliverySchema = z.enum(["environment", "header", "bearer"]);
 export const mcpCredentialBackendSchema = z.enum(["managed", "environment"]);
+export const mcpCredentialCapabilitySchema = z.enum(["unsupported", "optional", "required"]);
 export const mcpCredentialUpdateSchema = z.object({
   backend: mcpCredentialBackendSchema,
   delivery: mcpCredentialDeliverySchema,
@@ -151,14 +152,15 @@ export const mcpCredentialUpdateSchema = z.object({
   if (value.backend === "environment" && !value.environment_variable) context.addIssue({ code: "custom", path: ["environment_variable"], message: "environment_variable is required" });
 });
 export const mcpCredentialStatusSchema = z.object({
+  capability: mcpCredentialCapabilitySchema,
   credential_ref: z.string().nullable(),
   configured: z.boolean(),
   backend: mcpCredentialBackendSchema.nullable(),
   delivery: mcpCredentialDeliverySchema.nullable(),
   target_name: z.string().nullable(),
   environment_variable: z.string().nullable(),
-  suggested_delivery: mcpCredentialDeliverySchema,
-  suggested_target_name: z.string(),
+  suggested_delivery: mcpCredentialDeliverySchema.nullable(),
+  suggested_target_name: z.string().nullable(),
 });
 
 export type McpConnectorCreate = z.infer<typeof mcpConnectorCreateSchema>;
