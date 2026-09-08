@@ -75,6 +75,11 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
   // "user scrolled up" state of the previous session on this route.
   useEffect(() => {
     navigationGenerationRef.current += 1;
+    // A frame scheduled for the previous session must not run after the
+    // session identity changes, otherwise it can scroll the new conversation
+    // to the old session's bottom during the handoff.
+    followOutputCancelRef.current?.();
+    followOutputCancelRef.current = null;
     followOutputRef.current = true;
     setShowScrollDown(false);
     setNavigationLoading(false);

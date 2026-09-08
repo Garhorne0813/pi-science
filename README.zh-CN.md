@@ -100,7 +100,9 @@ PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 
 安装器默认下载 Pi Orbit 0.3.1。Pi Orbit Web Mode 提供 `GET /api/catalog`，用于读取完整的 Provider / Model 运行时目录；现有 `GET /api/models` 仍只表示当前可用模型。可通过 `PI_ORBIT_VERSION` 选择其他兼容版本，或通过 `PI_ORBIT_REPO` 使用本地 Pi Orbit 源码仓库。
 
-启动后进入 **Settings → LLM**，配置提供商和默认模型即可开始使用。已安装及从工作区发现的 skills 可在 **Settings → Skills** 中启用、禁用或重置。
+启动后进入 **设置 → LLM**，配置提供商和默认模型即可开始使用。已安装及从工作区发现的
+skills 可在 **设置 → Skills** 中启用、禁用或重置。内置和自定义 MCP 连接器统一在
+**设置 → MCP** 中管理；全新安装默认只启用 Paper Search。
 
 ## 核心能力
 
@@ -114,6 +116,38 @@ PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 | 科学计算 | 可复用的 Micromamba 环境、隔离的 Python/R Session 内核、可执行 `.ipynb` 文件、与对话关联的运行记录和应用级 Jupyter Lab |
 | 扩展能力 | Pi skills、扩展、MCP、subagents、自定义模型提供商和托管端点 |
 | 工作区安全 | 项目级元数据、路径校验、会话状态隔离和受控的模型端点发现 |
+
+## 科学 MCP 连接器
+
+Pi-Science 内置 18 个由公共科学数据服务驱动的 MCP 连接器。它们以本地 MCP
+进程运行，向 Agent 提供紧凑、带类型、只读的工具；实际检索仍会向上游服务发送网络请求。
+
+| 连接器 | 上游服务 | 默认状态 |
+|---|---|---|
+| Paper Search | PubMed、arXiv、Crossref、bioRxiv、medRxiv、Europe PMC | 启用 |
+| Literature Graph | OpenAlex | 关闭 |
+| Clinical Trials | ClinicalTrials.gov | 关闭 |
+| Structures & Interactions | RCSB PDB、AlphaFold DB、EMDB、IntAct、Complex Portal | 关闭 |
+| Genes & Ontologies | MyGene.info、EBI OLS、QuickGO、Reactome | 关闭 |
+| Genomes | Ensembl REST、UCSC Genome Browser | 关闭 |
+| CellGuide | CELLxGENE CellGuide | 关闭 |
+| Protein Annotation | InterPro、STRING v12、Human Protein Atlas | 关闭 |
+| Omics Archives | NCBI GEO、PRIDE、MGnify、ArrayExpress、MetaboLights | 关闭 |
+| Chemistry | PubChem、ChEBI、BindingDB、Rhea | 关闭 |
+| Regulation | ENCODE、JASPAR、UniBind | 关闭 |
+| BioMart | Ensembl BioMart | 关闭 |
+| Drug Regulatory | openFDA、Drugs@FDA | 关闭 |
+| Human Genetics | NHGRI-EBI GWAS Catalog、FinnGen PheWAS | 关闭 |
+| Protein Records | UniProtKB | 关闭 |
+| Nucleotide Archives | NCBI GenBank、ENA | 关闭 |
+| Target Discovery | Open Targets Platform | 关闭 |
+| ChEMBL | ChEMBL | 关闭 |
+
+这些连接器共提供 85 个工具。可在 **设置 → MCP** 中仅启用需要的科研领域，查看已发现
+工具、测试连接、筛选暴露的工具，并为工具选择 `询问`、`允许` 或 `拒绝`。内置连接器
+定义只读；也可以注册自定义 `stdio`、Streamable HTTP、SSE 和 socket 连接器。连接器
+设置全局生效，单个项目可以覆盖工具决策。配置变更会自动投影到活跃 Agent runtime，
+无需手工编辑 Pi 配置文件。
 
 ## 科学文件查看器
 
@@ -134,7 +168,9 @@ Pi-Science 可以直接在浏览器中渲染常见科研格式。
 
 Pi-Science 使用 local-first Node 控制面、一个承载隔离 agent runtime 的共享 Pi Orbit
 Web Host，以及按需启动的原生 Python/R Kernel 进程。全局 workspace、环境和任务状态
-由 SQLite 协调，项目文件和可复现性记录仍保存在各自 workspace 内。进程归属、服务
+由 SQLite 协调，项目文件和可复现性记录仍保存在各自 workspace 内。托管 MCP 定义
+和全局策略也保存在 SQLite 中；每个 workspace 会收到一份原子 runtime 投影，其中只
+包含已启用的连接器及该项目的有效工具决策。进程归属、服务
 边界、工作区状态、生命周期和安全设计详见[架构文档](docs/architecture.zh-CN.md)。
 
 ## 斜杠命令
@@ -216,6 +252,7 @@ pnpm --filter frontend test:uat:office
 ## 文档
 
 - [架构文档](docs/architecture.zh-CN.md)
+- [MCP 管理实现](docs/mcp-management-implementation.md)
 - [研究循环架构（ADR）](docs/adr-research-loop-subagents.md)
 - 控制面的内部端点提供运行状态和 SQLite 诊断信息
 

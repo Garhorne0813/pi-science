@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { JobRecord } from "../../runtime/jobs/job-coordinator.js";
 import { JobRepository } from "./repositories/job-repository.js";
 import { fingerprintPaths, WorkspaceRepository } from "./repositories/workspace-repository.js";
-import { InMemorySqliteStateStore } from "./state-store.js";
+import { loadMigrations } from "./migrations.js";
+import { InMemorySqliteStateStore, SqliteStateStore } from "./state-store.js";
 
 const stores: InMemorySqliteStateStore[] = [];
 const directories: string[] = [];
@@ -62,7 +63,7 @@ function runningJob(cwd: string): JobRecord {
 describe("SQLite state store", () => {
   it("starts the worker, applies migrations, and rolls back a failed batch", async () => {
     const state = await store();
-    expect(state.diagnostics()).toMatchObject({ status: "ready", schema_version: 1 });
+    expect(state.diagnostics()).toMatchObject({ status: "ready", schema_version: 4 });
 
     await expect(state.batch([
       { sql: "INSERT INTO projects (project_id, name, manifest_version, created_at, updated_at, last_seen_at) VALUES (?, ?, 1, 1, 1, 1)", params: ["project-one", "one"] },
@@ -70,6 +71,122 @@ describe("SQLite state store", () => {
     ])).rejects.toThrow();
 
     expect(await state.get<{ count: number }>("SELECT COUNT(*) AS count FROM projects")).toEqual({ count: 0 });
+  });
+
+  it("accepts checksums from the previously shipped compatible MCP migrations", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-science-compatible-migrations-"));
+    directories.push(root);
+    const path = join(root, "state.sqlite");
+    const initial = new SqliteStateStore({ path });
+    await initial.start();
+    await initial.run("UPDATE schema_migrations SET checksum = '502092b1102857c4affd53158935ed0b1b862245397077da72e25c0a547b8a96' WHERE version = 3");
+    await initial.run("UPDATE schema_migrations SET checksum = 'd89e957d8ad3894af8b0ea976658055e2477bea5e0ba4cc13e26ef128693410c' WHERE version = 4");
+    await initial.close();
+
+    const reopened = new SqliteStateStore({ path });
+    await expect(reopened.start()).resolves.toBeUndefined();
+    expect(reopened.diagnostics().schema_version).toBe(4);
+    await reopened.close();
+  });
+
+  it("migrates project MCP bindings and tool grants into global connector settings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-science-mcp-global-migration-"));
+    directories.push(root);
+    const path = join(root, "state.sqlite");
+    const migrations = await loadMigrations();
+    const legacy = new SqliteStateStore({ path, migrations: migrations.slice(0, 2) });
+    await legacy.start();
+    await legacy.run("INSERT INTO projects (project_id, name, manifest_version, created_at, updated_at, last_seen_at) VALUES ('project-1', 'one', 1, 1, 1, 1)");
+    await legacy.run(
+      `INSERT INTO mcp_connectors (connector_id, name, display_name, description, source, transport, endpoint_url, command, args_json, socket_path, runtime_config_json, credential_ref, revision, created_at, updated_at)
+       VALUES ('mcp-1', 'papers', 'Papers', '', 'custom', 'stdio', NULL, 'node', '[]', NULL, '{"lifecycle":"lazy","expose_resources":true,"include_tools":[],"exclude_tools":[],"environment":{},"headers":{},"auth":"none","allow_private":false}', NULL, 1, 1, 1)`,
+    );
+    await legacy.run("INSERT INTO mcp_project_bindings (project_id, connector_id, enabled, include_tools_json, exclude_tools_json, approval_mode, revision, created_at, updated_at) VALUES ('project-1', 'mcp-1', 1, '[\"search\"]', '[]', 'custom', 1, 1, 2)");
+    await legacy.run("INSERT INTO mcp_tool_grants (project_id, connector_id, tool_name, decision, updated_at) VALUES ('project-1', 'mcp-1', 'search', 'allow', 3)");
+    await legacy.close();
+
+    const upgraded = new SqliteStateStore({ path });
+    await upgraded.start();
+    expect(await upgraded.get("SELECT enabled, include_tools_json, approval_mode FROM mcp_connectors WHERE connector_id = 'mcp-1'"))
+      .toEqual({ enabled: 1, include_tools_json: '["search"]', approval_mode: "custom" });
+    expect(await upgraded.get("SELECT decision FROM mcp_global_tool_grants WHERE connector_id = 'mcp-1' AND tool_name = 'search'"))
+      .toEqual({ decision: "allow" });
+    expect(await upgraded.get("SELECT decision FROM mcp_project_tool_grants WHERE project_id = 'project-1' AND connector_id = 'mcp-1' AND tool_name = 'search'"))
+      .toEqual({ decision: "allow" });
+    expect(await upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name IN ('mcp_project_bindings', 'mcp_tool_grants')"))
+      .toEqual({ count: 0 });
+    await upgraded.close();
+  });
+
+  it("records scope conflicts and fails closed instead of selecting one project policy", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-science-mcp-conflict-migration-"));
+    directories.push(root);
+    const path = join(root, "state.sqlite");
+    const migrations = await loadMigrations();
+    const legacy = new SqliteStateStore({ path, migrations: migrations.slice(0, 2) });
+    let upgraded: SqliteStateStore | undefined;
+    try {
+      await legacy.start();
+      await legacy.run("INSERT INTO projects (project_id, name, manifest_version, created_at, updated_at, last_seen_at) VALUES ('project-1', 'one', 1, 1, 1, 1)");
+      await legacy.run("INSERT INTO projects (project_id, name, manifest_version, created_at, updated_at, last_seen_at) VALUES ('project-2', 'two', 1, 1, 1, 1)");
+      await legacy.run(
+        `INSERT INTO mcp_connectors (connector_id, name, display_name, description, source, transport, endpoint_url, command, args_json, socket_path, runtime_config_json, credential_ref, revision, created_at, updated_at)
+         VALUES ('mcp-conflict', 'conflict', 'Conflict', '', 'custom', 'stdio', NULL, 'node', '[]', NULL, '{"lifecycle":"lazy","expose_resources":true,"include_tools":[],"exclude_tools":[],"environment":{},"headers":{},"auth":"none","allow_private":false}', NULL, 1, 1, 1)`,
+      );
+      await legacy.run("INSERT INTO mcp_project_bindings (project_id, connector_id, enabled, include_tools_json, exclude_tools_json, approval_mode, revision, created_at, updated_at) VALUES ('project-1', 'mcp-conflict', 1, '[\"search\"]', '[]', 'custom', 1, 1, 2)");
+      await legacy.run("INSERT INTO mcp_project_bindings (project_id, connector_id, enabled, include_tools_json, exclude_tools_json, approval_mode, revision, created_at, updated_at) VALUES ('project-2', 'mcp-conflict', 0, '[\"other\"]', '[]', 'ask', 1, 1, 3)");
+      await legacy.run("INSERT INTO mcp_tool_grants (project_id, connector_id, tool_name, decision, updated_at) VALUES ('project-1', 'mcp-conflict', 'search', 'allow', 4)");
+      await legacy.run("INSERT INTO mcp_tool_grants (project_id, connector_id, tool_name, decision, updated_at) VALUES ('project-2', 'mcp-conflict', 'search', 'deny', 5)");
+      await legacy.close();
+
+      upgraded = new SqliteStateStore({ path });
+      await upgraded.start();
+      expect(await upgraded.get("SELECT enabled, include_tools_json, approval_mode FROM mcp_connectors WHERE connector_id = 'mcp-conflict'"))
+        .toEqual({ enabled: 0, include_tools_json: "[]", approval_mode: "ask" });
+      expect(await upgraded.get("SELECT decision FROM mcp_global_tool_grants WHERE connector_id = 'mcp-conflict' AND tool_name = 'search'"))
+        .toEqual({ decision: "ask" });
+      expect(await upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM mcp_scope_migration_conflicts WHERE connector_id = 'mcp-conflict'"))
+        .toEqual({ count: 4 });
+      const conflict = await upgraded.get<{ project_ids_json: string }>("SELECT project_ids_json FROM mcp_scope_migration_conflicts WHERE connector_id = 'mcp-conflict' AND conflict_kind = 'tool_grant' AND tool_name = 'search'");
+      expect(JSON.parse(conflict!.project_ids_json)).toEqual(expect.arrayContaining(["project-1", "project-2"]));
+      expect(await upgraded.all("SELECT project_id, decision FROM mcp_project_tool_grants WHERE connector_id = 'mcp-conflict' AND tool_name = 'search' ORDER BY project_id"))
+        .toEqual([{ project_id: "project-1", decision: "allow" }, { project_id: "project-2", decision: "deny" }]);
+    } finally {
+      await upgraded?.close();
+      await legacy.close();
+    }
+  }, 15_000);
+
+  it("does not promote a tool grant that was absent from another project", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-science-mcp-missing-grant-migration-"));
+    directories.push(root);
+    const path = join(root, "state.sqlite");
+    const migrations = await loadMigrations();
+    const legacy = new SqliteStateStore({ path, migrations: migrations.slice(0, 2) });
+    await legacy.start();
+    await legacy.run("INSERT INTO projects (project_id, name, manifest_version, created_at, updated_at, last_seen_at) VALUES ('project-1', 'one', 1, 1, 1, 1)");
+    await legacy.run("INSERT INTO projects (project_id, name, manifest_version, created_at, updated_at, last_seen_at) VALUES ('project-2', 'two', 1, 1, 1, 1)");
+    await legacy.run(
+      `INSERT INTO mcp_connectors (connector_id, name, display_name, description, source, transport, endpoint_url, command, args_json, socket_path, runtime_config_json, credential_ref, revision, created_at, updated_at)
+       VALUES ('mcp-partial', 'partial', 'Partial', '', 'custom', 'stdio', NULL, 'node', '[]', NULL, '{"lifecycle":"lazy","expose_resources":true,"include_tools":[],"exclude_tools":[],"environment":{},"headers":{},"auth":"none","allow_private":false}', NULL, 1, 1, 1)`,
+    );
+    for (const project of ["project-1", "project-2"]) {
+      await legacy.run("INSERT INTO mcp_project_bindings (project_id, connector_id, enabled, include_tools_json, exclude_tools_json, approval_mode, revision, created_at, updated_at) VALUES (?, 'mcp-partial', 1, '[]', '[]', 'custom', 1, 1, 2)", [project]);
+    }
+    await legacy.run("INSERT INTO mcp_tool_grants (project_id, connector_id, tool_name, decision, updated_at) VALUES ('project-1', 'mcp-partial', 'search', 'allow', 3)");
+    await legacy.close();
+
+    const upgraded = new SqliteStateStore({ path });
+    await upgraded.start();
+    expect(await upgraded.get("SELECT decision FROM mcp_global_tool_grants WHERE connector_id = 'mcp-partial' AND tool_name = 'search'"))
+      .toEqual({ decision: "ask" });
+    expect(await upgraded.get("SELECT decision FROM mcp_project_tool_grants WHERE project_id = 'project-1' AND connector_id = 'mcp-partial' AND tool_name = 'search'"))
+      .toEqual({ decision: "allow" });
+    expect(await upgraded.get("SELECT decision FROM mcp_project_tool_grants WHERE project_id = 'project-2' AND connector_id = 'mcp-partial' AND tool_name = 'search'"))
+      .toBeNull();
+    const conflict = await upgraded.get<{ project_ids_json: string }>("SELECT project_ids_json FROM mcp_scope_migration_conflicts WHERE connector_id = 'mcp-partial' AND conflict_kind = 'tool_grant' AND tool_name = 'search'");
+    expect(JSON.parse(conflict!.project_ids_json)).toEqual(expect.arrayContaining(["project-1", "project-2"]));
+    await upgraded.close();
   });
 
   it("keeps job history attached to project identity after a workspace rename", async () => {

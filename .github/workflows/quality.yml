@@ -33,6 +33,10 @@ jobs:
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify pinned MCP adapter patch
+        if: runner.os == 'Linux'
+        run: bash scripts/test-mcp-adapter-patch.sh
+
       - name: Lint frontend
         run: pnpm --filter frontend lint
 

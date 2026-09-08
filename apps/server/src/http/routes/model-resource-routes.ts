@@ -117,22 +117,32 @@ export function registerModelResourceRoutes(app: FastifyInstance, resources: Mod
   });
 
   app.get("/api/credentials", async (_request, reply) => {
-    try { return { credentials: await resources.credentials.listMetadata() }; }
+    try { return { credentials: (await resources.credentials.listMetadata()).filter((credential) => credential.owner_kind !== "mcp") }; }
     catch (error) { return routeError(reply, error); }
   });
 
   app.post("/api/credentials", async (request, reply) => {
-    try { return await reload(nodeSessionService, reply, { ok: true, credential: await resources.credentials.put(createCredentialRequestSchema.parse(request.body ?? {})) }); }
+    try {
+      const input = createCredentialRequestSchema.parse(request.body ?? {});
+      if (input.owner_kind === "mcp") return reply.code(403).send({ code: "resource_in_use", error: "MCP credentials must be managed from the connector settings" });
+      return await reload(nodeSessionService, reply, { ok: true, credential: await resources.credentials.put(input) });
+    }
     catch (error) { return routeError(reply, error); }
   });
 
   app.put<{ Params: { credential_id: string } }>("/api/credentials/:credential_id", async (request, reply) => {
-    try { return await reload(nodeSessionService, reply, { ok: true, credential: await resources.credentials.put({ ...updateCredentialRequestSchema.parse(request.body ?? {}), id: request.params.credential_id }) }); }
+    try {
+      const existing = await resources.credentials.metadata(request.params.credential_id);
+      if (existing?.owner_kind === "mcp") return reply.code(409).send({ code: "resource_in_use", error: "MCP credentials must be managed from the connector settings" });
+      return await reload(nodeSessionService, reply, { ok: true, credential: await resources.credentials.put({ ...updateCredentialRequestSchema.parse(request.body ?? {}), id: request.params.credential_id }) });
+    }
     catch (error) { return routeError(reply, error); }
   });
 
   app.delete<{ Params: { credential_id: string } }>("/api/credentials/:credential_id", async (request, reply) => {
     try {
+      const metadata = await resources.credentials.metadata(request.params.credential_id);
+      if (metadata?.owner_kind === "mcp") return reply.code(409).send({ code: "resource_in_use", error: "MCP credentials must be removed from the connector settings" });
       await resources.ensureMigrated();
       const state = await resources.repository.read();
       if (state.endpoints.some((endpoint) => endpoint.credential_ref === request.params.credential_id)) return reply.code(409).send({ code: "resource_in_use", error: `Credential '${request.params.credential_id}' is still referenced by an endpoint` });

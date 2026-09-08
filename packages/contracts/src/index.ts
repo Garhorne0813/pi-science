@@ -666,3 +666,5 @@ export type SkillContent = z.infer<typeof skillContentSchema>;
 export type SkillInfo = z.infer<typeof skillInfoSchema>;
 
 export * from "./model-resources.js";
+
+export * from "./mcp.js";

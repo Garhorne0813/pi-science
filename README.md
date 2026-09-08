@@ -106,7 +106,8 @@ to use a local Pi Orbit source checkout.
 
 Open **Settings → LLM** after startup and configure a provider and default
 model. Installed and workspace-discovered skills can be enabled, disabled, or
-reset from **Settings → Skills**.
+reset from **Settings → Skills**. Built-in and custom MCP connectors are managed
+from **Settings → MCP**; only Paper Search is enabled on a fresh installation.
 
 ## Highlights
 
@@ -120,6 +121,49 @@ reset from **Settings → Skills**.
 | Computation | Shared versioned Micromamba environments, isolated Python/R Session kernels, executable `.ipynb` files, agent notebook cell read/edit/run tools, conversation-linked runs, and an optional app-managed Jupyter Lab |
 | Extensibility | Pi skills, extensions, MCP servers, subagents, custom model providers, and managed endpoints |
 | Workspace safety | Project-scoped metadata, validated paths, isolated session state, and controlled outbound provider discovery |
+
+## Scientific MCP Connectors
+
+Pi-Science includes 18 managed MCP connectors backed by public scientific data
+services. They run as local MCP processes and expose compact, typed, read-only
+tools to the agent; the upstream searches still make outbound network requests.
+
+| Connector | Upstream services | Default |
+|---|---|---|
+| Paper Search | PubMed, arXiv, Crossref, bioRxiv, medRxiv, Europe PMC | Enabled |
+| Literature Graph | OpenAlex | Disabled |
+| Clinical Trials | ClinicalTrials.gov | Disabled |
+| Structures & Interactions | RCSB PDB, AlphaFold DB, EMDB, IntAct, Complex Portal | Disabled |
+| Genes & Ontologies | MyGene.info, EBI OLS, QuickGO, Reactome | Disabled |
+| Genomes | Ensembl REST, UCSC Genome Browser | Disabled |
+| CellGuide | CELLxGENE CellGuide | Disabled |
+| Protein Annotation | InterPro, STRING v12, Human Protein Atlas | Disabled |
+| Omics Archives | NCBI GEO, PRIDE, MGnify, ArrayExpress, MetaboLights | Disabled |
+| Chemistry | PubChem, ChEBI, BindingDB, Rhea | Disabled |
+| Regulation | ENCODE, JASPAR, UniBind | Disabled |
+| BioMart | Ensembl BioMart | Disabled |
+| Drug Regulatory | openFDA, Drugs@FDA | Disabled |
+| Human Genetics | NHGRI-EBI GWAS Catalog, FinnGen PheWAS | Disabled |
+| Protein Records | UniProtKB | Disabled |
+| Nucleotide Archives | NCBI GenBank, ENA | Disabled |
+| Target Discovery | Open Targets Platform | Disabled |
+| ChEMBL | ChEMBL | Disabled |
+
+Together they expose 85 tools. Enable only the domains you need from
+**Settings → MCP**, where you can inspect discovered tools, test a connection,
+filter exposed tools, and choose `Ask`, `Allow`, or `Deny` decisions. Built-in
+definitions are read-only, while custom `stdio`, Streamable HTTP, SSE, and
+socket connectors can also be registered. Settings apply globally; individual
+projects may override tool decisions. Connector changes are projected into
+active agent runtimes without manually editing Pi configuration files.
+
+Connector details also contain authentication settings modeled after Claude
+Science: an API key or token can be saved in Pi-Science's local mode-0600
+credential store, or referenced from an existing environment variable, then
+delivered as a process environment variable, an HTTP header, or a Bearer token.
+The workspace runtime snapshot contains only the credential reference; the
+secret is resolved in memory by the Pi process. OAuth login/refresh remains a
+separate follow-up rather than being represented as a partially working option.
 
 ## Scientific Viewers
 
@@ -141,7 +185,10 @@ Pi-Science renders common research formats directly in the browser.
 Pi-Science uses a local-first Node control plane, one shared Pi Orbit Web host
 with isolated agent runtimes, and on-demand native Python/R kernel processes.
 Global workspace, environment, and job state is coordinated through SQLite;
-project files and reproducibility records remain inside each workspace. See the
+project files and reproducibility records remain inside each workspace. Managed
+MCP definitions and global policies also live in SQLite; each workspace receives
+an atomic runtime projection containing only enabled connectors and its effective
+tool decisions. See the
 [architecture reference](docs/architecture.md) for process ownership, service
 boundaries, workspace state, lifecycle, and security details.
 
@@ -243,6 +290,7 @@ pnpm --filter frontend test:uat:office
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [MCP management implementation](docs/mcp-management-implementation.md)
 - [Research loop architecture (ADR)](docs/adr-research-loop-subagents.md)
 - Runtime health and SQLite diagnostics are available from the control-plane internal endpoints.
 
