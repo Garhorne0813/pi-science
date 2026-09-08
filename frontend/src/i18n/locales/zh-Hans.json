@@ -77,6 +77,7 @@
   "conversation.activity.completed": "完成",
   "conversation.activity.processHeader": "工作过程",
   "conversation.activity.exploreSummary": "已探索 · {{count}} 项操作",
+  "conversation.activity.exploreSummaryLive": "探索中 · 已完成 {{done}}/{{count}} 项操作",
   "conversation.activity.failureSummary": " · {{count}} 项失败",
   "conversation.activity.noAnswer": "本次运行没有返回最终答复",
   "conversation.activity.operationCount_one": "{{count}} 项操作",

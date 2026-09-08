@@ -77,6 +77,7 @@
   "conversation.activity.completed": "Complete",
   "conversation.activity.processHeader": "Work process",
   "conversation.activity.exploreSummary": "Explored · {{count}} operations",
+  "conversation.activity.exploreSummaryLive": "Exploring · {{done}} of {{count}} operations",
   "conversation.activity.failureSummary": " · {{count}} failed",
   "conversation.activity.noAnswer": "No final answer returned",
   "conversation.activity.operationCount_one": "{{count}} operation",

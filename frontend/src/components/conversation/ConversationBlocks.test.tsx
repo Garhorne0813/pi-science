@@ -22,7 +22,7 @@ describe("turn-level conversation rendering", () => {
     expect(renderBlocks({} as unknown as ThreadBlock[], codeRunner)).toBeNull();
   });
 
-  it("renders one activity across narration-separated tools and hides intermediate narration", () => {
+  it("keeps intermediate narration visible across narration-separated tools", () => {
     render(<>{renderBlocks([
       user("u1", "check module"),
       agent("a1", "I will read the component."),
@@ -31,17 +31,20 @@ describe("turn-level conversation rendering", () => {
       tool("grep", "grep", "done", { pattern: "tool.updated" }),
       agent("a3", "The final answer."),
     ], codeRunner)}</>);
-    expect(screen.getByText("Reading ConversationBlocks.tsx")).toBeInTheDocument();
-    expect(screen.getByText("Searching for tool.updated")).toBeInTheDocument();
-    expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
-    expect(screen.queryByText("I will read the component.")).not.toBeInTheDocument();
-    expect(screen.queryByText("Now I will search events.")).not.toBeInTheDocument();
+    // The model's intermediate narration stays visible; the tool steps are
+    // live-stream records and leave no settled trace behind.
+    expect(screen.getByText("I will read the component.")).toBeInTheDocument();
+    expect(screen.getByText("Now I will search events.")).toBeInTheDocument();
+    expect(screen.queryByText(/Work process/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Reading ConversationBlocks.tsx")).not.toBeInTheDocument();
     expect(screen.getByText("The final answer.")).toBeInTheDocument();
   });
 
   it("excludes interleaved todo tools from the turn activity", () => {
     render(<>{renderBlocks([user("u1"), agent("a1", "planning"), tool("read", "read"), tool("todo", "todo"), agent("a2", "searching"), tool("grep", "grep"), tool("todo-2", "todo"), agent("final", "done")], codeRunner)}</>);
-    expect(screen.getAllByText("Reading file")).toHaveLength(1);
+    expect(screen.getByText("planning")).toBeInTheDocument();
+    expect(screen.getByText("searching")).toBeInTheDocument();
+    expect(screen.queryByText(/Work process/)).not.toBeInTheDocument();
     expect(screen.queryByText(/todo/i)).not.toBeInTheDocument();
     expect(screen.getByText("done")).toBeInTheDocument();
   });
@@ -63,15 +66,16 @@ describe("turn-level conversation rendering", () => {
     const settled = buildTurnPresentations([user("u1"), tool("read", "read"), agent("a1", "streaming answer")])[0];
     render(<>{renderTurn(settled, codeRunner)}</>);
     expect(screen.getByText("streaming answer")).toBeInTheDocument();
-    expect(screen.getByText("Reading file")).toBeInTheDocument();
+    expect(screen.queryByText(/Work process/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Reading file")).not.toBeInTheDocument();
     expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
   });
 
   it("shows a completed summary when a settled turn ends on a tool", () => {
     render(<>{renderBlocks([user("u1"), agent("a1", "I will inspect it."), tool("read", "read")], codeRunner)}</>);
-    expect(screen.getByText("Reading file")).toBeInTheDocument();
+    expect(screen.queryByText(/Work process/)).not.toBeInTheDocument();
     expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
-    expect(screen.queryByText("I will inspect it.")).not.toBeInTheDocument();
+    expect(screen.getByText("I will inspect it.")).toBeInTheDocument();
   });
 
   it("copies only the final visible answer", () => {

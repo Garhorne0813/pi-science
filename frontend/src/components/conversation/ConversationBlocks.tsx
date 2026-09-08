@@ -33,18 +33,14 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
   return (
     <div data-thread-block-ids={turnBlockIds(turn).join(" ")} className="flex flex-col gap-3 scroll-mt-4">
       {turn.user && <UserMessage block={turn.user} />}
-      {(turn.active || turn.activityBlocks.length > 0) && <AgentActivity blocks={turn.activityBlocks} contextBlocks={turn.blocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} disclosureKey={conversationDisclosureKey(turn)} part={isLiveLifecycle(turn.lifecycle) ? "content" : "both"} />}
+      {(turn.active || turn.activityBlocks.length > 0) && <AgentActivity blocks={turn.activityBlocks} contextBlocks={turn.blocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} part={isLiveLifecycle(turn.lifecycle) ? "content" : "both"} />}
       {visibleAgent && <AgentMessage block={visibleAgent} actionText={turn.finalAgent ? actionTextByBlock?.get(turn.finalAgent.id) : undefined} codeRunner={codeRunner} />}
-      {(turn.active || turn.activityBlocks.length > 0) && isLiveLifecycle(turn.lifecycle) && <AgentActivity blocks={turn.activityBlocks} contextBlocks={turn.blocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} disclosureKey={conversationDisclosureKey(turn)} part="status" />}
+      {(turn.active || turn.activityBlocks.length > 0) && isLiveLifecycle(turn.lifecycle) && <AgentActivity blocks={turn.activityBlocks} contextBlocks={turn.blocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} part="status" />}
       {turn.systemBlocks.map((block) => <SystemBlock key={block.id} block={block} />)}
       {turn.artifacts.map((block) => <TurnArtifactStrip key={block.id} artifacts={block.artifacts} cwd={codeRunner?.cwd} />)}
       {finalText && <ReferencedArtifactStrip text={finalText} cwd={codeRunner?.cwd} exclude={publishedPaths} />}
     </div>
   );
-}
-
-function conversationDisclosureKey(turn: TurnPresentation): string {
-  return ["conversation-disclosure", turn.turnId ?? turn.id, turn.runId ?? "legacy", "activity"].join(":");
 }
 
 function UserMessage({ block }: { block: UserMessageBlock }) {
