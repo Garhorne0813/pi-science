@@ -50,6 +50,7 @@ export interface EventFoldState {
   anonymousSerial: number;
   errorSerial: number;
   textByKey: Record<string, TextFoldState>;
+  thinkingByKey: Record<string, { text: string; blockId: string }>;
   seenEventIds: string[];
   pendingEvents: PiScienceEvent[];
   /** Events that were projected (or deliberately consumed as stale) before
@@ -78,6 +79,7 @@ function createFoldState(event?: PiScienceEvent): EventFoldState {
     anonymousSerial: 0,
     errorSerial: 0,
     textByKey: {},
+    thinkingByKey: {},
     seenEventIds: [],
     pendingEvents: [],
     speculativeEventIds: [],
@@ -95,6 +97,7 @@ function cloneFoldState(state: Thread, event?: PiScienceEvent): EventFoldState {
       ...value,
       ...(value.segments ? { segments: value.segments.map((segment) => ({ ...segment })) } : {}),
     }])),
+    thinkingByKey: { ...(current.thinkingByKey ?? {}) },
     seenEventIds: [...current.seenEventIds],
     pendingEvents: [...current.pendingEvents],
     speculativeEventIds: [...(current.speculativeEventIds ?? [])],
@@ -212,12 +215,12 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       const itemId = stringValue(event.itemId) ?? stringValue(event.partId);
       const text = itemId ? foldState.textByKey[itemId] : undefined;
       const blockIndex = text ? index[text.blockId] : undefined;
-      if (blockIndex !== undefined && blocks[blockIndex]?.kind === "agent") {
+      if (blockIndex !== undefined && (blocks[blockIndex]?.kind === "agent" || blocks[blockIndex]?.kind === "thinking")) {
         blocks[blockIndex] = { ...blocks[blockIndex], partial: false };
       } else if (itemId) {
         for (let i = 0; i < blocks.length; i += 1) {
           const block = blocks[i];
-          if (block.kind === "agent" && (block.itemId === itemId || block.id === itemId)) {
+          if ((block.kind === "agent" || block.kind === "thinking") && (block.itemId === itemId || block.id === itemId)) {
             blocks[i] = { ...block, partial: false };
           }
         }
@@ -331,6 +334,45 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       }
       foldState.textByKey[key] = { text: nextText, revision, blockId, partId: eventPartId ?? key };
       foldState.activeItemKey = key;
+      break;
+    }
+
+    case "thinking.updated": {
+      // The reasoning stream stays out of the text state machine: thinking and
+      // narration interleave freely, and neither should finalize the other.
+      const incomingText = (event.text as string) || "";
+      const eventPartId = stringValue(event.partId) ?? stringValue(event.itemId);
+      const key = `thinking:${eventPartId ?? eventItemKey(event, foldState)}`;
+      const previous = foldState.thinkingByKey[key];
+      const nextText = event.replace === true ? incomingText : (previous?.text ?? "") + incomingText;
+      const turnId = turnIdentity(event, foldState);
+      const runId = runIdentity(event, foldState);
+      const blockId = previous?.blockId ?? `thinking-${turnId}-${eventPartId ?? key}`;
+      if (nextText.trim()) {
+        const existingIdx = index[blockId];
+        if (existingIdx !== undefined && blocks[existingIdx].kind === "thinking") {
+          blocks[existingIdx] = {
+            ...blocks[existingIdx],
+            parts: [{ id: blockId, text: nextText }],
+            partial: true,
+            turnId,
+            ...(runId ? { runId } : {}),
+          } as ThreadBlock;
+        } else {
+          index[blockId] = blocks.length;
+          blocks.push({
+            kind: "thinking",
+            id: blockId,
+            turnId,
+            ...(runId ? { runId } : {}),
+            ...(eventPartId ? { itemId: eventPartId } : {}),
+            parts: [{ id: blockId, text: nextText }],
+            partial: true,
+            timestamp: new Date().toISOString(),
+          } as ThreadBlock);
+        }
+      }
+      foldState.thinkingByKey[key] = { text: nextText, blockId };
       break;
     }
 
@@ -608,6 +650,25 @@ function adaptV2Event(event: PiScienceEvent): PiScienceEvent[] {
         ...(baseRevision !== undefined ? { baseRevision } : {}),
         ...(payload.replace === true || event.replace === true ? { replace: true } : {}),
         ...(textRole ? { presentationRole: textRole } : {}),
+      }];
+    }
+    case "thinking.updated": {
+      // Same wire shape as text.updated; the reasoning stream just targets
+      // thinking blocks instead of narration.
+      const text = typeof payload.text === "string"
+        ? payload.text
+        : typeof event.text === "string" ? event.text : "";
+      const partId = stringValue(payload.partId) ?? stringValue(event.partId) ?? stringValue(event.itemId);
+      const revision = numberValue(payload.revision) ?? numberValue(event.revision);
+      const baseRevision = numberValue(payload.baseRevision) ?? numberValue(event.baseRevision);
+      return [{
+        ...base,
+        type: "thinking.updated",
+        ...(partId ? { partId } : {}),
+        text,
+        ...(revision !== undefined ? { revision } : {}),
+        ...(baseRevision !== undefined ? { baseRevision } : {}),
+        ...(payload.replace === true || event.replace === true ? { replace: true } : {}),
       }];
     }
     case "item.text.delta":
@@ -1060,7 +1121,25 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
       const text = msg.content
         .filter((c: any) => c.type === "text")
         .map((c: any) => c.text)
+        .join("");
+      // Reasoning precedes the answer in the content array; rebuild it as its
+      // own block so restored turns show the same thinking rows as live ones.
+      const thinking = msg.content
+        .filter((c: any) => c.type === "thinking")
+        .map((c: any) => (typeof c.thinking === "string" ? c.thinking : ""))
+        .filter(Boolean)
         .join("\n");
+      if (thinking) {
+        blocks.push({
+          kind: "thinking",
+          id: `${msg.id}-thinking`,
+          ...(msg.turnId ? { turnId: msg.turnId } : {}),
+          ...(msg.runId ? { runId: msg.runId } : {}),
+          ...(msg.itemId ? { itemId: msg.itemId } : {}),
+          parts: [{ id: `${msg.id}-thinking-0`, text: thinking }],
+          timestamp: msg.timestamp,
+        });
+      }
       if (text) {
         blocks.push({
           kind: "agent",

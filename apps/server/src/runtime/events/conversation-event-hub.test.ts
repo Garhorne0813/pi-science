@@ -290,6 +290,32 @@ describe("central conversation event hub", () => {
     expect(text.at(-1)).toMatchObject({ text: "replacement", replace: true, partId: "m2" });
   });
 
+  it("streams thinking deltas as thinking.updated without touching the text stream", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub();
+    const process = new EventEmitter() as PiProcess;
+    const received: Array<Record<string, unknown>> = [];
+    hub.bind(cwd, process, { activeSessionId: () => "session-thinking", onBusy: () => undefined, onExit: () => undefined });
+    await hub.subscribe(cwd, "session-thinking", undefined, (record) => received.push(JSON.parse(record.data)));
+
+    process.emit("event", { type: "agent_start" });
+    process.emit("event", { type: "message_update", message: { id: "m1" }, assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "Let me " } });
+    process.emit("event", { type: "message_update", message: { id: "m1" }, assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "think." } });
+    process.emit("event", { type: "message_update", message: { id: "m1" }, assistantMessageEvent: { type: "thinking_end", contentIndex: 0, thinking: "Let me think." } });
+    process.emit("event", { type: "message_update", message: { id: "m1" }, assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "Answer" } });
+    process.emit("event", { type: "agent_settled" });
+    await eventually(() => received.some((event) => event.type === "session.idle"));
+
+    // The two thinking deltas coalesce into one batched record; the redundant
+    // thinking_end emits nothing. Text keeps its own stream and payload.
+    const thinking = received.filter((event) => event.type === "thinking.updated");
+    expect(thinking.map((event) => event.text)).toEqual(["Let me think."]);
+    expect(thinking[0]).toMatchObject({ partId: "m1" });
+    const text = received.filter((event) => event.type === "text.updated");
+    expect(text.map((event) => event.text)).toEqual(["Answer"]);
+    expect(text[0]).toMatchObject({ partId: "m1" });
+  });
+
   it("uses partial snapshots to discard repeated and overlapping streaming deltas", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();

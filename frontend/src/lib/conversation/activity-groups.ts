@@ -1,7 +1,7 @@
-import type { AgentMessageBlock, ThreadBlock, ToolCallBlock } from "../../types/thread";
+import type { AgentMessageBlock, ThinkingBlock, ThreadBlock, ToolCallBlock } from "../../types/thread";
 import { activityPolicy } from "./activity-policy";
 
-export type ActivityEntry = AgentMessageBlock | ToolCallBlock;
+export type ActivityEntry = AgentMessageBlock | ThinkingBlock | ToolCallBlock;
 
 export interface ActivityGroup {
   id: string;
@@ -36,6 +36,11 @@ export function groupActivityBlocks(blocks: ThreadBlock[]): ActivityGroup[] {
 
   for (const block of blocks) {
     if (block.kind === "agent") {
+      if (block.parts.some((part) => part.text.trim())) single(block);
+      else flush();
+      continue;
+    }
+    if (block.kind === "thinking") {
       if (block.parts.some((part) => part.text.trim())) single(block);
       else flush();
       continue;

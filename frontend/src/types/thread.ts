@@ -22,6 +22,7 @@ export interface ConversationBlockIdentity {
 export type ThreadBlock =
   | UserMessageBlock
   | AgentMessageBlock
+  | ThinkingBlock
   | StepSummaryBlock
   | ToolCallBlock
   | ReviewerBlock
@@ -56,6 +57,16 @@ export interface AgentMessageBlock extends ConversationBlockIdentity {
 export interface AgentMessagePart {
   id: string;
   text: string;
+}
+
+/** The model's reasoning stream (pi `thinking` content parts). Rendered as a
+ *  dim line in the live feed and folded behind the settled summary row. */
+export interface ThinkingBlock extends ConversationBlockIdentity {
+  kind: "thinking";
+  id: string;
+  parts: AgentMessagePart[];
+  partial?: boolean;
+  timestamp?: string;
 }
 
 export interface StepSummaryBlock {

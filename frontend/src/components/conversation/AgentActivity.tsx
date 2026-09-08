@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 
 import { Check, CircleX, ChevronRight } from "lucide-react";
 import type { ProgressAppearance } from "@pi-science/contracts";
 import { useTranslation } from "react-i18next";
-import type { AgentMessageBlock, ToolCallBlock } from "../../types/thread";
+import type { AgentMessageBlock, ThinkingBlock, ToolCallBlock } from "../../types/thread";
 import { activityPolicy } from "../../lib/conversation/activity-policy";
 import { ACTIVITY_SWITCH_DEBOUNCE_MS, MIN_ACTIVITY_VISIBLE_MS, selectDisplayedActivity } from "../../lib/conversation/activity-display-policy";
 import type { PresentedActivity } from "../../lib/conversation/activity-narrative";
@@ -16,7 +16,7 @@ import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
 import { parseSuggestions } from "../../lib/conversation";
 import styles from "./AgentActivity.module.css";
 
-export type ActivityBlock = AgentMessageBlock | ToolCallBlock;
+export type ActivityBlock = AgentMessageBlock | ThinkingBlock | ToolCallBlock;
 
 export function ThinkingActivity({ className }: { className?: string }) {
   const { t } = useTranslation();
@@ -46,18 +46,23 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
   const tools = useMemo(() => blocks.filter((block): block is ToolCallBlock => block.kind === "tool"), [blocks]);
   const activities = useMemo(() => blocks.filter((block) => block.kind === "agent"
     ? Boolean(parseSuggestions(block.parts.map((part) => part.text).join("")).clean.trim())
-    : activityPolicy(block).visibleInExecutionTrace), [blocks]);
+    : block.kind === "thinking"
+      ? block.parts.some((part) => part.text.trim())
+      : activityPolicy(block).visibleInExecutionTrace), [blocks]);
   const activityGroups = useMemo(() => groupActivityBlocks(blocks), [blocks]);
   const traceId = useId();
   const traceTools = useMemo(() => activities.filter((block): block is ToolCallBlock => block.kind === "tool"), [activities]);
+  const thinkingBlocks = useMemo(() => activities.filter((block): block is ThinkingBlock => block.kind === "thinking"), [activities]);
   const shown = useDisplayedActivity(tools, lifecycle);
   // Settled turns collapse their tool steps behind the process summary row.
   const [traceExpanded, setTraceExpanded] = useState(false);
 
   if (isLiveLifecycle(lifecycle)) {
     const state = lifecycle === "waiting" || lifecycle === "stopping" || shown?.state === "interaction" ? "waiting" : "running";
-    // Running tense of the process label: the stream below carries the
-    // specifics, the status row only marks that the process is at work.
+    // Running tense of the process label. The latest partial thinking block
+    // takes the phase while the model is reasoning (no tool has taken over).
+    const lastActivity = activities.at(-1);
+    const thinkingLive = lastActivity?.kind === "thinking" && lastActivity.partial === true;
     const title = lifecycle === "recovering"
       ? t("conversation.activity.narrative.recover")
       : lifecycle === "waiting" && !shown
@@ -66,7 +71,9 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
           ? t(shown.source.tool === "ask_user_question" ? "conversation.activity.waitingInput" : "conversation.activity.waitingApproval")
           : lifecycle === "stopping"
             ? t("conversation.activity.stopping")
-            : t("conversation.activity.processLive");
+            : thinkingLive
+              ? t("conversation.activity.thinking")
+              : t("conversation.activity.processLive");
     const visualSlot = shown ? "currentActivity" : "thinking";
     // The stream is always open while live: narration and tool lines render
     // chronologically, and the caller pins the status row after the answer.
@@ -131,14 +138,16 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
   const summaryLabel = `${stateLabel}${processDuration ? ` · ${processDuration}` : ""}${failureSuffix}${noAnswer ? ` · ${t("conversation.activity.noAnswer")}` : ""}`;
 
   return <div id={blocks.length === 1 && blocks[0].kind === "tool" ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
-    {traceTools.length > 0 || headline ? (
+    {traceTools.length > 0 || thinkingBlocks.length > 0 || headline ? (
       <button type="button" aria-expanded={traceExpanded} aria-controls={traceId} onClick={() => setTraceExpanded((value) => !value)} className={cn(styles.summary, "flex min-h-primary w-full items-center gap-2 rounded-input py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-control")}>
-        <span aria-live="polite" aria-atomic="true" className="min-w-0 flex-1 truncate text-sm font-medium text-text">{traceTools.length > 0 ? summaryLabel : headline}</span>
+        <span aria-live="polite" aria-atomic="true" className="min-w-0 flex-1 truncate text-sm font-medium text-text">{traceTools.length > 0 || thinkingBlocks.length > 0 ? summaryLabel : headline}</span>
         <ChevronRight size={13} aria-hidden className={cn(styles.chevron, "shrink-0 text-muted", traceExpanded && "rotate-90")} />
       </button>
     ) : null}
-    {traceExpanded && traceTools.length > 0 && <div id={traceId} role="region" className={styles.trace} aria-label={t("conversation.activity.trace")}>
-      {traceTools.map((block) => <TraceItem key={block.id} block={block} live={false} />)}
+    {traceExpanded && (traceTools.length > 0 || thinkingBlocks.length > 0) && <div id={traceId} role="region" className={styles.trace} aria-label={t("conversation.activity.trace")}>
+      {activities.map((block) => block.kind === "thinking"
+        ? <ThinkingRow key={block.id} block={block} />
+        : block.kind === "tool" ? <TraceItem key={block.id} block={block} live={false} /> : null)}
     </div>}
     {narrationBlocks.map((block) => (
       <div key={block.id} id={`thread-block-${block.id}`} className={cn(styles.entry, styles.narration, "min-w-0")}><MarkdownViewer variant="chat" className="text-ui-body leading-relaxed text-muted [overflow-wrap:anywhere]" resourceContext={cwd ? { cwd } : undefined}>{parseSuggestions(block.parts.map((part) => part.text).join("")).clean}</MarkdownViewer></div>
@@ -153,7 +162,9 @@ function ActivityTrace({ groups, cwd, live = false }: { groups: ActivityGroup[];
     {groups.map((group) => {
       const entries = group.blocks.map((block) => block.kind === "agent"
         ? <div key={block.id} id={`thread-block-${block.id}`} className={cn(styles.entry, styles.narration, "min-w-0")}><MarkdownViewer variant="chat" className="text-ui-body leading-relaxed text-muted [overflow-wrap:anywhere]" resourceContext={cwd ? { cwd } : undefined}>{parseSuggestions(block.parts.map((part) => part.text).join("")).clean}</MarkdownViewer></div>
-        : <TraceItem key={block.id} block={block} live={live} />);
+        : block.kind === "thinking"
+          ? <ThinkingRow key={block.id} block={block} />
+          : <TraceItem key={block.id} block={block} live={live} />);
       if (group.kind !== "exploration" || group.blocks.length < 2) return entries;
       return <div key={group.id} data-activity-group-id={group.id} className={cn(styles.entry, "min-w-0")}>
         <GroupSummary group={group} live={live} />
@@ -161,6 +172,15 @@ function ActivityTrace({ groups, cwd, live = false }: { groups: ActivityGroup[];
       </div>;
     })}
   </>;
+}
+
+/** One reasoning phase: a micro label over dim italic prose. */
+function ThinkingRow({ block }: { block: ThinkingBlock }) {
+  const { t } = useTranslation();
+  return <div id={`thread-block-${block.id}`} data-running={block.partial === true} className={cn(styles.entry, styles.thinking)}>
+    <div className="text-[10px] font-medium uppercase tracking-wider text-muted">{t("conversation.activity.thinking")}</div>
+    <MarkdownViewer variant="chat" className="text-ui-caption italic leading-relaxed text-muted [overflow-wrap:anywhere]">{block.parts.map((part) => part.text).join("")}</MarkdownViewer>
+  </div>;
 }
 
 function GroupSummary({ group, live }: { group: ActivityGroup; live: boolean }) {

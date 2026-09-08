@@ -55,6 +55,36 @@ describe("transport event folding", () => {
     expect(tool.endedAt).toBe("2026-09-08T00:00:02.400Z");
   });
 
+  it("folds thinking deltas into a reasoning block ahead of the narration", () => {
+    let thread = emptyThread();
+    const emit = (payload: Record<string, unknown>) => { thread = foldEvent(thread, { sessionId: "s", type: "agent_start", ...payload, turnId: "t1" }); };
+    emit({});
+    for (const delta of ["Check the ", "imports."]) {
+      thread = foldEvent(thread, { sessionId: "s", type: "thinking.updated", turnId: "t1", partId: "m1", text: delta, revision: 1 });
+    }
+    const thinking = thread.blocks.find((block) => block.kind === "thinking");
+    expect(thinking && "parts" in thinking && thinking.parts[0]?.text).toBe("Check the imports.");
+    // Narration arriving after thinking must not disturb the reasoning block.
+    thread = foldEvent(thread, { sessionId: "s", type: "text.updated", turnId: "t1", partId: "m1", text: "Answer", revision: 2 });
+    thread = foldEvent(thread, { sessionId: "s", type: "thinking.updated", turnId: "t1", partId: "m1", text: " more.", revision: 3 });
+    const stillOne = thread.blocks.filter((block) => block.kind === "thinking");
+    expect(stillOne).toHaveLength(1);
+    expect(stillOne[0]?.kind === "thinking" && stillOne[0].parts[0]?.text).toBe("Check the imports. more.");
+  });
+
+  it("rebuilds thinking rows from persisted assistant thinking parts", () => {
+    const thread = threadFromMessages([
+      { id: "u1", role: "user", content: [{ type: "text", text: "q" }], timestamp: "2026-09-08T00:00:00.000Z" },
+      { id: "m1", role: "assistant", content: [{ type: "thinking", thinking: "Weigh the options." }, { type: "text", text: "The answer." }], timestamp: "2026-09-08T00:00:01.000Z" },
+    ]);
+    const kinds = thread.blocks.map((block) => block.kind);
+    expect(kinds).toEqual(["user", "thinking", "agent"]);
+    const thinking = thread.blocks[1];
+    const narration = thread.blocks[2];
+    expect(thinking.kind === "thinking" && thinking.parts[0]?.text).toBe("Weigh the options.");
+    expect(narration.kind === "agent" && narration.parts[0]?.text).toBe("The answer.");
+  });
+
   it("merges durable user history with replayed live output during a mid-turn reload", async () => {
     let resolveMessages!: (response: Response) => void;
     let resolveState!: (response: Response) => void;
@@ -356,6 +386,22 @@ describe("conversation presentation protocol v2", () => {
 
     thread = foldEvent(thread, envelope({ seq: 4, type: "run.completed", payload: { outcome: "ok" } }));
     expect(thread.foldState?.terminalRunIds).toContain("run-1");
+  });
+
+  it("folds V2 thinking deltas with flat wire fields into reasoning blocks", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({
+      seq: 2,
+      type: "thinking.updated",
+      partId: "anonymous-1",
+      text: "Weigh it.",
+      baseRevision: 0,
+      revision: 1,
+      payload: {},
+    }));
+    const thinking = thread.blocks.find((block) => block.kind === "thinking");
+    expect(thinking && "parts" in thinking && thinking.parts[0]?.text).toBe("Weigh it.");
   });
 
   it("maps commentary and final answer to separate stable items", () => {

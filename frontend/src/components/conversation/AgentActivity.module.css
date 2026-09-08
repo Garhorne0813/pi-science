@@ -86,6 +86,14 @@
   padding-block: 0.25rem;
 }
 
+.thinking {
+  padding-block: 0.25rem;
+}
+
+.thinking[data-running="true"] > div:first-child {
+  color: var(--activity-color);
+}
+
 .toolButton {
   transition: color var(--motion-normal) var(--ease-standard);
 }

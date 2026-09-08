@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import i18n from "../../i18n";
+import type { ActivityBlock } from "./AgentActivity";
 import type { ToolCallBlock } from "../../types/thread";
 import { AgentActivity } from "./AgentActivity";
 import { executionActivities, executionOperationCount } from "../../lib/conversation/activity-policy";
@@ -168,6 +169,40 @@ describe("AgentActivity live stream", () => {
     render(<AgentActivity blocks={[tool("edit", "edit"), tool("failed", "bash", "error", { description: "Run tests" }), tool("next", "edit", "running")]} />);
     expect(screen.getByText("Working process")).toBeInTheDocument();
     expect(screen.queryByText("Encountered a problem")).not.toBeInTheDocument();
+  });
+
+  it("streams the reasoning row and names the thinking phase", () => {
+    const thinking: ActivityBlock = { kind: "thinking", id: "th1", parts: [{ id: "th1-0", text: "Weigh the options." }], partial: true };
+    const { rerender } = render(<AgentActivity blocks={[thinking]} />);
+    expect(screen.getByText("Weigh the options.")).toBeInTheDocument();
+    // The reasoning row's micro label and the status-row phase title share the
+    // word; the phase title is the one inside the status marker row.
+    expect(screen.getAllByText("Thinking").some((element) => element.closest("div[data-state]"))).toBe(true);
+    // Once narration takes over, the phase label falls back to the process.
+    rerender(<AgentActivity blocks={[{ ...thinking, partial: false }, { kind: "agent", id: "a1", parts: [{ id: "a1-0", text: "Answer." }] }]} />);
+    expect(screen.getByText("Working process")).toBeInTheDocument();
+  });
+
+  it("folds the reasoning rows behind the settled summary row", () => {
+    const blocks: ActivityBlock[] = [
+      { kind: "thinking", id: "th1", parts: [{ id: "th1-0", text: "Weigh the options." }] },
+      tool("t1", "read", "done", { path: "a.ts" }),
+      { kind: "agent", id: "a1", presentationRole: "final", parts: [{ id: "a1-0", text: "The final answer." }] },
+    ];
+    render(<AgentActivity blocks={blocks} lifecycle="settled" />);
+    expect(screen.queryByText("Weigh the options.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Thinking")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Complete|Encountered a problem|Stopped|Working/));
+    expect(screen.getByText("Weigh the options.")).toBeInTheDocument();
+  });
+
+  it("keeps a summary toggle for reasoning-only settled turns", () => {
+    render(<AgentActivity blocks={[
+      { kind: "thinking", id: "th1", parts: [{ id: "th1-0", text: "Weigh the options." }] },
+      { kind: "agent", id: "a1", presentationRole: "final", parts: [{ id: "a1-0", text: "The final answer." }] },
+    ]} lifecycle="settled" />);
+    expect(screen.getByText(/Complete|Encountered a problem|Stopped|Working/)).toBeInTheDocument();
+    expect(screen.queryByText("Weigh the options.")).not.toBeInTheDocument();
   });
   it("shows interaction, failure, and abort lifecycle copy", () => {
     const { rerender } = render(<AgentActivity lifecycle="waiting" blocks={[tool("read", "read"), tool("ask", "ask_user_question", "waiting-approval")]} />);
