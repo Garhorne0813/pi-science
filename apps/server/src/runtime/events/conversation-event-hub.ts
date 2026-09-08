@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { durableEventStore, type EventPublishGuard, type SseEventRecord } from "./event-store.js";
 import type { PiEvent, PiProcess } from "../pi/pi-process.js";
@@ -181,13 +182,16 @@ function sequenceFromCursor(id: string | null): number {
   return /^\d+$/.test(value) && Number.isSafeInteger(sequence) ? sequence : 0;
 }
 
-function stableConversationId(kind: "turn" | "run", sessionId: string, ordinal: number): string {
-  return `${kind}-${sessionId}-${ordinal}`;
+function newConversationId(kind: "turn" | "run", sessionId: string, ordinal: number): string {
+  // The ordinal is useful for diagnostics, but it is only in-memory and resets
+  // when the control plane restarts. A UUID prevents a resumed session from
+  // reusing an identity that the browser has already marked terminal.
+  return `${kind}-${sessionId}-${ordinal}-${randomUUID()}`;
 }
 
 function turnFields(turn: TurnState): Record<string, unknown> {
   return {
-    turnId: turn.turnId ?? stableConversationId("turn", "unknown", Math.max(1, turn.turnOrdinal)),
+    turnId: turn.turnId ?? `turn-unknown-${Math.max(1, turn.turnOrdinal)}`,
     ...(turn.runId ? { runId: turn.runId } : {}),
     streamEpoch: turn.streamEpoch,
     ...(turn.turnOrdinal > 0 ? { turnOrdinal: turn.turnOrdinal } : {}),
@@ -590,8 +594,8 @@ export class ConversationEventHub {
     }
     if (event.type === "agent_start") {
       turn.turnOrdinal += 1;
-      turn.turnId = stableConversationId("turn", sessionId, turn.turnOrdinal);
-      turn.runId = stableConversationId("run", sessionId, turn.turnOrdinal);
+      turn.turnId = newConversationId("turn", sessionId, turn.turnOrdinal);
+      turn.runId = newConversationId("run", sessionId, turn.turnOrdinal);
       turn.hadText = false;
       turn.hadError = false;
       turn.hadActivity = false;
@@ -602,8 +606,8 @@ export class ConversationEventHub {
     }
     if (!turn.turnId) {
       turn.turnOrdinal = Math.max(1, turn.turnOrdinal);
-      turn.turnId = stableConversationId("turn", sessionId, turn.turnOrdinal);
-      turn.runId = stableConversationId("run", sessionId, turn.turnOrdinal);
+      turn.turnId = newConversationId("turn", sessionId, turn.turnOrdinal);
+      turn.runId = newConversationId("run", sessionId, turn.turnOrdinal);
     }
 
     const text = assistantText(event);

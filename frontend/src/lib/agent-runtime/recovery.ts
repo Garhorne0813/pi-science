@@ -2,7 +2,8 @@
  *  stream attach or a transport failure, and the missing-session reset. */
 
 import { clearCachedMessages, clearAiTitle, clearSessionName, getClient, type PiScienceClient, type SessionState } from "../client/pi-science-client";
-import { attachTurnArtifacts, emptyThread, mergeHistoryWindow, resetTurnBuffer } from "./event-fold";
+import { attachTurnArtifacts, emptyThread, resetTurnBuffer } from "./event-fold";
+import { mergeRecoveryHistoryWindow } from "./history-window-recovery";
 import { fetchPersistedTurnArtifacts } from "./turn-artifacts";
 import { markWorkspaceFilesChanged } from "./file-revision";
 import { generations, turnState } from "./generations";
@@ -89,8 +90,9 @@ function waitForRecovery(ms: number): Promise<void> {
 export async function resyncCompletedHistory(sessionId: string, cwd: string): Promise<void> {
   const generation = generations.connection;
   try {
+    const client = getClient();
     const [historyResult, artifactsResult] = await Promise.allSettled([
-      getClient().getMessagesPage(sessionId, cwd),
+      client.getMessagesPage(sessionId, cwd),
       fetchPersistedTurnArtifacts(sessionId, cwd),
     ]);
     const current = useRuntimeStore.getState();
@@ -107,15 +109,14 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
     // snapshot is authoritative. An empty snapshot can still race the flush.
     if (history.messages.length === 0 && current.thread.blocks.length > 0) return;
     const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
-    // The latest page only describes its own slice of history. When the
-    // merged window keeps the previously loaded older prefix, that prefix's
-    // pagination boundary stays the truth about "is there more to load" —
-    // adopting the tail page's cursor would point it back into loaded pages.
-    const merged = mergeHistoryWindow(current.thread, history.messages, { keepLiveExtras: false });
-    const historyHasMore = merged.retainedOlderPrefix ? current.historyHasMore : history.has_more;
+    // A latest page can move completely beyond the already loaded window after
+    // a long tool-heavy turn. Walk older pages until lineage is established;
+    // only a complete no-overlap history may replace the window wholesale.
+    const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, current.thread, history, { keepLiveExtras: false });
+    const historyHasMore = merged.retainedOlderPrefix ? current.historyHasMore : merged.boundaryPage.has_more;
     useRuntimeStore.setState({
       thread: attachTurnArtifacts(merged.thread, turns, { windowComplete: !historyHasMore }),
-      historyCursor: merged.retainedOlderPrefix ? current.historyCursor : history.next_cursor,
+      historyCursor: merged.retainedOlderPrefix ? current.historyCursor : merged.boundaryPage.next_cursor,
       historyHasMore,
       historyLoading: false,
       historySnapshotVersion: history.snapshot_version,
@@ -224,15 +225,12 @@ async function runConnectionRecovery(
     if (historyResult.status === "fulfilled") {
       const history = historyResult.value;
       const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
-      // Rebuild the window around the REST snapshot: an older prefix already
-      // loaded stays in place (and keeps its pagination boundary), live
-      // blocks the snapshot does not cover survive the merge.
-      const merged = mergeHistoryWindow(useRuntimeStore.getState().thread, history.messages, { keepLiveExtras: true });
-      const historyHasMore = merged.retainedOlderPrefix ? current.historyHasMore : history.has_more;
+      const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, useRuntimeStore.getState().thread, history, { keepLiveExtras: true });
+      const historyHasMore = merged.retainedOlderPrefix ? current.historyHasMore : merged.boundaryPage.has_more;
       const restored = attachTurnArtifacts(merged.thread, turns, { windowComplete: !historyHasMore });
       useRuntimeStore.setState({
         thread: restored,
-        historyCursor: merged.retainedOlderPrefix ? current.historyCursor : history.next_cursor,
+        historyCursor: merged.retainedOlderPrefix ? current.historyCursor : merged.boundaryPage.next_cursor,
         historyHasMore,
         historyLoading: false,
         historySnapshotVersion: history.snapshot_version,
@@ -334,16 +332,16 @@ export async function reconcileAfterGap(
   }
   // History recovery is independent from busy state. Merge the REST snapshot
   // with live blocks so a text.updated arriving during this request is kept.
-  // An older prefix loaded before the gap stays first and keeps its boundary;
-  // the tail page's cursor must not point back into loaded pages.
+  // If the latest page moved beyond the loaded window, probe older pages until
+  // the overlap (or the actual history beginning) is known.
   if (historyResult.status === "fulfilled") {
     const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
-    const merged = mergeHistoryWindow(current.thread, historyResult.value.messages, { keepLiveExtras: true });
-    const historyHasMore = merged.retainedOlderPrefix ? current.historyHasMore : historyResult.value.has_more;
+    const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, current.thread, historyResult.value, { keepLiveExtras: true });
+    const historyHasMore = merged.retainedOlderPrefix ? current.historyHasMore : merged.boundaryPage.has_more;
     const restored = attachTurnArtifacts(merged.thread, turns, { windowComplete: !historyHasMore });
     useRuntimeStore.setState({
       thread: restored,
-      historyCursor: merged.retainedOlderPrefix ? current.historyCursor : historyResult.value.next_cursor,
+      historyCursor: merged.retainedOlderPrefix ? current.historyCursor : merged.boundaryPage.next_cursor,
       historyHasMore,
       historyLoading: false,
       historySnapshotVersion: historyResult.value.snapshot_version,
