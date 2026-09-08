@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { ChevronRight, Check, CircleX, Square } from "lucide-react";
 import type { ProgressAppearance } from "@pi-science/contracts";
 import { useTranslation } from "react-i18next";
@@ -20,14 +20,82 @@ import styles from "./AgentActivity.module.css";
 
 export type ActivityBlock = AgentMessageBlock | ToolCallBlock;
 
-function readDisclosure(key?: string): "auto" | "user-open" | "user-closed" {
+type DisclosureChoice = "auto" | "user-open" | "user-closed";
+
+const disclosureChoices = new Map<string, DisclosureChoice>();
+const disclosureSubscribers = new Map<string, Set<() => void>>();
+
+function readDisclosure(key?: string): DisclosureChoice {
   if (!key) return "auto";
+  const shared = disclosureChoices.get(key);
+  if (shared) return shared;
   try {
     const value = localStorage.getItem(key);
-    return value === "user-open" || value === "user-closed" ? value : "auto";
+    if (value === "user-open" || value === "user-closed") {
+      disclosureChoices.set(key, value);
+      return value;
+    }
   } catch {
     return "auto";
   }
+  return "auto";
+}
+
+function writeDisclosure(key: string | undefined, choice: DisclosureChoice): void {
+  if (!key) return;
+  disclosureChoices.set(key, choice);
+  try { localStorage.setItem(key, choice); } catch { /* storage is optional */ }
+  disclosureSubscribers.get(key)?.forEach((listener) => listener());
+}
+
+export function resetDisclosuresForTests(): void {
+  disclosureChoices.clear();
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key?.startsWith("conversation-disclosure:")) keys.push(key);
+    }
+    keys.forEach((key) => localStorage.removeItem(key));
+  } catch { /* storage is optional */ }
+}
+
+function subscribeDisclosure(key: string | undefined, listener: () => void): () => void {
+  if (!key) return () => undefined;
+  let subscribers = disclosureSubscribers.get(key);
+  if (!subscribers) {
+    subscribers = new Set();
+    disclosureSubscribers.set(key, subscribers);
+  }
+  subscribers.add(listener);
+  return () => { subscribers.delete(listener); };
+}
+
+/** The content and status parts are separate component instances, so the
+ *  live-feed disclosure lives in a shared external store: toggling Hide in
+ *  the status row collapses the content instance immediately. */
+function useDisclosure(key: string | undefined, live: boolean): { expanded: boolean; toggle: () => void } {
+  // Keyed instances share the external store; a missing key falls back to
+  // local state (standalone renders without a turn identity).
+  const [localChoice, setLocalChoice] = useState<DisclosureChoice>("auto");
+  const sharedChoice = useSyncExternalStore(
+    (listener) => subscribeDisclosure(key, listener),
+    () => readDisclosure(key),
+    () => "auto" as DisclosureChoice,
+  );
+  const choice = key ? sharedChoice : localChoice;
+  const choose = (next: DisclosureChoice) => {
+    if (key) writeDisclosure(key, next);
+    else setLocalChoice(next);
+  };
+  // A new live phase starts a fresh automatic disclosure.
+  const previousLive = useRef(live);
+  useEffect(() => {
+    if (live && !previousLive.current && choice !== "auto") choose("auto");
+    previousLive.current = live;
+  }, [live]);
+  const expanded = choice === "user-open" || (live && choice !== "user-closed");
+  return { expanded, toggle: () => choose(expanded ? "user-closed" : "user-open") };
 }
 
 export function ThinkingActivity({ className }: { className?: string }) {
@@ -54,26 +122,10 @@ export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "act
   const abort = useRuntimeStore((state) => state.abort);
   const traceId = useId();
   const live = isLiveLifecycle(lifecycle);
-  // The reducer owns business state; disclosure is view state. Auto-open while
-  // live, but once the user chooses open/closed, completion must not override
-  // that choice. A new live phase starts a fresh automatic disclosure.
-  const [disclosure, setDisclosure] = useState<"auto" | "user-open" | "user-closed">(() => readDisclosure(disclosureKey));
-  const previousLive = useRef(live);
-  useEffect(() => {
-    setDisclosure(readDisclosure(disclosureKey));
-  }, [disclosureKey]);
-  useEffect(() => {
-    if (live && !previousLive.current) setDisclosure("auto");
-    previousLive.current = live;
-  }, [live]);
-  const expanded = disclosure === "user-open" || (live && disclosure !== "user-closed");
-  const chooseDisclosure = (choice: "auto" | "user-open" | "user-closed") => {
-    setDisclosure(choice);
-    if (disclosureKey) {
-      try { localStorage.setItem(disclosureKey, choice); } catch { /* storage is optional */ }
-    }
-  };
-  const toggleDisclosure = () => chooseDisclosure(expanded ? "user-closed" : "user-open");
+  // Disclosure is shared view state (see useDisclosure): auto-open while
+  // live, user choice sticky across completion, and both component instances
+  // observe the same store.
+  const { expanded, toggle: toggleDisclosure } = useDisclosure(disclosureKey, live);
   // Turn elapsed clock: starts when the live row appears, resets when the
   // turn settles. Visual-only (aria-hidden) so the aria-live label never
   // announces a ticking number.
@@ -115,6 +167,11 @@ export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "act
           ? presentToolActivity(task.currentTool, t)
           : t(`conversation.activity.task.${task.fallback}`));
     const visualSlot = shown ? "currentActivity" : "thinking";
+    // The stream already shows each tool's own line: the status detail is
+    // redundant exactly when it repeats one of those labels (the mechanical
+    // "Running bash" case). Curated task text stays — it is complementary.
+    const duplicated = detail !== null && activities.some((block) => block.kind === "tool" && presentToolActivity(block, t) === detail);
+    const showDetail = expanded && duplicated ? null : detail;
     const content = activities.length === 0 ? null : (
       <div id={blocks.length === 1 && blocks[0].kind === "tool" ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
         {expanded && <div id={traceId} role="region" className={styles.trace} aria-label={t("conversation.activity.trace")}>
@@ -126,7 +183,7 @@ export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "act
       <div data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0")}>
         <div className="flex min-h-primary w-full items-center gap-2 py-1 text-left">
           <span key={state} className={styles.glyph}><ActivityIcon state={state} slot={visualSlot} config={progressAppearance} label={title} activityState={activityStateFor(lifecycle, shown)} /></span>
-          <ActivityLabel title={title} detail={detail} error={false} />
+          <ActivityLabel title={title} detail={showDetail} error={false} />
           <LiveElapsed startedAt={liveSinceRef.current} live />
           {activities.length > 0 && <button type="button" aria-expanded={expanded} aria-label={t(expanded ? "conversation.activity.collapse" : "conversation.activity.expand")} onClick={toggleDisclosure} className="flex shrink-0 items-center gap-1 rounded-input px-1.5 py-0.5 text-ui-micro text-muted transition-colors hover:bg-surface-hover hover:text-text"><ChevronRight size={11} aria-hidden className={cn(styles.chevron, expanded && "rotate-90")} />{t(expanded ? "conversation.activity.collapse" : "conversation.activity.expand")}</button>}
           {(lifecycle === "active" || lifecycle === "queued" || lifecycle === "waiting") && <button type="button" onClick={() => void abort().catch(() => undefined)} className="flex shrink-0 items-center gap-1 rounded-input px-1.5 py-0.5 text-ui-micro text-muted transition-colors hover:bg-surface-hover hover:text-text"><Square size={9} aria-hidden className="fill-current" />{t("conversation.activity.stop")}</button>}
@@ -158,14 +215,20 @@ export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "act
         ? t("conversation.activity.noAnswer")
       : t("conversation.activity.completed");
 
-  const operationCount = executionOperationCount(traceTools);
-  const processDuration = formatProcessDuration(traceTools);
   const failureCount = traceTools.filter((block) => block.status === "error" || block.statusHistory?.includes("error")).length;
-  const summary = t("conversation.activity.processSummary", {
-    operations: t("conversation.activity.operationCount", { count: operationCount }),
-    durationSuffix: processDuration ? ` · ${processDuration}` : "",
-    failureSuffix: failureCount > 0 ? t("conversation.activity.failureSummary", { count: failureCount }) : "",
-  });
+  // Deduped header metadata: a single step already shows its own duration on
+  // the line, and the count repeats what the visible rows say. Only facts the
+  // step lines cannot show survive into the header.
+  const multiStep = traceTools.length > 1;
+  const headerSegments = [
+    multiStep ? t("conversation.activity.operationCount", { count: executionOperationCount(traceTools) }) : null,
+    multiStep ? formatProcessDuration(traceTools) : null,
+  ].filter(Boolean);
+  // failureSummary carries its own separator.
+  const failureSuffix = failureCount > 0 ? t("conversation.activity.failureSummary", { count: failureCount }) : "";
+  const summary = t("conversation.activity.processHeader")
+    + (headerSegments.length ? ` · ${headerSegments.join(" · ")}` : "")
+    + failureSuffix;
 
   return <div id={blocks.length === 1 && blocks[0].kind === "tool" ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
     {settledSteps ? (

@@ -2,10 +2,11 @@
  *  rendered conversation. Guards the PRD §40 cases (todo leakage, count, trace,
  *  snapshot recovery, live/history parity) through the same path the UI uses. */
 
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { renderBlocks, renderTurn } from "./ConversationBlocks";
 import { buildTurnPresentations } from "../../lib/conversation/turn-presentation";
+import { resetDisclosuresForTests } from "./AgentActivity";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { threadFromMessages } from "../../lib/agent-runtime/event-fold";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "../../lib/agent-runtime/test-helpers";
@@ -68,6 +69,9 @@ installRuntimeTestEnvironment();
 
 beforeAll(async () => {
   await i18n.changeLanguage("en");
+});
+beforeEach(() => {
+  resetDisclosuresForTests();
 });
 
 afterEach(() => {

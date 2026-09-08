@@ -2,7 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import i18n from "../../i18n";
 import type { ToolCallBlock } from "../../types/thread";
-import { AgentActivity } from "./AgentActivity";
+import { AgentActivity, resetDisclosuresForTests } from "./AgentActivity";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { executionActivities, executionOperationCount } from "../../lib/conversation/activity-policy";
 import { defaultProgressAppearance } from "@pi-science/contracts";
@@ -10,7 +10,7 @@ import { setProgressAppearance } from "../progress/progress-settings-store";
 
 const tool = (id: string, name: string, status: ToolCallBlock["status"] = "done", input?: Record<string, unknown>): ToolCallBlock => ({ kind: "tool", id, callId: `${id}-call`, tool: name, status, input, output: "output" });
 beforeAll(async () => { await i18n.changeLanguage("en"); });
-beforeEach(() => { setProgressAppearance(defaultProgressAppearance); });
+beforeEach(() => { setProgressAppearance(defaultProgressAppearance); resetDisclosuresForTests(); });
 
 describe("AgentActivity data filters", () => {
   it("does not count todo", () => { expect(executionOperationCount([tool("a", "todo"), tool("b", "todo")])).toBe(0); });
@@ -35,14 +35,15 @@ describe("AgentActivity", () => {
 
   it("names a running tool that carries no task description", () => {
     render(<AgentActivity blocks={[tool("bash-1", "bash", "running")]} />);
-    // The status detail and the tool's own line both name the running tool.
-    expect(screen.getAllByText("Running bash")).toHaveLength(2);
+    // The open stream already names the tool; the status detail hides as an
+    // exact duplicate instead of printing "Running bash" twice.
+    expect(screen.getAllByText("Running bash")).toHaveLength(1);
     expect(screen.queryByText("Understanding your request and deciding what to do next")).not.toBeInTheDocument();
   });
 
   it("keeps the curated task text ahead of the mechanical tool label", () => {
     render(<AgentActivity blocks={[tool("bash-1", "bash", "running", { description: "Install the pinned toolchain" })]} />);
-    expect(screen.getAllByText("Install the pinned toolchain")).toHaveLength(2);
+    expect(screen.getAllByText("Install the pinned toolchain")).toHaveLength(1);
     expect(screen.queryByText("Running bash")).not.toBeInTheDocument();
   });
 
@@ -181,7 +182,7 @@ describe("AgentActivity", () => {
     render(<AgentActivity blocks={[tool("bash", "bash", "running", { command: "git status" })]} />);
     // The row keeps the thinking visual, and the detail names the running
     // tool instead of a generic orient sentence.
-    expect(screen.getAllByText("Running bash")).toHaveLength(2);
+    expect(screen.getAllByText("Running bash")).toHaveLength(1);
     expect(screen.getByText("Thinking")).toBeInTheDocument();
   });
 

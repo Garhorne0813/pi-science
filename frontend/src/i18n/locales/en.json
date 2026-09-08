@@ -75,7 +75,7 @@
   "conversation.activity.webSearch": "Searching the web for {{target}}",
   "conversation.activity.tool": "Running {{tool}}",
   "conversation.activity.completed": "Complete",
-  "conversation.activity.processSummary": "Work process · {{operations}}{{durationSuffix}}{{failureSuffix}}",
+  "conversation.activity.processHeader": "Work process",
   "conversation.activity.exploreSummary": "Explored · {{count}} operations",
   "conversation.activity.failureSummary": " · {{count}} failed",
   "conversation.activity.noAnswer": "No final answer returned",

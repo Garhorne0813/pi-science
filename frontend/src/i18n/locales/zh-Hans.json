@@ -75,7 +75,7 @@
   "conversation.activity.webSearch": "正在搜索网页资料：{{target}}",
   "conversation.activity.tool": "正在运行 {{tool}}",
   "conversation.activity.completed": "完成",
-  "conversation.activity.processSummary": "工作过程 · {{operations}}{{durationSuffix}}{{failureSuffix}}",
+  "conversation.activity.processHeader": "工作过程",
   "conversation.activity.exploreSummary": "已探索 · {{count}} 项操作",
   "conversation.activity.failureSummary": " · {{count}} 项失败",
   "conversation.activity.noAnswer": "本次运行没有返回最终答复",
