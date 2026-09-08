@@ -15,8 +15,8 @@ export function finalAgentInCompletedTurn(blocks: ThreadBlock[]): AgentMessageBl
 }
 
 /** The newest agent block of an ACTIVE turn that no visible tool has taken
- *  over yet. It may still turn out to be narration: the UI keeps it out of
- *  the main transcript until the turn lifecycle confirms the final answer. */
+ *  over yet. It may still turn out to be narration, but exposing it lets the
+ *  conversation render text deltas instead of waiting for the turn to settle. */
 export function provisionalAgentInActiveTurn(blocks: ThreadBlock[]): AgentMessageBlock | null {
   return latestUnsupersededAgent(blocks);
 }

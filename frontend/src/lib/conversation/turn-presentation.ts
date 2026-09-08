@@ -15,8 +15,8 @@ export interface TurnPresentation {
   activityTools: ToolCallBlock[];
   systemBlocks: ThreadBlock[];
   intermediateAgents: AgentMessageBlock[];
-  /** Active turn: newest agent text that no tool has superseded yet. Hidden
-   *  from the transcript until the turn lifecycle confirms it as the answer. */
+  /** Active turn: newest agent text that no tool has superseded yet. The
+   *  conversation renders this block while its text is still streaming. */
   provisionalAgent: AgentMessageBlock | null;
   /** Confirmed answer. Always null while the turn is still active. */
   finalAgent: AgentMessageBlock | null;
