@@ -27,7 +27,7 @@ describe("AgentActivity live stream", () => {
     const { rerender } = render(<AgentActivity blocks={[read]} />);
     expect(screen.getByText("Reading a.ts")).toBeInTheDocument();
     rerender(<AgentActivity blocks={[{ ...read, status: "done" }, tool("next", "read", "running", { path: "b.ts", description: "Check how virtual list measurements update" })]} />);
-    expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
+    expect(screen.getByText("Working process")).toBeInTheDocument();
     // Completed steps stay in the feed; the new running step appears below.
     expect(screen.getByText("Reading a.ts")).toBeInTheDocument();
     expect(screen.getByText("Reading b.ts")).toBeInTheDocument();
@@ -70,7 +70,7 @@ describe("AgentActivity live stream", () => {
     // Status row: the phase title and timer only — the stream above already
     // carries every detail, so there is nothing to duplicate and nothing to
     // toggle.
-    const title = screen.getByText("Reviewing the implementation");
+    const title = screen.getByText("Working process");
     const statusRow = title.closest("div[data-state]")!;
     expect(within(statusRow as HTMLElement).queryAllByRole("button")).toHaveLength(0);
     expect(container.firstElementChild).not.toHaveClass("border");
@@ -80,7 +80,7 @@ describe("AgentActivity live stream", () => {
     expect(within(trace).getByText("Searching for tool.updated")).toBeInTheDocument();
   });
 
-  it("keeps the active status visible for todo-only turns", () => { render(<AgentActivity blocks={[tool("todo", "todo")]} />); expect(screen.getByText("Thinking")).toBeInTheDocument(); expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument(); });
+  it("keeps the active status visible for todo-only turns", () => { render(<AgentActivity blocks={[tool("todo", "todo")]} />); expect(screen.getByText("Working process")).toBeInTheDocument(); expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument(); });
 
   it.each(["settled", "aborted", "failed"] as const)("streams open through %s until the turn ends", (lifecycle) => {
     const blocks = [tool("read", "read", "running", { path: "a.ts" })];
@@ -102,28 +102,28 @@ describe("AgentActivity live stream", () => {
 
   it("uses the generation narrative and orb for image generation", () => {
     render(<AgentActivity blocks={[tool("image", "image_gen", "running")]} />);
-    expect(screen.getByText("Generating the output")).toBeInTheDocument();
+    expect(screen.getByText("Working process")).toBeInTheDocument();
     expect(document.querySelector('[data-orb-variant="B3"]')).toBeInTheDocument();
   });
 
   it("uses the thinking pattern when a tool has no semantics", () => {
     render(<AgentActivity blocks={[tool("bash", "bash", "running", { command: "git status" })]} />);
     expect(screen.getByText("Running bash")).toBeInTheDocument();
-    expect(screen.getByText("Thinking")).toBeInTheDocument();
+    expect(screen.getByText("Working process")).toBeInTheDocument();
   });
 
   it("holds implementation through test and corrective reads", () => {
     vi.useFakeTimers();
     try {
       const { rerender } = render(<AgentActivity blocks={[tool("read-1", "read", "running", { path: "first.ts" })]} />);
-      expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
+      expect(screen.getByText("Working process")).toBeInTheDocument();
       rerender(<AgentActivity blocks={[tool("read-1", "read"), tool("edit", "edit", "running", { path: "a.ts" })]} />);
       act(() => { vi.advanceTimersByTime(900); });
-      expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
+      expect(screen.getByText("Working process")).toBeInTheDocument();
       expect(document.querySelector('[data-orb-variant="B4"]')).toBeInTheDocument();
       rerender(<AgentActivity blocks={[tool("read-1", "read"), tool("edit", "edit"), tool("test", "bash", "running", { description: "Run tests" }), tool("corrective", "read", "running", { path: "a.ts" })]} />);
       act(() => { vi.advanceTimersByTime(900); });
-      expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
+      expect(screen.getByText("Working process")).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -140,7 +140,7 @@ describe("AgentActivity live stream", () => {
         act(() => { vi.advanceTimersByTime(100); });
         rerender(<AgentActivity blocks={[{ ...read, status: "done" }, { ...running, partialOutput: `line ${elapsed}` }]} />);
       }
-      expect(screen.getByText("Verifying the changes")).toBeInTheDocument();
+      expect(screen.getByText("Working process")).toBeInTheDocument();
       expect(document.querySelector('[data-orb-variant="C5"]')).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
@@ -166,7 +166,7 @@ describe("AgentActivity live stream", () => {
 
   it("keeps progress copy neutral for a recoverable tool error", () => {
     render(<AgentActivity blocks={[tool("edit", "edit"), tool("failed", "bash", "error", { description: "Run tests" }), tool("next", "edit", "running")]} />);
-    expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
+    expect(screen.getByText("Working process")).toBeInTheDocument();
     expect(screen.queryByText("Encountered a problem")).not.toBeInTheDocument();
   });
   it("shows interaction, failure, and abort lifecycle copy", () => {
@@ -192,7 +192,7 @@ describe("AgentActivity settled display", () => {
     // are the visible content.
     expect(screen.getByText("Step notes: the CSV has 4 columns.")).toBeInTheDocument();
     expect(screen.getByText("The final answer.")).toBeInTheDocument();
-    expect(screen.getByText(/Work process · 2 operations/)).toBeInTheDocument();
+    expect(screen.getByText(/Work process/)).toBeInTheDocument();
     expect(screen.queryByText("Reading one.ts")).not.toBeInTheDocument();
     expect(screen.queryByText("Running bash")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();

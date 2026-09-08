@@ -76,6 +76,7 @@
   "conversation.activity.tool": "Running {{tool}}",
   "conversation.activity.completed": "Complete",
   "conversation.activity.processHeader": "Work process",
+  "conversation.activity.processLive": "Working process",
   "conversation.activity.exploreSummary": "Explored · {{count}} operations",
   "conversation.activity.exploreSummaryLive": "Exploring · {{done}} of {{count}} operations",
   "conversation.activity.failureSummary": " · {{count}} failed",

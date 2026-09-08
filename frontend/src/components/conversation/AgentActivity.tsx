@@ -2,8 +2,8 @@ import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 
 import { Check, CircleX, ChevronRight } from "lucide-react";
 import type { ProgressAppearance } from "@pi-science/contracts";
 import { useTranslation } from "react-i18next";
-import type { AgentMessageBlock, ThreadBlock, ToolCallBlock } from "../../types/thread";
-import { activityPolicy, executionOperationCount } from "../../lib/conversation/activity-policy";
+import type { AgentMessageBlock, ToolCallBlock } from "../../types/thread";
+import { activityPolicy } from "../../lib/conversation/activity-policy";
 import { ACTIVITY_SWITCH_DEBOUNCE_MS, MIN_ACTIVITY_VISIBLE_MS, selectDisplayedActivity } from "../../lib/conversation/activity-display-policy";
 import type { PresentedActivity } from "../../lib/conversation/activity-narrative";
 import { groupActivityBlocks, type ActivityGroup } from "../../lib/conversation/activity-groups";
@@ -14,7 +14,6 @@ import type { ProgressActivityState } from "../progress/progress-activity-map";
 import { cn } from "../../lib/ui";
 import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
 import { parseSuggestions } from "../../lib/conversation";
-import { selectActivityTask } from "../../lib/conversation/activity-task";
 import styles from "./AgentActivity.module.css";
 
 export type ActivityBlock = AgentMessageBlock | ToolCallBlock;
@@ -41,7 +40,7 @@ export function ThinkingActivity({ className }: { className?: string }) {
  *  narration — the per-step records were part of the live stream only.
  *  Aborted and failed runs keep a state headline; a settled turn without an
  *  explicit final message says so instead of implying the answer vanished. */
-export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "active", cwd, part = "both" }: { blocks: ActivityBlock[]; contextBlocks?: ThreadBlock[]; lifecycle?: TurnLifecycle; cwd?: string; part?: "both" | "content" | "status" }) {
+export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both" }: { blocks: ActivityBlock[]; lifecycle?: TurnLifecycle; cwd?: string; part?: "both" | "content" | "status" }) {
   const { t } = useTranslation();
   const progressAppearance = useProgressAppearance();
   const tools = useMemo(() => blocks.filter((block): block is ToolCallBlock => block.kind === "tool"), [blocks]);
@@ -52,23 +51,22 @@ export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "act
   const traceId = useId();
   const traceTools = useMemo(() => activities.filter((block): block is ToolCallBlock => block.kind === "tool"), [activities]);
   const shown = useDisplayedActivity(tools, lifecycle);
-  const task = useMemo(() => selectActivityTask(contextBlocks), [contextBlocks]);
   // Settled turns collapse their tool steps behind the process summary row.
   const [traceExpanded, setTraceExpanded] = useState(false);
 
   if (isLiveLifecycle(lifecycle)) {
     const state = lifecycle === "waiting" || lifecycle === "stopping" || shown?.state === "interaction" ? "waiting" : "running";
+    // Running tense of the process label: the stream below carries the
+    // specifics, the status row only marks that the process is at work.
     const title = lifecycle === "recovering"
       ? t("conversation.activity.narrative.recover")
-      : lifecycle === "stopping"
-        ? t("conversation.activity.stopping")
-        : lifecycle === "waiting" && !shown
-          ? t("conversation.activity.waitingInput")
-          : task.responding
-            ? t("conversation.activity.streaming")
-            : shown
-              ? narrativeLabel(shown, t)
-              : t("conversation.activity.thinking");
+      : lifecycle === "waiting" && !shown
+        ? t("conversation.activity.waitingInput")
+        : shown?.state === "interaction"
+          ? t(shown.source.tool === "ask_user_question" ? "conversation.activity.waitingInput" : "conversation.activity.waitingApproval")
+          : lifecycle === "stopping"
+            ? t("conversation.activity.stopping")
+            : t("conversation.activity.processLive");
     const visualSlot = shown ? "currentActivity" : "thinking";
     // The stream is always open while live: narration and tool lines render
     // chronologically, and the caller pins the status row after the answer.
@@ -117,10 +115,9 @@ export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "act
     ? t("conversation.activity.error")
     : t("conversation.activity.stopped");
   const failureCount = traceTools.filter((block) => block.status === "error" || block.statusHistory?.includes("error")).length;
-  const headerSegments = [
-    t("conversation.activity.operationCount", { count: executionOperationCount(traceTools) }),
-    formatProcessDuration(traceTools),
-  ].filter(Boolean);
+  // The step records are folded inside the row, so the header only adds what
+  // they cannot show: the overall process time.
+  const headerSegments = [formatProcessDuration(traceTools)].filter(Boolean);
   // failureSummary carries its own separator.
   const failureSuffix = failureCount > 0 ? t("conversation.activity.failureSummary", { count: failureCount }) : "";
   const summary = t("conversation.activity.processHeader")
@@ -131,9 +128,6 @@ export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "act
   const summaryLabel = `${lifecycle === "settled" ? summary : title}${noAnswer ? ` · ${t("conversation.activity.noAnswer")}` : ""}`;
 
   return <div id={blocks.length === 1 && blocks[0].kind === "tool" ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
-    {narrationBlocks.map((block) => (
-      <div key={block.id} id={`thread-block-${block.id}`} className={cn(styles.entry, styles.narration, "min-w-0")}><MarkdownViewer variant="chat" className="text-ui-body leading-relaxed text-muted [overflow-wrap:anywhere]" resourceContext={cwd ? { cwd } : undefined}>{parseSuggestions(block.parts.map((part) => part.text).join("")).clean}</MarkdownViewer></div>
-    ))}
     {traceTools.length > 0 || headline ? (
       <button type="button" aria-expanded={traceExpanded} aria-controls={traceId} onClick={() => setTraceExpanded((value) => !value)} className={cn(styles.summary, "flex min-h-primary w-full items-center gap-2 rounded-input py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-control")}>
         <span className="min-w-0 flex-1 truncate text-ui-caption text-muted">{traceTools.length > 0 ? summaryLabel : headline}</span>
@@ -142,8 +136,11 @@ export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "act
       </button>
     ) : null}
     {traceExpanded && traceTools.length > 0 && <div id={traceId} role="region" className={styles.trace} aria-label={t("conversation.activity.trace")}>
-      <ActivityTrace groups={activityGroups} cwd={cwd} />
+      {traceTools.map((block) => <TraceItem key={block.id} block={block} live={false} />)}
     </div>}
+    {narrationBlocks.map((block) => (
+      <div key={block.id} id={`thread-block-${block.id}`} className={cn(styles.entry, styles.narration, "min-w-0")}><MarkdownViewer variant="chat" className="text-ui-body leading-relaxed text-muted [overflow-wrap:anywhere]" resourceContext={cwd ? { cwd } : undefined}>{parseSuggestions(block.parts.map((part) => part.text).join("")).clean}</MarkdownViewer></div>
+    ))}
   </div>;
 }
 
@@ -211,15 +208,6 @@ function useDisplayedActivity(blocks: ToolCallBlock[], lifecycle: TurnLifecycle)
     return () => window.clearTimeout(timer);
   }, [displayedKey, live, targetForced, targetKey]);
   return live ? target?.mergeKey === displayed?.mergeKey ? target : displayed : null;
-}
-
-function narrativeLabel(activity: PresentedActivity, t: (key: string) => string): string {
-  if (activity.state === "interaction") return t(activity.source.tool === "ask_user_question" ? "conversation.activity.waitingInput" : "conversation.activity.waitingApproval");
-  if (activity.state === "error") return t("conversation.activity.error");
-  if (activity.state === "recover") return t("conversation.activity.narrative.recover");
-  const domainKey = `conversation.activity.narrative.${activity.state}.${activity.domain}`;
-  const translated = t(domainKey);
-  return translated === domainKey ? t(`conversation.activity.narrative.${activity.state}`) : translated;
 }
 
 function ActivityLabel({ title, detail, error = false }: { title: string; detail: string | null; error?: boolean }) {
