@@ -39,7 +39,7 @@ export function buildTurnPresentations(blocks: ThreadBlock[], opts: { lastTurnLi
   let lastKey: string | null = null;
   for (const block of blocks) {
     const identity = "turnId" in block ? block.turnId : undefined;
-    const key = identity
+    const key: string = identity
       ? `turn:${identity}`
       : block.kind === "user"
         ? `user:${block.id}`

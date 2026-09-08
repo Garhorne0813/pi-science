@@ -197,7 +197,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
         const previousText = foldState.textByKey[previousKey];
         const previousIdx = previousText ? index[previousText.blockId] : undefined;
         const previous = previousIdx !== undefined ? blocks[previousIdx] : undefined;
-        if (previous?.kind === "agent" && previous.partial) {
+        if (previousIdx !== undefined && previous?.kind === "agent" && previous.partial) {
           blocks[previousIdx] = { ...previous, partial: false };
         }
         foldState.activeItemKey = eventPartId;

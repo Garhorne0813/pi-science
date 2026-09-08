@@ -52,12 +52,13 @@ export function groupActivityBlocks(blocks: ThreadBlock[]): ActivityGroup[] {
       single(block);
       continue;
     }
-    const previous = exploration?.blocks.at(-1);
-    if (!previous || previous.kind !== "tool" || !compatibleExploration(previous, block) || exploration.blocks.length >= MAX_EXPLORATION_GROUP_SIZE) {
+    const currentExploration = exploration;
+    const previous = currentExploration?.blocks.at(-1);
+    if (!currentExploration || !previous || previous.kind !== "tool" || !compatibleExploration(previous, block) || currentExploration.blocks.length >= MAX_EXPLORATION_GROUP_SIZE) {
       flush();
       exploration = { id: block.itemId ?? block.id, kind: "exploration", blocks: [block] };
     } else {
-      exploration.blocks.push(block);
+      currentExploration.blocks.push(block);
     }
   }
   flush();
