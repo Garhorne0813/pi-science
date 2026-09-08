@@ -380,7 +380,11 @@ export function registerEventListener(client: PiScienceClient) {
     if (newThread.blocks !== current.thread.blocks || newThread.foldState !== current.thread.foldState) {
       useRuntimeStore.setState({ thread: newThread });
     }
-    if (event.schemaVersion === 2 && newThread.foldState?.pendingEvents.some((pending) => pending.eventId === event.eventId)) return false;
+    if (
+      event.schemaVersion === 2
+      && newThread.foldState?.pendingEvents.some((pending) => pending.eventId === event.eventId)
+      && !newThread.foldState.speculativeEventIds.includes(String(event.eventId))
+    ) return false;
     return true;
   });
 }

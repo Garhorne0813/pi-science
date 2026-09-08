@@ -19,11 +19,24 @@ export interface Thread {
   foldState?: EventFoldState;
 }
 
+interface TextSegment {
+  eventId: string;
+  sequence: number;
+  revision: number;
+  baseRevision?: number;
+  text: string;
+  replace?: boolean;
+}
+
 interface TextFoldState {
   text: string;
   revision: number;
   blockId: string;
   partId: string;
+  /** V2 deltas are kept as a small replayable log while a sequence gap is
+   *  open. This lets a late lower revision be inserted before an already
+   *  visible speculative delta without appending the text a second time. */
+  segments?: TextSegment[];
 }
 
 export interface EventFoldState {
@@ -39,7 +52,12 @@ export interface EventFoldState {
   textByKey: Record<string, TextFoldState>;
   seenEventIds: string[];
   pendingEvents: PiScienceEvent[];
+  /** Events that were projected (or deliberately consumed as stale) before
+   *  the contiguous sequence waterline reached them. They remain pending for
+   *  reconciliation, but must not be applied again when the gap closes. */
+  speculativeEventIds: string[];
   terminalRunIds: string[];
+  terminalRunSequences: Record<string, number>;
   reconciliationRequired: boolean;
   lastSequence?: number;
 }
@@ -62,7 +80,9 @@ function createFoldState(event?: PiScienceEvent): EventFoldState {
     textByKey: {},
     seenEventIds: [],
     pendingEvents: [],
+    speculativeEventIds: [],
     terminalRunIds: [],
+    terminalRunSequences: {},
     reconciliationRequired: false,
   };
 }
@@ -71,10 +91,15 @@ function cloneFoldState(state: Thread, event?: PiScienceEvent): EventFoldState {
   const current = state.foldState ?? createFoldState(event);
   return {
     ...current,
-    textByKey: { ...current.textByKey },
+    textByKey: Object.fromEntries(Object.entries(current.textByKey).map(([key, value]) => [key, {
+      ...value,
+      ...(value.segments ? { segments: value.segments.map((segment) => ({ ...segment })) } : {}),
+    }])),
     seenEventIds: [...current.seenEventIds],
     pendingEvents: [...current.pendingEvents],
+    speculativeEventIds: [...(current.speculativeEventIds ?? [])],
     terminalRunIds: [...current.terminalRunIds],
+    terminalRunSequences: { ...(current.terminalRunSequences ?? {}) },
   };
 }
 
@@ -122,13 +147,25 @@ function roleOf(event: PiScienceEvent): "intermediate" | "final" | undefined {
   return undefined;
 }
 
-function isTerminalRun(state: EventFoldState, runId: string | undefined): boolean {
-  return Boolean(runId && state.terminalRunIds.includes(runId));
+function isTerminalRun(state: EventFoldState, runId: string | undefined, sequence?: number): boolean {
+  if (!runId || !state.terminalRunIds.includes(runId)) return false;
+  const terminalSequence = state.terminalRunSequences[runId];
+  // A speculative terminal event can arrive before an earlier missing text
+  // event. Sequence-aware checking lets that earlier event repair the visible
+  // projection while still rejecting genuinely late events after terminal.
+  return terminalSequence === undefined || sequence === undefined || sequence > terminalSequence;
 }
 
-function markTerminalRun(state: EventFoldState, runId: string | undefined): void {
-  if (!runId || state.terminalRunIds.includes(runId)) return;
-  state.terminalRunIds = [...state.terminalRunIds, runId].slice(-256);
+function markTerminalRun(state: EventFoldState, runId: string | undefined, sequence?: number): void {
+  if (!runId) return;
+  if (!state.terminalRunIds.includes(runId)) state.terminalRunIds = [...state.terminalRunIds, runId].slice(-256);
+  if (sequence !== undefined && Number.isFinite(sequence)) {
+    if (state.terminalRunSequences[runId] === undefined) state.terminalRunSequences[runId] = sequence;
+    const activeRunIds = new Set(state.terminalRunIds);
+    for (const terminalRunId of Object.keys(state.terminalRunSequences)) {
+      if (!activeRunIds.has(terminalRunId)) delete state.terminalRunSequences[terminalRunId];
+    }
+  }
 }
 
 function stampCurrentUser(blocks: ThreadBlock[], turnId: string, runId?: string): void {
@@ -461,7 +498,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
 
     case "session.idle": {
       const completedRunId = runIdentity(event, foldState);
-      markTerminalRun(foldState, completedRunId);
+      markTerminalRun(foldState, completedRunId, numberValue(event.seq));
       foldState.activeItemKey = undefined;
       foldState.activeRunId = undefined;
       // A run terminal event settles every item in that run. Legacy idle has
@@ -487,7 +524,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
 
     case "error": {
       const msg = (event.message as string) || "Unknown error";
-      if (event.runFailed === true || event.runId) markTerminalRun(foldState, runIdentity(event, foldState));
+      if (event.runFailed === true || event.runId) markTerminalRun(foldState, runIdentity(event, foldState), numberValue(event.seq));
       // If we already have a partial agent block without text, replace it with the error
       const lastBlock = blocks[blocks.length - 1];
       if (lastBlock && lastBlock.kind === "agent" && lastBlock.partial && !lastBlock.parts?.[0]?.text) {
@@ -552,15 +589,36 @@ function adaptV2Event(event: PiScienceEvent): PiScienceEvent[] {
       return [{ ...base, type: "agent_start", turnOrdinal: payload.turnOrdinal }];
     case "item.started":
       return [{ ...base, type: "item.started" }];
+    case "text.updated": {
+      const text = typeof payload.text === "string"
+        ? payload.text
+        : typeof event.text === "string" ? event.text : "";
+      const partId = stringValue(payload.partId) ?? stringValue(event.partId) ?? stringValue(event.itemId);
+      const textPhase = stringValue(payload.phase) ?? stringValue(event.phase);
+      const textRole = textPhase === "commentary" ? "intermediate" : textPhase === "final_answer" ? "final" : undefined;
+      const revision = numberValue(payload.revision) ?? numberValue(event.revision);
+      const baseRevision = numberValue(payload.baseRevision) ?? numberValue(event.baseRevision);
+      return [{
+        ...base,
+        type: "text.updated",
+        ...(partId ? { partId } : {}),
+        text,
+        ...(textPhase ? { phase: textPhase } : {}),
+        ...(revision !== undefined ? { revision } : {}),
+        ...(baseRevision !== undefined ? { baseRevision } : {}),
+        ...(payload.replace === true || event.replace === true ? { replace: true } : {}),
+        ...(textRole ? { presentationRole: textRole } : {}),
+      }];
+    }
     case "item.text.delta":
       return [{
         ...base,
         type: "text.updated",
-        partId: stringValue(payload.partId) ?? stringValue(event.itemId),
-        text: typeof payload.text === "string" ? payload.text : "",
-        phase,
-        revision: payload.revision,
-        baseRevision: payload.baseRevision,
+        partId: stringValue(payload.partId) ?? stringValue(event.partId) ?? stringValue(event.itemId),
+        text: typeof payload.text === "string" ? payload.text : typeof event.text === "string" ? event.text : "",
+        phase: stringValue(payload.phase) ?? phase,
+        revision: numberValue(payload.revision) ?? numberValue(event.revision),
+        baseRevision: numberValue(payload.baseRevision) ?? numberValue(event.baseRevision),
         ...(role ? { presentationRole: role } : {}),
       }];
     case "item.snapshot": {
@@ -615,34 +673,179 @@ function skipV2InOrder(state: Thread, event: PiScienceEvent, foldState: EventFol
   return withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState);
 }
 
+function isV2TextEvent(event: PiScienceEvent): boolean {
+  return event.type === "item.text.delta" || event.type === "item.snapshot" || event.type === "text.updated";
+}
+
 function staleTextDelta(foldState: EventFoldState, event: PiScienceEvent): boolean {
-  if (event.type !== "item.text.delta") return false;
+  if (!isV2TextEvent(event)) return false;
   const payload = recordValue(event.payload);
   const itemId = stringValue(event.itemId);
-  const partId = stringValue(payload.partId) ?? itemId;
+  const partId = stringValue(payload.partId) ?? stringValue(event.partId) ?? itemId;
   const current = (itemId ? foldState.textByKey[itemId] : undefined)
     ?? (partId ? foldState.textByKey[partId] : undefined);
   if (!current) return false;
-  const baseRevision = numberValue(payload.baseRevision);
+  const baseRevision = numberValue(payload.baseRevision) ?? numberValue(event.baseRevision);
+  const revision = numberValue(payload.revision) ?? numberValue(event.revision);
+  // A future speculative segment means this event is probably the missing
+  // lower revision. Allow it through so the canonical text can be rebuilt in
+  // revision order instead of treating it as stale.
+  if (revision !== undefined && current.segments?.some((segment) => segment.revision > revision)) return false;
+  // Likewise, a delta whose base is ahead of the current projection is a
+  // useful best-effort future segment while the base event is still missing.
+  if (baseRevision !== undefined && baseRevision > current.revision) return false;
   if (baseRevision !== undefined && baseRevision !== current.revision) return true;
-  const revision = numberValue(payload.revision);
   return revision !== undefined && revision <= current.revision;
+}
+
+function staleSpeculativeText(foldState: EventFoldState, event: PiScienceEvent): boolean {
+  if (!isV2TextEvent(event)) return false;
+  const payload = recordValue(event.payload);
+  const itemId = stringValue(event.itemId);
+  const partId = stringValue(payload.partId) ?? stringValue(event.partId) ?? itemId;
+  const current = (itemId ? foldState.textByKey[itemId] : undefined)
+    ?? (partId ? foldState.textByKey[partId] : undefined);
+  const revision = numberValue(payload.revision) ?? numberValue(event.revision);
+  if (!current || revision === undefined) return false;
+  return revision <= current.revision
+    && !current.segments?.some((segment) => segment.revision > revision);
+}
+
+function compareTextSegments(left: TextSegment, right: TextSegment): number {
+  return left.revision - right.revision
+    || left.sequence - right.sequence
+    || left.eventId.localeCompare(right.eventId);
+}
+
+function composeTextSegments(segments: TextSegment[]): { text: string; revision: number } {
+  let text = "";
+  let revision = 0;
+  for (const segment of segments) {
+    if (segment.replace) {
+      if (segment.revision >= revision) {
+        text = segment.text;
+        revision = segment.revision;
+      }
+      continue;
+    }
+    text += segment.text;
+    revision = Math.max(revision, segment.revision);
+  }
+  return { text, revision };
+}
+
+function applyV2Text(state: Thread, event: PiScienceEvent, adapted: PiScienceEvent): Thread {
+  const initialFoldState = cloneFoldState(state, event);
+  const key = eventItemKey(adapted, initialFoldState);
+  const previous = initialFoldState.textByKey[key];
+  const segments = previous?.segments
+    ? [...previous.segments]
+    : previous
+      ? [{
+        eventId: `baseline:${key}`,
+        sequence: Number.MIN_SAFE_INTEGER,
+        revision: previous.revision,
+        text: previous.text,
+        replace: true,
+      }]
+      : [];
+  const eventId = String(event.eventId);
+  if (!segments.some((segment) => segment.eventId === eventId)) {
+    segments.push({
+      eventId,
+      sequence: Number(event.seq),
+      revision: numberValue(adapted.revision) ?? Number(event.seq),
+      ...(numberValue(adapted.baseRevision) !== undefined ? { baseRevision: numberValue(adapted.baseRevision) } : {}),
+      text: typeof adapted.text === "string" ? adapted.text : "",
+      ...(adapted.replace === true ? { replace: true } : {}),
+    });
+  }
+  segments.sort(compareTextSegments);
+  const composed = composeTextSegments(segments);
+  const rendered = foldLegacyEvent(state, {
+    ...adapted,
+    text: composed.text,
+    replace: true,
+    revision: composed.revision,
+  });
+  const foldState = cloneFoldState(rendered, event);
+  const current = foldState.textByKey[key];
+  if (current) {
+    foldState.textByKey[key] = {
+      ...current,
+      text: composed.text,
+      revision: composed.revision,
+      segments,
+    };
+  }
+  return withFoldState({ blocks: rendered.blocks, index: rendered.index, loaded: true }, foldState);
+}
+
+function applyV2AdaptedEvent(state: Thread, event: PiScienceEvent, adapted: PiScienceEvent): Thread {
+  return isV2TextEvent(event) && adapted.type === "text.updated"
+    ? applyV2Text(state, event, adapted)
+    : foldLegacyEvent(state, adapted);
 }
 
 function applyV2InOrder(state: Thread, event: PiScienceEvent): Thread {
   const initialFoldState = cloneFoldState(state, event);
-  if (isTerminalRun(initialFoldState, stringValue(event.runId)) && event.type !== "artifact.updated") {
+  const sequence = numberValue(event.seq);
+  if (isTerminalRun(initialFoldState, stringValue(event.runId), sequence) && event.type !== "artifact.updated") {
     return skipV2InOrder(state, event, initialFoldState);
   }
   if (staleTextDelta(initialFoldState, event)) {
     return skipV2InOrder(state, event, initialFoldState, true);
   }
   let next = state;
-  for (const adapted of adaptV2Event(event)) next = foldLegacyEvent(next, adapted);
+  for (const adapted of adaptV2Event(event)) next = applyV2AdaptedEvent(next, event, adapted);
   const foldState = cloneFoldState(next, event);
   foldState.lastSequence = Number(event.seq);
   markSeen(foldState, String(event.eventId));
   return withFoldState({ blocks: next.blocks, index: next.index, loaded: true }, foldState);
+}
+
+function applyV2Speculative(state: Thread, event: PiScienceEvent): Thread {
+  const initialFoldState = cloneFoldState(state, event);
+  const sequence = numberValue(event.seq);
+  const terminal = isTerminalRun(initialFoldState, stringValue(event.runId), sequence);
+  const stale = staleTextDelta(initialFoldState, event);
+  let next = state;
+  // Sequence gaps make the normal base-revision check provisional too: a
+  // newer text delta with an old base can still be the only visible evidence
+  // of progress until its missing predecessor is replayed. Only suppress a
+  // speculative delta when it is unambiguously an older duplicate.
+  if ((!terminal || event.type === "artifact.updated") && !(stale && staleSpeculativeText(initialFoldState, event))) {
+    for (const adapted of adaptV2Event(event)) next = applyV2AdaptedEvent(next, event, adapted);
+  }
+  const foldState = cloneFoldState(next, event);
+  foldState.reconciliationRequired = true;
+  const eventId = String(event.eventId);
+  if (!foldState.speculativeEventIds.includes(eventId)) {
+    foldState.speculativeEventIds = [...foldState.speculativeEventIds, eventId].slice(-4096);
+  }
+  markSeen(foldState, eventId);
+  // Deliberately leave lastSequence at the contiguous waterline. The pending
+  // event is only consumed once every earlier sequence has been observed.
+  return withFoldState({ blocks: next.blocks, index: next.index, loaded: true }, foldState);
+}
+
+function queueV2Pending(foldState: EventFoldState, event: PiScienceEvent): void {
+  const pending = [...foldState.pendingEvents, event]
+    .sort((left, right) => Number(left.seq) - Number(right.seq))
+    .slice(-2000);
+  const pendingIds = new Set(pending.map((candidate) => String(candidate.eventId)));
+  foldState.pendingEvents = pending;
+  foldState.speculativeEventIds = foldState.speculativeEventIds.filter((eventId) => pendingIds.has(eventId));
+}
+
+function consumeSpeculativePending(state: Thread, event: PiScienceEvent): Thread {
+  const foldState = cloneFoldState(state, event);
+  const eventId = String(event.eventId);
+  foldState.pendingEvents = foldState.pendingEvents.filter((pending) => pending.eventId !== event.eventId);
+  foldState.speculativeEventIds = foldState.speculativeEventIds.filter((pendingId) => pendingId !== eventId);
+  foldState.lastSequence = Number(event.seq);
+  markSeen(foldState, eventId);
+  return withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState);
 }
 
 function drainV2Pending(state: Thread): Thread {
@@ -651,6 +854,10 @@ function drainV2Pending(state: Thread): Thread {
     const expected = next.foldState.lastSequence + 1;
     const pending = next.foldState.pendingEvents.find((candidate) => Number(candidate.seq) === expected);
     if (!pending) break;
+    if (next.foldState.speculativeEventIds.includes(String(pending.eventId))) {
+      next = consumeSpeculativePending(next, pending);
+      continue;
+    }
     const pendingState = cloneFoldState(next, pending);
     pendingState.pendingEvents = next.foldState.pendingEvents.filter((candidate) => candidate.eventId !== pending.eventId);
     next = applyV2InOrder(withFoldState({ blocks: next.blocks, index: next.index, loaded: true }, pendingState), pending);
@@ -677,12 +884,8 @@ function foldV2Event(state: Thread, event: PiScienceEvent): Thread {
     return withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState);
   }
   if (lastSequence !== undefined && sequence > lastSequence + 1) {
-    if (!foldState.pendingEvents.some((pending) => pending.eventId === eventId)) {
-      foldState.pendingEvents = [...foldState.pendingEvents, event].sort((a, b) => Number(a.seq) - Number(b.seq)).slice(-2000);
-    }
-    markSeen(foldState, eventId);
-    foldState.reconciliationRequired = true;
-    return withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState);
+    if (!foldState.pendingEvents.some((pending) => pending.eventId === eventId)) queueV2Pending(foldState, event);
+    return applyV2Speculative(withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState), event);
   }
 
   return drainV2Pending(applyV2InOrder(withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState), event));

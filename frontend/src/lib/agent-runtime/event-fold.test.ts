@@ -369,11 +369,76 @@ describe("conversation presentation protocol v2", () => {
       seq: 3, type: "item.text.delta", itemId: "answer-1",
       payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "answer" },
     }));
-    expect(thread.blocks.some((block) => block.kind === "agent")).toBe(false);
+    expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "agent", itemId: "answer-1", parts: [{ id: "answer-1", text: "answer" }] }));
     expect(thread.foldState?.reconciliationRequired).toBe(true);
+    expect(thread.foldState?.lastSequence).toBe(1);
+    expect(thread.foldState?.pendingEvents).toHaveLength(1);
+    expect(thread.foldState?.speculativeEventIds).toEqual(["epoch-1:3"]);
     thread = foldEvent(thread, envelope({ seq: 2, type: "item.started", itemId: "answer-1", payload: { itemType: "assistant" } }));
     expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "agent", itemId: "answer-1" }));
+    expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "agent", parts: [{ id: "answer-1", text: "answer" }] }));
     expect(thread.foldState?.pendingEvents).toHaveLength(0);
+    expect(thread.foldState?.speculativeEventIds).toHaveLength(0);
+    expect(thread.foldState?.lastSequence).toBe(3);
+  });
+
+  it("keeps projecting text when a sequence gap never fills", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({
+      seq: 3,
+      type: "text.updated",
+      itemId: "commentary-1",
+      payload: {
+        partId: "commentary-1", phase: "commentary", baseRevision: 0, revision: 1, text: "Reading files",
+      },
+    }));
+    thread = foldEvent(thread, envelope({
+      seq: 5,
+      type: "text.updated",
+      itemId: "commentary-1",
+      payload: {
+        partId: "commentary-1", phase: "commentary", baseRevision: 1, revision: 2, text: " …done",
+      },
+    }));
+
+    expect(thread.blocks).toContainEqual(expect.objectContaining({
+      kind: "agent",
+      itemId: "commentary-1",
+      parts: [{ id: "commentary-1", text: "Reading files …done" }],
+    }));
+    expect(thread.foldState?.pendingEvents.map((event) => event.seq)).toEqual([3, 5]);
+    expect(thread.foldState?.lastSequence).toBe(1);
+  });
+
+  it("reorders speculative text without replaying it as a burst", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({
+      seq: 3,
+      type: "item.text.delta",
+      itemId: "answer-1",
+      payload: { partId: "answer-1", phase: "final_answer", baseRevision: 1, revision: 2, text: " world" },
+    }));
+    expect(thread.blocks).toContainEqual(expect.objectContaining({
+      kind: "agent",
+      itemId: "answer-1",
+      parts: [{ id: "answer-1", text: " world" }],
+    }));
+
+    thread = foldEvent(thread, envelope({
+      seq: 2,
+      type: "item.text.delta",
+      itemId: "answer-1",
+      payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "hello" },
+    }));
+
+    expect(thread.blocks.filter((block) => block.kind === "agent")).toEqual([
+      expect.objectContaining({ itemId: "answer-1", parts: [{ id: "answer-1", text: "hello world" }] }),
+    ]);
+    expect(thread.foldState?.pendingEvents).toHaveLength(0);
+    expect(thread.foldState?.speculativeEventIds).toHaveLength(0);
+    expect(thread.foldState?.lastSequence).toBe(3);
   });
 
   it("does not let a late callback from another session mutate the thread", () => {
