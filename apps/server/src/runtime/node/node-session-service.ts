@@ -182,6 +182,7 @@ export class NodeSessionService {
   private readonly statsProjector = new SessionStatsProjector();
   private hostReloadPending = false;
   private log: (level: "info" | "warn" | "error", message: string) => void = () => {};
+  private beforeRuntimeStart: ((cwd: string) => Promise<void>) | null = null;
 
   constructor(
     private readonly eventHub: ConversationEventHub = conversationEventHub,
@@ -195,6 +196,10 @@ export class NodeSessionService {
 
   configureLogging(log: (level: "info" | "warn" | "error", message: string) => void): void {
     this.log = log;
+  }
+
+  configureBeforeRuntimeStart(hook: ((cwd: string) => Promise<void>) | null): void {
+    this.beforeRuntimeStart = hook;
   }
 
   async create(body: CreateSessionRequest): Promise<{ id: string; cwd: string; project_id: string } | RuntimeFailure & { sessionId?: string }> {
@@ -775,6 +780,8 @@ export class NodeSessionService {
   }
 
   private async startRuntime(cwd: string, config: PiConfig, sessionPath?: string, preparedOptions?: PiProcessOptions): Promise<RuntimeRecord | RuntimeFailure> {
+    try { await this.beforeRuntimeStart?.(cwd); }
+    catch (error) { return { error: `unable to materialize runtime configuration: ${String(error)}`, code: "configuration_failed" }; }
     const migration = await this.ensureModelResources();
     if (migration) return migration;
     if (this.modelResources && config.model && config.model.startsWith("user-") && !(await this.modelResources.isModelAvailable(config.model))) {

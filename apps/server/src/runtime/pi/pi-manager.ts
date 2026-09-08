@@ -1,6 +1,6 @@
 import { PiProcess, type PiProcessOptions, type PiResult } from "./pi-process.js";
 import { PiOrbitHost } from "./pi-orbit-host.js";
-import { resetWebRuntimeAllocation } from "./pi-runtime-launch.js";
+import { refreshWebRuntimeAllocation, resetWebRuntimeAllocation } from "./pi-runtime-launch.js";
 
 export class PiManager {
   private readonly processes = new Map<string, PiProcess>();
@@ -102,21 +102,35 @@ export class PiManager {
     if (this.webHost && !this.webHost.isClosed) return this.webHost;
     if (this.webHostStart) return this.webHostStart;
     const starting = (async () => {
-      const host = new PiOrbitHost(options);
-      host.once("exit", () => {
-        if (this.webHost === host) this.webHost = undefined;
-      });
-      try {
-        await host.ready();
-        this.webHost = host;
-        return host;
-      } catch (error) {
-        await host.shutdown().catch(() => undefined);
-        // The singleton port may be taken by another process (EADDRINUSE);
-        // forget it so the next attempt allocates a fresh port/token and can
-        // self-heal without restarting the control plane.
-        resetWebRuntimeAllocation();
-        throw error;
+      let hostOptions = options;
+      for (let attempt = 0; ; attempt += 1) {
+        const host = new PiOrbitHost(hostOptions);
+        host.once("exit", () => {
+          if (this.webHost === host) this.webHost = undefined;
+        });
+        try {
+          await host.ready();
+          this.webHost = host;
+          return host;
+        } catch (error) {
+          await host.shutdown().catch(() => undefined);
+          const message = error instanceof Error ? error.message : String(error);
+          // Windows may deny a port from its excluded/reserved range with
+          // EACCES even though no process is listening on it. Retry a small
+          // number of times with a fresh allocation, while preserving the
+          // existing EADDRINUSE behavior (the caller still gets a useful
+          // failure when another process owns the configured port).
+          if (attempt < 2 && /\bEACCES\b|permission denied/i.test(message)) {
+            hostOptions = refreshWebRuntimeAllocation(hostOptions);
+            continue;
+          }
+          // The singleton port may be taken by another process (EADDRINUSE),
+          // or all permission retries may have failed; forget it so the next
+          // attempt allocates a fresh port/token and can self-heal without
+          // restarting the control plane.
+          resetWebRuntimeAllocation();
+          throw error;
+        }
       }
     })();
     this.webHostStart = starting;

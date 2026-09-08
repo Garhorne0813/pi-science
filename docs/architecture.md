@@ -15,10 +15,12 @@ flowchart LR
     PH --> R1[Conversation runtime A]
     PH --> R2[Conversation runtime B]
     PH --> RN[Background agent runtime]
+    PH -->|spawn lazily| MCP[Enabled MCP connectors]
     CP -->|spawn on demand| K[Native Python and R kernels]
     CP --> DB[(Global state.sqlite)]
     CP --> WS[(Workspace files and .pi-science metadata)]
-    CP -->|bounded outbound HTTP| EXT[Configured model and literature services]
+    CP -->|bounded provider and probe HTTP| EXT[Configured model and scientific data services]
+    MCP -->|bounded scientific API HTTP| EXT
     PH --> WS
     K --> WS
 ```
@@ -30,10 +32,11 @@ service the browser calls directly.
 | Component | Responsibility |
 |---|---|
 | React web app | Conversations, project knowledge, files, notebooks, runs, skills, settings, and scientific viewers |
-| Node control plane | Sessions, event streaming, files, jobs, provenance, project state, settings, SQLite coordination, runtime lifecycle, and route authorization |
+| Node control plane | Sessions, event streaming, files, jobs, provenance, project state, settings, managed MCP connectors, SQLite coordination, runtime lifecycle, and route authorization |
 | Pi Orbit Web host | Agent sessions and isolated runtimes for conversations and bounded background agents |
+| MCP connector processes | Lazy local tool servers and guarded transports to public scientific services |
 | Node-native scientific runtime | Workspace-bound Python/R kernels and optional JupyterLab tooling |
-| Global SQLite state | Workspace locations, environment revisions, durable jobs, leases, and legacy-import markers |
+| Global SQLite state | Workspace locations, environment revisions, MCP definitions and policy, durable jobs, leases, and legacy-import markers |
 | Workspace | User files plus project-local instructions, skills, environments, sessions, artifacts, and provenance |
 
 ## Pi Orbit runtime model
@@ -162,6 +165,7 @@ project/
 │   │   └── ledger.json       # canonical memory ledger (records, proposals, decisions)
 │   ├── sessions/             # persisted Pi session JSONL files
 │   ├── agent/                # project-local fallback runtime config
+│   ├── mcp-runtime.json      # generated enabled connectors and effective tool policy
 │   ├── runs/                 # execution workspaces and outputs
 │   ├── solutions/            # immutable research candidates
 │   ├── session-titles.jsonl
@@ -271,6 +275,67 @@ flowchart LR
 Legacy `custom_providers`, provider-specific API-key fields, and
 `model-endpoints.json` are migration inputs or compatibility projections only;
 new writes use the canonical resource services.
+
+## MCP connector domain and runtime projection
+
+MCP configuration is managed by the Node control plane rather than edited in
+Pi runtime files. Connector definitions, global enablement and filtering,
+global tool decisions, per-project tool overrides, and the tool discovery cache
+are canonical SQLite resources.
+
+```mermaid
+flowchart LR
+    UI[Settings / MCP API] --> S[McpConnectorService]
+    S --> DB[(MCP SQLite repositories)]
+    S --> P[Probe and tools/list]
+    DB --> RP[McpRuntimeProjection]
+    RP --> F[workspace/.pi-science/mcp-runtime.json]
+    F --> A[Pi MCP adapter]
+    A --> L[Local stdio or socket server]
+    A --> H[Remote HTTP or SSE server]
+    L --> D[Scientific data APIs]
+    H --> D
+```
+
+- Startup idempotently seeds 18 built-in definitions and their known tool
+  metadata. Definition upgrades preserve the user's enablement and approval
+  settings. Paper Search is enabled by default; the other 17 domain connectors
+  are opt-in. Built-in definitions cannot be edited or deleted.
+- The built-ins expose 85 read-only tools. Paper Search has a dedicated MCP
+  process; the other domains share one implementation entry point but are
+  launched with separate domain arguments, so each connector advertises only
+  its own tools. Processes use lazy lifecycle management.
+- Custom and legacy-imported connectors use the same resource model and may use
+  `stdio`, Streamable HTTP, SSE, or socket transport. Import preview rejects
+  sensitive legacy fields. Connector authentication can use a managed secret or
+  an environment-variable reference and deliver it as a process variable, an
+  HTTP header, or a Bearer token. Literal secret bindings remain rejected.
+- MCP credentials live in the separate mode-0600 `CredentialStore` and carry an
+  `owner_kind=mcp` / connector owner. General model-credential routes neither
+  list nor mutate them. Runtime snapshots contain only credential references;
+  the Pi extension resolves values in process memory. Built-in definition
+  upgrades preserve these bindings.
+- Enablement, include/exclude filters, and approval mode are global. Exact-name
+  `Allow`, `Ask`, and `Deny` tool decisions can be global or project-specific;
+  `Deny` wins, then the project decision, then the global decision, then the
+  connector's approval mode. Unknown tools remain approval-gated unless the
+  connector explicitly allows all tools.
+- Runtime-affecting definition or policy changes materialize a mode-0600,
+  atomically replaced
+  `.pi-science/mcp-runtime.json` for each known workspace and reloads active
+  runtimes. The snapshot contains enabled definitions and policy, not resolved
+  secret values. The Pi extension loads the snapshot from each session's own
+  workspace because multiple projects share one Pi Orbit host.
+- Probes perform the MCP handshake and `tools/list`, coalesce concurrent probes,
+  and cache the result against a connector revision and fingerprint. Built-in
+  tool metadata has a non-expiring seeded cache; a live probe can refresh it.
+- Remote transports and built-in upstream clients use the guarded MCP fetch
+  path: URLs are validated before connection, public endpoints receive DNS
+  rebinding protection, cross-origin requests and HTTP redirects are rejected,
+  requests are bounded, and outcomes are recorded in the egress audit.
+
+The detailed API, schema, migration, and UI contract is documented in
+[MCP management implementation](mcp-management-implementation.md).
 
 ## Trust and security boundaries
 

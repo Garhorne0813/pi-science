@@ -15,6 +15,8 @@ export interface Migration {
   name: string;
   sql: string;
   checksum: string;
+  /** Checksums of previously shipped, schema-compatible migration revisions. */
+  compatibleChecksums?: string[];
 }
 
 export type SqliteRequest =

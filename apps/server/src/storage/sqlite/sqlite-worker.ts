@@ -72,7 +72,7 @@ function runMigrations(migrations: Migration[]) {
   const appliedByVersion = new Map(applied.map((row) => [row.version, row]));
   for (const row of applied) {
     const migration = migrations.find((item) => item.version === row.version);
-    if (!migration || migration.name !== row.name || migration.checksum !== row.checksum) {
+    if (!migration || migration.name !== row.name || (migration.checksum !== row.checksum && !migration.compatibleChecksums?.includes(row.checksum))) {
       throw new Error(`SQLite migration checksum mismatch at version ${row.version} (${row.name})`);
     }
   }

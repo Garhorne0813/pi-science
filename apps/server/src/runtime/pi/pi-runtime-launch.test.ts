@@ -526,6 +526,17 @@ describe("Pi runtime custom provider materialization", () => {
     expect(extensions).toContain(join(import.meta.dirname, "extensions", "pi-science-notebook.ts"));
   });
 
+  it("loads only the Pi-Science MCP snapshot adapter", async () => {
+    const cwd = join(tmpdir(), `pi-runtime-mcp-extension-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    cleanup.push(cwd);
+    await mkdir(cwd, { recursive: true });
+    const ambient = join(cwd, "node_modules", "pi-mcp-adapter", "index.ts");
+    const options = buildPiProcessOptions(cwd, { skills: [], extensions: [ambient] })!;
+    const extensions = options.args.flatMap((arg, index) => arg === "-e" ? [options.args[index + 1]] : []);
+    expect(extensions).not.toContain(ambient);
+    expect(extensions).toContain(join(import.meta.dirname, "extensions", "pi-science-mcp.ts"));
+  });
+
   it("runs a source TypeScript CLI through the adjacent tsx runtime", async () => {
     const piRoot = join(tmpdir(), `pi-source-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     cleanup.push(piRoot);
