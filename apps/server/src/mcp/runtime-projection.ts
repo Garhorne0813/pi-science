@@ -10,7 +10,7 @@ export const MCP_RUNTIME_SNAPSHOT = ".pi-science/mcp-runtime.json";
 // Bump when the managed MCP implementation changes its tool/resource contract.
 // The adapter includes this value in its metadata-cache fingerprint so a
 // previously discovered tool list cannot survive a runtime upgrade.
-export const MCP_RUNTIME_CACHE_VERSION = 2;
+export const MCP_RUNTIME_CACHE_VERSION = 3;
 
 export interface ProjectedMcpServer {
   __piScienceAllowedTools?: string[];
@@ -28,6 +28,7 @@ export interface ProjectedMcpServer {
   idleTimeout?: number;
   requestTimeoutMs?: number;
   exposeResources?: boolean;
+  directTools?: boolean | string[];
   includeTools?: string[];
   excludeTools?: string[];
   approveTools?: boolean | string[];
@@ -77,6 +78,11 @@ function projectServer(
   configuredToolCount?: number,
 ): ProjectedMcpServer {
   const runtime = connector.runtime_config;
+  // Promote only the exact-accession lookup. Exposing search and FASTA beside
+  // it made models issue redundant parallel calls for a single accession.
+  const directTools = connector.source === "builtin" && connector.name === "protein-records"
+    ? ["get_uniprot_entry"]
+    : undefined;
   return {
     __piScienceConnectorId: connector.connector_id,
     __piScienceAllowPrivate: runtime.allow_private,
@@ -91,6 +97,7 @@ function projectServer(
     ...(runtime.idle_timeout_minutes != null ? { idleTimeout: runtime.idle_timeout_minutes } : {}),
     ...(runtime.request_timeout_ms != null ? { requestTimeoutMs: runtime.request_timeout_ms } : {}),
     exposeResources: runtime.expose_resources,
+    ...(directTools ? { directTools } : {}),
     ...(includeTools.length ? { includeTools } : {}),
     ...(excludeTools.length ? { excludeTools } : {}),
     approveTools,

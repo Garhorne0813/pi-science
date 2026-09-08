@@ -200,9 +200,9 @@ const scientificDomains = [
     description: "Search and retrieve UniProtKB protein records and sequences.",
     terms: "https://www.uniprot.org/help/terms",
     tools: [
-      tool("search_uniprot_proteins", "Search UniProt Proteins", "Search UniProtKB with organism, review-status, pagination, and sorting controls."),
-      tool("get_uniprot_entry", "Get UniProt Entry", "Retrieve a compact UniProtKB entry by accession."),
-      tool("get_uniprot_sequence", "Get UniProt Sequence", "Retrieve a bounded UniProtKB FASTA sequence by accession."),
+      tool("search_uniprot_proteins", "Search UniProt Proteins", "Search UniProtKB when no exact accession is available. Do not call this alongside get_uniprot_entry for an accession."),
+      tool("get_uniprot_entry", "Get UniProt Entry", "Retrieve a compact UniProtKB entry directly by exact accession. Do not also call search_uniprot_proteins."),
+      tool("get_uniprot_sequence", "Get UniProt Sequence", "Retrieve standalone UniProtKB FASTA by accession only when sequence output is explicitly needed. Do not call it when get_uniprot_entry already uses include_sequence=true."),
     ],
   },
   {

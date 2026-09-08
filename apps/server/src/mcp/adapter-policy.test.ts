@@ -23,6 +23,23 @@ describe.skipIf(!existsSync(fileURLToPath(adapterUrl)))("installed MCP adapter a
     expect(await ensureToolCallApproved(state, "test", { originalName: "tool" }, {})).toEqual({ ok: false, reason: "approval_required_headless" });
     expect(await ensureToolCallApproved({ ...state, ui: { select: async () => "Allow once" } }, "test", { originalName: "tool" }, {})).toEqual({ ok: true });
   });
+  it("serializes concurrent approval prompts so neither caller is orphaned", async () => {
+    const { ensureToolCallApproved } = await import(adapterUrl.href);
+    const decisions: Array<(value: string) => void> = [];
+    const ui = {
+      select: vi.fn(() => new Promise<string>((resolve) => decisions.push(resolve))),
+    };
+    const state = { config: { mcpServers: { test: { approveTools: true } } }, approvedToolCalls: new Map(), ui };
+    const first = ensureToolCallApproved(state, "test", { originalName: "first" }, {});
+    const second = ensureToolCallApproved(state, "test", { originalName: "second" }, {});
+
+    await vi.waitFor(() => expect(ui.select).toHaveBeenCalledTimes(1));
+    decisions.shift()!("Allow once");
+    await vi.waitFor(() => expect(ui.select).toHaveBeenCalledTimes(2));
+    decisions.shift()!("Allow once");
+
+    await expect(Promise.all([first, second])).resolves.toEqual([{ ok: true }, { ok: true }]);
+  });
   it("runs stdio without ambient secrets and preserves bound values without command interpolation", async () => {
     vi.stubEnv("MCP_AMBIENT_SECRET", "must-not-leak");
     const { McpServerManager } = await import(new URL("server-manager.ts", adapterUrl).href);
@@ -48,8 +65,8 @@ describe.skipIf(!existsSync(fileURLToPath(adapterUrl)))("installed MCP adapter a
 
   it("invalidates metadata when the managed runtime cache version changes", async () => {
     const { computeServerHash } = await import(new URL("metadata-cache.ts", adapterUrl).href);
-    const base = { command: process.execPath, args: ["server.js"], __piScienceCacheVersion: 2 };
-    expect(computeServerHash(base)).not.toBe(computeServerHash({ ...base, __piScienceCacheVersion: 3 }));
+    const base = { command: process.execPath, args: ["server.js"], __piScienceCacheVersion: 3 };
+    expect(computeServerHash(base)).not.toBe(computeServerHash({ ...base, __piScienceCacheVersion: 4 }));
   });
 
 });

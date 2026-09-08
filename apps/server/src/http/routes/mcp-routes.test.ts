@@ -144,9 +144,13 @@ describe("canonical MCP routes", () => {
     await service.ensureBuiltins();
     const seededPaper = await service.repository.toolCache("mcp_builtin_paper_search");
     expect(seededPaper?.expires_at).toBe(Number.MAX_SAFE_INTEGER);
-    if (seededPaper) await service.repository.replaceToolCache({ ...seededPaper, expires_at: Date.now() - 1 });
+    if (seededPaper) await service.repository.replaceToolCache({
+      ...seededPaper,
+      tools: seededPaper.tools.map((tool, index) => index === 0 ? { ...tool, description: "stale description" } : tool),
+    });
     await service.ensureBuiltins();
     expect((await service.repository.toolCache("mcp_builtin_paper_search"))?.expires_at).toBe(Number.MAX_SAFE_INTEGER);
+    expect((await service.repository.toolCache("mcp_builtin_paper_search"))?.tools[0]?.description).not.toBe("stale description");
     const listed = await app.inject({ method: "GET", url: `/api/mcp/connectors?cwd=${encodeURIComponent(cwd)}` });
     const connectors = listed.json().connectors as Array<{ connector_id: string; name: string; revision: number; tool_count: number; settings: { enabled: boolean; revision: number } }>;
     expect(connectors).toHaveLength(18);
@@ -171,7 +175,18 @@ describe("canonical MCP routes", () => {
       expect.objectContaining({ name: "chembl", tool_count: 4, settings: expect.objectContaining({ enabled: false }) }),
     ]));
     const runtimeSnapshot = JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8"));
-    expect(runtimeSnapshot.mcpServers["paper-search"]).toMatchObject({ __piScienceCacheVersion: 2, __piScienceToolCount: 5 });
+    expect(runtimeSnapshot.mcpServers["paper-search"]).toMatchObject({ __piScienceCacheVersion: 3, __piScienceToolCount: 5 });
+
+    const proteinRecords = connectors.find((item) => item.name === "protein-records")!;
+    await service.setSettings(proteinRecords.connector_id, {
+      enabled: true,
+      include_tools: [],
+      exclude_tools: [],
+      approval_mode: "ask",
+      revision: proteinRecords.settings.revision,
+    });
+    const proteinSnapshot = JSON.parse(await readFile(join(cwd, ".pi-science", "mcp-runtime.json"), "utf8"));
+    expect(proteinSnapshot.mcpServers["protein-records"].directTools).toEqual(["get_uniprot_entry"]);
 
     expect(await service.credential("mcp_builtin_paper_search")).toMatchObject({ capability: "optional", suggested_target_name: "NCBI_API_KEY" });
     expect(await service.credential("mcp_builtin_literature_graph")).toMatchObject({ capability: "optional", suggested_target_name: "OPENALEX_API_KEY" });

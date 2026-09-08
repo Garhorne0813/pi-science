@@ -18,6 +18,61 @@ patch("tool-approval.ts", "PI_SCIENCE_EXACT_TOOL_GRANTS_V1", [[
   '  const allowed = (definition as { __piScienceAllowedTools?: string[] } | undefined)?.__piScienceAllowedTools;\n  if (approval === true && allowed?.includes(toolMeta.originalName)) return false;\n  if (approval === true) return true;',
 ]]);
 
+// Pi's web UI owns a single interactive selection surface. Concurrent MCP
+// calls must not open multiple approval prompts at once: a later prompt can
+// otherwise replace the earlier one and leave its Promise pending forever.
+// Serialize approvals per session state while preserving cancellation for
+// callers waiting their turn.
+patch("tool-approval.ts", "PI_SCIENCE_SERIAL_APPROVALS_V1", [
+  [
+    'export type ToolCallApprovalResult =\n  | { ok: true }\n  | { ok: false; reason: "denied" | "approval_required_headless" };',
+    `export type ToolCallApprovalResult =
+  | { ok: true }
+  | { ok: false; reason: "denied" | "approval_required_headless" };
+
+const approvalQueues = new WeakMap<McpExtensionState, Promise<void>>();
+
+async function withApprovalQueue<T>(
+  state: McpExtensionState,
+  signal: AbortSignal | undefined,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = approvalQueues.get(state) ?? Promise.resolve();
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const tail = previous.catch(() => undefined).then(() => gate);
+  approvalQueues.set(state, tail);
+  try {
+    await abortable(previous.catch(() => undefined), signal);
+    return await operation();
+  } finally {
+    release();
+    if (approvalQueues.get(state) === tail) {
+      void tail.finally(() => {
+        if (approvalQueues.get(state) === tail) approvalQueues.delete(state);
+      });
+    }
+  }
+}`,
+  ],
+  [
+    `  const decision = await abortable(
+    state.ui.select(
+      \`${"${title}"}\\n\\nArguments:\\n${"${preview}"}\`,
+      ["Allow once", "Allow for session", "Deny"],
+    ),
+    ownedSignal,
+  );`,
+    `  const decision = await withApprovalQueue(state, ownedSignal, () => abortable(
+    state.ui!.select(
+      \`${"${title}"}\\n\\nArguments:\\n${"${preview}"}\`,
+      ["Allow once", "Allow for session", "Deny"],
+    ),
+    ownedSignal,
+  ));`,
+  ],
+]);
+
 // Pi Orbit hosts many workspace sessions in one process. Allow the managed
 // wrapper to resolve its in-memory config from the current session context;
 // a config captured while the host boots would otherwise use orbit-host cwd.

@@ -51,9 +51,9 @@ export class McpConnectorService {
       const connector = await this.repository.upsertBuiltin(builtin.connector_id, builtin.definition, builtin.enabled_by_default);
       const cache = await this.repository.toolCache(connector.connector_id);
       const fingerprint = mcpConnectorFingerprint(connector);
-      const cachedToolNames = cache?.tools.map((tool) => tool.name).sort().join("\0");
-      const builtinToolNames = builtin.tools.map((tool) => tool.name).sort().join("\0");
-      if (!cache || cache.config_revision !== connector.revision || cache.fingerprint !== fingerprint || cachedToolNames !== builtinToolNames || cache.expires_at !== Number.MAX_SAFE_INTEGER) {
+      const cachedTools = cache ? JSON.stringify(cache.tools) : null;
+      const builtinTools = JSON.stringify(builtin.tools);
+      if (!cache || cache.config_revision !== connector.revision || cache.fingerprint !== fingerprint || cachedTools !== builtinTools || cache.expires_at !== Number.MAX_SAFE_INTEGER) {
         const now = Date.now();
         await this.repository.replaceToolCache({
           connector_id: connector.connector_id,
