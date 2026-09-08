@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Check, CircleX, ChevronRight } from "lucide-react";
 import type { ProgressAppearance } from "@pi-science/contracts";
 import { useTranslation } from "react-i18next";
 import type { AgentMessageBlock, ThreadBlock, ToolCallBlock } from "../../types/thread";
-import { activityPolicy } from "../../lib/conversation/activity-policy";
+import { activityPolicy, executionOperationCount } from "../../lib/conversation/activity-policy";
 import { ACTIVITY_SWITCH_DEBOUNCE_MS, MIN_ACTIVITY_VISIBLE_MS, selectDisplayedActivity } from "../../lib/conversation/activity-display-policy";
 import type { PresentedActivity } from "../../lib/conversation/activity-narrative";
 import { groupActivityBlocks, type ActivityGroup } from "../../lib/conversation/activity-groups";
@@ -49,8 +49,12 @@ export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "act
     ? Boolean(parseSuggestions(block.parts.map((part) => part.text).join("")).clean.trim())
     : activityPolicy(block).visibleInExecutionTrace), [blocks]);
   const activityGroups = useMemo(() => groupActivityBlocks(blocks), [blocks]);
+  const traceId = useId();
+  const traceTools = useMemo(() => activities.filter((block): block is ToolCallBlock => block.kind === "tool"), [activities]);
   const shown = useDisplayedActivity(tools, lifecycle);
   const task = useMemo(() => selectActivityTask(contextBlocks), [contextBlocks]);
+  // Settled turns collapse their tool steps behind the process summary row.
+  const [traceExpanded, setTraceExpanded] = useState(false);
 
   if (isLiveLifecycle(lifecycle)) {
     const state = lifecycle === "waiting" || lifecycle === "stopping" || shown?.state === "interaction" ? "waiting" : "running";
@@ -109,11 +113,37 @@ export function AgentActivity({ blocks, contextBlocks = blocks, lifecycle = "act
         ? t("conversation.activity.noAnswer")
         : null;
 
+  const title = lifecycle === "failed"
+    ? t("conversation.activity.error")
+    : t("conversation.activity.stopped");
+  const failureCount = traceTools.filter((block) => block.status === "error" || block.statusHistory?.includes("error")).length;
+  const headerSegments = [
+    t("conversation.activity.operationCount", { count: executionOperationCount(traceTools) }),
+    formatProcessDuration(traceTools),
+  ].filter(Boolean);
+  // failureSummary carries its own separator.
+  const failureSuffix = failureCount > 0 ? t("conversation.activity.failureSummary", { count: failureCount }) : "";
+  const summary = t("conversation.activity.processHeader")
+    + (headerSegments.length ? ` · ${headerSegments.join(" · ")}` : "")
+    + failureSuffix;
+  // Settled steps fold inside this row; aborted and failed turns show their
+  // state headline instead.
+  const summaryLabel = `${lifecycle === "settled" ? summary : title}${noAnswer ? ` · ${t("conversation.activity.noAnswer")}` : ""}`;
+
   return <div id={blocks.length === 1 && blocks[0].kind === "tool" ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
     {narrationBlocks.map((block) => (
       <div key={block.id} id={`thread-block-${block.id}`} className={cn(styles.entry, styles.narration, "min-w-0")}><MarkdownViewer variant="chat" className="text-ui-body leading-relaxed text-muted [overflow-wrap:anywhere]" resourceContext={cwd ? { cwd } : undefined}>{parseSuggestions(block.parts.map((part) => part.text).join("")).clean}</MarkdownViewer></div>
     ))}
-    {headline && <div className="py-1 text-left text-ui-caption text-muted">{headline}</div>}
+    {traceTools.length > 0 || headline ? (
+      <button type="button" aria-expanded={traceExpanded} aria-controls={traceId} onClick={() => setTraceExpanded((value) => !value)} className={cn(styles.summary, "flex min-h-primary w-full items-center gap-2 rounded-input py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-control")}>
+        <span className="min-w-0 flex-1 truncate text-ui-caption text-muted">{traceTools.length > 0 ? summaryLabel : headline}</span>
+        {lifecycle === "settled" && <span className="sr-only" aria-live="polite">{t("conversation.activity.completed")}</span>}
+        <ChevronRight size={13} aria-hidden className={cn(styles.chevron, "shrink-0 text-muted", traceExpanded && "rotate-90")} />
+      </button>
+    ) : null}
+    {traceExpanded && traceTools.length > 0 && <div id={traceId} role="region" className={styles.trace} aria-label={t("conversation.activity.trace")}>
+      <ActivityTrace groups={activityGroups} cwd={cwd} />
+    </div>}
   </div>;
 }
 
@@ -228,6 +258,13 @@ function stepDuration(block: ToolCallBlock): string | null {
   const end = Date.parse(block.endedAt);
   if (Number.isNaN(start) || Number.isNaN(end)) return null;
   return formatSeconds(Math.max(0, (end - start) / 1000));
+}
+
+function formatProcessDuration(blocks: ToolCallBlock[]): string | null {
+  const starts = blocks.map((block) => block.startedAt ? Date.parse(block.startedAt) : Number.NaN).filter(Number.isFinite);
+  const ends = blocks.map((block) => block.endedAt ? Date.parse(block.endedAt) : Number.NaN).filter(Number.isFinite);
+  if (starts.length === 0 || ends.length === 0) return null;
+  return formatSeconds(Math.max(0, (Math.max(...ends) - Math.min(...starts)) / 1000));
 }
 
 function activityStateFor(lifecycle: TurnLifecycle, activity: PresentedActivity | null): ProgressActivityState {

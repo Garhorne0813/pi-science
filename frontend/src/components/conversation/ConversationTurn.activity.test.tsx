@@ -88,7 +88,7 @@ describe("turn-level activity through the live event path", () => {
     // settled view keeps the model's narration — no process row, no steps.
     expect(screen.getByText("我先读取 turn-presentation.ts。")).toBeInTheDocument();
     expect(screen.getByText("接下来看事件折叠。")).toBeInTheDocument();
-    expect(screen.queryByText(/Work process/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Work process/)).toBeInTheDocument();
     expect(screen.queryByText("Reading turn-presentation.ts")).not.toBeInTheDocument();
     expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
     expect(screen.getByText(/实现符合方案/)).toBeInTheDocument();
@@ -127,7 +127,7 @@ describe("turn-level activity through the live event path", () => {
     expect(screen.getByText("实现符合方案：一个 turn 只有一个 Activity。")).toBeInTheDocument();
     // Todo never leaks as a visible row or an aria-live announcement source.
     expect(screen.queryByText(/Created #1|Updated #1/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Work process/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Work process/)).toBeInTheDocument();
   });
 });
 
@@ -138,7 +138,7 @@ describe("turn-level activity through the history path", () => {
 
     expect(screen.getByText("我先读取 turn-presentation.ts。")).toBeInTheDocument();
     expect(screen.getByText("接下来看事件折叠。")).toBeInTheDocument();
-    expect(screen.queryByText(/Work process/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Work process/)).toBeInTheDocument();
     expect(screen.queryByText("Reading file")).not.toBeInTheDocument();
     expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
     expect(screen.getByText(/实现符合方案/)).toBeInTheDocument();

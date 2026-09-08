@@ -188,12 +188,14 @@ describe("AgentActivity settled display", () => {
       { kind: "agent" as const, id: "a2", presentationRole: "final" as const, parts: [{ id: "p2", text: "The final answer." }] },
     ];
     render(<AgentActivity blocks={blocks} lifecycle="settled" />);
+    // The summary row folds the step records: the narration and the answer
+    // are the visible content.
     expect(screen.getByText("Step notes: the CSV has 4 columns.")).toBeInTheDocument();
     expect(screen.getByText("The final answer.")).toBeInTheDocument();
+    expect(screen.getByText(/Work process · 2 operations/)).toBeInTheDocument();
     expect(screen.queryByText("Reading one.ts")).not.toBeInTheDocument();
     expect(screen.queryByText("Running bash")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
-    expect(screen.queryByText(/Work process/)).not.toBeInTheDocument();
   });
 
   it("notes a settled turn whose findings never produced a final answer", () => {
