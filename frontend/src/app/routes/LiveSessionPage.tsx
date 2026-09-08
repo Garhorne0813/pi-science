@@ -130,7 +130,7 @@ export function LiveSessionPage() {
     };
   }, [sessionId, workspaceCwd, connect, disconnect]);
 
-  const turns = useMemo(() => buildTurnPresentations(thread.blocks, { lastTurnLifecycle: turnLifecycle }), [thread.blocks, turnLifecycle]);
+  const turns = useMemo(() => buildTurnPresentations(thread.blocks, { lastTurnLifecycle: turnLifecycle, lastTurnId: thread.foldState?.activeTurnId }), [thread.blocks, thread.foldState?.activeTurnId, turnLifecycle]);
   // Copy-button eligibility computed across the WHOLE thread (not per group):
   // agentActionTextByBlock needs the trailing tool blocks after an agent block
   // to decide whether it is the final answer. A per-group computation would

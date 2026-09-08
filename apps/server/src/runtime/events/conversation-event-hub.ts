@@ -30,8 +30,13 @@ type TurnState = {
   hadError: boolean;
   hadActivity: boolean;
   textByKey: Map<string, string>;
+  revisionByKey: Map<string, number>;
   anonymousSerial: number;
   activeAnonymousKey: string | null;
+  turnOrdinal: number;
+  turnId: string | null;
+  runId: string | null;
+  streamEpoch: string;
 };
 
 type StderrChunk = { text: string; at: number; turn: number };
@@ -42,7 +47,10 @@ type PendingText = {
   timer: ReturnType<typeof setTimeout>;
 };
 
-const MAX_EVENT_TEXT = 20_000;
+// Keep the durable event payload bounded, but large answers/logs must remain
+// recoverable. The UI owns the 8KB preview; the transport should not silently
+// turn a 100KB answer into a clipped message.
+const MAX_EVENT_TEXT = 1_000_000;
 const MAX_SUBSCRIBER_REPLAY_PENDING = 2_000;
 const STDERR_WINDOW_MS = 30_000;
 const TEXT_BATCH_MS = 50;
@@ -171,6 +179,63 @@ function sequenceFromCursor(id: string | null): number {
   const value = separator >= 0 ? id.slice(separator + 1) : id;
   const sequence = Number(value);
   return /^\d+$/.test(value) && Number.isSafeInteger(sequence) ? sequence : 0;
+}
+
+function stableConversationId(kind: "turn" | "run", sessionId: string, ordinal: number): string {
+  return `${kind}-${sessionId}-${ordinal}`;
+}
+
+function turnFields(turn: TurnState): Record<string, unknown> {
+  return {
+    turnId: turn.turnId ?? stableConversationId("turn", "unknown", Math.max(1, turn.turnOrdinal)),
+    ...(turn.runId ? { runId: turn.runId } : {}),
+    streamEpoch: turn.streamEpoch,
+    ...(turn.turnOrdinal > 0 ? { turnOrdinal: turn.turnOrdinal } : {}),
+  };
+}
+
+function eventPhase(role: "intermediate" | "final" | undefined): "commentary" | "final_answer" | "unknown" {
+  return role === "intermediate" ? "commentary" : role === "final" ? "final_answer" : "unknown";
+}
+
+/** Build the versioned wire envelope for events that belong to a known run.
+ *
+ * The original flat fields are intentionally retained at the top level as a
+ * compatibility view for older clients. `payload` is the authoritative V2
+ * body; both views are written in one record so replaying a mixed-version
+ * session cannot produce a second logical event. Events without a trustworthy
+ * turn/run identity stay on the legacy path instead of receiving a fabricated
+ * timestamp-based identity. */
+function versionedPayload(
+  cwd: string,
+  sessionId: string,
+  payload: Record<string, unknown>,
+  sequence: number,
+): Record<string, unknown> {
+  const body = safeValue(payload);
+  if (!body || typeof body !== "object" || Array.isArray(body)) return payload;
+  const cleanBody = body as Record<string, unknown>;
+  const turnId = typeof cleanBody.turnId === "string" && cleanBody.turnId ? cleanBody.turnId : null;
+  const runId = typeof cleanBody.runId === "string" && cleanBody.runId ? cleanBody.runId : null;
+  if (!turnId || !runId) return cleanBody;
+  const streamEpoch = typeof cleanBody.streamEpoch === "string" && cleanBody.streamEpoch
+    ? cleanBody.streamEpoch
+    : `session-${sessionId}`;
+  const type = String(cleanBody.type ?? "runtime.event");
+  return {
+    ...cleanBody,
+    schemaVersion: 2,
+    workspaceId: resolve(cwd),
+    sessionId,
+    streamEpoch,
+    eventId: `${streamEpoch}:${sequence}`,
+    seq: sequence,
+    turnId,
+    runId,
+    occurredAt: new Date().toISOString(),
+    type,
+    payload: cleanBody,
+  };
 }
 
 function modelError(event: PiEvent): string | null {
@@ -380,10 +445,11 @@ export class ConversationEventHub {
       if (!canPublish()) return;
       const sequence = (this.sequences.get(key) ?? 0) + 1;
       this.sequences.set(key, sequence);
+      const eventPayload = versionedPayload(cwd, sessionId, payload, sequence);
       const record: SseEventRecord = {
         event: String(payload.type ?? "runtime.event"),
         id: String(sequence),
-        data: JSON.stringify(safeValue(payload)),
+        data: JSON.stringify(eventPayload),
         created_at: new Date().toISOString(),
       };
       let appended = true;
@@ -470,6 +536,7 @@ export class ConversationEventHub {
           ...current.payload,
           ...payload,
           text: cap(`${String(current.payload.text ?? "")}${incomingText}`),
+          ...(current.payload.baseRevision !== undefined ? { baseRevision: current.payload.baseRevision } : {}),
           ...(current.payload.replace === true ? { replace: true } : {}),
         };
       }
@@ -506,16 +573,37 @@ export class ConversationEventHub {
     const key = streamKey(cwd, sessionId);
     let turn = this.turns.get(key);
     if (!turn) {
-      turn = { hadText: false, hadError: false, hadActivity: false, textByKey: new Map(), anonymousSerial: 0, activeAnonymousKey: null };
+      turn = {
+        hadText: false,
+        hadError: false,
+        hadActivity: false,
+        textByKey: new Map(),
+        revisionByKey: new Map(),
+        anonymousSerial: 0,
+        activeAnonymousKey: null,
+        turnOrdinal: 0,
+        turnId: null,
+        runId: null,
+        streamEpoch: `session-${sessionId}`,
+      };
       this.turns.set(key, turn);
     }
     if (event.type === "agent_start") {
+      turn.turnOrdinal += 1;
+      turn.turnId = stableConversationId("turn", sessionId, turn.turnOrdinal);
+      turn.runId = stableConversationId("run", sessionId, turn.turnOrdinal);
       turn.hadText = false;
       turn.hadError = false;
       turn.hadActivity = false;
       turn.textByKey.clear();
+      turn.revisionByKey.clear();
       turn.activeAnonymousKey = null;
-      return [{ type: "agent_start", sessionId }];
+      return [{ type: "agent_start", sessionId, ...turnFields(turn) }];
+    }
+    if (!turn.turnId) {
+      turn.turnOrdinal = Math.max(1, turn.turnOrdinal);
+      turn.turnId = stableConversationId("turn", sessionId, turn.turnOrdinal);
+      turn.runId = stableConversationId("run", sessionId, turn.turnOrdinal);
     }
 
     const text = assistantText(event);
@@ -556,15 +644,30 @@ export class ConversationEventHub {
           turn.textByKey.set(key, accumulated + text.text);
         }
       }
+      const previousRevision = turn.revisionByKey.get(key) ?? 0;
+      const revision = previousRevision + (emitted || replace ? 1 : 0);
+      if (emitted || replace) turn.revisionByKey.set(key, revision);
       if (text.text.trim() || accumulated.trim()) turn.hadText = true;
       if (!emitted && !replace) return [];
-      return [{ type: "text.updated", sessionId, partId: messageKey, text: cap(emitted), ...(text.presentationRole ? { presentationRole: text.presentationRole } : {}), ...(replace ? { replace: true } : {}) }];
+      return [{
+        type: "text.updated",
+        sessionId,
+        partId: messageKey,
+        itemId: messageKey,
+        ...turnFields(turn),
+        phase: eventPhase(text.presentationRole),
+        baseRevision: previousRevision,
+        revision,
+        text: cap(emitted),
+        ...(text.presentationRole ? { presentationRole: text.presentationRole } : {}),
+        ...(replace ? { replace: true } : {}),
+      }];
     }
 
     const exactError = modelError(event);
     if (exactError) {
       turn.hadError = true;
-      return [{ type: "error", sessionId, message: cap(exactError) }];
+      return [{ type: "error", sessionId, ...turnFields(turn), message: cap(exactError) }];
     }
 
     switch (event.type) {
@@ -576,7 +679,7 @@ export class ConversationEventHub {
           : `anonymous-${++turn.anonymousSerial}`;
         turn.activeAnonymousKey = typeof message.id === "string" && message.id ? null : partId;
         const presentationRole = message?.presentationRole === "final" || message?.presentationRole === "intermediate" ? message.presentationRole : undefined;
-        return [{ type: "text.updated", sessionId, partId, text: "", ...(presentationRole ? { presentationRole } : {}) }];
+        return [{ type: "text.updated", sessionId, partId, itemId: partId, ...turnFields(turn), phase: eventPhase(presentationRole), baseRevision: 0, revision: 0, text: "", ...(presentationRole ? { presentationRole } : {}) }];
       }
       case "tool_execution_start": {
         turn.hadActivity = true;
@@ -589,12 +692,12 @@ export class ConversationEventHub {
         }
         const title = toolActivityTitle(tool, event.args);
         const presentation = event.presentation && typeof event.presentation === "object" ? event.presentation : toolActivityPresentation(tool, event.args);
-        records.push({ type: "tool.updated", sessionId, callId, tool, status: "running", ...(title ? { title } : {}), ...(presentation ? { presentation } : {}), input: safeValue(event.args ?? {}), startedAt: new Date().toISOString() });
+        records.push({ type: "tool.updated", sessionId, callId, itemId: callId, ...turnFields(turn), ...(title ? { title } : {}), ...(presentation ? { presentation } : {}), tool, status: "running", input: safeValue(event.args ?? {}), startedAt: new Date().toISOString() });
         return records;
       }
       case "tool_execution_update":
         turn.hadActivity = true;
-        return [{ type: "tool.updated", sessionId, callId: String(event.toolCallId ?? ""), tool: String(event.toolName ?? ""), status: "running", partialOutput: cap(event.partialResult) }];
+        return [{ type: "tool.updated", sessionId, callId: String(event.toolCallId ?? ""), itemId: String(event.toolCallId ?? ""), ...turnFields(turn), tool: String(event.toolName ?? ""), status: "running", partialOutput: cap(event.partialResult) }];
       case "tool_execution_end": {
         turn.hadActivity = true;
         const callId = String(event.toolCallId ?? "");
@@ -602,18 +705,19 @@ export class ConversationEventHub {
         const records: Record<string, unknown>[] = [];
         if (tool === "ask_user_question") records.push({ type: "questionnaire.finished", sessionId, toolCallId: callId, cancelled: event.isError === true });
         const presentation = event.presentation && typeof event.presentation === "object" ? event.presentation : toolActivityPresentation(tool, event.args);
-        records.push({ type: "tool.updated", sessionId, callId, tool, status: event.isError ? "error" : "done", output: cap(event.result), ...(presentation ? { presentation } : {}), ...(event.details === undefined ? {} : { details: safeValue(event.details) }), endedAt: new Date().toISOString() });
+        records.push({ type: "tool.updated", sessionId, callId, itemId: callId, ...turnFields(turn), tool, status: event.isError ? "error" : "done", output: cap(event.result), ...(presentation ? { presentation } : {}), ...(event.details === undefined ? {} : { details: safeValue(event.details) }), endedAt: new Date().toISOString() });
         return records;
       }
       case "extension_ui_request": {
         turn.hadActivity = true;
         const method = String(event.method ?? "");
-        if (method === "confirm") return [{ type: "permission.asked", sessionId, requestId: String(event.id ?? ""), title: String(event.title ?? "Confirmation"), message: cap(event.message) }];
+        if (method === "confirm") return [{ type: "permission.asked", sessionId, ...turnFields(turn), requestId: String(event.id ?? ""), title: String(event.title ?? "Confirmation"), message: cap(event.message) }];
         if (["select", "input", "editor"].includes(method)) {
           const toolCallId = browserQuestionnaireRequestId(event.title);
           return [{
             type: "question.asked",
             sessionId,
+            ...turnFields(turn),
             requestId: String(event.id ?? ""),
             method,
             title: toolCallId ? "Questionnaire" : String(event.title ?? "Question"),
@@ -628,40 +732,50 @@ export class ConversationEventHub {
       }
       case "artifact_published":
         turn.hadActivity = true;
-        return [{ type: "artifact.published", sessionId, artifactId: String(event.artifactId ?? ""), path: String(event.path ?? ""), version: event.version, mime: String(event.mime ?? ""), verification: safeValue(event.verification ?? {}) }];
+        return [{ type: "artifact.published", sessionId, ...turnFields(turn), artifactId: String(event.artifactId ?? ""), path: String(event.path ?? ""), version: event.version, mime: String(event.mime ?? ""), verification: safeValue(event.verification ?? {}) }];
       case "compaction_start":
       case "compaction_update":
       case "compaction_end":
       case "compaction_error":
-        return [{ type: "compaction.updated", sessionId, status: event.type.replace("compaction_", ""), message: cap(event.message ?? event.error ?? ""), progress: event.progress }];
+        return [{ type: "compaction.updated", sessionId, ...turnFields(turn), status: event.type.replace("compaction_", ""), message: cap(event.message ?? event.error ?? ""), progress: event.progress }];
       case "extension_error":
         turn.hadError = true;
-        return [{ type: "error", sessionId, message: cap(event.message ?? event.error ?? "Extension failed") }];
+        return [{ type: "error", sessionId, ...turnFields(turn), message: cap(event.message ?? event.error ?? "Extension failed") }];
       case "error":
         turn.hadError = true;
-        return [{ type: "error", sessionId, message: cap(event.message ?? event.error ?? "Pi runtime error") }];
+        return [{ type: "error", sessionId, ...turnFields(turn), message: cap(event.message ?? event.error ?? "Pi runtime error") }];
       case "retry_start":
       case "retry_update":
       case "retry_end":
       case "status":
-        return [{ type: "status.updated", sessionId, status: event.type, message: cap(event.message ?? ""), attempt: event.attempt }];
+        return [{ type: "status.updated", sessionId, ...turnFields(turn), status: event.type, message: cap(event.message ?? ""), attempt: event.attempt }];
       case "agent_end":
-        return [{ type: "agent_end", sessionId }];
+        return [{ type: "agent_end", sessionId, ...turnFields(turn) }];
       case "agent_settled": {
         const records: Record<string, unknown>[] = [];
         if (!turn.hadText && !turn.hadError && !turn.hadActivity && !event.handledWithoutTurn) {
           records.push({
             type: "error",
             sessionId,
+            ...turnFields(turn),
             message: "The model returned an empty response. Check the configured API key, model ID, thinking level, and network connection.",
           });
         }
-        records.push({ type: "session.idle", sessionId, ...(event.handledWithoutTurn ? { handledWithoutTurn: true } : {}) });
+        records.push({
+          type: "session.idle",
+          sessionId,
+          ...turnFields(turn),
+          outcome: turn.hadError ? "with_issues" : turn.hadText ? "ok" : "no_answer",
+          ...(event.handledWithoutTurn ? { handledWithoutTurn: true } : {}),
+        });
         turn.hadText = false;
         turn.hadError = false;
         turn.hadActivity = false;
         turn.textByKey.clear();
+        turn.revisionByKey.clear();
         turn.activeAnonymousKey = null;
+        turn.turnId = null;
+        turn.runId = null;
         return records;
       }
       default:

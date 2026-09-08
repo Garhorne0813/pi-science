@@ -76,6 +76,39 @@ describe("central conversation event hub", () => {
     expect(hub.hasSubscribers(cwd, "session-live")).toBe(false);
   });
 
+  it("writes an identity-bearing V2 envelope with a flat legacy view", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub({ append: async () => undefined, readAfter: async () => [] });
+    const received: SseEventRecord[] = [];
+    await hub.subscribe(cwd, "session-v2", undefined, (record) => received.push(record), false);
+
+    await hub.publish(cwd, "session-v2", {
+      type: "text.updated",
+      sessionId: "session-v2",
+      turnId: "turn-1",
+      runId: "run-1",
+      streamEpoch: "epoch-1",
+      partId: "answer-1",
+      text: "answer",
+    });
+
+    const event = JSON.parse(received[0]!.data) as Record<string, unknown>;
+    expect(event).toMatchObject({
+      schemaVersion: 2,
+      workspaceId: cwd,
+      sessionId: "session-v2",
+      streamEpoch: "epoch-1",
+      eventId: "epoch-1:1",
+      seq: 1,
+      turnId: "turn-1",
+      runId: "run-1",
+      type: "text.updated",
+      text: "answer",
+      payload: expect.objectContaining({ type: "text.updated", partId: "answer-1", text: "answer" }),
+    });
+    expect(typeof event.occurredAt).toBe("string");
+  });
+
   it("does not append or deliver a guarded publication that is invalid before publishing", async () => {
     const cwd = await workspace();
     let allowed = false;

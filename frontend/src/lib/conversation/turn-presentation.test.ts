@@ -31,6 +31,14 @@ describe("turn analysis", () => {
     expect(intermediateAgentsInTurn(blocks).map((block) => block.id)).toEqual(["agent-a"]);
   });
 
+  it("does not promote explicit intermediate commentary to a completed answer", () => {
+    const blocks = [user("u1"), { ...agent("commentary"), presentationRole: "intermediate" as const }];
+    const turn = buildTurnPresentations(blocks)[0];
+    expect(turn.finalAgent).toBeNull();
+    expect(turn.completed).toBe(false);
+    expect(turn.intermediateAgents.map((block) => block.id)).toEqual(["commentary"]);
+  });
+
   it("exposes live narration as provisional, never as final", () => {
     const blocks = [agent("agent-a"), tool("tool-1"), agent("answer-streaming")];
     expect(provisionalAgentInActiveTurn(blocks)?.id).toBe("answer-streaming");

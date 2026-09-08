@@ -14,6 +14,11 @@ beforeEach(() => { setProgressAppearance(defaultProgressAppearance); });
 
 describe("AgentActivity data filters", () => {
   it("does not count todo", () => { expect(executionOperationCount([tool("a", "todo"), tool("b", "todo")])).toBe(0); });
+  it("counts a retried call once while preserving its status history", () => {
+    const first = tool("a", "bash", "error");
+    const retry = { ...first, status: "done" as const, statusHistory: ["error" as const, "done" as const] };
+    expect(executionOperationCount([first, retry])).toBe(1);
+  });
   it("keeps todo out of trace", () => { expect(executionActivities([tool("read", "read"), tool("todo", "todo"), tool("search", "grep")]).map((block) => block.id)).toEqual(["read", "search"]); });
 });
 
@@ -81,11 +86,31 @@ describe("AgentActivity", () => {
     useRuntimeStore.setState({ abort: abort as typeof previous });
     try {
       render(<AgentActivity blocks={[tool("bash-1", "bash", "running")]} />);
-      await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Stop" })); });
       expect(abort).toHaveBeenCalledTimes(1);
     } finally {
       useRuntimeStore.setState({ abort: previous });
     }
+  });
+
+  it("keeps a manual disclosure choice when the run completes", () => {
+    const blocks = [tool("read", "read", "done", { path: "answer.ts" })];
+    const { rerender } = render(<AgentActivity blocks={blocks} lifecycle="settled" />);
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
+    rerender(<AgentActivity blocks={[{ ...blocks[0], output: "updated" }]} lifecycle="settled" />);
+    expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
+  });
+
+  it("labels a long tool preview and exposes the retained full output on demand", () => {
+    const output = "x".repeat(9_000);
+    render(<AgentActivity lifecycle="settled" blocks={[tool("bash", "bash", "done", { command: "long" })].map((block) => ({ ...block, output }))} />);
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    const details = screen.getByLabelText("Execution trace");
+    fireEvent.click(within(details).getByRole("button", { expanded: false }));
+    expect(within(details).getByText(/Preview truncated at .*8,?000 characters/)).toBeInTheDocument();
+    fireEvent.click(within(details).getByRole("button", { name: /View full output/ }));
+    expect(within(details).getByText((_, element) => element?.tagName === "PRE" && element.textContent?.length === output.length)).toBeInTheDocument();
   });
 
   it("streams the live trace open with the status row pinned after it", () => {
@@ -111,6 +136,11 @@ describe("AgentActivity", () => {
     expect(screen.getByText("Reading file")).toBeInTheDocument();
     expect(screen.getByText("Searching for matching code")).toBeInTheDocument();
     expect(screen.queryByLabelText(/operation/)).not.toBeInTheDocument();
+  });
+
+  it("does not present explicit commentary as a completed answer", () => {
+    render(<AgentActivity lifecycle="settled" blocks={[{ kind: "agent", id: "commentary", presentationRole: "intermediate", parts: [{ id: "commentary-part", text: "I checked the inputs." }] }]} />);
+    expect(screen.getByText("No final answer returned")).toBeInTheDocument();
   });
 
   it("keeps the active status visible for todo-only turns", () => { render(<AgentActivity blocks={[tool("todo", "todo")]} />); expect(screen.getByText("Thinking")).toBeInTheDocument(); expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument(); });

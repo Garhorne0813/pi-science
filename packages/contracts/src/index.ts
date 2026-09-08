@@ -163,6 +163,13 @@ export const historyMessageSchema = z.object({
   timestamp: z.string().nullish(),
   presentation: toolPresentationSchema.optional(),
   presentationRole: z.enum(["intermediate", "final"]).optional(),
+  turnId: z.string().optional(),
+  runId: z.string().optional(),
+  itemId: z.string().optional(),
+  parentItemId: z.string().optional(),
+  revision: z.number().int().nonnegative().optional(),
+  sequence: z.number().int().nonnegative().optional(),
+  classificationSource: z.enum(["explicit", "legacy_inferred", "unknown"]).optional(),
 });
 
 export const sessionMessagePageSchema = z.object({
@@ -284,6 +291,122 @@ export const sessionEventSchema = z.discriminatedUnion("type", [
   sessionErrorEventSchema,
   sessionStatsEventSchema,
 ]).and(z.looseObject({}));
+
+/** ── Conversation presentation protocol v2 ──
+ *
+ * The legacy session events above remain the wire-compatible read path. V2
+ * adds durable identity and version metadata so a client can replay a stream
+ * without guessing message boundaries from arrival order or text contents.
+ * Payloads stay `unknown` at the envelope level and are validated by the
+ * event-specific schemas below. */
+
+export const conversationRunStateSchema = z.enum([
+  "queued",
+  "active",
+  "waiting",
+  "stopping",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+export type ConversationRunState = z.infer<typeof conversationRunStateSchema>;
+
+export const conversationRunOutcomeSchema = z.enum(["ok", "with_issues", "no_answer"]);
+export type ConversationRunOutcome = z.infer<typeof conversationRunOutcomeSchema>;
+
+export const conversationEventPhaseSchema = z.enum(["commentary", "final_answer", "unknown"]);
+export type ConversationEventPhase = z.infer<typeof conversationEventPhaseSchema>;
+
+const eventIdSchema = z.string().min(1);
+const occurredAtSchema = z.string().min(1);
+
+export const conversationEventV2Schema = z.looseObject({
+  schemaVersion: z.literal(2),
+  workspaceId: z.string().min(1),
+  sessionId: z.string().min(1),
+  streamEpoch: z.string().min(1),
+  eventId: eventIdSchema,
+  seq: z.number().int().nonnegative(),
+  turnId: z.string().min(1),
+  runId: z.string().min(1),
+  itemId: z.string().min(1).optional(),
+  parentItemId: z.string().min(1).optional(),
+  occurredAt: occurredAtSchema,
+  type: z.string().min(1),
+  payload: z.unknown(),
+});
+export type ConversationEventV2 = z.infer<typeof conversationEventV2Schema>;
+
+export const textDeltaPayloadSchema = z.object({
+  partId: z.string().min(1),
+  phase: conversationEventPhaseSchema,
+  baseRevision: z.number().int().nonnegative(),
+  revision: z.number().int().positive(),
+  text: z.string(),
+});
+export type TextDeltaPayload = z.infer<typeof textDeltaPayloadSchema>;
+
+export const textSnapshotPayloadSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  phase: conversationEventPhaseSchema,
+  parts: z.array(z.object({ partId: z.string().min(1), text: z.string() })),
+});
+export type TextSnapshotPayload = z.infer<typeof textSnapshotPayloadSchema>;
+
+export const conversationItemStartedPayloadSchema = z.looseObject({
+  itemType: z.enum(["user", "commentary", "assistant", "tool", "interaction", "artifact", "system"]),
+  phase: conversationEventPhaseSchema.optional(),
+  content: z.string().optional(),
+});
+
+export const conversationItemCompletedPayloadSchema = z.looseObject({
+  revision: z.number().int().nonnegative().optional(),
+});
+
+export const conversationToolUpdatedPayloadSchema = z.looseObject({
+  callId: z.string().min(1),
+  operationId: z.string().min(1).optional(),
+  attemptId: z.string().min(1).optional(),
+  tool: z.string().min(1),
+  status: z.enum(["running", "done", "error", "waiting-approval", "unknown"]),
+  input: z.record(z.string(), z.unknown()).optional(),
+  output: z.string().optional(),
+  partialOutput: z.string().optional(),
+  diff: z.string().optional(),
+  startedAt: z.string().optional(),
+  endedAt: z.string().optional(),
+});
+
+export const conversationRunRecordSchema = z.looseObject({
+  turnId: z.string().min(1),
+  runId: z.string().min(1),
+  retryOfRunId: z.string().min(1).optional(),
+  state: conversationRunStateSchema,
+  startedAt: z.string().optional(),
+  endedAt: z.string().optional(),
+  finalItemId: z.string().min(1).optional(),
+  outcome: conversationRunOutcomeSchema.optional(),
+  issues: z.array(z.object({
+    itemId: z.string().min(1).optional(),
+    code: z.string().min(1),
+    resolvedByItemId: z.string().min(1).optional(),
+  })).default([]),
+});
+export type ConversationRunRecord = z.infer<typeof conversationRunRecordSchema>;
+
+export const conversationSnapshotSchema = z.looseObject({
+  schemaVersion: z.literal(2),
+  sessionId: z.string().min(1),
+  streamEpoch: z.string().min(1),
+  throughSeq: z.number().int().nonnegative(),
+  snapshotVersion: z.string().min(1),
+  turns: z.array(z.unknown()),
+  runs: z.array(conversationRunRecordSchema),
+  items: z.array(z.unknown()),
+  pendingInteractions: z.array(z.unknown()),
+  page: z.object({ nextCursor: z.string().nullable(), hasMore: z.boolean() }),
+});
+export type ConversationSnapshot = z.infer<typeof conversationSnapshotSchema>;
 
 export const piRpcCommandSchema = z.object({
   id: z.string().min(1),

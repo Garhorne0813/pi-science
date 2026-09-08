@@ -33,14 +33,18 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
   return (
     <div data-thread-block-ids={turnBlockIds(turn).join(" ")} className="flex flex-col gap-3 scroll-mt-4">
       {turn.user && <UserMessage block={turn.user} />}
-      {(turn.active || turn.activityBlocks.length > 0) && <AgentActivity blocks={turn.activityBlocks} contextBlocks={turn.blocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} part={isLiveLifecycle(turn.lifecycle) ? "content" : "both"} />}
+      {(turn.active || turn.activityBlocks.length > 0) && <AgentActivity blocks={turn.activityBlocks} contextBlocks={turn.blocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} disclosureKey={conversationDisclosureKey(turn)} part={isLiveLifecycle(turn.lifecycle) ? "content" : "both"} />}
       {visibleAgent && <AgentMessage block={visibleAgent} actionText={turn.finalAgent ? actionTextByBlock?.get(turn.finalAgent.id) : undefined} codeRunner={codeRunner} />}
-      {(turn.active || turn.activityBlocks.length > 0) && isLiveLifecycle(turn.lifecycle) && <AgentActivity blocks={turn.activityBlocks} contextBlocks={turn.blocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} part="status" />}
+      {(turn.active || turn.activityBlocks.length > 0) && isLiveLifecycle(turn.lifecycle) && <AgentActivity blocks={turn.activityBlocks} contextBlocks={turn.blocks} lifecycle={turn.lifecycle} cwd={codeRunner?.cwd} disclosureKey={conversationDisclosureKey(turn)} part="status" />}
       {turn.systemBlocks.map((block) => <SystemBlock key={block.id} block={block} />)}
       {turn.artifacts.map((block) => <TurnArtifactStrip key={block.id} artifacts={block.artifacts} cwd={codeRunner?.cwd} />)}
       {finalText && <ReferencedArtifactStrip text={finalText} cwd={codeRunner?.cwd} exclude={publishedPaths} />}
     </div>
   );
+}
+
+function conversationDisclosureKey(turn: TurnPresentation): string {
+  return ["conversation-disclosure", turn.turnId ?? turn.id, turn.runId ?? "legacy", "activity"].join(":");
 }
 
 function UserMessage({ block }: { block: UserMessageBlock }) {
@@ -49,6 +53,9 @@ function UserMessage({ block }: { block: UserMessageBlock }) {
   const copyText = visibleText || references.map((reference) => reference.path).join("\n");
   return (
     <div id={`user-msg-${block.id}`} className="group/message ml-auto flex max-w-[min(var(--user-message-width),82%)] scroll-mt-4 flex-col items-end gap-1">
+      {block.images && block.images.length > 0 && <div className="flex max-w-full flex-wrap justify-end gap-2" aria-label="Attached images">
+        {block.images.map((image, index) => <img key={`${image.mimeType}-${index}`} src={`data:${image.mimeType};base64,${image.data}`} alt={`Attachment ${index + 1}`} className="max-h-64 max-w-full rounded-input border border-border object-contain" />)}
+      </div>}
       {visibleText && <div className="ui-user-message rounded-bubble px-4 py-2.5 text-sm leading-relaxed text-text whitespace-pre-wrap">{visibleText}</div>}
       {references.length > 0 && <div className="flex flex-wrap justify-end gap-1.5" aria-label="Referenced context">
         {references.map((reference) => <span key={`${reference.isDir ? "folder" : "file"}-${reference.path}`} className="flex max-w-full items-center gap-1 rounded-input border border-accent/20 bg-accent/5 px-2 py-1 font-mono text-[10px] text-muted" title={reference.path}>

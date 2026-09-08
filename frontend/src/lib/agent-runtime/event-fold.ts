@@ -1,10 +1,9 @@
-/** Thread model and transport event folding (ported from open-science foldEvent).
+/** Thread model and transport event folding.
  *
- *  The turn buffer below is module-level mutable state owned by this module:
- *  `foldEvent` accumulates text deltas across events of the same agent turn.
- *  Every code path that starts or abandons a turn (connect, sendPrompt,
- *  agent_start, stream.gap, session replacement, missing-session recovery)
- *  clears it through `resetTurnBuffer()`. */
+ * The presentation protocol is intentionally a pure projection: all state
+ * needed to join deltas, reject duplicates, and reconcile sequence gaps lives
+ * on the Thread being folded. This keeps two sessions isolated even when an
+ * old EventSource callback arrives after the user has switched sessions. */
 
 import type { ThreadBlock, ToolCallBlock } from "../../types/thread";
 import type { TurnArtifactItem } from "../../types/thread";
@@ -15,115 +14,307 @@ export interface Thread {
   /** Map from block id to index in blocks array */
   index: Record<string, number>;
   loaded: boolean;
+  /** Internal, serializable reducer state. Omitted from an empty thread so
+   * existing callers can continue to use `emptyThread()` as a stable value. */
+  foldState?: EventFoldState;
+}
+
+interface TextFoldState {
+  text: string;
+  revision: number;
+  blockId: string;
+  partId: string;
+}
+
+export interface EventFoldState {
+  sessionId?: string;
+  streamEpoch?: string;
+  activeTurnId?: string;
+  activeRunId?: string;
+  activeItemKey?: string;
+  lastAgentBlockId?: string;
+  turnOrdinal: number;
+  anonymousSerial: number;
+  errorSerial: number;
+  textByKey: Record<string, TextFoldState>;
+  seenEventIds: string[];
+  pendingEvents: PiScienceEvent[];
+  terminalRunIds: string[];
+  reconciliationRequired: boolean;
+  lastSequence?: number;
 }
 
 export function emptyThread(): Thread {
   return { blocks: [], index: {}, loaded: false };
 }
 
-let _textBuffer = ""; // Accumulates text deltas
-let _currentTurnId = ""; // Unique ID per agent turn, resets on agent_start
-/** Index (in the folded block list) of the last agent block inserted or
- *  updated in the current turn. `turn.artifacts` arrives after the turn's
- *  final assistant message, so this is the exact "turn end" position even
- *  when the turn spans several assistant messages (anonymous part ids). */
-let _turnLastAgentIndex = -1;
+/** Kept for source compatibility with older session actions. Reducer state is
+ * now attached to each Thread, so a module-level reset would be incorrect. */
+export function resetTurnBuffer(): void { /* state is per Thread */ }
 
-/** Drop the accumulated text of the current turn. Called by every path that
- *  begins a new turn or invalidates the one in flight. */
-export function resetTurnBuffer(): void {
-  _textBuffer = "";
-  _currentTurnId = "";
-  _turnLastAgentIndex = -1;
+function createFoldState(event?: PiScienceEvent): EventFoldState {
+  return {
+    ...(typeof event?.sessionId === "string" ? { sessionId: event.sessionId } : {}),
+    ...(typeof event?.streamEpoch === "string" ? { streamEpoch: event.streamEpoch } : {}),
+    turnOrdinal: 0,
+    anonymousSerial: 0,
+    errorSerial: 0,
+    textByKey: {},
+    seenEventIds: [],
+    pendingEvents: [],
+    terminalRunIds: [],
+    reconciliationRequired: false,
+  };
+}
+
+function cloneFoldState(state: Thread, event?: PiScienceEvent): EventFoldState {
+  const current = state.foldState ?? createFoldState(event);
+  return {
+    ...current,
+    textByKey: { ...current.textByKey },
+    seenEventIds: [...current.seenEventIds],
+    pendingEvents: [...current.pendingEvents],
+    terminalRunIds: [...current.terminalRunIds],
+  };
+}
+
+function withFoldState(thread: Omit<Thread, "foldState">, foldState: EventFoldState): Thread {
+  return { ...thread, foldState };
+}
+
+function preserveFoldState(thread: Omit<Thread, "foldState">, source: Thread): Thread {
+  return source.foldState ? { ...thread, foldState: source.foldState } : thread;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function eventHasIdentity(event: PiScienceEvent): boolean {
+  return typeof event.itemId === "string" || typeof event.turnId === "string" || typeof event.runId === "string";
+}
+
+function isV2Event(event: PiScienceEvent): boolean {
+  return event.schemaVersion === 2 && typeof event.eventId === "string" && typeof event.seq === "number";
+}
+
+function eventItemKey(event: PiScienceEvent, state: EventFoldState): string {
+  return stringValue(event.itemId) ?? stringValue(event.partId) ?? state.activeItemKey ?? "anonymous";
+}
+
+function turnIdentity(event: PiScienceEvent, state: EventFoldState): string {
+  return stringValue(event.turnId) ?? state.activeTurnId ?? `legacy-turn-${Math.max(1, state.turnOrdinal)}`;
+}
+
+function runIdentity(event: PiScienceEvent, state: EventFoldState): string | undefined {
+  return stringValue(event.runId) ?? state.activeRunId;
+}
+
+function roleOf(event: PiScienceEvent): "intermediate" | "final" | undefined {
+  if (event.presentationRole === "intermediate" || event.presentationRole === "final") return event.presentationRole;
+  const phase = event.phase;
+  if (phase === "commentary") return "intermediate";
+  if (phase === "final_answer") return "final";
+  return undefined;
+}
+
+function isTerminalRun(state: EventFoldState, runId: string | undefined): boolean {
+  return Boolean(runId && state.terminalRunIds.includes(runId));
+}
+
+function markTerminalRun(state: EventFoldState, runId: string | undefined): void {
+  if (!runId || state.terminalRunIds.includes(runId)) return;
+  state.terminalRunIds = [...state.terminalRunIds, runId].slice(-256);
+}
+
+function stampCurrentUser(blocks: ThreadBlock[], turnId: string, runId?: string): void {
+  for (let i = blocks.length - 1; i >= 0; i -= 1) {
+    const block = blocks[i];
+    if (block.kind !== "user") continue;
+    if (block.turnId && block.turnId !== turnId) break;
+    blocks[i] = { ...block, turnId, ...(runId ? { runId } : {}) };
+    break;
+  }
 }
 
 export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
+  if (isV2Event(event)) return foldV2Event(state, event);
+  return foldLegacyEvent(state, event);
+}
+
+function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
+  const foldState = cloneFoldState(state, event);
+  if (foldState.sessionId && event.sessionId && foldState.sessionId !== event.sessionId) return state;
+  if (event.sessionId) foldState.sessionId = event.sessionId;
+  if (event.streamEpoch) foldState.streamEpoch = String(event.streamEpoch);
   const blocks = [...state.blocks];
   const index = { ...state.index };
 
   switch (event.type) {
+    case "agent_start": {
+      foldState.turnOrdinal = Math.max(foldState.turnOrdinal, Number(event.turnOrdinal) || foldState.turnOrdinal + 1);
+      foldState.activeTurnId = stringValue(event.turnId) ?? `legacy-turn-${foldState.turnOrdinal}`;
+      foldState.activeRunId = stringValue(event.runId);
+      foldState.activeItemKey = undefined;
+      stampCurrentUser(blocks, foldState.activeTurnId, foldState.activeRunId);
+      break;
+    }
+
+    case "item.started": {
+      if (event.turnId) foldState.activeTurnId = String(event.turnId);
+      if (event.runId) foldState.activeRunId = String(event.runId);
+      if (event.itemId) foldState.activeItemKey = String(event.itemId);
+      break;
+    }
+
+    case "item.completed": {
+      const itemId = stringValue(event.itemId) ?? stringValue(event.partId);
+      const text = itemId ? foldState.textByKey[itemId] : undefined;
+      const blockIndex = text ? index[text.blockId] : undefined;
+      if (blockIndex !== undefined && blocks[blockIndex]?.kind === "agent") {
+        blocks[blockIndex] = { ...blocks[blockIndex], partial: false };
+      } else if (itemId) {
+        for (let i = 0; i < blocks.length; i += 1) {
+          const block = blocks[i];
+          if (block.kind === "agent" && (block.itemId === itemId || block.id === itemId)) {
+            blocks[i] = { ...block, partial: false };
+          }
+        }
+      }
+      break;
+    }
+
     case "text.updated": {
-      const eventPartId = typeof event.partId === "string" && event.partId
-        ? event.partId
-        : null;
-      if (eventPartId && _currentTurnId && eventPartId !== _currentTurnId) {
-        const previousIdx = index[_currentTurnId];
+      const explicit = eventHasIdentity(event);
+      const eventPartId = stringValue(event.partId) ?? (explicit ? stringValue(event.itemId) : undefined);
+      const key = eventItemKey(event, foldState);
+      const previousKey = foldState.activeItemKey;
+      if (eventPartId && previousKey && eventPartId !== previousKey && !explicit) {
+        const previousText = foldState.textByKey[previousKey];
+        const previousIdx = previousText ? index[previousText.blockId] : undefined;
         const previous = previousIdx !== undefined ? blocks[previousIdx] : undefined;
         if (previous?.kind === "agent" && previous.partial) {
           blocks[previousIdx] = { ...previous, partial: false };
         }
-        _textBuffer = "";
-        _currentTurnId = eventPartId;
-      } else if (eventPartId && !_currentTurnId) {
-        _currentTurnId = eventPartId;
+        foldState.activeItemKey = eventPartId;
+      } else if (eventPartId && !foldState.activeItemKey) {
+        foldState.activeItemKey = eventPartId;
       }
       const incomingText = (event.text as string) || "";
-      _textBuffer = event.replace === true ? incomingText : _textBuffer + incomingText;
+      const previousText = foldState.textByKey[key];
+      let nextText = event.replace === true ? incomingText : (previousText?.text ?? "") + incomingText;
       // Skip initial empty text events that create placeholder agent blocks
       // (DeepSeek sends empty text.updated between tool calls before real text)
-      const hasText = _textBuffer.trim().length > 0;
-      if (!hasText) break;  // Don't create/update agent block for empty text
-      const turnId = _currentTurnId || `agent-${Date.now()}`;
-      if (!_currentTurnId) _currentTurnId = turnId;
-      const blockId = turnId;
+      const hasText = nextText.trim().length > 0;
+      const turnId = turnIdentity(event, foldState);
+      const runId = runIdentity(event, foldState);
+      foldState.activeTurnId = turnId;
+      if (runId) foldState.activeRunId = runId;
+      stampCurrentUser(blocks, turnId, runId);
+      const role = roleOf(event);
+      const revision = numberValue(event.revision) ?? ((previousText?.revision ?? 0) + 1);
+      if (!hasText) {
+        foldState.textByKey[key] = {
+          text: nextText,
+          revision,
+          blockId: previousText?.blockId ?? (explicit ? `agent-${turnId}-${stringValue(event.itemId) ?? key}` : key),
+          partId: eventPartId ?? key,
+        };
+        break;
+      }
+      let blockId = previousText?.blockId ?? (explicit ? `agent-${turnId}-${stringValue(event.itemId) ?? key}` : (eventPartId ?? key));
       const existingIdx = index[blockId];
       if (existingIdx !== undefined) {
         const hasToolsAfter = blocks.slice(existingIdx + 1).some((b) => b.kind === "tool");
-        if (hasToolsAfter) {
+        if (hasToolsAfter && !explicit) {
           // Pre-tool text → finalize old block; redirect turn ID to new post-tool block
           const oldBlock = blocks[existingIdx];
           if (oldBlock.kind === "agent") {
             blocks[existingIdx] = { ...oldBlock, partial: false };
           }
-          _textBuffer = (event.text as string) || "";
-          // Update turn ID so subsequent events find this post-tool block
-          _currentTurnId = turnId + "-post";
-          index[turnId + "-post"] = blocks.length;
-          _turnLastAgentIndex = blocks.length;
+          nextText = incomingText;
+          blockId = `${blockId}-post`;
+          // A legacy runtime can reuse a part id after a tool. Keep the
+          // compatibility split deterministic while leaving V2 item ids
+          // single-writer and stable.
+          let postId = blockId;
+          let suffix = 2;
+          while (index[postId] !== undefined) postId = `${blockId}-${suffix++}`;
+          blockId = postId;
+          foldState.activeItemKey = blockId;
+          index[blockId] = blocks.length;
+          foldState.lastAgentBlockId = blockId;
           blocks.push({
             kind: "agent",
-            id: turnId + "-post",
-            parts: [{ id: turnId + "-post", text: _textBuffer }],
-            presentationRole: event.presentationRole === "final" ? "final" : event.presentationRole === "intermediate" ? "intermediate" : undefined,
+            id: blockId,
+            turnId,
+            ...(runId ? { runId } : {}),
+            itemId: stringValue(event.itemId) ?? eventPartId,
+            parts: [{ id: eventPartId ?? blockId, text: nextText }],
+            ...(role ? { presentationRole: role } : {}),
+            classificationSource: role ? "explicit" : "legacy_inferred",
             partial: true,
             timestamp: new Date().toISOString(),
-          } as ThreadBlock);
+          });
         } else {
           blocks[existingIdx] = {
             ...blocks[existingIdx],
             kind: "agent",
-            parts: [{ id: turnId, text: _textBuffer }],
-            presentationRole: event.presentationRole === "final" ? "final" : event.presentationRole === "intermediate" ? "intermediate" : (blocks[existingIdx].kind === "agent" ? blocks[existingIdx].presentationRole : undefined),
+            turnId,
+            ...(runId ? { runId } : {}),
+            itemId: stringValue(event.itemId) ?? eventPartId ?? (blocks[existingIdx].kind === "agent" ? blocks[existingIdx].itemId : undefined),
+            parts: [{ id: eventPartId ?? blockId, text: nextText }],
+            ...(role ? { presentationRole: role, classificationSource: "explicit" as const } : {}),
             partial: true,
             timestamp: blocks[existingIdx].kind === "agent" ? blocks[existingIdx].timestamp : undefined,
           } as ThreadBlock;
-          _turnLastAgentIndex = existingIdx;
+          foldState.lastAgentBlockId = blockId;
         }
       } else {
         // New block for this turn
         const block: ThreadBlock = {
           kind: "agent",
           id: blockId,
-          parts: [{ id: turnId, text: _textBuffer }],
-          presentationRole: event.presentationRole === "final" ? "final" : event.presentationRole === "intermediate" ? "intermediate" : undefined,
+          turnId,
+          ...(runId ? { runId } : {}),
+          ...(stringValue(event.itemId) || eventPartId ? { itemId: stringValue(event.itemId) ?? eventPartId } : {}),
+          parts: [{ id: eventPartId ?? blockId, text: nextText }],
+          ...(role ? { presentationRole: role } : {}),
+          classificationSource: role ? "explicit" : "legacy_inferred",
           partial: true,
           timestamp: new Date().toISOString(),
         };
         index[blockId] = blocks.length;
-        _turnLastAgentIndex = blocks.length;
+        foldState.lastAgentBlockId = blockId;
         blocks.push(block);
       }
+      foldState.textByKey[key] = { text: nextText, revision, blockId, partId: eventPartId ?? key };
+      foldState.activeItemKey = key;
       break;
     }
 
     case "tool.updated": {
-      const callId = event.callId as string;
-      const blockId = `tool-${callId}`;
+      const callId = stringValue(event.callId) ?? "unknown-call";
+      const operationId = stringValue(event.operationId);
+      const attemptId = stringValue(event.attemptId);
+      const blockId = eventHasIdentity(event) && (operationId || attemptId)
+        ? `tool-${callId}-${operationId ?? attemptId}`
+        : `tool-${callId}`;
       const existingIdx = index[blockId];
       const previous = existingIdx !== undefined && blocks[existingIdx].kind === "tool"
         ? blocks[existingIdx]
         : undefined;
-      const status = event.status as ThreadBlock extends { status: infer S } ? S : never;
+      const rawStatus = stringValue(event.status);
+      const status: ToolCallBlock["status"] = (rawStatus === "running" || rawStatus === "done" || rawStatus === "error" || rawStatus === "waiting-approval" || rawStatus === "unknown")
+        ? rawStatus
+        : "unknown";
+      const statusHistory = previous?.statusHistory
+        ? [...previous.statusHistory, ...(previous.statusHistory.at(-1) === status ? [] : [status])]
+        : [status];
       // Runtimes rarely ship wall-clock fields. Arrival times are the honest
       // fallback: first sight starts the clock, a terminal status ends it.
       const nowIso = new Date().toISOString();
@@ -131,8 +322,13 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
         kind: "tool",
         id: blockId,
         callId,
+        turnId: stringValue(event.turnId) ?? previous?.turnId ?? foldState.activeTurnId,
+        runId: stringValue(event.runId) ?? previous?.runId ?? foldState.activeRunId,
+        ...(operationId || previous?.operationId ? { operationId: operationId ?? previous?.operationId } : {}),
+        ...(attemptId || previous?.attemptId ? { attemptId: attemptId ?? previous?.attemptId } : {}),
         tool: (event.tool as string) || previous?.tool || "unknown",
         status,
+        statusHistory,
         title: (event.title as string | undefined) ?? previous?.title,
         input: (event.input as Record<string, unknown> | undefined) ?? previous?.input,
         output: (event.output as string | undefined) ?? previous?.output,
@@ -154,6 +350,8 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
         index[blockId] = blocks.length;
         blocks.push(block);
       }
+      if (event.turnId) foldState.activeTurnId = String(event.turnId);
+      if (event.runId) foldState.activeRunId = String(event.runId);
       break;
     }
 
@@ -191,17 +389,18 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
         // the id points at an intermediate message of a multi-message turn.
         insertAt = afterAssistantTurnEnd(blocks, assistantMessageId, index);
       }
-      if (insertAt < 0 && _turnLastAgentIndex >= 0) {
+      if (insertAt < 0) insertAt = afterIdentifiedTurn(blocks, turnId);
+      if (insertAt < 0 && Number.isInteger(turnOrdinal) && turnOrdinal > 0) {
+        // Prefer explicit turn metadata to the current live anchor: a late
+        // artifact must not attach to a newer turn that is already streaming.
+        insertAt = afterTurnEnd(blocks, turnOrdinal);
+      }
+      const liveAnchor = foldState.lastAgentBlockId ? index[foldState.lastAgentBlockId] : undefined;
+      if (insertAt < 0 && liveAnchor !== undefined) {
         // Live fold: anchor at the END of the current turn (after its last
         // assistant message), not after an intermediate message of a turn
         // that spans several assistant messages.
-        insertAt = _turnLastAgentIndex + 1;
-      }
-      if (insertAt < 0 && Number.isInteger(turnOrdinal) && turnOrdinal > 0) {
-        // Anchor to the n-th agent block when the turn ordinal is known. This
-        // is reliable even when earlier turns produced no record (a pure
-        // record-ordinal fallback would misplace strips in that case).
-        insertAt = afterAgentBlock(blocks, turnOrdinal);
+        insertAt = liveAnchor + 1;
       }
       if (insertAt < 0) {
         // Pi's agent_settled does not carry a message id, so summaries are
@@ -261,14 +460,26 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
     }
 
     case "session.idle": {
-      _textBuffer = "";
-      _currentTurnId = "";  // Reset for next turn
-      // Mark last agent block as not partial
-      for (let i = blocks.length - 1; i >= 0; i--) {
-        const block = blocks[i];
-        if (block.kind === "agent" && block.partial) {
-          blocks[i] = { ...block, partial: false };
-          break;
+      const completedRunId = runIdentity(event, foldState);
+      markTerminalRun(foldState, completedRunId);
+      foldState.activeItemKey = undefined;
+      foldState.activeRunId = undefined;
+      // A run terminal event settles every item in that run. Legacy idle has
+      // no run id, so retain its historical last-block behaviour.
+      if (completedRunId) {
+        for (let i = 0; i < blocks.length; i += 1) {
+          const block = blocks[i];
+          if (block.kind === "agent" && block.partial && block.runId === completedRunId) {
+            blocks[i] = { ...block, partial: false };
+          }
+        }
+      } else {
+        for (let i = blocks.length - 1; i >= 0; i--) {
+          const block = blocks[i];
+          if (block.kind === "agent" && block.partial) {
+            blocks[i] = { ...block, partial: false };
+            break;
+          }
         }
       }
       break;
@@ -276,12 +487,15 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
 
     case "error": {
       const msg = (event.message as string) || "Unknown error";
+      if (event.runFailed === true || event.runId) markTerminalRun(foldState, runIdentity(event, foldState));
       // If we already have a partial agent block without text, replace it with the error
       const lastBlock = blocks[blocks.length - 1];
       if (lastBlock && lastBlock.kind === "agent" && lastBlock.partial && !lastBlock.parts?.[0]?.text) {
         blocks[blocks.length - 1] = {
           kind: "status-line",
-          id: `error-${Date.now()}`,
+          id: `error-${foldState.errorSerial++}`,
+          turnId: stringValue(event.turnId) ?? foldState.activeTurnId,
+          runId: stringValue(event.runId) ?? foldState.activeRunId,
           text: msg,
           level: "error",
         } as ThreadBlock;
@@ -289,7 +503,9 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
       } else {
         const errBlock: ThreadBlock = {
           kind: "status-line",
-          id: `error-${Date.now()}`,
+          id: `error-${foldState.errorSerial++}`,
+          turnId: stringValue(event.turnId) ?? foldState.activeTurnId,
+          runId: stringValue(event.runId) ?? foldState.activeRunId,
           text: msg,
           level: "error",
         };
@@ -300,7 +516,176 @@ export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
     }
   }
 
-  return { blocks, index, loaded: true };
+  return withFoldState({ blocks, index, loaded: true }, foldState);
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function v2Base(event: PiScienceEvent, payload: Record<string, unknown>): PiScienceEvent {
+  return {
+    ...payload,
+    type: event.type,
+    sessionId: event.sessionId,
+    streamEpoch: event.streamEpoch,
+    eventId: event.eventId,
+    seq: event.seq,
+    schemaVersion: 2,
+    turnId: event.turnId,
+    runId: event.runId,
+    ...(event.itemId ? { itemId: event.itemId } : {}),
+    ...(event.parentItemId ? { parentItemId: event.parentItemId } : {}),
+  };
+}
+
+function adaptV2Event(event: PiScienceEvent): PiScienceEvent[] {
+  const payload = recordValue(event.payload);
+  const base = v2Base(event, payload);
+  const phase = payload.phase;
+  const role = phase === "commentary" ? "intermediate" : phase === "final_answer" ? "final" : undefined;
+
+  switch (event.type) {
+    case "run.started":
+      return [{ ...base, type: "agent_start", turnOrdinal: payload.turnOrdinal }];
+    case "item.started":
+      return [{ ...base, type: "item.started" }];
+    case "item.text.delta":
+      return [{
+        ...base,
+        type: "text.updated",
+        partId: stringValue(payload.partId) ?? stringValue(event.itemId),
+        text: typeof payload.text === "string" ? payload.text : "",
+        phase,
+        revision: payload.revision,
+        baseRevision: payload.baseRevision,
+        ...(role ? { presentationRole: role } : {}),
+      }];
+    case "item.snapshot": {
+      const parts = Array.isArray(payload.parts) ? payload.parts : [];
+      const text = parts
+        .map((part) => recordValue(part).text)
+        .filter((part): part is string => typeof part === "string")
+        .join("");
+      return [{
+        ...base,
+        type: "text.updated",
+        partId: stringValue(event.itemId) ?? stringValue(recordValue(parts[0]).partId),
+        text,
+        replace: true,
+        phase,
+        revision: payload.revision,
+        ...(role ? { presentationRole: role } : {}),
+      }];
+    }
+    case "item.completed":
+      return [{ ...base, type: "item.completed", revision: payload.revision }];
+    case "tool.updated":
+      return [{ ...base, type: "tool.updated" }];
+    case "run.completed":
+      return [{ ...base, type: "session.idle", runCompleted: true }];
+    case "run.failed": {
+      const issues = Array.isArray(payload.issues) ? payload.issues : [];
+      const message = stringValue(payload.message) ?? (issues.length > 0 ? `Run failed (${issues.length} issue${issues.length === 1 ? "" : "s"})` : "Run failed");
+      return [{ ...base, type: "error", message, runFailed: true }];
+    }
+    case "run.cancelled":
+      return [{ ...base, type: "session.idle", cancelled: true }];
+    case "artifact.updated":
+      return [{ ...base, type: "turn.artifacts", artifacts: payload.artifacts ?? payload.items ?? [] }];
+    case "plan.updated":
+      return [{ ...base, type: "status.updated", status: "plan", message: stringValue(payload.summary) ?? stringValue(payload.message) ?? "Plan updated" }];
+    default:
+      // A V2 producer may carry a legacy event name while progressively
+      // adding the envelope. Preserve it as an extension point.
+      return [{ ...base, type: event.type }];
+  }
+}
+
+function markSeen(foldState: EventFoldState, eventId: string): void {
+  if (!foldState.seenEventIds.includes(eventId)) foldState.seenEventIds = [...foldState.seenEventIds, eventId].slice(-4096);
+}
+
+function skipV2InOrder(state: Thread, event: PiScienceEvent, foldState: EventFoldState, reconciliationRequired = false): Thread {
+  if (reconciliationRequired) foldState.reconciliationRequired = true;
+  foldState.lastSequence = Number(event.seq);
+  markSeen(foldState, String(event.eventId));
+  return withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState);
+}
+
+function staleTextDelta(foldState: EventFoldState, event: PiScienceEvent): boolean {
+  if (event.type !== "item.text.delta") return false;
+  const payload = recordValue(event.payload);
+  const itemId = stringValue(event.itemId);
+  const partId = stringValue(payload.partId) ?? itemId;
+  const current = (itemId ? foldState.textByKey[itemId] : undefined)
+    ?? (partId ? foldState.textByKey[partId] : undefined);
+  if (!current) return false;
+  const baseRevision = numberValue(payload.baseRevision);
+  if (baseRevision !== undefined && baseRevision !== current.revision) return true;
+  const revision = numberValue(payload.revision);
+  return revision !== undefined && revision <= current.revision;
+}
+
+function applyV2InOrder(state: Thread, event: PiScienceEvent): Thread {
+  const initialFoldState = cloneFoldState(state, event);
+  if (isTerminalRun(initialFoldState, stringValue(event.runId)) && event.type !== "artifact.updated") {
+    return skipV2InOrder(state, event, initialFoldState);
+  }
+  if (staleTextDelta(initialFoldState, event)) {
+    return skipV2InOrder(state, event, initialFoldState, true);
+  }
+  let next = state;
+  for (const adapted of adaptV2Event(event)) next = foldLegacyEvent(next, adapted);
+  const foldState = cloneFoldState(next, event);
+  foldState.lastSequence = Number(event.seq);
+  markSeen(foldState, String(event.eventId));
+  return withFoldState({ blocks: next.blocks, index: next.index, loaded: true }, foldState);
+}
+
+function drainV2Pending(state: Thread): Thread {
+  let next = state;
+  while (next.foldState?.lastSequence !== undefined) {
+    const expected = next.foldState.lastSequence + 1;
+    const pending = next.foldState.pendingEvents.find((candidate) => Number(candidate.seq) === expected);
+    if (!pending) break;
+    const pendingState = cloneFoldState(next, pending);
+    pendingState.pendingEvents = next.foldState.pendingEvents.filter((candidate) => candidate.eventId !== pending.eventId);
+    next = applyV2InOrder(withFoldState({ blocks: next.blocks, index: next.index, loaded: true }, pendingState), pending);
+  }
+  return next;
+}
+
+function foldV2Event(state: Thread, event: PiScienceEvent): Thread {
+  const foldState = cloneFoldState(state, event);
+  const sessionId = stringValue(event.sessionId);
+  const streamEpoch = stringValue(event.streamEpoch);
+  if (foldState.sessionId && sessionId && foldState.sessionId !== sessionId) return state;
+  if (foldState.streamEpoch && streamEpoch && foldState.streamEpoch !== streamEpoch) return state;
+  if (sessionId) foldState.sessionId = sessionId;
+  if (streamEpoch) foldState.streamEpoch = streamEpoch;
+
+  const eventId = String(event.eventId);
+  const sequence = Number(event.seq);
+  if (foldState.seenEventIds.includes(eventId)) return state;
+
+  const lastSequence = foldState.lastSequence;
+  if (lastSequence !== undefined && sequence <= lastSequence) {
+    markSeen(foldState, eventId);
+    return withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState);
+  }
+  if (lastSequence !== undefined && sequence > lastSequence + 1) {
+    if (!foldState.pendingEvents.some((pending) => pending.eventId === eventId)) {
+      foldState.pendingEvents = [...foldState.pendingEvents, event].sort((a, b) => Number(a.seq) - Number(b.seq)).slice(-2000);
+    }
+    markSeen(foldState, eventId);
+    foldState.reconciliationRequired = true;
+    return withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState);
+  }
+
+  return drainV2Pending(applyV2InOrder(withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState), event));
 }
 
 export function threadFromMessages(messages: HistoryMessage[]): Thread {
@@ -328,7 +713,7 @@ export function prependHistoryMessages(current: Thread, messages: HistoryMessage
   const blocks = [...uniqueOlder, ...current.blocks];
   const index: Record<string, number> = {};
   blocks.forEach((block, position) => { index[block.id] = position; });
-  return { blocks, index, loaded: true };
+  return preserveFoldState({ blocks, index, loaded: true }, current);
 }
 
 /** Preserve UI-observed tool timing across authoritative rebuilds. History
@@ -354,7 +739,7 @@ function carryToolTiming(current: Thread, authoritative: Thread): Thread {
   if (!changed) return authoritative;
   const index: Record<string, number> = {};
   blocks.forEach((block, position) => { index[block.id] = position; });
-  return { blocks, index, loaded: authoritative.loaded };
+  return preserveFoldState({ blocks, index, loaded: authoritative.loaded }, current);
 }
 
 export function replaceHistoryTail(current: Thread, messages: HistoryMessage[]): Thread {
@@ -362,11 +747,11 @@ export function replaceHistoryTail(current: Thread, messages: HistoryMessage[]):
   if (authoritative.blocks.length === 0) return current;
   const authoritativeIds = new Set(authoritative.blocks.map((block) => block.id));
   const firstOverlap = current.blocks.findIndex((block) => authoritativeIds.has(block.id));
-  if (firstOverlap < 0) return authoritative;
+  if (firstOverlap < 0) return preserveFoldState({ blocks: authoritative.blocks, index: authoritative.index, loaded: authoritative.loaded }, current);
   const blocks = [...current.blocks.slice(0, firstOverlap), ...authoritative.blocks];
   const index: Record<string, number> = {};
   blocks.forEach((block, position) => { index[block.id] = position; });
-  return { blocks, index, loaded: true };
+  return preserveFoldState({ blocks, index, loaded: true }, current);
 }
 
 export interface HistoryWindowMerge {
@@ -394,7 +779,8 @@ export function mergeHistoryWindow(current: Thread, messages: HistoryMessage[], 
   if (firstOverlap < 0) {
     // No shared lineage: the snapshot replaces the window wholesale and the
     // old boundary is meaningless — the caller must re-derive it.
-    return { thread: opts.keepLiveExtras ? mergeHistoryWithLive(authoritative, current) : authoritative, retainedOlderPrefix: false };
+    const replacement = opts.keepLiveExtras ? mergeHistoryWithLive(authoritative, current) : preserveFoldState({ blocks: authoritative.blocks, index: authoritative.index, loaded: authoritative.loaded }, current);
+    return { thread: replacement, retainedOlderPrefix: false };
   }
   const tail = opts.keepLiveExtras
     ? mergeHistoryWithLive(authoritative, { blocks: current.blocks.slice(firstOverlap), index: {}, loaded: true })
@@ -402,7 +788,7 @@ export function mergeHistoryWindow(current: Thread, messages: HistoryMessage[], 
   const blocks = [...current.blocks.slice(0, firstOverlap), ...tail.blocks];
   const index: Record<string, number> = {};
   blocks.forEach((block, position) => { index[block.id] = position; });
-  return { thread: { blocks, index, loaded: true }, retainedOlderPrefix: true };
+  return { thread: preserveFoldState({ blocks, index, loaded: true }, current), retainedOlderPrefix: true };
 }
 export function mergeHistoryWithLive(history: Thread, live: Thread): Thread {
   if (live.blocks.length === 0) return history;
@@ -422,7 +808,7 @@ export function mergeHistoryWithLive(history: Thread, live: Thread): Thread {
   }
   const index: Record<string, number> = {};
   blocks.forEach((block, position) => { index[block.id] = position; });
-  return { blocks, index, loaded: true };
+  return preserveFoldState({ blocks, index, loaded: true }, live.foldState ? live : history);
 }
 
 export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[] {
@@ -437,7 +823,23 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
         .filter((c: any) => c.type === "text")
         .map((c: any) => c.text)
         .join("\n");
-      if (text) blocks.push({ kind: "user", id: msg.id, text, timestamp: msg.timestamp });
+      const images = msg.content.flatMap((content: any) => {
+        if (content.type !== "image" && content.type !== "input_image") return [];
+        const source = content.source && typeof content.source === "object" ? content.source : content;
+        const data = typeof source.data === "string" ? source.data : "";
+        const mimeType = typeof source.media_type === "string" ? source.media_type : typeof content.mimeType === "string" ? content.mimeType : typeof content.mime === "string" ? content.mime : "image/png";
+        return data ? [{ data, mimeType }] : [];
+      });
+      if (text || images.length > 0) blocks.push({
+        kind: "user",
+        id: msg.id,
+        text,
+        ...(images.length > 0 ? { images } : {}),
+        ...(msg.turnId ? { turnId: msg.turnId } : {}),
+        ...(msg.runId ? { runId: msg.runId } : {}),
+        ...(msg.itemId ? { itemId: msg.itemId } : {}),
+        timestamp: msg.timestamp,
+      });
     } else if (role === "assistant") {
       for (const content of msg.content) {
         if (content.type !== "toolCall") continue;
@@ -452,7 +854,20 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
         .map((c: any) => c.text)
         .join("\n");
       if (text) {
-        blocks.push({ kind: "agent", id: msg.id, parts: [{ id: msg.id, text }], ...(msg.presentationRole ? { presentationRole: msg.presentationRole } : {}), timestamp: msg.timestamp });
+        blocks.push({
+          kind: "agent",
+          id: msg.id,
+          parts: [{ id: msg.itemId ?? msg.id, text }],
+          ...(msg.turnId ? { turnId: msg.turnId } : {}),
+          ...(msg.runId ? { runId: msg.runId } : {}),
+          ...(msg.itemId ? { itemId: msg.itemId } : {}),
+          ...(msg.parentItemId ? { parentItemId: msg.parentItemId } : {}),
+          ...(msg.presentationRole ? { presentationRole: msg.presentationRole } : {}),
+          ...(msg.classificationSource ? { classificationSource: msg.classificationSource } : {}),
+          ...(msg.revision !== undefined ? { revision: msg.revision } : {}),
+          ...(msg.sequence !== undefined ? { sequence: msg.sequence } : {}),
+          timestamp: msg.timestamp,
+        });
       }
     } else if (role === "toolResult") {
       const callId = msg.toolCallId || msg.id;
@@ -464,6 +879,9 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
         kind: "tool",
         id: `tool-${callId}`,
         callId,
+        ...(msg.turnId ? { turnId: msg.turnId } : {}),
+        ...(msg.runId ? { runId: msg.runId } : {}),
+        ...(msg.itemId ? { itemId: msg.itemId } : {}),
         tool: msg.toolName || toolNames.get(callId) || "unknown",
         status: msg.isError ? "error" as const : "done" as const,
         output: text || undefined,
@@ -488,6 +906,18 @@ function afterAgentBlock(blocks: ThreadBlock[], ordinal: number): number {
     }
   }
   return blocks.length;
+}
+
+/** Position after the last block carrying a stable turn identity. This is the
+ * strongest live artifact anchor when an older turn publishes after a newer
+ * turn has already started. */
+function afterIdentifiedTurn(blocks: ThreadBlock[], turnId: string): number {
+  let last = -1;
+  for (let i = 0; i < blocks.length; i += 1) {
+    const block = blocks[i];
+    if (block.kind !== "artifact-summary" && "turnId" in block && block.turnId === turnId) last = i;
+  }
+  return last >= 0 ? last + 1 : -1;
 }
 
 /** Position right after the LAST agent block of the `turnIndex`-th turn
@@ -615,6 +1045,7 @@ export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[], o
       // assistant message, not right after an intermediate id.
       insertAt = afterAssistantTurnEnd(blocks, assistantMessageId, index);
     }
+    if (insertAt < 0) insertAt = afterIdentifiedTurn(blocks, turn.turn_id);
     if (insertAt < 0 && typeof turn.ended_at === "string" && turn.ended_at) {
       // Primary fallback: anchor by the turn's end time. Independent of
       // ordinals, so legacy duplicate ordinals and record-less turns both
@@ -688,5 +1119,5 @@ export function attachTurnArtifacts(thread: Thread, turns: TurnArtifactTurn[], o
     changed = true;
   }
   if (!changed) return thread;
-  return { blocks, index, loaded: thread.loaded };
+  return preserveFoldState({ blocks, index, loaded: thread.loaded }, thread);
 }

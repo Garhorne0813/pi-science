@@ -451,22 +451,25 @@ export function createRuntimeActions(set: SetState, get: GetState) {
     },
 
     abort: async () => {
-      const { activeSessionId, cwd } = get();
+      const { activeSessionId, cwd, turnLifecycle } = get();
       if (!activeSessionId) return;
       ++generations.activity;
       ++generations.localMutation;
       ++generations.promptMonitor;
+      // Keep the run visibly in-flight until the server acknowledges the
+      // stop. This prevents a second prompt from racing an unconfirmed abort.
+      set({ working: true, turnLifecycle: "stopping", status: "ready" });
       try {
         await getClient().abort(activeSessionId, cwd);
         const current = get();
-        if (current.activeSessionId === activeSessionId && current.cwd === cwd) {
+        if (current.activeSessionId === activeSessionId && current.cwd === cwd && current.turnLifecycle === "stopping") {
           set({ working: false, turnLifecycle: "aborted", status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
         }
       } catch (error) {
         const current = get();
         if (current.activeSessionId === activeSessionId && current.cwd === cwd) {
           appendRuntimeError(error, activeSessionId, cwd);
-          set({ status: "error" });
+          set({ working: true, turnLifecycle: turnLifecycle === "settled" ? "active" : turnLifecycle, status: "error" });
         }
         throw error;
       }

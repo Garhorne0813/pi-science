@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { convertHistoryToBlocks, mergeHistoryWindow, replaceHistoryTail, useRuntimeStore } from "./index";
-import { threadFromMessages, type Thread } from "./event-fold";
-import type { HistoryMessage } from "../client/types";
+import { emptyThread, foldEvent, threadFromMessages, type Thread } from "./event-fold";
+import type { HistoryMessage, PiScienceEvent } from "../client/types";
 import type { ThreadBlock } from "../../types/thread";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
@@ -300,5 +300,125 @@ describe("conversation history conversion", () => {
       tool: "todo",
       details: { action: "create", params: {}, nextId: 2, tasks: [{ id: 1, subject: "x", status: "pending" }] },
     });
+  });
+});
+
+describe("conversation presentation protocol v2", () => {
+  const envelope = (overrides: Record<string, unknown>): PiScienceEvent => ({
+    schemaVersion: 2,
+    workspaceId: "/workspace",
+    sessionId: "session-v2",
+    streamEpoch: "epoch-1",
+    eventId: `epoch-1:${String(overrides.seq)}`,
+    seq: 0,
+    turnId: "turn-1",
+    runId: "run-1",
+    occurredAt: "2026-09-08T00:00:00.000Z",
+    type: "run.started",
+    payload: {},
+    ...overrides,
+  });
+
+  it("keeps item completion separate from run completion and deduplicates replay", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({
+      seq: 2,
+      type: "item.text.delta",
+      itemId: "answer-1",
+      payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "answer" },
+    }));
+    thread = foldEvent(thread, envelope({ seq: 3, type: "item.completed", itemId: "answer-1", payload: { revision: 1 } }));
+    const beforeRunCompletion = thread.blocks.find((block) => block.kind === "agent");
+    expect(beforeRunCompletion).toMatchObject({ itemId: "answer-1", partial: false, presentationRole: "final" });
+    expect(thread.foldState?.terminalRunIds).not.toContain("run-1");
+
+    const duplicate = foldEvent(thread, envelope({
+      seq: 2,
+      type: "item.text.delta",
+      itemId: "answer-1",
+      payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "answer" },
+    }));
+    expect(duplicate.blocks).toEqual(thread.blocks);
+
+    thread = foldEvent(thread, envelope({ seq: 4, type: "run.completed", payload: { outcome: "ok" } }));
+    expect(thread.foldState?.terminalRunIds).toContain("run-1");
+  });
+
+  it("maps commentary and final answer to separate stable items", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({
+      seq: 2, type: "item.text.delta", itemId: "commentary-1",
+      payload: { partId: "commentary-1", phase: "commentary", baseRevision: 0, revision: 1, text: "Reading files" },
+    }));
+    thread = foldEvent(thread, envelope({
+      seq: 3, type: "item.text.delta", itemId: "answer-1",
+      payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "The answer" },
+    }));
+    expect(thread.blocks.filter((block) => block.kind === "agent")).toEqual([
+      expect.objectContaining({ itemId: "commentary-1", presentationRole: "intermediate" }),
+      expect.objectContaining({ itemId: "answer-1", presentationRole: "final" }),
+    ]);
+  });
+
+  it("holds a sequence gap and drains it after the missing event arrives", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({
+      seq: 3, type: "item.text.delta", itemId: "answer-1",
+      payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "answer" },
+    }));
+    expect(thread.blocks.some((block) => block.kind === "agent")).toBe(false);
+    expect(thread.foldState?.reconciliationRequired).toBe(true);
+    thread = foldEvent(thread, envelope({ seq: 2, type: "item.started", itemId: "answer-1", payload: { itemType: "assistant" } }));
+    expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "agent", itemId: "answer-1" }));
+    expect(thread.foldState?.pendingEvents).toHaveLength(0);
+  });
+
+  it("does not let a late callback from another session mutate the thread", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    const foreign = envelope({ sessionId: "session-other", seq: 2, type: "item.text.delta", itemId: "foreign", payload: { partId: "foreign", phase: "final_answer", baseRevision: 0, revision: 1, text: "foreign" } });
+    const next = foldEvent(thread, foreign);
+    expect(next).toEqual(thread);
+  });
+
+  it("refuses to append a delta when its base revision is stale", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({ seq: 2, type: "item.text.delta", itemId: "answer-1", payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "correct" } }));
+    const next = foldEvent(thread, envelope({ seq: 3, type: "item.text.delta", itemId: "answer-1", payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 2, text: " stale" } }));
+    expect(next.blocks).toContainEqual(expect.objectContaining({ itemId: "answer-1", parts: [{ id: "answer-1", text: "correct" }] }));
+    expect(next.foldState?.reconciliationRequired).toBe(true);
+  });
+
+  it("keeps a failed run readable while consuming late events for later artifacts", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({
+      seq: 2,
+      type: "item.text.delta",
+      itemId: "answer-1",
+      payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "partial" },
+    }));
+    thread = foldEvent(thread, envelope({ seq: 3, type: "run.failed", payload: { message: "stream failed" } }));
+    thread = foldEvent(thread, envelope({
+      seq: 4,
+      type: "item.text.delta",
+      itemId: "answer-1",
+      payload: { partId: "answer-1", phase: "final_answer", baseRevision: 1, revision: 2, text: " late" },
+    }));
+    thread = foldEvent(thread, envelope({
+      seq: 5,
+      type: "artifact.updated",
+      payload: { artifacts: [{ path: "result.csv", kind: "table", mime: "text/csv", size: 10 }] },
+    }));
+
+    expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "agent", parts: [{ id: "answer-1", text: "partial" }] }));
+    expect(thread.blocks).not.toContainEqual(expect.objectContaining({ kind: "agent", parts: [{ id: "answer-1", text: "partial late" }] }));
+    expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "status-line", level: "error" }));
+    expect(thread.blocks).toContainEqual(expect.objectContaining({ kind: "artifact-summary", turnId: "turn-1" }));
+    expect(thread.foldState?.lastSequence).toBe(5);
   });
 });

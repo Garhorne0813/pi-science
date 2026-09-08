@@ -29,7 +29,13 @@ export function isVisibleActivity(block: ToolCallBlock): boolean {
 }
 
 export function executionActivities(blocks: ToolCallBlock[]): ToolCallBlock[] { return blocks.filter((block) => activityPolicy(block).visibleInExecutionTrace); }
-export function executionOperationCount(blocks: ToolCallBlock[]): number { return blocks.filter((block) => activityPolicy(block).countsAsOperation).length; }
+export function executionOperationCount(blocks: ToolCallBlock[]): number {
+  const callIds = new Set<string>();
+  for (const block of blocks) {
+    if (activityPolicy(block).countsAsOperation) callIds.add(block.callId);
+  }
+  return callIds.size;
+}
 
 function policy(plane: ToolPresentationPolicy["plane"], visibleInCurrentActivity: boolean, visibleInExecutionTrace: boolean, countsAsOperation: boolean): ToolPresentationPolicy {
   return { plane, visibleInCurrentActivity, visibleInExecutionTrace, countsAsOperation };
