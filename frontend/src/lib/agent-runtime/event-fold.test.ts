@@ -24,7 +24,7 @@ describe("transport event folding", () => {
     expect(next.blocks.at(-1)).toMatchObject({ output: "fresh tail result" });
   });
 
-  it("carries observed tool timing across a settle-time resync", () => {
+  it("rebuilds tool timing from history timestamps, keeping observed timing only for gaps", () => {
     const current = threadFromMessages([
       { id: "user-1", role: "user", content: [{ type: "text", text: "run" }] },
     ]);
@@ -32,6 +32,8 @@ describe("transport event folding", () => {
       kind: "tool", id: "tool-call-1", callId: "call-1", tool: "bash", status: "done",
       output: "ok", startedAt: "2026-09-08T00:00:00.000Z", endedAt: "2026-09-08T00:00:02.400Z",
     } as ThreadBlock);
+    // The persisted assistant message has no timestamp (legacy record): the
+    // observed start survives. The result timestamp is authoritative for the end.
     const merged = replaceHistoryTail(current, [
       { id: "user-1", role: "user", content: [{ type: "text", text: "run" }] },
       { id: "assistant-1", role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "bash" }] },
@@ -39,6 +41,17 @@ describe("transport event folding", () => {
     ]);
     const tool = merged.blocks.find((block) => block.kind === "tool" && block.callId === "call-1") as { startedAt?: string; endedAt?: string };
     expect(tool.startedAt).toBe("2026-09-08T00:00:00.000Z");
+    expect(tool.endedAt).toBe("2026-09-08T00:00:03.000Z");
+  });
+
+  it("derives full tool timing from history when the live tail was never observed", () => {
+    const merged = threadFromMessages([
+      { id: "user-1", role: "user", content: [{ type: "text", text: "run" }], timestamp: "2026-09-08T00:00:00.000Z" },
+      { id: "assistant-1", role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "bash" }], timestamp: "2026-09-08T00:00:01.000Z" },
+      { id: "result-1", role: "toolResult", toolCallId: "call-1", toolName: "bash", content: [{ type: "text", text: "ok" }], timestamp: "2026-09-08T00:00:02.400Z" },
+    ]);
+    const tool = merged.blocks.find((block) => block.kind === "tool" && block.callId === "call-1") as { startedAt?: string; endedAt?: string };
+    expect(tool.startedAt).toBe("2026-09-08T00:00:01.000Z");
     expect(tool.endedAt).toBe("2026-09-08T00:00:02.400Z");
   });
 

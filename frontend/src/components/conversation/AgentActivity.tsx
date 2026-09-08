@@ -40,7 +40,7 @@ export function ThinkingActivity({ className }: { className?: string }) {
  *  narration — the per-step records were part of the live stream only.
  *  Aborted and failed runs keep a state headline; a settled turn without an
  *  explicit final message says so instead of implying the answer vanished. */
-export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both" }: { blocks: ActivityBlock[]; lifecycle?: TurnLifecycle; cwd?: string; part?: "both" | "content" | "status" }) {
+export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both", hasFinalAnswer }: { blocks: ActivityBlock[]; lifecycle?: TurnLifecycle; cwd?: string; part?: "both" | "content" | "status"; hasFinalAnswer?: boolean }) {
   const { t } = useTranslation();
   const progressAppearance = useProgressAppearance();
   const tools = useMemo(() => blocks.filter((block): block is ToolCallBlock => block.kind === "tool"), [blocks]);
@@ -100,8 +100,12 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
   // runs keep a state headline; a settled turn without an explicit final
   // message says so instead of implying the answer went missing.
   const narrationBlocks = activities.filter((block): block is AgentMessageBlock => block.kind === "agent");
-  const hasExplicitFinal = blocks.some((block) => block.kind === "agent" && block.presentationRole === "final");
-  const noAnswer = lifecycle === "settled" && !hasExplicitFinal && blocks.some((block) => block.kind === "agent" && block.presentationRole === "intermediate");
+  // Callers that render the final answer outside this component
+  // (ConversationTurn) pass the flag down; direct renders scan the blocks.
+  const hasExplicitFinal = hasFinalAnswer ?? blocks.some((block) => block.kind === "agent" && block.presentationRole === "final");
+  // Narration with no answer behind it: say so instead of implying the
+  // answer went missing.
+  const noAnswer = lifecycle === "settled" && !hasExplicitFinal && narrationBlocks.length > 0;
   const state = lifecycle === "failed" || shown?.state === "error" ? "error" : lifecycle === "aborted" ? "stopped" : "completed";
   const headline = lifecycle === "failed"
     ? t("conversation.activity.error")
@@ -111,27 +115,25 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
         ? t("conversation.activity.noAnswer")
         : null;
 
-  const title = lifecycle === "failed"
-    ? t("conversation.activity.error")
-    : t("conversation.activity.stopped");
   const failureCount = traceTools.filter((block) => block.status === "error" || block.statusHistory?.includes("error")).length;
-  // The step records are folded inside the row, so the header only adds what
-  // they cannot show: the overall process time.
-  const headerSegments = [formatProcessDuration(traceTools)].filter(Boolean);
-  // failureSummary carries its own separator.
-  const failureSuffix = failureCount > 0 ? t("conversation.activity.failureSummary", { count: failureCount }) : "";
-  const summary = t("conversation.activity.processHeader")
-    + (headerSegments.length ? ` · ${headerSegments.join(" · ")}` : "")
-    + failureSuffix;
-  // Settled steps fold inside this row; aborted and failed turns show their
-  // state headline instead.
-  const summaryLabel = `${lifecycle === "settled" ? summary : title}${noAnswer ? ` · ${t("conversation.activity.noAnswer")}` : ""}`;
+  // The step records fold inside the row; the label leads with the state and
+  // adds only what the folded records cannot show: the overall process time
+  // and failures.
+  const stateLabel = lifecycle === "failed"
+    ? t("conversation.activity.error")
+    : lifecycle === "aborted"
+      ? t("conversation.activity.stopped")
+      : t("conversation.activity.completed");
+  const processDuration = formatProcessDuration(traceTools);
+  // failureSummary carries its own separator; the failed headline already
+  // says the run went wrong.
+  const failureSuffix = lifecycle !== "failed" && failureCount > 0 ? t("conversation.activity.failureSummary", { count: failureCount }) : "";
+  const summaryLabel = `${stateLabel}${processDuration ? ` · ${processDuration}` : ""}${failureSuffix}${noAnswer ? ` · ${t("conversation.activity.noAnswer")}` : ""}`;
 
   return <div id={blocks.length === 1 && blocks[0].kind === "tool" ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
     {traceTools.length > 0 || headline ? (
       <button type="button" aria-expanded={traceExpanded} aria-controls={traceId} onClick={() => setTraceExpanded((value) => !value)} className={cn(styles.summary, "flex min-h-primary w-full items-center gap-2 rounded-input py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-control")}>
-        <span className="min-w-0 flex-1 truncate text-ui-caption text-muted">{traceTools.length > 0 ? summaryLabel : headline}</span>
-        {lifecycle === "settled" && <span className="sr-only" aria-live="polite">{t("conversation.activity.completed")}</span>}
+        <span aria-live="polite" aria-atomic="true" className="min-w-0 flex-1 truncate text-sm font-medium text-text">{traceTools.length > 0 ? summaryLabel : headline}</span>
         <ChevronRight size={13} aria-hidden className={cn(styles.chevron, "shrink-0 text-muted", traceExpanded && "rotate-90")} />
       </button>
     ) : null}

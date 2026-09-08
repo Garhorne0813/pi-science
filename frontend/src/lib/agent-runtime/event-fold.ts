@@ -1018,6 +1018,10 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
   const blocks: ThreadBlock[] = [];
   const toolNames = new Map<string, string>();
   const toolPresentations = new Map<string, ToolCallBlock["presentation"]>();
+  // The assistant message that carries a toolCall is the call's start wall
+  // clock; the toolResult message is its end. Together they reconstruct the
+  // per-step and whole-process durations that live events provide.
+  const toolCallStarts = new Map<string, string>();
 
   for (const msg of messages) {
     const role = msg.role;
@@ -1050,6 +1054,7 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
         if (callId) {
           toolNames.set(callId, String(content.name || content.tool || "unknown"));
           if (content.presentation && typeof content.presentation === "object") toolPresentations.set(callId, content.presentation as ToolCallBlock["presentation"]);
+          if (msg.timestamp) toolCallStarts.set(callId, msg.timestamp);
         }
       }
       const text = msg.content
@@ -1090,6 +1095,8 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
         output: text || undefined,
         details: msg.details,
         presentation: msg.presentation ?? toolPresentations.get(callId),
+        ...(toolCallStarts.get(callId) ? { startedAt: toolCallStarts.get(callId) } : {}),
+        ...(msg.timestamp ? { endedAt: msg.timestamp } : {}),
       });
     }
   }

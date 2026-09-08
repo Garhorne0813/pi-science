@@ -53,14 +53,14 @@ function stubWorkspace(): void {
 function historyMessages(): HistoryMessage[] {
   return [
     { id: "u1", role: "user", content: [{ type: "text", text: "检查 turn 级 Activity 实现" }], timestamp: "2026-08-30T02:00:00.000Z" },
-    { id: "m1", role: "assistant", content: [{ type: "text", text: "我先读取 turn-presentation.ts。" }, { type: "toolCall", id: "c1", name: "read" }] },
-    { id: "r1", role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "text", text: "export function buildTurnPresentations" }] },
-    { id: "r2", role: "toolResult", toolCallId: "td1", toolName: "todo", content: [{ type: "text", text: "Created #1" }], details: planV1 },
-    { id: "m2", role: "assistant", content: [{ type: "text", text: "接下来看事件折叠。" }, { type: "toolCall", id: "c2", name: "read" }, { type: "toolCall", id: "c3", name: "bash" }] },
-    { id: "r3", role: "toolResult", toolCallId: "c2", toolName: "read", content: [{ type: "text", text: "case tool.updated" }] },
-    { id: "r4", role: "toolResult", toolCallId: "c3", toolName: "bash", content: [{ type: "text", text: "7 passed" }] },
-    { id: "r5", role: "toolResult", toolCallId: "td2", toolName: "todo", content: [{ type: "text", text: "Updated #1" }], details: planV2 },
-    { id: "m3", role: "assistant", content: [{ type: "text", text: "实现符合方案：一个 turn 只有一个 Activity。" }] },
+    { id: "m1", role: "assistant", content: [{ type: "text", text: "我先读取 turn-presentation.ts。" }, { type: "toolCall", id: "c1", name: "read" }], timestamp: "2026-08-30T02:00:00.000Z" },
+    { id: "r1", role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "text", text: "export function buildTurnPresentations" }], timestamp: "2026-08-30T02:00:02.000Z" },
+    { id: "r2", role: "toolResult", toolCallId: "td1", toolName: "todo", content: [{ type: "text", text: "Created #1" }], details: planV1, timestamp: "2026-08-30T02:00:02.200Z" },
+    { id: "m2", role: "assistant", content: [{ type: "text", text: "接下来看事件折叠。" }, { type: "toolCall", id: "c2", name: "read" }, { type: "toolCall", id: "c3", name: "bash" }], timestamp: "2026-08-30T02:00:03.000Z" },
+    { id: "r3", role: "toolResult", toolCallId: "c2", toolName: "read", content: [{ type: "text", text: "case tool.updated" }], timestamp: "2026-08-30T02:00:04.000Z" },
+    { id: "r4", role: "toolResult", toolCallId: "c3", toolName: "bash", content: [{ type: "text", text: "7 passed" }], timestamp: "2026-08-30T02:00:06.000Z" },
+    { id: "r5", role: "toolResult", toolCallId: "td2", toolName: "todo", content: [{ type: "text", text: "Updated #1" }], details: planV2, timestamp: "2026-08-30T02:00:04.100Z" },
+    { id: "m3", role: "assistant", content: [{ type: "text", text: "实现符合方案：一个 turn 只有一个 Activity。" }], timestamp: "2026-08-30T02:00:07.000Z" },
   ];
 }
 
@@ -88,7 +88,7 @@ describe("turn-level activity through the live event path", () => {
     // settled view keeps the model's narration — no process row, no steps.
     expect(screen.getByText("我先读取 turn-presentation.ts。")).toBeInTheDocument();
     expect(screen.getByText("接下来看事件折叠。")).toBeInTheDocument();
-    expect(screen.getByText(/Work process/)).toBeInTheDocument();
+    expect(screen.getByText(/Complete|Encountered a problem|Stopped|Working/)).toBeInTheDocument();
     expect(screen.queryByText("Reading turn-presentation.ts")).not.toBeInTheDocument();
     expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
     expect(screen.getByText(/实现符合方案/)).toBeInTheDocument();
@@ -127,7 +127,7 @@ describe("turn-level activity through the live event path", () => {
     expect(screen.getByText("实现符合方案：一个 turn 只有一个 Activity。")).toBeInTheDocument();
     // Todo never leaks as a visible row or an aria-live announcement source.
     expect(screen.queryByText(/Created #1|Updated #1/)).not.toBeInTheDocument();
-    expect(screen.getByText(/Work process/)).toBeInTheDocument();
+    expect(screen.getByText(/Complete|Encountered a problem|Stopped|Working/)).toBeInTheDocument();
   });
 });
 
@@ -138,7 +138,9 @@ describe("turn-level activity through the history path", () => {
 
     expect(screen.getByText("我先读取 turn-presentation.ts。")).toBeInTheDocument();
     expect(screen.getByText("接下来看事件折叠。")).toBeInTheDocument();
-    expect(screen.getByText(/Work process/)).toBeInTheDocument();
+    // Message timestamps rebuild the process duration: c1 starts with m1
+    // (02:00:00), the last execution result lands at 02:00:06.
+    expect(screen.getByText("Completed · 6.0s")).toBeInTheDocument();
     expect(screen.queryByText("Reading file")).not.toBeInTheDocument();
     expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
     expect(screen.getByText(/实现符合方案/)).toBeInTheDocument();

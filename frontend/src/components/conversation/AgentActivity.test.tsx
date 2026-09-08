@@ -192,7 +192,7 @@ describe("AgentActivity settled display", () => {
     // are the visible content.
     expect(screen.getByText("Step notes: the CSV has 4 columns.")).toBeInTheDocument();
     expect(screen.getByText("The final answer.")).toBeInTheDocument();
-    expect(screen.getByText(/Work process/)).toBeInTheDocument();
+    expect(screen.getByText(/Complete|Encountered a problem|Stopped|Working/)).toBeInTheDocument();
     expect(screen.queryByText("Reading one.ts")).not.toBeInTheDocument();
     expect(screen.queryByText("Running bash")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
