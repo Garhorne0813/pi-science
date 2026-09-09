@@ -34,6 +34,9 @@ type TurnState = {
    *  Text and thinking parts share the map: the content index is unique per part. */
   contentByKey: Map<string, string>;
   revisionByKey: Map<string, number>;
+  /** Live bash output tails keyed by call id, throttled to keep a chatty
+   *  install log from flooding the SSE stream. */
+  bashTails: Map<string, { text: string; emittedAt: number }>;
   anonymousSerial: number;
   activeAnonymousKey: string | null;
   turnOrdinal: number;
@@ -57,6 +60,11 @@ const MAX_EVENT_TEXT = 1_000_000;
 const MAX_SUBSCRIBER_REPLAY_PENDING = 2_000;
 const STDERR_WINDOW_MS = 30_000;
 const TEXT_BATCH_MS = 50;
+/** Minimum spacing between live bash-output emissions, and how much of the
+ *  output tail each emission carries. The final tool_execution_end record
+ *  always carries the complete output, so throttle loss is transient. */
+const BASH_EMIT_INTERVAL_MS = 250;
+const BASH_TAIL_BYTES = 4_000;
 const BROWSER_QUESTIONNAIRE_REQUEST_PREFIX = "pi-science-questionnaire-v1:";
 
 function streamKey(cwd: string, sessionId: string): string {
@@ -66,6 +74,27 @@ function streamKey(cwd: string, sessionId: string): string {
 function cap(value: unknown, limit = MAX_EVENT_TEXT): string {
   const text = typeof value === "string" ? value : stringify(value);
   return text.length <= limit ? text : `${text.slice(0, limit)}\n[truncated]`;
+}
+
+/** A tool partial result arrives as the result shape itself
+ *  ({content:[{type:"text",text:…}]}) — as an object, or as its JSON string.
+ *  Return the joined text parts, or null when it is not that shape. */
+function snapshotText(value: unknown): string | null {
+  let parsed: unknown = value;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const content = (parsed as Record<string, unknown>).content;
+  if (!Array.isArray(content)) return null;
+  return content.map((part) => {
+    const record = part && typeof part === "object" ? (part as Record<string, unknown>) : {};
+    return typeof record.text === "string" ? record.text : "";
+  }).join("");
 }
 
 function stringify(value: unknown): string {
@@ -601,6 +630,7 @@ export class ConversationEventHub {
         hadError: false,
         hadActivity: false,
         contentByKey: new Map(),
+        bashTails: new Map(),
         revisionByKey: new Map(),
         anonymousSerial: 0,
         activeAnonymousKey: null,
@@ -619,6 +649,7 @@ export class ConversationEventHub {
       turn.hadError = false;
       turn.hadActivity = false;
       turn.contentByKey.clear();
+      turn.bashTails.clear();
       turn.revisionByKey.clear();
       turn.activeAnonymousKey = null;
       return [{ type: "agent_start", sessionId, ...turnFields(turn) }];
@@ -718,9 +749,37 @@ export class ConversationEventHub {
         records.push({ type: "tool.updated", sessionId, callId, itemId: callId, ...turnFields(turn), ...(title ? { title } : {}), ...(presentation ? { presentation } : {}), tool, status: "running", input: safeValue(event.args ?? {}), startedAt: new Date().toISOString() });
         return records;
       }
-      case "tool_execution_update":
+      case "tool_execution_update": {
         turn.hadActivity = true;
-        return [{ type: "tool.updated", sessionId, callId: String(event.toolCallId ?? ""), itemId: String(event.toolCallId ?? ""), ...turnFields(turn), tool: String(event.toolName ?? ""), status: "running", partialOutput: cap(event.partialResult) }];
+        const record: Record<string, unknown> = { type: "tool.updated", sessionId, callId: String(event.toolCallId ?? ""), itemId: String(event.toolCallId ?? ""), ...turnFields(turn), tool: String(event.toolName ?? ""), status: "running" };
+        // Partial results arrive as result-shaped snapshots; unwrap the text
+        // so the live row shows real output. An empty snapshot must not
+        // clobber an already accumulated tail, so it is simply omitted.
+        const unwrapped = event.partialResult !== undefined ? snapshotText(event.partialResult) : null;
+        const partial = unwrapped !== null ? unwrapped : typeof event.partialResult === "string" ? event.partialResult : stringify(event.partialResult);
+        if (partial) record.partialOutput = cap(partial);
+        return [record];
+      }
+      case "bash_execution_update": {
+        // Some runtimes stream bash stdout through these updates instead of
+        // tool_execution_update. Unwrap the text, keep a bounded tail, and
+        // throttle emissions so a chatty install cannot flood the stream; the
+        // end record still carries the complete output.
+        turn.hadActivity = true;
+        const callId = String(event.id ?? "");
+        if (!callId || event.delta === undefined) return [];
+        const text = snapshotText(event.delta) ?? (typeof event.delta === "string" ? event.delta : stringify(event.delta));
+        const tail = turn.bashTails.get(callId) ?? { text: "", emittedAt: 0 };
+        if (text) tail.text = text.slice(-BASH_TAIL_BYTES);
+        const now = Date.now();
+        if (now - tail.emittedAt < BASH_EMIT_INTERVAL_MS) {
+          turn.bashTails.set(callId, tail);
+          return [];
+        }
+        tail.emittedAt = now;
+        turn.bashTails.set(callId, tail);
+        return [{ type: "tool.updated", sessionId, callId, itemId: callId, ...turnFields(turn), tool: "bash", status: "running", partialOutput: tail.text }];
+      }
       case "tool_execution_end": {
         turn.hadActivity = true;
         const callId = String(event.toolCallId ?? "");
@@ -795,6 +854,7 @@ export class ConversationEventHub {
         turn.hadError = false;
         turn.hadActivity = false;
         turn.contentByKey.clear();
+      turn.bashTails.clear();
         turn.revisionByKey.clear();
         turn.activeAnonymousKey = null;
         turn.turnId = null;

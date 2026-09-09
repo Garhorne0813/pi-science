@@ -87,7 +87,8 @@
 }
 
 .thinking {
-  padding-block: 0.25rem;
+  padding-block: 0.125rem;
+  opacity: 0.9;
 }
 
 .thinking[data-running="true"] > div:first-child {

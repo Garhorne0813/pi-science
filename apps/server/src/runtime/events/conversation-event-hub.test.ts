@@ -316,6 +316,32 @@ describe("central conversation event hub", () => {
     expect(text[0]).toMatchObject({ partId: "m1" });
   });
 
+  it("streams bash output tails as throttled tool updates", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub();
+    const process = new EventEmitter() as PiProcess;
+    const received: Array<Record<string, unknown>> = [];
+    hub.bind(cwd, process, { activeSessionId: () => "session-bash-tail", onBusy: () => undefined, onExit: () => undefined });
+    await hub.subscribe(cwd, "session-bash-tail", undefined, (record) => received.push(JSON.parse(record.data)));
+
+    const snapshot = (text: string) => JSON.stringify({ content: text ? [{ type: "text", text }] : [] });
+    process.emit("event", { type: "agent_start" });
+    process.emit("event", { type: "tool_execution_start", toolCallId: "b1", toolName: "bash", args: { command: "pip install -U scikit-learn" } });
+    process.emit("event", { type: "bash_execution_update", id: "b1", delta: snapshot("Collecting scikit-learn\n") });
+    await eventually(() => received.some((event) => event.type === "tool.updated" && String(event.partialOutput ?? "").includes("Collecting scikit-learn")));
+    // An empty shell inside the throttle window must not clobber the tail.
+    process.emit("event", { type: "bash_execution_update", id: "b1", delta: snapshot("") });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // The next snapshot beyond the throttle window replaces the tail.
+    process.emit("event", { type: "bash_execution_update", id: "b1", delta: snapshot("Downloading wheel\n") });
+    await eventually(() => received.some((event) => event.type === "tool.updated" && String(event.partialOutput ?? "").includes("Downloading wheel")));
+    process.emit("event", { type: "tool_execution_end", toolCallId: "b1", toolName: "bash", result: "installed" });
+    await eventually(() => received.some((event) => event.type === "tool.updated" && event.status === "done"));
+    const tails = received.filter((event) => event.type === "tool.updated" && typeof event.partialOutput === "string" && String(event.partialOutput).length > 0);
+    expect(tails.length).toBeGreaterThanOrEqual(2);
+    expect(tails.every((event) => event.callId === "b1")).toBe(true);
+  });
+
   it("uses partial snapshots to discard repeated and overlapping streaming deltas", async () => {
     const cwd = await workspace();
     const hub = new ConversationEventHub();

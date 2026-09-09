@@ -204,6 +204,16 @@ describe("AgentActivity live stream", () => {
     expect(screen.getByText(/Complete|Encountered a problem|Stopped|Working/)).toBeInTheDocument();
     expect(screen.queryByText("Weigh the options.")).not.toBeInTheDocument();
   });
+  it("streams the freshest output line beside a running tool", () => {
+    const bash = { ...tool("b1", "bash", "running", { command: "pip install -U scikit-learn" }), partialOutput: "Collecting scikit-learn\nDownloading numpy-1.26.4.whl (56 MB)\n" } as ToolCallBlock;
+    const { rerender } = render(<AgentActivity blocks={[bash]} />);
+    expect(screen.getByText("Downloading numpy-1.26.4.whl (56 MB)")).toBeInTheDocument();
+    // Once the step completes, the tail makes way for the duration chip.
+    rerender(<AgentActivity blocks={[{ ...bash, status: "done", output: "Installed", startedAt: "2026-09-09T00:00:00.000Z", endedAt: "2026-09-09T00:00:01.900Z" }]} />);
+    expect(screen.queryByText("Downloading numpy-1.26.4.whl (56 MB)")).not.toBeInTheDocument();
+    expect(screen.getByText("1.9s")).toBeInTheDocument();
+  });
+
   it("shows interaction, failure, and abort lifecycle copy", () => {
     const { rerender } = render(<AgentActivity lifecycle="waiting" blocks={[tool("read", "read"), tool("ask", "ask_user_question", "waiting-approval")]} />);
     expect(screen.getByText("Needs your input")).toBeInTheDocument();

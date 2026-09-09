@@ -174,12 +174,15 @@ function ActivityTrace({ groups, cwd, live = false }: { groups: ActivityGroup[];
   </>;
 }
 
-/** One reasoning phase: a micro label over dim italic prose. */
+/** One reasoning phase. Deliberately quieter than the tool rows — a small
+ *  phase label while it streams, then dim italic prose that reads like an
+ *  aside between the step records. */
 function ThinkingRow({ block }: { block: ThinkingBlock }) {
   const { t } = useTranslation();
-  return <div id={`thread-block-${block.id}`} data-running={block.partial === true} className={cn(styles.entry, styles.thinking)}>
-    <div className="text-[10px] font-medium uppercase tracking-wider text-muted">{t("conversation.activity.thinking")}</div>
-    <MarkdownViewer variant="chat" className="text-ui-caption italic leading-relaxed text-muted [overflow-wrap:anywhere]">{block.parts.map((part) => part.text).join("")}</MarkdownViewer>
+  const running = block.partial === true;
+  return <div id={`thread-block-${block.id}`} data-running={running} className={cn(styles.entry, styles.thinking, "min-w-0 border-l-2 border-border/70 pl-3")}>
+    {running && <div className="mb-0.5 text-[9px] font-medium uppercase tracking-wider text-muted">{t("conversation.activity.thinking")}</div>}
+    <div className="whitespace-pre-wrap text-ui-caption italic leading-snug text-muted [overflow-wrap:anywhere]">{block.parts.map((part) => part.text).join("")}</div>
   </div>;
 }
 
@@ -300,10 +303,14 @@ function TraceItem({ block, live }: { block: ToolCallBlock; live: boolean }) {
   const output = block.output ?? block.partialOutput;
   const running = live && block.status === "running";
   const duration = running ? null : stepDuration(block);
+  // While the operation streams, its freshest output line runs along the
+  // right edge of the row — the step keeps its label, the tail stays live.
+  const liveTail = running && block.partialOutput ? lastOutputLine(block.partialOutput) : null;
   return <div className={cn(styles.entry, styles.tool)} data-running={running}>
     <button type="button" disabled={!hasDetails} aria-expanded={hasDetails ? expanded : undefined} onClick={() => hasDetails && setExpanded((value) => !value)} className={cn(styles.toolButton, "flex min-h-primary max-w-full items-center gap-2 rounded-input py-1.5 text-left text-ui-label text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default sm:min-h-control")}>
       {running ? <span aria-hidden className="mx-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : block.status === "error" ? <CircleX size={14} aria-hidden className="shrink-0 text-error-text" /> : <Check size={14} aria-hidden className="shrink-0 text-muted" />}
       <span className="min-w-0 flex-1 truncate">{presentToolActivity(block, t)}</span>
+      {liveTail && <span aria-hidden className="hidden max-w-[45%] shrink truncate text-right font-mono text-[10px] text-muted sm:block">{liveTail}</span>}
       {duration && <span aria-hidden="true" className="shrink-0 font-mono text-[10px] tabular-nums text-muted">{duration}</span>}
       {hasDetails && <ChevronRight size={12} aria-hidden className={cn("shrink-0 transition-transform", expanded && "rotate-90")} />}
     </button>
@@ -314,6 +321,15 @@ function TraceItem({ block, live }: { block: ToolCallBlock; live: boolean }) {
       {block.diff && <OutputDetail label={t("conversation.activity.diff")} value={block.diff} fullValue={block.diff} t={t} />}
     </div>}
   </div>;
+}
+
+/** The freshest meaningful line of a streaming tool output, whitespace
+ *  collapsed and bounded so it fits the row's right edge. */
+function lastOutputLine(value: string): string | null {
+  const lines = value.split("\n").map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const tail = lines.at(-1);
+  if (!tail) return null;
+  return tail.length > 120 ? `…${tail.slice(-120)}` : tail;
 }
 
 const DETAIL_PREVIEW_LIMIT = 8_000;
