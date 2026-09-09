@@ -3,7 +3,7 @@
 }
 
 .summary {
-  align-items: flex-start;
+  align-items: center;
   padding-block: 0.5rem;
   -webkit-tap-highlight-color: transparent;
 }
@@ -122,10 +122,6 @@
 .tool > button:focus-visible > .chevron,
 .tool > button[aria-expanded="true"] > .chevron {
   opacity: 1;
-}
-
-.summary > .chevron {
-  margin-top: 0.5rem;
 }
 
 button:hover > .chevron, button:focus-visible > .chevron {
