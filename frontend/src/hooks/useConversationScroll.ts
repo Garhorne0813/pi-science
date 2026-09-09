@@ -122,6 +122,31 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
     await loadOlderAndAnchor();
   }, [loadOlderAndAnchor]);
 
+  // Virtuoso fires startReached once per arrival at the top; if that one
+  // attempt failed (a transport hiccup, a restarting backend), a user who
+  // keeps scrolling up would never trigger another load. Retry on every
+  // fresh upward arrival at the top instead.
+  const topRetriedRef = useRef(false);
+  const handleScrollerScroll = useCallback(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    if (scroller.scrollTop > 64) {
+      topRetriedRef.current = false;
+      return;
+    }
+    if (topRetriedRef.current) return;
+    topRetriedRef.current = true;
+    const state = useRuntimeStore.getState();
+    if (!state.historyHasMore || !state.historyCursor || state.historyLoading) return;
+    void loadOlderAndAnchor();
+  }, [loadOlderAndAnchor]);
+
+  const attachScrollerWithHistoryRetry = useCallback((element: Window | HTMLElement | null) => {
+    if (element instanceof HTMLElement) element.removeEventListener("scroll", handleScrollerScroll);
+    attachScroller(element);
+    if (element instanceof HTMLElement) element.addEventListener("scroll", handleScrollerScroll, { passive: true });
+  }, [attachScroller, handleScrollerScroll]);
+
   // Runs fn after `delay` only while the page still shows the same session;
   // every pending handle is tracked so newer interactions/unmount can cancel.
   const scheduleSessionScoped = useCallback((fn: () => void, delay: number) => {
@@ -282,5 +307,5 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
   // older answer. New list measurements continue the pin; no guessed timers.
   const startNewTurn = scrollToBottom;
 
-  return { scrollRef, virtuosoRef, showScrollDown, virtualFirstItemIndex, navigationLoading, attachScroller, handleLoadOlder, handleNavSelect, scrollToBottom, startNewTurn, followOutput, handleListHeightChanged };
+  return { scrollRef, virtuosoRef, showScrollDown, virtualFirstItemIndex, navigationLoading, attachScroller: attachScrollerWithHistoryRetry, handleLoadOlder, handleNavSelect, scrollToBottom, startNewTurn, followOutput, handleListHeightChanged };
 }
