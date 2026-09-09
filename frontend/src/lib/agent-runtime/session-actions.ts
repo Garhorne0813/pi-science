@@ -15,7 +15,7 @@ import { appendRuntimeError, isMissingSessionError } from "./errors";
 import { attachTurnArtifacts, emptyThread, mergeHistoryWithLive, prependHistoryMessages, resetTurnBuffer, threadFromMessages } from "./event-fold";
 import { fetchPersistedTurnArtifacts } from "./turn-artifacts";
 import { generations, turnState } from "./generations";
-import { registerEventListener } from "./listener";
+import { registerEventListener, ensureTurnWatchdog } from "./listener";
 import { applyPromptSessionName, backfillSessionName } from "./naming";
 import { recoverMissingSession, reconcileAfterConnectionLoss, reconcilePromptAfterLateStream, rememberRuntimeState, suppressConnectionRecovery } from "./recovery";
 import { loadSessionsInternal, optimisticSessionIds } from "./sessions";
@@ -594,6 +594,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
             ? { ...current.thread, blocks: resolvedBlocks, index: Object.fromEntries(resolvedBlocks.map((block, index) => [block.id, index])) }
             : current.thread;
           set({ pendingInteraction: null, working: true, turnLifecycle: "active", status: "ready", thread });
+          ensureTurnWatchdog();
         }
       } catch (error) {
         const current = get();

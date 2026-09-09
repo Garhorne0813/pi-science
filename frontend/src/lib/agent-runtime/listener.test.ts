@@ -9,6 +9,35 @@ installRuntimeTestEnvironment();
 
 
 describe("runtime event subscription", () => {
+  it("settles a live turn whose event stream goes silent while the runtime is idle", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/messages")) return jsonResponse({ messages: [] });
+        if (url.includes("/state")) return jsonResponse(state("session-a"));
+        if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+        throw new Error(`Unexpected request: ${url}`);
+      }));
+
+      await useRuntimeStore.getState().connect("/workspace", "session-a");
+      const source = FakeEventSource.instances[0];
+      source.open();
+      source.emit("agent_start", { type: "agent_start", sessionId: "session-a", turnId: "turn-1", runId: "run-1" });
+      expect(useRuntimeStore.getState().turnLifecycle).toBe("active");
+
+      // Silence past the watchdog threshold: one cursor-preserving reconnect,
+      // then the authoritative idle probe settles the turn.
+      await vi.advanceTimersByTimeAsync(26_000);
+      const current = useRuntimeStore.getState();
+      expect(current.working).toBe(false);
+      expect(current.turnLifecycle).toBe("settled");
+      expect(current.status).toBe("ready");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("renders a terminal runtime error and settles the active turn", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
