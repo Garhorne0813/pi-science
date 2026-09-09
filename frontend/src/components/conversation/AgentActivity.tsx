@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Check, CircleX, ChevronRight } from "lucide-react";
 import type { ProgressAppearance } from "@pi-science/contracts";
 import { useTranslation } from "react-i18next";
@@ -87,11 +87,11 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
     const status = (
       <div data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0")}>
         {/* Same compact marker slot as the tool lines above, so the phase
-            title aligns with the step labels. */}
+            title aligns with the step labels. The turn clock sits right
+            after the phase word. */}
         <div className="flex min-h-primary w-full items-center gap-2 py-1 text-left">
           <span key={state} className="mx-1 flex w-3.5 shrink-0 justify-center"><ActivityIcon state={state} slot={visualSlot} config={progressAppearance} compact label={title} activityState={activityStateFor(lifecycle, shown)} /></span>
-          <ActivityLabel title={title} detail={null} error={false} />
-          <LiveElapsed live />
+          <ActivityLabel title={title} detail={null} error={false} elapsed={<LiveElapsed live />} />
         </div>
       </div>
     );
@@ -235,9 +235,10 @@ function useDisplayedActivity(blocks: ToolCallBlock[], lifecycle: TurnLifecycle)
   return live ? target?.mergeKey === displayed?.mergeKey ? target : displayed : null;
 }
 
-function ActivityLabel({ title, detail, error = false }: { title: string; detail: string | null; error?: boolean }) {
+function ActivityLabel({ title, detail, error = false, elapsed }: { title: string; detail: string | null; error?: boolean; elapsed?: ReactNode }) {
   return <span aria-live="polite" aria-atomic="true" className={styles.label}>
     <span className={cn(styles.title, "text-text", error && "text-error-text")}>{title}</span>
+    {elapsed}
     {detail && <span className={cn(styles.detail, "text-muted")}>{detail}</span>}
   </span>;
 }

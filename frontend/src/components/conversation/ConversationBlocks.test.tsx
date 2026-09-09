@@ -52,7 +52,7 @@ describe("turn-level conversation rendering", () => {
   it("shows process narration while tools are running", () => {
     const turn = buildTurnPresentations([user("u1"), agent("a1", "I will inspect it."), tool("read", "read", "running", { path: "event-fold.ts" })], { lastTurnLifecycle: "active" })[0];
     render(<>{renderTurn(turn, codeRunner)}</>);
-    expect(screen.getByText("Working process")).toBeInTheDocument();
+    expect(screen.getByText("Working")).toBeInTheDocument();
     expect(screen.getByText("I will inspect it.")).toBeInTheDocument();
   });
 
@@ -61,7 +61,7 @@ describe("turn-level conversation rendering", () => {
     render(<>{renderTurn(turn, codeRunner)}</>);
     expect(screen.getByText("streaming answer")).toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
-    expect(screen.getByText("Working process")).toBeInTheDocument();
+    expect(screen.getByText("Working")).toBeInTheDocument();
     cleanup();
     const settled = buildTurnPresentations([user("u1"), tool("read", "read"), agent("a1", "streaming answer")])[0];
     render(<>{renderTurn(settled, codeRunner)}</>);

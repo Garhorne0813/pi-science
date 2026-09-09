@@ -110,7 +110,7 @@ describe("turn-level activity through the live event path", () => {
     const runtime = useRuntimeStore.getState();
     render(<>{buildTurnPresentations(runtime.thread.blocks, { lastTurnLifecycle: runtime.turnLifecycle }).map((turn) => renderTurn(turn, codeRunner))}</>);
     // Narrative label, not the per-tool title: the title stays in the trace.
-    expect(screen.getByText("Working process")).toBeInTheDocument();
+    expect(screen.getByText("Working")).toBeInTheDocument();
     expect(screen.getByText("我先读取实现。")).toBeInTheDocument();
     expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
   });
@@ -172,7 +172,7 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
 
       emit("tool.updated", { callId: "r1", tool: "read", status: "running", input: { path: "a.ts" } });
       rerender(view());
-      expect(screen.getByText("Working process")).toBeInTheDocument();
+      expect(screen.getByText("Working")).toBeInTheDocument();
       expect(screen.getByText("我先检查一下。")).toBeInTheDocument();
       // Narration stays visible inside the live stream.
       expect(screen.getByLabelText("Execution trace")).toHaveTextContent("我先检查一下。");
@@ -181,21 +181,21 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       emit("tool.updated", { callId: "r2", tool: "grep", status: "running", input: { pattern: "x" } });
       rerender(view());
       // More micro ops inside the same burst: no visible transition at all.
-      expect(screen.getByText("Working process")).toBeInTheDocument();
+      expect(screen.getByText("Working")).toBeInTheDocument();
 
       emit("tool.updated", { callId: "r2", tool: "grep", status: "done" });
       emit("tool.updated", { callId: "e1", tool: "edit", status: "running", input: { path: "b.ts" } });
       rerender(view());
-      expect(screen.getByText("Working process")).toBeInTheDocument();
+      expect(screen.getByText("Working")).toBeInTheDocument();
       act(() => { vi.advanceTimersByTime(900); });
-      expect(screen.getByText("Working process")).toBeInTheDocument();
+      expect(screen.getByText("Working")).toBeInTheDocument();
 
       emit("tool.updated", { callId: "e1", tool: "edit", status: "done" });
       emit("tool.updated", { callId: "b1", tool: "bash", status: "running", input: { command: "pnpm vitest run", description: "运行测试" } });
       rerender(view());
-      expect(screen.getByText("Working process")).toBeInTheDocument();
+      expect(screen.getByText("Working")).toBeInTheDocument();
       act(() => { vi.advanceTimersByTime(900); });
-      expect(screen.getByText("Working process")).toBeInTheDocument();
+      expect(screen.getByText("Working")).toBeInTheDocument();
 
       emit("tool.updated", { callId: "b1", tool: "bash", status: "done" });
       emit("text.updated", { partId: "m2", text: "这是最终回答。" });
@@ -203,7 +203,7 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       // The final answer is visible while its text is still streaming.
       expect(screen.getByText("这是最终回答。")).toBeInTheDocument();
       expect(screen.queryByRole("status")).not.toBeInTheDocument();
-      expect(screen.getByText("Working process")).toBeInTheDocument();
+      expect(screen.getByText("Working")).toBeInTheDocument();
 
       emit("session.idle", {});
       rerender(view());
