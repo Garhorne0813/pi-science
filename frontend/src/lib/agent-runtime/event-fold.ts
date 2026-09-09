@@ -5,7 +5,7 @@
  * on the Thread being folded. This keeps two sessions isolated even when an
  * old EventSource callback arrives after the user has switched sessions. */
 
-import type { ThreadBlock, ToolCallBlock } from "../../types/thread";
+import type { AgentMessageBlock, ThreadBlock, ToolCallBlock } from "../../types/thread";
 import type { TurnArtifactItem } from "../../types/thread";
 import type { HistoryMessage, PiScienceEvent, TurnArtifactTurn } from "../client/pi-science-client";
 
@@ -181,8 +181,45 @@ function stampCurrentUser(blocks: ThreadBlock[], turnId: string, runId?: string)
   }
 }
 
-export function foldEvent(state: Thread, event: PiScienceEvent): Thread {
-  if (isV2Event(event)) return foldV2Event(state, event);
+type NarrationSubsumption = "keep" | "replaced" | "subsumed";
+
+/** Some models re-narrate everything said so far at the start of every
+ *  message, which stacks verbatim repeats in the feed. When a fresh
+ *  narration contains the previous one, the previous block is dropped (its
+ *  content lives on inside the superset, so even a streamed answer that gets
+ *  echoed later stays visible through the superset); when the fresh text is
+ *  itself contained, it is skipped. Explicit finals are never dropped. */
+function narrationSubsumption(previous: AgentMessageBlock, nextText: string): NarrationSubsumption {
+  if (previous.presentationRole === "final") return "keep";
+  const previousText = previous.parts.map((part) => part.text).join("");
+  if (!previousText.trim() || !nextText.trim()) return "keep";
+  if (nextText.includes(previousText)) return "replaced";
+  if (previousText.includes(nextText)) return "subsumed";
+  return "keep";
+}
+
+/** Find the latest same-turn narration block and reconcile the incoming text
+ *  against it, dropping a subsumed predecessor in place. Returns "subsumed"
+ *  when the caller must not create a block for this text. */
+function reconcileRepeatedNarration(blocks: ThreadBlock[], index: Record<string, number>, turnId: string, nextText: string, allowDrop = true): NarrationSubsumption {
+  for (let i = blocks.length - 1; i >= 0; i -= 1) {
+    const block = blocks[i];
+    if (block.kind !== "agent") continue;
+    if (block.turnId && turnId && block.turnId !== turnId) continue;
+    if (block.turnId !== turnId) return "keep";
+    const verdict = narrationSubsumption(block, nextText);
+    if (verdict === "replaced" && !allowDrop) return "keep";
+    if (verdict === "replaced") {
+      blocks.splice(i, 1);
+      for (const id of Object.keys(index)) delete index[id];
+      blocks.forEach((entry, position) => { index[entry.id] = position; });
+    }
+    return verdict;
+  }
+  return "keep";
+}
+
+export function foldEvent(state: Thread, event: PiScienceEvent): Thread {  if (isV2Event(event)) return foldV2Event(state, event);
   return foldLegacyEvent(state, event);
 }
 
@@ -285,6 +322,10 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
           let suffix = 2;
           while (index[postId] !== undefined) postId = `${blockId}-${suffix++}`;
           blockId = postId;
+          if (reconcileRepeatedNarration(blocks, index, turnId, nextText) === "subsumed") {
+            foldState.textByKey[key] = { text: nextText, revision, blockId: `subsumed-${blockId}`, partId: eventPartId ?? key };
+            break;
+          }
           foldState.activeItemKey = blockId;
           index[blockId] = blocks.length;
           foldState.lastAgentBlockId = blockId;
@@ -315,7 +356,13 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
           foldState.lastAgentBlockId = blockId;
         }
       } else {
-        // New block for this turn
+        // New block for this turn. Some models re-narrate everything said so
+        // far at the start of every message; collapse the verbatim repeat
+        // instead of stacking another copy in the feed.
+        if (reconcileRepeatedNarration(blocks, index, turnId, nextText, role !== "final") === "subsumed") {
+          foldState.textByKey[key] = { text: nextText, revision, blockId: `subsumed-${blockId}`, partId: eventPartId ?? key };
+          break;
+        }
         const block: ThreadBlock = {
           kind: "agent",
           id: blockId,
@@ -1141,20 +1188,36 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
         });
       }
       if (text) {
-        blocks.push({
-          kind: "agent",
-          id: msg.id,
-          parts: [{ id: msg.itemId ?? msg.id, text }],
-          ...(msg.turnId ? { turnId: msg.turnId } : {}),
-          ...(msg.runId ? { runId: msg.runId } : {}),
-          ...(msg.itemId ? { itemId: msg.itemId } : {}),
-          ...(msg.parentItemId ? { parentItemId: msg.parentItemId } : {}),
-          ...(msg.presentationRole ? { presentationRole: msg.presentationRole } : {}),
-          ...(msg.classificationSource ? { classificationSource: msg.classificationSource } : {}),
-          ...(msg.revision !== undefined ? { revision: msg.revision } : {}),
-          ...(msg.sequence !== undefined ? { sequence: msg.sequence } : {}),
-          timestamp: msg.timestamp,
-        });
+        // Collapse models that repeat their previous narration in every
+        // message: the union stays, the verbatim repeat goes.
+        let subsumed: NarrationSubsumption = "keep";
+        if (msg.presentationRole !== "final") {
+          for (let i = blocks.length - 1; i >= 0; i -= 1) {
+            const block = blocks[i];
+            if (block.kind !== "agent") continue;
+            if (block.turnId && msg.turnId && block.turnId !== msg.turnId) continue;
+            if (block.turnId !== msg.turnId) break;
+            subsumed = narrationSubsumption(block, text);
+            if (subsumed === "replaced") blocks.splice(i, 1);
+            break;
+          }
+        }
+        if (subsumed !== "subsumed") {
+          blocks.push({
+            kind: "agent",
+            id: msg.id,
+            parts: [{ id: msg.itemId ?? msg.id, text }],
+            ...(msg.turnId ? { turnId: msg.turnId } : {}),
+            ...(msg.runId ? { runId: msg.runId } : {}),
+            ...(msg.itemId ? { itemId: msg.itemId } : {}),
+            ...(msg.parentItemId ? { parentItemId: msg.parentItemId } : {}),
+            ...(msg.presentationRole ? { presentationRole: msg.presentationRole } : {}),
+            ...(msg.classificationSource ? { classificationSource: msg.classificationSource } : {}),
+            ...(msg.revision !== undefined ? { revision: msg.revision } : {}),
+            ...(msg.sequence !== undefined ? { sequence: msg.sequence } : {}),
+            timestamp: msg.timestamp,
+          });
+        }
       }
     } else if (role === "toolResult") {
       const callId = msg.toolCallId || msg.id;

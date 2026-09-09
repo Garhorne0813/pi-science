@@ -55,8 +55,47 @@ describe("transport event folding", () => {
     expect(tool.endedAt).toBe("2026-09-08T00:00:02.400Z");
   });
 
-  it("folds thinking deltas into a reasoning block ahead of the narration", () => {
+  it("collapses narration that a later message repeats verbatim", () => {
     let thread = emptyThread();
+    const emitText = (partId: string, text: string) => {
+      thread = foldEvent(thread, { sessionId: "s", type: "text.updated", turnId: "t1", partId, text, revision: 1 });
+    };
+    emitText("m1", "Todo 列表已创建。在开始之前，说说主题。");
+    emitText("m2", "好的。Todo 列表已创建。在开始之前，说说主题。");
+    const narration = thread.blocks.filter((block) => block.kind === "agent");
+    expect(narration).toHaveLength(1);
+    expect(narration[0]?.kind === "agent" && narration[0].parts[0]?.text).toContain("好的。");
+    // A strict subset adds nothing and must not spawn a second block.
+    emitText("m3", "Todo 列表已创建。");
+    expect(thread.blocks.filter((block) => block.kind === "agent")).toHaveLength(1);
+    // Unrelated narration still gets its own block.
+    emitText("m4", "开始检索文献。");
+    expect(thread.blocks.filter((block) => block.kind === "agent")).toHaveLength(2);
+  });
+
+  it("keeps the union when a streamed answer is echoed by later text", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, { sessionId: "s", type: "text.updated", turnId: "t1", partId: "m1", text: "最终回答正文。", revision: 1 });
+    thread = foldEvent(thread, { sessionId: "s", type: "text.updated", turnId: "t1", partId: "m2", text: "最终回答正文。附注。", revision: 1 });
+    const agents = thread.blocks.filter((block) => block.kind === "agent");
+    expect(agents).toHaveLength(1);
+    expect(agents[0]?.kind === "agent" && agents[0].parts[0]?.text).toBe("最终回答正文。附注。");
+  });
+
+  it("rebuilds history with the narration repeat collapsed", () => {
+    const thread = threadFromMessages([
+      { id: "u1", role: "user", content: [{ type: "text", text: "研究" }], timestamp: "2026-09-09T00:00:00.000Z" },
+      { id: "m1", role: "assistant", content: [{ type: "text", text: "Todo 列表已创建。说说主题。" }] },
+      { id: "m2", role: "assistant", content: [{ type: "text", text: "好的。Todo 列表已创建。说说主题。" }] },
+      { id: "m3", role: "assistant", presentationRole: "final", content: [{ type: "text", text: "结论。" }] },
+    ]);
+    const narration = thread.blocks.filter((block) => block.kind === "agent");
+    expect(narration).toHaveLength(2);
+    expect(narration[0]?.kind === "agent" && narration[0].parts[0]?.text).toContain("好的。");
+    expect(narration[1]?.kind === "agent" && narration[1].parts[0]?.text).toBe("结论。");
+  });
+
+  it("folds thinking deltas into a reasoning block ahead of the narration", () => {    let thread = emptyThread();
     const emit = (payload: Record<string, unknown>) => { thread = foldEvent(thread, { sessionId: "s", type: "agent_start", ...payload, turnId: "t1" }); };
     emit({});
     for (const delta of ["Check the ", "imports."]) {
