@@ -52,7 +52,6 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
   const activityGroups = useMemo(() => groupActivityBlocks(blocks), [blocks]);
   const traceId = useId();
   const traceTools = useMemo(() => activities.filter((block): block is ToolCallBlock => block.kind === "tool"), [activities]);
-  const thinkingBlocks = useMemo(() => activities.filter((block): block is ThinkingBlock => block.kind === "thinking"), [activities]);
   const shown = useDisplayedActivity(tools, lifecycle);
   // Settled turns collapse their tool steps behind the process summary row.
   const [traceExpanded, setTraceExpanded] = useState(false);
@@ -138,16 +137,14 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
   const summaryLabel = `${stateLabel}${processDuration ? ` · ${processDuration}` : ""}${failureSuffix}${noAnswer ? ` · ${t("conversation.activity.noAnswer")}` : ""}`;
 
   return <div id={blocks.length === 1 && blocks[0].kind === "tool" ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
-    {traceTools.length > 0 || thinkingBlocks.length > 0 || headline ? (
+    {traceTools.length > 0 || headline ? (
       <button type="button" aria-expanded={traceExpanded} aria-controls={traceId} onClick={() => setTraceExpanded((value) => !value)} className={cn(styles.summary, "flex min-h-primary w-full items-center gap-2 rounded-input py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-control")}>
-        <span aria-live="polite" aria-atomic="true" className="min-w-0 flex-1 truncate text-sm font-medium text-text">{traceTools.length > 0 || thinkingBlocks.length > 0 ? summaryLabel : headline}</span>
+        <span aria-live="polite" aria-atomic="true" className="min-w-0 flex-1 truncate text-sm font-medium text-text">{traceTools.length > 0 ? summaryLabel : headline}</span>
         <ChevronRight size={13} aria-hidden className={cn(styles.chevron, "shrink-0 text-muted", traceExpanded && "rotate-90")} />
       </button>
     ) : null}
-    {traceExpanded && (traceTools.length > 0 || thinkingBlocks.length > 0) && <div id={traceId} role="region" className={styles.trace} aria-label={t("conversation.activity.trace")}>
-      {activities.map((block) => block.kind === "thinking"
-        ? <ThinkingRow key={block.id} block={block} />
-        : block.kind === "tool" ? <TraceItem key={block.id} block={block} live={false} /> : null)}
+    {traceExpanded && traceTools.length > 0 && <div id={traceId} role="region" className={styles.trace} aria-label={t("conversation.activity.trace")}>
+      {traceTools.map((block) => <TraceItem key={block.id} block={block} live={false} />)}
     </div>}
     {narrationBlocks.map((block) => (
       <div key={block.id} id={`thread-block-${block.id}`} className={cn(styles.entry, styles.narration, "min-w-0")}><MarkdownViewer variant="chat" className="text-ui-body leading-relaxed text-muted [overflow-wrap:anywhere]" resourceContext={cwd ? { cwd } : undefined}>{parseSuggestions(block.parts.map((part) => part.text).join("")).clean}</MarkdownViewer></div>

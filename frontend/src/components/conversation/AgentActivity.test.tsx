@@ -183,7 +183,7 @@ describe("AgentActivity live stream", () => {
     expect(screen.getByText("Working")).toBeInTheDocument();
   });
 
-  it("folds the reasoning rows behind the settled summary row", () => {
+  it("keeps reasoning out of the settled step records", () => {
     const blocks: ActivityBlock[] = [
       { kind: "thinking", id: "th1", parts: [{ id: "th1-0", text: "Weigh the options." }] },
       tool("t1", "read", "done", { path: "a.ts" }),
@@ -192,16 +192,10 @@ describe("AgentActivity live stream", () => {
     render(<AgentActivity blocks={blocks} lifecycle="settled" />);
     expect(screen.queryByText("Weigh the options.")).not.toBeInTheDocument();
     expect(screen.queryByText("Thinking")).not.toBeInTheDocument();
+    // Expanding reveals the step records only — the reasoning stream was part
+    // of the live feed and does not belong in the folded records.
     fireEvent.click(screen.getByText(/Complete|Encountered a problem|Stopped|Working/));
-    expect(screen.getByText("Weigh the options.")).toBeInTheDocument();
-  });
-
-  it("keeps a summary toggle for reasoning-only settled turns", () => {
-    render(<AgentActivity blocks={[
-      { kind: "thinking", id: "th1", parts: [{ id: "th1-0", text: "Weigh the options." }] },
-      { kind: "agent", id: "a1", presentationRole: "final", parts: [{ id: "a1-0", text: "The final answer." }] },
-    ]} lifecycle="settled" />);
-    expect(screen.getByText(/Complete|Encountered a problem|Stopped|Working/)).toBeInTheDocument();
+    expect(screen.getByText("Reading a.ts")).toBeInTheDocument();
     expect(screen.queryByText("Weigh the options.")).not.toBeInTheDocument();
   });
   it("streams the freshest output line beside a running tool", () => {
