@@ -36,6 +36,7 @@ import { PhaseView } from "./PhaseView";
 import { useScrollMemory } from "@/lib/ui";
 import { cn } from "@/lib/ui";
 import { previewPolicy } from "@/lib/artifacts/preview-policy";
+import { isSelectAllShortcut, selectAllWithin } from "@/lib/ui/select-all-within";
 
 /** Keep the Markdown DOM bounded. Full text is fetched only when requested. */
 const MARKDOWN_PREVIEW_BYTES = 2 * 1024 * 1024;
@@ -559,7 +560,15 @@ function Body({
           onLoadFullText={onLoadFullText}
         />
         <div
-          className="w-full flex-1 rounded-sm bg-[var(--doc-paper)] shadow-[0_1px_4px_rgba(0,0,0,.25)]"
+          className="w-full flex-1 rounded-sm bg-[var(--doc-paper)] shadow-[0_1px_4px_rgba(0,0,0,.25)] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (!isSelectAllShortcut(event.nativeEvent)) return;
+            if (selectAllWithin(event.currentTarget)) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          }}
           style={{
             paddingInline: "1rem",
             paddingBlock: "1.25rem",
