@@ -112,6 +112,18 @@
   transition: transform var(--motion-normal) var(--ease-standard), opacity var(--motion-normal) var(--ease-standard);
 }
 
+/* Step rows hide their expand chevron until the row is hovered, focused, or
+   already open; while streaming the chevron sits at the far right edge. */
+.tool > button > .chevron {
+  opacity: 0;
+}
+
+.tool > button:hover > .chevron,
+.tool > button:focus-visible > .chevron,
+.tool > button[aria-expanded="true"] > .chevron {
+  opacity: 1;
+}
+
 .summary > .chevron {
   margin-top: 0.5rem;
 }

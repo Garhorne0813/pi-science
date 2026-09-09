@@ -303,16 +303,17 @@ function TraceItem({ block, live }: { block: ToolCallBlock; live: boolean }) {
   const output = block.output ?? block.partialOutput;
   const running = live && block.status === "running";
   const duration = running ? null : stepDuration(block);
-  // While the operation streams, its freshest output line runs along the
-  // right edge of the row — the step keeps its label, the tail stays live.
+  // While the operation streams, its freshest output line fills the right
+  // edge of the row and the chevron sits at the far right; once the step
+  // completes the tail makes way for the duration chip.
   const liveTail = running && block.partialOutput ? lastOutputLine(block.partialOutput) : null;
   return <div className={cn(styles.entry, styles.tool)} data-running={running}>
     <button type="button" disabled={!hasDetails} aria-expanded={hasDetails ? expanded : undefined} onClick={() => hasDetails && setExpanded((value) => !value)} className={cn(styles.toolButton, "flex min-h-primary max-w-full items-center gap-2 rounded-input py-1.5 text-left text-ui-label text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default sm:min-h-control")}>
       {running ? <span aria-hidden className="mx-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : block.status === "error" ? <CircleX size={14} aria-hidden className="shrink-0 text-error-text" /> : <Check size={14} aria-hidden className="shrink-0 text-muted" />}
-      <span className="min-w-0 flex-1 truncate">{presentToolActivity(block, t)}</span>
-      {liveTail && <span aria-hidden className="hidden max-w-[45%] shrink truncate text-right font-mono text-[10px] text-muted sm:block">{liveTail}</span>}
+      <span className="min-w-0 truncate">{presentToolActivity(block, t)}</span>
+      {liveTail && <span aria-hidden className="hidden min-w-0 flex-1 truncate text-right font-mono text-[10px] text-muted sm:block">{liveTail}</span>}
       {duration && <span aria-hidden="true" className="shrink-0 font-mono text-[10px] tabular-nums text-muted">{duration}</span>}
-      {hasDetails && <ChevronRight size={12} aria-hidden className={cn("shrink-0 transition-transform", expanded && "rotate-90")} />}
+      {hasDetails && <ChevronRight size={12} aria-hidden className={cn(styles.chevron, "shrink-0 transition-transform", expanded && "rotate-90")} />}
     </button>
     {expanded && hasDetails && <div className={cn(styles.details, "space-y-2 pb-2 pl-6 text-xs")}>
       <Detail label={t("conversation.activity.toolLabel")} value={block.tool} />
