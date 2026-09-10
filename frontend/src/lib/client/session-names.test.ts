@@ -118,7 +118,7 @@ describe("setSessionName server persistence", () => {
       setSessionName("/workspace", "persist-me", "持久标题");
       // The localStorage write is immediate (sync contract).
       expect(getSessionName("/workspace", "persist-me")).toBe("持久标题");
-      // Fire-and-forget: give the dynamic import + PUT a tick.
+      // Fire-and-forget: give the PUT a tick.
       await new Promise((resolve) => setTimeout(resolve, 50));
       const put = calls.find((c) => c.url.includes("/api/sessions/persist-me/title") && c.method === "PUT");
       expect(put).toBeTruthy();
