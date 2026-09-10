@@ -3,7 +3,6 @@ import { lazy, Suspense, useState, useEffect, useRef } from "react";
 import { PanelLeft, Settings, Plus, Trash2, GitFork, FolderOpen, ArrowLeft, FileText, Inbox, FlaskConical, type LucideIcon } from "lucide-react";
 import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
-import { InspectorTabs } from "../../components/inspector/InspectorTabs";
 import { RightPane } from "../../components/inspector/RightPane";
 import { PreviewPaneControls } from "../../components/inspector/PreviewPaneControls";
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
@@ -13,6 +12,7 @@ import { cn } from "../../lib/ui";
 
 // The settings bundle (dialog + tabs) only loads on first open.
 const SettingsDialog = lazy(() => import("../../components/settings/SettingsDialog").then((m) => ({ default: m.SettingsDialog })));
+const InspectorTabs = lazy(() => import("../../components/inspector/InspectorTabs").then((m) => ({ default: m.InspectorTabs })));
 import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { workspacePathLeaf } from "../../lib/workspace";
@@ -36,6 +36,7 @@ export function ProjectsLayout() {
   const setInspectorVisible = useUiStore((s) => s.setInspectorVisible);
   const setInspectorMaximized = useUiStore((s) => s.setInspectorMaximized);
   const setSidebarWidth = useUiStore((s) => s.setSidebarWidth);
+  const settingsOpen = useUiStore((s) => s.settingsOpen);
   const [sidebarDragWidth, setSidebarDragWidth] = useState<number | null>(null);
   const [sidebarDragging, setSidebarDragging] = useState(false);
   const sidebarDragWidthRef = useRef<number | null>(null);
@@ -222,20 +223,24 @@ export function ProjectsLayout() {
           side={previewOnLeft ? "left" : "right"}
           onMinimize={() => setInspectorVisible(false)}
         >
-          <InspectorTabs
-            tabs={inspectorTabs}
-            activeTabId={activeInspectorTabId}
-            cwd={activeCwd || undefined}
-            sessionId={activeConversationSessionId}
-            reserveControls={isConversationRoute}
-          />
+          <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted">{t("common.loading")}</div>}>
+            <InspectorTabs
+              tabs={inspectorTabs}
+              activeTabId={activeInspectorTabId}
+              cwd={activeCwd || undefined}
+              sessionId={activeConversationSessionId}
+              reserveControls={isConversationRoute}
+            />
+          </Suspense>
         </RightPane>
       )}
 
       {/* Settings dialog — floats above every page, one instance only */}
-      <Suspense fallback={null}>
-        <SettingsDialog />
-      </Suspense>
+      {settingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsDialog />
+        </Suspense>
+      )}
     </div>
   );
 }
