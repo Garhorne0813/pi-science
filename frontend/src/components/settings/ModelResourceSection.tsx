@@ -7,6 +7,7 @@ import { queryClient } from "../../lib/client/query-client";
 import { modelResourceKeys, modelResourcesApi } from "../../lib/model-resources";
 import type { ModelEndpointResource, ModelProvider, ModelResource } from "../../lib/model-resources";
 import { SettingsSelectMenu } from "./SettingsSelectMenu";
+import { Modal } from "../ui/Modal";
 
 type ProviderForm = {
   name: string;
@@ -367,11 +368,11 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
 
       {/* Add / Edit provider modal */}
       {modal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
-          <div className="max-h-[85vh] w-full max-w-lg space-y-3 overflow-auto rounded-card border border-faint bg-surface-raised p-4">
-            <p className="text-sm font-semibold text-text">
-              {modal.mode === "edit" ? t("settings.resources.editProviderTitle", { defaultValue: "Edit provider" }) : t("settings.resources.addProvider", { defaultValue: "Add Provider" })}
-            </p>
+        <Modal
+          title={modal.mode === "edit" ? t("settings.resources.editProviderTitle", { defaultValue: "Edit provider" }) : t("settings.resources.addProvider", { defaultValue: "Add Provider" })}
+          onClose={() => { if (busy === null) setModal(null); }}
+        >
+          <div className="space-y-3">
             {modal.mode === "edit" && (
               <div className="flex items-center gap-2 rounded-input bg-surface-2 px-3 py-2 text-[11px]">
                 <span className="text-muted">{t("settings.resources.connection", { defaultValue: "Connection" })}</span>
@@ -484,14 +485,17 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {/* Delete confirmation */}
       {confirmDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="alertdialog" aria-modal="true">
-          <div className="w-full max-w-sm space-y-3 rounded-card border border-faint bg-surface-raised p-4">
-            <p className="text-sm font-semibold text-text">{t("settings.resources.deleteTitle", { defaultValue: "Delete" })} "{confirmDelete.name}"?</p>
+        <Modal
+          title={`${t("settings.resources.deleteTitle", { defaultValue: "Delete" })} "${confirmDelete.name}"?`}
+          onClose={() => { if (busy === null) setConfirmDelete(null); }}
+          contentClassName="max-w-sm"
+        >
+          <div className="space-y-3">
             <p className="text-[11px] leading-relaxed text-muted">
               {t("settings.resources.deleteBody", { defaultValue: "This will remove its models, its binding, its private API connection, and its managed API credential. Shared connections or credentials will not be removed." })}
             </p>
@@ -503,7 +507,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
     </section>
   );
