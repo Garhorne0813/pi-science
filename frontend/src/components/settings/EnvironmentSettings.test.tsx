@@ -48,4 +48,24 @@ describe("EnvironmentSettings", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/environments/rev_failed", expect.objectContaining({ method: "DELETE" })));
     expect(await screen.findByText(/No shared environments yet/)).toBeInTheDocument();
   });
+
+  it("ignores a stale binding response after switching workspaces", async () => {
+    environments = [{ ...environments[0], status: "ready", revision_id: "rev_a" }];
+    let resolveFirst!: (response: Response) => void;
+    const firstBinding = new Promise<Response>((resolve) => { resolveFirst = resolve; });
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/environments") return jsonResponse({ environments });
+      if (url.includes("cwd=workspace-a")) return firstBinding;
+      if (url.includes("cwd=workspace-b")) return jsonResponse({ revision_id: "rev_b", ready: true });
+      return jsonResponse({ error: `unhandled ${init?.method ?? "GET"} ${url}` }, 404);
+    });
+
+    const { rerender } = render(<EnvironmentSettings workspaceCwd="workspace-a" />);
+    rerender(<EnvironmentSettings workspaceCwd="workspace-b" />);
+    resolveFirst(jsonResponse({ revision_id: "rev_failed", ready: true }));
+
+    expect(await screen.findByText("Use")).toBeInTheDocument();
+    expect(screen.queryByText("Active")).not.toBeInTheDocument();
+  });
 });

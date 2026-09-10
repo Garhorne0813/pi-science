@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Loader2, Plus, Trash2 } from "lucide-react";
 import { apiRequest } from "../../lib/client/api";
 
@@ -19,14 +19,31 @@ export function EnvironmentSettings({ workspaceCwd }: { workspaceCwd: string | n
   const [binding, setBinding] = useState<Binding | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const loadTokenRef = useRef(0);
 
-  const load = async () => {
-    const list = await apiRequest<{ environments: EnvironmentRevision[] }>("/api/environments");
+  const load = useCallback(async (signal?: AbortSignal) => {
+    const token = ++loadTokenRef.current;
+    const [list, nextBinding] = await Promise.all([
+      apiRequest<{ environments: EnvironmentRevision[] }>("/api/environments", { signal }),
+      workspaceCwd
+        ? apiRequest<Binding>(`/api/environments/workspace?cwd=${encodeURIComponent(workspaceCwd)}`, { signal })
+        : Promise.resolve(null),
+    ]);
+    if (signal?.aborted || token !== loadTokenRef.current) return;
     setEnvironments(list.environments);
-    if (workspaceCwd) setBinding(await apiRequest<Binding>(`/api/environments/workspace?cwd=${encodeURIComponent(workspaceCwd)}`));
-  };
+    setBinding(nextBinding);
+  }, [workspaceCwd]);
 
-  useEffect(() => { void load().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }, [workspaceCwd]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void load(controller.signal).catch((cause) => {
+      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause));
+    });
+    return () => {
+      controller.abort();
+      loadTokenRef.current += 1;
+    };
+  }, [load]);
 
   const create = async () => {
     setBusy("create"); setError(null);
