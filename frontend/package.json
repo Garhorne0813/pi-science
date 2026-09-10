@@ -17,7 +17,7 @@
     "test:visual:typecheck": "tsc -p tests/visual/tsconfig.json",
     "test:visual:update": "pnpm build && playwright test --config playwright.visual.config.ts --update-snapshots",
     "test:accessibility": "pnpm build && playwright test --config playwright.visual.config.ts --grep @accessibility",
-    "lint": "oxlint",
+    "lint": "oxlint --deny-warnings",
     "preview": "vite preview"
   },
   "dependencies": {

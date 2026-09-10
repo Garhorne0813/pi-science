@@ -18,6 +18,7 @@ type ProviderForm = {
 };
 
 const EMPTY_FORM: ProviderForm = { name: "", baseUrl: "", protocol: "openai", authKind: "api_key", apiKey: "" };
+const EMPTY_MODELS: ModelResource[] = [];
 
 type TestResult = { ok: true; health: "ready"; models: Array<{ id: string; display_name: string }> };
 
@@ -48,7 +49,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
   const providers = (providersRead.data?.providers ?? []).filter((provider) => provider.kind === "user");
   const endpoints = endpointsRead.data?.endpoints ?? [];
   const bindings = bindingsRead.data?.bindings ?? [];
-  const allModels = modelsRead.data?.models ?? [];
+  const allModels = modelsRead.data?.models ?? EMPTY_MODELS;
 
   const connectionFor = (providerId: string): ModelEndpointResource | undefined => {
     const binding = bindings.find((item) => item.provider_id === providerId);
@@ -59,7 +60,12 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
     protocol === "anthropic" ? t("settings.resources.anthropic", { defaultValue: "Anthropic-compatible" })
       : protocol === "ollama" ? t("settings.resources.ollama", { defaultValue: "Ollama" })
       : t("settings.resources.openai", { defaultValue: "OpenAI-compatible" });
-  const editingModels = useMemo(() => (modal?.mode === "edit" ? modelsFor(modal.provider.id).sort((a, b) => a.model_id.localeCompare(b.model_id)) : []), [modal, allModels, providersRead.data]);
+  const editingModels = useMemo(
+    () => (modal?.mode === "edit"
+      ? allModels.filter((model) => model.provider_id === modal.provider.id).sort((a, b) => a.model_id.localeCompare(b.model_id))
+      : []),
+    [modal, allModels],
+  );
 
   const invalidate = async () => {
     await Promise.all([
