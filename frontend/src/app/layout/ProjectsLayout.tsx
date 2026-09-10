@@ -109,7 +109,7 @@ export function ProjectsLayout() {
         <aside className="app-sidebar rail-enter flex h-full w-[var(--sidebar-collapsed-width)] shrink-0 flex-col items-center gap-1.5 overflow-hidden border-r border-border px-1.5 py-[18px]">
           <IconButton
             icon={PanelLeft}
-            label="Expand sidebar"
+            label={t("shell.expandSidebar")}
             size="standard"
             className="h-11 w-11"
             onClick={() => setSidebarCollapsed(false)}
@@ -128,7 +128,7 @@ export function ProjectsLayout() {
         </aside>
       ) : (
         <>
-        <button type="button" aria-label="Close sidebar" onClick={() => setSidebarCollapsed(true)} className="fixed inset-0 z-20 bg-black/45 md:hidden" />
+        <button type="button" aria-label={t("shell.closeSidebar")} onClick={() => setSidebarCollapsed(true)} className="fixed inset-0 z-20 bg-black/45 md:hidden" />
         <aside className="app-sidebar sidebar-enter absolute z-30 flex h-full shrink-0 flex-col overflow-hidden border-r border-border md:relative" style={{ width: sidebarDragWidth ?? sidebarWidth, maxWidth: "86vw" }}>
           <div className="flex h-full flex-col px-panel py-card">
             {/* Header */}
@@ -138,7 +138,7 @@ export function ProjectsLayout() {
               </h1>
               <IconButton
                 icon={PanelLeft}
-                label="Close sidebar"
+                label={t("shell.closeSidebar")}
                 size="touch"
                 className="translate-x-1"
                 onClick={() => setSidebarCollapsed(true)}
@@ -179,7 +179,7 @@ export function ProjectsLayout() {
           <div
             role="separator"
             aria-orientation="vertical"
-            aria-label="调整侧边栏宽度"
+            aria-label={t("shell.resizeSidebar")}
             aria-valuemin={SIDEBAR_MIN_WIDTH}
             aria-valuemax={SIDEBAR_MAX_WIDTH}
             aria-valuenow={sidebarDragWidth ?? sidebarWidth}

@@ -44,16 +44,17 @@ function ConversationTurn({ turn, codeRunner, actionTextByBlock }: { turn: TurnP
 }
 
 function UserMessage({ block }: { block: UserMessageBlock }) {
+  const { t } = useTranslation();
   const visibleText = visibleUserMessage(block.text);
   const references = referencesFromMessage(block.text);
   const copyText = visibleText || references.map((reference) => reference.path).join("\n");
   return (
     <div id={`user-msg-${block.id}`} className="group/message ml-auto flex max-w-[min(var(--user-message-width),82%)] scroll-mt-4 flex-col items-end gap-1">
-      {block.images && block.images.length > 0 && <div className="flex max-w-full flex-wrap justify-end gap-2" aria-label="Attached images">
+      {block.images && block.images.length > 0 && <div className="flex max-w-full flex-wrap justify-end gap-2" aria-label={t("conversation.attachedImages")}>
         {block.images.map((image, index) => <img key={`${image.mimeType}-${index}`} src={`data:${image.mimeType};base64,${image.data}`} alt={`Attachment ${index + 1}`} className="max-h-64 max-w-full rounded-input border border-border object-contain" />)}
       </div>}
       {visibleText && <div className="ui-user-message rounded-bubble px-4 py-2.5 text-sm leading-relaxed text-text whitespace-pre-wrap">{visibleText}</div>}
-      {references.length > 0 && <div className="flex flex-wrap justify-end gap-1.5" aria-label="Referenced context">
+      {references.length > 0 && <div className="flex flex-wrap justify-end gap-1.5" aria-label={t("conversation.referencedContext")}>
         {references.map((reference) => <span key={`${reference.isDir ? "folder" : "file"}-${reference.path}`} className="flex max-w-full items-center gap-1 rounded-input border border-accent/20 bg-accent/5 px-2 py-1 font-mono text-[10px] text-muted" title={reference.path}>
           {reference.isDir ? <FolderOpen size={10} /> : <File size={10} />}
           <span className="truncate">{reference.path}</span>

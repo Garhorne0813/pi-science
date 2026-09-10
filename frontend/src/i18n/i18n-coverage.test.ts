@@ -93,6 +93,18 @@ describe("i18n resource coverage", () => {
     expect(missing).toEqual([]);
   });
 
+  it("does not hard-code accessible control labels in JSX", () => {
+    const hardCoded: string[] = [];
+    const pattern = /aria-label\s*=\s*["']([^"']+)["']/g;
+    for (const file of sourceFiles(srcRoot)) {
+      const source = readFileSync(file, "utf8");
+      for (const match of source.matchAll(pattern)) {
+        hardCoded.push(`${path.relative(srcRoot, file)}:${match[1]}`);
+      }
+    }
+    expect(hardCoded).toEqual([]);
+  });
+
   it("persists and applies the language selected in Settings", async () => {
     const setItem = vi.fn();
     vi.stubGlobal("window", { localStorage: { getItem: vi.fn(), setItem } });

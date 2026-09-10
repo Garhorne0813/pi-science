@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EnvironmentSettings } from "./EnvironmentSettings";
+import i18n from "../../i18n";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -25,6 +26,10 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     return jsonResponse({ ok: true, revision_id: "rev_failed" });
   }
   return jsonResponse({ error: `unhandled ${method} ${url}` }, 404);
+});
+
+beforeAll(async () => {
+  await i18n.changeLanguage("en");
 });
 
 beforeEach(() => {
