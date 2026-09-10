@@ -135,4 +135,58 @@ describe("MentionComposer", () => {
     fireEvent.keyDown(input(), { key: "ArrowDown" });
     expect(input().getAttribute("aria-activedescendant")).toBe(`${listbox.id}-option-1`);
   });
+
+  it("grows with its content, scrolls at the maximum height, and shrinks again", async () => {
+    render(<Harness />);
+    const composer = input();
+
+    Object.defineProperty(composer, "scrollHeight", { configurable: true, value: 120 });
+    await typeAt("one\ntwo\nthree");
+    expect(composer.style.height).toBe("120px");
+    expect(composer.style.overflowY).toBe("hidden");
+
+    Object.defineProperty(composer, "scrollHeight", { configurable: true, value: 240 });
+    await typeAt("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight");
+    expect(composer.style.height).toBe("160px");
+    expect(composer.style.overflowY).toBe("auto");
+
+    Object.defineProperty(composer, "scrollHeight", { configurable: true, value: 20 });
+    await typeAt("");
+    expect(composer.style.height).toBe("64px");
+    expect(composer.style.overflowY).toBe("hidden");
+  });
+
+  it("keeps the latest line visible when appending beyond the maximum height", async () => {
+    const { container } = render(<Harness />);
+    const composer = input();
+    const mirror = container.querySelector<HTMLElement>("[aria-hidden='true']");
+    Object.defineProperty(composer, "scrollHeight", { configurable: true, value: 240 });
+
+    await typeAt("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight");
+
+    expect(composer.scrollTop).toBe(240);
+    expect(mirror?.scrollTop).toBe(240);
+  });
+
+  it("preserves the scroll position when editing earlier overflowing text", async () => {
+    render(<Harness />);
+    const composer = input();
+    Object.defineProperty(composer, "scrollHeight", { configurable: true, value: 240 });
+    await typeAt("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight");
+
+    composer.scrollTop = 36;
+    composer.setSelectionRange(3, 3);
+    fireEvent.change(composer, { target: { value: "ONE\ntwo\nthree\nfour\nfive\nsix\nseven\neight", selectionStart: 3, selectionEnd: 3 } });
+
+    expect(composer.scrollTop).toBe(36);
+  });
+
+  it("clips mirrored text and the textarea scrollbar inside the composer corners", () => {
+    const { container } = render(<Harness />);
+    const clippingFrame = input().parentElement;
+    const mirror = container.querySelector("[aria-hidden='true']");
+
+    expect(clippingFrame).toHaveClass("overflow-hidden", "rounded-t-composer");
+    expect(mirror).toHaveClass("[clip-path:inset(8px_12px)]");
+  });
 });
