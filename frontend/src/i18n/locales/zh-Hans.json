@@ -818,6 +818,7 @@
   "projects.sessionCount_other": "{{count}} 个对话",
   "projects.newWorkspace": "新建工作区",
   "projects.openFolder": "导入文件夹",
+  "projects.open": "打开 {{name}}",
   "projects.empty": "暂无工作区，请先创建一个。",
   "projects.pinned": "已置顶",
   "projects.pin": "置顶",

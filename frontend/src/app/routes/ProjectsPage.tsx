@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { FolderOpen, Plus, Loader2, MessageSquare, FolderInput, ChevronDown, Pin, PinOff, Pencil, Trash2, Activity } from "lucide-react";
 import { cn } from "../../lib/ui";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
@@ -297,7 +297,7 @@ export function ProjectsPage() {
 
 /* ── Workspace Card ── */
 
-function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingName, editValue, setEditValue, handleRename, handleDelete, nameInputRef, navigate, timeAgo }: {
+export function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingName, editValue, setEditValue, handleRename, handleDelete, nameInputRef, navigate, timeAgo }: {
   w: Workspace;
   pinned: Set<string>;
   togglePin: (path: string) => void;
@@ -323,12 +323,18 @@ function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingName, edit
 
   return (
     <div
-      onClick={() => navigate(`/workspace/${encodeURIComponent(w.path)}`)}
       className={cn(
-        "ui-card-interactive group relative cursor-pointer rounded-card p-card text-left",
+        "ui-card-interactive group relative rounded-card p-card text-left",
         isPinned && "ring-1 ring-accent/30",
       )}
     >
+      <Link
+        to={`/workspace/${encodeURIComponent(w.path)}`}
+        aria-label={t("projects.open", { name: w.name })}
+        className="absolute inset-0 z-[1] cursor-pointer rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+      >
+        <span className="sr-only">{t("projects.open", { name: w.name })}</span>
+      </Link>
       {/* Secondary workspace actions — revealed on hover or keyboard focus. */}
       <div className="ui-popover absolute right-2 top-2 z-10 hidden items-center gap-0.5 rounded-input p-0.5 group-hover:flex group-focus-within:flex"
         onClick={(e) => e.stopPropagation()}
@@ -373,7 +379,7 @@ function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingName, edit
           onBlur={() => handleRename(w.path)}
           onClick={(e) => e.stopPropagation()}
           placeholder={w.name}
-          className="rounded-input border border-accent bg-surface px-2 py-0.5 text-sm font-medium text-text outline-none w-full"
+          className="relative z-10 w-full rounded-input border border-accent bg-surface px-2 py-0.5 text-sm font-medium text-text outline-none"
         />
       ) : (
         <h3 className="text-sm font-medium text-text truncate">{w.name}</h3>
@@ -391,7 +397,7 @@ function WorkspaceCard({ w, pinned, togglePin, editingName, setEditingName, edit
           }}
           aria-label={t("runs.viewAll")}
           title={t("runs.viewAll")}
-          className="-m-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted/70 transition-colors hover:bg-surface-2 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          className="relative z-10 -m-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted/70 transition-colors hover:bg-surface-2 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
         >
           <Activity size={13} />
         </button>

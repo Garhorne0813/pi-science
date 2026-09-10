@@ -818,6 +818,7 @@
   "projects.sessionCount_other": "{{count}} sessions",
   "projects.newWorkspace": "New workspace",
   "projects.openFolder": "Import folder",
+  "projects.open": "Open {{name}}",
   "projects.empty": "No workspaces yet. Create one to get started.",
   "projects.pinned": "Pinned",
   "projects.pin": "Pin to top",
