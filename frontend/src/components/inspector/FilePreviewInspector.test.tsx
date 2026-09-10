@@ -139,6 +139,19 @@ describe("FilePreviewInspector edit capability", () => {
     await waitFor(() => expect(screen.queryByLabelText("Edit file")).toBeNull());
   });
 
+  it("uses the viewport scroller for both axes and renders tables flush to it", async () => {
+    renderInspector("wide.csv", "wide.csv", "text", "a,b,c\n1,2,3\n4,5,6");
+
+    const table = await screen.findByRole("table");
+    const tableSurface = table.parentElement as HTMLElement;
+    const scroller = screen.getByTestId("table-preview-scroller");
+
+    expect(scroller).toHaveClass("min-h-0", "flex-1", "overflow-auto");
+    expect(tableSurface.parentElement).toBe(scroller);
+    expect(tableSurface).not.toHaveClass("p-3", "overflow-x-auto");
+    expect(table).toHaveClass("w-max", "min-w-full");
+  });
+
   it("shows a missing-file error for a markdown artifact reference", async () => {
     missingPath = "drafts/missing.md";
     renderInspector(missingPath, "missing.md", "text");

@@ -723,7 +723,7 @@ function TableView({ table }: { table: import("@/lib/shared").ParsedTable }) {
           </ToggleBtn>
         </div>
       )}
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div data-testid="table-preview-scroller" className="min-h-0 flex-1 overflow-auto">
         {view === "chart" && chartable ? (
           <TableChart table={table} />
         ) : (
