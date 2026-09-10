@@ -18,10 +18,10 @@ export default defineConfig({
       // Mol* stays unbundled in development, point that import at Mutative's
       // equivalent native ESM build so browsers can resolve `create`.
       "mutative/dist/index.js": "mutative/dist/mutative.esm.mjs",
-      // The package's default entry targets Node and imports fs/path/crypto.
-      // Mol* runs in the browser, so always resolve its optional MP4 encoder to
-      // the WebAssembly-backed web build shipped by the same package.
-      "h264-mp4-encoder": path.resolve(__dirname, "node_modules/h264-mp4-encoder/embuild/dist/h264-mp4-encoder.web.js"),
+      // Mol* registers MP4 export even though Pi-Science does not expose it.
+      // Avoid bundling the encoder's Node entry (fs/path/crypto) or its 2 MB
+      // legacy web bundle until that feature has a first-class UI.
+      "h264-mp4-encoder": path.resolve(__dirname, "src/lib/viewers/h264-mp4-encoder-stub.ts"),
     },
   },
   server: {
