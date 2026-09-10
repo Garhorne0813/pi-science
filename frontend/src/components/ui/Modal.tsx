@@ -19,13 +19,23 @@ export function Modal({
 }) {
   const { t } = useTranslation();
   const titleId = useId();
+  const overlayRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const lastFocusedRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     lastFocusedRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const siblings = [...document.body.children]
+      .filter((element) => element !== overlayRef.current)
+      .map((element) => ({ element, wasInert: element.hasAttribute("inert") }));
+    for (const { element } of siblings) element.setAttribute("inert", "");
     panelRef.current?.focus();
-    return () => lastFocusedRef.current?.focus();
+    return () => {
+      for (const { element, wasInert } of siblings) {
+        if (!wasInert) element.removeAttribute("inert");
+      }
+      lastFocusedRef.current?.focus();
+    };
   }, []);
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
@@ -56,6 +66,7 @@ export function Modal({
 
   return createPortal(
     <div
+      ref={overlayRef}
       className={cn("fixed inset-0 z-[115] flex items-center justify-center bg-black/40 p-4", overlayClassName)}
       role="presentation"
       onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
