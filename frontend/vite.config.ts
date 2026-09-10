@@ -10,10 +10,6 @@ export default defineConfig({
     // BuiltInPluginBehaviors before the State namespace is initialized, which
     // makes PluginUIContext fail before a structure is parsed.
     exclude: ["molstar"],
-    // Mol*'s viewer extension registry imports this legacy CommonJS package
-    // even when MP4 export is disabled. Pre-bundle only that leaf dependency
-    // so its `module.exports` wrapper is browser-compatible.
-    include: ["molstar > h264-mp4-encoder"],
   },
   resolve: {
     alias: {
@@ -22,6 +18,10 @@ export default defineConfig({
       // Mol* stays unbundled in development, point that import at Mutative's
       // equivalent native ESM build so browsers can resolve `create`.
       "mutative/dist/index.js": "mutative/dist/mutative.esm.mjs",
+      // The package's default entry targets Node and imports fs/path/crypto.
+      // Mol* runs in the browser, so always resolve its optional MP4 encoder to
+      // the WebAssembly-backed web build shipped by the same package.
+      "h264-mp4-encoder": path.resolve(__dirname, "node_modules/h264-mp4-encoder/embuild/dist/h264-mp4-encoder.web.js"),
     },
   },
   server: {

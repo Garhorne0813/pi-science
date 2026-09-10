@@ -104,6 +104,9 @@ importers:
       generative-loaders:
         specifier: 0.1.1
         version: 0.1.1(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      h264-mp4-encoder:
+        specifier: ^1.0.12
+        version: 1.0.12
       highlight.js:
         specifier: ^11.11.1
         version: 11.11.1
