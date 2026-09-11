@@ -95,6 +95,17 @@ describe("transport event folding", () => {
     expect(narration[1]?.kind === "agent" && narration[1].parts[0]?.text).toBe("结论。");
   });
 
+  it("does not deduplicate legacy assistant narration across a user turn boundary", () => {
+    const blocks = convertHistoryToBlocks([
+      { id: "u1", role: "user", content: [{ type: "text", text: "What is the result?" }] },
+      { id: "a1", role: "assistant", content: [{ type: "text", text: "Result: 42" }] },
+      { id: "u2", role: "user", content: [{ type: "text", text: "Can you verify it?" }] },
+      { id: "a2", role: "assistant", content: [{ type: "text", text: "Verified. Result: 42" }] },
+    ]);
+
+    expect(blocks.filter((block) => block.kind === "agent").map((block) => block.id)).toEqual(["a1", "a2"]);
+  });
+
   it("folds thinking deltas into a reasoning block ahead of the narration", () => {    let thread = emptyThread();
     const emit = (payload: Record<string, unknown>) => { thread = foldEvent(thread, { sessionId: "s", type: "agent_start", ...payload, turnId: "t1" }); };
     emit({});

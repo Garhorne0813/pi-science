@@ -484,7 +484,6 @@ export function registerEventListener(client: PiScienceClient) {
     if (
       event.schemaVersion === 2
       && newThread.foldState?.pendingEvents.some((pending) => pending.eventId === event.eventId)
-      && !newThread.foldState.speculativeEventIds.includes(String(event.eventId))
     ) return false;
     return true;
   });

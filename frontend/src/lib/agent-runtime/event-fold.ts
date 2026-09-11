@@ -1194,6 +1194,7 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
         if (msg.presentationRole !== "final") {
           for (let i = blocks.length - 1; i >= 0; i -= 1) {
             const block = blocks[i];
+            if (block.kind === "user") break;
             if (block.kind !== "agent") continue;
             if (block.turnId && msg.turnId && block.turnId !== msg.turnId) continue;
             if (block.turnId !== msg.turnId) break;

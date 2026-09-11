@@ -89,6 +89,7 @@ function waitForRecovery(ms: number): Promise<void> {
 
 export async function resyncCompletedHistory(sessionId: string, cwd: string): Promise<void> {
   const generation = generations.connection;
+  const activityGeneration = generations.activity;
   try {
     const client = getClient();
     const [historyResult, artifactsResult] = await Promise.allSettled([
@@ -99,6 +100,7 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
     if (historyResult.status !== "fulfilled") return;
     if (
       generation !== generations.connection
+      || activityGeneration !== generations.activity
       || current.activeSessionId !== sessionId
       || current.cwd !== cwd
       || current.working
@@ -113,10 +115,18 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
     // a long tool-heavy turn. Walk older pages until lineage is established;
     // only a complete no-overlap history may replace the window wholesale.
     const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, current.thread, history, { keepLiveExtras: false });
-    const historyHasMore = merged.retainedOlderPrefix ? current.historyHasMore : merged.boundaryPage.has_more;
+    const latest = useRuntimeStore.getState();
+    if (
+      generation !== generations.connection
+      || activityGeneration !== generations.activity
+      || latest.activeSessionId !== sessionId
+      || latest.cwd !== cwd
+      || latest.working
+    ) return;
+    const historyHasMore = merged.retainedOlderPrefix ? latest.historyHasMore : merged.boundaryPage.has_more;
     useRuntimeStore.setState({
       thread: attachTurnArtifacts(merged.thread, turns, { windowComplete: !historyHasMore }),
-      historyCursor: merged.retainedOlderPrefix ? current.historyCursor : merged.boundaryPage.next_cursor,
+      historyCursor: merged.retainedOlderPrefix ? latest.historyCursor : merged.boundaryPage.next_cursor,
       historyHasMore,
       historyLoading: false,
       historySnapshotVersion: history.snapshot_version,
@@ -226,11 +236,18 @@ async function runConnectionRecovery(
       const history = historyResult.value;
       const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
       const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, useRuntimeStore.getState().thread, history, { keepLiveExtras: true });
-      const historyHasMore = merged.retainedOlderPrefix ? current.historyHasMore : merged.boundaryPage.has_more;
+      const latest = useRuntimeStore.getState();
+      if (
+        connectionGeneration !== generations.connection
+        || activityGeneration !== generations.activity
+        || latest.activeSessionId !== sessionId
+        || latest.cwd !== cwd
+      ) return;
+      const historyHasMore = merged.retainedOlderPrefix ? latest.historyHasMore : merged.boundaryPage.has_more;
       const restored = attachTurnArtifacts(merged.thread, turns, { windowComplete: !historyHasMore });
       useRuntimeStore.setState({
         thread: restored,
-        historyCursor: merged.retainedOlderPrefix ? current.historyCursor : merged.boundaryPage.next_cursor,
+        historyCursor: merged.retainedOlderPrefix ? latest.historyCursor : merged.boundaryPage.next_cursor,
         historyHasMore,
         historyLoading: false,
         historySnapshotVersion: history.snapshot_version,
@@ -336,12 +353,20 @@ export async function reconcileAfterGap(
   // the overlap (or the actual history beginning) is known.
   if (historyResult.status === "fulfilled") {
     const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
+    const lineageActivityGeneration = generations.activity;
     const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, current.thread, historyResult.value, { keepLiveExtras: true });
-    const historyHasMore = merged.retainedOlderPrefix ? current.historyHasMore : merged.boundaryPage.has_more;
+    const latest = useRuntimeStore.getState();
+    if (
+      connectionGeneration !== generations.connection
+      || lineageActivityGeneration !== generations.activity
+      || latest.activeSessionId !== sessionId
+      || latest.cwd !== cwd
+    ) return;
+    const historyHasMore = merged.retainedOlderPrefix ? latest.historyHasMore : merged.boundaryPage.has_more;
     const restored = attachTurnArtifacts(merged.thread, turns, { windowComplete: !historyHasMore });
     useRuntimeStore.setState({
       thread: restored,
-      historyCursor: merged.retainedOlderPrefix ? current.historyCursor : merged.boundaryPage.next_cursor,
+      historyCursor: merged.retainedOlderPrefix ? latest.historyCursor : merged.boundaryPage.next_cursor,
       historyHasMore,
       historyLoading: false,
       historySnapshotVersion: historyResult.value.snapshot_version,

@@ -4,7 +4,7 @@ import { getClient } from "../client/pi-science-client";
 import { workspaceFiles } from "../workspace";
 import { generations } from "./generations";
 import { useRuntimeStore } from "./index";
-import { reconcileAfterConnectionLoss, reconcilePromptAfterLateStream } from "./recovery";
+import { reconcileAfterConnectionLoss, reconcileAfterGap, reconcilePromptAfterLateStream, resyncCompletedHistory } from "./recovery";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
 
@@ -12,6 +12,78 @@ installRuntimeTestEnvironment();
 
 
 describe("runtime conversation recovery", () => {
+  it.each([
+    ["settled-history resync", async () => resyncCompletedHistory("session-a", "/workspace")],
+    ["connection recovery", async () => reconcileAfterConnectionLoss(
+      getClient(),
+      "session-a",
+      "/workspace",
+      generations.connection,
+      generations.activity,
+    )],
+    ["stream-gap recovery", async () => reconcileAfterGap("session-a", "/workspace")],
+  ])("drops %s results when the session changes during lineage probing", async (_name, runRecovery) => {
+    let releaseProbe!: (page: {
+      messages: Array<{ id: string; role: "user"; content: Array<{ type: "text"; text: string }> }>;
+      next_cursor: null;
+      has_more: false;
+      snapshot_version: string;
+    }) => void;
+    const probe = new Promise<Parameters<typeof releaseProbe>[0]>((resolve) => { releaseProbe = resolve; });
+    const client = getClient();
+    vi.spyOn(client, "getMessagesPage").mockImplementation(async (_sessionId, _cwd, options) => {
+      if (options?.before) return probe;
+      return {
+        messages: [{ id: "a-new", role: "user", content: [{ type: "text", text: "A newest" }] }],
+        next_cursor: "a-probe",
+        has_more: true,
+        snapshot_version: "snapshot-a",
+      };
+    });
+    vi.spyOn(client, "getSessionState").mockResolvedValue(state("session-a"));
+    vi.spyOn(client, "getTurnArtifacts").mockResolvedValue({ turns: [] });
+    useRuntimeStore.setState({
+      activeSessionId: "session-a",
+      cwd: "/workspace",
+      working: false,
+      thread: {
+        blocks: [{ kind: "user", id: "a-old", text: "A old" }],
+        index: { "a-old": 0 },
+        loaded: true,
+      },
+      historyCursor: "a-cursor",
+      historyHasMore: true,
+    });
+
+    const recovering = runRecovery();
+    await vi.waitFor(() => expect(client.getMessagesPage).toHaveBeenCalledTimes(2));
+    ++generations.connection;
+    ++generations.activity;
+    useRuntimeStore.setState({
+      activeSessionId: "session-b",
+      thread: {
+        blocks: [{ kind: "user", id: "b-only", text: "B" }],
+        index: { "b-only": 0 },
+        loaded: true,
+      },
+      historyCursor: "b-cursor",
+      historyHasMore: false,
+      status: "connecting",
+    });
+    releaseProbe({
+      messages: [{ id: "a-old", role: "user", content: [{ type: "text", text: "A old" }] }],
+      next_cursor: null,
+      has_more: false,
+      snapshot_version: "snapshot-a",
+    });
+    await recovering;
+
+    expect(useRuntimeStore.getState().activeSessionId).toBe("session-b");
+    expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual(["b-only"]);
+    expect(useRuntimeStore.getState().historyCursor).toBe("b-cursor");
+    expect(useRuntimeStore.getState().status).toBe("connecting");
+  });
+
   it.each([
     "session not found in this workspace",
     "session is not active in this workspace",

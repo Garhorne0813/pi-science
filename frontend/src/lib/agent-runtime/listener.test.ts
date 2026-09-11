@@ -9,6 +9,33 @@ installRuntimeTestEnvironment();
 
 
 describe("runtime event subscription", () => {
+  it("renders named thinking.updated events delivered through the SSE transport", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-thinking"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-thinking");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    source.emit("thinking.updated", {
+      type: "thinking.updated",
+      sessionId: "session-thinking",
+      turnId: "turn-1",
+      partId: "thinking-1",
+      text: "Inspecting the evidence",
+      revision: 1,
+    }, "epoch-1:1");
+
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(expect.objectContaining({
+      kind: "thinking",
+      parts: [expect.objectContaining({ text: "Inspecting the evidence" })],
+    }));
+  });
+
   it("settles a live turn whose event stream goes silent while the runtime is idle", async () => {
     vi.useFakeTimers();
     try {
@@ -185,7 +212,7 @@ describe("runtime event subscription", () => {
     expect(useRuntimeStore.getState().status).toBe("ready");
   });
 
-  it("advances the resume cursor after projecting a sequence-gap event", async () => {
+  it("keeps the resume cursor at the contiguous waterline after projecting a sequence-gap event", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/messages")) return jsonResponse({ messages: [] });
@@ -228,7 +255,8 @@ describe("runtime event subscription", () => {
 
     useRuntimeStore.getState().disconnect();
     await useRuntimeStore.getState().connect("/workspace", "session-gap");
-    expect(FakeEventSource.instances[1].url).toContain("lastEventId=epoch-1%3A3");
+    expect(FakeEventSource.instances[1].url).toContain("lastEventId=epoch-1%3A1");
+    expect(FakeEventSource.instances[1].url).not.toContain("epoch-1%3A3");
   });
 
   it("routes the structured questionnaire request through the browser bridge", async () => {
