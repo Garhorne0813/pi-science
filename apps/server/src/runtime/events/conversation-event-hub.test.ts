@@ -285,9 +285,9 @@ describe("central conversation event hub", () => {
 
     const text = received.filter((event) => event.type === "text.updated");
     expect(text).toHaveLength(4);
-    expect(text[0]).toMatchObject({ text: "Hello", partId: "m1" });
+    expect(text[0]).toMatchObject({ text: "Hello", partId: "m1:0", itemId: "m1" });
     expect(text[1]?.partId).not.toBe(text[2]?.partId);
-    expect(text.at(-1)).toMatchObject({ text: "replacement", replace: true, partId: "m2" });
+    expect(text.at(-1)).toMatchObject({ text: "replacement", replace: true, partId: "m2:0", itemId: "m2" });
   });
 
   it("streams thinking deltas as thinking.updated without touching the text stream", async () => {
@@ -310,10 +310,30 @@ describe("central conversation event hub", () => {
     // thinking_end emits nothing. Text keeps its own stream and payload.
     const thinking = received.filter((event) => event.type === "thinking.updated");
     expect(thinking.map((event) => event.text)).toEqual(["Let me think."]);
-    expect(thinking[0]).toMatchObject({ partId: "m1" });
+    expect(thinking[0]).toMatchObject({ partId: "m1:0", itemId: "m1" });
     const text = received.filter((event) => event.type === "text.updated");
     expect(text.map((event) => event.text)).toEqual(["Answer"]);
-    expect(text[0]).toMatchObject({ partId: "m1" });
+    expect(text[0]).toMatchObject({ partId: "m1:1", itemId: "m1" });
+  });
+
+  it("gives independently revised text content parts distinct wire identities", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub();
+    const process = new EventEmitter() as PiProcess;
+    const received: Array<Record<string, unknown>> = [];
+    hub.bind(cwd, process, { activeSessionId: () => "session-parts", onBusy: () => undefined, onExit: () => undefined });
+    await hub.subscribe(cwd, "session-parts", undefined, (record) => received.push(JSON.parse(record.data)));
+
+    process.emit("event", { type: "agent_start" });
+    process.emit("event", { type: "message_update", message: { id: "m1" }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "first" } });
+    process.emit("event", { type: "message_update", message: { id: "m1" }, assistantMessageEvent: { type: "text_delta", contentIndex: 2, delta: "second" } });
+    process.emit("event", { type: "agent_settled" });
+    await eventually(() => received.some((event) => event.type === "session.idle"));
+
+    expect(received.filter((event) => event.type === "text.updated")).toEqual([
+      expect.objectContaining({ itemId: "m1", partId: "m1:0", baseRevision: 0, revision: 1, text: "first" }),
+      expect.objectContaining({ itemId: "m1", partId: "m1:2", baseRevision: 0, revision: 1, text: "second" }),
+    ]);
   });
 
   it("streams bash output tails as throttled tool updates", async () => {

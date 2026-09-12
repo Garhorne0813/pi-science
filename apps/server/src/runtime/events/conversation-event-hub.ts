@@ -703,10 +703,14 @@ export class ConversationEventHub {
       if (emitted || replace) turn.revisionByKey.set(key, revision);
       if (content.kind === "text" && (content.text.trim() || accumulated.trim())) turn.hadText = true;
       if (!emitted && !replace) return [];
+      // Revisions are accumulated per content slot, so the wire identity must
+      // have the same scope. itemId remains the enclosing assistant message;
+      // partId identifies the independently revised content part within it.
+      const partId = `${messageKey}:${content.contentIndex}`;
       return [{
         type: content.kind === "thinking" ? "thinking.updated" : "text.updated",
         sessionId,
-        partId: messageKey,
+        partId,
         itemId: messageKey,
         ...turnFields(turn),
         phase: eventPhase(content.presentationRole),

@@ -84,6 +84,64 @@ describe("runtime conversation recovery", () => {
     expect(useRuntimeStore.getState().status).toBe("connecting");
   });
 
+  it("does not overwrite a history page prepended while gap lineage probing is in flight", async () => {
+    let releaseProbe!: (page: {
+      messages: Array<{ id: string; role: "user"; content: Array<{ type: "text"; text: string }> }>;
+      next_cursor: string | null;
+      has_more: boolean;
+      snapshot_version: string;
+    }) => void;
+    const probe = new Promise<Parameters<typeof releaseProbe>[0]>((resolve) => { releaseProbe = resolve; });
+    const client = getClient();
+    vi.spyOn(client, "getMessagesPage").mockImplementation(async (_sessionId, _cwd, options) => {
+      if (!options?.before) {
+        return {
+          messages: [{ id: "u20", role: "user", content: [{ type: "text", text: "newest" }] }],
+          next_cursor: "recovery-probe",
+          has_more: true,
+          snapshot_version: "snapshot-new",
+        };
+      }
+      if (options.before === "recovery-probe") return probe;
+      if (options.before === "user-cursor") {
+        return {
+          messages: [{ id: "u1", role: "user", content: [{ type: "text", text: "oldest" }] }],
+          next_cursor: "older-cursor",
+          has_more: true,
+          snapshot_version: "snapshot-page",
+        };
+      }
+      throw new Error(`Unexpected cursor: ${options.before}`);
+    });
+    vi.spyOn(client, "getSessionState").mockResolvedValue(state("session-a"));
+    vi.spyOn(client, "getTurnArtifacts").mockResolvedValue({ turns: [] });
+    useRuntimeStore.setState({
+      activeSessionId: "session-a",
+      cwd: "/workspace",
+      status: "ready",
+      thread: { blocks: [{ kind: "user", id: "u10", text: "loaded" }], index: { u10: 0 }, loaded: true },
+      historyCursor: "user-cursor",
+      historyHasMore: true,
+      historyLoading: false,
+    });
+
+    const recovering = reconcileAfterGap("session-a", "/workspace");
+    await vi.waitFor(() => expect(client.getMessagesPage).toHaveBeenCalledWith("session-a", "/workspace", { before: "recovery-probe" }));
+    await useRuntimeStore.getState().loadOlderMessages();
+    expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual(["u1", "u10"]);
+
+    releaseProbe({
+      messages: [{ id: "u10", role: "user", content: [{ type: "text", text: "loaded" }] }],
+      next_cursor: "user-cursor",
+      has_more: true,
+      snapshot_version: "snapshot-new",
+    });
+    await recovering;
+
+    expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual(["u1", "u10"]);
+    expect(useRuntimeStore.getState().historyCursor).toBe("older-cursor");
+  });
+
   it.each([
     "session not found in this workspace",
     "session is not active in this workspace",

@@ -114,11 +114,13 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
     // A latest page can move completely beyond the already loaded window after
     // a long tool-heavy turn. Walk older pages until lineage is established;
     // only a complete no-overlap history may replace the window wholesale.
+    const historyWindowGeneration = generations.historyWindow;
     const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, current.thread, history, { keepLiveExtras: false });
     const latest = useRuntimeStore.getState();
     if (
       generation !== generations.connection
       || activityGeneration !== generations.activity
+      || historyWindowGeneration !== generations.historyWindow
       || latest.activeSessionId !== sessionId
       || latest.cwd !== cwd
       || latest.working
@@ -235,11 +237,13 @@ async function runConnectionRecovery(
     if (historyResult.status === "fulfilled") {
       const history = historyResult.value;
       const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
+      const historyWindowGeneration = generations.historyWindow;
       const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, useRuntimeStore.getState().thread, history, { keepLiveExtras: true });
       const latest = useRuntimeStore.getState();
       if (
         connectionGeneration !== generations.connection
         || activityGeneration !== generations.activity
+        || historyWindowGeneration !== generations.historyWindow
         || latest.activeSessionId !== sessionId
         || latest.cwd !== cwd
       ) return;
@@ -354,11 +358,13 @@ export async function reconcileAfterGap(
   if (historyResult.status === "fulfilled") {
     const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
     const lineageActivityGeneration = generations.activity;
+    const historyWindowGeneration = generations.historyWindow;
     const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, current.thread, historyResult.value, { keepLiveExtras: true });
     const latest = useRuntimeStore.getState();
     if (
       connectionGeneration !== generations.connection
       || lineageActivityGeneration !== generations.activity
+      || historyWindowGeneration !== generations.historyWindow
       || latest.activeSessionId !== sessionId
       || latest.cwd !== cwd
     ) return;

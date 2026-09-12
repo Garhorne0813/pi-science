@@ -284,6 +284,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         || current.historyCursor !== before
       ) return 0;
       const merged = prependHistoryMessages(current.thread, page.messages);
+      ++generations.historyWindow;
       set({
         thread: merged,
         historyCursor: page.next_cursor,

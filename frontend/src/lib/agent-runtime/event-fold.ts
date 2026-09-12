@@ -134,6 +134,23 @@ function eventItemKey(event: PiScienceEvent, state: EventFoldState): string {
   return stringValue(event.itemId) ?? stringValue(event.partId) ?? state.activeItemKey ?? "anonymous";
 }
 
+/** Text revisions belong to content parts, not their enclosing item. */
+function eventTextKey(event: PiScienceEvent, state: EventFoldState): string {
+  const payload = recordValue(event.payload);
+  return stringValue(payload.partId)
+    ?? stringValue(event.partId)
+    ?? stringValue(event.itemId)
+    ?? state.activeItemKey
+    ?? "anonymous";
+}
+
+function updatedAgentParts(block: ThreadBlock, partId: string, text: string): AgentMessageBlock["parts"] {
+  if (block.kind !== "agent") return [{ id: partId, text }];
+  const existing = block.parts.findIndex((part) => part.id === partId);
+  if (existing < 0) return [...block.parts, { id: partId, text }];
+  return block.parts.map((part, index) => index === existing ? { id: partId, text } : part);
+}
+
 function turnIdentity(event: PiScienceEvent, state: EventFoldState): string {
   return stringValue(event.turnId) ?? state.activeTurnId ?? `legacy-turn-${Math.max(1, state.turnOrdinal)}`;
 }
@@ -268,7 +285,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
     case "text.updated": {
       const explicit = eventHasIdentity(event);
       const eventPartId = stringValue(event.partId) ?? (explicit ? stringValue(event.itemId) : undefined);
-      const key = eventItemKey(event, foldState);
+      const key = eventTextKey(event, foldState);
       const previousKey = foldState.activeItemKey;
       if (eventPartId && previousKey && eventPartId !== previousKey && !explicit) {
         const previousText = foldState.textByKey[previousKey];
@@ -348,7 +365,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
             turnId,
             ...(runId ? { runId } : {}),
             itemId: stringValue(event.itemId) ?? eventPartId ?? (blocks[existingIdx].kind === "agent" ? blocks[existingIdx].itemId : undefined),
-            parts: [{ id: eventPartId ?? blockId, text: nextText }],
+            parts: updatedAgentParts(blocks[existingIdx], eventPartId ?? blockId, nextText),
             ...(role ? { presentationRole: role, classificationSource: "explicit" as const } : {}),
             partial: true,
             timestamp: blocks[existingIdx].kind === "agent" ? blocks[existingIdx].timestamp : undefined,
@@ -790,8 +807,7 @@ function staleTextDelta(foldState: EventFoldState, event: PiScienceEvent): boole
   const payload = recordValue(event.payload);
   const itemId = stringValue(event.itemId);
   const partId = stringValue(payload.partId) ?? stringValue(event.partId) ?? itemId;
-  const current = (itemId ? foldState.textByKey[itemId] : undefined)
-    ?? (partId ? foldState.textByKey[partId] : undefined);
+  const current = partId ? foldState.textByKey[partId] : undefined;
   if (!current) return false;
   const baseRevision = numberValue(payload.baseRevision) ?? numberValue(event.baseRevision);
   const revision = numberValue(payload.revision) ?? numberValue(event.revision);
@@ -811,8 +827,7 @@ function staleSpeculativeText(foldState: EventFoldState, event: PiScienceEvent):
   const payload = recordValue(event.payload);
   const itemId = stringValue(event.itemId);
   const partId = stringValue(payload.partId) ?? stringValue(event.partId) ?? itemId;
-  const current = (itemId ? foldState.textByKey[itemId] : undefined)
-    ?? (partId ? foldState.textByKey[partId] : undefined);
+  const current = partId ? foldState.textByKey[partId] : undefined;
   const revision = numberValue(payload.revision) ?? numberValue(event.revision);
   if (!current || revision === undefined) return false;
   return revision <= current.revision
@@ -844,7 +859,7 @@ function composeTextSegments(segments: TextSegment[]): { text: string; revision:
 
 function applyV2Text(state: Thread, event: PiScienceEvent, adapted: PiScienceEvent): Thread {
   const initialFoldState = cloneFoldState(state, event);
-  const key = eventItemKey(adapted, initialFoldState);
+  const key = eventTextKey(adapted, initialFoldState);
   const previous = initialFoldState.textByKey[key];
   const segments = previous?.segments
     ? [...previous.segments]

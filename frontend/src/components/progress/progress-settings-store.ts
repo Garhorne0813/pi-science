@@ -175,14 +175,13 @@ export function seedProgressAppearance(server: ProgressAppearance | undefined): 
 
 if (typeof window !== "undefined") {
   window.addEventListener("pagehide", () => {
-    const job = pending;
-    if (!job || job.revision !== revision) return;
-    // A queued draft must at least be attempted: keepalive requests survive
-    // the unload even though their result cannot be observed here.
+    if (!dirty) return;
+    // The latest draft may be queued or already inside a non-keepalive fetch.
+    // Always make a best-effort keepalive attempt while it is unconfirmed.
     void fetch("/api/settings/progress", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(job.appearance),
+      body: JSON.stringify(current),
       credentials: "include",
       keepalive: true,
     }).catch(() => undefined);

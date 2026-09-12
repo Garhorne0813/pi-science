@@ -14,6 +14,7 @@ type Deferred = {
   body?: unknown;
   url: string;
   method: string;
+  keepalive?: boolean;
   settled: boolean;
 };
 const deferreds: Deferred[] = [];
@@ -33,7 +34,7 @@ function stubFetch(): void {
     let resolve!: (value: unknown) => void;
     let reject!: (error: unknown) => void;
     const promise = new Promise<unknown>((res, rej) => { resolve = res; reject = rej; });
-    deferreds.push({ resolve, reject, body: init?.body ? JSON.parse(String(init.body)) : undefined, url, method, settled: false });
+    deferreds.push({ resolve, reject, body: init?.body ? JSON.parse(String(init.body)) : undefined, url, method, keepalive: init?.keepalive, settled: false });
     return promise.then((value) => value as Response);
   }));
 }
@@ -134,5 +135,20 @@ describe("progress settings controller", () => {
     const { appearance } = getProgressSettings();
     expect(appearance.preset).toBe("custom");
     expect(appearance.patterns.thinking).toBe("static-check");
+  });
+
+  it("sends the dirty current snapshot with keepalive while its normal save is in flight", async () => {
+    updateProgressAppearance(appearanceWith({ speed: 2 }));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(pendingRequests()).toHaveLength(1);
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(pendingRequests()).toHaveLength(2);
+    expect(pendingRequests()[1]).toMatchObject({
+      method: "PUT",
+      keepalive: true,
+      body: expect.objectContaining({ speed: 2 }),
+    });
   });
 });

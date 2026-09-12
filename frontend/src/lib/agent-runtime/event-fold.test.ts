@@ -567,6 +567,36 @@ describe("conversation presentation protocol v2", () => {
     expect(next.foldState?.reconciliationRequired).toBe(true);
   });
 
+  it("tracks revisions per part while projecting multiple parts into one item", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({
+      seq: 2,
+      type: "item.text.delta",
+      itemId: "answer-1",
+      payload: { partId: "answer-1:0", phase: "final_answer", baseRevision: 0, revision: 1, text: "first" },
+    }));
+    thread = foldEvent(thread, envelope({
+      seq: 3,
+      type: "item.text.delta",
+      itemId: "answer-1",
+      payload: { partId: "answer-1:2", phase: "final_answer", baseRevision: 0, revision: 1, text: "second" },
+    }));
+
+    expect(thread.blocks.filter((block) => block.kind === "agent")).toEqual([
+      expect.objectContaining({
+        itemId: "answer-1",
+        parts: [
+          { id: "answer-1:0", text: "first" },
+          { id: "answer-1:2", text: "second" },
+        ],
+      }),
+    ]);
+    expect(thread.foldState?.textByKey["answer-1:0"]?.revision).toBe(1);
+    expect(thread.foldState?.textByKey["answer-1:2"]?.revision).toBe(1);
+    expect(thread.foldState?.reconciliationRequired).toBe(false);
+  });
+
   it("keeps a failed run readable while consuming late events for later artifacts", () => {
     let thread = emptyThread();
     thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
