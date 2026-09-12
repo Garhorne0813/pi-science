@@ -91,6 +91,9 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
     }
   });
 
+  // Progress appearance is UI-only state: the dedicated settings-routes
+  // handler persists it through the SettingsStore without reloading Pi
+  // runtimes or replacing active sessions.
   app.addHook("onSend", async (request, reply, payload) => {
     if (request.url.startsWith("/api/")) {
       reply.header("x-pi-science-runtime", runtimeOwner(request.url.split("?")[0] ?? request.url));

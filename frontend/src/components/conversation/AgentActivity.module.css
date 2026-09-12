@@ -1,0 +1,141 @@
+.root {
+  --activity-color: var(--accent);
+}
+
+.summary {
+  align-items: center;
+  padding-block: 0.5rem;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.glyph {
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 2rem;
+  align-items: center;
+  justify-content: center;
+}
+
+.label {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.title {
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+  flex-shrink: 0;
+}
+
+.detail {
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+/* The live detail is a continuation of the single summary line: one quiet
+   middot, then the running task/tool text, truncating before the timer. */
+.detail::before {
+  content: "·";
+  margin-right: 0.375rem;
+  opacity: 0.7;
+}
+
+.root:is([data-state="completed"], [data-state="stopped"], [data-state="error"]) .title {
+  font-size: 0.875rem;
+  line-height: 2rem;
+  letter-spacing: normal;
+}
+
+.root:is([data-state="completed"], [data-state="stopped"], [data-state="error"]) .detail {
+  display: none;
+}
+
+.trace {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.25rem 0;
+}
+
+/* The live feed reads as one continuous stream: tighter than the folded
+   records behind the settled summary row. */
+.traceLive {
+  gap: 0.125rem;
+}
+
+.entry, .details {
+  animation: reveal var(--motion-normal) var(--ease-standard) both;
+}
+
+.narration {
+  padding-block: 0.25rem;
+}
+
+.thinking {
+  padding-block: 0.125rem;
+  opacity: 0.9;
+}
+
+.thinking[data-running="true"] > div:first-child {
+  color: var(--activity-color);
+}
+
+.toolButton {
+  transition: color var(--motion-normal) var(--ease-standard);
+}
+
+.toolButton:hover, .toolButton:focus-visible {
+  color: var(--text);
+}
+
+.tool[data-running="true"] .toolButton {
+  color: var(--activity-color);
+}
+
+.chevron {
+  opacity: 0.6;
+  transition: transform var(--motion-normal) var(--ease-standard), opacity var(--motion-normal) var(--ease-standard);
+}
+
+/* Step rows hide their expand chevron until the row is hovered, focused, or
+   already open; while streaming the chevron sits at the far right edge. */
+.tool > button > .chevron {
+  opacity: 0;
+}
+
+.tool > button:hover > .chevron,
+.tool > button:focus-visible > .chevron,
+.tool > button[aria-expanded="true"] > .chevron {
+  opacity: 1;
+}
+
+button:hover > .chevron, button:focus-visible > .chevron {
+  opacity: 1;
+}
+
+@keyframes reveal { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+.root[data-motion="off"] *, .root[data-motion="off"] *::before, .root[data-motion="off"] *::after {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* The OS preference only governs users who chose to follow it ("system").
+   "full" is an explicit override and keeps playing; "off" is handled by the
+   data-motion rule above. The subscribed JS policy (useReducedMotion) makes
+   the same decision for the progress glyphs. */
+@media (prefers-reduced-motion: reduce) { .root[data-motion="system"] *, .root[data-motion="system"] *::before, .root[data-motion="system"] *::after { animation: none !important; transition: none !important; } }

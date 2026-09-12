@@ -23,6 +23,10 @@ interface UiState {
   setPreviewPaneSide: (side: "left" | "right") => void;
   inspectorOpen: boolean;
   inspectorWidth: number;
+  /** Preview share of the desktop viewport. Pixel width remains in state for
+   *  rendering and accessibility, while this ratio makes the split responsive
+   *  when moving the window between displays. */
+  inspectorRatio: number;
   inspectorMaximized: boolean;
   inspectorData: Inspector | null;
   inspectorTabs: InspectorTab[];
@@ -36,6 +40,7 @@ interface UiState {
   activateInspectorTab: (id: string) => void;
   closeInspectorTab: (id: string) => void;
   setInspectorWidth: (w: number) => void;
+  setInspectorRatio: (ratio: number) => void;
   setInspectorMaximized: (m: boolean) => void;
   workspaceReferences: WorkspaceReference[];
   addWorkspaceReference: (reference: WorkspaceReference) => void;
@@ -149,6 +154,23 @@ function saveToStorage(key: string, value: unknown) {
   }
 }
 
+const DEFAULT_INSPECTOR_RATIO = 0.42;
+const initialViewportWidth = typeof window === "undefined" ? 1000 : window.innerWidth;
+const storedInspectorRatio = loadFromStorage<unknown>("inspector.ratio", null);
+const legacyInspectorWidth = loadFromStorage<unknown>("inspector.width", null);
+const migratedInspectorRatio = typeof legacyInspectorWidth === "number"
+  && Number.isFinite(legacyInspectorWidth)
+  && legacyInspectorWidth > 0
+  ? legacyInspectorWidth / initialViewportWidth
+  : DEFAULT_INSPECTOR_RATIO;
+const initialInspectorRatio = typeof storedInspectorRatio === "number"
+  && Number.isFinite(storedInspectorRatio)
+  && storedInspectorRatio > 0
+  && storedInspectorRatio <= 0.7
+  ? storedInspectorRatio
+  : Math.min(migratedInspectorRatio, 0.7);
+const initialInspectorWidth = Math.max(280, Math.round(initialViewportWidth * initialInspectorRatio));
+
 export const useUiStore = create<UiState>((set) => ({
   theme: loadFromStorage<ThemeChoice>("theme", "light"),
   setTheme: (t) => {
@@ -193,7 +215,8 @@ export const useUiStore = create<UiState>((set) => ({
   },
 
   inspectorOpen: false,
-  inspectorWidth: loadFromStorage("inspector.width", 420),
+  inspectorWidth: initialInspectorWidth,
+  inspectorRatio: initialInspectorRatio,
   inspectorMaximized: false,
   inspectorData: null,
   inspectorTabs: [],
@@ -256,8 +279,11 @@ export const useUiStore = create<UiState>((set) => ({
     };
   }),
   setInspectorWidth: (w) => {
-    saveToStorage("inspector.width", w);
     set({ inspectorWidth: w });
+  },
+  setInspectorRatio: (ratio) => {
+    saveToStorage("inspector.ratio", ratio);
+    set({ inspectorRatio: ratio });
   },
   setInspectorMaximized: (m) => set({ inspectorMaximized: m }),
 
@@ -286,6 +312,4 @@ export const useUiStore = create<UiState>((set) => ({
   setInspectorResizing: (r) => set({ inspectorResizing: r }),
 }));
 
-// Re-export for RightPane compatibility
 export const INSPECTOR_MIN = 280;
-export const INSPECTOR_MAX = 800;

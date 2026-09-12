@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from "react";
 import type { SubagentMention } from "../../lib/conversation";
@@ -28,6 +28,9 @@ interface Trigger {
   start: number;
   query: string;
 }
+
+const COMPOSER_MIN_HEIGHT = 64;
+const COMPOSER_MAX_HEIGHT = 160;
 
 function triggerAt(value: string, caret: number): Trigger | null {
   const before = value.slice(0, caret);
@@ -93,6 +96,28 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
   useEffect(() => {
     const element = inputRef.current;
     if (element) setCaret(element.selectionEnd);
+  }, [inputRef, value]);
+
+  useLayoutEffect(() => {
+    const element = inputRef.current;
+    if (!element) return;
+
+    // Reset the explicit height first so scrollHeight reflects the complete
+    // content and the composer can shrink again after text is removed.
+    const previousScrollTop = element.scrollTop;
+    const caretWasAtEnd = element.selectionEnd === value.length;
+    element.style.height = "0px";
+    const contentHeight = element.scrollHeight;
+    const nextHeight = Math.min(Math.max(contentHeight, COMPOSER_MIN_HEIGHT), COMPOSER_MAX_HEIGHT);
+    const overflowing = contentHeight > COMPOSER_MAX_HEIGHT;
+    element.style.height = `${nextHeight}px`;
+    element.style.overflowY = overflowing ? "auto" : "hidden";
+
+    // Resetting the height can move the scroll position back to the top. Keep
+    // edits elsewhere stable, but follow the caret to the bottom while the user
+    // is appending text (including when Enter creates a new line).
+    element.scrollTop = overflowing && caretWasAtEnd ? contentHeight : previousScrollTop;
+    if (mirrorRef.current) mirrorRef.current.scrollTop = element.scrollTop;
   }, [inputRef, value]);
 
   const trigger = useMemo(() => triggerAt(value, caret), [caret, value]);
@@ -251,11 +276,11 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
           ))}
         </div>
       )}
-      <div className="relative max-h-[160px] min-h-[64px] overflow-hidden">
+      <div className="relative min-h-[64px] max-h-[160px] overflow-hidden rounded-t-composer">
         <div
           ref={mirrorRef}
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3 py-2 text-sm leading-6 text-text"
+          className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3 py-2 text-sm leading-6 text-text [clip-path:inset(8px_12px)]"
         >
           {renderHighlighted(value, mentions)}
           {value.endsWith("\n") ? "\n" : null}
@@ -277,7 +302,7 @@ export function MentionComposer({ cwd, value, mentions, onChange, onKeyDown, onC
           onScroll={(event) => syncScroll(event.currentTarget)}
           placeholder={placeholder}
           rows={2}
-          className="relative z-10 max-h-[160px] min-h-[64px] w-full resize-none bg-transparent px-3 py-2 text-sm leading-6 text-transparent caret-text outline-none placeholder:text-muted selection:bg-accent/25"
+          className="relative z-10 min-h-[64px] max-h-[160px] w-full resize-none bg-transparent px-3 py-2 text-sm leading-6 text-transparent caret-text outline-none placeholder:text-muted selection:bg-accent/25"
         />
       </div>
     </>

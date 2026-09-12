@@ -15,7 +15,7 @@ import { appendRuntimeError, isMissingSessionError } from "./errors";
 import { attachTurnArtifacts, emptyThread, mergeHistoryWithLive, prependHistoryMessages, resetTurnBuffer, threadFromMessages } from "./event-fold";
 import { fetchPersistedTurnArtifacts } from "./turn-artifacts";
 import { generations, turnState } from "./generations";
-import { registerEventListener } from "./listener";
+import { registerEventListener, ensureTurnWatchdog } from "./listener";
 import { applyPromptSessionName, backfillSessionName } from "./naming";
 import { recoverMissingSession, reconcileAfterConnectionLoss, reconcilePromptAfterLateStream, rememberRuntimeState, suppressConnectionRecovery } from "./recovery";
 import { loadSessionsInternal, optimisticSessionIds } from "./sessions";
@@ -283,8 +283,10 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         || current.cwd !== cwd
         || current.historyCursor !== before
       ) return 0;
+      const merged = prependHistoryMessages(current.thread, page.messages);
+      ++generations.historyWindow;
       set({
-        thread: prependHistoryMessages(current.thread, page.messages),
+        thread: merged,
         historyCursor: page.next_cursor,
         historyHasMore: page.has_more,
         historySnapshotVersion: page.snapshot_version,
@@ -304,7 +306,10 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           thread: attachTurnArtifacts(latest.thread, turns, { windowComplete: !latest.historyHasMore }),
         });
       });
-      return page.messages.length;
+      // Report what is actually new. A duplicate page (a boundary that
+      // drifted into already-loaded history) must not scroll-anchor as if
+      // fresh content arrived; the received count is page.messages.length.
+      return merged.blocks.length - current.thread.blocks.length;
     } catch (error) {
       const current = get();
       if (current.activeSessionId === sessionId && current.cwd === cwd) {
@@ -447,22 +452,25 @@ export function createRuntimeActions(set: SetState, get: GetState) {
     },
 
     abort: async () => {
-      const { activeSessionId, cwd } = get();
+      const { activeSessionId, cwd, turnLifecycle } = get();
       if (!activeSessionId) return;
       ++generations.activity;
       ++generations.localMutation;
       ++generations.promptMonitor;
+      // Keep the run visibly in-flight until the server acknowledges the
+      // stop. This prevents a second prompt from racing an unconfirmed abort.
+      set({ working: true, turnLifecycle: "stopping", status: "ready" });
       try {
         await getClient().abort(activeSessionId, cwd);
         const current = get();
-        if (current.activeSessionId === activeSessionId && current.cwd === cwd) {
+        if (current.activeSessionId === activeSessionId && current.cwd === cwd && current.turnLifecycle === "stopping") {
           set({ working: false, turnLifecycle: "aborted", status: "ready", pendingInteraction: null, pendingQuestionnaire: null });
         }
       } catch (error) {
         const current = get();
         if (current.activeSessionId === activeSessionId && current.cwd === cwd) {
           appendRuntimeError(error, activeSessionId, cwd);
-          set({ status: "error" });
+          set({ working: true, turnLifecycle: turnLifecycle === "settled" ? "active" : turnLifecycle, status: "error" });
         }
         throw error;
       }
@@ -572,7 +580,22 @@ export function createRuntimeActions(set: SetState, get: GetState) {
           && current.cwd === cwd
           && current.pendingInteraction?.requestId === requestId
         ) {
-          set({ pendingInteraction: null, status: "ready" });
+          const resolvedBlocks = current.thread.blocks.map((block) => {
+            if (block.kind !== "tool" || block.status !== "waiting-approval") return block;
+            // Resolve only the block this request is tied to. Without a
+            // toolCallId the requestId itself is the only trustworthy link;
+            // batch-resolving every waiting block would retire prompts the
+            // user has not answered.
+            const matches = pendingInteraction.toolCallId
+              ? block.callId === pendingInteraction.toolCallId
+              : block.callId === requestId;
+            return matches ? { ...block, interactionResolved: true } : block;
+          });
+          const thread = resolvedBlocks.some((block, index) => block !== current.thread.blocks[index])
+            ? { ...current.thread, blocks: resolvedBlocks, index: Object.fromEntries(resolvedBlocks.map((block, index) => [block.id, index])) }
+            : current.thread;
+          set({ pendingInteraction: null, working: true, turnLifecycle: "active", status: "ready", thread });
+          ensureTurnWatchdog();
         }
       } catch (error) {
         const current = get();

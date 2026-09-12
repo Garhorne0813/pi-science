@@ -18,10 +18,10 @@ import { ConversationWelcome } from "../../components/conversation/ConversationW
 import { InteractionPrompt } from "../../components/conversation/InteractionPrompt";
 import { QuestionnairePrompt } from "../../components/conversation/QuestionnairePrompt";
 import { renderTurn } from "../../components/conversation/ConversationBlocks";
-import { isVisibleActivity } from "../../lib/conversation/activity-policy";
 import { buildTurnPresentations, type TurnPresentation } from "../../lib/conversation/turn-presentation";
 import { ConversationNavRail, type ConversationNavItem } from "../../components/conversation/ConversationNavRail";
 import { SessionExecutionButton } from "../../components/conversation/SessionExecutionButton";
+import { ThinkingActivity } from "../../components/conversation/AgentActivity";
 import { visibleUserMessage } from "../../lib/files";
 import { useTranslation } from "react-i18next";
 import { ResearchLoopDraftCard, ResearchLoopStatusCard, ResearchModePicker } from "../../components/conversation/ResearchLoopControls";
@@ -50,15 +50,9 @@ const SessionRunsPage = lazy(() => import("./RunsPage").then((m) => ({ default: 
  * its local answer state.
  */
 export function ConversationFooter() {
-  const { t } = useTranslation();
   const pendingInteraction = useRuntimeStore((s) => s.pendingInteraction);
   const pendingQuestionnaire = useRuntimeStore((s) => s.pendingQuestionnaire);
-  const working = useRuntimeStore((s) => s.working);
   const respondToInteraction = useRuntimeStore((s) => s.respondToInteraction);
-  const blocks = useRuntimeStore((s) => s.thread.blocks);
-  const lastUserIndex = blocks.findLastIndex((block) => block.kind === "user");
-  const currentTurnTools = blocks.slice(lastUserIndex + 1).filter((block): block is Extract<ThreadBlock, { kind: "tool" }> => block.kind === "tool");
-  const hasTurnActivity = currentTurnTools.some(isVisibleActivity);
 
   return (
     <div className="mx-auto flex w-full max-w-[calc(var(--conversation-content-width)+4rem)] flex-col gap-4 px-8 pb-6 pt-2">
@@ -74,12 +68,6 @@ export function ConversationFooter() {
           onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
         />
       ) : null}
-      {working && !pendingInteraction && !hasTurnActivity && (
-        <div className="flex items-center gap-2 py-4 text-sm text-muted" aria-live="polite">
-          <Loader2 size={14} className="animate-spin text-accent" />
-          {t("conversation.activity.continuing")}
-        </div>
-      )}
     </div>
   );
 }
@@ -142,7 +130,7 @@ export function LiveSessionPage() {
     };
   }, [sessionId, workspaceCwd, connect, disconnect]);
 
-  const turns = useMemo(() => buildTurnPresentations(thread.blocks, { lastTurnLifecycle: turnLifecycle }), [thread.blocks, turnLifecycle]);
+  const turns = useMemo(() => buildTurnPresentations(thread.blocks, { lastTurnLifecycle: turnLifecycle, lastTurnId: thread.foldState?.activeTurnId }), [thread.blocks, thread.foldState?.activeTurnId, turnLifecycle]);
   // Copy-button eligibility computed across the WHOLE thread (not per group):
   // agentActionTextByBlock needs the trailing tool blocks after an agent block
   // to decide whether it is the final answer. A per-group computation would
@@ -361,8 +349,11 @@ export function LiveSessionPage() {
                   key={`${workspaceCwd}:${activeSessionId ?? "new"}`}
                   ref={virtuosoRef}
                   scrollerRef={attachScroller}
+                  followOutput={scroll.followOutput}
+                  totalListHeightChanged={scroll.handleListHeightChanged}
                   firstItemIndex={virtualFirstItemIndex}
                   data={turns}
+                  computeItemKey={(_index, turn) => turn.id}
                   initialItemCount={Math.min(turns.length, 20)}
                   startReached={() => void handleLoadOlder()}
                   increaseViewportBy={{ top: 600, bottom: 800 }}
@@ -417,12 +408,7 @@ export function LiveSessionPage() {
                 {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
                 {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{research.error}</div>}
                 {renderInteractionPrompt()}
-                {working && !pendingInteraction && (
-                  <div className="flex items-center gap-2 py-4 text-sm text-muted">
-                    <Loader2 size={14} className="animate-spin text-accent" />
-                    {t("conversation.activity.continuing")}
-                  </div>
-                )}
+                {working && !pendingInteraction && <ThinkingActivity className="py-4" />}
               </>
             )}
           </div>

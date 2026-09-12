@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
-import { INSPECTOR_MAX, INSPECTOR_MIN, useUiStore } from "@/lib/ui";
+import { INSPECTOR_MIN, useUiStore } from "@/lib/ui";
 import { cn } from "@/lib/ui";
 
 /** Dragging the divider below this pane width minimizes the pane while keeping
@@ -12,9 +12,10 @@ const MAX_FRACTION = 0.7;
 
 /**
  * Resizable preview pane that can sit on either side of the conversation.
- * Its conversation-facing divider drags within [INSPECTOR_MIN, INSPECTOR_MAX]
- * (persisted); dragging toward the pane minimizes it. Maximized, the pane
- * covers all layout space to the right of the sidebar while conversation hides.
+ * Its conversation-facing divider persists a viewport-relative split ratio,
+ * with pixel minimum and maximum-fraction guards. Dragging toward the pane
+ * minimizes it. Maximized, the pane covers all layout space to the right of
+ * the sidebar while conversation hides.
  */
 export function RightPane({
   children,
@@ -30,6 +31,7 @@ export function RightPane({
   const inspectorWidth = useUiStore((s) => s.inspectorWidth);
   const inspectorMaximized = useUiStore((s) => s.inspectorMaximized);
   const setInspectorWidth = useUiStore((s) => s.setInspectorWidth);
+  const setInspectorRatio = useUiStore((s) => s.setInspectorRatio);
   const setInspectorMaximized = useUiStore((s) => s.setInspectorMaximized);
   // Keep divider drag state in the UI store so the pane's drag feedback stays
   // synchronized with the live width update.
@@ -52,21 +54,34 @@ export function RightPane({
     if (dragFrameRef.current !== null) cancelAnimationFrame(dragFrameRef.current);
   }, []);
 
+  const availableSplitWidth = () => {
+    const mainWidth = document.getElementById("main-content")?.getBoundingClientRect().width ?? 0;
+    const paneWidth = paneRef.current?.getBoundingClientRect().width ?? 0;
+    const measured = mainWidth + paneWidth;
+    return measured > 0 ? measured : window.innerWidth;
+  };
+
   const clamp = (w: number) =>
     Math.max(
       INSPECTOR_MIN,
-      Math.min(w, INSPECTOR_MAX, Math.round(window.innerWidth * MAX_FRACTION)),
+      Math.min(w, Math.round(availableSplitWidth() * MAX_FRACTION)),
     );
 
-  // A persisted width is only valid for the viewport it was saved in: shrinking
-  // the window re-clamps the stored width so the pane can never squeeze the
-  // conversation out on a smaller screen.
+  const persistSplit = (width: number) => {
+    setInspectorWidth(width);
+    setInspectorRatio(width / availableSplitWidth());
+  };
+
+  // Re-project the persisted ratio whenever the viewport changes. This keeps
+  // the conversation/preview split proportional on larger displays while the
+  // pixel minimum and maximum fraction protect smaller windows.
   useEffect(() => {
     const onResize = () => {
-      const current = useUiStore.getState().inspectorWidth;
-      const next = clamp(current);
-      if (next !== current) setInspectorWidth(next);
+      const current = useUiStore.getState();
+      const next = clamp(Math.round(availableSplitWidth() * current.inspectorRatio));
+      if (next !== current.inspectorWidth) setInspectorWidth(next);
     };
+    onResize();
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, [setInspectorWidth]);
@@ -172,7 +187,7 @@ export function RightPane({
     dragFrameRef.current = null;
     if (nextWidth !== null) {
       if (paneRef.current) paneRef.current.style.width = `${nextWidth}px`;
-      setInspectorWidth(nextWidth);
+      persistSplit(nextWidth);
     }
     dragWidthRef.current = null;
     setInspectorResizing(false);
@@ -184,7 +199,7 @@ export function RightPane({
     const delta = side === "right"
       ? (e.key === "ArrowLeft" ? 16 : -16)
       : (e.key === "ArrowRight" ? 16 : -16);
-    setInspectorWidth(clamp(inspectorWidth + delta));
+    persistSplit(clamp(inspectorWidth + delta));
   };
 
   if (inspectorMaximized) {
@@ -208,14 +223,14 @@ export function RightPane({
       style={{ "--inspector-width": `${inspectorWidth}px` } as CSSProperties}
     >
       <div className={cn("h-full", dragging && "pointer-events-none contain-layout contain-paint")}>{children}</div>
-      {/* Drag divider: resize within [INSPECTOR_MIN, INSPECTOR_MAX]; dragging
+      {/* Drag divider: resize within the responsive min/max bounds; dragging
           toward the pane minimizes it while retaining its tabs. */}
       <div
         role="separator"
         aria-orientation="vertical"
         aria-label={t("shell.resizePane")}
         aria-valuemin={INSPECTOR_MIN}
-        aria-valuemax={INSPECTOR_MAX}
+        aria-valuemax={Math.round(window.innerWidth * MAX_FRACTION)}
         aria-valuenow={inspectorWidth}
         tabIndex={mobileOverlay ? -1 : 0}
         onPointerDown={onDividerPointerDown}

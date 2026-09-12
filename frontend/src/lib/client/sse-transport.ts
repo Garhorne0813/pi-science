@@ -9,7 +9,7 @@ import type { PiScienceEvent } from "./types";
 export class SseTransport {
   private baseUrl: string;
   private eventSource: EventSource | null = null;
-  private listeners = new Set<(event: PiScienceEvent) => void>();
+  private listeners = new Set<(event: PiScienceEvent) => unknown>();
   private sessionId: string | null = null;
   private cwd: string | null = null;
   private connectionGeneration = 0;
@@ -19,14 +19,24 @@ export class SseTransport {
   // forcing the backend to replay the entire event log. Uses a composite key
   // because different workspaces can have sessions with the same ID.
   private lastEventIds = new Map<string, string>();
+  /** Diagnostic/flow-control cursor. It is intentionally separate from the
+   * applied cursor used for reconnect URLs: receiving an event is not proof
+   * that the reducer accepted it. */
+  private receivedEventIds = new Map<string, string>();
 
   // Known event types from the backend (named SSE events)
   private static SSE_EVENTS = [
-    "text.updated", "tool.updated", "session.idle", "error",
+    "text.updated", "thinking.updated", "tool.updated", "session.idle", "error",
     "question.asked", "permission.asked", "compaction.updated", "artifact.published",
     "questionnaire.asked", "questionnaire.finished",
     "agent_start", "agent_end", "status.updated", "session.replaced", "stream.gap",
     "turn.artifacts", "session.stats",
+    // Presentation protocol v2 events use the same SSE transport. Keeping
+    // these names explicit is important because EventSource only dispatches
+    // named events to registered listeners.
+    "run.started", "run.completed", "run.failed", "run.cancelled",
+    "item.started", "item.text.delta", "item.snapshot", "item.completed",
+    "plan.updated", "interaction.requested", "interaction.resolved", "artifact.updated",
   ];
 
   constructor(baseUrl: string) {
@@ -94,8 +104,7 @@ export class SseTransport {
           console.error(`Discarded event for ${event.sessionId}; active stream is ${sessionId}`);
           return;
         }
-        // Only advance the cursor after the event has passed all validation.
-        if (eventId && cursorKey) this.lastEventIds.set(cursorKey, eventId);
+        if (eventId && cursorKey) this.receivedEventIds.set(cursorKey, eventId);
         // On stream.gap the stored cursor is stale (the backend no longer
         // retains events that far back). Clear it, then proactively rebuild
         // the connection WITHOUT the cursor so the new subscription only
@@ -108,6 +117,7 @@ export class SseTransport {
         // can no longer satisfy and would re-emit the gap in a loop.
         if (event.type === "stream.gap" && cursorKey) {
           this.lastEventIds.delete(cursorKey);
+          this.receivedEventIds.delete(cursorKey);
           const reconnectSession = this.sessionId;
           const reconnectCwd = this.cwd;
           if (reconnectSession && generation === this.connectionGeneration && source === this.eventSource) {
@@ -132,7 +142,8 @@ export class SseTransport {
             return;
           }
         }
-        this.emit(event);
+        const applied = this.emit(event);
+        if (applied && eventId && cursorKey) this.lastEventIds.set(cursorKey, eventId);
         // The backend marks unrecoverable stream errors (for example a
         // session that no longer exists in the workspace) as terminal. A
         // native EventSource automatically retries after the server closes
@@ -213,7 +224,7 @@ export class SseTransport {
     if (sessionId) this.emit({ type: "connection.closed", sessionId });
   }
 
-  onEvent(fn: (event: PiScienceEvent) => void): () => void {
+  onEvent(fn: (event: PiScienceEvent) => unknown): () => void {
     this.listeners.add(fn);
     return () => {
       this.listeners.delete(fn);
@@ -224,7 +235,11 @@ export class SseTransport {
    *  detected missing) so a later connect() does a full replay rather than
    *  resuming from a cursor that no longer belongs to this session. */
   clearCursor(cwd: string, sessionId: string): void {
-    if (cwd && sessionId) this.lastEventIds.delete(sessionKey(cwd, sessionId));
+    if (cwd && sessionId) {
+      const key = sessionKey(cwd, sessionId);
+      this.lastEventIds.delete(key);
+      this.receivedEventIds.delete(key);
+    }
   }
 
   private closeEventSource(): void {
@@ -263,13 +278,16 @@ export class SseTransport {
     }
   }
 
-  private emit(event: PiScienceEvent): void {
+  private emit(event: PiScienceEvent): boolean {
+    let applied = true;
     this.listeners.forEach((fn) => {
       try {
-        fn(event);
+        if (fn(event) === false) applied = false;
       } catch (err) {
         console.error("Event listener error:", err);
+        applied = false;
       }
     });
+    return applied;
   }
 }

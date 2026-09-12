@@ -1,6 +1,7 @@
 /** Session display-name registry (localStorage). */
 
 import { sessionKey } from "./session-key";
+import { setSessionTitle } from "./rest";
 
 const NAME_KEY = "pi-science.session-names";
 
@@ -72,9 +73,7 @@ export function setSessionName(cwd: string, sessionId: string, name: string): vo
   // Best-effort server persistence (fire-and-forget): the localStorage
   // registry stays the immediate source and the fallback when the control
   // plane is unreachable, so naming never blocks the prompt path.
-  void import("./pi-science-client").then(({ getClient }) => {
-    void getClient().setSessionTitle(sessionId, name.slice(0, 100), cwd).catch(() => undefined);
-  });
+  void setSessionTitle("", sessionId, name.slice(0, 100), cwd).catch(() => undefined);
 }
 
 /** Remove the display name for a session (e.g. after deletion or when a

@@ -1,6 +1,7 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 
 const dist = fileURLToPath(new URL("../dist/assets/", import.meta.url));
 const files = await readdir(dist);
@@ -21,12 +22,18 @@ const initialFiles = [...html.matchAll(/(?:src|href)="\/assets\/([^"]+\.js)"/g)]
 const initial = [];
 for (const file of initialFiles) {
   const info = await stat(join(dist, file));
-  initial.push({ file, size: info.size });
+  const contents = await readFile(join(dist, file));
+  initial.push({ file, size: info.size, gzipSize: gzipSync(contents).byteLength });
 }
-const initialBudget = Number(process.env.PI_SCIENCE_INITIAL_JS_BUDGET || 1_500_000);
+const initialBudget = Number(process.env.PI_SCIENCE_INITIAL_JS_BUDGET || 1_250_000);
+const initialGzipBudget = Number(process.env.PI_SCIENCE_INITIAL_JS_GZIP_BUDGET || 400_000);
 const initialTotal = initial.reduce((total, entry) => total + entry.size, 0);
-const lazyOnly = ["vendor-echarts", ...allowedLazyLarge, "molstar-", "vendor-three", "vendor-exceljs", "vendor-docx", "vendor-pptx", "vendor-openchemlib"];
+const initialGzipTotal = initial.reduce((total, entry) => total + entry.gzipSize, 0);
+const lazyOnly = ["InspectorTabs-", "SettingsDialog-", "vendor-echarts", ...allowedLazyLarge, "molstar-", "vendor-three", "vendor-exceljs", "vendor-docx", "vendor-pptx", "vendor-openchemlib", "vendor-progress"];
 const eagerlyLoadedHeavyChunks = initial.filter((entry) => lazyOnly.some((prefix) => entry.file.startsWith(prefix)));
+// The animation runtime is one async chunk by design; a split means something
+// started reaching into its graph from a static import.
+const progressChunks = files.filter((file) => file.startsWith("vendor-progress") && file.endsWith(".js"));
 for (const entry of entries.sort((a, b) => b.size - a.size)) {
   console.log(`${entry.file}\t${entry.size} bytes`);
 }
@@ -35,8 +42,11 @@ if (failures.length) {
   process.exit(1);
 }
 console.log(`initial-js\t${initialTotal} bytes`);
-if (initialTotal > initialBudget || eagerlyLoadedHeavyChunks.length) {
+console.log(`initial-js-gzip\t${initialGzipTotal} bytes`);
+if (initialTotal > initialBudget || initialGzipTotal > initialGzipBudget || eagerlyLoadedHeavyChunks.length || progressChunks.length > 1) {
   if (initialTotal > initialBudget) console.error(`Initial JS budget exceeded (${initialBudget} bytes)`);
+  if (initialGzipTotal > initialGzipBudget) console.error(`Initial gzipped JS budget exceeded (${initialGzipBudget} bytes)`);
   if (eagerlyLoadedHeavyChunks.length) console.error(`Lazy-only chunks loaded eagerly: ${eagerlyLoadedHeavyChunks.map((item) => item.file).join(", ")}`);
+  if (progressChunks.length > 1) console.error(`vendor-progress split into ${progressChunks.length} chunks: ${progressChunks.join(", ")}`);
   process.exit(1);
 }

@@ -6,7 +6,9 @@ import { activityPolicy, isVisibleActivity } from "./activity-policy";
  *  turn: its "no trailing tool" state just means the next tool has not
  *  arrived yet, which is what made provisional narration flicker as an answer. */
 export function finalAgentInCompletedTurn(blocks: ThreadBlock[]): AgentMessageBlock | null {
-  const candidate = latestUnsupersededAgent(blocks);
+  // Commentary is never a fallback answer. A completed turn without an
+  // explicit final item remains answer-less and must be rendered as such.
+  const candidate = latestUnsupersededAgent(blocks, { excludeIntermediate: true });
   if (!candidate) return null;
   const candidateIndex = blocks.indexOf(candidate);
   const trailingPlan = blocks.slice(candidateIndex + 1).some((block) => block.kind === "tool" && activityPolicy(block).plane === "plan-control");
@@ -14,18 +16,19 @@ export function finalAgentInCompletedTurn(blocks: ThreadBlock[]): AgentMessageBl
   return trailingPlan && !executionBeforeCandidate ? null : candidate;
 }
 
-/** The newest agent block of an ACTIVE turn that no visible tool has taken
- *  over yet. It may still turn out to be narration: the UI keeps it out of
- *  the main transcript until the turn lifecycle confirms the final answer. */
+/** The newest streaming agent block of an ACTIVE turn that no visible tool
+ *  has taken over yet. A later tool can still supersede it as narration. */
 export function provisionalAgentInActiveTurn(blocks: ThreadBlock[]): AgentMessageBlock | null {
   return latestUnsupersededAgent(blocks);
 }
 
 export function intermediateAgentsInTurn(blocks: ThreadBlock[]): AgentMessageBlock[] {
-  const structural = latestUnsupersededAgent(blocks);
+  const structural = latestUnsupersededAgent(blocks, { excludeIntermediate: true });
   return blocks.filter((block): block is AgentMessageBlock => block.kind === "agent" && block !== structural);
 }
 
-function latestUnsupersededAgent(blocks: ThreadBlock[]): AgentMessageBlock | null {
-  return blocks.findLast((block, index): block is AgentMessageBlock => block.kind === "agent" && !blocks.slice(index + 1).some((candidate) => candidate.kind === "tool" && isVisibleActivity(candidate))) ?? null;
+function latestUnsupersededAgent(blocks: ThreadBlock[], opts: { excludeIntermediate?: boolean } = {}): AgentMessageBlock | null {
+  return blocks.findLast((block, index): block is AgentMessageBlock => block.kind === "agent"
+    && !(opts.excludeIntermediate && block.presentationRole === "intermediate")
+    && !blocks.slice(index + 1).some((candidate) => candidate.kind === "tool" && isVisibleActivity(candidate))) ?? null;
 }

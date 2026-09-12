@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Blocks, Boxes, BrainCircuit, Loader2, ServerCog, Settings2, Unplug, UserRound, WandSparkles, X, type LucideIcon } from "lucide-react";
+import { Activity, Blocks, Boxes, BrainCircuit, Loader2, ServerCog, Settings2, Unplug, UserRound, WandSparkles, X, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/ui";
 import { settingsApi } from "../../lib/settings";
@@ -13,13 +13,15 @@ import { MCPTab } from "./MCPTab";
 import { SkillsTab } from "./SkillsTab";
 import { Icon, IconButton } from "../ui/Icon";
 import { EnvironmentSettings } from "./EnvironmentSettings";
+import { ProgressTab } from "./ProgressTab";
 
-type Tab = "general" | "models" | "agent" | "skills" | "extensions" | "mcp" | "compute" | "environments";
+type Tab = "general" | "models" | "agent" | "progress" | "skills" | "extensions" | "mcp" | "compute" | "environments";
 
 const TABS: { id: Tab; labelKey: string; titleKey: string; icon: LucideIcon }[] = [
   { id: "general", labelKey: "settings.general", titleKey: "settings.general", icon: Settings2 },
   { id: "models", labelKey: "settings.models.title", titleKey: "settings.models.title", icon: BrainCircuit },
   { id: "agent", labelKey: "settings.agent.title", titleKey: "settings.agent.title", icon: UserRound },
+  { id: "progress", labelKey: "settings.progress.nav", titleKey: "settings.progress.nav", icon: Activity },
   { id: "skills", labelKey: "skills.title", titleKey: "skills.title", icon: WandSparkles },
   { id: "environments", labelKey: "settings.environments", titleKey: "settings.environments", icon: Boxes },
   { id: "extensions", labelKey: "settings.extensions", titleKey: "settings.extensions", icon: Blocks },
@@ -189,6 +191,7 @@ export function SettingsContent({ scope, onClose }: { scope: string | null; onCl
                 {tab === "general" && <GeneralTab />}
                 {tab === "models" && <AIModelsTab config={config} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} showKey={showKey} setShowKey={setShowKey} saving={saving} saveKey={saveKey} deleteKey={deleteKey} onConfigReload={loadConfig} />}
                 {tab === "agent" && <AgentTab config={config} saving={saving === "compaction"} onSave={saveCompaction} />}
+                {tab === "progress" && config && <ProgressTab config={config} />}
                 {tab === "skills" && <SkillsTab workspaceCwd={scope} />}
                 {tab === "extensions" && <ExtensionsTab workspaceCwd={scope} />}
                 {tab === "mcp" && <MCPTab workspaceCwd={scope} />}

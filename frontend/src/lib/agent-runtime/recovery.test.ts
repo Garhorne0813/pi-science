@@ -4,7 +4,7 @@ import { getClient } from "../client/pi-science-client";
 import { workspaceFiles } from "../workspace";
 import { generations } from "./generations";
 import { useRuntimeStore } from "./index";
-import { reconcileAfterConnectionLoss, reconcilePromptAfterLateStream } from "./recovery";
+import { reconcileAfterConnectionLoss, reconcileAfterGap, reconcilePromptAfterLateStream, resyncCompletedHistory } from "./recovery";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
 
@@ -12,6 +12,136 @@ installRuntimeTestEnvironment();
 
 
 describe("runtime conversation recovery", () => {
+  it.each([
+    ["settled-history resync", async () => resyncCompletedHistory("session-a", "/workspace")],
+    ["connection recovery", async () => reconcileAfterConnectionLoss(
+      getClient(),
+      "session-a",
+      "/workspace",
+      generations.connection,
+      generations.activity,
+    )],
+    ["stream-gap recovery", async () => reconcileAfterGap("session-a", "/workspace")],
+  ])("drops %s results when the session changes during lineage probing", async (_name, runRecovery) => {
+    let releaseProbe!: (page: {
+      messages: Array<{ id: string; role: "user"; content: Array<{ type: "text"; text: string }> }>;
+      next_cursor: null;
+      has_more: false;
+      snapshot_version: string;
+    }) => void;
+    const probe = new Promise<Parameters<typeof releaseProbe>[0]>((resolve) => { releaseProbe = resolve; });
+    const client = getClient();
+    vi.spyOn(client, "getMessagesPage").mockImplementation(async (_sessionId, _cwd, options) => {
+      if (options?.before) return probe;
+      return {
+        messages: [{ id: "a-new", role: "user", content: [{ type: "text", text: "A newest" }] }],
+        next_cursor: "a-probe",
+        has_more: true,
+        snapshot_version: "snapshot-a",
+      };
+    });
+    vi.spyOn(client, "getSessionState").mockResolvedValue(state("session-a"));
+    vi.spyOn(client, "getTurnArtifacts").mockResolvedValue({ turns: [] });
+    useRuntimeStore.setState({
+      activeSessionId: "session-a",
+      cwd: "/workspace",
+      working: false,
+      thread: {
+        blocks: [{ kind: "user", id: "a-old", text: "A old" }],
+        index: { "a-old": 0 },
+        loaded: true,
+      },
+      historyCursor: "a-cursor",
+      historyHasMore: true,
+    });
+
+    const recovering = runRecovery();
+    await vi.waitFor(() => expect(client.getMessagesPage).toHaveBeenCalledTimes(2));
+    ++generations.connection;
+    ++generations.activity;
+    useRuntimeStore.setState({
+      activeSessionId: "session-b",
+      thread: {
+        blocks: [{ kind: "user", id: "b-only", text: "B" }],
+        index: { "b-only": 0 },
+        loaded: true,
+      },
+      historyCursor: "b-cursor",
+      historyHasMore: false,
+      status: "connecting",
+    });
+    releaseProbe({
+      messages: [{ id: "a-old", role: "user", content: [{ type: "text", text: "A old" }] }],
+      next_cursor: null,
+      has_more: false,
+      snapshot_version: "snapshot-a",
+    });
+    await recovering;
+
+    expect(useRuntimeStore.getState().activeSessionId).toBe("session-b");
+    expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual(["b-only"]);
+    expect(useRuntimeStore.getState().historyCursor).toBe("b-cursor");
+    expect(useRuntimeStore.getState().status).toBe("connecting");
+  });
+
+  it("does not overwrite a history page prepended while gap lineage probing is in flight", async () => {
+    let releaseProbe!: (page: {
+      messages: Array<{ id: string; role: "user"; content: Array<{ type: "text"; text: string }> }>;
+      next_cursor: string | null;
+      has_more: boolean;
+      snapshot_version: string;
+    }) => void;
+    const probe = new Promise<Parameters<typeof releaseProbe>[0]>((resolve) => { releaseProbe = resolve; });
+    const client = getClient();
+    vi.spyOn(client, "getMessagesPage").mockImplementation(async (_sessionId, _cwd, options) => {
+      if (!options?.before) {
+        return {
+          messages: [{ id: "u20", role: "user", content: [{ type: "text", text: "newest" }] }],
+          next_cursor: "recovery-probe",
+          has_more: true,
+          snapshot_version: "snapshot-new",
+        };
+      }
+      if (options.before === "recovery-probe") return probe;
+      if (options.before === "user-cursor") {
+        return {
+          messages: [{ id: "u1", role: "user", content: [{ type: "text", text: "oldest" }] }],
+          next_cursor: "older-cursor",
+          has_more: true,
+          snapshot_version: "snapshot-page",
+        };
+      }
+      throw new Error(`Unexpected cursor: ${options.before}`);
+    });
+    vi.spyOn(client, "getSessionState").mockResolvedValue(state("session-a"));
+    vi.spyOn(client, "getTurnArtifacts").mockResolvedValue({ turns: [] });
+    useRuntimeStore.setState({
+      activeSessionId: "session-a",
+      cwd: "/workspace",
+      status: "ready",
+      thread: { blocks: [{ kind: "user", id: "u10", text: "loaded" }], index: { u10: 0 }, loaded: true },
+      historyCursor: "user-cursor",
+      historyHasMore: true,
+      historyLoading: false,
+    });
+
+    const recovering = reconcileAfterGap("session-a", "/workspace");
+    await vi.waitFor(() => expect(client.getMessagesPage).toHaveBeenCalledWith("session-a", "/workspace", { before: "recovery-probe" }));
+    await useRuntimeStore.getState().loadOlderMessages();
+    expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual(["u1", "u10"]);
+
+    releaseProbe({
+      messages: [{ id: "u10", role: "user", content: [{ type: "text", text: "loaded" }] }],
+      next_cursor: "user-cursor",
+      has_more: true,
+      snapshot_version: "snapshot-new",
+    });
+    await recovering;
+
+    expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual(["u1", "u10"]);
+    expect(useRuntimeStore.getState().historyCursor).toBe("older-cursor");
+  });
+
   it.each([
     "session not found in this workspace",
     "session is not active in this workspace",

@@ -29,11 +29,14 @@ beforeAll(async () => {
 afterEach(cleanup);
 
 describe("ConversationStatsLine", () => {
-  it("renders nothing for a null stats or an empty session (hero state)", () => {
-    const { rerender } = render(<ConversationStatsLine stats={null} />);
+  it("reserves the stats line height for null stats or an empty session", () => {
+    const { container, rerender } = render(<ConversationStatsLine stats={null} />);
     expect(screen.queryByLabelText("Session stats")).toBeNull();
+    expect(container.firstElementChild).toHaveAttribute("aria-hidden", "true");
+    expect(container.firstElementChild).toHaveClass("leading-[20px]", "pb-1", "pt-1.5");
     rerender(<ConversationStatsLine stats={stats({ userMessages: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } })} />);
     expect(screen.queryByLabelText("Session stats")).toBeNull();
+    expect(container.firstElementChild).toHaveAttribute("aria-hidden", "true");
   });
 
   it("renders the DeepSeek-aligned single line: turns/steps, timing, speed, billing", () => {

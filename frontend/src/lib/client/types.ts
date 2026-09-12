@@ -40,6 +40,13 @@ export interface HistoryMessage {
   details?: unknown;
   presentation?: ToolPresentation;
   presentationRole?: "intermediate" | "final";
+  turnId?: string;
+  runId?: string;
+  itemId?: string;
+  parentItemId?: string;
+  revision?: number;
+  sequence?: number;
+  classificationSource?: "explicit" | "legacy_inferred" | "unknown";
 }
 
 export interface SessionMessagePage {

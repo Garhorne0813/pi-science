@@ -55,11 +55,104 @@ export const toolPresentationSchema = z.object({
   description: z.string().optional(),
   importance: z.enum(["micro", "stage", "interrupt"]),
   domain: z.enum(["code", "research", "science", "document", "data", "generic"]),
-  narrativeHint: z.object({ state: z.enum(["explore", "research", "analyze", "implementation", "compute", "verify"]).optional(), finalVerification: z.boolean().optional() }).optional(),
+  narrativeHint: z.object({ state: z.enum(["explore", "research", "analyze", "implementation", "compute", "verify", "generate"]).optional(), finalVerification: z.boolean().optional() }).optional(),
   locations: z.array(z.object({ path: z.string().optional(), line: z.number().int().optional(), uri: z.string().optional() })).optional(),
 });
 export type ToolPresentation = z.infer<typeof toolPresentationSchema>;
 
+/** ── Progress appearance ──
+ *  One pure data declaration per pattern: id, family and the slots it is
+ *  legal for. Slot schemas, the id union and the frontend options list all
+ *  derive from this table, so a pattern cannot be legal in one layer and
+ *  rejected in another. React/adapters stay in the frontend. */
+
+export const PROGRESS_SLOTS = ["thinking", "currentActivity", "streamingAnswer", "imageGeneration", "waiting", "completed"] as const;
+export type ProgressPatternSlot = (typeof PROGRESS_SLOTS)[number];
+export const PROGRESS_PATTERN_FAMILIES = ["static", "orb", "inline", "text", "image"] as const;
+export type ProgressPatternFamily = (typeof PROGRESS_PATTERN_FAMILIES)[number];
+
+export interface ProgressPatternInfo {
+  readonly id: string;
+  readonly family: ProgressPatternFamily;
+  readonly slots: readonly ProgressPatternSlot[];
+}
+
+const INLINE_SLOTS: readonly ProgressPatternSlot[] = ["thinking", "currentActivity", "waiting"];
+const AICSS_ORB_IDS = ["aicss-orb-S1", "aicss-orb-S2", "aicss-orb-S3", "aicss-orb-S4", "aicss-orb-S5", "aicss-orb-B1", "aicss-orb-B2", "aicss-orb-B3", "aicss-orb-B4", "aicss-orb-B5", "aicss-orb-C1", "aicss-orb-C2", "aicss-orb-C3", "aicss-orb-C4", "aicss-orb-C5", "aicss-orb-G1", "aicss-orb-G2", "aicss-orb-G3", "aicss-orb-G4", "aicss-orb-G5", "aicss-orb-M1", "aicss-orb-M2", "aicss-orb-M3", "aicss-orb-M4", "aicss-orb-M5"] as const;
+const GENERATIVE_INLINE_IDS = ["inline-glyph", "inline-matrix", "inline-orbit", "inline-ripple", "inline-signal", "inline-spark", "inline-rotor", "inline-pixel-drift", "inline-chomp", "inline-snake", "inline-fold", "inline-gravity", "inline-domino", "inline-aperture"] as const;
+const GENERATIVE_TEXT_IDS = ["text-decode", "text-typewriter", "text-skeleton", "text-cascade", "text-focus", "text-wipe", "text-flip", "text-redact", "text-line", "text-terminal", "text-wave", "text-dissolve", "text-slice", "text-tracking", "text-coalesce", "text-fragments"] as const;
+const GENERATIVE_IMAGE_IDS = ["image-skeleton", "image-bands", "image-tiles", "image-scan", "image-pixel-grid", "image-resolution", "image-focus", "image-shutter", "image-contour"] as const;
+
+export const PROGRESS_PATTERNS: readonly ProgressPatternInfo[] = [
+  { id: "static-check", family: "static", slots: ["thinking", "waiting", "completed"] },
+  { id: "aicss-auto", family: "orb", slots: INLINE_SLOTS },
+  ...AICSS_ORB_IDS.map((id) => ({ id, family: "orb" as const, slots: INLINE_SLOTS })),
+  ...GENERATIVE_INLINE_IDS.map((id) => ({ id, family: "inline" as const, slots: INLINE_SLOTS })),
+  ...GENERATIVE_TEXT_IDS.map((id) => ({ id, family: "text" as const, slots: ["streamingAnswer" as const] })),
+  ...GENERATIVE_IMAGE_IDS.map((id) => ({ id, family: "image" as const, slots: ["imageGeneration" as const] })),
+];
+
+const PROGRESS_PATTERN_IDS = ["static-check", "aicss-auto", ...AICSS_ORB_IDS, ...GENERATIVE_INLINE_IDS, ...GENERATIVE_TEXT_IDS, ...GENERATIVE_IMAGE_IDS] as const;
+export type ProgressPatternId = (typeof PROGRESS_PATTERN_IDS)[number];
+export const progressPatternIdSchema = z.enum(PROGRESS_PATTERN_IDS);
+
+function progressPatternForSlot(slot: ProgressPatternSlot) {
+  const ids = PROGRESS_PATTERNS.filter((pattern) => pattern.slots.includes(slot)).map((pattern) => pattern.id);
+  return z.enum(ids as [ProgressPatternId, ...ProgressPatternId[]]);
+}
+
+const DEFAULT_PATTERNS = {
+  thinking: "aicss-auto",
+  currentActivity: "aicss-auto",
+  streamingAnswer: "text-decode",
+  imageGeneration: "image-scan",
+  waiting: "aicss-auto",
+  completed: "static-check",
+} as const;
+
+function slotPatternSchema(slot: ProgressPatternSlot, tolerant: boolean) {
+  const base = progressPatternForSlot(slot).default(DEFAULT_PATTERNS[slot]);
+  return tolerant ? base.catch(DEFAULT_PATTERNS[slot]) : base;
+}
+
+function patternsSchema(tolerant: boolean) {
+  return z.object({
+    thinking: slotPatternSchema("thinking", tolerant),
+    currentActivity: slotPatternSchema("currentActivity", tolerant),
+    streamingAnswer: slotPatternSchema("streamingAnswer", tolerant),
+    imageGeneration: slotPatternSchema("imageGeneration", tolerant),
+    waiting: slotPatternSchema("waiting", tolerant),
+    completed: slotPatternSchema("completed", tolerant),
+  }).default(DEFAULT_PATTERNS);
+}
+
+const STRICT_COLOR = z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().default(null);
+const STRICT_SPEED = z.number().min(0.5).max(2).default(1);
+
+/** Writes are strict: a bad slot value, an out-of-range speed, a malformed
+ *  color or an unknown version is rejected instead of silently repaired. */
+export const progressAppearanceInputSchema = z.object({
+  version: z.literal(1).default(1),
+  preset: z.enum(["quiet", "research", "science", "custom"]).default("quiet"),
+  motion: z.enum(["system", "full", "off"]).default("system"),
+  speed: STRICT_SPEED,
+  colorMode: z.enum(["semantic", "custom"]).default("semantic"),
+  customColor: STRICT_COLOR,
+  patterns: patternsSchema(false),
+});
+
+/** Reads recover legacy or partially invalid storage through per-field
+ *  fallbacks, so one bad field cannot discard the rest of the config. */
+export const progressAppearanceSchema = progressAppearanceInputSchema.extend({
+  version: z.literal(1).default(1).catch(1),
+  speed: STRICT_SPEED.catch(1),
+  // The color input emits six-digit hex; anything else falls back to the
+  // semantic palette instead of invalidating the whole stored config.
+  customColor: STRICT_COLOR.catch(null),
+  patterns: patternsSchema(true),
+});
+export type ProgressAppearance = z.infer<typeof progressAppearanceSchema>;
+export const defaultProgressAppearance: ProgressAppearance = progressAppearanceSchema.parse({});
 export const historyMessageSchema = z.object({
   id: z.string().min(1),
   role: z.string(),
@@ -70,6 +163,13 @@ export const historyMessageSchema = z.object({
   timestamp: z.string().nullish(),
   presentation: toolPresentationSchema.optional(),
   presentationRole: z.enum(["intermediate", "final"]).optional(),
+  turnId: z.string().optional(),
+  runId: z.string().optional(),
+  itemId: z.string().optional(),
+  parentItemId: z.string().optional(),
+  revision: z.number().int().nonnegative().optional(),
+  sequence: z.number().int().nonnegative().optional(),
+  classificationSource: z.enum(["explicit", "legacy_inferred", "unknown"]).optional(),
 });
 
 export const sessionMessagePageSchema = z.object({
@@ -191,6 +291,122 @@ export const sessionEventSchema = z.discriminatedUnion("type", [
   sessionErrorEventSchema,
   sessionStatsEventSchema,
 ]).and(z.looseObject({}));
+
+/** ── Conversation presentation protocol v2 ──
+ *
+ * The legacy session events above remain the wire-compatible read path. V2
+ * adds durable identity and version metadata so a client can replay a stream
+ * without guessing message boundaries from arrival order or text contents.
+ * Payloads stay `unknown` at the envelope level and are validated by the
+ * event-specific schemas below. */
+
+export const conversationRunStateSchema = z.enum([
+  "queued",
+  "active",
+  "waiting",
+  "stopping",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+export type ConversationRunState = z.infer<typeof conversationRunStateSchema>;
+
+export const conversationRunOutcomeSchema = z.enum(["ok", "with_issues", "no_answer"]);
+export type ConversationRunOutcome = z.infer<typeof conversationRunOutcomeSchema>;
+
+export const conversationEventPhaseSchema = z.enum(["commentary", "final_answer", "unknown"]);
+export type ConversationEventPhase = z.infer<typeof conversationEventPhaseSchema>;
+
+const eventIdSchema = z.string().min(1);
+const occurredAtSchema = z.string().min(1);
+
+export const conversationEventV2Schema = z.looseObject({
+  schemaVersion: z.literal(2),
+  workspaceId: z.string().min(1),
+  sessionId: z.string().min(1),
+  streamEpoch: z.string().min(1),
+  eventId: eventIdSchema,
+  seq: z.number().int().nonnegative(),
+  turnId: z.string().min(1),
+  runId: z.string().min(1),
+  itemId: z.string().min(1).optional(),
+  parentItemId: z.string().min(1).optional(),
+  occurredAt: occurredAtSchema,
+  type: z.string().min(1),
+  payload: z.unknown(),
+});
+export type ConversationEventV2 = z.infer<typeof conversationEventV2Schema>;
+
+export const textDeltaPayloadSchema = z.object({
+  partId: z.string().min(1),
+  phase: conversationEventPhaseSchema,
+  baseRevision: z.number().int().nonnegative(),
+  revision: z.number().int().positive(),
+  text: z.string(),
+});
+export type TextDeltaPayload = z.infer<typeof textDeltaPayloadSchema>;
+
+export const textSnapshotPayloadSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  phase: conversationEventPhaseSchema,
+  parts: z.array(z.object({ partId: z.string().min(1), text: z.string() })),
+});
+export type TextSnapshotPayload = z.infer<typeof textSnapshotPayloadSchema>;
+
+export const conversationItemStartedPayloadSchema = z.looseObject({
+  itemType: z.enum(["user", "commentary", "assistant", "tool", "interaction", "artifact", "system"]),
+  phase: conversationEventPhaseSchema.optional(),
+  content: z.string().optional(),
+});
+
+export const conversationItemCompletedPayloadSchema = z.looseObject({
+  revision: z.number().int().nonnegative().optional(),
+});
+
+export const conversationToolUpdatedPayloadSchema = z.looseObject({
+  callId: z.string().min(1),
+  operationId: z.string().min(1).optional(),
+  attemptId: z.string().min(1).optional(),
+  tool: z.string().min(1),
+  status: z.enum(["running", "done", "error", "waiting-approval", "unknown"]),
+  input: z.record(z.string(), z.unknown()).optional(),
+  output: z.string().optional(),
+  partialOutput: z.string().optional(),
+  diff: z.string().optional(),
+  startedAt: z.string().optional(),
+  endedAt: z.string().optional(),
+});
+
+export const conversationRunRecordSchema = z.looseObject({
+  turnId: z.string().min(1),
+  runId: z.string().min(1),
+  retryOfRunId: z.string().min(1).optional(),
+  state: conversationRunStateSchema,
+  startedAt: z.string().optional(),
+  endedAt: z.string().optional(),
+  finalItemId: z.string().min(1).optional(),
+  outcome: conversationRunOutcomeSchema.optional(),
+  issues: z.array(z.object({
+    itemId: z.string().min(1).optional(),
+    code: z.string().min(1),
+    resolvedByItemId: z.string().min(1).optional(),
+  })).default([]),
+});
+export type ConversationRunRecord = z.infer<typeof conversationRunRecordSchema>;
+
+export const conversationSnapshotSchema = z.looseObject({
+  schemaVersion: z.literal(2),
+  sessionId: z.string().min(1),
+  streamEpoch: z.string().min(1),
+  throughSeq: z.number().int().nonnegative(),
+  snapshotVersion: z.string().min(1),
+  turns: z.array(z.unknown()),
+  runs: z.array(conversationRunRecordSchema),
+  items: z.array(z.unknown()),
+  pendingInteractions: z.array(z.unknown()),
+  page: z.object({ nextCursor: z.string().nullable(), hasMore: z.boolean() }),
+});
+export type ConversationSnapshot = z.infer<typeof conversationSnapshotSchema>;
 
 export const piRpcCommandSchema = z.object({
   id: z.string().min(1),

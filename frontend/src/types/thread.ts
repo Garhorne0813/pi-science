@@ -5,11 +5,24 @@
 export type { ExecutionRecord, ProvenanceEnvironment, ProvenanceRecord, ToolPresentation } from "@pi-science/contracts";
 import type { ToolPresentation } from "@pi-science/contracts";
 
+/** Identity assigned by the conversation protocol. Legacy history may omit
+ * these fields; the presentation adapter keeps that path explicit rather than
+ * manufacturing an identity from timestamps or message text. */
+export interface ConversationBlockIdentity {
+  turnId?: string;
+  runId?: string;
+  itemId?: string;
+  parentItemId?: string;
+  revision?: number;
+  sequence?: number;
+}
+
 // ── Discriminated union of all block types ──
 
 export type ThreadBlock =
   | UserMessageBlock
   | AgentMessageBlock
+  | ThinkingBlock
   | StepSummaryBlock
   | ToolCallBlock
   | ReviewerBlock
@@ -20,7 +33,7 @@ export type ThreadBlock =
   | StatusLineBlock
   | TurnArtifactSummaryBlock;
 
-export interface UserMessageBlock {
+export interface UserMessageBlock extends ConversationBlockIdentity {
   kind: "user";
   id: string;
   text: string;
@@ -28,12 +41,15 @@ export interface UserMessageBlock {
   images?: ImageAttachment[];
 }
 
-export interface AgentMessageBlock {
+export interface AgentMessageBlock extends ConversationBlockIdentity {
   kind: "agent";
   id: string;
   parts: AgentMessagePart[];
   partial?: boolean;
   presentationRole?: "intermediate" | "final";
+  /** How the role was obtained. This is diagnostic metadata and is not shown
+   * in the ordinary conversation UI. */
+  classificationSource?: "explicit" | "legacy_inferred" | "unknown";
   timestamp?: string;
   subagentId?: string;
 }
@@ -43,18 +59,33 @@ export interface AgentMessagePart {
   text: string;
 }
 
+/** The model's reasoning stream (pi `thinking` content parts). Rendered as a
+ *  dim line in the live feed and folded behind the settled summary row. */
+export interface ThinkingBlock extends ConversationBlockIdentity {
+  kind: "thinking";
+  id: string;
+  parts: AgentMessagePart[];
+  partial?: boolean;
+  timestamp?: string;
+}
+
 export interface StepSummaryBlock {
   kind: "step-summary";
   id: string;
   text: string;
 }
 
-export interface ToolCallBlock {
+export interface ToolCallBlock extends ConversationBlockIdentity {
   kind: "tool";
   id: string;
   callId: string;
   tool: string;
   status: ToolStatus;
+  /** All observed terminal/status transitions for this operation. A later
+   * successful retry must not erase the fact that an earlier attempt failed. */
+  statusHistory?: ToolStatus[];
+  operationId?: string;
+  attemptId?: string;
   title?: string;
   presentation?: ToolPresentation;
   input?: Record<string, unknown>;
@@ -68,9 +99,10 @@ export interface ToolCallBlock {
   startedAt?: string;
   endedAt?: string;
   childSessionId?: string;
+  interactionResolved?: boolean;
 }
 
-export type ToolStatus = "running" | "done" | "error" | "waiting-approval";
+export type ToolStatus = "running" | "done" | "error" | "waiting-approval" | "unknown";
 
 export type ActivityPlane = "execution" | "plan-control" | "interaction" | "system";
 
@@ -138,7 +170,7 @@ export interface TurnArtifactItem {
 /** Per-turn generated-file summary shown after the final assistant message.
  *  Built from the `turn.artifacts` SSE event and restored from the persisted
  *  turn-artifacts.jsonl on history load. */
-export interface TurnArtifactSummaryBlock {
+export interface TurnArtifactSummaryBlock extends ConversationBlockIdentity {
   kind: "artifact-summary";
   id: string;
   turnId: string;
@@ -161,7 +193,7 @@ export interface RunningJob {
   elapsed: string;
 }
 
-export interface StatusLineBlock {
+export interface StatusLineBlock extends ConversationBlockIdentity {
   kind: "status-line";
   id: string;
   text: string;

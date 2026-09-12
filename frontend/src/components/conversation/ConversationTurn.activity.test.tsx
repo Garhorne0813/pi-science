@@ -3,7 +3,7 @@
  *  snapshot recovery, live/history parity) through the same path the UI uses. */
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { renderBlocks, renderTurn } from "./ConversationBlocks";
 import { buildTurnPresentations } from "../../lib/conversation/turn-presentation";
 import { useRuntimeStore } from "../../lib/agent-runtime";
@@ -53,14 +53,14 @@ function stubWorkspace(): void {
 function historyMessages(): HistoryMessage[] {
   return [
     { id: "u1", role: "user", content: [{ type: "text", text: "检查 turn 级 Activity 实现" }], timestamp: "2026-08-30T02:00:00.000Z" },
-    { id: "m1", role: "assistant", content: [{ type: "text", text: "我先读取 turn-presentation.ts。" }, { type: "toolCall", id: "c1", name: "read" }] },
-    { id: "r1", role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "text", text: "export function buildTurnPresentations" }] },
-    { id: "r2", role: "toolResult", toolCallId: "td1", toolName: "todo", content: [{ type: "text", text: "Created #1" }], details: planV1 },
-    { id: "m2", role: "assistant", content: [{ type: "text", text: "接下来看事件折叠。" }, { type: "toolCall", id: "c2", name: "read" }, { type: "toolCall", id: "c3", name: "bash" }] },
-    { id: "r3", role: "toolResult", toolCallId: "c2", toolName: "read", content: [{ type: "text", text: "case tool.updated" }] },
-    { id: "r4", role: "toolResult", toolCallId: "c3", toolName: "bash", content: [{ type: "text", text: "7 passed" }] },
-    { id: "r5", role: "toolResult", toolCallId: "td2", toolName: "todo", content: [{ type: "text", text: "Updated #1" }], details: planV2 },
-    { id: "m3", role: "assistant", content: [{ type: "text", text: "实现符合方案：一个 turn 只有一个 Activity。" }] },
+    { id: "m1", role: "assistant", content: [{ type: "text", text: "我先读取 turn-presentation.ts。" }, { type: "toolCall", id: "c1", name: "read" }], timestamp: "2026-08-30T02:00:00.000Z" },
+    { id: "r1", role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "text", text: "export function buildTurnPresentations" }], timestamp: "2026-08-30T02:00:02.000Z" },
+    { id: "r2", role: "toolResult", toolCallId: "td1", toolName: "todo", content: [{ type: "text", text: "Created #1" }], details: planV1, timestamp: "2026-08-30T02:00:02.200Z" },
+    { id: "m2", role: "assistant", content: [{ type: "text", text: "接下来看事件折叠。" }, { type: "toolCall", id: "c2", name: "read" }, { type: "toolCall", id: "c3", name: "bash" }], timestamp: "2026-08-30T02:00:03.000Z" },
+    { id: "r3", role: "toolResult", toolCallId: "c2", toolName: "read", content: [{ type: "text", text: "case tool.updated" }], timestamp: "2026-08-30T02:00:04.000Z" },
+    { id: "r4", role: "toolResult", toolCallId: "c3", toolName: "bash", content: [{ type: "text", text: "7 passed" }], timestamp: "2026-08-30T02:00:06.000Z" },
+    { id: "r5", role: "toolResult", toolCallId: "td2", toolName: "todo", content: [{ type: "text", text: "Updated #1" }], details: planV2, timestamp: "2026-08-30T02:00:04.100Z" },
+    { id: "m3", role: "assistant", content: [{ type: "text", text: "实现符合方案：一个 turn 只有一个 Activity。" }], timestamp: "2026-08-30T02:00:07.000Z" },
   ];
 }
 
@@ -69,6 +69,7 @@ installRuntimeTestEnvironment();
 beforeAll(async () => {
   await i18n.changeLanguage("en");
 });
+
 
 afterEach(() => {
   cleanup();
@@ -81,16 +82,15 @@ describe("turn-level activity through the live event path", () => {
     emitTurn();
 
     const blocks = useRuntimeStore.getState().thread.blocks;
-    const { container } = render(<>{renderBlocks(blocks, codeRunner)}</>);
+    render(<>{renderBlocks(blocks, codeRunner)}</>);
 
-    // One user turn => exactly one Current Activity row.
-    expect(container.querySelectorAll("span[aria-live='polite']")).toHaveLength(1);
-    // Execution tools only: 2 reads + 1 bash. Todo is plan-control.
-    expect(screen.getByText("Complete")).toBeInTheDocument();
-    expect(screen.getByLabelText("3 operations")).toBeInTheDocument();
-    // Intermediate narration is suppressed; only the final answer is prose.
-    expect(screen.queryByText("我先读取 turn-presentation.ts。")).not.toBeInTheDocument();
-    expect(screen.queryByText("接下来看事件折叠。")).not.toBeInTheDocument();
+    // Execution tools only: 2 reads + 1 bash. Todo is plan-control. The
+    // settled view keeps the model's narration — no process row, no steps.
+    expect(screen.getByText("我先读取 turn-presentation.ts。")).toBeInTheDocument();
+    expect(screen.getByText("接下来看事件折叠。")).toBeInTheDocument();
+    expect(screen.getByText(/Complete|Encountered a problem|Stopped|Working/)).toBeInTheDocument();
+    expect(screen.queryByText("Reading turn-presentation.ts")).not.toBeInTheDocument();
+    expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
     expect(screen.getByText(/实现符合方案/)).toBeInTheDocument();
     // PRD case D: hiding the todo ToolCard must not break Todo state recovery.
     const viewModel = todoViewModel(blocks);
@@ -110,46 +110,46 @@ describe("turn-level activity through the live event path", () => {
     const runtime = useRuntimeStore.getState();
     render(<>{buildTurnPresentations(runtime.thread.blocks, { lastTurnLifecycle: runtime.turnLifecycle }).map((turn) => renderTurn(turn, codeRunner))}</>);
     // Narrative label, not the per-tool title: the title stays in the trace.
-    expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
-    expect(screen.queryByText("我先读取实现。")).not.toBeInTheDocument();
-    expect(screen.queryByText("Complete")).not.toBeInTheDocument();
+    expect(screen.getByText("Working")).toBeInTheDocument();
+    expect(screen.getByText("我先读取实现。")).toBeInTheDocument();
+    expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
   });
 
-  it("keeps todo bookkeeping out of the trace while the plan still shows", async () => {
+  it("keeps todo bookkeeping out of the settled view while the plan still shows", async () => {
     stubWorkspace();
     await useRuntimeStore.getState().connect("/workspace", SESSION);
     emitTurn();
     render(<>{renderBlocks(useRuntimeStore.getState().thread.blocks, codeRunner)}</>);
 
-    fireEvent.click(screen.getByRole("button", { name: /Complete/ }));
-    expect(screen.getByLabelText("Execution trace")).toBeInTheDocument();
-    const traceLabels = Array.from(document.querySelectorAll("[aria-label='Execution trace'] button > span"));
-    expect(traceLabels.map((node) => node.textContent)).toEqual([
-      "Reading turn-presentation.ts",
-      "Reading event-fold.ts",
-      "运行 turn 呈现层测试",
-    ]);
-    // Todo never leaks as a trace row or an aria-live announcement source.
+    // The settled view keeps the model's narration and final answer; per-step
+    // records were part of the live stream only.
+    expect(screen.getByText("我先读取 turn-presentation.ts。")).toBeInTheDocument();
+    expect(screen.getByText("实现符合方案：一个 turn 只有一个 Activity。")).toBeInTheDocument();
+    // Todo never leaks as a visible row or an aria-live announcement source.
     expect(screen.queryByText(/Created #1|Updated #1/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Complete|Encountered a problem|Stopped|Working/)).toBeInTheDocument();
   });
 });
 
 describe("turn-level activity through the history path", () => {
   it("rebuilds the same visible activity and todo plan after a refresh", () => {
     const thread = threadFromMessages(historyMessages());
-    const { container } = render(<>{renderBlocks(thread.blocks, codeRunner)}</>);
+    render(<>{renderBlocks(thread.blocks, codeRunner)}</>);
 
-    expect(container.querySelectorAll("span[aria-live='polite']")).toHaveLength(1);
-    expect(screen.getByText("Complete")).toBeInTheDocument();
-    expect(screen.getByLabelText("3 operations")).toBeInTheDocument();
-    expect(screen.queryByText("我先读取 turn-presentation.ts。")).not.toBeInTheDocument();
+    expect(screen.getByText("我先读取 turn-presentation.ts。")).toBeInTheDocument();
+    expect(screen.getByText("接下来看事件折叠。")).toBeInTheDocument();
+    // Message timestamps rebuild the process duration: c1 starts with m1
+    // (02:00:00), the last execution result lands at 02:00:06.
+    expect(screen.getByText("Completed · 6.0s")).toBeInTheDocument();
+    expect(screen.queryByText("Reading file")).not.toBeInTheDocument();
+    expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
     expect(screen.getByText(/实现符合方案/)).toBeInTheDocument();
     expect(todoViewModel(thread.blocks)?.allCompleted).toBe(true);
   });
 });
 
 describe("activity over time (PRD v1.2 §26/§28)", () => {
-  it("never surfaces narration, keeps one phase row, and confirms the answer only at session.idle", async () => {
+  it("streams provisional text, keeps one phase row, and confirms the answer at session.idle", async () => {
     stubWorkspace();
     await useRuntimeStore.getState().connect("/workspace", SESSION);
     vi.useFakeTimers();
@@ -165,48 +165,54 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       emit("agent_start", {});
       emit("text.updated", { partId: "m1", text: "我先检查一下。" });
       rerender(view());
-      // Provisional narration: invisible from the very first token, not just
-      // after a tool supersedes it.
-      expect(screen.queryByText("我先检查一下。")).not.toBeInTheDocument();
-      expect(screen.queryByText("Reviewing the implementation")).not.toBeInTheDocument();
+      // Prose streams immediately, then joins the open process when a tool arrives.
+      expect(screen.getByText("我先检查一下。")).toBeInTheDocument();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      expect(screen.queryByText("Reviewing the implementation")).not.toBeInTheDocument(); // phase copy is unified into the process label
 
       emit("tool.updated", { callId: "r1", tool: "read", status: "running", input: { path: "a.ts" } });
       rerender(view());
-      expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
+      expect(screen.getByText("Working")).toBeInTheDocument();
+      expect(screen.getByText("我先检查一下。")).toBeInTheDocument();
+      // Narration stays visible inside the live stream.
+      expect(screen.getByLabelText("Execution trace")).toHaveTextContent("我先检查一下。");
 
       emit("tool.updated", { callId: "r1", tool: "read", status: "done" });
       emit("tool.updated", { callId: "r2", tool: "grep", status: "running", input: { pattern: "x" } });
       rerender(view());
       // More micro ops inside the same burst: no visible transition at all.
-      expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
+      expect(screen.getByText("Working")).toBeInTheDocument();
 
       emit("tool.updated", { callId: "r2", tool: "grep", status: "done" });
       emit("tool.updated", { callId: "e1", tool: "edit", status: "running", input: { path: "b.ts" } });
       rerender(view());
-      expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
+      expect(screen.getByText("Working")).toBeInTheDocument();
       act(() => { vi.advanceTimersByTime(900); });
-      expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
+      expect(screen.getByText("Working")).toBeInTheDocument();
 
       emit("tool.updated", { callId: "e1", tool: "edit", status: "done" });
       emit("tool.updated", { callId: "b1", tool: "bash", status: "running", input: { command: "pnpm vitest run", description: "运行测试" } });
       rerender(view());
-      expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
+      expect(screen.getByText("Working")).toBeInTheDocument();
       act(() => { vi.advanceTimersByTime(900); });
-      expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
+      expect(screen.getByText("Working")).toBeInTheDocument();
 
       emit("tool.updated", { callId: "b1", tool: "bash", status: "done" });
       emit("text.updated", { partId: "m2", text: "这是最终回答。" });
       rerender(view());
-      // Streaming answer prose stays hidden until the lifecycle confirms it.
-      expect(screen.queryByText("这是最终回答。")).not.toBeInTheDocument();
-      expect(screen.getByText("Updating and verifying the implementation")).toBeInTheDocument();
+      // The final answer is visible while its text is still streaming.
+      expect(screen.getByText("这是最终回答。")).toBeInTheDocument();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      expect(screen.getByText("Working")).toBeInTheDocument();
 
       emit("session.idle", {});
       rerender(view());
       expect(screen.getByText("这是最终回答。")).toBeInTheDocument();
-      expect(screen.getByText("Complete")).toBeInTheDocument();
-      expect(screen.getByLabelText("4 operations")).toBeInTheDocument();
-      expect(screen.queryByText("我先检查一下。")).not.toBeInTheDocument();
+      // The settled view keeps the narration; no process row, no steps.
+      expect(screen.getByText("我先检查一下。")).toBeInTheDocument();
+      expect(screen.queryByText("运行测试")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
+      expect(screen.getAllByText("这是最终回答。")).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }

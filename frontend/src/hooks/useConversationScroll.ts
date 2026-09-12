@@ -4,6 +4,7 @@ import type { VirtuosoHandle } from "react-virtuoso";
 import { buildTurnPresentations } from "../lib/conversation/turn-presentation";
 import { useRuntimeStore } from "../lib/agent-runtime";
 import type { ThreadBlock } from "../types/thread";
+import { useConversationFollow } from "./useConversationFollow";
 
 export interface ConversationScrollOptions {
   sessionId?: string;
@@ -27,6 +28,8 @@ export interface ConversationScrollController {
   handleNavSelect: (id: string) => void;
   scrollToBottom: () => void;
   startNewTurn: () => void;
+  followOutput: () => "auto" | false;
+  handleListHeightChanged: () => void;
 }
 
 /**
@@ -48,12 +51,12 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
   } = options;
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
-  const followOutputRef = useRef(true);
-  const [showScrollDown, setShowScrollDown] = useState(false);
+  const { showScrollDown, attachScroller, followOutput, handleListHeightChanged, pauseFollowing, resumeFollowing } = useConversationFollow({
+    scrollRef, virtuosoRef, scope: `${workspaceCwd}:${sessionId ?? activeSessionId ?? "new"}`, blocks, working,
+  });
   const [virtualFirstItemIndex, setVirtualFirstItemIndex] = useState(100_000);
   const [navigationLoading, setNavigationLoading] = useState(false);
   const scrollTimersRef = useRef<number[]>([]);
-  const followOutputCancelRef = useRef<(() => void) | null>(null);
   const historyLoadInFlightRef = useRef<{ key: string; promise: Promise<number> } | null>(null);
   const navigationGenerationRef = useRef(0);
   const sessionRef = useRef(sessionId);
@@ -75,81 +78,9 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
   // "user scrolled up" state of the previous session on this route.
   useEffect(() => {
     navigationGenerationRef.current += 1;
-    // A frame scheduled for the previous session must not run after the
-    // session identity changes, otherwise it can scroll the new conversation
-    // to the old session's bottom during the handoff.
-    followOutputCancelRef.current?.();
-    followOutputCancelRef.current = null;
-    followOutputRef.current = true;
-    setShowScrollDown(false);
     setNavigationLoading(false);
     setVirtualFirstItemIndex(100_000);
   }, [sessionId, workspaceCwd]);
-
-  const handleThreadScroll = useCallback(() => {
-    const scroller = scrollRef.current;
-    if (!scroller) return;
-    const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 96;
-    followOutputRef.current = nearBottom;
-    setShowScrollDown(!nearBottom);
-  }, []);
-
-  const attachScroller = useCallback((element: Window | HTMLElement | null) => {
-    if (scrollRef.current) scrollRef.current.removeEventListener("scroll", handleThreadScroll);
-    scrollRef.current = element instanceof HTMLElement ? element as HTMLDivElement : null;
-    if (scrollRef.current) {
-      // Keep the stable class hook used by the conversation rail and by
-      // integrations that locate the active conversation scroller.
-      scrollRef.current.classList.add("conversation-scroller", "overflow-y-auto");
-      scrollRef.current.addEventListener("scroll", handleThreadScroll);
-    }
-  }, [handleThreadScroll]);
-
-  const scheduleFollowOutput = useCallback(() => {
-    if (followOutputCancelRef.current) return;
-    const apply = () => {
-      followOutputCancelRef.current = null;
-      if (!followOutputRef.current) return;
-      if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-      virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "auto" });
-    };
-    if (typeof window.requestAnimationFrame === "function") {
-      const frame = window.requestAnimationFrame(apply);
-      followOutputCancelRef.current = () => window.cancelAnimationFrame(frame);
-    } else {
-      // Keep jsdom/tests deterministic; browsers use the frame-coalesced path.
-      apply();
-    }
-  }, []);
-
-  useEffect(() => {
-    if (followOutputRef.current) scheduleFollowOutput();
-  }, [scheduleFollowOutput, blocks]);
-
-  useEffect(() => () => {
-    followOutputCancelRef.current?.();
-    followOutputCancelRef.current = null;
-  }, []);
-
-  // When a new turn starts (user sends a message or the agent resumes), snap
-  // the view back to the newest content. The user may have scrolled up to read
-  // history; sending a message — or receiving live output — must always bring
-  // the latest message into view instead of leaving the thread pinned to the
-  // old position.
-  const wasWorking = useRef(false);
-  useEffect(() => {
-    if (working && !wasWorking.current) {
-      // Only snap to the bottom on a NEW turn if the user is not deliberately
-      // reading history (followOutputRef stays false after a nav click).
-      if (followOutputRef.current === false) return;
-      followOutputRef.current = true;
-      setShowScrollDown(false);
-      const scroller = scrollRef.current;
-      if (scroller) scroller.scrollTop = scroller.scrollHeight;
-      virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "auto" });
-    }
-    wasWorking.current = working;
-  }, [working]);
 
   // One anchor transaction owns each in-flight prepend. Both Virtuoso's
   // startReached callback and navigation can request the same page; sharing
@@ -191,7 +122,30 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
     await loadOlderAndAnchor();
   }, [loadOlderAndAnchor]);
 
-  const smoothScroll = useCallback(() => !window.matchMedia("(prefers-reduced-motion: reduce)").matches, []);
+  // Virtuoso fires startReached once per arrival at the top; if that one
+  // attempt failed (a transport hiccup, a restarting backend), a user who
+  // keeps scrolling up would never trigger another load. Retry on every
+  // fresh upward arrival at the top instead.
+  const topRetriedRef = useRef(false);
+  const handleScrollerScroll = useCallback(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    if (scroller.scrollTop > 64) {
+      topRetriedRef.current = false;
+      return;
+    }
+    if (topRetriedRef.current) return;
+    topRetriedRef.current = true;
+    const state = useRuntimeStore.getState();
+    if (!state.historyHasMore || !state.historyCursor || state.historyLoading) return;
+    void loadOlderAndAnchor();
+  }, [loadOlderAndAnchor]);
+
+  const attachScrollerWithHistoryRetry = useCallback((element: Window | HTMLElement | null) => {
+    if (element instanceof HTMLElement) element.removeEventListener("scroll", handleScrollerScroll);
+    attachScroller(element);
+    if (element instanceof HTMLElement) element.addEventListener("scroll", handleScrollerScroll, { passive: true });
+  }, [attachScroller, handleScrollerScroll]);
 
   // Runs fn after `delay` only while the page still shows the same session;
   // every pending handle is tracked so newer interactions/unmount can cancel.
@@ -274,7 +228,7 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
 
   const locateBlock = useCallback(async (id: string, options: { highlight?: boolean } = {}): Promise<boolean> => {
     const token = ++navigationGenerationRef.current;
-    followOutputRef.current = false;
+    pauseFollowing();
     cancelPendingScrollTimers();
     const expectedSessionId = activeSessionId ?? sessionId ?? null;
     let state = useRuntimeStore.getState();
@@ -309,7 +263,7 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
     } finally {
       if (navigationGenerationRef.current === token) setNavigationLoading(false);
     }
-  }, [activeSessionId, cancelPendingScrollTimers, loadOlderAndAnchor, scheduleSessionScoped, scrollToLoadedTarget, sessionId, workspaceCwd]);
+  }, [activeSessionId, cancelPendingScrollTimers, pauseFollowing, loadOlderAndAnchor, scheduleSessionScoped, scrollToLoadedTarget, sessionId, workspaceCwd]);
 
   const handleNavSelect = useCallback((id: string) => {
     void locateBlock(id);
@@ -345,33 +299,13 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
   const scrollToBottom = useCallback(() => {
     navigationGenerationRef.current += 1;
     setNavigationLoading(false);
-    followOutputRef.current = true;
     cancelPendingScrollTimers();
-    const scroller = scrollRef.current;
-    if (scroller) {
-      scroller.scrollTo({ top: scroller.scrollHeight, behavior: smoothScroll() ? "smooth" : "auto" });
-      scroller.scrollTop = scroller.scrollHeight;
-    }
-    virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: smoothScroll() ? "smooth" : "auto" });
-  }, [cancelPendingScrollTimers, smoothScroll]);
+    resumeFollowing();
+  }, [cancelPendingScrollTimers, resumeFollowing]);
 
-  const startNewTurn = useCallback(() => {
-    navigationGenerationRef.current += 1;
-    setNavigationLoading(false);
-    followOutputRef.current = true;
-    setShowScrollDown(false);
-    cancelPendingScrollTimers();
-    const snapToBottom = () => {
-      const scroller = scrollRef.current;
-      if (scroller) scroller.scrollTop = scroller.scrollHeight;
-      virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "auto" });
-    };
-    snapToBottom();
-    // The optimistic user block lands right after; scroll again once the
-    // block list has grown so the new message is actually in view.
-    scheduleSessionScoped(snapToBottom, 50);
-    scheduleSessionScoped(snapToBottom, 200);
-  }, [cancelPendingScrollTimers, scheduleSessionScoped]);
+  // Sending is an explicit request to follow again, even while browsing an
+  // older answer. New list measurements continue the pin; no guessed timers.
+  const startNewTurn = scrollToBottom;
 
-  return { scrollRef, virtuosoRef, showScrollDown, virtualFirstItemIndex, navigationLoading, attachScroller, handleLoadOlder, handleNavSelect, scrollToBottom, startNewTurn };
+  return { scrollRef, virtuosoRef, showScrollDown, virtualFirstItemIndex, navigationLoading, attachScroller: attachScrollerWithHistoryRetry, handleLoadOlder, handleNavSelect, scrollToBottom, startNewTurn, followOutput, handleListHeightChanged };
 }

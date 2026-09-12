@@ -9,6 +9,8 @@
  *     snapshot cannot clear a turn that is demonstrably alive.
  *   - `localMutation`: bumped by user-initiated mutations (prompt, model,
  *     abort) so an in-flight history read cannot overwrite optimistic blocks.
+ *   - `historyWindow`: bumped when pagination prepends an older page, so an
+ *     asynchronous recovery probe cannot replace the newly expanded window.
  *   - `promptMonitor`: bumped when the late-stream prompt monitor must stop.
  *  `turnState.errored` records whether the turn in flight ended in a
  *  non-recoverable error, so `session.idle` can settle to error instead of ready. */
@@ -17,6 +19,7 @@ export const generations = {
   connection: 0,
   activity: 0,
   localMutation: 0,
+  historyWindow: 0,
   promptMonitor: 0,
 };
 

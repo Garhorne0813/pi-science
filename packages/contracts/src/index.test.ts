@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { artifactManifestSchema, createResearchLoopSchema, createSessionRequestSchema, executionEventSchema, executionRecordSchema, gatewayHealthSchema, jobRecordSchema, piRpcCommandSchema, researchLoopSchema, sessionEventSchema, sessionMessagePageSchema, sessionStatsSchema, sessionUserMessageIndexSchema, skillContentSchema } from "./index.js";
+import { artifactManifestSchema, conversationEventV2Schema, conversationSnapshotSchema, conversationToolUpdatedPayloadSchema, createResearchLoopSchema, createSessionRequestSchema, defaultProgressAppearance, executionEventSchema, executionRecordSchema, gatewayHealthSchema, jobRecordSchema, piRpcCommandSchema, progressAppearanceInputSchema, progressAppearanceSchema, researchLoopSchema, sessionEventSchema, sessionMessagePageSchema, sessionStatsSchema, sessionUserMessageIndexSchema, skillContentSchema, textDeltaPayloadSchema } from "./index.js";
 
 describe("gateway contracts", () => {
   it("accepts a healthy Node gateway response", () => {
@@ -105,5 +105,83 @@ describe("gateway contracts", () => {
       skill_id: "s1", name: "alpha", digest: "0123456789abcdef",
       source: "builtin", location: "alpha/SKILL.md",
     })).toThrow();
+  });
+});
+
+describe("progress appearance schemas", () => {
+  it("rejects a legal-in-another-slot pattern on the write path", () => {
+    const body = { preset: "quiet", patterns: { ...defaultProgressAppearance.patterns, thinking: "text-decode" } };
+    expect(() => progressAppearanceInputSchema.parse(body)).toThrow();
+  });
+
+  it("recovers per-field defaults when reading invalid stored values", () => {
+    const stored = {
+      version: 1,
+      preset: "quiet",
+      motion: "full",
+      speed: 9,
+      colorMode: "custom",
+      customColor: "not-a-color",
+      patterns: { ...defaultProgressAppearance.patterns, thinking: "text-decode", currentActivity: "inline-signal" },
+    };
+    const parsed = progressAppearanceSchema.parse(stored);
+    expect(parsed.speed).toBe(1);
+    expect(parsed.customColor).toBeNull();
+    expect(parsed.patterns.thinking).toBe("aicss-auto");
+    expect(parsed.patterns.currentActivity).toBe("inline-signal");
+  });
+
+  it("keeps legal explicit pattern choices on both paths", () => {
+    const body = { patterns: { ...defaultProgressAppearance.patterns, waiting: "inline-spark" } };
+    expect(progressAppearanceInputSchema.parse(body).patterns.waiting).toBe("inline-spark");
+    expect(progressAppearanceSchema.parse(body).patterns.waiting).toBe("inline-spark");
+  });
+});
+
+describe("conversation presentation protocol v2", () => {
+  it("validates the durable envelope and revisioned text payload", () => {
+    const event = conversationEventV2Schema.parse({
+      schemaVersion: 2,
+      workspaceId: "/tmp/project",
+      sessionId: "session-1",
+      streamEpoch: "epoch-1",
+      eventId: "epoch-1:12",
+      seq: 12,
+      turnId: "turn-1",
+      runId: "run-1",
+      itemId: "answer-1",
+      occurredAt: "2026-09-08T00:00:00.000Z",
+      type: "item.text.delta",
+      payload: textDeltaPayloadSchema.parse({
+        partId: "answer-1",
+        phase: "final_answer",
+        baseRevision: 0,
+        revision: 1,
+        text: "answer",
+      }),
+    });
+    expect(event).toMatchObject({ type: "item.text.delta", turnId: "turn-1", seq: 12 });
+  });
+
+  it("keeps tool status validation separate from the generic envelope", () => {
+    expect(conversationToolUpdatedPayloadSchema.parse({ callId: "call-1", tool: "bash", status: "error" })).toMatchObject({ callId: "call-1" });
+    expect(() => conversationToolUpdatedPayloadSchema.parse({ callId: "call-1", tool: "bash", status: "success" })).toThrow();
+  });
+
+  it("requires one snapshot waterline for history reconciliation", () => {
+    const snapshot = conversationSnapshotSchema.parse({
+      schemaVersion: 2,
+      sessionId: "session-1",
+      streamEpoch: "epoch-1",
+      throughSeq: 12,
+      snapshotVersion: "snapshot-12",
+      turns: [],
+      runs: [{ turnId: "turn-1", runId: "run-1", state: "completed" }],
+      items: [],
+      pendingInteractions: [],
+      page: { nextCursor: null, hasMore: false },
+    });
+    expect(snapshot).toMatchObject({ throughSeq: 12, runs: [{ state: "completed", issues: [] }] });
+    expect(() => conversationSnapshotSchema.parse({ ...snapshot, page: { nextCursor: "cursor", hasMore: "yes" } })).toThrow();
   });
 });

@@ -1,0 +1,80 @@
+import { useEffect, useSyncExternalStore, type ReactNode } from "react";
+import { RotateCcw } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import type { ProgressAppearance } from "@pi-science/contracts";
+import { defaultProgressAppearance } from "@pi-science/contracts";
+import { ProgressVisual } from "../progress/ProgressVisual";
+import {
+  getProgressSettings,
+  seedProgressAppearance,
+  subscribeProgressSettings,
+  updateProgressAppearance,
+  updateProgressPattern,
+  updateProgressPreset,
+} from "../progress/progress-settings-store";
+import { normalizeProgressAppearance, patternsForSlot, type ProgressSlot } from "../progress/ProgressPatternCatalog";
+import type { SettingsConfig } from "../../lib/settings";
+import { SettingsSelectMenu } from "./SettingsSelectMenu";
+
+// Only pattern sets a preset carries; speed and color are independent of the
+// preset identity. The wired slots (thinking / currentActivity / waiting) stay
+// observably distinct so each preset changes what the conversation shows.
+const PRESET_PATTERNS: Record<Exclude<ProgressAppearance["preset"], "custom">, ProgressAppearance["patterns"]> = {
+  quiet: { thinking: "aicss-auto", currentActivity: "aicss-auto", streamingAnswer: "text-decode", imageGeneration: "image-scan", waiting: "aicss-auto", completed: "static-check" },
+  research: { thinking: "inline-orbit", currentActivity: "inline-ripple", streamingAnswer: "text-decode", imageGeneration: "image-scan", waiting: "inline-glyph", completed: "static-check" },
+  science: { thinking: "inline-matrix", currentActivity: "inline-signal", streamingAnswer: "text-cascade", imageGeneration: "image-tiles", waiting: "inline-spark", completed: "static-check" },
+};
+
+const PROGRESS_SELECT_CLASS = "max-w-none border-transparent focus-visible:border-transparent focus-visible:ring-0 data-[state=open]:border-transparent";
+
+// Only slots with a production consumer are configurable; a setting without
+// an observable effect must not be offered (streamingAnswer/imageGeneration
+// open up when their consumers ship).
+const SLOTS: Array<{ id: ProgressSlot; labelKey: string; sampleKey: string }> = [
+  { id: "thinking", labelKey: "settings.progress.slot.thinking", sampleKey: "conversation.activity.thinking" },
+  { id: "currentActivity", labelKey: "settings.progress.slot.activity", sampleKey: "settings.progress.sample.activity" },
+  { id: "waiting", labelKey: "settings.progress.slot.waiting", sampleKey: "conversation.activity.waitingInput" },
+];
+
+function configFrom(input: ProgressAppearance | undefined): ProgressAppearance {
+  return normalizeProgressAppearance(input ? structuredClone(input) : structuredClone(defaultProgressAppearance));
+}
+
+export function ProgressTab({ config }: { config: SettingsConfig }) {
+  const { t } = useTranslation();
+  const { appearance: draft, saving, saveError, dirty } = useSyncExternalStore(subscribeProgressSettings, getProgressSettings, getProgressSettings);
+  // The settings payload usually resolves before this tab mounts; seed the
+  // shared controller when no local state has established the appearance yet.
+  useEffect(() => { seedProgressAppearance(config.progress_appearance); }, [config.progress_appearance]);
+
+  const update = (patch: Partial<ProgressAppearance>) => updateProgressAppearance({ ...draft, ...patch });
+  const updatePreset = (preset: ProgressAppearance["preset"]) => updateProgressPreset(preset, preset === "custom" ? undefined : structuredClone(PRESET_PATTERNS[preset]));
+  const reset = () => updateProgressAppearance(configFrom(undefined));
+
+  return <div className="space-y-4">
+    <section className="overflow-hidden rounded-card border border-faint bg-surface-2/40">
+      <div className="flex min-h-14 items-center justify-between gap-3 border-b border-faint px-4 py-2">
+        <div><h2 className="text-[13px] font-semibold text-text">{t("settings.progress.title")}</h2><p className="mt-0.5 text-ui-caption text-muted">{t("settings.progress.description")}</p></div>
+        <button type="button" disabled={saving} onClick={reset} className="flex min-h-8 items-center gap-1.5 rounded-input px-2 text-ui-caption text-muted hover:bg-surface-hover hover:text-text"><RotateCcw size={13} />{t("settings.progress.reset")}</button>
+      </div>
+      {saveError && dirty && <div className="border-b border-faint bg-error-fill/40 px-4 py-2 text-ui-caption text-error-text" role="status">{t("settings.progress.saveError")}</div>}
+      <div className="divide-y divide-faint">
+        <SettingRow label={t("settings.progress.preset")}><SettingsSelectMenu variant="row" className={PROGRESS_SELECT_CLASS} selectionClassName="bg-surface-selected" ariaLabel={t("settings.progress.preset")} value={draft.preset} options={["quiet", "research", "science", "custom"].map((value) => ({ value, label: t(`settings.progress.preset.${value}`) }))} onSelect={(value) => updatePreset(value as ProgressAppearance["preset"])} /></SettingRow>
+        <SettingRow label={t("settings.progress.motion")}><SettingsSelectMenu variant="row" className={PROGRESS_SELECT_CLASS} selectionClassName="bg-surface-selected" ariaLabel={t("settings.progress.motion")} value={draft.motion} options={["system", "full", "off"].map((value) => ({ value, label: t(`settings.progress.motion.${value}`) }))} onSelect={(value) => update({ motion: value as ProgressAppearance["motion"] })} /></SettingRow>
+        <SettingRow label={t("settings.progress.color")}><div className="flex items-center gap-2"><SettingsSelectMenu variant="row" className={PROGRESS_SELECT_CLASS} selectionClassName="bg-surface-selected" ariaLabel={t("settings.progress.color")} value={draft.colorMode} options={["semantic", "custom"].map((value) => ({ value, label: t(`settings.progress.color.${value}`) }))} onSelect={(value) => update({ colorMode: value as ProgressAppearance["colorMode"] })} />{draft.colorMode === "custom" && <input aria-label={t("settings.progress.customColor")} type="color" value={draft.customColor || "#679efe"} onChange={(event) => update({ customColor: event.target.value })} className="h-8 w-10 cursor-pointer rounded-input border border-border bg-transparent p-0.5" />}</div></SettingRow>
+        <SettingRow label={t("settings.progress.speed")}><input aria-label={t("settings.progress.speed")} type="range" min="0.5" max="2" step="0.25" value={draft.speed} onChange={(event) => update({ speed: Number(event.target.value) })} className="w-40 accent-accent" /><span className="w-10 text-right font-mono text-ui-caption text-muted">{draft.speed}x</span></SettingRow>
+      </div>
+    </section>
+
+    <section className="overflow-hidden rounded-card border border-faint bg-surface-2/40">
+      <div className="border-b border-faint px-4 py-3"><h2 className="text-[13px] font-semibold text-text">{t("settings.progress.patterns")}</h2></div>
+      <div className="divide-y divide-faint">
+        {SLOTS.map((slot) => <SettingRow key={slot.id} label={t(slot.labelKey)} preview={<ProgressVisual slot={slot.id} config={draft} compact state={slot.id === "completed" ? "completed" : "running"} text={t(slot.sampleKey)} />}><SettingsSelectMenu variant="row" className={PROGRESS_SELECT_CLASS} selectionClassName="bg-surface-selected" ariaLabel={t(slot.labelKey)} value={draft.patterns[slot.id]} options={patternsForSlot(slot.id).map((pattern) => ({ value: pattern.id, label: t(pattern.labelKey) }))} onSelect={(value) => updateProgressPattern(slot.id, value as ProgressAppearance["patterns"][ProgressSlot])} /></SettingRow>)}
+      </div>
+    </section>
+  </div>;
+}
+
+function SettingRow({ label, children, preview }: { label: string; children: ReactNode; preview?: ReactNode }) {
+  return <div className="flex min-h-14 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2"><span className="min-w-[9rem] flex-1 text-ui-label font-medium text-text">{label}</span><div className="flex min-w-[12rem] flex-[0_1_20rem] items-center justify-end gap-3">{preview && <span className="flex h-8 min-w-12 shrink-0 items-center justify-center text-muted">{preview}</span>}{children}</div></div>;
+}

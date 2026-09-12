@@ -58,6 +58,7 @@ export function SettingsSelectMenu({
   emptyMessage,
   className,
   contentClassName,
+  selectionClassName = "bg-accent-soft",
 }: {
   value: string;
   options: SettingsSelectOption[];
@@ -73,6 +74,7 @@ export function SettingsSelectMenu({
   emptyMessage?: string;
   className?: string;
   contentClassName?: string;
+  selectionClassName?: string;
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -150,7 +152,7 @@ export function SettingsSelectMenu({
                 <DropdownMenu.RadioItem
                   key={option.value}
                   value={option.value}
-                  className={cn(MENU_ITEM_CLASS, option.value === value && "bg-accent-soft")}
+                  className={cn(MENU_ITEM_CLASS, option.value === value && selectionClassName)}
                 >
                   <span className="min-w-0 flex-1 truncate">{option.label}</span>
                   {option.hint && <span aria-hidden="true" className="max-w-[9rem] shrink-0 truncate font-mono text-ui-caption text-muted">{option.hint}</span>}

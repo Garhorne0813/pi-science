@@ -7,7 +7,15 @@ const SYSTEM_TOOLS = new Set(["context_compaction", "runtime_recovery", "reconne
 export function activityPolicy(block: ToolCallBlock): ToolPresentationPolicy {
   const tool = block.tool.trim().toLowerCase();
   if (PLAN_CONTROL_TOOLS.has(tool)) return policy("plan-control", false, false, false);
-  if (INTERACTION_TOOLS.has(tool) || block.status === "waiting-approval") return policy("interaction", true, false, false);
+  // An answered approval prompt may only retire the prompt itself. Pure
+  // interaction tools never execute, so their stale prompt disappears; an
+  // execution tool carries the mark only until its real status lands, and
+  // running/done/error stay visible as ordinary execution records.
+  const interactionTool = INTERACTION_TOOLS.has(tool);
+  if (block.interactionResolved && (interactionTool || block.status === "waiting-approval")) {
+    return policy("plan-control", false, false, false);
+  }
+  if (interactionTool || block.status === "waiting-approval") return policy("interaction", true, false, false);
   if (SYSTEM_TOOLS.has(tool)) {
     const recoveryVisible = (tool === "runtime_recovery" || tool === "reconnect") && block.status === "running";
     return policy("system", recoveryVisible || block.status === "error", block.status === "error", false);
@@ -21,7 +29,13 @@ export function isVisibleActivity(block: ToolCallBlock): boolean {
 }
 
 export function executionActivities(blocks: ToolCallBlock[]): ToolCallBlock[] { return blocks.filter((block) => activityPolicy(block).visibleInExecutionTrace); }
-export function executionOperationCount(blocks: ToolCallBlock[]): number { return blocks.filter((block) => activityPolicy(block).countsAsOperation).length; }
+export function executionOperationCount(blocks: ToolCallBlock[]): number {
+  const callIds = new Set<string>();
+  for (const block of blocks) {
+    if (activityPolicy(block).countsAsOperation) callIds.add(block.callId);
+  }
+  return callIds.size;
+}
 
 function policy(plane: ToolPresentationPolicy["plane"], visibleInCurrentActivity: boolean, visibleInExecutionTrace: boolean, countsAsOperation: boolean): ToolPresentationPolicy {
   return { plane, visibleInCurrentActivity, visibleInExecutionTrace, countsAsOperation };

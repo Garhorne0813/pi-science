@@ -178,7 +178,7 @@ export class PiScienceClient {
     this.transport.disconnect();
   }
 
-  onEvent(fn: (event: PiScienceEvent) => void): () => void {
+  onEvent(fn: (event: PiScienceEvent) => unknown): () => void {
     return this.transport.onEvent(fn);
   }
 }

@@ -7,6 +7,7 @@ import { queryClient } from "../../lib/client/query-client";
 import { modelResourceKeys, modelResourcesApi } from "../../lib/model-resources";
 import type { ModelEndpointResource, ModelProvider, ModelResource } from "../../lib/model-resources";
 import { SettingsSelectMenu } from "./SettingsSelectMenu";
+import { Modal } from "../ui/Modal";
 
 type ProviderForm = {
   name: string;
@@ -17,6 +18,7 @@ type ProviderForm = {
 };
 
 const EMPTY_FORM: ProviderForm = { name: "", baseUrl: "", protocol: "openai", authKind: "api_key", apiKey: "" };
+const EMPTY_MODELS: ModelResource[] = [];
 
 type TestResult = { ok: true; health: "ready"; models: Array<{ id: string; display_name: string }> };
 
@@ -47,7 +49,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
   const providers = (providersRead.data?.providers ?? []).filter((provider) => provider.kind === "user");
   const endpoints = endpointsRead.data?.endpoints ?? [];
   const bindings = bindingsRead.data?.bindings ?? [];
-  const allModels = modelsRead.data?.models ?? [];
+  const allModels = modelsRead.data?.models ?? EMPTY_MODELS;
 
   const connectionFor = (providerId: string): ModelEndpointResource | undefined => {
     const binding = bindings.find((item) => item.provider_id === providerId);
@@ -58,7 +60,12 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
     protocol === "anthropic" ? t("settings.resources.anthropic", { defaultValue: "Anthropic-compatible" })
       : protocol === "ollama" ? t("settings.resources.ollama", { defaultValue: "Ollama" })
       : t("settings.resources.openai", { defaultValue: "OpenAI-compatible" });
-  const editingModels = useMemo(() => (modal?.mode === "edit" ? modelsFor(modal.provider.id).sort((a, b) => a.model_id.localeCompare(b.model_id)) : []), [modal, allModels, providersRead.data]);
+  const editingModels = useMemo(
+    () => (modal?.mode === "edit"
+      ? allModels.filter((model) => model.provider_id === modal.provider.id).sort((a, b) => a.model_id.localeCompare(b.model_id))
+      : []),
+    [modal, allModels],
+  );
 
   const invalidate = async () => {
     await Promise.all([
@@ -367,11 +374,11 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
 
       {/* Add / Edit provider modal */}
       {modal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
-          <div className="max-h-[85vh] w-full max-w-lg space-y-3 overflow-auto rounded-card border border-faint bg-surface-raised p-4">
-            <p className="text-sm font-semibold text-text">
-              {modal.mode === "edit" ? t("settings.resources.editProviderTitle", { defaultValue: "Edit provider" }) : t("settings.resources.addProvider", { defaultValue: "Add Provider" })}
-            </p>
+        <Modal
+          title={modal.mode === "edit" ? t("settings.resources.editProviderTitle", { defaultValue: "Edit provider" }) : t("settings.resources.addProvider", { defaultValue: "Add Provider" })}
+          onClose={() => { if (busy === null) setModal(null); }}
+        >
+          <div className="space-y-3">
             {modal.mode === "edit" && (
               <div className="flex items-center gap-2 rounded-input bg-surface-2 px-3 py-2 text-[11px]">
                 <span className="text-muted">{t("settings.resources.connection", { defaultValue: "Connection" })}</span>
@@ -484,14 +491,17 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {/* Delete confirmation */}
       {confirmDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="alertdialog" aria-modal="true">
-          <div className="w-full max-w-sm space-y-3 rounded-card border border-faint bg-surface-raised p-4">
-            <p className="text-sm font-semibold text-text">{t("settings.resources.deleteTitle", { defaultValue: "Delete" })} "{confirmDelete.name}"?</p>
+        <Modal
+          title={`${t("settings.resources.deleteTitle", { defaultValue: "Delete" })} "${confirmDelete.name}"?`}
+          onClose={() => { if (busy === null) setConfirmDelete(null); }}
+          contentClassName="max-w-sm"
+        >
+          <div className="space-y-3">
             <p className="text-[11px] leading-relaxed text-muted">
               {t("settings.resources.deleteBody", { defaultValue: "This will remove its models, its binding, its private API connection, and its managed API credential. Shared connections or credentials will not be removed." })}
             </p>
@@ -503,7 +513,7 @@ export function ModelResourceSection({ onConfigReload }: { onConfigReload: () =>
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
     </section>
   );

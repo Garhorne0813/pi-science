@@ -11,6 +11,7 @@ import { consumeSuppressedConnectionRecovery, reconcileAfterConnectionLoss, reco
 import { applyAiSessionName } from "./naming";
 import { applySessionReplacements } from "./session-replacement";
 import { loadSessionsInternal, optimisticSessionIds } from "./sessions";
+import { hasActivePendingInteraction } from "./types";
 import { useRuntimeStore } from "./store";
 import type { PendingInteraction, PendingQuestionnaire } from "./types";
 
@@ -63,8 +64,102 @@ function maybeGenerateAiTitle(sessionId: string, cwd?: string): void {
     });
 }
 
-function questionnaireQuestions(value: unknown): PendingQuestionnaire["questions"] {
-  if (!Array.isArray(value)) return [];
+/** A live turn whose event stream goes silent must not latch "Working"
+ *  forever: an open EventSource is not proof that bytes still flow, and the
+ *  prompt-time monitor exits as soon as the first live event arrives. While
+ *  a turn is live this watchdog tracks the last event arrival; on silence it
+ *  reconnects the stream once (the missed tail replays from the durable
+ *  event store) and then probes the authoritative state — an idle runtime
+ *  with no pending interaction settles the turn and resyncs history. */
+const TURN_WATCHDOG_TICK_MS = 5_000;
+const TURN_WATCHDOG_SILENCE_MS = 20_000;
+let turnWatchdogTimer: ReturnType<typeof setInterval> | null = null;
+let turnWatchdogReconnected = false;
+let lastTurnEventAt = 0;
+
+function noteTurnEvent(): void {
+  lastTurnEventAt = Date.now();
+}
+
+function disarmTurnWatchdog(): void {
+  if (turnWatchdogTimer) {
+    clearInterval(turnWatchdogTimer);
+    turnWatchdogTimer = null;
+  }
+  turnWatchdogReconnected = false;
+}
+
+/** Arm (or refresh) the live-turn watchdog. Safe to call on every live
+ *  event: the timer exists once and reads the current store each tick.
+ *  Exported for callers that re-activate a turn outside this listener
+ *  (e.g. an answered interaction). */
+export function ensureTurnWatchdog(): void {
+  noteTurnEvent();
+  if (turnWatchdogTimer) return;
+  turnWatchdogTimer = globalThis.setInterval(() => { void runTurnWatchdogTick(); }, TURN_WATCHDOG_TICK_MS);
+}
+
+async function runTurnWatchdogTick(): Promise<void> {
+  const client = _listenerClient;
+  const current = useRuntimeStore.getState();
+  if (
+    !client
+    || !current.working
+    || !current.activeSessionId
+    || !current.cwd
+    || current.turnLifecycle === "waiting"
+    || current.turnLifecycle === "stopping"
+  ) {
+    disarmTurnWatchdog();
+    return;
+  }
+  const silentFor = Date.now() - lastTurnEventAt;
+  if (silentFor < TURN_WATCHDOG_SILENCE_MS) {
+    turnWatchdogReconnected = false;
+    return;
+  }
+  const sessionId = current.activeSessionId;
+  const cwd = current.cwd;
+  if (!turnWatchdogReconnected) {
+    turnWatchdogReconnected = true;
+    client.reconnect(sessionId, cwd);
+    return;
+  }
+  try {
+    const runtimeState = await client.getSessionState(sessionId, cwd);
+    const latest = useRuntimeStore.getState();
+    if (!latest.working || latest.activeSessionId !== sessionId || latest.cwd !== cwd) {
+      disarmTurnWatchdog();
+      return;
+    }
+    if (hasActivePendingInteraction(latest.pendingInteraction, latest.pendingQuestionnaire)) {
+      useRuntimeStore.setState({ working: false, turnLifecycle: "waiting", status: "ready" });
+      disarmTurnWatchdog();
+      return;
+    }
+    const runtimeWorking = runtimeState.is_streaming
+      || runtimeState.is_compacting
+      || runtimeState.pending_message_count > 0;
+    if (!runtimeWorking) {
+      const successful = !turnState.errored;
+      ++generations.activity;
+      useRuntimeStore.setState({
+        working: false,
+        turnLifecycle: successful ? "settled" : "failed",
+        status: successful ? "ready" : "error",
+        pendingInteraction: null,
+        pendingQuestionnaire: null,
+      });
+      markWorkspaceFilesChanged();
+      if (successful) void resyncCompletedHistory(sessionId, cwd);
+      disarmTurnWatchdog();
+    }
+  } catch {
+    // A failed probe is retried on the next tick.
+  }
+}
+
+function questionnaireQuestions(value: unknown): PendingQuestionnaire["questions"] {  if (!Array.isArray(value)) return [];
   return value.flatMap((rawQuestion) => {
     if (!rawQuestion || typeof rawQuestion !== "object" || Array.isArray(rawQuestion)) return [];
     const question = rawQuestion as Record<string, unknown>;
@@ -103,6 +198,10 @@ export function registerEventListener(client: PiScienceClient) {
     if (event.sessionId && state.activeSessionId && event.sessionId !== state.activeSessionId) {
       return;
     }
+    // Transport lifecycle chatter (connection.connecting/closed/ready) does
+    // not count as turn activity: the watchdog's reconnect emits one and
+    // must not reset its own silence clock.
+    if (!event.type.startsWith("connection.")) noteTurnEvent();
 
     if (event.type === "session.replaced") {
       const replacementSessionId = String(event.replacementSessionId || "");
@@ -130,7 +229,7 @@ export function registerEventListener(client: PiScienceClient) {
         const cwd = state.cwd;
         void reconcileAfterGap(sessionId, cwd);
       }
-      return;
+      return false;
     }
 
     if (event.type === "connection.connecting" || event.type === "connection.reconnecting") {
@@ -249,6 +348,39 @@ export function registerEventListener(client: PiScienceClient) {
       return;
     }
 
+    const payload = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
+      ? event.payload as Record<string, unknown>
+      : {};
+
+    if (event.type === "interaction.requested") {
+      const interactionId = String(event.interactionId || event.requestId || payload.interactionId || payload.requestId || event.itemId || "");
+      if (!interactionId) return false;
+      ++generations.activity;
+      const method = String(event.method || payload.method || "input") as PendingInteraction["method"];
+      useRuntimeStore.setState({
+        working: true,
+        turnLifecycle: "waiting",
+        status: "ready",
+        pendingInteraction: {
+          requestId: interactionId,
+          method: ["confirm", "select", "input", "editor"].includes(method) ? method : "input",
+          title: String(event.title || payload.title || "Question"),
+          message: String(event.message || payload.message || ""),
+          options: Array.isArray(event.options || payload.options) ? (event.options || payload.options) as PendingInteraction["options"] : [],
+          placeholder: String(event.placeholder || payload.placeholder || ""),
+          prefill: String(event.prefill || payload.prefill || ""),
+        },
+      });
+      // The reducer still records the envelope; the interaction card is a
+      // separate state dimension and must not be hidden by process folding.
+    } else if (event.type === "interaction.resolved") {
+      const interactionId = String(event.interactionId || event.requestId || payload.interactionId || payload.requestId || event.itemId || "");
+      const current = useRuntimeStore.getState();
+      if (current.pendingInteraction?.requestId === interactionId) {
+        useRuntimeStore.setState({ pendingInteraction: null, turnLifecycle: current.working ? "active" : current.turnLifecycle });
+      }
+    }
+
     if (event.type === "permission.asked" || event.type === "question.asked") {
       ++generations.activity;
       const method = event.type === "permission.asked"
@@ -272,16 +404,28 @@ export function registerEventListener(client: PiScienceClient) {
       return;
     }
 
-    if (event.type === "agent_start") {
+    const eventStatus = String(event.status ?? payload.status ?? "");
+    const runStarted = event.type === "agent_start" || event.type === "run.started";
+    const activityEvent = event.type === "text.updated"
+      || event.type === "item.text.delta"
+      || event.type === "item.snapshot"
+      || event.type === "item.started"
+      || event.type === "item.completed"
+      || event.type === "tool.updated"
+      || event.type === "plan.updated";
+    const knownTerminalRun = typeof event.runId === "string" && state.thread.foldState?.terminalRunIds.includes(event.runId);
+    if (runStarted && !knownTerminalRun && state.turnLifecycle !== "stopping") {
       ++generations.activity;
       resetTurnBuffer();
       turnState.errored = false;
       useRuntimeStore.setState({ working: true, turnLifecycle: "active", status: "ready" });
-    } else if (event.type === "text.updated" || event.type === "tool.updated") {
+      ensureTurnWatchdog();
+    } else if (activityEvent) {
       ++generations.activity;
-      if (!blocksLateEvents(state.turnLifecycle)) {
+      if (!blocksLateEvents(state.turnLifecycle) && state.turnLifecycle !== "stopping" && !knownTerminalRun) {
         turnState.errored = false;
-        useRuntimeStore.setState({ working: true, turnLifecycle: event.type === "tool.updated" && String(event.status || "") === "waiting-approval" ? "waiting" : "active", status: "ready" });
+        useRuntimeStore.setState({ working: true, turnLifecycle: event.type === "tool.updated" && eventStatus === "waiting-approval" ? "waiting" : "active", status: "ready" });
+        if (state.turnLifecycle !== "waiting") ensureTurnWatchdog();
       }
     } else if (event.type === "compaction.updated") {
       ++generations.activity;
@@ -294,14 +438,15 @@ export function registerEventListener(client: PiScienceClient) {
       // No extra tree refresh here: the server publishes this event from the
       // agent_settled observer, and that settled event already bumped the
       // file revision above. Marking again would double-refresh every turn.
-    } else if (event.type === "agent_settled" || event.type === "session.idle") {
+    } else if (event.type === "agent_settled" || event.type === "session.idle" || event.type === "run.completed" || event.type === "run.cancelled") {
       ++generations.activity;
       if (!blocksLateEvents(state.turnLifecycle)) {
         const successful = !turnState.errored;
+        const cancelled = event.type === "run.cancelled" || event.cancelled === true;
         useRuntimeStore.setState({
           working: false,
-          turnLifecycle: successful ? "settled" : "failed",
-          status: successful ? "ready" : "error",
+          turnLifecycle: cancelled ? "aborted" : successful ? "settled" : "failed",
+          status: successful || cancelled ? "ready" : "error",
           pendingInteraction: null,
           pendingQuestionnaire: null,
         });
@@ -321,7 +466,7 @@ export function registerEventListener(client: PiScienceClient) {
       if (stats && typeof stats === "object" && state.activeSessionId && event.sessionId === state.activeSessionId) {
         useRuntimeStore.setState({ sessionStats: stats });
       }
-    } else if (event.type === "error") {
+    } else if (event.type === "error" || event.type === "run.failed") {
       ++generations.activity;
       if (event.recoverable === true) {
         if (!blocksLateEvents(state.turnLifecycle)) useRuntimeStore.setState({ turnLifecycle: "recovering", status: "connecting" });
@@ -333,9 +478,14 @@ export function registerEventListener(client: PiScienceClient) {
 
     const current = useRuntimeStore.getState();
     const newThread = foldEvent(current.thread, event);
-    if (newThread.blocks !== current.thread.blocks) {
+    if (newThread.blocks !== current.thread.blocks || newThread.foldState !== current.thread.foldState) {
       useRuntimeStore.setState({ thread: newThread });
     }
+    if (
+      event.schemaVersion === 2
+      && newThread.foldState?.pendingEvents.some((pending) => pending.eventId === event.eventId)
+    ) return false;
+    return true;
   });
 }
 

@@ -2,7 +2,8 @@
  *  stream attach or a transport failure, and the missing-session reset. */
 
 import { clearCachedMessages, clearAiTitle, clearSessionName, getClient, type PiScienceClient, type SessionState } from "../client/pi-science-client";
-import { attachTurnArtifacts, emptyThread, mergeHistoryWithLive, resetTurnBuffer, threadFromMessages } from "./event-fold";
+import { attachTurnArtifacts, emptyThread, resetTurnBuffer } from "./event-fold";
+import { mergeRecoveryHistoryWindow } from "./history-window-recovery";
 import { fetchPersistedTurnArtifacts } from "./turn-artifacts";
 import { markWorkspaceFilesChanged } from "./file-revision";
 import { generations, turnState } from "./generations";
@@ -88,15 +89,18 @@ function waitForRecovery(ms: number): Promise<void> {
 
 export async function resyncCompletedHistory(sessionId: string, cwd: string): Promise<void> {
   const generation = generations.connection;
+  const activityGeneration = generations.activity;
   try {
+    const client = getClient();
     const [historyResult, artifactsResult] = await Promise.allSettled([
-      getClient().getMessagesPage(sessionId, cwd),
+      client.getMessagesPage(sessionId, cwd),
       fetchPersistedTurnArtifacts(sessionId, cwd),
     ]);
     const current = useRuntimeStore.getState();
     if (historyResult.status !== "fulfilled") return;
     if (
       generation !== generations.connection
+      || activityGeneration !== generations.activity
       || current.activeSessionId !== sessionId
       || current.cwd !== cwd
       || current.working
@@ -107,10 +111,25 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
     // snapshot is authoritative. An empty snapshot can still race the flush.
     if (history.messages.length === 0 && current.thread.blocks.length > 0) return;
     const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
+    // A latest page can move completely beyond the already loaded window after
+    // a long tool-heavy turn. Walk older pages until lineage is established;
+    // only a complete no-overlap history may replace the window wholesale.
+    const historyWindowGeneration = generations.historyWindow;
+    const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, current.thread, history, { keepLiveExtras: false });
+    const latest = useRuntimeStore.getState();
+    if (
+      generation !== generations.connection
+      || activityGeneration !== generations.activity
+      || historyWindowGeneration !== generations.historyWindow
+      || latest.activeSessionId !== sessionId
+      || latest.cwd !== cwd
+      || latest.working
+    ) return;
+    const historyHasMore = merged.retainedOlderPrefix ? latest.historyHasMore : merged.boundaryPage.has_more;
     useRuntimeStore.setState({
-      thread: attachTurnArtifacts(threadFromMessages(history.messages), turns, { windowComplete: !history.has_more }),
-      historyCursor: history.next_cursor,
-      historyHasMore: history.has_more,
+      thread: attachTurnArtifacts(merged.thread, turns, { windowComplete: !historyHasMore }),
+      historyCursor: merged.retainedOlderPrefix ? latest.historyCursor : merged.boundaryPage.next_cursor,
+      historyHasMore,
       historyLoading: false,
       historySnapshotVersion: history.snapshot_version,
     });
@@ -218,14 +237,22 @@ async function runConnectionRecovery(
     if (historyResult.status === "fulfilled") {
       const history = historyResult.value;
       const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
-      const restored = mergeHistoryWithLive(
-        attachTurnArtifacts(threadFromMessages(history.messages), turns, { windowComplete: !history.has_more }),
-        useRuntimeStore.getState().thread,
-      );
+      const historyWindowGeneration = generations.historyWindow;
+      const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, useRuntimeStore.getState().thread, history, { keepLiveExtras: true });
+      const latest = useRuntimeStore.getState();
+      if (
+        connectionGeneration !== generations.connection
+        || activityGeneration !== generations.activity
+        || historyWindowGeneration !== generations.historyWindow
+        || latest.activeSessionId !== sessionId
+        || latest.cwd !== cwd
+      ) return;
+      const historyHasMore = merged.retainedOlderPrefix ? latest.historyHasMore : merged.boundaryPage.has_more;
+      const restored = attachTurnArtifacts(merged.thread, turns, { windowComplete: !historyHasMore });
       useRuntimeStore.setState({
         thread: restored,
-        historyCursor: history.next_cursor,
-        historyHasMore: history.has_more,
+        historyCursor: merged.retainedOlderPrefix ? latest.historyCursor : merged.boundaryPage.next_cursor,
+        historyHasMore,
         historyLoading: false,
         historySnapshotVersion: history.snapshot_version,
       });
@@ -293,7 +320,7 @@ export function reconcileAfterConnectionLoss(
   return promise;
 }
 
-/** Recover the authoritative conversation snapshot after a `stream.gap`:"}]} Беларусь.functions.edit  code...  (json) $1? Wrong? Tool output omitted? Need see. ["}]} NakneАҞӘА 全民彩票天天атәуп 天天彩票网.functions.edit  code￣色жәк 彩神争霸输钱json  suliaq  񟿿 เกมสล็อตԥсҭазаара? Unclear JSON valid? Actually tool returned? Need inspect. Wait no output likely? Let's check. уҳәа. [
+/** Recover the authoritative conversation snapshot after a `stream.gap`:
  *  re-read both the message history and the runtime state in parallel, and
  *  base `working` on the authoritative state rather than blindly clearing it.
  *  The new SSE subscription (rebuilt by the client transport) only carries
@@ -326,16 +353,27 @@ export async function reconcileAfterGap(
   }
   // History recovery is independent from busy state. Merge the REST snapshot
   // with live blocks so a text.updated arriving during this request is kept.
+  // If the latest page moved beyond the loaded window, probe older pages until
+  // the overlap (or the actual history beginning) is known.
   if (historyResult.status === "fulfilled") {
     const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
-    const merged = mergeHistoryWithLive(
-      attachTurnArtifacts(threadFromMessages(historyResult.value.messages), turns, { windowComplete: !historyResult.value.has_more }),
-      useRuntimeStore.getState().thread,
-    );
+    const lineageActivityGeneration = generations.activity;
+    const historyWindowGeneration = generations.historyWindow;
+    const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, current.thread, historyResult.value, { keepLiveExtras: true });
+    const latest = useRuntimeStore.getState();
+    if (
+      connectionGeneration !== generations.connection
+      || lineageActivityGeneration !== generations.activity
+      || historyWindowGeneration !== generations.historyWindow
+      || latest.activeSessionId !== sessionId
+      || latest.cwd !== cwd
+    ) return;
+    const historyHasMore = merged.retainedOlderPrefix ? latest.historyHasMore : merged.boundaryPage.has_more;
+    const restored = attachTurnArtifacts(merged.thread, turns, { windowComplete: !historyHasMore });
     useRuntimeStore.setState({
-      thread: merged,
-      historyCursor: historyResult.value.next_cursor,
-      historyHasMore: historyResult.value.has_more,
+      thread: restored,
+      historyCursor: merged.retainedOlderPrefix ? latest.historyCursor : merged.boundaryPage.next_cursor,
+      historyHasMore,
       historyLoading: false,
       historySnapshotVersion: historyResult.value.snapshot_version,
     });

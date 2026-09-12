@@ -33,6 +33,8 @@ source, and so values we invent are clearly marked as our own proposals.
 | `packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css` | Chat content width 748px, composer width = content + 32px, 36px fade mask, tabs 13px/2px active bar |
 | `packages/client/ui-conversation/src/client/skeleton/InputBar.module.css` | Composer card: radius 22px, 1px border `rgba(0,0,0,0.10)` light / `rgba(255,255,255,0.06)` dark, send button 34px circular `#4176e6` (dark `#679efe`) |
 | `packages/client/ui-conversation/src/client/chat/MessageItem.module.css` | User bubble: max-width `min(525px, 82%)`, radius 22px, padding 10px 16px |
+| `packages/client/ui-conversation/src/client/chat/ReasoningRow.module.css` | Borderless reasoning row, title weight 400, muted summary at 14px/24px, running sweep overlay |
+| `packages/client/ui-tool/src/client/tool/components/ToolRow.module.css` | Borderless tool summary row, 2px separator dot, title + tertiary summary hierarchy at 14px/24px |
 | `packages/client/ui-primitives/src/markdown/CodeBlock.module.css` | Code block radius 12px, sticky banner |
 | `packages/client/ui-primitives/src/markdown/MarkdownText.module.css` | Markdown spacing (16px paragraph rhythm), link color = business blue |
 
@@ -229,3 +231,90 @@ owner should confirm or revise them:
 - Do not copy upstream source files wholesale; only parameter values and
   interaction patterns (collapse motion, sticky code banner) are in scope.
 - Pi-Science keeps its own product name and "Pi" identity.
+
+## Progress pattern proposal
+
+The progress-pattern layer uses bundled MIT-licensed primitives from
+[Generative Loaders](https://generativeloaders.com/docs) v0.1.1. It exposes only
+allowlisted variants through `ProgressPatternCatalog.ts`; remote pages and
+runtime CDN assets are never loaded. AICSS free components remain a visual
+reference for agent states and may be copied only under its MIT terms; licensed
+AICSS components are excluded until a commercial license is recorded. The public
+AICSS React package is vendored at commit `4556a918fd8c9358d42d2b24a3866301b8ea10a2`
+under `frontend/src/components/progress/aicss/`; Activity uses the MIT-licensed
+`packages/react/src/orbs/Orb.tsx` component and its CSS module. Website-only and
+Pro components are not copied.
+
+The imported loader stylesheet owns only the internal animation geometry. The
+application owns layout, semantic colors, typography, radii, accessibility
+labels, reduced-motion behavior, and the settings contract. Current Activity
+keeps its narrative text outside the loader so the animation cannot replace
+meaning or affect Markdown and KaTeX rendering.
+
+### Semantic Activity mapping
+
+`aicss-auto` is the default pattern for Thinking, Current Activity, and Waiting.
+The turn lifecycle controls whether progress is running, waiting, completed, or
+failed. The narrative state independently selects the AICSS Orb geometry:
+
+| Narrative state | Orb | Meaning |
+| --- | --- | --- |
+| orient | S1 | Understand the request |
+| explore | S4 | Read or search local context |
+| research | B2 | Search external sources |
+| analyze | C4 | Analyze information |
+| implementation | B4 | Edit or solve |
+| compute | G1 | Run scientific computation |
+| verify | C5 | Test, build, or validate |
+| generate | B3 | Generate images or other outputs |
+| interaction | C2 | Wait for user input |
+| recover | G4 | Reconnect or restore state |
+| complete | S5 | Finalize the turn |
+
+A user-selected fixed pattern overrides this automatic mapping. Recoverable tool
+errors remain in Execution Trace and do not change the lifecycle to failed.
+
+### Activity hierarchy (Pi-Science proposal)
+
+DeepSeek Harness uses quiet, borderless reasoning and tool rows. Pi-Science
+keeps that treatment and uses a stacked hierarchy for the requested live status:
+
+- one existing semantic progress glyph in a 32px stage;
+- phase title: 20px, 1.4 line height, 500 weight, primary text;
+- current task: 13px, 1.6 line height, muted text, wrapping on narrow screens;
+- 6px between title and task, 8px vertical padding, no enclosing border or fill;
+- completed/stopped/error status contracts to a 14px title.
+
+The title holds a stable phase while the subtitle updates with each tool or
+plan event. Purpose comes from an explicit task description, current model
+narration, or the latest in-progress plan. File names and raw tool labels stay
+in Execution details. A localized phase description is used when the model
+has not supplied a task description; the UI does not invent a task from a path.
+
+### Live process disclosure
+
+Each active turn owns one status header, including the initial thinking state.
+The virtual list footer contains only interaction controls. The current answer
+streams outside the process panel. Intermediate prose is available in the
+process panel; short prose used as the current subtitle is not repeated there.
+Execution details are a separate, initially collapsed disclosure. Completion,
+failure, and stop collapse the process; its status row can reopen it for review.
+Manual disclosure survives phase updates and resets at the run boundary.
+
+The existing progress pattern is the only continuous animation. No external
+rotating glow, second loader, title shimmer, or tool waveform is layered over
+it. Content enters with the existing normal-motion duration and easing, using
+a 3px translation and opacity. Motion-off and reduced-motion disable these
+effects. Existing progress settings continue to select the pattern and color.
+
+### Conversation following
+
+Virtuoso owns scrolling; native scroll writes are only a fallback before its
+handle exists. Sending a message resumes following immediately and subsequent
+list-height measurements keep the new turn pinned through token growth and
+activity collapse. Scroll position changes alone never disable following:
+wheel, touch, keyboard, scrollbar dragging, and history navigation supply user
+intent. Scrolling upward pauses, scrolling down to the bottom resumes, and
+Back to latest explicitly resumes. A pending follow frame is cancelled when
+the user pauses. This avoids stale scroll events from the first answer trapping
+the second turn above the viewport.

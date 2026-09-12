@@ -214,7 +214,7 @@ export function MeshView({ filename, bytes }: { filename: string; bytes: ArrayBu
           setRendering(false);
           animate();
         }
-      } catch (e) {
+      } catch {
         if (!cancelled) {
           setError(t("mesh.loadFailed"));
           setRendering(false);

@@ -1,4 +1,5 @@
 import { configPath, readJson, writeJsonAtomic } from "./persistence.js";
+import { defaultProgressAppearance, progressAppearanceInputSchema, progressAppearanceSchema, type ProgressAppearance } from "@pi-science/contracts";
 import type { RuntimeSkillPolicy } from "../runtime/pi/pi-process.js";
 
 export type SettingsData = {
@@ -15,11 +16,31 @@ export type SettingsData = {
   skills_configured?: boolean;
   skill_paths?: string[];
   skill_policy?: RuntimeSkillPolicy;
+  progress_appearance?: ProgressAppearance;
   /** Legacy workspace-scoped policies from the initial 0.2.0 integration. */
   skill_policies?: Record<string, RuntimeSkillPolicy>;
   model_endpoints?: unknown[];
   [key: string]: unknown;
 };
+
+// Writes stay strict at the HTTP boundary, but persisted settings may come
+// from an older build or a manually edited config. Recover each field
+// independently so one stale enum or malformed patterns object cannot discard
+// otherwise valid progress preferences.
+const storedProgressAppearanceSchema = progressAppearanceSchema.extend({
+  preset: progressAppearanceInputSchema.shape.preset.catch(defaultProgressAppearance.preset),
+  motion: progressAppearanceInputSchema.shape.motion.catch(defaultProgressAppearance.motion),
+  colorMode: progressAppearanceInputSchema.shape.colorMode.catch(defaultProgressAppearance.colorMode),
+  patterns: progressAppearanceSchema.shape.patterns.catch(defaultProgressAppearance.patterns),
+});
+
+function normalizeSettingsData(config: SettingsData): SettingsData {
+  if (config.progress_appearance === undefined) return config;
+  return {
+    ...config,
+    progress_appearance: storedProgressAppearanceSchema.parse(config.progress_appearance),
+  };
+}
 
 export class SettingsStore {
   private writes: Promise<void> = Promise.resolve();
@@ -29,14 +50,14 @@ export class SettingsStore {
   async read(): Promise<SettingsData> {
     await this.writes.catch(() => undefined);
     if (this.cached && this.cached.expiresAt > Date.now()) return structuredClone(this.cached.value);
-    const value = await readJson<SettingsData>(configPath("config.json"), {});
+    const value = normalizeSettingsData(await readJson<SettingsData>(configPath("config.json"), {}));
     this.cached = { expiresAt: Date.now() + this.cacheTtlMs, value: structuredClone(value) };
     return value;
   }
 
   async update<T>(operation: (config: SettingsData) => T | Promise<T>): Promise<T> {
     const pending = this.writes.catch(() => undefined).then(async () => {
-      const config = await readJson<SettingsData>(configPath("config.json"), {});
+      const config = normalizeSettingsData(await readJson<SettingsData>(configPath("config.json"), {}));
       const result = await operation(config);
       await writeJsonAtomic(configPath("config.json"), config);
       this.cached = { expiresAt: Date.now() + this.cacheTtlMs, value: structuredClone(config) };
