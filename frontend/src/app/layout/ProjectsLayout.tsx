@@ -5,6 +5,7 @@ import { useUiStore } from "../../lib/ui";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 import { RightPane } from "../../components/inspector/RightPane";
 import { PreviewPaneControls } from "../../components/inspector/PreviewPaneControls";
+import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { FileBrowser } from "../../components/sidebar/FileBrowser";
 import { useWorkspaceCwd } from "../../lib/workspace";
 import { usePendingProposalCount } from "../../lib/knowledge";
@@ -12,7 +13,43 @@ import { cn } from "../../lib/ui";
 
 // The settings bundle (dialog + tabs) only loads on first open.
 const SettingsDialog = lazy(() => import("../../components/settings/SettingsDialog").then((m) => ({ default: m.SettingsDialog })));
-const InspectorTabs = lazy(() => import("../../components/inspector/InspectorTabs").then((m) => ({ default: m.InspectorTabs })));
+
+type InspectorTabsModule = { default: typeof import("../../components/inspector/InspectorTabs").InspectorTabs };
+
+const INSPECTOR_LOAD_TIMEOUT_MS = 15_000;
+let inspectorTabsModule: Promise<InspectorTabsModule> | null = null;
+
+function loadInspectorTabs(): Promise<InspectorTabsModule> {
+  if (!inspectorTabsModule) {
+    const moduleRequest = import("../../components/inspector/InspectorTabs")
+      .then((module) => ({ default: module.InspectorTabs }));
+    inspectorTabsModule = new Promise<InspectorTabsModule>((resolve, reject) => {
+      const timeoutId = window.setTimeout(
+        () => reject(new Error("Preview module load timed out")),
+        INSPECTOR_LOAD_TIMEOUT_MS,
+      );
+      void moduleRequest.then(
+        (module) => {
+          window.clearTimeout(timeoutId);
+          resolve(module);
+        },
+        (error: unknown) => {
+          window.clearTimeout(timeoutId);
+          reject(error);
+        },
+      );
+    })
+      .catch((error: unknown) => {
+        // Do not permanently cache a rejected chunk request. A fresh lazy
+        // component can retry it from the preview's local error state.
+        inspectorTabsModule = null;
+        throw error;
+      });
+  }
+  return inspectorTabsModule;
+}
+
+const InitialInspectorTabs = lazy(loadInspectorTabs);
 import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { workspacePathLeaf } from "../../lib/workspace";
@@ -37,6 +74,8 @@ export function ProjectsLayout() {
   const setInspectorMaximized = useUiStore((s) => s.setInspectorMaximized);
   const setSidebarWidth = useUiStore((s) => s.setSidebarWidth);
   const settingsOpen = useUiStore((s) => s.settingsOpen);
+  const [LazyInspectorTabs, setLazyInspectorTabs] = useState(() => InitialInspectorTabs);
+  const [inspectorLoadAttempt, setInspectorLoadAttempt] = useState(0);
   const [sidebarDragWidth, setSidebarDragWidth] = useState<number | null>(null);
   const [sidebarDragging, setSidebarDragging] = useState(false);
   const sidebarDragWidthRef = useRef<number | null>(null);
@@ -81,6 +120,14 @@ export function ProjectsLayout() {
   useEffect(() => {
     closeInspector();
   }, [activeCwd, closeInspector]);
+
+  // Start fetching the preview shell as soon as a workspace opens. File
+  // clicks can then render immediately instead of paying for the whole
+  // inspector module graph while showing an indefinite generic spinner.
+  useEffect(() => {
+    if (!isWorkspace) return;
+    void loadInspectorTabs().catch(() => undefined);
+  }, [isWorkspace]);
 
   useEffect(() => {
     if (!isConversationRoute && inspectorMaximized) setInspectorMaximized(false);
@@ -223,15 +270,35 @@ export function ProjectsLayout() {
           side={previewOnLeft ? "left" : "right"}
           onMinimize={() => setInspectorVisible(false)}
         >
-          <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted">{t("common.loading")}</div>}>
-            <InspectorTabs
-              tabs={inspectorTabs}
-              activeTabId={activeInspectorTabId}
-              cwd={activeCwd || undefined}
-              sessionId={activeConversationSessionId}
-              reserveControls={isConversationRoute}
-            />
-          </Suspense>
+          <ErrorBoundary
+            key={inspectorLoadAttempt}
+            fallback={(
+              <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted">
+                <p>{t("errors.somethingWentWrong")}</p>
+                <button
+                  type="button"
+                  className="rounded-input bg-surface-2 px-3 py-1.5 text-xs text-text hover:bg-surface"
+                  onClick={() => {
+                    inspectorTabsModule = null;
+                    setLazyInspectorTabs(() => lazy(loadInspectorTabs));
+                    setInspectorLoadAttempt((attempt) => attempt + 1);
+                  }}
+                >
+                  {t("common.tryAgain")}
+                </button>
+              </div>
+            )}
+          >
+            <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted">{t("inspector.loading")}</div>}>
+              <LazyInspectorTabs
+                tabs={inspectorTabs}
+                activeTabId={activeInspectorTabId}
+                cwd={activeCwd || undefined}
+                sessionId={activeConversationSessionId}
+                reserveControls={isConversationRoute}
+              />
+            </Suspense>
+          </ErrorBoundary>
         </RightPane>
       )}
 
