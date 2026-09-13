@@ -150,6 +150,27 @@ describe("legacy migration", () => {
 });
 
 describe("resource service", () => {
+  it("uses normalized thinking levels from system catalog models", async () => {
+    const service = new ModelResourceService({
+      runtimeCatalog: {
+        getCatalog: vi.fn(async () => ({
+          schemaVersion: 1 as const,
+          providers: [{
+            id: "openai",
+            name: "OpenAI",
+            baseUrl: "https://api.openai.com/v1",
+            auth: { apiKey: false, oauth: false, subscription: false, configured: true },
+            models: [{ id: "gpt-5.5", name: "GPT-5.5", api: "openai-responses", reasoning: true, thinkingLevels: ["off", "high", "max"], input: ["text"], contextWindow: 400000, maxTokens: 128000 }],
+          }],
+        })),
+      },
+    });
+
+    const model = (await service.listModels({ provider_id: "openai" }))[0];
+
+    expect(model?.capabilities.thinking_levels).toEqual(["off", "high", "max"]);
+  });
+
   it("creates canonical user resources without putting a secret in the resource file", async () => {
     const service = new ModelResourceService();
     const provider = await service.createProvider({ name: "Lab", adapter: "openai-compatible", catalog_mode: "manual", auth_kind: "none", enabled: true });

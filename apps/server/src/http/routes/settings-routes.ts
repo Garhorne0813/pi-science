@@ -115,6 +115,7 @@ function catalogModels(catalog: PiOrbitCatalog): Array<Record<string, unknown>> 
 }
 
 function orbitModel(provider: PiOrbitCatalogProvider, model: PiOrbitCatalogModel): Record<string, unknown> {
+  const thinkingLevels = normalizeThinkingLevels(model.thinkingLevels);
   return {
     id: `${provider.id}/${model.id}`,
     provider: provider.id,
@@ -122,7 +123,7 @@ function orbitModel(provider: PiOrbitCatalogProvider, model: PiOrbitCatalogModel
     label: `${provider.name} · ${model.name}`,
     custom: provider.id.startsWith("user-"),
     reasoning: model.reasoning,
-    thinking_levels: model.reasoning ? [...FALLBACK_DEFAULT_THINKING_LEVELS] : ["off"],
+    thinking_levels: model.reasoning ? thinkingLevels ?? [...FALLBACK_DEFAULT_THINKING_LEVELS] : ["off"],
     context_window: model.contextWindow || null,
     max_output_tokens: model.maxTokens || null,
     input_formats: model.input,
@@ -210,17 +211,18 @@ function normalizePiModel(value: unknown): Record<string, unknown> | null {
   if (!provider || !model) return null;
   const explicitReasoning = typeof item.reasoning === "boolean";
   const reasoning = explicitReasoning ? item.reasoning === true : undefined;
+  const listedLevels = normalizeThinkingLevels(item.thinkingLevels);
   const levelMap = item.thinkingLevelMap && typeof item.thinkingLevelMap === "object" ? item.thinkingLevelMap as Record<string, unknown> : {};
   const hasExplicitLevels = Object.keys(levelMap).length > 0;
   // A runtime entry WITHOUT capability metadata (no reasoning flag, no
-  // thinkingLevelMap) must not invent levels or erase the authoritative
-  // pi-ai/custom-hint values: leave both fields undefined for the merge to
-  // keep the previous entry's values. Only an explicit map produces levels,
-  // with xhigh/max included exclusively when explicitly present and non-null.
+  // thinkingLevels/thinkingLevelMap) must not invent levels or erase the
+  // authoritative pi-ai/custom-hint values: leave both fields undefined for
+  // the merge to keep the previous entry's values. Prefer Orbit's normalized
+  // list; retain thinkingLevelMap support for older runtime projections.
   const thinkingLevels = reasoning === true
-    ? hasExplicitLevels
+    ? listedLevels ?? (hasExplicitLevels
       ? THINKING_LEVELS.filter((level) => levelMap[level] !== null && (level !== "xhigh" && level !== "max" || Object.hasOwn(levelMap, level)))
-      : undefined
+      : undefined)
     : reasoning === false ? ["off"] : undefined;
   const name = typeof item.name === "string" && item.name ? item.name : model;
   const contextWindow = Number(item.contextWindow ?? 0);

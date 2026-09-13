@@ -13,12 +13,12 @@ describe("PiOrbitCatalogService", () => {
         name: "Anthropic",
         baseUrl: "https://api.anthropic.com",
         auth: { apiKey: true, oauth: false, subscription: false, configured: true },
-        models: [{ id: "claude-sonnet-4", name: "Claude Sonnet 4", api: "anthropic-messages", reasoning: true, input: ["text", "image"], contextWindow: 200000, maxTokens: 64000 }],
+        models: [{ id: "claude-sonnet-4", name: "Claude Sonnet 4", api: "anthropic-messages", reasoning: true, thinkingLevels: ["high", "off", "max"], input: ["text", "image"], contextWindow: 200000, maxTokens: 64000 }],
       }],
     })) };
     const service = new PiOrbitCatalogService(manager, () => options);
 
-    await expect(service.getCatalog()).resolves.toMatchObject({ schemaVersion: 1, providers: [{ id: "anthropic", models: [{ input: ["text", "image"], contextWindow: 200000 }] }] });
+    await expect(service.getCatalog()).resolves.toMatchObject({ schemaVersion: 1, providers: [{ id: "anthropic", models: [{ thinkingLevels: ["off", "high", "max"], input: ["text", "image"], contextWindow: 200000 }] }] });
     expect(manager.getCatalog).toHaveBeenCalledTimes(1);
   });
 
@@ -45,6 +45,17 @@ describe("PiOrbitCatalogService", () => {
     const service = new PiOrbitCatalogService(manager, () => options);
 
     await expect(service.getCatalog()).rejects.toMatchObject({ code: "runtime_catalog_incompatible" });
+  });
+
+  it("keeps v0.3.1 catalogs compatible when thinking levels are absent", async () => {
+    const manager = { getCatalog: vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      providers: [{ id: "legacy", name: "Legacy", baseUrl: null, auth: { apiKey: false, oauth: false, subscription: false, configured: true }, models: [{ id: "legacy-model", name: "Legacy Model", api: "openai-completions", reasoning: true, input: ["text"], contextWindow: 128000, maxTokens: 8192 }] }],
+    })) };
+    const service = new PiOrbitCatalogService(manager, () => options);
+
+    await expect(service.getCatalog()).resolves.toMatchObject({ providers: [{ models: [{ id: "legacy-model" }] }] });
+    expect((await service.getCatalog()).providers[0]?.models[0]).not.toHaveProperty("thinkingLevels");
   });
 
   it("does not expose credentials from the catalog response", async () => {

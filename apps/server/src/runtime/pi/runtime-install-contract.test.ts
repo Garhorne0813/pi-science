@@ -9,7 +9,7 @@ describe("Pi runtime installation contract", () => {
     const installScript = await readFile(resolve(projectRoot, "scripts/install.sh"), "utf8");
 
     expect(fetchScript).toContain('archive="pi-orbit-${platform}-${arch}.tar.gz"');
-    expect(fetchScript).toContain('PI_ORBIT_VERSION="${PI_ORBIT_VERSION:-0.3.1}"');
+    expect(fetchScript).toContain('PI_ORBIT_VERSION="${PI_ORBIT_VERSION:-0.4.0}"');
     expect(fetchScript).toContain('curl --fail --location --silent --show-error');
     expect(fetchScript).toContain('actual="$(shasum -a 256');
     expect(fetchScript).toContain('printf \'%s\\n\' "$pi_cli" > "$CLI_MARKER"');
@@ -29,7 +29,7 @@ describe("Pi runtime installation contract", () => {
     expect(fetchScript).toContain('--no-save');
     expect(installScript).toContain('PI_CLI="$(cat "$PI_CLI_MARKER")"');
     const windowsFetchScript = await readFile(resolve(projectRoot, "scripts/fetch-pi.ps1"), "utf8");
-    expect(windowsFetchScript).toContain('$version = Get-Setting "PI_ORBIT_VERSION" "0.3.1"');
+    expect(windowsFetchScript).toContain('$version = Get-Setting "PI_ORBIT_VERSION" "0.4.0"');
     expect(windowsFetchScript).not.toContain("PI_AI_VERSION");
     expect(windowsFetchScript).not.toContain('"@earendil-works/pi-ai@');
   });
