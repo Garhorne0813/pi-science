@@ -11,6 +11,17 @@ import { Icon } from "../ui/Icon";
 
 interface DirState { entries: FileListEntry[]; loading: boolean; error: string | null }
 
+const FILE_BROWSER_MIN_HEIGHT = 112;
+const FILE_BROWSER_MAX_HEIGHT = 560;
+const SIDEBAR_FIXED_CONTENT_HEIGHT = 240;
+
+function clampFileBrowserHeight(height: number, containerHeight?: number) {
+  const availableHeight = containerHeight
+    ? Math.max(FILE_BROWSER_MIN_HEIGHT, containerHeight - SIDEBAR_FIXED_CONTENT_HEIGHT)
+    : FILE_BROWSER_MAX_HEIGHT;
+  return Math.min(FILE_BROWSER_MAX_HEIGHT, availableHeight, Math.max(FILE_BROWSER_MIN_HEIGHT, height));
+}
+
 export function FileBrowser({ cwd }: { cwd: string }) {
   const { t } = useTranslation();
   const { confirm, toast } = useFeedback();
@@ -21,19 +32,68 @@ export function FileBrowser({ cwd }: { cwd: string }) {
   const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
   const [folderStates, setFolderStates] = useState<Map<string, DirState>>(new Map());
   const openFoldersRef = useRef<Set<string>>(new Set());
+  const rootRef = useRef<HTMLDivElement>(null);
+  const resizeStartRef = useRef<{ pointerId: number; y: number; height: number } | null>(null);
   // Guards async results: any newer load/toggle invalidates older in-flight
   // requests (workspace switch, rapid toggles, revision bumps).
   const requestTokenRef = useRef(0);
+  // Quiet polling participates in result freshness, but must not take ownership
+  // of the foreground loading indicator. Otherwise a poll that supersedes a
+  // visible request can leave the refresh icon spinning forever.
+  const visibleLoadTokenRef = useRef<number | null>(null);
   // The `work/` folder auto-opens only once per workspace, so a later revision
   // refresh does not fight a user who deliberately closed it.
   const initializedRef = useRef(false);
   const openInspector = useUiStore((s) => s.openInspector);
   const addWorkspaceReference = useUiStore((s) => s.addWorkspaceReference);
+  const fileBrowserHeight = useUiStore((s) => s.sidebarFileBrowserHeight);
+  const setFileBrowserHeight = useUiStore((s) => s.setSidebarFileBrowserHeight);
   const fileRevision = useRuntimeStore((s) => s.fileRevision);
+  const [dragHeight, setDragHeight] = useState<number | null>(null);
+  const [resizing, setResizing] = useState(false);
+
+  const availableContainerHeight = () => rootRef.current?.parentElement?.getBoundingClientRect().height;
+  const displayedHeight = clampFileBrowserHeight(dragHeight ?? fileBrowserHeight);
+
+  useEffect(() => {
+    if (!resizing) return;
+    const handlePointerMove = (event: PointerEvent) => {
+      const start = resizeStartRef.current;
+      if (!start || event.pointerId !== start.pointerId) return;
+      setDragHeight(clampFileBrowserHeight(start.height + start.y - event.clientY, availableContainerHeight()));
+    };
+    const finishResize = (event: PointerEvent) => {
+      const start = resizeStartRef.current;
+      if (!start || event.pointerId !== start.pointerId) return;
+      const height = clampFileBrowserHeight(start.height + start.y - event.clientY, availableContainerHeight());
+      setFileBrowserHeight(height);
+      resizeStartRef.current = null;
+      setDragHeight(null);
+      setResizing(false);
+    };
+    const cancelResize = (event: PointerEvent) => {
+      const start = resizeStartRef.current;
+      if (!start || event.pointerId !== start.pointerId) return;
+      resizeStartRef.current = null;
+      setDragHeight(null);
+      setResizing(false);
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", finishResize);
+    window.addEventListener("pointercancel", cancelResize);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", finishResize);
+      window.removeEventListener("pointercancel", cancelResize);
+    };
+  }, [resizing, setFileBrowserHeight]);
 
   const loadFiles = useCallback(async (signal?: AbortSignal, quiet = false) => {
     const token = ++requestTokenRef.current;
-    if (!quiet) setLoading(true);
+    if (!quiet) {
+      visibleLoadTokenRef.current = token;
+      setLoading(true);
+    }
     try {
       const rootEntries = await workspaceFiles.sidebar(cwd, signal);
       if (token !== requestTokenRef.current || signal?.aborted) return;
@@ -89,7 +149,12 @@ export function FileBrowser({ cwd }: { cwd: string }) {
       }
     } catch (error) {
       if (!signal?.aborted) toast(error instanceof Error ? error.message : t("files.loadError"), "error");
-    } finally { if (token === requestTokenRef.current && !quiet) setLoading(false); }
+    } finally {
+      if (!quiet && token === visibleLoadTokenRef.current) {
+        visibleLoadTokenRef.current = null;
+        setLoading(false);
+      }
+    }
   }, [cwd, t, toast]);
 
   // Reset per-workspace state when the cwd changes.
@@ -217,58 +282,92 @@ export function FileBrowser({ cwd }: { cwd: string }) {
   };
 
   return (
-    <div className="border-t border-faint mt-2 pt-2">
-      <div className="flex items-center">
-        <button
-          type="button"
-          onClick={() => { setExpanded(!expanded); if (!expanded) void loadFiles(); }}
-          className="flex h-tool min-w-0 flex-1 items-center gap-1.5 px-2 text-ui-caption font-medium uppercase tracking-wider text-muted hover:text-text"
+    <div
+      ref={rootRef}
+      className="mt-2 flex min-h-0 shrink-0 flex-col"
+      style={expanded ? { height: displayedHeight, maxHeight: "calc(100dvh - 240px)" } : undefined}
+    >
+      {expanded ? (
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label={t("files.resize")}
+          aria-valuemin={FILE_BROWSER_MIN_HEIGHT}
+          aria-valuemax={FILE_BROWSER_MAX_HEIGHT}
+          aria-valuenow={displayedHeight}
+          tabIndex={0}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            resizeStartRef.current = { pointerId: event.pointerId, y: event.clientY, height: displayedHeight };
+            setResizing(true);
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+            event.preventDefault();
+            const delta = event.key === "ArrowUp" ? 16 : -16;
+            setFileBrowserHeight(clampFileBrowserHeight(displayedHeight + delta, availableContainerHeight()));
+          }}
+          className="group relative h-2 shrink-0 cursor-row-resize touch-none"
         >
-          <Icon icon={expanded ? ChevronDown : ChevronRight} size="xs" />
-          <span className="truncate">{t("nav.files")}</span>
-        </button>
-        <button
-          type="button"
-          aria-label={t("files.refresh", { defaultValue: "Refresh files" })}
-          title={t("files.refresh", { defaultValue: "Refresh files" })}
-          onClick={refreshFiles}
-          className="flex h-tool w-tool shrink-0 items-center justify-center rounded-input text-muted transition-colors hover:bg-surface-hover hover:text-text"
-        >
-          <Icon icon={RefreshCw} size="xs" className={loading ? "animate-spin" : ""} />
-        </button>
-      </div>
-      {expanded && (
-        <div className="mt-1 flex flex-col gap-0.5 max-h-72 overflow-y-auto">
-          {loading && entries.length === 0 ? (
-            <p className="px-2 text-ui-meta italic text-muted/60">{t("common.loading")}</p>
-          ) : entries.length === 0 ? (
-            <p className="px-2 text-ui-meta italic text-muted/60">{t("files.empty")}</p>
-          ) : (
-            folderEntries.map((e) => {
-              const state = folderStates.get(e.path);
-              const isLoading = state?.loading;
-              const error = state?.error;
-              return (
-                <div key={e.path}>
-                  <button
-                    onClick={() => handleClick(e)}
-                    onContextMenu={(ev) => handleContextMenu(ev, e)}
-                    className="flex h-icon w-full items-center gap-2 truncate rounded px-2 text-left text-ui-caption text-text/80 hover:bg-surface-hover"
-                    title={e.path}
-                    style={{ paddingLeft: `${8 + e.depth * 12}px` }}
-                  >
-                    {e.isDir ? <Icon icon={openFolders.has(e.path) ? ChevronDown : ChevronRight} size="xs" className="shrink-0 text-muted" /> : null}
-                    <Icon icon={e.isDir ? FolderOpen : File} size="sm" className="shrink-0 text-muted" />
-                    <span className="truncate">{e.name}</span>
-                    {isLoading && <Icon icon={Loader2} size="xs" className="ml-auto shrink-0 animate-spin text-muted" />}
-                  </button>
-                  {error && <p className="px-2 text-ui-micro italic text-error-text" style={{ paddingLeft: `${20 + e.depth * 12}px` }}>{error}</p>}
-                </div>
-              );
-            })
-          )}
+          <div className={`absolute inset-x-0 top-1/2 h-px -translate-y-1/2 transition-colors ${resizing ? "bg-accent/70" : "bg-faint group-hover:bg-accent/50"}`} />
         </div>
+      ) : (
+        <div className="h-px shrink-0 bg-faint" />
       )}
+      <div className="flex min-h-0 flex-1 flex-col pt-2">
+        <div className="flex items-center">
+          <button
+            type="button"
+            onClick={() => { setExpanded(!expanded); if (!expanded) void loadFiles(); }}
+            className="flex h-tool min-w-0 flex-1 items-center gap-1.5 px-2 text-ui-caption font-medium uppercase tracking-wider text-muted hover:text-text"
+          >
+            <Icon icon={expanded ? ChevronDown : ChevronRight} size="xs" />
+            <span className="truncate">{t("nav.files")}</span>
+          </button>
+          <button
+            type="button"
+            aria-label={t("files.refresh", { defaultValue: "Refresh files" })}
+            title={t("files.refresh", { defaultValue: "Refresh files" })}
+            onClick={refreshFiles}
+            className="flex h-tool w-tool shrink-0 items-center justify-center rounded-input text-muted transition-colors hover:bg-surface-hover hover:text-text"
+          >
+            <Icon icon={RefreshCw} size="xs" className={loading ? "animate-spin" : ""} />
+          </button>
+        </div>
+        {expanded && (
+          <div className="mt-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
+            {loading && entries.length === 0 ? (
+              <p className="px-2 text-ui-meta italic text-muted/60">{t("common.loading")}</p>
+            ) : entries.length === 0 ? (
+              <p className="px-2 text-ui-meta italic text-muted/60">{t("files.empty")}</p>
+            ) : (
+              folderEntries.map((e) => {
+                const state = folderStates.get(e.path);
+                const isLoading = state?.loading;
+                const error = state?.error;
+                return (
+                  <div key={e.path}>
+                    <button
+                      onClick={() => handleClick(e)}
+                      onContextMenu={(ev) => handleContextMenu(ev, e)}
+                      className="flex h-icon w-full items-center gap-2 truncate rounded px-2 text-left text-ui-caption text-text/80 hover:bg-surface-hover"
+                      title={e.path}
+                      style={{ paddingLeft: `${8 + e.depth * 12}px` }}
+                    >
+                      {e.isDir ? <Icon icon={openFolders.has(e.path) ? ChevronDown : ChevronRight} size="xs" className="shrink-0 text-muted" /> : null}
+                      <Icon icon={e.isDir ? FolderOpen : File} size="sm" className="shrink-0 text-muted" />
+                      <span className="truncate">{e.name}</span>
+                      {isLoading && <Icon icon={Loader2} size="xs" className="ml-auto shrink-0 animate-spin text-muted" />}
+                    </button>
+                    {error && <p className="px-2 text-ui-micro italic text-error-text" style={{ paddingLeft: `${20 + e.depth * 12}px` }}>{error}</p>}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Context menu */}
       {contextMenu && <FileContextMenu entry={contextMenu.entry} point={contextMenu.point} onClose={() => setContextMenu(null)} onReference={() => referenceEntry(contextMenu.entry)} onCopy={(text) => void copyToClipboard(text)} onDelete={() => void deleteEntry(contextMenu.entry)} />}

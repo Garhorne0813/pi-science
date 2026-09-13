@@ -16,8 +16,10 @@ interface UiState {
   setLocale: (l: string) => void;
   sidebarCollapsed: boolean;
   sidebarWidth: number;
+  sidebarFileBrowserHeight: number;
   setSidebarCollapsed: (c: boolean) => void;
   setSidebarWidth: (w: number) => void;
+  setSidebarFileBrowserHeight: (height: number) => void;
   /** Which side of the conversation the preview occupies on desktop. */
   previewPaneSide: "left" | "right";
   setPreviewPaneSide: (side: "left" | "right") => void;
@@ -199,6 +201,7 @@ export const useUiStore = create<UiState>((set) => ({
 
   sidebarCollapsed: loadFromStorage("sidebar.collapsed", false),
   sidebarWidth: loadFromStorage("sidebar.width", 260),
+  sidebarFileBrowserHeight: loadFromStorage("sidebar.fileBrowserHeight", 288),
   setSidebarCollapsed: (c) => {
     saveToStorage("sidebar.collapsed", c);
     set({ sidebarCollapsed: c });
@@ -206,6 +209,10 @@ export const useUiStore = create<UiState>((set) => ({
   setSidebarWidth: (w) => {
     saveToStorage("sidebar.width", w);
     set({ sidebarWidth: w });
+  },
+  setSidebarFileBrowserHeight: (height) => {
+    saveToStorage("sidebar.fileBrowserHeight", height);
+    set({ sidebarFileBrowserHeight: height });
   },
 
   previewPaneSide: loadFromStorage<"left" | "right">("layout.previewPaneSide", "right"),

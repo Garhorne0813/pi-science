@@ -849,6 +849,7 @@
   "files.copyName": "Copy name",
   "files.copied": "Copied to clipboard",
   "files.refresh": "Refresh files",
+  "files.resize": "Resize file browser",
   "files.loadError": "Unable to load files",
   "files.deleteFileTitle": "Delete file?",
   "files.deleteFolderTitle": "Delete folder?",

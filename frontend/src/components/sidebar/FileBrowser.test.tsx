@@ -50,7 +50,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   useRuntimeStore.setState({ fileRevision: 0, cwd: "proj", activeSessionId: "s1" });
-  useUiStore.setState({ inspectorOpen: false, inspectorData: null });
+  useUiStore.setState({ inspectorOpen: false, inspectorData: null, sidebarFileBrowserHeight: 288 });
   vi.clearAllMocks();
   // jsdom reports the tab as visible by default.
   Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
@@ -80,6 +80,31 @@ describe("FileBrowser", () => {
     fireEvent.click(refresh);
     expect(files.invalidate).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(files.sidebar.mock.calls.length).toBeGreaterThan(callsBefore));
+  });
+
+  it("lets keyboard users resize the expanded file browser", async () => {
+    render(<FileBrowser cwd="proj" />);
+    fireEvent.click(screen.getByRole("button", { name: "Files" }));
+
+    const resize = screen.getByRole("separator", { name: "Resize file browser" });
+    expect(resize).toHaveAttribute("aria-valuenow", "288");
+    fireEvent.keyDown(resize, { key: "ArrowUp" });
+
+    expect(resize).toHaveAttribute("aria-valuenow", "304");
+    expect(useUiStore.getState().sidebarFileBrowserHeight).toBe(304);
+  });
+
+  it("resizes the expanded file browser by dragging its top edge", () => {
+    render(<FileBrowser cwd="proj" />);
+    fireEvent.click(screen.getByRole("button", { name: "Files" }));
+
+    const resize = screen.getByRole("separator", { name: "Resize file browser" });
+    fireEvent.pointerDown(resize, { button: 0, pointerId: 1, clientY: 300 });
+    fireEvent.pointerMove(window, { pointerId: 1, clientY: 200 });
+    expect(resize).toHaveAttribute("aria-valuenow", "388");
+    fireEvent.pointerUp(window, { pointerId: 1, clientY: 200 });
+
+    expect(useUiStore.getState().sidebarFileBrowserHeight).toBe(388);
   });
 
   it("re-reads every expanded folder when the file revision bumps", async () => {
@@ -138,5 +163,25 @@ describe("FileBrowser", () => {
     const callsBefore = files.sidebar.mock.calls.length;
     await new Promise((resolve) => setTimeout(resolve, 2_500));
     expect(files.sidebar.mock.calls.length).toBe(callsBefore);
+  });
+
+  it("stops the loading indicator when a quiet poll supersedes a visible load", async () => {
+    render(<FileBrowser cwd="proj" />);
+    const refresh = screen.getByRole("button", { name: "Refresh files" });
+    await vi.waitFor(() => expect(refresh.querySelector("svg")).not.toHaveClass("animate-spin"));
+
+    let resolveVisibleLoad!: (entries: FileListEntry[]) => void;
+    files.sidebar
+      .mockImplementationOnce(() => new Promise<FileListEntry[]>((resolve) => { resolveVisibleLoad = resolve; }))
+      .mockResolvedValue(sidebarEntries(["work", "reports"]));
+
+    fireEvent.click(screen.getByRole("button", { name: "Files" }));
+    expect(refresh.querySelector("svg")).toHaveClass("animate-spin");
+
+    const callsBeforePoll = files.sidebar.mock.calls.length;
+    await vi.waitFor(() => expect(files.sidebar.mock.calls.length).toBeGreaterThan(callsBeforePoll), { timeout: 3_000 });
+    await act(async () => { resolveVisibleLoad(sidebarEntries(["work", "reports"])); });
+
+    await vi.waitFor(() => expect(refresh.querySelector("svg")).not.toHaveClass("animate-spin"));
   });
 });
