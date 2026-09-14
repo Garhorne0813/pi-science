@@ -50,7 +50,7 @@ export interface EventFoldState {
   anonymousSerial: number;
   errorSerial: number;
   textByKey: Record<string, TextFoldState>;
-  thinkingByKey: Record<string, { text: string; blockId: string }>;
+  thinkingByKey: Record<string, TextFoldState>;
   seenEventIds: string[];
   pendingEvents: PiScienceEvent[];
   /** Events that were projected (or deliberately consumed as stale) before
@@ -97,7 +97,10 @@ function cloneFoldState(state: Thread, event?: PiScienceEvent): EventFoldState {
       ...value,
       ...(value.segments ? { segments: value.segments.map((segment) => ({ ...segment })) } : {}),
     }])),
-    thinkingByKey: { ...(current.thinkingByKey ?? {}) },
+    thinkingByKey: Object.fromEntries(Object.entries(current.thinkingByKey ?? {}).map(([key, value]) => [key, {
+      ...value,
+      ...(value.segments ? { segments: value.segments.map((segment) => ({ ...segment })) } : {}),
+    }])),
     seenEventIds: [...current.seenEventIds],
     pendingEvents: [...current.pendingEvents],
     speculativeEventIds: [...(current.speculativeEventIds ?? [])],
@@ -208,10 +211,18 @@ type NarrationSubsumption = "keep" | "replaced" | "subsumed";
  *  itself contained, it is skipped. Explicit finals are never dropped. */
 function narrationSubsumption(previous: AgentMessageBlock, nextText: string): NarrationSubsumption {
   if (previous.presentationRole === "final") return "keep";
-  const previousText = previous.parts.map((part) => part.text).join("");
-  if (!previousText.trim() || !nextText.trim()) return "keep";
-  if (nextText.includes(previousText)) return "replaced";
-  if (previousText.includes(nextText)) return "subsumed";
+  const previousText = previous.parts.map((part) => part.text).join("").trim();
+  const candidate = nextText.trim();
+  if (!previousText || !candidate) return "keep";
+  if (candidate === previousText) return "subsumed";
+  // Only collapse substantial, near-verbatim edge echoes. Plain substring
+  // matching deleted legitimate short observations such as "Done" whenever
+  // a later narration happened to contain the same word.
+  const shorter = Math.min(previousText.length, candidate.length);
+  const longer = Math.max(previousText.length, candidate.length);
+  if (shorter < 12 || shorter / longer < 0.6) return "keep";
+  if (candidate.startsWith(previousText) || candidate.endsWith(previousText)) return "replaced";
+  if (previousText.startsWith(candidate) || previousText.endsWith(candidate)) return "subsumed";
   return "keep";
 }
 
@@ -267,8 +278,8 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
 
     case "item.completed": {
       const itemId = stringValue(event.itemId) ?? stringValue(event.partId);
-      const text = itemId ? foldState.textByKey[itemId] : undefined;
-      const blockIndex = text ? index[text.blockId] : undefined;
+      const content = itemId ? foldState.textByKey[itemId] ?? foldState.thinkingByKey[itemId] : undefined;
+      const blockIndex = content ? index[content.blockId] : undefined;
       if (blockIndex !== undefined && (blocks[blockIndex]?.kind === "agent" || blocks[blockIndex]?.kind === "thinking")) {
         blocks[blockIndex] = { ...blocks[blockIndex], partial: false };
       } else if (itemId) {
@@ -429,14 +440,20 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
             id: blockId,
             turnId,
             ...(runId ? { runId } : {}),
-            ...(eventPartId ? { itemId: eventPartId } : {}),
+            ...(stringValue(event.itemId) || eventPartId ? { itemId: stringValue(event.itemId) ?? eventPartId } : {}),
             parts: [{ id: blockId, text: nextText }],
             partial: true,
             timestamp: new Date().toISOString(),
           } as ThreadBlock);
         }
       }
-      foldState.thinkingByKey[key] = { text: nextText, blockId };
+      foldState.thinkingByKey[key] = {
+        text: nextText,
+        revision: numberValue(event.revision) ?? ((previous?.revision ?? 0) + 1),
+        blockId,
+        partId: eventPartId ?? key,
+        ...(previous?.segments ? { segments: previous.segments } : {}),
+      };
       break;
     }
 
@@ -612,16 +629,16 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       if (completedRunId) {
         for (let i = 0; i < blocks.length; i += 1) {
           const block = blocks[i];
-          if (block.kind === "agent" && block.partial && block.runId === completedRunId) {
+          if ((block.kind === "agent" || block.kind === "thinking") && block.partial && block.runId === completedRunId) {
             blocks[i] = { ...block, partial: false };
           }
         }
       } else {
         for (let i = blocks.length - 1; i >= 0; i--) {
           const block = blocks[i];
-          if (block.kind === "agent" && block.partial) {
+          if ((block.kind === "agent" || block.kind === "thinking") && block.partial
+            && (!foldState.activeTurnId || !block.turnId || block.turnId === foldState.activeTurnId)) {
             blocks[i] = { ...block, partial: false };
-            break;
           }
         }
       }
@@ -798,16 +815,16 @@ function skipV2InOrder(state: Thread, event: PiScienceEvent, foldState: EventFol
   return withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState);
 }
 
-function isV2TextEvent(event: PiScienceEvent): boolean {
-  return event.type === "item.text.delta" || event.type === "item.snapshot" || event.type === "text.updated";
+function isV2ContentEvent(event: PiScienceEvent): boolean {
+  return event.type === "item.text.delta" || event.type === "item.snapshot" || event.type === "text.updated" || event.type === "thinking.updated";
 }
 
-function staleTextDelta(foldState: EventFoldState, event: PiScienceEvent): boolean {
-  if (!isV2TextEvent(event)) return false;
+function staleContentDelta(foldState: EventFoldState, event: PiScienceEvent): boolean {
+  if (!isV2ContentEvent(event)) return false;
   const payload = recordValue(event.payload);
   const itemId = stringValue(event.itemId);
   const partId = stringValue(payload.partId) ?? stringValue(event.partId) ?? itemId;
-  const current = partId ? foldState.textByKey[partId] : undefined;
+  const current = partId ? (event.type === "thinking.updated" ? foldState.thinkingByKey[`thinking:${partId}`] : foldState.textByKey[partId]) : undefined;
   if (!current) return false;
   const baseRevision = numberValue(payload.baseRevision) ?? numberValue(event.baseRevision);
   const revision = numberValue(payload.revision) ?? numberValue(event.revision);
@@ -822,12 +839,12 @@ function staleTextDelta(foldState: EventFoldState, event: PiScienceEvent): boole
   return revision !== undefined && revision <= current.revision;
 }
 
-function staleSpeculativeText(foldState: EventFoldState, event: PiScienceEvent): boolean {
-  if (!isV2TextEvent(event)) return false;
+function staleSpeculativeContent(foldState: EventFoldState, event: PiScienceEvent): boolean {
+  if (!isV2ContentEvent(event)) return false;
   const payload = recordValue(event.payload);
   const itemId = stringValue(event.itemId);
   const partId = stringValue(payload.partId) ?? stringValue(event.partId) ?? itemId;
-  const current = partId ? foldState.textByKey[partId] : undefined;
+  const current = partId ? (event.type === "thinking.updated" ? foldState.thinkingByKey[`thinking:${partId}`] : foldState.textByKey[partId]) : undefined;
   const revision = numberValue(payload.revision) ?? numberValue(event.revision);
   if (!current || revision === undefined) return false;
   return revision <= current.revision
@@ -857,10 +874,12 @@ function composeTextSegments(segments: TextSegment[]): { text: string; revision:
   return { text, revision };
 }
 
-function applyV2Text(state: Thread, event: PiScienceEvent, adapted: PiScienceEvent): Thread {
+function applyV2Content(state: Thread, event: PiScienceEvent, adapted: PiScienceEvent): Thread {
   const initialFoldState = cloneFoldState(state, event);
-  const key = eventTextKey(adapted, initialFoldState);
-  const previous = initialFoldState.textByKey[key];
+  const thinking = adapted.type === "thinking.updated";
+  const contentKey = eventTextKey(adapted, initialFoldState);
+  const key = thinking ? `thinking:${contentKey}` : contentKey;
+  const previous = thinking ? initialFoldState.thinkingByKey[key] : initialFoldState.textByKey[key];
   const segments = previous?.segments
     ? [...previous.segments]
     : previous
@@ -892,21 +911,23 @@ function applyV2Text(state: Thread, event: PiScienceEvent, adapted: PiScienceEve
     revision: composed.revision,
   });
   const foldState = cloneFoldState(rendered, event);
-  const current = foldState.textByKey[key];
+  const current = thinking ? foldState.thinkingByKey[key] : foldState.textByKey[key];
   if (current) {
-    foldState.textByKey[key] = {
+    const next = {
       ...current,
       text: composed.text,
       revision: composed.revision,
       segments,
     };
+    if (thinking) foldState.thinkingByKey[key] = next;
+    else foldState.textByKey[key] = next;
   }
   return withFoldState({ blocks: rendered.blocks, index: rendered.index, loaded: true }, foldState);
 }
 
 function applyV2AdaptedEvent(state: Thread, event: PiScienceEvent, adapted: PiScienceEvent): Thread {
-  return isV2TextEvent(event) && adapted.type === "text.updated"
-    ? applyV2Text(state, event, adapted)
+  return isV2ContentEvent(event) && (adapted.type === "text.updated" || adapted.type === "thinking.updated")
+    ? applyV2Content(state, event, adapted)
     : foldLegacyEvent(state, adapted);
 }
 
@@ -916,7 +937,7 @@ function applyV2InOrder(state: Thread, event: PiScienceEvent): Thread {
   if (isTerminalRun(initialFoldState, stringValue(event.runId), sequence) && event.type !== "artifact.updated") {
     return skipV2InOrder(state, event, initialFoldState);
   }
-  if (staleTextDelta(initialFoldState, event)) {
+  if (staleContentDelta(initialFoldState, event)) {
     return skipV2InOrder(state, event, initialFoldState, true);
   }
   let next = state;
@@ -931,13 +952,13 @@ function applyV2Speculative(state: Thread, event: PiScienceEvent): Thread {
   const initialFoldState = cloneFoldState(state, event);
   const sequence = numberValue(event.seq);
   const terminal = isTerminalRun(initialFoldState, stringValue(event.runId), sequence);
-  const stale = staleTextDelta(initialFoldState, event);
+  const stale = staleContentDelta(initialFoldState, event);
   let next = state;
   // Sequence gaps make the normal base-revision check provisional too: a
   // newer text delta with an old base can still be the only visible evidence
   // of progress until its missing predecessor is replayed. Only suppress a
   // speculative delta when it is unambiguously an older duplicate.
-  if ((!terminal || event.type === "artifact.updated") && !(stale && staleSpeculativeText(initialFoldState, event))) {
+  if ((!terminal || event.type === "artifact.updated") && !(stale && staleSpeculativeContent(initialFoldState, event))) {
     for (const adapted of adaptV2Event(event)) next = applyV2AdaptedEvent(next, event, adapted);
   }
   const foldState = cloneFoldState(next, event);
@@ -1140,7 +1161,9 @@ export function mergeHistoryWithLive(history: Thread, live: Thread): Thread {
 export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[] {
   const blocks: ThreadBlock[] = [];
   const toolNames = new Map<string, string>();
+  const toolInputs = new Map<string, Record<string, unknown>>();
   const toolPresentations = new Map<string, ToolCallBlock["presentation"]>();
+  const toolBlockIndexes = new Map<string, number>();
   // The assistant message that carries a toolCall is the call's start wall
   // clock; the toolResult message is its end. Together they reconstruct the
   // per-step and whole-process durations that live events provide.
@@ -1171,13 +1194,18 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
         timestamp: msg.timestamp,
       });
     } else if (role === "assistant") {
+      const messageToolCalls: Array<{ callId: string; tool: string }> = [];
       for (const content of msg.content) {
         if (content.type !== "toolCall") continue;
         const callId = String(content.id || "");
         if (callId) {
-          toolNames.set(callId, String(content.name || content.tool || "unknown"));
+          const tool = String(content.name || content.tool || "unknown");
+          toolNames.set(callId, tool);
+          const input = recordValue(content.arguments ?? content.args ?? content.input);
+          if (Object.keys(input).length > 0) toolInputs.set(callId, input);
           if (content.presentation && typeof content.presentation === "object") toolPresentations.set(callId, content.presentation as ToolCallBlock["presentation"]);
           if (msg.timestamp) toolCallStarts.set(callId, msg.timestamp);
+          messageToolCalls.push({ callId, tool });
         }
       }
       const text = msg.content
@@ -1235,27 +1263,64 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
           });
         }
       }
+      // Materialize calls at their invocation point instead of waiting for a
+      // result message. This preserves interrupted/orphan calls after refresh
+      // and lets the later result update the same chronological step.
+      for (const { callId, tool } of messageToolCalls) {
+        if (toolBlockIndexes.has(callId)) continue;
+        const block: ToolCallBlock = {
+          kind: "tool",
+          id: `tool-${callId}`,
+          callId,
+          ...(msg.turnId ? { turnId: msg.turnId } : {}),
+          ...(msg.runId ? { runId: msg.runId } : {}),
+          tool,
+          status: "running",
+          statusHistory: ["running"],
+          input: toolInputs.get(callId),
+          presentation: toolPresentations.get(callId),
+          ...(msg.timestamp ? { startedAt: msg.timestamp } : {}),
+        };
+        toolBlockIndexes.set(callId, blocks.length);
+        blocks.push(block);
+      }
     } else if (role === "toolResult") {
       const callId = msg.toolCallId || msg.id;
       const text = msg.content
         .filter((c: any) => c.type === "text")
         .map((c: any) => c.text)
         .join("\n");
-      blocks.push({
+      const nonTextContent = msg.content.filter((content) => content.type !== "text");
+      const details = nonTextContent.length === 0
+        ? msg.details
+        : msg.details === undefined
+          ? { content: nonTextContent }
+          : { details: msg.details, content: nonTextContent };
+      const previousIndex = toolBlockIndexes.get(callId);
+      const previous = previousIndex === undefined ? undefined : blocks[previousIndex];
+      const block: ToolCallBlock = {
         kind: "tool",
         id: `tool-${callId}`,
         callId,
-        ...(msg.turnId ? { turnId: msg.turnId } : {}),
-        ...(msg.runId ? { runId: msg.runId } : {}),
+        ...(msg.turnId || (previous?.kind === "tool" && previous.turnId) ? { turnId: msg.turnId ?? (previous?.kind === "tool" ? previous.turnId : undefined) } : {}),
+        ...(msg.runId || (previous?.kind === "tool" && previous.runId) ? { runId: msg.runId ?? (previous?.kind === "tool" ? previous.runId : undefined) } : {}),
         ...(msg.itemId ? { itemId: msg.itemId } : {}),
         tool: msg.toolName || toolNames.get(callId) || "unknown",
         status: msg.isError ? "error" as const : "done" as const,
+        statusHistory: previous?.kind === "tool" ? [...(previous.statusHistory ?? [previous.status]), msg.isError ? "error" : "done"] : [msg.isError ? "error" : "done"],
+        input: toolInputs.get(callId) ?? (previous?.kind === "tool" ? previous.input : undefined),
         output: text || undefined,
-        details: msg.details,
+        details,
         presentation: msg.presentation ?? toolPresentations.get(callId),
         ...(toolCallStarts.get(callId) ? { startedAt: toolCallStarts.get(callId) } : {}),
         ...(msg.timestamp ? { endedAt: msg.timestamp } : {}),
-      });
+      };
+      if (previousIndex === undefined) {
+        toolBlockIndexes.set(callId, blocks.length);
+        blocks.push(block);
+      } else {
+        blocks[previousIndex] = block;
+      }
     }
   }
   return blocks;

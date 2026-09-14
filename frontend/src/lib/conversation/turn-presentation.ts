@@ -75,7 +75,12 @@ function buildTurnPresentation(blocks: ThreadBlock[], lifecycle: TurnLifecycle):
   const activityTools = tools.filter(isVisibleActivity);
   const artifacts = blocks.filter((block): block is TurnArtifactSummaryBlock => block.kind === "artifact-summary");
   const identityBlock = blocks.find((block) => "turnId" in block && typeof block.turnId === "string");
-  const finalAgent = blocks.findLast((block): block is AgentMessageBlock => block.kind === "agent" && block.presentationRole === "final")
+  // An explicit final is authoritative only while no later execution step has
+  // superseded it. Late/retried tools must remain after that prose in the
+  // trajectory instead of being visually moved in front of a stale answer.
+  const finalAgent = blocks.findLast((block, index): block is AgentMessageBlock => block.kind === "agent"
+    && block.presentationRole === "final"
+    && !blocks.slice(index + 1).some((candidate) => candidate.kind === "tool" && isVisibleActivity(candidate)))
     ?? (lifecycle === "settled" ? finalAgentInCompletedTurn(blocks) : null);
   const hasTerminalError = lifecycle === "failed" && blocks.some((block) => block.kind === "status-line" && block.level === "error");
   const provisionalAgent = !finalAgent && (active || hasTerminalError) ? provisionalAgentInActiveTurn(blocks) : null;

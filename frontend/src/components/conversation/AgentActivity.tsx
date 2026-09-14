@@ -36,8 +36,8 @@ export function ThinkingActivity({ className }: { className?: string }) {
  *  renders the chronological narration and tool lines, `status` renders the
  *  aggregate progress row. The default renders both in order.
  *
- *  Settled (and aborted/failed) turns collapse everything into the model's
- *  narration — the per-step records were part of the live stream only.
+ *  Settled (and aborted/failed) turns collapse the reasoning and tool trace
+ *  behind a summary while keeping the model's narration visible.
  *  Aborted and failed runs keep a state headline; a settled turn without an
  *  explicit final message says so instead of implying the answer vanished. */
 export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both", hasFinalAnswer }: { blocks: ActivityBlock[]; lifecycle?: TurnLifecycle; cwd?: string; part?: "both" | "content" | "status"; hasFinalAnswer?: boolean }) {
@@ -51,7 +51,8 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
       : activityPolicy(block).visibleInExecutionTrace), [blocks]);
   const activityGroups = useMemo(() => groupActivityBlocks(blocks), [blocks]);
   const traceId = useId();
-  const traceTools = useMemo(() => activities.filter((block): block is ToolCallBlock => block.kind === "tool"), [activities]);
+  const traceBlocks = useMemo(() => activities.filter((block): block is ThinkingBlock | ToolCallBlock => block.kind !== "agent"), [activities]);
+  const traceTools = useMemo(() => traceBlocks.filter((block): block is ToolCallBlock => block.kind === "tool"), [traceBlocks]);
   const shown = useDisplayedActivity(tools, lifecycle);
   // Settled turns collapse their tool steps behind the process summary row.
   const [traceExpanded, setTraceExpanded] = useState(false);
@@ -101,10 +102,10 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
 
   if (activities.length === 0) return null;
 
-  // Settled (and aborted/failed) turns keep the model's narration — the
-  // per-step records were part of the live stream only. Aborted and failed
-  // runs keep a state headline; a settled turn without an explicit final
-  // message says so instead of implying the answer went missing.
+  // Settled turns keep narration open and place reasoning/tool records behind
+  // one summary. Aborted and failed runs keep a state headline; a settled turn
+  // without an explicit final message says so instead of implying the answer
+  // went missing.
   const narrationBlocks = activities.filter((block): block is AgentMessageBlock => block.kind === "agent");
   // Callers that render the final answer outside this component
   // (ConversationTurn) pass the flag down; direct renders scan the blocks.
@@ -137,14 +138,16 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
   const summaryLabel = `${stateLabel}${processDuration ? ` · ${processDuration}` : ""}${failureSuffix}${noAnswer ? ` · ${t("conversation.activity.noAnswer")}` : ""}`;
 
   return <div id={blocks.length === 1 && blocks[0].kind === "tool" ? `thread-block-${blocks[0].id}` : undefined} data-thread-block-ids={blocks.map((block) => block.id).join(" ")} data-state={state} data-motion={progressAppearance.motion} style={activityStyle(progressAppearance)} className={cn(styles.root, "min-w-0 scroll-mt-4")}>
-    {traceTools.length > 0 || headline ? (
+    {traceBlocks.length > 0 ? (
       <button type="button" aria-expanded={traceExpanded} aria-controls={traceId} onClick={() => setTraceExpanded((value) => !value)} className={cn(styles.summary, "flex min-h-primary w-full items-center gap-2 rounded-input py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-control")}>
-        <span aria-live="polite" aria-atomic="true" className="min-w-0 flex-1 truncate text-sm font-medium text-text">{traceTools.length > 0 ? summaryLabel : headline}</span>
+        <span aria-live="polite" aria-atomic="true" className="min-w-0 flex-1 truncate text-sm font-medium text-text">{summaryLabel}</span>
         <ChevronRight size={13} aria-hidden className={cn(styles.chevron, "shrink-0 text-muted", traceExpanded && "rotate-90")} />
       </button>
+    ) : headline ? (
+      <div aria-live="polite" aria-atomic="true" className={cn(styles.summary, "flex min-h-primary w-full items-center py-1 text-sm font-medium text-text")}>{headline}</div>
     ) : null}
-    {traceExpanded && traceTools.length > 0 && <div id={traceId} role="region" className={styles.trace} aria-label={t("conversation.activity.trace")}>
-      {traceTools.map((block) => <TraceItem key={block.id} block={block} live={false} />)}
+    {traceExpanded && traceBlocks.length > 0 && <div id={traceId} role="region" className={styles.trace} aria-label={t("conversation.activity.trace")}>
+      <ActivityTrace groups={groupActivityBlocks(traceBlocks)} cwd={cwd} />
     </div>}
     {narrationBlocks.map((block) => (
       <div key={block.id} id={`thread-block-${block.id}`} className={cn(styles.entry, styles.narration, "min-w-0")}><MarkdownViewer variant="chat" className="text-ui-body leading-relaxed text-muted [overflow-wrap:anywhere]" resourceContext={cwd ? { cwd } : undefined}>{parseSuggestions(block.parts.map((part) => part.text).join("")).clean}</MarkdownViewer></div>
@@ -297,7 +300,8 @@ function ActivityIcon({ state, slot, config, label, activityState, compact = fal
 function TraceItem({ block, live }: { block: ToolCallBlock; live: boolean }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const hasDetails = Boolean(block.input || block.output || block.partialOutput || block.diff);
+  const hasStructuredDetails = block.details !== undefined && block.details !== null;
+  const hasDetails = Boolean(block.input || block.output || block.partialOutput || block.diff || hasStructuredDetails);
   const output = block.output ?? block.partialOutput;
   const running = live && block.status === "running";
   const duration = running ? null : stepDuration(block);
@@ -317,6 +321,7 @@ function TraceItem({ block, live }: { block: ToolCallBlock; live: boolean }) {
       <Detail label={t("conversation.activity.toolLabel")} value={block.tool} />
       {block.input && <Detail label={t("conversation.activity.input")} value={JSON.stringify(block.input, null, 2)} pre />}
       {output && <OutputDetail label={t("conversation.activity.output")} value={output} fullValue={block.output} partial={Boolean(block.partialOutput && !block.output)} t={t} />}
+      {hasStructuredDetails && <OutputDetail label={t("conversation.activity.details")} value={stringifyDetails(block.details)} fullValue={stringifyDetails(block.details)} t={t} />}
       {block.diff && <OutputDetail label={t("conversation.activity.diff")} value={block.diff} fullValue={block.diff} t={t} />}
     </div>}
   </div>;
@@ -361,5 +366,10 @@ function OutputDetail({
     </div>}
     {partial && !truncated && <div className="mt-1 text-[10px] text-muted">{t("conversation.activity.fullOutputUnavailable")}</div>}
   </div>;
+}
+function stringifyDetails(value: unknown): string {
+  if (typeof value === "string") return value;
+  try { return JSON.stringify(value, null, 2); }
+  catch { return String(value); }
 }
 function Detail({ label, value, pre = false }: { label: string; value: string; pre?: boolean }) { return <div><div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted">{label}</div>{pre ? <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-input bg-surface px-2 py-1.5 font-mono text-xs leading-5 text-text">{value}</pre> : <div className="font-mono text-xs text-text">{value}</div>}</div>; }

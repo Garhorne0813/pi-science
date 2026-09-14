@@ -55,6 +55,27 @@ describe("transport event folding", () => {
     expect(tool.endedAt).toBe("2026-09-08T00:00:02.400Z");
   });
 
+  it("restores tool inputs and keeps calls that have no result yet", () => {
+    const thread = threadFromMessages([
+      { id: "user-1", role: "user", content: [{ type: "text", text: "inspect" }] },
+      { id: "assistant-1", role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.ts" } }] },
+    ]);
+    expect(thread.blocks.find((block) => block.kind === "tool")).toMatchObject({
+      kind: "tool", callId: "call-1", tool: "read", status: "running", input: { path: "a.ts" },
+    });
+  });
+
+  it("preserves non-text tool result content as structured details", () => {
+    const thread = threadFromMessages([
+      { id: "assistant-1", role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "image", arguments: { prompt: "plot" } }] },
+      { id: "result-1", role: "toolResult", toolCallId: "call-1", content: [{ type: "image", mimeType: "image/png", data: "abc" }] },
+    ]);
+    expect(thread.blocks.find((block) => block.kind === "tool")).toMatchObject({
+      kind: "tool", callId: "call-1", status: "done", input: { prompt: "plot" },
+      details: { content: [{ type: "image", mimeType: "image/png", data: "abc" }] },
+    });
+  });
+
   it("collapses narration that a later message repeats verbatim", () => {
     let thread = emptyThread();
     const emitText = (partId: string, text: string) => {
@@ -65,21 +86,29 @@ describe("transport event folding", () => {
     const narration = thread.blocks.filter((block) => block.kind === "agent");
     expect(narration).toHaveLength(1);
     expect(narration[0]?.kind === "agent" && narration[0].parts[0]?.text).toContain("好的。");
-    // A strict subset adds nothing and must not spawn a second block.
+    // A short subset is retained because substring overlap alone is not
+    // enough evidence that a distinct process observation is duplicated.
     emitText("m3", "Todo 列表已创建。");
-    expect(thread.blocks.filter((block) => block.kind === "agent")).toHaveLength(1);
+    expect(thread.blocks.filter((block) => block.kind === "agent")).toHaveLength(2);
     // Unrelated narration still gets its own block.
     emitText("m4", "开始检索文献。");
-    expect(thread.blocks.filter((block) => block.kind === "agent")).toHaveLength(2);
+    expect(thread.blocks.filter((block) => block.kind === "agent")).toHaveLength(3);
   });
 
   it("keeps the union when a streamed answer is echoed by later text", () => {
     let thread = emptyThread();
-    thread = foldEvent(thread, { sessionId: "s", type: "text.updated", turnId: "t1", partId: "m1", text: "最终回答正文。", revision: 1 });
-    thread = foldEvent(thread, { sessionId: "s", type: "text.updated", turnId: "t1", partId: "m2", text: "最终回答正文。附注。", revision: 1 });
+    thread = foldEvent(thread, { sessionId: "s", type: "text.updated", turnId: "t1", partId: "m1", text: "这是经过完整验证的最终回答正文。", revision: 1 });
+    thread = foldEvent(thread, { sessionId: "s", type: "text.updated", turnId: "t1", partId: "m2", text: "这是经过完整验证的最终回答正文。附注。", revision: 1 });
     const agents = thread.blocks.filter((block) => block.kind === "agent");
     expect(agents).toHaveLength(1);
-    expect(agents[0]?.kind === "agent" && agents[0].parts[0]?.text).toBe("最终回答正文。附注。");
+    expect(agents[0]?.kind === "agent" && agents[0].parts[0]?.text).toBe("这是经过完整验证的最终回答正文。附注。");
+  });
+
+  it("does not delete short narration merely because later prose contains it", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, { sessionId: "s", type: "text.updated", turnId: "t1", partId: "m1", text: "Done", revision: 1 });
+    thread = foldEvent(thread, { sessionId: "s", type: "text.updated", turnId: "t1", partId: "m2", text: "Done with discovery; starting verification.", revision: 1 });
+    expect(thread.blocks.filter((block) => block.kind === "agent")).toHaveLength(2);
   });
 
   it("rebuilds history with the narration repeat collapsed", () => {
@@ -336,7 +365,7 @@ describe("history window merges", () => {
 });
 
 describe("conversation history conversion", () => {
-  it("maps tool results by toolCallId instead of using the previous tool or unknown", () => {
+  it("maps tool results by toolCallId while preserving invocation order", () => {
     const blocks = convertHistoryToBlocks([
       {
         id: "assistant-1",
@@ -363,8 +392,8 @@ describe("conversation history conversion", () => {
     ]);
 
     expect(blocks).toEqual([
-      expect.objectContaining({ kind: "tool", callId: "call-bash", tool: "bash" }),
       expect.objectContaining({ kind: "tool", callId: "call-read", tool: "read" }),
+      expect.objectContaining({ kind: "tool", callId: "call-bash", tool: "bash" }),
     ]);
   });
 
@@ -452,6 +481,32 @@ describe("conversation presentation protocol v2", () => {
     }));
     const thinking = thread.blocks.find((block) => block.kind === "thinking");
     expect(thinking && "parts" in thinking && thinking.parts[0]?.text).toBe("Weigh it.");
+  });
+
+  it("reorders speculative V2 thinking revisions when a missing predecessor arrives", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({
+      seq: 3, type: "thinking.updated", itemId: "reasoning-1",
+      payload: { partId: "reasoning-1:0", baseRevision: 1, revision: 2, text: "B" },
+    }));
+    thread = foldEvent(thread, envelope({
+      seq: 2, type: "thinking.updated", itemId: "reasoning-1",
+      payload: { partId: "reasoning-1:0", baseRevision: 0, revision: 1, text: "A" },
+    }));
+    const thinking = thread.blocks.find((block) => block.kind === "thinking");
+    expect(thinking && thinking.kind === "thinking" && thinking.parts[0]?.text).toBe("AB");
+  });
+
+  it("settles a reasoning block when its item completes", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({
+      seq: 2, type: "thinking.updated", itemId: "reasoning-1",
+      payload: { partId: "reasoning-1:0", baseRevision: 0, revision: 1, text: "A" },
+    }));
+    thread = foldEvent(thread, envelope({ seq: 3, type: "item.completed", itemId: "reasoning-1", payload: { revision: 1 } }));
+    expect(thread.blocks.find((block) => block.kind === "thinking")).toMatchObject({ partial: false });
   });
 
   it("maps commentary and final answer to separate stable items", () => {

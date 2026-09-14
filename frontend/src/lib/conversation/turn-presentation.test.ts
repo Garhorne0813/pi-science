@@ -127,4 +127,10 @@ describe("buildTurnPresentations", () => {
     const turn = buildTurnPresentations([user("u1"), tool("read"), agent("final"), tool("todo", "todo")], { lastTurnLifecycle: "settled" })[0];
     expect(turn.finalAgent?.id).toBe("final");
   });
+
+  it("does not keep a stale explicit final when later execution supersedes it", () => {
+    const turn = buildTurnPresentations([user("u1"), { ...agent("final"), presentationRole: "final" }, tool("late-read")], { lastTurnLifecycle: "settled" })[0];
+    expect(turn.finalAgent).toBeNull();
+    expect(turn.activityBlocks.map((block) => block.id)).toEqual(["final", "late-read"]);
+  });
 });

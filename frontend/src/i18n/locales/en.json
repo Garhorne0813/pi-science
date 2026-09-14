@@ -129,6 +129,7 @@
   "conversation.activity.toolLabel": "Tool",
   "conversation.activity.input": "Input",
   "conversation.activity.output": "Output",
+  "conversation.activity.details": "Details",
   "conversation.activity.diff": "Diff",
   "conversation.activity.previewTruncated": "Preview truncated at {{count}} characters",
   "conversation.activity.fullOutput": "View full output",

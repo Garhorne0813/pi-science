@@ -129,6 +129,7 @@
   "conversation.activity.toolLabel": "工具",
   "conversation.activity.input": "输入",
   "conversation.activity.output": "输出",
+  "conversation.activity.details": "详情",
   "conversation.activity.diff": "差异",
   "conversation.activity.previewTruncated": "预览已截断，仅显示前 {{count}} 个字符",
   "conversation.activity.fullOutput": "查看完整输出",

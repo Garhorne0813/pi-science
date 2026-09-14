@@ -183,7 +183,7 @@ describe("AgentActivity live stream", () => {
     expect(screen.getByText("Working")).toBeInTheDocument();
   });
 
-  it("keeps reasoning out of the settled step records", () => {
+  it("folds reasoning into the settled step records", () => {
     const blocks: ActivityBlock[] = [
       { kind: "thinking", id: "th1", parts: [{ id: "th1-0", text: "Weigh the options." }] },
       tool("t1", "read", "done", { path: "a.ts" }),
@@ -192,11 +192,10 @@ describe("AgentActivity live stream", () => {
     render(<AgentActivity blocks={blocks} lifecycle="settled" />);
     expect(screen.queryByText("Weigh the options.")).not.toBeInTheDocument();
     expect(screen.queryByText("Thinking")).not.toBeInTheDocument();
-    // Expanding reveals the step records only — the reasoning stream was part
-    // of the live feed and does not belong in the folded records.
+    // Expanding restores the complete pre-answer trajectory.
     fireEvent.click(screen.getByText(/Complete|Encountered a problem|Stopped|Working/));
     expect(screen.getByText("Reading a.ts")).toBeInTheDocument();
-    expect(screen.queryByText("Weigh the options.")).not.toBeInTheDocument();
+    expect(screen.getByText("Weigh the options.")).toBeInTheDocument();
   });
   it("streams the freshest output line beside a running tool", () => {
     const bash = { ...tool("b1", "bash", "running", { command: "pip install -U scikit-learn" }), partialOutput: "Collecting scikit-learn\nDownloading numpy-1.26.4.whl (56 MB)\n" } as ToolCallBlock;
@@ -241,6 +240,15 @@ describe("AgentActivity settled display", () => {
     render(<AgentActivity lifecycle="settled" blocks={[{ kind: "agent", id: "commentary", presentationRole: "intermediate", parts: [{ id: "commentary-part", text: "I checked the inputs." }] }]} />);
     expect(screen.getByText("I checked the inputs.")).toBeInTheDocument();
     expect(screen.getByText("No final answer returned")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("exposes structured tool details even when there is no text output", () => {
+    render(<AgentActivity lifecycle="settled" blocks={[{ ...tool("structured", "compute"), output: undefined, details: { rows: 3 } }]} />);
+    fireEvent.click(screen.getByText(/Complete|Encountered a problem|Stopped|Working/));
+    fireEvent.click(screen.getByText("Running compute"));
+    expect(screen.getByText("Details")).toBeInTheDocument();
+    expect(screen.getByText(/"rows": 3/)).toBeInTheDocument();
   });
 
   it("keeps the state headline for aborted and failed turns", () => {
