@@ -30,8 +30,10 @@ type GetState = StoreApi<RuntimeState>["getState"];
  *  racing two. Owned by `createNewSession`, which also clears each entry. */
 const _createSessionPromises = new Map<string, Promise<string>>();
 const _historyPagePromises = new Map<string, Promise<number>>();
+const _interactionResponsePromises = new Map<string, Promise<void>>();
 function connectionKey(cwd: string, sessionId?: string): string { return `${cwd}\u0000${sessionId ?? ""}`; }
 function historyPageKey(cwd: string, sessionId: string, before: string): string { return `${connectionKey(cwd, sessionId)}\u0000${before}`; }
+function interactionResponseKey(cwd: string, sessionId: string, requestId: string): string { return `${connectionKey(cwd, sessionId)}\u0000${requestId}`; }
 
 export function createRuntimeActions(set: SetState, get: GetState) {
   /** React StrictMode can replay the route effect while the first session
@@ -592,50 +594,59 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       }
     },
 
-    respondToInteraction: async (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => {
+    respondToInteraction: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => {
       const { activeSessionId, cwd, pendingInteraction } = get();
-      if (!activeSessionId || !pendingInteraction) return;
+      if (!activeSessionId || !pendingInteraction) return Promise.resolve();
       const requestId = pendingInteraction.requestId;
-      ++generations.activity;
-      ++generations.localMutation;
-      try {
-        await getClient().respondToInteraction(
-          activeSessionId,
-          requestId,
-          response,
-          cwd,
-        );
-        const current = get();
-        if (
-          current.activeSessionId === activeSessionId
-          && current.cwd === cwd
-          && current.pendingInteraction?.requestId === requestId
-        ) {
-          const resolvedBlocks = current.thread.blocks.map((block) => {
-            if (block.kind !== "tool" || block.status !== "waiting-approval") return block;
-            // Resolve only the block this request is tied to. Without a
-            // toolCallId the requestId itself is the only trustworthy link;
-            // batch-resolving every waiting block would retire prompts the
-            // user has not answered.
-            const matches = pendingInteraction.toolCallId
-              ? block.callId === pendingInteraction.toolCallId
-              : block.callId === requestId;
-            return matches ? { ...block, interactionResolved: true } : block;
-          });
-          const thread = resolvedBlocks.some((block, index) => block !== current.thread.blocks[index])
-            ? { ...current.thread, blocks: resolvedBlocks, index: Object.fromEntries(resolvedBlocks.map((block, index) => [block.id, index])) }
-            : current.thread;
-          set({ pendingInteraction: null, working: true, turnLifecycle: "active", status: "ready", thread });
-          ensureTurnWatchdog();
+      const key = interactionResponseKey(cwd, activeSessionId, requestId);
+      const existing = _interactionResponsePromises.get(key);
+      if (existing) return existing;
+      const operation = (async () => {
+        ++generations.activity;
+        ++generations.localMutation;
+        try {
+          await getClient().respondToInteraction(
+            activeSessionId,
+            requestId,
+            response,
+            cwd,
+          );
+          const current = get();
+          if (
+            current.activeSessionId === activeSessionId
+            && current.cwd === cwd
+            && current.pendingInteraction?.requestId === requestId
+          ) {
+            const resolvedBlocks = current.thread.blocks.map((block) => {
+              if (block.kind !== "tool" || block.status !== "waiting-approval") return block;
+              // Resolve only the block this request is tied to. Without a
+              // toolCallId the requestId itself is the only trustworthy link;
+              // batch-resolving every waiting block would retire prompts the
+              // user has not answered.
+              const matches = pendingInteraction.toolCallId
+                ? block.callId === pendingInteraction.toolCallId
+                : block.callId === requestId;
+              return matches ? { ...block, interactionResolved: true } : block;
+            });
+            const thread = resolvedBlocks.some((block, index) => block !== current.thread.blocks[index])
+              ? { ...current.thread, blocks: resolvedBlocks, index: Object.fromEntries(resolvedBlocks.map((block, index) => [block.id, index])) }
+              : current.thread;
+            set({ pendingInteraction: null, working: true, turnLifecycle: "active", status: "ready", thread });
+            ensureTurnWatchdog();
+          }
+        } catch (error) {
+          const current = get();
+          if (current.activeSessionId === activeSessionId && current.cwd === cwd) {
+            appendRuntimeError(error, activeSessionId, cwd);
+            set({ status: "error" });
+          }
+          throw error;
         }
-      } catch (error) {
-        const current = get();
-        if (current.activeSessionId === activeSessionId && current.cwd === cwd) {
-          appendRuntimeError(error, activeSessionId, cwd);
-          set({ status: "error" });
-        }
-        throw error;
-      }
+      })();
+      _interactionResponsePromises.set(key, operation);
+      return operation.finally(() => {
+        if (_interactionResponsePromises.get(key) === operation) _interactionResponsePromises.delete(key);
+      });
     },
 
     loadSessions: async (cwd?: string) => {

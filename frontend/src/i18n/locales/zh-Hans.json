@@ -1087,6 +1087,7 @@
   "welcome.description": "由 pi agent 运行时驱动。借助 AI 分析数据、运行代码并探索结果。",
   "interaction.option": "选项",
   "interaction.decline": "拒绝",
+  "interaction.responseFailed": "响应发送失败，请重试。",
   "skills.title": "技能",
   "skills.descriptionPrefix": "Agent 技能可扩展 AI 的能力。技能加载自",
   "skills.projectSource": "（项目）",

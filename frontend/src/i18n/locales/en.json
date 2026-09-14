@@ -1087,6 +1087,7 @@
   "welcome.description": "Powered by the pi agent runtime. Analyze data, run code, and explore results with AI assistance.",
   "interaction.option": "Option",
   "interaction.decline": "Decline",
+  "interaction.responseFailed": "Could not send the response. Please try again.",
   "skills.title": "Skills",
   "skills.descriptionPrefix": "Agent skills extend what the AI can do. Skills are loaded from",
   "skills.projectSource": "(project)",

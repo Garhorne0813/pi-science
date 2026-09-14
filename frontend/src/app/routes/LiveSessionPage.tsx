@@ -60,12 +60,12 @@ export function ConversationFooter() {
         <QuestionnairePrompt
           questionnaire={pendingQuestionnaire}
           interaction={pendingInteraction}
-          onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
+          onRespond={respondToInteraction}
         />
       ) : pendingInteraction ? (
         <InteractionPrompt
           interaction={pendingInteraction}
-          onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
+          onRespond={respondToInteraction}
         />
       ) : null}
     </div>
@@ -223,7 +223,7 @@ export function LiveSessionPage() {
         <QuestionnairePrompt
           questionnaire={pendingQuestionnaire}
           interaction={pendingInteraction}
-          onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
+          onRespond={respondToInteraction}
         />
       );
     }
@@ -231,7 +231,7 @@ export function LiveSessionPage() {
     return (
       <InteractionPrompt
         interaction={pendingInteraction}
-        onRespond={(response) => void respondToInteraction(response).catch(() => undefined)}
+        onRespond={respondToInteraction}
       />
     );
   };

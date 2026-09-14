@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Loader2 } from "lucide-react";
 import type { PendingInteraction } from "../../lib/agent-runtime";
 import { useTranslation } from "react-i18next";
 
@@ -7,14 +8,30 @@ export function InteractionPrompt({
   onRespond,
 }: {
   interaction: PendingInteraction;
-  onRespond: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => void;
+  onRespond: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => void | Promise<void>;
 }) {
   const { t } = useTranslation();
   const [value, setValue] = useState(interaction.prefill || "");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setValue(interaction.prefill || "");
+    setSubmitting(false);
+    setError(null);
   }, [interaction.requestId, interaction.prefill]);
+
+  const respond = async (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => {
+    if (submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onRespond(response);
+    } catch (cause) {
+      setError(cause instanceof Error && cause.message ? cause.message : t("interaction.responseFailed"));
+      setSubmitting(false);
+    }
+  };
 
   const options = (interaction.options || []).map((option) => (
     typeof option === "string"
@@ -29,21 +46,24 @@ export function InteractionPrompt({
 
       {interaction.method === "confirm" ? (
         <div className="mt-3 flex gap-2">
-          <button onClick={() => onRespond({ confirmed: true })} className="rounded-input bg-accent-fill px-3 py-1.5 text-xs text-accent-fg">{t("common.confirm")}</button>
-          <button onClick={() => onRespond({ confirmed: false })} className="rounded-input border border-border px-3 py-1.5 text-xs text-text hover:bg-surface-2">{t("interaction.decline")}</button>
+          <button type="button" disabled={submitting} onClick={() => void respond({ confirmed: true })} className="inline-flex items-center gap-1.5 rounded-input bg-accent-fill px-3 py-1.5 text-xs text-accent-fg disabled:opacity-50">{submitting && <Loader2 size={12} className="animate-spin" />}{t("common.confirm")}</button>
+          <button type="button" disabled={submitting} onClick={() => void respond({ confirmed: false })} className="rounded-input border border-border px-3 py-1.5 text-xs text-text hover:bg-surface-2 disabled:opacity-50">{t("interaction.decline")}</button>
         </div>
       ) : interaction.method === "select" ? (
         <div className="mt-3 flex flex-wrap gap-2">
           {options.map((option) => (
             <button
+              type="button"
               key={`${option.label}-${option.value}`}
-              onClick={() => onRespond({ value: option.value })}
-              className="rounded-input border border-border bg-surface px-3 py-1.5 text-xs text-text hover:border-accent"
+              disabled={submitting}
+              onClick={() => void respond({ value: option.value })}
+              className="inline-flex items-center gap-1.5 rounded-input border border-border bg-surface px-3 py-1.5 text-xs text-text hover:border-accent disabled:opacity-50"
             >
+              {submitting && <Loader2 size={12} className="animate-spin" />}
               {option.label}
             </button>
           ))}
-          <button onClick={() => onRespond({ cancelled: true })} className="rounded-input px-3 py-1.5 text-xs text-muted hover:bg-surface-2">{t("common.cancel")}</button>
+          <button type="button" disabled={submitting} onClick={() => void respond({ cancelled: true })} className="rounded-input px-3 py-1.5 text-xs text-muted hover:bg-surface-2 disabled:opacity-50">{t("common.cancel")}</button>
         </div>
       ) : (
         <div className="mt-3 flex items-end gap-2">
@@ -55,15 +75,17 @@ export function InteractionPrompt({
             className="min-h-10 flex-1 resize-y rounded-input border border-border bg-surface px-3 py-2 text-sm text-text outline-none focus:border-accent"
           />
           <button
-            onClick={() => onRespond({ value })}
-            disabled={!value.trim()}
+            type="button"
+            onClick={() => void respond({ value })}
+            disabled={!value.trim() || submitting}
             className="rounded-input bg-accent-fill px-3 py-2 text-xs text-accent-fg disabled:cursor-default disabled:opacity-50"
           >
-            {t("common.submit")}
+            {submitting ? <Loader2 size={12} className="animate-spin" aria-label={t("questionnaire.submitting")} /> : t("common.submit")}
           </button>
-          <button onClick={() => onRespond({ cancelled: true })} className="rounded-input px-2 py-2 text-xs text-muted hover:bg-surface-2">{t("common.cancel")}</button>
+          <button type="button" disabled={submitting} onClick={() => void respond({ cancelled: true })} className="rounded-input px-2 py-2 text-xs text-muted hover:bg-surface-2 disabled:opacity-50">{t("common.cancel")}</button>
         </div>
       )}
+      {error && <p role="alert" className="mt-3 rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{error}</p>}
     </div>
   );
 }

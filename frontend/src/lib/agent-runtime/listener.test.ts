@@ -206,7 +206,10 @@ describe("runtime event subscription", () => {
     });
     expect(useRuntimeStore.getState().pendingInteraction?.requestId).toBe("question-1");
 
-    await useRuntimeStore.getState().respondToInteraction({ value: "B" });
+    const firstResponse = useRuntimeStore.getState().respondToInteraction({ value: "B" });
+    const duplicateResponse = useRuntimeStore.getState().respondToInteraction({ value: "A" });
+    await Promise.all([firstResponse, duplicateResponse]);
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/interactions/question-1"))).toHaveLength(1);
     expect(useRuntimeStore.getState().pendingInteraction).toBeNull();
     expect(useRuntimeStore.getState().turnLifecycle).toBe("active");
     source.emit("session.idle", { type: "session.idle", sessionId: "session-a" });
