@@ -16,6 +16,12 @@ export interface SessionInfo {
   project_id?: string | null;
 }
 
+export interface SessionListPage {
+  sessions: SessionInfo[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
 export interface AvailableModel {
   id: string;
   provider: string;

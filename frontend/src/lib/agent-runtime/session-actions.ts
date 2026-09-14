@@ -14,11 +14,12 @@ import {
 import { appendRuntimeError, isMissingSessionError } from "./errors";
 import { attachTurnArtifacts, emptyThread, mergeHistoryWithLive, prependHistoryMessages, resetTurnBuffer, threadFromMessages } from "./event-fold";
 import { fetchPersistedTurnArtifacts } from "./turn-artifacts";
+import { mergeRecoveryHistoryWindow } from "./history-window-recovery";
 import { generations, turnState } from "./generations";
 import { registerEventListener, ensureTurnWatchdog } from "./listener";
 import { applyPromptSessionName, backfillSessionName } from "./naming";
 import { recoverMissingSession, reconcileAfterConnectionLoss, reconcilePromptAfterLateStream, rememberRuntimeState, suppressConnectionRecovery } from "./recovery";
-import { loadSessionsInternal, optimisticSessionIds } from "./sessions";
+import { loadMoreSessionsInternal, loadSessionsInternal, optimisticSessionIds } from "./sessions";
 import { hasActivePendingInteraction, hasPendingInteractionData, type RuntimeState } from "./types";
 
 type SetState = StoreApi<RuntimeState>["setState"];
@@ -275,7 +276,37 @@ export function createRuntimeActions(set: SetState, get: GetState) {
     const connectionGeneration = generations.connection;
     set({ historyLoading: true });
     try {
-      const page = await getClient().getMessagesPage(sessionId, cwd, { before });
+      const client = getClient();
+      let page;
+      try {
+        page = await client.getMessagesPage(sessionId, cwd, { before });
+      } catch (firstError) {
+        if (String(firstError).includes("stale history cursor")) {
+          const current = get();
+          const fresh = await client.getMessagesPage(sessionId, cwd);
+          const rebased = await mergeRecoveryHistoryWindow(client, sessionId, cwd, current.thread, fresh, { keepLiveExtras: true });
+          const latest = get();
+          if (
+            connectionGeneration !== generations.connection
+            || latest.activeSessionId !== sessionId
+            || latest.cwd !== cwd
+            || latest.historyCursor !== before
+          ) return 0;
+          const added = rebased.thread.blocks.length - latest.thread.blocks.length;
+          ++generations.historyWindow;
+          set({
+            thread: rebased.thread,
+            historyCursor: rebased.boundaryPage.next_cursor,
+            historyHasMore: rebased.boundaryPage.has_more,
+            historySnapshotVersion: fresh.snapshot_version,
+            historyLoading: false,
+          });
+          return added;
+        }
+        // One bounded retry absorbs a transient backend restart without
+        // requiring the user to leave the top of the list and scroll back.
+        page = await client.getMessagesPage(sessionId, cwd, { before });
+      }
       const current = get();
       if (
         connectionGeneration !== generations.connection
@@ -610,6 +641,8 @@ export function createRuntimeActions(set: SetState, get: GetState) {
     loadSessions: async (cwd?: string) => {
       return loadSessionsInternal(cwd);
     },
+
+    loadMoreSessions: async () => loadMoreSessionsInternal(),
 
     loadSession: async (sessionId: string) => {
       const cwd = get().cwd;

@@ -827,6 +827,8 @@
   "conversation.newSession": "新会话",
   "conversation.sessions": "会话",
   "conversation.noSessions": "暂无会话",
+  "conversation.loadMoreSessions": "加载更早的会话",
+  "conversation.loadingSessions": "正在加载…",
   "conversation.stopBeforeNew": "请先停止当前任务，再新建会话",
   "conversation.copy": "复制",
   "conversation.copied": "已复制",

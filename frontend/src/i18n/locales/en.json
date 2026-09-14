@@ -827,6 +827,8 @@
   "conversation.newSession": "New conversation",
   "conversation.sessions": "Conversations",
   "conversation.noSessions": "No conversations yet",
+  "conversation.loadMoreSessions": "Load older conversations",
+  "conversation.loadingSessions": "Loading…",
   "conversation.stopBeforeNew": "Stop the current task before creating a new conversation",
   "conversation.copy": "Copy",
   "conversation.copied": "Copied",

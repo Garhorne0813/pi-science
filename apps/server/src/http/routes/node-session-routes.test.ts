@@ -324,6 +324,29 @@ describe("native Node conversation routes", () => {
     await server.close();
   });
 
+  it("paginates the session index without losing rows when timestamps tie", async () => {
+    const ids = Array.from({ length: 35 }, (_, index) => `session-${String(index).padStart(2, "0")}`);
+    const cwd = await workspaceWithSessions(...ids);
+    const server = app();
+
+    const first = await server.inject({ method: "GET", url: `/api/sessions?cwd=${encodeURIComponent(cwd)}&limit=20` });
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({ has_more: true, next_cursor: expect.any(String) });
+    expect(first.json().sessions).toHaveLength(20);
+
+    const second = await server.inject({
+      method: "GET",
+      url: `/api/sessions?cwd=${encodeURIComponent(cwd)}&limit=20&cursor=${encodeURIComponent(first.json().next_cursor)}`,
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toMatchObject({ has_more: false, next_cursor: null });
+    expect(second.json().sessions).toHaveLength(15);
+    expect(new Set([...first.json().sessions, ...second.json().sessions].map((session: { id: string }) => session.id)).size).toBe(35);
+    expect((await server.inject({ method: "GET", url: `/api/sessions?cwd=${encodeURIComponent(cwd)}&limit=0` })).statusCode).toBe(400);
+    expect((await server.inject({ method: "GET", url: `/api/sessions?cwd=${encodeURIComponent(cwd)}&cursor=broken` })).statusCode).toBe(400);
+    await server.close();
+  });
+
   it("enforces busy status and owns fork, interaction, commands, model, export, and exact delete routes", async () => {
     const cwd = await workspaceWithSessions("session-a", "session-b");
     const server = app();

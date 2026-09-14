@@ -10,7 +10,7 @@ import { clearCachedMessages, readCachedMessages } from "./message-cache";
 import * as rest from "./rest";
 import { clearAiTitle, clearAiTitleAttempted, clearSessionName } from "./session-names";
 import { SseTransport } from "./sse-transport";
-import type { HistoryMessage, InteractionResponse, PiScienceEvent, SessionInfo, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
+import type { HistoryMessage, InteractionResponse, PiScienceEvent, SessionInfo, SessionListPage, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
 
 export type {
   AvailableModel,
@@ -18,6 +18,7 @@ export type {
   InteractionResponse,
   PiScienceEvent,
   SessionInfo,
+  SessionListPage,
   SessionMessagePage,
   SessionState,
   SessionStats,
@@ -63,6 +64,10 @@ export class PiScienceClient {
 
   async listSessions(cwd: string): Promise<SessionInfo[]> {
     return rest.listSessions(this.baseUrl, cwd);
+  }
+
+  async listSessionsPage(cwd: string, options: { cursor?: string | null; limit?: number } = {}): Promise<SessionListPage> {
+    return rest.listSessionsPage(this.baseUrl, cwd, options);
   }
 
   async getMessages(sessionId: string, cwd?: string): Promise<HistoryMessage[]> {

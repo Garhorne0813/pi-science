@@ -31,6 +31,9 @@ beforeEach(() => {
   useUiStore.setState({ settingsOpen: false, settingsScope: null, suppressAutoSessionNav: false });
   useRuntimeStore.setState({
     sessions: [],
+    sessionsHasMore: false,
+    sessionsLoading: false,
+    loadMoreSessions: vi.fn(async () => 0),
     activeSessionId: null,
     cwd: "proj",
     loadSessions: vi.fn(async () => []),
@@ -122,6 +125,21 @@ describe("WorkspaceSessionList", () => {
     const inactiveDot = rowFor("Session B").firstElementChild;
     expect(inactiveDot?.className).not.toContain("bg-accent");
     expect((inactiveDot as HTMLElement).style.visibility).toBe("hidden");
+  });
+
+  it("renders every loaded page and offers loading for older conversations", () => {
+    const loadMoreSessions = vi.fn(async () => 0);
+    useRuntimeStore.setState({
+      sessions: Array.from({ length: 35 }, (_, index) => session(`s${index}`, `Session ${index}`)),
+      sessionsHasMore: true,
+      sessionsLoading: false,
+      loadMoreSessions,
+    });
+    renderList();
+
+    expect(screen.getByRole("button", { name: /Session 34/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Load older conversations" }));
+    expect(loadMoreSessions).toHaveBeenCalledTimes(1);
   });
 
   it("does not load sessions for a workspace route other than the root", () => {

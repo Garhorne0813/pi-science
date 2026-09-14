@@ -161,6 +161,23 @@ describe("useConversationScroll follow output", () => {
 });
 
 describe("useConversationScroll history navigation", () => {
+  it("allows an in-place retry when an older-page attempt fails at the top", async () => {
+    const loadOlderMessages = vi.fn(async () => 0);
+    const { result } = renderHook(() => useConversationScroll(options(loadOlderMessages)));
+    const scroller = document.createElement("div");
+    Object.defineProperties(scroller, {
+      scrollTop: { configurable: true, value: 0, writable: true },
+      scrollHeight: { configurable: true, value: 1_000 },
+      clientHeight: { configurable: true, value: 500 },
+    });
+    act(() => { result.current.attachScroller(scroller); });
+
+    act(() => { scroller.dispatchEvent(new Event("scroll")); });
+    await waitFor(() => expect(loadOlderMessages).toHaveBeenCalledTimes(1));
+    act(() => { scroller.dispatchEvent(new Event("scroll")); });
+    await waitFor(() => expect(loadOlderMessages).toHaveBeenCalledTimes(2));
+  });
+
   it("loads older pages sequentially and keeps the virtual index aligned", async () => {
     let page = 0;
     const loadOlderMessages = vi.fn(async () => {

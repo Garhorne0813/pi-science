@@ -33,6 +33,12 @@ export const sessionInfoSchema = z.object({
   project_id: z.string().min(1).nullish(),
 });
 
+export const sessionListPageSchema = z.object({
+  sessions: z.array(sessionInfoSchema),
+  next_cursor: z.string().nullable().default(null),
+  has_more: z.boolean().default(false),
+});
+
 export const sessionStateSchema = z.object({
   id: z.string().min(1),
   cwd: z.string().min(1),
@@ -616,6 +622,7 @@ export type PiConfig = z.infer<typeof piConfigSchema>;
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 export type CreateSessionResponse = z.infer<typeof createSessionResponseSchema>;
 export type SessionInfo = z.infer<typeof sessionInfoSchema>;
+export type SessionListPage = z.infer<typeof sessionListPageSchema>;
 export type SessionState = z.infer<typeof sessionStateSchema>;
 export type HistoryMessage = z.infer<typeof historyMessageSchema>;
 export type SessionMessagePage = z.infer<typeof sessionMessagePageSchema>;

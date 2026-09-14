@@ -321,6 +321,9 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
   const forkSession = useRuntimeStore((s) => s.forkSession);
   const loadSessions = useRuntimeStore((s) => s.loadSessions);
+  const loadMoreSessions = useRuntimeStore((s) => s.loadMoreSessions);
+  const sessionsHasMore = useRuntimeStore((s) => s.sessionsHasMore);
+  const sessionsLoading = useRuntimeStore((s) => s.sessionsLoading);
   const deleteSession = useRuntimeStore((s) => s.deleteSession);
   const navigate = useNavigate();
   const location = useLocation();
@@ -445,7 +448,7 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
         {sessions.length === 0 ? (
           <p className="px-2 text-ui-meta italic text-muted/60">{t("conversation.noSessions")}</p>
         ) : (
-          sessions.slice(0, 30).map((s) => (
+          sessions.map((s) => (
             <div key={s.id} className="group relative flex items-center rounded-input hover:bg-surface-hover focus-within:bg-surface-hover">
               {/* Current-conversation indicator: a dot on the left edge; other
                   sessions keep an invisible dot so the list does not jump. */}
@@ -494,6 +497,16 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
               />
             </div>
           ))
+        )}
+        {sessionsHasMore && (
+          <button
+            type="button"
+            disabled={sessionsLoading}
+            onClick={() => void loadMoreSessions()}
+            className="mx-2 mt-1 rounded-input px-2 py-1.5 text-ui-meta text-muted transition-colors hover:bg-surface-hover hover:text-text disabled:opacity-60"
+          >
+            {sessionsLoading ? t("conversation.loadingSessions") : t("conversation.loadMoreSessions")}
+          </button>
         )}
       </div>
     </div>

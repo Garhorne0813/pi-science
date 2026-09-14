@@ -135,10 +135,14 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
       return;
     }
     if (topRetriedRef.current) return;
-    topRetriedRef.current = true;
     const state = useRuntimeStore.getState();
     if (!state.historyHasMore || !state.historyCursor || state.historyLoading) return;
-    void loadOlderAndAnchor();
+    topRetriedRef.current = true;
+    void loadOlderAndAnchor().then((loaded) => {
+      // A failed/stale attempt must remain retryable while the user is still
+      // at the top; no artificial 64px round trip should be required.
+      if (loaded === 0) topRetriedRef.current = false;
+    });
   }, [loadOlderAndAnchor]);
 
   const attachScrollerWithHistoryRetry = useCallback((element: Window | HTMLElement | null) => {
