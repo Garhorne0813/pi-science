@@ -16,6 +16,10 @@ function agent(id: string, text = id): ThreadBlock {
   return { kind: "agent", id, parts: [{ id: `${id}-part`, text }] };
 }
 
+function tool(id: string): ThreadBlock {
+  return { kind: "tool", id, callId: `${id}-call`, tool: "read", status: "done" };
+}
+
 function thread(blocks: ThreadBlock[]) {
   const index: Record<string, number> = {};
   blocks.forEach((block, position) => { index[block.id] = position; });
@@ -60,6 +64,30 @@ afterEach(() => {
 });
 
 describe("useConversationScroll follow output", () => {
+  it("expands a folded trace before focusing a linked tool", async () => {
+    setHistory([user("u1"), tool("tool-linked")], null, false);
+    const owner = document.createElement("div");
+    owner.dataset.threadBlockIds = "tool-linked";
+    const disclosure = document.createElement("button");
+    disclosure.setAttribute("aria-expanded", "false");
+    disclosure.setAttribute("aria-controls", "trace-1");
+    disclosure.addEventListener("click", () => {
+      disclosure.setAttribute("aria-expanded", "true");
+      const exact = document.createElement("div");
+      exact.id = "thread-block-tool-linked";
+      owner.append(exact);
+    });
+    owner.append(disclosure);
+    document.body.append(owner);
+    const click = vi.spyOn(disclosure, "click");
+
+    renderHook(() => useConversationScroll({ ...options(vi.fn(async () => 0), "tool-linked"), blocks: useRuntimeStore.getState().thread.blocks }));
+
+    await waitFor(() => expect(click).toHaveBeenCalledOnce());
+    expect(document.getElementById("thread-block-tool-linked")).not.toBeNull();
+    owner.remove();
+  });
+
   it("follows a second turn after collapse and delayed measurements, but respects browsing", () => {
     vi.useFakeTimers();
     try {

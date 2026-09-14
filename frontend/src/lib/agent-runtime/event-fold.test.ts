@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { convertHistoryToBlocks, mergeHistoryWindow, replaceHistoryTail, useRuntimeStore } from "./index";
-import { emptyThread, foldEvent, threadFromMessages, type Thread } from "./event-fold";
+import { emptyThread, foldEvent, prependHistoryMessages, threadFromMessages, type Thread } from "./event-fold";
 import type { HistoryMessage, PiScienceEvent } from "../client/types";
 import type { ThreadBlock } from "../../types/thread";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
@@ -73,6 +73,21 @@ describe("transport event folding", () => {
     expect(thread.blocks.find((block) => block.kind === "tool")).toMatchObject({
       kind: "tool", callId: "call-1", status: "done", input: { prompt: "plot" },
       details: { content: [{ type: "image", mimeType: "image/png", data: "abc" }] },
+    });
+  });
+
+  it("enriches a tool result when pagination splits it from its older call", () => {
+    const current = threadFromMessages([
+      { id: "result-1", role: "toolResult", toolCallId: "call-1", content: [{ type: "text", text: "done" }], timestamp: "2026-09-08T00:00:02.000Z" },
+    ]);
+    const merged = prependHistoryMessages(current, [
+      { id: "assistant-1", role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.ts" } }], timestamp: "2026-09-08T00:00:01.000Z" },
+    ]);
+    expect(merged.blocks).toHaveLength(1);
+    expect(merged.blocks[0]).toMatchObject({
+      kind: "tool", callId: "call-1", tool: "read", status: "done", input: { path: "a.ts" },
+      output: "done", startedAt: "2026-09-08T00:00:01.000Z", endedAt: "2026-09-08T00:00:02.000Z",
+      statusHistory: ["running", "done"],
     });
   });
 

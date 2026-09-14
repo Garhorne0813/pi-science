@@ -407,6 +407,7 @@ export function registerEventListener(client: PiScienceClient) {
     const eventStatus = String(event.status ?? payload.status ?? "");
     const runStarted = event.type === "agent_start" || event.type === "run.started";
     const activityEvent = event.type === "text.updated"
+      || event.type === "thinking.updated"
       || event.type === "item.text.delta"
       || event.type === "item.snapshot"
       || event.type === "item.started"
@@ -433,6 +434,7 @@ export function registerEventListener(client: PiScienceClient) {
       const failed = status === "error";
       const finished = status === "end" || failed;
       useRuntimeStore.setState({ working: !finished, turnLifecycle: failed ? "failed" : finished ? "settled" : "active", status: failed ? "error" : "ready" });
+      if (finished) disarmTurnWatchdog();
     } else if (event.type === "turn.artifacts") {
       ++generations.activity;
       // No extra tree refresh here: the server publishes this event from the
@@ -450,6 +452,7 @@ export function registerEventListener(client: PiScienceClient) {
           pendingInteraction: null,
           pendingQuestionnaire: null,
         });
+        disarmTurnWatchdog();
         markWorkspaceFilesChanged();
         if (successful && state.activeSessionId && event.handledWithoutTurn !== true) {
           void resyncCompletedHistory(state.activeSessionId, state.cwd);
@@ -473,6 +476,7 @@ export function registerEventListener(client: PiScienceClient) {
       } else if (!blocksLateEvents(state.turnLifecycle)) {
         turnState.errored = true;
         useRuntimeStore.setState({ working: false, turnLifecycle: "failed", status: "error", pendingInteraction: null, pendingQuestionnaire: null });
+        disarmTurnWatchdog();
       }
     }
 

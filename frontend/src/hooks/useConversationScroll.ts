@@ -176,6 +176,14 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
       .find((element) => element.dataset.threadBlockIds?.split(" ").includes(id)) ?? null;
   }, []);
 
+  const revealCollapsedThreadBlock = useCallback((id: string) => {
+    if (document.getElementById(`thread-block-${id}`)) return;
+    const owner = Array.from(document.querySelectorAll<HTMLElement>("[data-thread-block-ids]"))
+      .find((element) => element.dataset.threadBlockIds?.split(" ").includes(id));
+    const disclosure = owner?.querySelector<HTMLButtonElement>('button[aria-expanded="false"][aria-controls]');
+    disclosure?.click();
+  }, []);
+
   const highlightThreadBlock = useCallback((id: string) => {
     const target = threadBlockElement(id);
     if (!target) return;
@@ -184,6 +192,10 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
   }, [scheduleSessionScoped, threadBlockElement]);
 
   const scrollToLoadedTarget = useCallback((id: string, highlight = false) => {
+    // Settled traces do not mount their tool rows until expanded. Reveal the
+    // owning summary first so a Runs-page deep link can focus the exact step
+    // rather than merely highlighting the collapsed turn container.
+    revealCollapsedThreadBlock(id);
     const scrollToExact = () => {
       const target = threadBlockElement(id);
       if (!target) return false;
@@ -228,7 +240,7 @@ export function useConversationScroll(options: ConversationScrollOptions): Conve
     } else if (scrollToExact() && highlight) {
       highlightThreadBlock(id);
     }
-  }, [highlightThreadBlock, scheduleSessionScoped, threadBlockElement]);
+  }, [highlightThreadBlock, revealCollapsedThreadBlock, scheduleSessionScoped, threadBlockElement]);
 
   const locateBlock = useCallback(async (id: string, options: { highlight?: boolean } = {}): Promise<boolean> => {
     const token = ++navigationGenerationRef.current;

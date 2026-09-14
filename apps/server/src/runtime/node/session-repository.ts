@@ -27,6 +27,15 @@ export interface SessionMessageRecord {
    *  snapshot). Forwarded to the frontend so read-only panels can rebuild
    *  tool state without live events. Capped: oversized details are dropped. */
   details?: unknown;
+  presentation?: Record<string, unknown>;
+  presentationRole?: "intermediate" | "final";
+  turnId?: string;
+  runId?: string;
+  itemId?: string;
+  parentItemId?: string;
+  revision?: number;
+  sequence?: number;
+  classificationSource?: "explicit" | "legacy_inferred" | "unknown";
 }
 
 export interface SessionMessagePage {
@@ -134,6 +143,15 @@ function parseMessageLine(line: string): SessionMessageRecord | null {
       toolName: typeof message.toolName === "string" ? message.toolName : undefined,
       isError: typeof message.isError === "boolean" ? message.isError : false,
       timestamp: typeof entry.timestamp === "string" ? entry.timestamp : null,
+      ...(message.presentation && typeof message.presentation === "object" && !Array.isArray(message.presentation) ? { presentation: message.presentation as Record<string, unknown> } : {}),
+      ...(message.presentationRole === "intermediate" || message.presentationRole === "final" ? { presentationRole: message.presentationRole } : {}),
+      ...(typeof message.turnId === "string" ? { turnId: message.turnId } : {}),
+      ...(typeof message.runId === "string" ? { runId: message.runId } : {}),
+      ...(typeof message.itemId === "string" ? { itemId: message.itemId } : {}),
+      ...(typeof message.parentItemId === "string" ? { parentItemId: message.parentItemId } : {}),
+      ...(typeof message.revision === "number" && Number.isInteger(message.revision) && message.revision >= 0 ? { revision: message.revision } : {}),
+      ...(typeof message.sequence === "number" && Number.isInteger(message.sequence) && message.sequence >= 0 ? { sequence: message.sequence } : {}),
+      ...(message.classificationSource === "explicit" || message.classificationSource === "legacy_inferred" || message.classificationSource === "unknown" ? { classificationSource: message.classificationSource } : {}),
     };
     if (message.details !== undefined) {
       try {

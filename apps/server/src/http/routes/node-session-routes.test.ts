@@ -324,6 +324,29 @@ describe("native Node conversation routes", () => {
     await server.close();
   });
 
+  it("forwards persisted trajectory metadata in history messages", async () => {
+    const cwd = await workspaceWithSessions("session-metadata");
+    await writeFile(join(cwd, ".pi-science", "sessions", "session-metadata.jsonl"), [
+      JSON.stringify({ type: "session", id: "session-metadata", cwd }),
+      JSON.stringify({
+        type: "message", id: "a1", timestamp: "2026-09-14T00:00:00.000Z",
+        message: {
+          role: "assistant", content: [{ type: "text", text: "done" }], details: { rows: 3 },
+          presentationRole: "final", turnId: "turn-1", runId: "run-1", itemId: "item-1",
+          revision: 2, sequence: 7, classificationSource: "explicit",
+        },
+      }),
+    ].join("\n") + "\n", "utf8");
+    const server = app();
+    const response = await server.inject({ method: "GET", url: `/api/sessions/session-metadata/messages?cwd=${encodeURIComponent(cwd)}` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().messages[0]).toMatchObject({
+      details: { rows: 3 }, presentationRole: "final", turnId: "turn-1", runId: "run-1",
+      itemId: "item-1", revision: 2, sequence: 7, classificationSource: "explicit",
+    });
+    await server.close();
+  });
+
   it("paginates the session index without losing rows when timestamps tie", async () => {
     const ids = Array.from({ length: 35 }, (_, index) => `session-${String(index).padStart(2, "0")}`);
     const cwd = await workspaceWithSessions(...ids);

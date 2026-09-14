@@ -167,6 +167,7 @@ export const historyMessageSchema = z.object({
   toolName: z.string().optional(),
   isError: z.boolean().optional(),
   timestamp: z.string().nullish(),
+  details: z.unknown().optional(),
   presentation: toolPresentationSchema.optional(),
   presentationRole: z.enum(["intermediate", "final"]).optional(),
   turnId: z.string().optional(),

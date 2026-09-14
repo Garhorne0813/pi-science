@@ -34,6 +34,8 @@ describe("runtime event subscription", () => {
       kind: "thinking",
       parts: [expect.objectContaining({ text: "Inspecting the evidence" })],
     }));
+    expect(useRuntimeStore.getState()).toMatchObject({ working: true, turnLifecycle: "active" });
+    source.emit("session.idle", { type: "session.idle", sessionId: "session-thinking" });
   });
 
   it("settles a live turn whose event stream goes silent while the runtime is idle", async () => {

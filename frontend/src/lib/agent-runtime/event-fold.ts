@@ -1047,20 +1047,55 @@ export function prependHistoryMessages(current: Thread, messages: HistoryMessage
   const older = threadFromMessages(messages).blocks;
   if (older.length === 0) return current;
   const existingIds = new Set(current.blocks.map((block) => block.id));
-  const existingToolCalls = new Set(
-    current.blocks
-      .filter((block): block is Extract<ThreadBlock, { kind: "tool" }> => block.kind === "tool")
-      .map((block) => block.callId),
-  );
+  const currentBlocks = [...current.blocks];
+  const existingToolCalls = new Map<string, number>();
+  currentBlocks.forEach((block, position) => {
+    if (block.kind === "tool") existingToolCalls.set(block.callId, position);
+  });
   const uniqueOlder = older.filter((block) => {
+    if (block.kind === "tool") {
+      const existing = existingToolCalls.get(block.callId);
+      if (existing !== undefined) {
+        const currentBlock = currentBlocks[existing];
+        if (currentBlock?.kind === "tool") currentBlocks[existing] = mergeToolHistoryBlock(currentBlock, block);
+        return false;
+      }
+    }
     if (existingIds.has(block.id)) return false;
-    if (block.kind === "tool" && existingToolCalls.has(block.callId)) return false;
     return true;
   });
-  const blocks = [...uniqueOlder, ...current.blocks];
+  const blocks = [...uniqueOlder, ...currentBlocks];
   const index: Record<string, number> = {};
   blocks.forEach((block, position) => { index[block.id] = position; });
   return preserveFoldState({ blocks, index, loaded: true }, current);
+}
+
+/** Keep the newer result/status while enriching it with invocation metadata
+ * from an older page. History pagination commonly splits an assistant
+ * toolCall from its later toolResult, so call-id deduplication must merge
+ * fields rather than discard the call half. */
+function mergeToolHistoryBlock(current: ToolCallBlock, older: ToolCallBlock): ToolCallBlock {
+  const statusHistory = [...(older.statusHistory ?? [older.status]), ...(current.statusHistory ?? [current.status])]
+    .filter((status, index, values) => index === 0 || status !== values[index - 1]);
+  return {
+    ...older,
+    ...current,
+    tool: current.tool === "unknown" ? older.tool : current.tool,
+    input: current.input ?? older.input,
+    output: current.output ?? older.output,
+    partialOutput: current.partialOutput ?? older.partialOutput,
+    details: current.details ?? older.details,
+    presentation: current.presentation ?? older.presentation,
+    title: current.title ?? older.title,
+    diff: current.diff ?? older.diff,
+    startedAt: older.startedAt ?? current.startedAt,
+    endedAt: current.endedAt ?? older.endedAt,
+    turnId: current.turnId ?? older.turnId,
+    runId: current.runId ?? older.runId,
+    itemId: current.itemId ?? older.itemId,
+    parentItemId: current.parentItemId ?? older.parentItemId,
+    statusHistory,
+  };
 }
 
 /** Preserve UI-observed tool timing across authoritative rebuilds. History

@@ -52,6 +52,16 @@ function sanitizeMessageEntry(raw: unknown): CachedMessageEntry | null {
       toolName: typeof msg.toolName === "string" ? msg.toolName : undefined,
       isError: msg.isError === true,
       timestamp: typeof msg.timestamp === "string" ? msg.timestamp : undefined,
+      details: msg.details,
+      presentation: msg.presentation && typeof msg.presentation === "object" && !Array.isArray(msg.presentation) ? msg.presentation as HistoryMessage["presentation"] : undefined,
+      presentationRole: msg.presentationRole === "intermediate" || msg.presentationRole === "final" ? msg.presentationRole : undefined,
+      turnId: typeof msg.turnId === "string" ? msg.turnId : undefined,
+      runId: typeof msg.runId === "string" ? msg.runId : undefined,
+      itemId: typeof msg.itemId === "string" ? msg.itemId : undefined,
+      parentItemId: typeof msg.parentItemId === "string" ? msg.parentItemId : undefined,
+      revision: typeof msg.revision === "number" && Number.isInteger(msg.revision) && msg.revision >= 0 ? msg.revision : undefined,
+      sequence: typeof msg.sequence === "number" && Number.isInteger(msg.sequence) && msg.sequence >= 0 ? msg.sequence : undefined,
+      classificationSource: msg.classificationSource === "explicit" || msg.classificationSource === "legacy_inferred" || msg.classificationSource === "unknown" ? msg.classificationSource : undefined,
     });
   }
   if (clean.length === 0) return null;
