@@ -537,7 +537,7 @@ describe("Node Pi Orbit adapter", () => {
       else process.env.PI_SCIENCE_PI_MODE = originalMode;
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => undefined);
     }
-  });
+  }, 30_000);
 
   it("waits out a busy runtime longer than the legacy 2s dispose budget", async () => {
     const manager = new PiManager();

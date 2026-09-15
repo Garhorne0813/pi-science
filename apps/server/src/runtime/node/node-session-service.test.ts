@@ -411,13 +411,13 @@ describe("Node session lifecycle", () => {
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error("UI response waited behind the session lock")), 300)),
       ]);
       expect(response).toMatchObject({ success: true });
+      await waitFor(async () => (await readFile(process.env.FAKE_PI_LOG!, "utf8"))
+        .includes('"type":"extension_ui_response","id":"approval-1","value":"Allow once"'));
     } finally {
       releaseLock();
       await held;
       await service.shutdownAll();
     }
-    const log = await readFile(process.env.FAKE_PI_LOG!, "utf8");
-    expect(log).toContain('"type":"extension_ui_response","id":"approval-1","value":"Allow once"');
   });
 
   it("sends set_model with the projected runtime identity instead of the canonical ref", async () => {
