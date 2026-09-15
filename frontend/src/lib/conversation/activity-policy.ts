@@ -1,8 +1,47 @@
 import type { ToolCallBlock, ToolPresentationPolicy } from "../../types/thread";
 
+export type ToolEffect = "observe" | "mutate" | "execute" | "control" | "interaction" | "system";
+
 const PLAN_CONTROL_TOOLS = new Set(["todo", "plan_update", "task_state", "internal_checkpoint"]);
 const INTERACTION_TOOLS = new Set(["ask_user_question", "permission_request", "request_permission", "confirmation", "authenticate"]);
 const SYSTEM_TOOLS = new Set(["context_compaction", "runtime_recovery", "reconnect"]);
+const OBSERVE_TOOLS = new Set([
+  "read",
+  "read_file",
+  "view_image",
+  "grep",
+  "rg",
+  "search",
+  "search_files",
+  "find",
+  "glob",
+  "ls",
+  "list",
+  "list_files",
+  "web_search",
+  "search_web",
+  "tavily_search",
+  "web_fetch",
+  "fetch",
+  "notebook_read",
+]);
+const MUTATE_TOOLS = new Set([
+  "edit",
+  "write",
+  "write_file",
+  "apply_patch",
+  "patch",
+  "delete",
+  "delete_file",
+  "move",
+  "rename",
+  "notebook_edit",
+  "image_gen",
+  "image_generation",
+  "generate_image",
+  "create_image",
+  "render_image",
+]);
 
 export function activityPolicy(block: ToolCallBlock): ToolPresentationPolicy {
   const tool = block.tool.trim().toLowerCase();
@@ -21,6 +60,43 @@ export function activityPolicy(block: ToolCallBlock): ToolPresentationPolicy {
     return policy("system", recoveryVisible || block.status === "error", block.status === "error", false);
   }
   return policy("execution", true, true, true);
+}
+
+/** Classifies what a tool can do to the state described by an explicit final
+ * candidate. Presentation metadata wins when available; otherwise only known
+ * read-only tool names are treated as observation. Unknown tools are execute
+ * by default so a possibly stale final is never preserved optimistically. */
+export function toolEffect(block: ToolCallBlock): ToolEffect {
+  const plane = activityPolicy(block).plane;
+  if (plane === "plan-control") return "control";
+  if (plane === "interaction") return "interaction";
+  if (plane === "system") return "system";
+
+  switch (block.presentation?.kind) {
+    case "read":
+    case "search":
+    case "fetch":
+      return "observe";
+    case "edit":
+    case "artifact":
+      return "mutate";
+    case "interaction":
+      return "interaction";
+    case "system":
+      return "system";
+    case "execute":
+    case "compute":
+    case "verify":
+    case "other":
+      return "execute";
+    default:
+      break;
+  }
+
+  const tool = block.tool.trim().toLowerCase();
+  if (OBSERVE_TOOLS.has(tool)) return "observe";
+  if (MUTATE_TOOLS.has(tool)) return "mutate";
+  return "execute";
 }
 
 export function isVisibleActivity(block: ToolCallBlock): boolean {

@@ -1,5 +1,5 @@
 import type { AgentMessageBlock, ThinkingBlock, ThreadBlock, ToolCallBlock, TurnArtifactSummaryBlock, UserMessageBlock } from "../../types/thread";
-import { activityPolicy, isVisibleActivity } from "./activity-policy";
+import { activityPolicy, isVisibleActivity, toolEffect } from "./activity-policy";
 import { finalAgentInCompletedTurn, intermediateAgentsInTurn, provisionalAgentInActiveTurn } from "./turn-analysis";
 
 export type TurnLifecycle = "queued" | "active" | "waiting" | "recovering" | "stopping" | "settled" | "aborted" | "failed";
@@ -65,6 +65,13 @@ export function turnBlockIds(turn: TurnPresentation): string[] {
   return turn.blocks.map((block) => block.id);
 }
 
+function invalidatesExplicitFinal(block: ThreadBlock): boolean {
+  if (block.kind !== "tool") return false;
+  if (block.status === "error") return true;
+  const effect = toolEffect(block);
+  return effect === "mutate" || effect === "execute" || effect === "interaction";
+}
+
 function buildTurnPresentation(blocks: ThreadBlock[], lifecycle: TurnLifecycle): TurnPresentation {
   const active = lifecycle === "queued" || lifecycle === "active" || lifecycle === "waiting" || lifecycle === "recovering" || lifecycle === "stopping";
   const user = blocks.find((block): block is UserMessageBlock => block.kind === "user") ?? null;
@@ -75,12 +82,14 @@ function buildTurnPresentation(blocks: ThreadBlock[], lifecycle: TurnLifecycle):
   const activityTools = tools.filter(isVisibleActivity);
   const artifacts = blocks.filter((block): block is TurnArtifactSummaryBlock => block.kind === "artifact-summary");
   const identityBlock = blocks.find((block) => "turnId" in block && typeof block.turnId === "string");
-  // An explicit final is authoritative only while no later execution step has
-  // superseded it. Late/retried tools must remain after that prose in the
-  // trajectory instead of being visually moved in front of a stale answer.
+  // `presentationRole=final` is a final candidate. Successful read-only
+  // observation can verify that candidate without replacing it. Mutating,
+  // opaque execution, interaction, or failed tools can change or invalidate
+  // the state it describes, so they require a newer final answer. Legacy
+  // unclassified messages retain the stricter structural fallback below.
   const finalAgent = blocks.findLast((block, index): block is AgentMessageBlock => block.kind === "agent"
     && block.presentationRole === "final"
-    && !blocks.slice(index + 1).some((candidate) => candidate.kind === "tool" && isVisibleActivity(candidate)))
+    && !blocks.slice(index + 1).some(invalidatesExplicitFinal))
     ?? (lifecycle === "settled" ? finalAgentInCompletedTurn(blocks) : null);
   const hasTerminalError = lifecycle === "failed" && blocks.some((block) => block.kind === "status-line" && block.level === "error");
   const provisionalAgent = !finalAgent && (active || hasTerminalError) ? provisionalAgentInActiveTurn(blocks) : null;

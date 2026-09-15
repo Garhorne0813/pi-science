@@ -96,6 +96,7 @@ describe("buildTurnPresentations", () => {
     expect(turn.provisionalAgent).toBeNull();
     expect(turn.completed).toBe(false);
   });
+
   it("does not promote provisional narration after abort or terminal failure", () => {
     const blocks = [user("u1"), agent("narration"), tool("tool-1"), agent("provisional")];
     for (const lifecycle of ["aborted", "failed"] as const) {
@@ -128,9 +129,57 @@ describe("buildTurnPresentations", () => {
     expect(turn.finalAgent?.id).toBe("final");
   });
 
-  it("does not keep a stale explicit final when later execution supersedes it", () => {
-    const turn = buildTurnPresentations([user("u1"), { ...agent("final"), presentationRole: "final" }, tool("late-read")], { lastTurnLifecycle: "settled" })[0];
+  it("keeps an explicit final across successful read-only verification", () => {
+    const turn = buildTurnPresentations([
+      user("u1"),
+      { ...agent("final"), presentationRole: "final" },
+      tool("verify-read", "read"),
+      { ...agent("verification"), presentationRole: "intermediate" },
+    ], { lastTurnLifecycle: "settled" })[0];
+    expect(turn.finalAgent?.id).toBe("final");
+    expect(turn.activityBlocks.map((block) => block.id)).toEqual(["verify-read", "verification"]);
+  });
+
+  it("keeps an explicit final across observation tools named by presentation metadata", () => {
+    const observed: ToolCallBlock = {
+      kind: "tool",
+      id: "custom-read",
+      callId: "custom-read-call",
+      tool: "provider_specific_reader",
+      status: "done",
+      presentation: { version: 1, kind: "read", title: "Inspect output", importance: "micro", domain: "generic" },
+    };
+    const turn = buildTurnPresentations([user("u1"), { ...agent("final"), presentationRole: "final" }, observed], { lastTurnLifecycle: "settled" })[0];
+    expect(turn.finalAgent?.id).toBe("final");
+  });
+
+  it("invalidates an explicit final when read-only verification fails", () => {
+    const turn = buildTurnPresentations([user("u1"), { ...agent("final"), presentationRole: "final" }, tool("verify-read", "read", "error")], { lastTurnLifecycle: "settled" })[0];
     expect(turn.finalAgent).toBeNull();
-    expect(turn.activityBlocks.map((block) => block.id)).toEqual(["final", "late-read"]);
+    expect(turn.activityBlocks.map((block) => block.id)).toEqual(["final", "verify-read"]);
+  });
+
+  it("invalidates an explicit final when later mutation supersedes it", () => {
+    const turn = buildTurnPresentations([user("u1"), { ...agent("final"), presentationRole: "final" }, tool("late-edit", "edit")], { lastTurnLifecycle: "settled" })[0];
+    expect(turn.finalAgent).toBeNull();
+    expect(turn.activityBlocks.map((block) => block.id)).toEqual(["final", "late-edit"]);
+  });
+
+  it("invalidates an explicit final for opaque or unknown execution", () => {
+    for (const name of ["bash", "provider_specific_tool"]) {
+      const turn = buildTurnPresentations([user("u1"), { ...agent("final"), presentationRole: "final" }, tool("late-tool", name)], { lastTurnLifecycle: "settled" })[0];
+      expect(turn.finalAgent).toBeNull();
+    }
+  });
+
+  it("uses the newer final after a mutating tool invalidates the old candidate", () => {
+    const turn = buildTurnPresentations([
+      user("u1"),
+      { ...agent("final-a"), presentationRole: "final" },
+      tool("late-edit", "edit"),
+      { ...agent("final-b"), presentationRole: "final" },
+    ], { lastTurnLifecycle: "settled" })[0];
+    expect(turn.finalAgent?.id).toBe("final-b");
+    expect(turn.activityBlocks.map((block) => block.id)).toEqual(["final-a", "late-edit"]);
   });
 });

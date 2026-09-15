@@ -87,6 +87,21 @@ describe("turn-level conversation rendering", () => {
     expect(screen.getByText("I will inspect it.")).toBeInTheDocument();
   });
 
+  it("keeps an explicit final visible when later read-only verification completes", () => {
+    render(<>{renderBlocks([
+      user("u1", "generate an artifact"),
+      { ...agent("final", "Generated the artifact successfully."), presentationRole: "final" as const },
+      tool("verify", "read", "done", { path: "work/result.svg" }),
+      { ...agent("verification", "Verification confirmed the generated file."), presentationRole: "intermediate" as const },
+    ], codeRunner)}</>);
+
+    expect(screen.getByText("Generated the artifact successfully.")).toBeInTheDocument();
+    expect(screen.queryByText("Verification confirmed the generated file.")).not.toBeInTheDocument();
+    const summary = screen.getByText(/Complete|Encountered a problem|Stopped|Working/);
+    fireEvent.click(summary);
+    expect(screen.getByText("Verification confirmed the generated file.")).toBeInTheDocument();
+  });
+
   it("copies only the final visible answer", () => {
     render(<>{renderBlocks([user("u1", "question"), agent("a1", "hidden narration"), tool("read", "read"), agent("a2", "visible answer")], codeRunner)}</>);
     const userMessage = document.getElementById("user-msg-u1")!;
