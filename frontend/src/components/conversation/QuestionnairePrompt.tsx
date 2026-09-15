@@ -281,7 +281,7 @@ export function QuestionnairePrompt({
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-[11px] font-medium uppercase tracking-[0.06em] text-accent">{questionLabel}</span>
-                  <span className="block truncate text-sm font-medium leading-snug text-text">{question.question}</span>
+                  <span className="block whitespace-pre-wrap break-words text-sm font-medium leading-snug text-text">{question.question}</span>
                   {!isOpen && answered && (
                     <span className="mt-0.5 block truncate text-xs text-muted">{answerLabel(answer, noneLabel, customLabel)}</span>
                   )}
@@ -452,7 +452,7 @@ export function QuestionnairePrompt({
                   <span className="w-5 shrink-0 text-[11px] font-mono text-muted">{questionIndex + 1}</span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-xs font-medium text-text">{question.header || t("questionnaire.question", { number: questionIndex + 1 })}</span>
-                    <span className="block truncate text-xs text-text">{question.question}</span>
+                    <span className="block whitespace-pre-wrap break-words text-xs text-text">{question.question}</span>
                     <span className="block truncate text-xs text-muted">{answer ? answerLabel(answer, noneLabel, customLabel) : t("questionnaire.unanswered")}</span>
                   </span>
                   {answer ? <Check size={13} className="mt-0.5 shrink-0 text-ok-text" /> : <span className="mt-0.5 shrink-0 text-[11px] text-warn-text">—</span>}
