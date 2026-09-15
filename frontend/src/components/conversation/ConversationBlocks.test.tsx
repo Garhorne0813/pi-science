@@ -3,13 +3,13 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { renderBlocks, renderTurn } from "./ConversationBlocks";
 import i18n from "../../i18n";
 import type { CodeRunner } from "../markdown-viewer/MarkdownViewer";
-import type { ThreadBlock, ToolCallBlock } from "../../types/thread";
+import type { AgentMessageBlock, ThreadBlock, ToolCallBlock } from "../../types/thread";
 import { buildTurnPresentations } from "../../lib/conversation/turn-presentation";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 
 const codeRunner: CodeRunner = { cwd: "proj", sessionId: "s1" };
 const user = (id: string, text = id): ThreadBlock => ({ kind: "user", id, text, timestamp: new Date().toISOString() });
-const agent = (id: string, text: string, partial = false): ThreadBlock => ({ kind: "agent", id, parts: [{ id: `${id}-p0`, text }], ...(partial ? { partial: true } : {}) });
+const agent = (id: string, text: string, partial = false): AgentMessageBlock => ({ kind: "agent", id, parts: [{ id: `${id}-p0`, text }], ...(partial ? { partial: true } : {}) });
 const tool = (id: string, name: string, status: ToolCallBlock["status"] = "done", input?: Record<string, unknown>): ThreadBlock => ({ kind: "tool", id, callId: `${id}-call`, tool: name, status, input, output: "output" });
 
 beforeAll(async () => { await i18n.changeLanguage("en"); });
