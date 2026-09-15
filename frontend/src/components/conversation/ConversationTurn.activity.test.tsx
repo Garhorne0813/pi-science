@@ -3,7 +3,7 @@
  *  snapshot recovery, live/history parity) through the same path the UI uses. */
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { renderBlocks, renderTurn } from "./ConversationBlocks";
 import { buildTurnPresentations } from "../../lib/conversation/turn-presentation";
 import { useRuntimeStore } from "../../lib/agent-runtime";
@@ -84,10 +84,11 @@ describe("turn-level activity through the live event path", () => {
     const blocks = useRuntimeStore.getState().thread.blocks;
     render(<>{renderBlocks(blocks, codeRunner)}</>);
 
-    // Execution tools only: 2 reads + 1 bash. Todo is plan-control. The
-    // settled view keeps the model's narration — no process row, no steps.
-    expect(screen.getByText("我先读取 turn-presentation.ts。")).toBeInTheDocument();
-    expect(screen.getByText("接下来看事件折叠。")).toBeInTheDocument();
+    // Execution tools only: 2 reads + 1 bash. Todo is plan-control. Once
+    // settled, commentary and execution history are folded together; only the
+    // final answer remains in the main conversation flow.
+    expect(screen.queryByText("我先读取 turn-presentation.ts。")).not.toBeInTheDocument();
+    expect(screen.queryByText("接下来看事件折叠。")).not.toBeInTheDocument();
     expect(screen.getByText(/Complete|Encountered a problem|Stopped|Working/)).toBeInTheDocument();
     expect(screen.queryByText("Reading turn-presentation.ts")).not.toBeInTheDocument();
     expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
@@ -121,13 +122,17 @@ describe("turn-level activity through the live event path", () => {
     emitTurn();
     render(<>{renderBlocks(useRuntimeStore.getState().thread.blocks, codeRunner)}</>);
 
-    // The settled view keeps the model's narration and final answer; per-step
-    // records were part of the live stream only.
-    expect(screen.getByText("我先读取 turn-presentation.ts。")).toBeInTheDocument();
+    // Settled commentary is process history and starts folded; the final
+    // answer remains visible outside AgentActivity.
+    expect(screen.queryByText("我先读取 turn-presentation.ts。")).not.toBeInTheDocument();
     expect(screen.getByText("实现符合方案：一个 turn 只有一个 Activity。")).toBeInTheDocument();
     // Todo never leaks as a visible row or an aria-live announcement source.
     expect(screen.queryByText(/Created #1|Updated #1/)).not.toBeInTheDocument();
-    expect(screen.getByText(/Complete|Encountered a problem|Stopped|Working/)).toBeInTheDocument();
+    const summary = screen.getByText(/Complete|Encountered a problem|Stopped|Working/);
+    expect(summary).toBeInTheDocument();
+    fireEvent.click(summary);
+    expect(screen.getByText("我先读取 turn-presentation.ts。")).toBeInTheDocument();
+    expect(screen.queryByText(/Created #1|Updated #1/)).not.toBeInTheDocument();
   });
 });
 
@@ -136,14 +141,18 @@ describe("turn-level activity through the history path", () => {
     const thread = threadFromMessages(historyMessages());
     render(<>{renderBlocks(thread.blocks, codeRunner)}</>);
 
-    expect(screen.getByText("我先读取 turn-presentation.ts。")).toBeInTheDocument();
-    expect(screen.getByText("接下来看事件折叠。")).toBeInTheDocument();
+    expect(screen.queryByText("我先读取 turn-presentation.ts。")).not.toBeInTheDocument();
+    expect(screen.queryByText("接下来看事件折叠。")).not.toBeInTheDocument();
     // Message timestamps rebuild the process duration: c1 starts with m1
     // (02:00:00), the last execution result lands at 02:00:06.
-    expect(screen.getByText("Completed · 6.0s")).toBeInTheDocument();
+    const summary = screen.getByText("Completed · 6.0s");
+    expect(summary).toBeInTheDocument();
     expect(screen.queryByText("Reading file")).not.toBeInTheDocument();
     expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
     expect(screen.getByText(/实现符合方案/)).toBeInTheDocument();
+    fireEvent.click(summary);
+    expect(screen.getByText("我先读取 turn-presentation.ts。")).toBeInTheDocument();
+    expect(screen.getByText("接下来看事件折叠。")).toBeInTheDocument();
     expect(todoViewModel(thread.blocks)?.allCompleted).toBe(true);
   });
 });
@@ -208,11 +217,15 @@ describe("activity over time (PRD v1.2 §26/§28)", () => {
       emit("session.idle", {});
       rerender(view());
       expect(screen.getByText("这是最终回答。")).toBeInTheDocument();
-      // The settled view keeps the narration; no process row, no steps.
-      expect(screen.getByText("我先检查一下。")).toBeInTheDocument();
+      // The turn is now terminal: commentary/tools collapse into the process
+      // row while the final answer remains in the main conversation flow.
+      expect(screen.queryByText("我先检查一下。")).not.toBeInTheDocument();
       expect(screen.queryByText("运行测试")).not.toBeInTheDocument();
       expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
       expect(screen.getAllByText("这是最终回答。")).toHaveLength(1);
+      const summary = screen.getByText(/Complete|Encountered a problem|Stopped|Working/);
+      fireEvent.click(summary);
+      expect(screen.getByText("我先检查一下。")).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

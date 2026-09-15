@@ -218,29 +218,37 @@ describe("AgentActivity live stream", () => {
 });
 
 describe("AgentActivity settled display", () => {
-  it("keeps the narration and drops the per-step records", () => {
+  it("folds intermediate narration with the step records and leaves final answers outside activity", () => {
     const blocks = [
-      { kind: "agent" as const, id: "a1", parts: [{ id: "p1", text: "Step notes: the CSV has 4 columns." }] },
+      { kind: "agent" as const, id: "a1", presentationRole: "intermediate" as const, parts: [{ id: "p1", text: "Step notes: the CSV has 4 columns." }] },
       tool("t1", "read", "done", { path: "one.ts" }),
       tool("t2", "bash", "done"),
       { kind: "agent" as const, id: "a2", presentationRole: "final" as const, parts: [{ id: "p2", text: "The final answer." }] },
     ];
     render(<AgentActivity blocks={blocks} lifecycle="settled" />);
-    // The summary row folds the step records: the narration and the answer
-    // are the visible content.
-    expect(screen.getByText("Step notes: the CSV has 4 columns.")).toBeInTheDocument();
-    expect(screen.getByText("The final answer.")).toBeInTheDocument();
-    expect(screen.getByText(/Complete|Encountered a problem|Stopped|Working/)).toBeInTheDocument();
+
+    // Settled activity starts compact: commentary, reasoning, and tools are
+    // process history; the final answer belongs to ConversationTurn instead.
+    expect(screen.queryByText("Step notes: the CSV has 4 columns.")).not.toBeInTheDocument();
+    expect(screen.queryByText("The final answer.")).not.toBeInTheDocument();
     expect(screen.queryByText("Reading one.ts")).not.toBeInTheDocument();
     expect(screen.queryByText("Running bash")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Execution trace")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText(/Complete|Encountered a problem|Stopped|Working/));
+    expect(screen.getByText("Step notes: the CSV has 4 columns.")).toBeInTheDocument();
+    expect(screen.getByText("Reading one.ts")).toBeInTheDocument();
+    expect(screen.getByText("Running bash")).toBeInTheDocument();
+    expect(screen.queryByText("The final answer.")).not.toBeInTheDocument();
   });
 
-  it("notes a settled turn whose findings never produced a final answer", () => {
+  it("folds commentary when a settled turn never produced a final answer", () => {
     render(<AgentActivity lifecycle="settled" blocks={[{ kind: "agent", id: "commentary", presentationRole: "intermediate", parts: [{ id: "commentary-part", text: "I checked the inputs." }] }]} />);
+
+    expect(screen.queryByText("I checked the inputs.")).not.toBeInTheDocument();
+    expect(screen.getByText(/No final answer returned/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button"));
     expect(screen.getByText("I checked the inputs.")).toBeInTheDocument();
-    expect(screen.getByText("No final answer returned")).toBeInTheDocument();
-    expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("exposes structured tool details even when there is no text output", () => {

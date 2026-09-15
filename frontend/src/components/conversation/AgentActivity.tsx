@@ -36,10 +36,10 @@ export function ThinkingActivity({ className }: { className?: string }) {
  *  renders the chronological narration and tool lines, `status` renders the
  *  aggregate progress row. The default renders both in order.
  *
- *  Settled (and aborted/failed) turns collapse the reasoning and tool trace
- *  behind a summary while keeping the model's narration visible.
- *  Aborted and failed runs keep a state headline; a settled turn without an
- *  explicit final message says so instead of implying the answer vanished. */
+ *  Settled (and aborted/failed) turns collapse the complete process trace —
+ *  intermediate narration, reasoning, and tools — behind one summary. The
+ *  final answer is owned by ConversationTurn and rendered outside this
+ *  component. A settled turn without a final answer says so explicitly. */
 export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both", hasFinalAnswer }: { blocks: ActivityBlock[]; lifecycle?: TurnLifecycle; cwd?: string; part?: "both" | "content" | "status"; hasFinalAnswer?: boolean }) {
   const { t } = useTranslation();
   const progressAppearance = useProgressAppearance();
@@ -51,10 +51,11 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
       : activityPolicy(block).visibleInExecutionTrace), [blocks]);
   const activityGroups = useMemo(() => groupActivityBlocks(blocks), [blocks]);
   const traceId = useId();
-  const traceBlocks = useMemo(() => activities.filter((block): block is ThinkingBlock | ToolCallBlock => block.kind !== "agent"), [activities]);
+  // Final answers are rendered by ConversationTurn. Everything else is
+  // process history and collapses together once the turn is terminal.
+  const traceBlocks = useMemo(() => activities.filter((block) => block.kind !== "agent" || block.presentationRole !== "final"), [activities]);
   const traceTools = useMemo(() => traceBlocks.filter((block): block is ToolCallBlock => block.kind === "tool"), [traceBlocks]);
   const shown = useDisplayedActivity(tools, lifecycle);
-  // Settled turns collapse their tool steps behind the process summary row.
   const [traceExpanded, setTraceExpanded] = useState(false);
 
   if (isLiveLifecycle(lifecycle)) {
@@ -102,17 +103,14 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
 
   if (activities.length === 0) return null;
 
-  // Settled turns keep narration open and place reasoning/tool records behind
-  // one summary. Aborted and failed runs keep a state headline; a settled turn
-  // without an explicit final message says so instead of implying the answer
-  // went missing.
-  const narrationBlocks = activities.filter((block): block is AgentMessageBlock => block.kind === "agent");
   // Callers that render the final answer outside this component
   // (ConversationTurn) pass the flag down; direct renders scan the blocks.
   const hasExplicitFinal = hasFinalAnswer ?? blocks.some((block) => block.kind === "agent" && block.presentationRole === "final");
-  // Narration with no answer behind it: say so instead of implying the
-  // answer went missing.
-  const noAnswer = lifecycle === "settled" && !hasExplicitFinal && narrationBlocks.length > 0;
+  // A settled turn can legitimately contain only commentary/process narration.
+  // Keep that history recoverable in the fold, but make the missing answer
+  // explicit instead of promoting commentary into the answer slot.
+  const hasNarration = traceBlocks.some((block) => block.kind === "agent");
+  const noAnswer = lifecycle === "settled" && !hasExplicitFinal && hasNarration;
   const state = lifecycle === "failed" || shown?.state === "error" ? "error" : lifecycle === "aborted" ? "stopped" : "completed";
   const headline = lifecycle === "failed"
     ? t("conversation.activity.error")
@@ -149,9 +147,6 @@ export function AgentActivity({ blocks, lifecycle = "active", cwd, part = "both"
     {traceExpanded && traceBlocks.length > 0 && <div id={traceId} role="region" className={styles.trace} aria-label={t("conversation.activity.trace")}>
       <ActivityTrace groups={groupActivityBlocks(traceBlocks)} cwd={cwd} />
     </div>}
-    {narrationBlocks.map((block) => (
-      <div key={block.id} id={`thread-block-${block.id}`} className={cn(styles.entry, styles.narration, "min-w-0")}><MarkdownViewer variant="chat" className="text-ui-body leading-relaxed text-muted [overflow-wrap:anywhere]" resourceContext={cwd ? { cwd } : undefined}>{parseSuggestions(block.parts.map((part) => part.text).join("")).clean}</MarkdownViewer></div>
-    ))}
   </div>;
 }
 
