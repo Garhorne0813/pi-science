@@ -2,6 +2,14 @@
   --activity-color: var(--accent);
 }
 
+/* Terminal activity is the process boundary before the user-facing answer.
+   Keep the divider on the activity side so the answer remains plain content. */
+.root:is([data-state="completed"], [data-state="stopped"], [data-state="error"]) {
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
 .summary {
   align-items: center;
   padding-block: 0.5rem;
