@@ -12,6 +12,7 @@ import type {
   NotebookFileInspector,
   ThreadBlock,
 } from "../../types/thread";
+import { toWorkspaceRelativePath } from "../files/workspace-path";
 
 // Re-export so existing imports from artifacts.ts keep working
 export type { ArtifactKind, ArtifactBlock, ArtifactVersion, ArtifactInspector, FilePreviewInspector, NotebookFileInspector };
@@ -49,15 +50,23 @@ const REF_EXTS = [
   "bed", "bedgraph", "bdg", "gff", "gff3", "gtf", "vcf",
   "stl", "obj", "ply", "gltf", "glb",
 ];
-const REF_RE = new RegExp(`[\\w./-]+\\.(?:${REF_EXTS.join("|")})\\b`, "gi");
+// Backslash and drive-colon spellings are accepted so a Windows absolute path
+// (`C:\Users\me\ws\figures\a.png`) is extracted whole instead of degrading to
+// its bare filename, which the directory check below would drop.
+const REF_RE = new RegExp(`[\\w./:\\\\-]+\\.(?:${REF_EXTS.join("|")})\\b`, "gi");
 
 /**
  * Extract workspace file paths mentioned in an agent message so a file produced by
  * running code (e.g. `canvas-project/canvas.pdf` from a python run) becomes clickable,
  * not just prose. HTML comments are hidden by the renderer, so ignore them here too;
  * normalize path spelling before deduping so equivalent references produce one card.
+ *
+ * `cwd` maps the absolute spelling models produce (`<cwd>/figures/a.png`, because the
+ * run cwd is absolute) onto the workspace-relative spelling every automatic file route
+ * accepts, so `figures/a.png` written two ways still yields one card. Without `cwd` the
+ * text is returned as spelled.
  */
-export function extractArtifactRefs(markdown: string): string[] {
+export function extractArtifactRefs(markdown: string, cwd?: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   let visibleMarkdown = markdown;
@@ -68,12 +77,16 @@ export function extractArtifactRefs(markdown: string): string[] {
   } while (visibleMarkdown !== previous);
   for (const m of visibleMarkdown.matchAll(REF_RE)) {
     const raw = m[0].replace(/^[`'"(]+|[`'".,)]+$/g, "");
-    if (!raw || /^https?:\/\//i.test(raw) || raw.startsWith("//")) continue;
-    const path = normalizeArtifactPath(raw);
+    if (!raw || /^(?:https?|file):\/\//i.test(raw) || raw.startsWith("//")) continue;
+    const spelled = normalizeArtifactPath(raw);
     // A bare filename in prose may only be an example (for example main.py or
     // SKILL.md). Tool events and the file browser surface real root-level files;
     // chat text needs an explicit directory component before it is clickable.
-    if (!path.includes("/")) continue;
+    // The check runs on the spelling in the text, so an absolute path to a
+    // workspace-root file stays a candidate.
+    if (!spelled.includes("/")) continue;
+    const path = cwd ? toWorkspaceRelativePath(spelled, cwd) : spelled;
+    if (!path) continue;
     if (seen.has(path)) continue;
     seen.add(path);
     out.push(path);

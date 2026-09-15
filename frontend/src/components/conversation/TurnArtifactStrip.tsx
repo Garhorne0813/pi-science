@@ -351,11 +351,14 @@ export function ReferencedArtifactStrip({ text, cwd, exclude = [] }: { text: str
   const excludeKey = exclude.join("\0");
   const refs = useMemo(() => {
     const skipped = new Set(excludeKey ? excludeKey.split("\0").map(normalizeArtifactPath) : []);
-    return extractArtifactRefs(text)
+    // Absolute paths in model prose (`<cwd>/figures/a.png`) must become
+    // workspace-relative before probing: the probe route rejects absolute
+    // paths, which silently dropped the referenced-file card.
+    return extractArtifactRefs(text, cwd)
       .map(normalizeArtifactPath)
       .filter((path) => !skipped.has(path))
       .slice(0, MAX_REFERENCED_REFS);
-  }, [excludeKey, text]);
+  }, [cwd, excludeKey, text]);
   const [items, setItems] = useState<TurnArtifactItem[]>([]);
   useEffect(() => {
     if (!cwd || refs.length === 0) { setItems([]); return; }

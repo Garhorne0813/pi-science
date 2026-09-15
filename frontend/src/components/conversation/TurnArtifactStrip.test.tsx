@@ -50,6 +50,22 @@ describe("TurnArtifactStrip", () => {
     expect(mockReadArtifact).not.toHaveBeenCalledWith("work/plot.png", "workspace", "/workspace", 1);
   });
 
+  it("relativizes an absolute path from the final answer before probing", async () => {
+    const cwd = "/home/caee/pi-science-workspaces/rosavin";
+    mockProbeLargeFile.mockImplementation(async (path: string) => path === "work/plot.png" ? { path, name: "plot.png", size: 2048, is_dir: false } : null);
+    render(<ReferencedArtifactStrip cwd={cwd} text={`Saved to ${cwd}/work/plot.png.`} />);
+    await waitFor(() => expect(screen.getByText("REFERENCED · 1")).toBeInTheDocument());
+    expect(mockProbeLargeFile).toHaveBeenCalledWith("work/plot.png", "workspace", cwd);
+  });
+
+  it("keeps a workspace-root file cited by its absolute path", async () => {
+    const cwd = "/home/caee/pi-science-workspaces/rosavin";
+    mockProbeLargeFile.mockImplementation(async (path: string) => path === "pelican_bike.svg" ? { path, name: "pelican_bike.svg", size: 512, is_dir: false } : null);
+    render(<ReferencedArtifactStrip cwd={cwd} text={`Saved to ${cwd}/pelican_bike.svg`} />);
+    await waitFor(() => expect(screen.getByText("REFERENCED · 1")).toBeInTheDocument());
+    expect(mockProbeLargeFile).toHaveBeenCalledWith("pelican_bike.svg", "workspace", cwd);
+  });
+
   it("bounds referenced-file probes from model output", async () => {
     mockProbeLargeFile.mockImplementation(async (path: string) => ({ path, name: path.split("/").at(-1), size: 1, is_dir: false }));
     const text = Array.from({ length: 80 }, (_, index) => `results/f${index}.csv`).join(" ");

@@ -34,6 +34,27 @@ describe("artifact inspector routing", () => {
     expect(extractArtifactRefs("See `./work/plot.png` and `work/plot.png`.")).toEqual(["work/plot.png"]);
   });
 
+  it("maps the absolute spelling models produce onto workspace-relative paths", () => {
+    const cwd = "/home/caee/pi-science-workspaces/rosavin";
+    expect(extractArtifactRefs(`Saved to ${cwd}/pelican_bike.svg`, cwd)).toEqual(["pelican_bike.svg"]);
+    expect(extractArtifactRefs(`Saved to ${cwd}/figures/plot.png and figures/plot.png`, cwd)).toEqual(["figures/plot.png"]);
+    // Windows absolute spelling, case-insensitive drive.
+    expect(extractArtifactRefs("Saved to C:\\Users\\cyq\\ws\\figures\\plot.png", "c:/Users/cyq/ws")).toEqual(["figures/plot.png"]);
+  });
+
+  it("keeps the workspace-root shorthand and drops paths that climb out of the workspace", () => {
+    const cwd = "/home/caee/pi-science-workspaces/rosavin";
+    expect(extractArtifactRefs("See /figures/a.png for the plot.", cwd)).toEqual(["figures/a.png"]);
+    expect(extractArtifactRefs(`See ${cwd}/figures/../../etc/passwd.txt`, cwd)).toEqual([]);
+    // Without a cwd the text is returned as spelled, as before.
+    expect(extractArtifactRefs(`Saved to ${cwd}/pelican_bike.svg`)).toEqual([`${cwd}/pelican_bike.svg`]);
+  });
+
+  it("never treats a URL as a workspace reference", () => {
+    expect(extractArtifactRefs("See https://example.com/figures/a.svg")).toEqual([]);
+    expect(extractArtifactRefs("See file:///home/caee/ws/figures/a.svg")).toEqual([]);
+  });
+
   it("recognizes referenced formats that the workspace snapshot can surface", () => {
     expect(extractArtifactRefs("See results/notes.txt, results/config.yaml, data/output.parquet, and scripts/run.sh.")).toEqual([
       "results/notes.txt",
