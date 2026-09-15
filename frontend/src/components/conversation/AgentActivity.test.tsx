@@ -171,16 +171,31 @@ describe("AgentActivity live stream", () => {
     expect(screen.queryByText("Encountered a problem")).not.toBeInTheDocument();
   });
 
-  it("streams the reasoning row and names the thinking phase", () => {
-    const thinking: ActivityBlock = { kind: "thinking", id: "th1", parts: [{ id: "th1-0", text: "Weigh the options." }], partial: true };
+  it("streams the reasoning row and folds the full reasoning behind it", () => {
+    const thinking: ActivityBlock = { kind: "thinking", id: "th1", parts: [{ id: "th1-0", text: "Weigh the options.\nCheck the imports first." }], partial: true, startedAt: "2026-09-15T00:00:00.000Z" };
     const { rerender } = render(<AgentActivity blocks={[thinking]} />);
-    expect(screen.getByText("Weigh the options.")).toBeInTheDocument();
-    // The reasoning row's micro label and the status-row phase title share the
-    // word; the phase title is the one inside the status marker row.
+    // The freshest reasoning fragment streams at the row's right edge, exactly
+    // like a running tool's output tail; earlier lines stay folded.
+    expect(screen.getByText("Check the imports first.")).toBeInTheDocument();
+    expect(screen.queryByText(/Weigh the options\./)).not.toBeInTheDocument();
+    // The reasoning row's label and the status-row phase title share the word;
+    // the phase title is the one inside the status marker row.
     expect(screen.getAllByText("Thinking").some((element) => element.closest("div[data-state]"))).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Thinking" }));
+    expect(screen.getByText(/Weigh the options\./)).toBeInTheDocument();
     // Once narration takes over, the phase label falls back to the process.
     rerender(<AgentActivity blocks={[{ ...thinking, partial: false }, { kind: "agent", id: "a1", parts: [{ id: "a1-0", text: "Answer." }] }]} />);
     expect(screen.getByText("Working")).toBeInTheDocument();
+  });
+
+  it("shows a per-phase duration for finished reasoning", () => {
+    const blocks: ActivityBlock[] = [
+      { kind: "thinking", id: "th1", parts: [{ id: "th1-0", text: "Weigh the options." }], partial: false, startedAt: "2026-09-15T00:00:00.000Z", endedAt: "2026-09-15T00:00:03.200Z" },
+      { kind: "agent", id: "a1", presentationRole: "final", parts: [{ id: "a1-0", text: "The final answer." }] },
+    ];
+    render(<AgentActivity blocks={blocks} lifecycle="settled" />);
+    fireEvent.click(screen.getByText(/Complete|Encountered a problem|Stopped|Working/));
+    expect(screen.getByText("3.2s")).toBeInTheDocument();
   });
 
   it("folds reasoning into the settled step records", () => {
@@ -192,9 +207,13 @@ describe("AgentActivity live stream", () => {
     render(<AgentActivity blocks={blocks} lifecycle="settled" />);
     expect(screen.queryByText("Weigh the options.")).not.toBeInTheDocument();
     expect(screen.queryByText("Thinking")).not.toBeInTheDocument();
-    // Expanding restores the complete pre-answer trajectory.
+    // Expanding restores the complete pre-answer trajectory: the reasoning row
+    // returns as a step, and its prose folds behind it like a tool's details.
     fireEvent.click(screen.getByText(/Complete|Encountered a problem|Stopped|Working/));
     expect(screen.getByText("Reading a.ts")).toBeInTheDocument();
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
+    expect(screen.queryByText("Weigh the options.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Thinking" }));
     expect(screen.getByText("Weigh the options.")).toBeInTheDocument();
   });
   it("streams the freshest output line beside a running tool", () => {

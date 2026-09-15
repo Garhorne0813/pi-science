@@ -97,11 +97,6 @@
 
 .thinking {
   padding-block: 0.125rem;
-  opacity: 0.9;
-}
-
-.thinking[data-running="true"] > div:first-child {
-  color: var(--activity-color);
 }
 
 .toolButton {
@@ -112,7 +107,8 @@
   color: var(--text);
 }
 
-.tool[data-running="true"] .toolButton {
+.tool[data-running="true"] .toolButton,
+.thinking[data-running="true"] .toolButton {
   color: var(--activity-color);
 }
 
@@ -121,15 +117,20 @@
   transition: transform var(--motion-normal) var(--ease-standard), opacity var(--motion-normal) var(--ease-standard);
 }
 
-/* Step rows hide their expand chevron until the row is hovered, focused, or
-   already open; while streaming the chevron sits at the far right edge. */
-.tool > button > .chevron {
+/* Step and reasoning rows hide their expand chevron until the row is hovered,
+   focused, or already open; while streaming the chevron sits at the far right
+   edge. */
+.tool > button > .chevron,
+.thinking > button > .chevron {
   opacity: 0;
 }
 
 .tool > button:hover > .chevron,
 .tool > button:focus-visible > .chevron,
-.tool > button[aria-expanded="true"] > .chevron {
+.tool > button[aria-expanded="true"] > .chevron,
+.thinking > button:hover > .chevron,
+.thinking > button:focus-visible > .chevron,
+.thinking > button[aria-expanded="true"] > .chevron {
   opacity: 1;
 }
 

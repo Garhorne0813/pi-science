@@ -166,6 +166,41 @@ describe("transport event folding", () => {
     expect(stillOne[0]?.kind === "thinking" && stillOne[0].parts[0]?.text).toBe("Check the imports. more.");
   });
 
+  it("stamps the reasoning phase clock and closes it when the model moves on", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, { sessionId: "s", type: "agent_start", turnId: "t1" });
+    thread = foldEvent(thread, { sessionId: "s", type: "thinking.updated", turnId: "t1", partId: "m1", text: "Weigh it.", revision: 1 });
+    const open = thread.blocks.find((block) => block.kind === "thinking");
+    expect(open?.kind === "thinking" && open.partial).toBe(true);
+    expect(open?.kind === "thinking" && typeof open.startedAt).toBe("string");
+    expect(open?.kind === "thinking" && open.endedAt).toBeUndefined();
+
+    // Narration supersedes the phase: it closes even though the run continues.
+    thread = foldEvent(thread, { sessionId: "s", type: "text.updated", turnId: "t1", partId: "m1", text: "Answer", revision: 2 });
+    const closed = thread.blocks.find((block) => block.kind === "thinking");
+    expect(closed?.kind === "thinking" && closed.partial).toBe(false);
+    expect(closed?.kind === "thinking" && typeof closed.endedAt).toBe("string");
+  });
+
+  it("closes a running reasoning phase on a tool call and on idle", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, { sessionId: "s", type: "agent_start", turnId: "t1", runId: "r1" });
+    thread = foldEvent(thread, { sessionId: "s", type: "thinking.updated", turnId: "t1", runId: "r1", partId: "m1", text: "Weigh it.", revision: 1 });
+    thread = foldEvent(thread, { sessionId: "s", type: "tool.updated", turnId: "t1", runId: "r1", callId: "c1", tool: "read", status: "running" });
+    const afterTool = thread.blocks.find((block) => block.kind === "thinking");
+    expect(afterTool?.kind === "thinking" && afterTool.partial).toBe(false);
+    expect(afterTool?.kind === "thinking" && typeof afterTool.endedAt).toBe("string");
+
+    // A phase that is still open when the run settles also gets an end stamp.
+    let idle = emptyThread();
+    idle = foldEvent(idle, { sessionId: "s", type: "agent_start", turnId: "t2", runId: "r2" });
+    idle = foldEvent(idle, { sessionId: "s", type: "thinking.updated", turnId: "t2", runId: "r2", partId: "m2", text: "Still reasoning.", revision: 1 });
+    idle = foldEvent(idle, { sessionId: "s", type: "session.idle", runId: "r2" });
+    const settled = idle.blocks.find((block) => block.kind === "thinking");
+    expect(settled?.kind === "thinking" && settled.partial).toBe(false);
+    expect(settled?.kind === "thinking" && typeof settled.endedAt).toBe("string");
+  });
+
   it("rebuilds thinking rows from persisted assistant thinking parts", () => {
     const thread = threadFromMessages([
       { id: "u1", role: "user", content: [{ type: "text", text: "q" }], timestamp: "2026-09-08T00:00:00.000Z" },
@@ -178,7 +213,6 @@ describe("transport event folding", () => {
     expect(thinking.kind === "thinking" && thinking.parts[0]?.text).toBe("Weigh the options.");
     expect(narration.kind === "agent" && narration.parts[0]?.text).toBe("The answer.");
   });
-
   it("merges durable user history with replayed live output during a mid-turn reload", async () => {
     let resolveMessages!: (response: Response) => void;
     let resolveState!: (response: Response) => void;

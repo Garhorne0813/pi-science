@@ -67,6 +67,10 @@ export interface ThinkingBlock extends ConversationBlockIdentity {
   parts: AgentMessagePart[];
   partial?: boolean;
   timestamp?: string;
+  /** First reasoning delta and the moment the phase ended. The row reports the
+   *  elapsed time between them once the phase is done. */
+  startedAt?: string;
+  endedAt?: string;
 }
 
 export interface StepSummaryBlock {

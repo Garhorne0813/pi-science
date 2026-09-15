@@ -169,15 +169,30 @@ function ActivityTrace({ groups, cwd, live = false }: { groups: ActivityGroup[];
   </>;
 }
 
-/** One reasoning phase. Deliberately quieter than the tool rows — a small
- *  phase label while it streams, then dim italic prose that reads like an
- *  aside between the step records. */
+/** One reasoning phase. Same single-line row as the tool steps — running dot,
+ *  phase label, and the newest reasoning fragment at the right edge — so the
+ *  phase reads as one more step instead of a separate wall of prose. The full
+ *  reasoning folds behind the row, exactly like a step's input/output. */
 function ThinkingRow({ block }: { block: ThinkingBlock }) {
   const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const text = block.parts.map((part) => part.text).join("");
   const running = block.partial === true;
-  return <div id={`thread-block-${block.id}`} data-running={running} className={cn(styles.entry, styles.thinking, "min-w-0 border-l-2 border-border/70 pl-3")}>
-    {running && <div className="mb-0.5 text-[9px] font-medium uppercase tracking-wider text-muted">{t("conversation.activity.thinking")}</div>}
-    <div className="whitespace-pre-wrap text-ui-caption italic leading-snug text-muted [overflow-wrap:anywhere]">{block.parts.map((part) => part.text).join("")}</div>
+  const duration = running ? null : stepDuration(block);
+  // Mirror the running tool's live tail: while the model reasons, the freshest
+  // fragment streams at the right edge of the row.
+  const liveTail = running ? lastStreamLine(text) : null;
+  return <div id={`thread-block-${block.id}`} data-running={running} className={cn(styles.entry, styles.thinking, "min-w-0")}>
+    <button type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)} className={cn(styles.toolButton, "flex min-h-primary max-w-full items-center gap-2 rounded-input py-1.5 text-left text-ui-label text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-control")}>
+      {running ? <span aria-hidden className="mx-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : <Check size={14} aria-hidden className="shrink-0 text-muted" />}
+      <span className="min-w-0 truncate">{t("conversation.activity.thinking")}</span>
+      {liveTail && <span aria-hidden className="hidden min-w-0 flex-1 truncate text-right font-mono text-[10px] text-muted sm:block">{liveTail}</span>}
+      {duration && <span aria-hidden="true" className="shrink-0 font-mono text-[10px] tabular-nums text-muted">{duration}</span>}
+      <ChevronRight size={12} aria-hidden className={cn(styles.chevron, "shrink-0 transition-transform", expanded && "rotate-90")} />
+    </button>
+    {expanded && <div className={cn(styles.details, "pb-2 pl-6")}>
+      <div className="whitespace-pre-wrap text-ui-caption italic leading-snug text-muted [overflow-wrap:anywhere]">{text}</div>
+    </div>}
   </div>;
 }
 
@@ -261,7 +276,7 @@ function formatSeconds(totalSeconds: number): string {
   return `${minutes}m${String(Math.floor(totalSeconds % 60)).padStart(2, "0")}s`;
 }
 
-function stepDuration(block: ToolCallBlock): string | null {
+function stepDuration(block: { startedAt?: string; endedAt?: string }): string | null {
   if (!block.startedAt || !block.endedAt) return null;
   const start = Date.parse(block.startedAt);
   const end = Date.parse(block.endedAt);
@@ -303,7 +318,7 @@ function TraceItem({ block, live }: { block: ToolCallBlock; live: boolean }) {
   // While the operation streams, its freshest output line fills the right
   // edge of the row and the chevron sits at the far right; once the step
   // completes the tail makes way for the duration chip.
-  const liveTail = running && block.partialOutput ? lastOutputLine(block.partialOutput) : null;
+  const liveTail = running && block.partialOutput ? lastStreamLine(block.partialOutput) : null;
   return <div className={cn(styles.entry, styles.tool)} data-running={running}>
     <button type="button" disabled={!hasDetails} aria-expanded={hasDetails ? expanded : undefined} onClick={() => hasDetails && setExpanded((value) => !value)} className={cn(styles.toolButton, "flex min-h-primary max-w-full items-center gap-2 rounded-input py-1.5 text-left text-ui-label text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default sm:min-h-control")}>
       {running ? <span aria-hidden className="mx-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : block.status === "error" ? <CircleX size={14} aria-hidden className="shrink-0 text-error-text" /> : <Check size={14} aria-hidden className="shrink-0 text-muted" />}
@@ -322,9 +337,10 @@ function TraceItem({ block, live }: { block: ToolCallBlock; live: boolean }) {
   </div>;
 }
 
-/** The freshest meaningful line of a streaming tool output, whitespace
- *  collapsed and bounded so it fits the row's right edge. */
-function lastOutputLine(value: string): string | null {
+/** The freshest meaningful line of a streaming text (tool output or live
+ *  reasoning), whitespace collapsed and bounded so it fits the row's right
+ *  edge. */
+function lastStreamLine(value: string): string | null {
   const lines = value.split("\n").map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
   const tail = lines.at(-1);
   if (!tail) return null;

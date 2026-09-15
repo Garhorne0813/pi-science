@@ -5,7 +5,7 @@
  * on the Thread being folded. This keeps two sessions isolated even when an
  * old EventSource callback arrives after the user has switched sessions. */
 
-import type { AgentMessageBlock, ThreadBlock, ToolCallBlock } from "../../types/thread";
+import type { AgentMessageBlock, ThinkingBlock, ThreadBlock, ToolCallBlock } from "../../types/thread";
 import type { TurnArtifactItem } from "../../types/thread";
 import type { HistoryMessage, PiScienceEvent, TurnArtifactTurn } from "../client/pi-science-client";
 
@@ -201,6 +201,19 @@ function stampCurrentUser(blocks: ThreadBlock[], turnId: string, runId?: string)
   }
 }
 
+/** Reasoning is a phase, not a step: it ends as soon as the model narrates or
+ *  calls a tool, and the run's later completion events are only a fallback.
+ *  Stamping the end when the next activity supersedes it keeps the phase
+ *  duration honest when a long tool sequence follows the reasoning. */
+function closeOpenThinking(blocks: ThreadBlock[], nowIso: string, keepId?: string): void {
+  for (let i = 0; i < blocks.length; i += 1) {
+    const block = blocks[i];
+    if (block.kind === "thinking" && block.partial && block.id !== keepId) {
+      blocks[i] = { ...block, partial: false, endedAt: block.endedAt ?? nowIso };
+    }
+  }
+}
+
 type NarrationSubsumption = "keep" | "replaced" | "subsumed";
 
 /** Some models re-narrate everything said so far at the start of every
@@ -281,12 +294,17 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       const content = itemId ? foldState.textByKey[itemId] ?? foldState.thinkingByKey[itemId] : undefined;
       const blockIndex = content ? index[content.blockId] : undefined;
       if (blockIndex !== undefined && (blocks[blockIndex]?.kind === "agent" || blocks[blockIndex]?.kind === "thinking")) {
-        blocks[blockIndex] = { ...blocks[blockIndex], partial: false };
+        const completed = blocks[blockIndex];
+        blocks[blockIndex] = completed.kind === "thinking"
+          ? { ...completed, partial: false, endedAt: completed.endedAt ?? new Date().toISOString() }
+          : { ...completed, partial: false };
       } else if (itemId) {
         for (let i = 0; i < blocks.length; i += 1) {
           const block = blocks[i];
           if ((block.kind === "agent" || block.kind === "thinking") && (block.itemId === itemId || block.id === itemId)) {
-            blocks[i] = { ...block, partial: false };
+            blocks[i] = block.kind === "thinking"
+              ? { ...block, partial: false, endedAt: block.endedAt ?? new Date().toISOString() }
+              : { ...block, partial: false };
           }
         }
       }
@@ -294,6 +312,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
     }
 
     case "text.updated": {
+      closeOpenThinking(blocks, new Date().toISOString());
       const explicit = eventHasIdentity(event);
       const eventPartId = stringValue(event.partId) ?? (explicit ? stringValue(event.itemId) : undefined);
       const key = eventTextKey(event, foldState);
@@ -415,6 +434,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
     case "thinking.updated": {
       // The reasoning stream stays out of the text state machine: thinking and
       // narration interleave freely, and neither should finalize the other.
+      const nowIso = new Date().toISOString();
       const incomingText = (event.text as string) || "";
       const eventPartId = stringValue(event.partId) ?? stringValue(event.itemId);
       const key = `thinking:${eventPartId ?? eventItemKey(event, foldState)}`;
@@ -423,13 +443,20 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       const turnId = turnIdentity(event, foldState);
       const runId = runIdentity(event, foldState);
       const blockId = previous?.blockId ?? `thinking-${turnId}-${eventPartId ?? key}`;
+      // A different reasoning item taking over ends the previous phase.
+      closeOpenThinking(blocks, nowIso, blockId);
       if (nextText.trim()) {
         const existingIdx = index[blockId];
         if (existingIdx !== undefined && blocks[existingIdx].kind === "thinking") {
+          const existing = blocks[existingIdx] as ThinkingBlock;
           blocks[existingIdx] = {
-            ...blocks[existingIdx],
+            ...existing,
             parts: [{ id: blockId, text: nextText }],
             partial: true,
+            // Resuming a phase that was already closed restarts its clock, so
+            // the row never reports a stale end time as its duration.
+            startedAt: existing.partial ? existing.startedAt ?? nowIso : nowIso,
+            endedAt: undefined,
             turnId,
             ...(runId ? { runId } : {}),
           } as ThreadBlock;
@@ -443,7 +470,8 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
             ...(stringValue(event.itemId) || eventPartId ? { itemId: stringValue(event.itemId) ?? eventPartId } : {}),
             parts: [{ id: blockId, text: nextText }],
             partial: true,
-            timestamp: new Date().toISOString(),
+            startedAt: nowIso,
+            timestamp: nowIso,
           } as ThreadBlock);
         }
       }
@@ -458,6 +486,9 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
     }
 
     case "tool.updated": {
+      // A tool call supersedes reasoning: the phase is over even though the
+      // run continues.
+      closeOpenThinking(blocks, new Date().toISOString());
       const callId = stringValue(event.callId) ?? "unknown-call";
       const operationId = stringValue(event.operationId);
       const attemptId = stringValue(event.attemptId);
@@ -627,18 +658,24 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       // A run terminal event settles every item in that run. Legacy idle has
       // no run id, so retain its historical last-block behaviour.
       if (completedRunId) {
+        const idleIso = new Date().toISOString();
         for (let i = 0; i < blocks.length; i += 1) {
           const block = blocks[i];
           if ((block.kind === "agent" || block.kind === "thinking") && block.partial && block.runId === completedRunId) {
-            blocks[i] = { ...block, partial: false };
+            blocks[i] = block.kind === "thinking"
+              ? { ...block, partial: false, endedAt: block.endedAt ?? idleIso }
+              : { ...block, partial: false };
           }
         }
       } else {
+        const idleIso = new Date().toISOString();
         for (let i = blocks.length - 1; i >= 0; i--) {
           const block = blocks[i];
           if ((block.kind === "agent" || block.kind === "thinking") && block.partial
             && (!foldState.activeTurnId || !block.turnId || block.turnId === foldState.activeTurnId)) {
-            blocks[i] = { ...block, partial: false };
+            blocks[i] = block.kind === "thinking"
+              ? { ...block, partial: false, endedAt: block.endedAt ?? idleIso }
+              : { ...block, partial: false };
           }
         }
       }
