@@ -3,8 +3,9 @@
 }
 
 /* Terminal activity is the process boundary before the user-facing answer.
-   Keep the divider on the activity side so the answer remains plain content. */
-.root:is([data-state="completed"], [data-state="stopped"], [data-state="error"]) {
+   Keep the divider on the activity side so the answer remains plain content.
+   Only render it when an answer message is the immediate next sibling. */
+.root:is([data-state="completed"], [data-state="stopped"], [data-state="error"]):has(+ [class~="group/message"]) {
   margin-bottom: 0.5rem;
   padding-bottom: 0.5rem;
   border-bottom: 1px solid var(--border);
