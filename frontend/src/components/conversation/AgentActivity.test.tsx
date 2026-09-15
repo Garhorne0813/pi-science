@@ -234,6 +234,16 @@ describe("AgentActivity live stream", () => {
     rerender(<AgentActivity lifecycle="aborted" blocks={[tool("read", "read")]} />);
     expect(screen.getByText("Stopped")).toBeInTheDocument();
   });
+
+  it("switches away from a resolved running interaction immediately", () => {
+    const waiting = tool("ask", "ask_user_question", "running");
+    const { rerender } = render(<AgentActivity lifecycle="waiting" blocks={[tool("read", "read"), waiting]} />);
+    expect(screen.getByText("Needs your input")).toBeInTheDocument();
+
+    rerender(<AgentActivity lifecycle="active" blocks={[tool("read", "read"), { ...waiting, interactionResolved: true }]} />);
+    expect(screen.getByText("Working")).toBeInTheDocument();
+    expect(screen.queryByText("Needs your input")).not.toBeInTheDocument();
+  });
 });
 
 describe("AgentActivity settled display", () => {

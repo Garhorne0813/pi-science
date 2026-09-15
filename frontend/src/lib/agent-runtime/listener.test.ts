@@ -217,6 +217,47 @@ describe("runtime event subscription", () => {
     expect(useRuntimeStore.getState().status).toBe("ready");
   });
 
+  it("marks a running questionnaire interaction resolved immediately after response", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-questionnaire"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      if (url.includes("/interactions/")) return jsonResponse({ ok: true });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await useRuntimeStore.getState().connect("/workspace", "session-questionnaire");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    source.emit("tool.updated", {
+      type: "tool.updated",
+      sessionId: "session-questionnaire",
+      turnId: "turn-q1",
+      callId: "call-q1",
+      itemId: "call-q1",
+      tool: "ask_user_question",
+      status: "running",
+    });
+    source.emit("question.asked", {
+      type: "question.asked",
+      sessionId: "session-questionnaire",
+      requestId: "request-q1",
+      method: "input",
+      title: "Questionnaire",
+      questionnaire: true,
+      toolCallId: "call-q1",
+    });
+
+    expect(useRuntimeStore.getState().turnLifecycle).toBe("waiting");
+    await useRuntimeStore.getState().respondToInteraction({ value: "answer" });
+
+    const interaction = useRuntimeStore.getState().thread.blocks.find((block) => block.kind === "tool");
+    expect(interaction).toMatchObject({ tool: "ask_user_question", status: "running", interactionResolved: true });
+    expect(useRuntimeStore.getState().pendingInteraction).toBeNull();
+    expect(useRuntimeStore.getState().turnLifecycle).toBe("active");
+  });
+
   it("keeps the resume cursor at the contiguous waterline after projecting a sequence-gap event", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

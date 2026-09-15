@@ -220,6 +220,7 @@ function useDisplayedActivity(blocks: ToolCallBlock[], lifecycle: TurnLifecycle)
   const targetForced = target?.forced === true;
   const [displayed, setDisplayed] = useState<PresentedActivity | null>(target);
   const displayedKey = displayed?.mergeKey ?? null;
+  const displayedForced = displayed?.forced === true;
   const shownAt = useRef(Date.now());
   const targetRef = useRef(target);
   targetRef.current = target;
@@ -230,7 +231,7 @@ function useDisplayedActivity(blocks: ToolCallBlock[], lifecycle: TurnLifecycle)
       return;
     }
     if (displayedKey === targetKey) return;
-    if (!displayedKey || targetForced) {
+    if (!displayedKey || targetForced || displayedForced) {
       shownAt.current = Date.now();
       setDisplayed(targetRef.current);
       return;
@@ -241,7 +242,7 @@ function useDisplayedActivity(blocks: ToolCallBlock[], lifecycle: TurnLifecycle)
       setDisplayed(targetRef.current);
     }, delay);
     return () => window.clearTimeout(timer);
-  }, [displayedKey, live, targetForced, targetKey]);
+  }, [displayedForced, displayedKey, live, targetForced, targetKey]);
   return live ? target?.mergeKey === displayed?.mergeKey ? target : displayed : null;
 }
 

@@ -4,6 +4,7 @@
 
 import type { StoreApi } from "zustand";
 import type { ThreadBlock } from "../../types/thread";
+import { activityPolicy } from "../conversation/activity-policy";
 import {
   clearCachedMessages,
   getClient,
@@ -618,10 +619,10 @@ export function createRuntimeActions(set: SetState, get: GetState) {
             && current.pendingInteraction?.requestId === requestId
           ) {
             const resolvedBlocks = current.thread.blocks.map((block) => {
-              if (block.kind !== "tool" || block.status !== "waiting-approval") return block;
+              if (block.kind !== "tool" || activityPolicy(block).plane !== "interaction") return block;
               // Resolve only the block this request is tied to. Without a
               // toolCallId the requestId itself is the only trustworthy link;
-              // batch-resolving every waiting block would retire prompts the
+              // batch-resolving every interaction block would retire prompts the
               // user has not answered.
               const matches = pendingInteraction.toolCallId
                 ? block.callId === pendingInteraction.toolCallId
