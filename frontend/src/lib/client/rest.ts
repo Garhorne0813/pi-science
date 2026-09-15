@@ -266,6 +266,7 @@ export async function respondToInteraction(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(response),
+      timeoutMs: 15_000,
     },
   );
   const data = await res.json().catch(() => ({}));

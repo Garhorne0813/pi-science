@@ -23,6 +23,9 @@ describe("InteractionPrompt", () => {
     expect(onRespond).toHaveBeenCalledTimes(1);
     expect(onRespond).toHaveBeenCalledWith({ value: "Allow once" });
     expect(screen.getByRole("button", { name: /Allow once/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Allow for session" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Allow once" }).querySelector(".animate-spin")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Allow for session" }).querySelector(".animate-spin")).toBeNull();
 
     resolveResponse();
   });

@@ -13,23 +13,27 @@ export function InteractionPrompt({
   const { t } = useTranslation();
   const [value, setValue] = useState(interaction.prefill || "");
   const [submitting, setSubmitting] = useState(false);
+  const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setValue(interaction.prefill || "");
     setSubmitting(false);
+    setSelectedOption(null);
     setError(null);
   }, [interaction.requestId, interaction.prefill]);
 
   const respond = async (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => {
     if (submitting) return;
     setSubmitting(true);
+    setSelectedOption(typeof response.value === "string" ? response.value : null);
     setError(null);
     try {
       await onRespond(response);
     } catch (cause) {
       setError(cause instanceof Error && cause.message ? cause.message : t("interaction.responseFailed"));
       setSubmitting(false);
+      setSelectedOption(null);
     }
   };
 
@@ -59,7 +63,7 @@ export function InteractionPrompt({
               onClick={() => void respond({ value: option.value })}
               className="inline-flex items-center gap-1.5 rounded-input border border-border bg-surface px-3 py-1.5 text-xs text-text hover:border-accent disabled:opacity-50"
             >
-              {submitting && <Loader2 size={12} className="animate-spin" />}
+              {submitting && selectedOption === option.value && <Loader2 size={12} className="animate-spin" />}
               {option.label}
             </button>
           ))}

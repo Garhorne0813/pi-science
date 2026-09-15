@@ -194,7 +194,7 @@ export class PiProcess extends EventEmitter {
   async sendNotification(type: string, params: Record<string, unknown> = {}): Promise<void> {
     if (this.webHost) {
       if (type !== "extension_ui_response") throw new Error(`unsupported Pi Orbit notification: ${type}`);
-      const result = await this.webRequest("POST", `${this.runtimePath()}/ui-response`, { type, ...params });
+      const result = await this.webRequest("POST", `${this.runtimePath()}/ui-response`, { type, ...params }, 10_000);
       if (!result.success) throw new Error(String(result.error ?? "Pi Orbit notification failed"));
       return;
     }
@@ -453,8 +453,8 @@ export class PiProcess extends EventEmitter {
     return null;
   }
 
-  private async webRequest(method: string, path: string, body?: Record<string, unknown>): Promise<PiResult> {
-    const response = await this.webHost!.request(method, path, body, this.requestTimeoutMs);
+  private async webRequest(method: string, path: string, body?: Record<string, unknown>, timeoutMs = this.requestTimeoutMs): Promise<PiResult> {
+    const response = await this.webHost!.request(method, path, body, timeoutMs);
     let payload: unknown;
     try { payload = await response.json(); }
     catch { payload = {}; }
