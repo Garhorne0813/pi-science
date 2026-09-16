@@ -678,10 +678,10 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       }
     },
 
-    forkSession: async (sessionId: string) => {
+    forkSession: async (sessionId: string, entryId?: string) => {
       const { cwd } = get();
       const client = getClient();
-      const result = await client.forkSession(sessionId, cwd);
+      const result = await client.forkSession(sessionId, cwd, entryId);
       if (get().cwd !== cwd) {
         throw new Error("Workspace changed while the conversation was being forked");
       }

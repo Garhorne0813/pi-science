@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { injectWorkspaceReferences, referencesFromMessage, visibleUserMessage } from "./file-references";
+import { injectWorkspaceReferences, referencesFromMessage, replaceVisibleUserMessage, visibleUserMessage } from "./file-references";
 
 describe("workspace reference messages", () => {
   const references = [
@@ -31,5 +31,15 @@ describe("workspace reference messages", () => {
     expect(injectWorkspaceReferences("Hello", [])).toBe("Hello");
     expect(visibleUserMessage("Hello")).toBe("Hello");
     expect(referencesFromMessage("Hello")).toEqual([]);
+  });
+
+  it("replaces visible prose without dropping hidden message metadata", () => {
+    const original = "Old text\n\n<subagent_mentions>\n- \"reviewer\"\n</subagent_mentions>\n\n<workspace_references>\n- file: \"data.csv\"\n</workspace_references>";
+
+    const edited = replaceVisibleUserMessage(original, "New text");
+
+    expect(visibleUserMessage(edited)).toBe("New text");
+    expect(edited).toContain("<subagent_mentions>");
+    expect(edited).toContain("<workspace_references>");
   });
 });

@@ -284,6 +284,7 @@ beforeEach(() => {
     disconnect: vi.fn(),
     sendPrompt: vi.fn(async (): Promise<string | null> => null),
     abort: vi.fn(async () => undefined),
+    forkSession: vi.fn(async () => "forked"),
     createNewSession: vi.fn(async () => "s2"),
     // Session-local model changes go through the runtime store action; the
     // default stub mirrors the real action's success path (apply model/thinking
@@ -1343,6 +1344,61 @@ describe("defensive thread shape and copy actions (docs/pr30markdown.md 3.4/3.5/
 
     fireEvent.click(agentCopy!);
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith("Here is the final answer.");
+  });
+
+  it("forks before a historical user message and resends its original content", async () => {
+    const forkSession = vi.fn(async (_sessionId: string, _entryId?: string) => {
+      useRuntimeStore.setState({ activeSessionId: "forked" });
+      return "forked";
+    });
+    const sendPrompt = vi.fn(async (): Promise<string | null> => "forked");
+    const secondUser = { ...userBlock("u2", "Try another approach"), parentId: "a1" };
+    useRuntimeStore.setState({
+      forkSession,
+      sendPrompt,
+      thread: {
+        blocks: [userBlock("u1", "First question"), agentBlock("a1", "First answer"), secondUser, agentBlock("a2", "Second answer")],
+        index: { u1: 0, a1: 1, u2: 2, a2: 3 },
+        loaded: true,
+      },
+    });
+    await renderReady();
+
+    fireEvent.click(within(document.getElementById("user-msg-u2")!).getByRole("button", { name: "Regenerate" }));
+
+    await waitFor(() => expect(forkSession).toHaveBeenCalledWith(SESSION_ID, "u2"));
+    expect(sendPrompt).toHaveBeenCalledWith("Try another approach");
+  });
+
+  it("keeps the selected user bubble and immediately hides its old agent trace while regeneration is pending", async () => {
+    let finishFork!: (sessionId: string) => void;
+    const forkSession = vi.fn(() => new Promise<string>((resolve) => { finishFork = resolve; }));
+    const sendPrompt = vi.fn(async (): Promise<string | null> => "forked");
+    useRuntimeStore.setState({
+      forkSession,
+      sendPrompt,
+      thread: {
+        blocks: [
+          userBlock("u1", "First question"),
+          agentBlock("a1", "Old first answer"),
+          userBlock("u2", "Regenerate this"),
+          agentBlock("a2", "Old execution trace and answer"),
+        ],
+        index: { u1: 0, a1: 1, u2: 2, a2: 3 },
+        loaded: true,
+      },
+    });
+    await renderReady();
+
+    fireEvent.click(within(document.getElementById("user-msg-u2")!).getByRole("button", { name: "Regenerate" }));
+
+    await waitFor(() => expect(forkSession).toHaveBeenCalledWith(SESSION_ID, "u2"));
+    expect(screen.getByText("Regenerate this")).toBeInTheDocument();
+    expect(screen.queryByText("Old execution trace and answer")).not.toBeInTheDocument();
+    expect(screen.queryByText("Old first answer")).toBeInTheDocument();
+
+    finishFork("forked");
+    await waitFor(() => expect(sendPrompt).toHaveBeenCalledWith("Regenerate this"));
   });
 
   it("hides the copy action when the turn ends on a tool call with no final assistant answer", async () => {

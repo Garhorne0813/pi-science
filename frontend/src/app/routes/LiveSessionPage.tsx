@@ -12,8 +12,20 @@ import { useUiStore } from "../../lib/ui";
 import { cn } from "../../lib/ui";
 import { useRequiredWorkspaceCwd } from "../../lib/workspace";
 import { projectKnowledgeApi, useReviewPolicy } from "../../lib/knowledge";
-import { agentActionTextByBlock, fetchDynamicCommands, resetDynamicCommands } from "../../lib/conversation";
+import {
+  agentActionTextByBlock,
+  appendResponseVersion,
+  bindResponseVersionMessage,
+  fetchDynamicCommands,
+  readResponseVersionGroups,
+  replayForkEntryId,
+  resetDynamicCommands,
+  responseVersionGroup,
+  writeResponseVersionGroups,
+  type ResponseVersionGroup,
+} from "../../lib/conversation";
 import { ConversationComposer } from "../../components/conversation/ConversationComposer";
+import { useFeedback } from "../../components/feedback/feedback-context";
 import { ConversationWelcome } from "../../components/conversation/ConversationWelcome";
 import { InteractionPrompt } from "../../components/conversation/InteractionPrompt";
 import { QuestionnairePrompt } from "../../components/conversation/QuestionnairePrompt";
@@ -30,7 +42,7 @@ import { useModelConfig } from "../../hooks/useModelConfig";
 import { useResearchLoop } from "../../hooks/useResearchLoop";
 import { useComposer } from "../../hooks/useComposer";
 import { useConversationScroll } from "../../hooks/useConversationScroll";
-import type { ThreadBlock } from "../../types/thread";
+import type { ThreadBlock, UserMessageBlock } from "../../types/thread";
 
 type ConversationVirtuosoContext = {
   renderInteractionPrompt: () => ReactNode;
@@ -88,6 +100,7 @@ export function ConversationFooter() {
 
 export function LiveSessionPage() {
   const { t } = useTranslation();
+  const { toast } = useFeedback();
   const { sessionId } = useParams<{ sessionId: string }>();
   const workspaceCwd = useRequiredWorkspaceCwd();
   const navigate = useNavigate();
@@ -112,6 +125,8 @@ export function LiveSessionPage() {
   const connect = useRuntimeStore((s) => s.connect);
   const disconnect = useRuntimeStore((s) => s.disconnect);
   const abort = useRuntimeStore((s) => s.abort);
+  const sendPrompt = useRuntimeStore((s) => s.sendPrompt);
+  const forkSession = useRuntimeStore((s) => s.forkSession);
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
   const contextTokens = useRuntimeStore((s) => s.contextTokens);
   const contextWindow = useRuntimeStore((s) => s.contextWindow);
@@ -124,7 +139,13 @@ export function LiveSessionPage() {
   const interactionPending = Boolean(pendingInteraction || pendingQuestionnaire);
   const [reviewingProject, setReviewingProject] = useState(false);
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
+  const [replaying, setReplaying] = useState<{ sessionId: string; userMessageId: string } | null>(null);
+  const [responseVersionGroups, setResponseVersionGroups] = useState<ResponseVersionGroup[]>(() => readResponseVersionGroups(workspaceCwd));
   const removeWorkspaceReference = useUiStore((state) => state.removeWorkspaceReference);
+
+  useEffect(() => {
+    setResponseVersionGroups(readResponseVersionGroups(workspaceCwd));
+  }, [workspaceCwd]);
 
   const messageIndexQuery = useQuery({
     queryKey: ["session-message-index", workspaceCwd, sessionId ?? null],
@@ -145,6 +166,30 @@ export function LiveSessionPage() {
   }, [sessionId, workspaceCwd, connect, disconnect]);
 
   const turns = useMemo(() => buildTurnPresentations(thread.blocks, { lastTurnLifecycle: turnLifecycle, lastTurnId: thread.foldState?.activeTurnId }), [thread.blocks, thread.foldState?.activeTurnId, turnLifecycle]);
+  const displayedTurns = useMemo(() => {
+    if (!replaying || replaying.sessionId !== activeSessionId) return turns;
+    const index = turns.findIndex((turn) => turn.user?.id === replaying.userMessageId);
+    if (index < 0) return turns;
+    const selected = turns[index]!;
+    const userOnly: TurnPresentation = {
+      ...selected,
+      blocks: selected.user ? [selected.user] : [],
+      executionTools: [],
+      planControlTools: [],
+      interactionTools: [],
+      activityTools: [],
+      activityBlocks: [],
+      systemBlocks: [],
+      intermediateAgents: [],
+      provisionalAgent: null,
+      finalAgent: null,
+      artifacts: [],
+      lifecycle: "settled",
+      active: false,
+      completed: false,
+    };
+    return [...turns.slice(0, index), userOnly];
+  }, [activeSessionId, replaying, turns]);
   // Copy-button eligibility computed across the WHOLE thread (not per group):
   // agentActionTextByBlock needs the trailing tool blocks after an agent block
   // to decide whether it is the final answer. A per-group computation would
@@ -152,6 +197,21 @@ export function LiveSessionPage() {
   const actionTextByBlock = useMemo(() => agentActionTextByBlock(thread.blocks), [thread.blocks]);
 
   const { suggestions, setSuggestions } = useTurnEffects(working, thread.blocks);
+
+  useEffect(() => {
+    if (working || !activeSessionId) return;
+    const pending = responseVersionGroups
+      .flatMap((group) => group.versions)
+      .find((version) => version.sessionId === activeSessionId && version.userMessageId === null);
+    if (!pending) return;
+    const user = thread.blocks.findLast((block): block is UserMessageBlock => block.kind === "user" && block.text === pending.message);
+    if (!user) return;
+    setResponseVersionGroups((current) => {
+      const next = bindResponseVersionMessage(current, activeSessionId, user.id, pending.message);
+      if (next !== current) writeResponseVersionGroups(workspaceCwd, next);
+      return next;
+    });
+  }, [activeSessionId, responseVersionGroups, thread.blocks, working, workspaceCwd]);
 
   const userNavItems = useMemo<ConversationNavItem[]>(() => {
     const loadedUsers = thread.blocks.filter((block): block is Extract<ThreadBlock, { kind: "user" }> => block.kind === "user");
@@ -264,6 +324,60 @@ export function LiveSessionPage() {
     }
   };
 
+  const handleResendUserMessage = async (block: UserMessageBlock, message: string) => {
+    if (!activeSessionId || working || interactionPending || reviewingProject) return;
+    const sourceSessionId = activeSessionId;
+    const entryId = replayForkEntryId(block);
+    setReplaying({ sessionId: sourceSessionId, userMessageId: block.id });
+    setSuggestions([]);
+    try {
+      // Orbit's fork endpoint takes the selected user entry and branches
+      // immediately before it, including for the first conversational turn.
+      const targetSessionId = await forkSession(sourceSessionId, entryId);
+      setReplaying(null);
+      const sentSessionId = await sendPrompt(message);
+      const nextSessionId = sentSessionId ?? targetSessionId;
+      setResponseVersionGroups((current) => {
+        const next = appendResponseVersion(
+          current,
+          { sessionId: sourceSessionId, userMessageId: block.id, message: block.text },
+          { sessionId: nextSessionId, userMessageId: null, message },
+        );
+        writeResponseVersionGroups(workspaceCwd, next);
+        return next;
+      });
+      if (nextSessionId) navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/session/${nextSessionId}`);
+    } catch (error) {
+      const recoverySessionId = useRuntimeStore.getState().activeSessionId;
+      if (recoverySessionId && recoverySessionId !== sourceSessionId) {
+        navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/session/${recoverySessionId}`);
+      }
+      toast(error instanceof Error ? error.message : t("conversation.branchError"), "error");
+      throw error;
+    } finally {
+      setReplaying(null);
+    }
+  };
+
+  const versionControlsForTurn = (turn: TurnPresentation) => {
+    if (working || !activeSessionId || !turn.user || !turn.finalAgent) return undefined;
+    const group = responseVersionGroup(responseVersionGroups, activeSessionId, turn.user.id);
+    if (!group || group.versions.length < 2) return undefined;
+    const index = group.versions.findIndex((version) => version.sessionId === activeSessionId && version.userMessageId === turn.user!.id);
+    if (index < 0) return undefined;
+    const go = (nextIndex: number) => {
+      const target = group.versions[nextIndex];
+      if (!target || target.sessionId === activeSessionId) return;
+      navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/session/${target.sessionId}`);
+    };
+    return {
+      index,
+      total: group.versions.length,
+      onPrevious: () => go(index - 1),
+      onNext: () => go(index + 1),
+    };
+  };
+
   // Empty new conversation: welcome copy sits directly above a vertically centered composer.
   const showWelcome = thread.blocks.length === 0 && !working && status !== "connecting" && !research.draft && !research.activeLoop;
   const activeSession = sessions.find((session) => session.id === activeSessionId);
@@ -366,9 +480,9 @@ export function LiveSessionPage() {
                   followOutput={scroll.followOutput}
                   totalListHeightChanged={scroll.handleListHeightChanged}
                   firstItemIndex={virtualFirstItemIndex}
-                  data={turns}
+                  data={displayedTurns}
                   computeItemKey={conversationTurnItemKey}
-                  initialItemCount={Math.min(turns.length, 20)}
+                  initialItemCount={Math.min(displayedTurns.length, 20)}
                   startReached={() => void handleLoadOlder()}
                   increaseViewportBy={{ top: 600, bottom: 800 }}
                   context={{ renderInteractionPrompt, working, pendingInteraction }}
@@ -390,7 +504,16 @@ export function LiveSessionPage() {
                   }}
                   itemContent={(_index, turn) => renderConversationTurnSlot(turn, (safeTurn) => (
                     <div className="mx-auto w-full max-w-[calc(var(--conversation-content-width)+4rem)] px-8 pb-3">
-                      {renderTurn(safeTurn, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock)}
+                      {renderTurn(
+                        safeTurn,
+                        { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" },
+                        actionTextByBlock,
+                        {
+                          disabled: !activeSessionId || working || interactionPending || reviewingProject,
+                          onResend: handleResendUserMessage,
+                        },
+                        versionControlsForTurn(safeTurn),
+                      )}
                       {showSuggestions && safeTurn.blocks.some((block) => block.id === suggestionAnchorBlockId) && (
                         <div className="mt-3 flex flex-wrap gap-2" aria-label={t("conversation.suggestions")}>
                           {suggestions.map((suggestion) => (

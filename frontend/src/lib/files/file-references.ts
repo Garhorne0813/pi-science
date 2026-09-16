@@ -22,6 +22,12 @@ export function visibleUserMessage(message: string): string {
   return stripSubagentMentionBlock(message.replace(REFERENCE_BLOCK, ""));
 }
 
+/** Replace user-visible prose while preserving hidden reference/mention metadata. */
+export function replaceVisibleUserMessage(message: string, visibleText: string): string {
+  const metadata = message.match(/<(?:workspace_references|subagent_mentions)>[\s\S]*?<\/(?:workspace_references|subagent_mentions)>/g) ?? [];
+  return [visibleText.trim(), ...metadata].filter(Boolean).join("\n\n");
+}
+
 export function referencesFromMessage(message: string): Array<Pick<WorkspaceReference, "path" | "name" | "isDir">> {
   const block = message.match(/<workspace_references>([\s\S]*?)<\/workspace_references>/)?.[1];
   if (!block) return [];

@@ -36,6 +36,8 @@ export type ThreadBlock =
 export interface UserMessageBlock extends ConversationBlockIdentity {
   kind: "user";
   id: string;
+  /** Persisted conversation entry immediately before this message. */
+  parentId?: string | null;
   text: string;
   timestamp?: string;
   images?: ImageAttachment[];

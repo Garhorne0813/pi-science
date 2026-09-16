@@ -107,7 +107,7 @@ export interface RuntimeState {
   loadMoreSessions: () => Promise<number>;
   loadSession: (sessionId: string) => Promise<void>;
   loadOlderMessages: () => Promise<number>;
-  forkSession: (sessionId: string) => Promise<string>;
+  forkSession: (sessionId: string, entryId?: string) => Promise<string>;
   createNewSession: () => Promise<string>;
   deleteSession: (sessionId: string) => Promise<void>;
   removeSession: (sessionId: string) => void;

@@ -9,6 +9,26 @@ installRuntimeTestEnvironment();
 
 
 describe("runtime session actions", () => {
+  it("passes an entry id when forking from a historical turn", async () => {
+    let forkBody: BodyInit | null | undefined;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      if (url.includes("parent/fork")) {
+        forkBody = init.body;
+        return jsonResponse({ ok: true, id: "forked" });
+      }
+      if (url.includes("forked/messages")) return jsonResponse({ messages: [] });
+      if (url.startsWith("/api/sessions?")) return jsonResponse([{ id: "forked", cwd: "/workspace" }]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useRuntimeStore.setState({ cwd: "/workspace", activeSessionId: "parent", status: "ready" });
+
+    await useRuntimeStore.getState().forkSession("parent", "assistant-1");
+
+    expect(forkBody).toBe(JSON.stringify({ entry_id: "assistant-1" }));
+  });
+
   it("does not create ghost sessions when StrictMode reopens a workspace route", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

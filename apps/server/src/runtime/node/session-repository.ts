@@ -17,6 +17,7 @@ export interface SessionInfoRecord {
 
 export interface SessionMessageRecord {
   id: string;
+  parentId?: string | null;
   role: string;
   content: Array<Record<string, unknown>>;
   toolCallId?: string;
@@ -137,6 +138,7 @@ function parseMessageLine(line: string): SessionMessageRecord | null {
     const message = entry.message as Record<string, unknown>;
     const record: SessionMessageRecord = {
       id: typeof entry.id === "string" ? entry.id : "",
+      parentId: typeof entry.parentId === "string" ? entry.parentId : null,
       role: typeof message.role === "string" ? message.role : "",
       content: Array.isArray(message.content) ? message.content as Array<Record<string, unknown>> : [],
       toolCallId: typeof message.toolCallId === "string" ? message.toolCallId : undefined,

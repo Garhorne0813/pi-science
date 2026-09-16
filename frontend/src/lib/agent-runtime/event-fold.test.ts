@@ -213,6 +213,18 @@ describe("transport event folding", () => {
     expect(thinking.kind === "thinking" && thinking.parts[0]?.text).toBe("Weigh the options.");
     expect(narration.kind === "agent" && narration.parts[0]?.text).toBe("The answer.");
   });
+  it("keeps a persisted user message's parent entry for branch-and-resend", () => {
+    expect(convertHistoryToBlocks([{
+      id: "user-2",
+      parentId: "assistant-1",
+      role: "user",
+      content: [{ type: "text", text: "try again" }],
+    }])).toContainEqual(expect.objectContaining({
+      kind: "user",
+      id: "user-2",
+      parentId: "assistant-1",
+    }));
+  });
   it("merges durable user history with replayed live output during a mid-turn reload", async () => {
     let resolveMessages!: (response: Response) => void;
     let resolveState!: (response: Response) => void;
