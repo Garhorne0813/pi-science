@@ -6,6 +6,11 @@ import { REQUEST_TIMEOUT_MS } from "./http";
 import { sessionKey } from "./session-key";
 import type { PiScienceEvent } from "./types";
 
+/** A recovery reconnect with no applied cursor must never become a future-only
+ * subscription. This deliberately missing cursor forces the server to answer
+ * with stream.gap, which establishes a live subscriber before recovery runs. */
+const RECOVERY_REPLAY_SENTINEL = "pi-recovery-sentinel:0";
+
 export class SseTransport {
   private baseUrl: string;
   private eventSource: EventSource | null = null;
@@ -23,6 +28,11 @@ export class SseTransport {
    * applied cursor used for reconnect URLs: receiving an event is not proof
    * that the reducer accepted it. */
   private receivedEventIds = new Map<string, string>();
+  /** A server-declared gap is delivered only after the backend has already
+   * registered this EventSource as a live subscriber. Keep that exact stream
+   * alive until a normal event is successfully applied; closing it during the
+   * REST rebase would recreate a subscribe-registration blind spot. */
+  private gapFencedKey: string | null = null;
 
   // Known event types from the backend (named SSE events)
   private static SSE_EVENTS = [
@@ -69,6 +79,9 @@ export class SseTransport {
     if (this.isConnectedTo(sessionId, targetCwd ?? undefined)) {
       return;
     }
+    // A gap fence belongs to the currently registered EventSource only. A
+    // real session switch/new attach must not suppress the new connection.
+    this.gapFencedKey = null;
     this.closeEventSource();
     const generation = ++this.connectionGeneration;
     this.sessionId = sessionId;
@@ -105,45 +118,25 @@ export class SseTransport {
           return;
         }
         if (eventId && cursorKey) this.receivedEventIds.set(cursorKey, eventId);
-        // On stream.gap the stored cursor is stale (the backend no longer
-        // retains events that far back). Clear it, then proactively rebuild
-        // the connection WITHOUT the cursor so the new subscription only
-        // carries FUTURE events. The authoritative conversation snapshot is
-        // restored separately by the runtime store (which re-reads messages
-        // and the authoritative session state over REST), so this rebuild is
-        // purely the live-event transport — not a "full replay" of the log.
-        // Rebuilding now also avoids the browser's native EventSource
-        // auto-reconnect reusing the same ?lastEventId= URL, which the backend
-        // can no longer satisfy and would re-emit the gap in a loop.
+        // ConversationEventHub registers a subscriber before it attempts the
+        // cursor replay that may produce stream.gap. Therefore the EventSource
+        // carrying this gap is already a lossless live fence for every event
+        // published after the gap decision. Keep it open while REST recovery
+        // rebases the projection. Reconnecting here would create a blind
+        // interval between closing this subscriber and registering the next.
+        // Keep the last APPLIED cursor as well: if the socket later has to be
+        // rebuilt before a new event arrives, replaying that cursor may yield
+        // another gap, but it cannot silently skip an unseen event.
         if (event.type === "stream.gap" && cursorKey) {
-          this.lastEventIds.delete(cursorKey);
-          this.receivedEventIds.delete(cursorKey);
-          const reconnectSession = this.sessionId;
-          const reconnectCwd = this.cwd;
-          if (reconnectSession && generation === this.connectionGeneration && source === this.eventSource) {
-            // Surface the gap to listeners, then rebuild the transport WITHOUT
-            // the cursor. Close the current socket first so connect() isn't
-            // short-circuited by its own isConnectedTo() guard.
-            this.emit(event);
-            // A listener may have reacted to the gap by disconnecting or
-            // switching sessions. Re-verify the connection is still for this
-            // session before reconnecting, otherwise we would forcibly
-            // reconnect to a session the user just left.
-            if (
-              generation !== this.connectionGeneration
-              || source !== this.eventSource
-              || this.sessionId !== reconnectSession
-              || this.cwd !== reconnectCwd
-            ) {
-              return;
-            }
-            this.closeEventSource();
-            this.connect(reconnectSession, reconnectCwd ?? undefined);
-            return;
-          }
+          this.gapFencedKey = cursorKey;
+          this.emit(event);
+          return;
         }
         const applied = this.emit(event);
-        if (applied && eventId && cursorKey) this.lastEventIds.set(cursorKey, eventId);
+        if (applied && eventId && cursorKey) {
+          this.lastEventIds.set(cursorKey, eventId);
+          if (this.gapFencedKey === cursorKey) this.gapFencedKey = null;
+        }
         // The backend marks unrecoverable stream errors (for example a
         // session that no longer exists in the workspace) as terminal. A
         // native EventSource automatically retries after the server closes
@@ -156,6 +149,7 @@ export class SseTransport {
           && source === this.eventSource
         ) {
           ++this.connectionGeneration;
+          this.gapFencedKey = null;
           this.closeEventSource();
           this.sessionId = null;
           this.cwd = null;
@@ -204,9 +198,19 @@ export class SseTransport {
   /** Rebuild the current subscription even when EventSource still reports
    *  OPEN. A half-open connection can otherwise look healthy forever while
    *  silently missing a turn. The per-session cursor is intentionally kept,
-   *  so the replacement stream replays only events that were missed. */
+   *  so the replacement stream replays only events that were missed.
+   *
+   *  Exception: after a server-declared stream.gap the current source itself
+   *  is the recovery fence. Do not tear it down until a successfully applied
+   *  event advances the cursor (or the source actually closes). */
   reconnect(sessionId: string, cwd?: string): void {
     const targetCwd = cwd ?? null;
+    const cursorKey = targetCwd ? sessionKey(targetCwd, sessionId) : "";
+    if (
+      cursorKey
+      && this.gapFencedKey === cursorKey
+      && this.isConnectedTo(sessionId, targetCwd ?? undefined)
+    ) return;
     if (this.sessionId !== sessionId || this.cwd !== targetCwd) {
       this.connect(sessionId, cwd);
       return;
@@ -218,6 +222,7 @@ export class SseTransport {
   disconnect(): void {
     const sessionId = this.sessionId;
     ++this.connectionGeneration;
+    this.gapFencedKey = null;
     this.closeEventSource();
     this.sessionId = null;
     this.cwd = null;
@@ -251,6 +256,15 @@ export class SseTransport {
     } else {
       this.clearCursor(cwd, sessionId);
     }
+  }
+
+  /** Recovery may only resume from an event the reducer has actually applied.
+   * The server's newest durable cursor can be ahead of the REST snapshot and
+   * would recreate the snapshot→cursor TOCTOU loss. When there is no applied
+   * cursor, force a server-declared gap instead of opening a future-only SSE. */
+  getRecoveryResumeCursor(cwd: string, sessionId: string): string {
+    if (!cwd || !sessionId) return RECOVERY_REPLAY_SENTINEL;
+    return this.lastEventIds.get(sessionKey(cwd, sessionId)) ?? RECOVERY_REPLAY_SENTINEL;
   }
 
   private closeEventSource(): void {

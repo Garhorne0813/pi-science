@@ -74,8 +74,11 @@ export class PiScienceClient {
     return rest.getMessages(this.baseUrl, sessionId, cwd);
   }
 
+  /** Gap recovery may resume only from a cursor whose event was accepted by
+   * the reducer. The server's newest durable cursor may be newer than the REST
+   * snapshot and would allow a snapshot→cursor TOCTOU window to skip an event. */
   async getConversationResumeCursor(sessionId: string, cwd: string): Promise<string | null> {
-    return rest.getConversationResumeCursor(this.baseUrl, sessionId, cwd);
+    return this.transport.getRecoveryResumeCursor(cwd, sessionId);
   }
 
   async getMessagesPage(

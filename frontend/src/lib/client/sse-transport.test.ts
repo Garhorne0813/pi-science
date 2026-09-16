@@ -215,31 +215,67 @@ describe("PiScienceClient SSE cursor resumption", () => {
     expect(reconnectUrl).not.toContain("lastEventId");
   });
 
-  it("rebuilds the EventSource without a cursor after stream.gap", () => {
+  it("keeps the registered gap stream as a live fence until a new event advances the applied cursor", () => {
     const client = new PiScienceClient();
     client.connect("session-gap", "/workspace");
     const first = FakeEventSource.instances[0];
     first.open();
 
-    // First receive a valid event to set the cursor
+    // This is the last event that the reducer definitely applied before the
+    // server reports that the requested replay can no longer be satisfied.
     first.emit("text.updated", { type: "text.updated", sessionId: "session-gap", text: "ok" }, "epoch:10");
-
-    // stream.gap must clear the cursor AND proactively rebuild the transport
-    // without it, so the browser's native EventSource auto-reconnect cannot
-    // re-send the stale cursor (which would re-trigger the gap in a loop).
     first.emit("stream.gap", { type: "stream.gap", sessionId: "session-gap" }, undefined);
 
-    const reconnect = FakeEventSource.instances[1];
-    expect(reconnect).toBeDefined();
-    expect(reconnect.url).not.toContain("lastEventId");
-    expect(first.readyState).toBe(FakeEventSource.CLOSED);
+    // The server registers the subscriber before generating stream.gap, so
+    // this exact source is already a live fence. Recovery must not tear it down.
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(first.readyState).not.toBe(FakeEventSource.CLOSED);
     expect(client.isConnectedTo("session-gap", "/workspace")).toBe(true);
+
+    // Existing recovery/watchdog reconnect calls are suppressed while the
+    // fence is active; otherwise they would recreate the subscribe blind spot.
+    client.reconnect("session-gap", "/workspace");
+    expect(FakeEventSource.instances).toHaveLength(1);
+
+    // Once a post-gap event is successfully applied, its id becomes the safe
+    // replay point and normal reconnect behavior resumes.
+    first.emit("text.updated", { type: "text.updated", sessionId: "session-gap", text: "after gap" }, "epoch-new:11");
+    client.reconnect("session-gap", "/workspace");
+
+    expect(first.readyState).toBe(FakeEventSource.CLOSED);
+    expect(FakeEventSource.instances).toHaveLength(2);
+    expect(FakeEventSource.instances[1].url).toContain("lastEventId=epoch-new%3A11");
+  });
+
+  it("uses the last applied cursor for recovery instead of the newest received cursor", async () => {
+    const client = new PiScienceClient();
+    client.onEvent((event) => event.type === "text.updated" ? false : undefined);
+    client.connect("session-rejected", "/workspace");
+    const source = FakeEventSource.instances[0];
+    source.open();
+
+    // The transport receives an id, but the reducer rejects the event. That id
+    // must never become a resume cursor because doing so could skip the event.
+    source.emit("text.updated", { type: "text.updated", sessionId: "session-rejected", text: "not applied" }, "epoch:9");
+
+    await expect(client.getConversationResumeCursor("session-rejected", "/workspace"))
+      .resolves.toBe("pi-recovery-sentinel:0");
+  });
+
+  it("forces a server-declared gap when recovery has no applied cursor", async () => {
+    const client = new PiScienceClient();
+
+    // A non-empty, valid cursor shape is intentional: an empty/no-cursor SSE
+    // is future-only on the server. The missing sentinel makes readAfter()
+    // return stream.gap after the live subscriber is already registered.
+    await expect(client.getConversationResumeCursor("session-fresh", "/workspace"))
+      .resolves.toBe("pi-recovery-sentinel:0");
   });
 
   it("does not reconnect after a gap if a listener disconnected during emit", () => {
     const client = new PiScienceClient();
     // A listener that reacts to the gap by disconnecting the client must
-    // prevent the proactive reconnect — otherwise we would forcibly re-open a
+    // prevent any recovery reconnect — otherwise we would forcibly re-open a
     // stream to a session the user just left.
     client.onEvent((event) => {
       if (event.type === "stream.gap") client.disconnect();
