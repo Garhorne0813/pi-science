@@ -638,10 +638,11 @@ export async function reconcilePromptAfterLateStream(
       if (!runtimeWorking) {
         // Authoritative idle is not proof the turn finished: an agent can be
         // briefly idle between tool calls. Only settle once THIS turn's reply
-        // is visible in the persisted history (an assistant message written
-        // after the prompt was sent) — otherwise an early resync could drop
-        // the late reply. Without a prompt baseline (defensive), never assume
-        // a reply; the idle cap settles the monitor either way.
+        // is visible in the persisted history. Explicit intermediate
+        // commentary does not count as that reply; final and legacy unclassified
+        // assistant messages keep the timestamp-based compatibility path.
+        // Without a prompt baseline (defensive), never assume a reply; the idle
+        // cap settles the monitor either way.
         const replyConfirmed = promptTimestamp !== undefined
           && await turnHasNewAssistantReply(client, sessionId, cwd, promptTimestamp);
         if (!replyConfirmed) {
@@ -675,9 +676,9 @@ export async function reconcilePromptAfterLateStream(
 
 /** True when the persisted conversation already contains an assistant message
  *  written after the prompt was sent — i.e. this turn produced a reply that a
- *  history resync will find. The scan starts from the newest message; an
- *  assistant message without a parseable timestamp cannot be attributed to
- *  this turn and counts as unconfirmed. */
+ *  history resync will find. Explicit intermediate commentary is not a final
+ *  reply. Legacy messages without presentation metadata retain the existing
+ *  timestamp-based behavior. */
 async function turnHasNewAssistantReply(
   client: PiScienceClient,
   sessionId: string,
@@ -689,6 +690,7 @@ async function turnHasNewAssistantReply(
     const messages = page.messages;
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       if (messages[i].role !== "assistant") continue;
+      if (messages[i].presentationRole === "intermediate") return false;
       const timestamp = messages[i].timestamp;
       if (!timestamp) return false;
       const parsed = Date.parse(timestamp);
