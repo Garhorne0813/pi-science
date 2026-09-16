@@ -2,26 +2,37 @@
  *  stream attach or a transport failure, and the missing-session reset. */
 
 import { clearCachedMessages, clearAiTitle, clearSessionName, getClient, type PiScienceClient, type SessionState } from "../client/pi-science-client";
+import { isMissingSessionError } from "./errors";
 import { attachTurnArtifacts, emptyThread, resetTurnBuffer } from "./event-fold";
-import { mergeRecoveryHistoryWindow } from "./history-window-recovery";
-import { fetchPersistedTurnArtifacts } from "./turn-artifacts";
 import { markWorkspaceFilesChanged } from "./file-revision";
 import { generations, turnState } from "./generations";
+import { mergeRecoveryHistoryWindow } from "./history-window-recovery";
 import { backfillSessionName } from "./naming";
 import { loadSessionsInternal } from "./sessions";
 import { useRuntimeStore } from "./store";
+import { fetchPersistedTurnArtifacts, refetchPersistedTurnArtifacts } from "./turn-artifacts";
 import { hasActivePendingInteraction, hasPendingInteractionData } from "./types";
 
 const WORKING_STATE_MAX_ATTEMPTS = 3;
 const WORKING_STATE_BACKOFF_MS = [0, 100, 250] as const;
 const CONNECTION_RECOVERY_MAX_ATTEMPTS = 4;
 const CONNECTION_RECOVERY_BACKOFF_MS = [0, 100, 250, 500] as const;
+const MAX_GAP_RECOVERY_ROUNDS = 3;
+const GAP_RECOVERY_BACKOFF_MS = [0, 100, 250] as const;
 
 type KnownRuntimeState = { busy: boolean; activityGeneration: number };
 type ConnectionRecoveryRun = { connectionGeneration: number; activityGeneration: number; promise: Promise<void> };
+type GapRecoveryResult = "completed" | "superseded" | "aborted" | "retryable-failure";
+interface GapRecoveryRun {
+  promise: Promise<void>;
+  rerunRequested: boolean;
+  rounds: number;
+  resetTransport: boolean;
+  reconnectTransport: boolean;
+}
 const knownRuntimeStates = new WeakMap<PiScienceClient, Map<string, KnownRuntimeState>>();
 const connectionRecoveryRuns = new WeakMap<PiScienceClient, Map<string, ConnectionRecoveryRun>>();
-const gapRecoveryRuns = new Map<string, Promise<void>>();
+const gapRecoveryRuns = new Map<string, GapRecoveryRun>();
 const suppressedConnectionRecoveries = new WeakMap<PiScienceClient, Set<string>>();
 
 function runtimeKey(sessionId: string, cwd: string): string {
@@ -92,6 +103,7 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
   const generation = generations.connection;
   const conversationGeneration = generations.conversation;
   const activityGeneration = generations.activity;
+  const metadataGeneration = generations.presentationMetadata;
   try {
     const client = getClient();
     const [historyResult, artifactsResult] = await Promise.allSettled([
@@ -113,13 +125,13 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
     // process writes the session JSONL before agent_settled, so a non-empty
     // snapshot is authoritative. An empty snapshot can still race the flush.
     if (history.messages.length === 0 && current.thread.blocks.length > 0) return;
-    const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
+    let turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
     // A latest page can move completely beyond the already loaded window after
     // a long tool-heavy turn. Walk older pages until lineage is established;
     // only a complete no-overlap history may replace the window wholesale.
     const historyWindowGeneration = generations.historyWindow;
     const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, current.thread, history, { keepLiveExtras: false, resetProjection: true });
-    const latest = useRuntimeStore.getState();
+    let latest = useRuntimeStore.getState();
     if (
       generation !== generations.connection
       || conversationGeneration !== generations.conversation
@@ -129,6 +141,30 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
       || latest.cwd !== cwd
       || latest.working
     ) return;
+    if (metadataGeneration !== generations.presentationMetadata) {
+      try {
+        const persistedTurns = await refetchPersistedTurnArtifacts(sessionId, cwd);
+        latest = useRuntimeStore.getState();
+        turns = mergeArtifactTurns(persistedTurns, liveArtifactTurns(latest.thread, sessionId));
+      } catch (error) {
+        // Conversation history is the primary recovery result. When the
+        // metadata refresh is unavailable, use only the latest live summaries:
+        // reusing the first (older) snapshot could resurrect a removed strip.
+        console.warn("Failed to refresh conversation metadata during history resync:", error);
+        latest = useRuntimeStore.getState();
+        turns = liveArtifactTurns(latest.thread, sessionId);
+      }
+      latest = useRuntimeStore.getState();
+      if (
+        generation !== generations.connection
+        || conversationGeneration !== generations.conversation
+        || activityGeneration !== generations.activity
+        || historyWindowGeneration !== generations.historyWindow
+        || latest.activeSessionId !== sessionId
+        || latest.cwd !== cwd
+        || latest.working
+      ) return;
+    }
     const historyHasMore = merged.retainedOlderPrefix ? latest.historyHasMore : merged.boundaryPage.has_more;
     useRuntimeStore.setState({
       thread: attachTurnArtifacts(merged.thread, turns, { windowComplete: !historyHasMore }),
@@ -140,6 +176,26 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
   } catch (error) {
     console.error("Failed to resynchronize completed conversation:", error);
   }
+}
+
+function liveArtifactTurns(thread: ReturnType<typeof useRuntimeStore.getState>["thread"], sessionId: string) {
+  return thread.blocks.flatMap((block) => block.kind === "artifact-summary" ? [{
+    turn_id: block.turnId,
+    session_id: sessionId,
+    assistant_message_id: block.assistantMessageId ?? null,
+    turn_ordinal: block.turnOrdinal ?? null,
+    ended_at: "",
+    artifacts: block.artifacts,
+  }] : []);
+}
+
+function mergeArtifactTurns(
+  persisted: Awaited<ReturnType<typeof fetchPersistedTurnArtifacts>>,
+  live: Awaited<ReturnType<typeof fetchPersistedTurnArtifacts>>,
+) {
+  const byTurn = new Map(persisted.map((turn) => [turn.turn_id, turn]));
+  for (const turn of live) byTurn.set(turn.turn_id, turn);
+  return [...byTurn.values()];
 }
 
 export async function reconcileWorkingState(
@@ -329,28 +385,61 @@ export function reconcileAfterConnectionLoss(
  *  base `working` on the authoritative state rather than blindly clearing it.
  *  The new SSE subscription (rebuilt by the client transport) only carries
  *  future events, so this REST snapshot is what restores the visible history. */
-async function runGapRecovery(
+function gapRecoveryInvalidation(
+  sessionId: string,
+  cwd: string,
+  connectionGeneration: number,
+  conversationGeneration: number,
+  activityGeneration: number,
+  historyWindowGeneration: number,
+): "superseded" | "aborted" | null {
+  const current = useRuntimeStore.getState();
+  if (
+    connectionGeneration !== generations.connection
+    || current.activeSessionId !== sessionId
+    || current.cwd !== cwd
+  ) return "aborted";
+  if (
+    conversationGeneration !== generations.conversation
+    || activityGeneration !== generations.activity
+    || historyWindowGeneration !== generations.historyWindow
+  ) return "superseded";
+  return null;
+}
+
+async function runGapRecoveryRound(
   sessionId: string,
   cwd: string,
   resetTransport: boolean,
   reconnectTransport: boolean,
-): Promise<void> {
+): Promise<GapRecoveryResult> {
   const client = getClient();
   const connectionGeneration = generations.connection;
   const conversationGeneration = generations.conversation;
   const activityGeneration = generations.activity;
+  const historyWindowGeneration = generations.historyWindow;
   const [historyResult, stateResult, artifactsResult] = await Promise.allSettled([
     client.getMessagesPage(sessionId, cwd),
     client.getSessionState(sessionId, cwd),
     fetchPersistedTurnArtifacts(sessionId, cwd),
   ]);
+  const invalidation = gapRecoveryInvalidation(
+    sessionId,
+    cwd,
+    connectionGeneration,
+    conversationGeneration,
+    activityGeneration,
+    historyWindowGeneration,
+  );
+  if (invalidation) return invalidation;
+  const missingSession = [historyResult, stateResult].some(
+    (result) => result.status === "rejected" && isMissingSessionError(result.reason),
+  );
+  if (missingSession) {
+    recoverMissingSession(sessionId, cwd, client);
+    return "aborted";
+  }
   const current = useRuntimeStore.getState();
-  if (
-    connectionGeneration !== generations.connection
-    || conversationGeneration !== generations.conversation
-    || current.activeSessionId !== sessionId
-    || current.cwd !== cwd
-  ) return;
 
   // Apply the authoritative runtime state BEFORE the history snapshot so we do
   // not clobber a busy flag the backend still holds. A gap during a long tool
@@ -366,18 +455,17 @@ async function runGapRecovery(
   // old snapshot cannot overwrite the newer live projection.
   if (historyResult.status === "fulfilled") {
     const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
-    const lineageActivityGeneration = generations.activity;
-    const historyWindowGeneration = generations.historyWindow;
     const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, current.thread, historyResult.value, { keepLiveExtras: false, resetProjection: true });
+    const mergeInvalidation = gapRecoveryInvalidation(
+      sessionId,
+      cwd,
+      connectionGeneration,
+      conversationGeneration,
+      activityGeneration,
+      historyWindowGeneration,
+    );
+    if (mergeInvalidation) return mergeInvalidation;
     const latest = useRuntimeStore.getState();
-    if (
-      connectionGeneration !== generations.connection
-      || conversationGeneration !== generations.conversation
-      || lineageActivityGeneration !== generations.activity
-      || historyWindowGeneration !== generations.historyWindow
-      || latest.activeSessionId !== sessionId
-      || latest.cwd !== cwd
-    ) return;
     const historyHasMore = merged.retainedOlderPrefix ? latest.historyHasMore : merged.boundaryPage.has_more;
     const restored = attachTurnArtifacts(merged.thread, turns, { windowComplete: !historyHasMore });
     useRuntimeStore.setState({
@@ -396,6 +484,15 @@ async function runGapRecovery(
     // fresh live subscription. A later server gap remains recoverable and is
     // coalesced by the single-flight wrapper below.
     const resumeCursor = await client.getConversationResumeCursor(sessionId, cwd).catch(() => null);
+    const cursorInvalidation = gapRecoveryInvalidation(
+      sessionId,
+      cwd,
+      connectionGeneration,
+      conversationGeneration,
+      activityGeneration,
+      historyWindowGeneration,
+    );
+    if (cursorInvalidation) return cursorInvalidation;
     client.clearCursor(cwd, sessionId);
     client.setResumeCursor(cwd, sessionId, resumeCursor);
     if (reconnectTransport && client.isConnectedTo(sessionId, cwd)) client.reconnect(sessionId, cwd);
@@ -405,6 +502,32 @@ async function runGapRecovery(
   // authoritative recovery. A later connection.open will also settle it.
   useRuntimeStore.setState({ status: recoveryStatus });
   void loadSessionsInternal();
+  return recoveryStatus === "ready" ? "completed" : "retryable-failure";
+}
+
+async function runGapRecoveryWorker(sessionId: string, cwd: string, run: GapRecoveryRun): Promise<void> {
+  while (run.rounds < MAX_GAP_RECOVERY_ROUNDS) {
+    run.rounds += 1;
+    run.rerunRequested = false;
+    await waitForRecovery(GAP_RECOVERY_BACKOFF_MS[run.rounds - 1] ?? GAP_RECOVERY_BACKOFF_MS.at(-1)!);
+    const result = await runGapRecoveryRound(sessionId, cwd, run.resetTransport, run.reconnectTransport);
+    if (result === "aborted") return;
+
+    const current = useRuntimeStore.getState();
+    const stillNeedsRecovery = current.activeSessionId === sessionId
+      && current.cwd === cwd
+      && current.thread.foldState?.reconciliationRequired === true;
+    if (
+      result === "superseded"
+      || result === "retryable-failure"
+      || run.rerunRequested
+      || stillNeedsRecovery
+    ) continue;
+    return;
+  }
+  useRuntimeStore.setState((current) => current.activeSessionId === sessionId && current.cwd === cwd
+    ? { status: "error" }
+    : {});
 }
 
 /** Single-flight authoritative recovery for both explicit server gaps and
@@ -417,11 +540,24 @@ export function reconcileAfterGap(
 ): Promise<void> {
   const key = runtimeKey(sessionId, cwd);
   const existing = gapRecoveryRuns.get(key);
-  if (existing) return existing;
-  const promise = runGapRecovery(sessionId, cwd, options.resetTransport === true, options.reconnectTransport === true);
-  gapRecoveryRuns.set(key, promise);
+  if (existing) {
+    existing.rerunRequested = true;
+    existing.resetTransport ||= options.resetTransport === true;
+    existing.reconnectTransport ||= options.reconnectTransport === true;
+    return existing.promise;
+  }
+  const run: GapRecoveryRun = {
+    promise: Promise.resolve(),
+    rerunRequested: false,
+    rounds: 0,
+    resetTransport: options.resetTransport === true,
+    reconnectTransport: options.reconnectTransport === true,
+  };
+  const promise = runGapRecoveryWorker(sessionId, cwd, run);
+  run.promise = promise;
+  gapRecoveryRuns.set(key, run);
   void promise.finally(() => {
-    if (gapRecoveryRuns.get(key) === promise) gapRecoveryRuns.delete(key);
+    if (gapRecoveryRuns.get(key) === run) gapRecoveryRuns.delete(key);
   }).catch(() => undefined);
   return promise;
 }
