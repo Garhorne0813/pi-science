@@ -134,12 +134,10 @@ function finalizeOwnedState(
       thinkingByKey: foldState.thinkingByKey,
     },
   });
-  return {
-    ...thread,
-    foldState: {
-      ...foldState,
-      contentStateByOwner: byOwner,
-      contentStateOwner: resolvedOwner,
-    },
+  const nextFoldState: OwnedFoldState = {
+    ...foldState,
+    contentStateByOwner: byOwner,
+    contentStateOwner: resolvedOwner,
   };
+  return { ...thread, foldState: nextFoldState };
 }
