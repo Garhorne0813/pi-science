@@ -31,8 +31,13 @@ interface TextSegment {
 interface TextFoldState {
   text: string;
   revision: number;
+  /** Logical target block id. A repeated narration may be intentionally
+   * suppressed from Thread.blocks while retaining this stable identity. */
   blockId: string;
   partId: string;
+  /** True while the logical text item is omitted from Thread.blocks because
+   * its narration is already represented by a neighboring same-turn block. */
+  suppressed?: boolean;
   /** V2 deltas are kept as a small replayable log while a sequence gap is
    *  open. This lets a late lower revision be inserted before an already
    *  visible speculative delta without appending the text a second time. */
@@ -221,9 +226,14 @@ type NarrationSubsumption = "keep" | "replaced" | "subsumed";
  *  narration contains the previous one, the previous block is dropped (its
  *  content lives on inside the superset, so even a streamed answer that gets
  *  echoed later stays visible through the superset); when the fresh text is
- *  itself contained, it is skipped. Explicit finals are never dropped. */
-function narrationSubsumption(previous: AgentMessageBlock, nextText: string): NarrationSubsumption {
-  if (previous.presentationRole === "final") return "keep";
+ *  itself contained, it is skipped. Explicit final candidates stay outside
+ *  this heuristic in either direction. */
+function narrationSubsumption(
+  previous: AgentMessageBlock,
+  nextText: string,
+  nextRole?: AgentMessageBlock["presentationRole"],
+): NarrationSubsumption {
+  if (previous.presentationRole === "final" || nextRole === "final") return "keep";
   const previousText = previous.parts.map((part) => part.text).join("").trim();
   const candidate = nextText.trim();
   if (!previousText || !candidate) return "keep";
@@ -242,14 +252,19 @@ function narrationSubsumption(previous: AgentMessageBlock, nextText: string): Na
 /** Find the latest same-turn narration block and reconcile the incoming text
  *  against it, dropping a subsumed predecessor in place. Returns "subsumed"
  *  when the caller must not create a block for this text. */
-function reconcileRepeatedNarration(blocks: ThreadBlock[], index: Record<string, number>, turnId: string, nextText: string, allowDrop = true): NarrationSubsumption {
+function reconcileRepeatedNarration(
+  blocks: ThreadBlock[],
+  index: Record<string, number>,
+  turnId: string,
+  nextText: string,
+  nextRole?: AgentMessageBlock["presentationRole"],
+): NarrationSubsumption {
   for (let i = blocks.length - 1; i >= 0; i -= 1) {
     const block = blocks[i];
     if (block.kind !== "agent") continue;
     if (block.turnId && turnId && block.turnId !== turnId) continue;
     if (block.turnId !== turnId) return "keep";
-    const verdict = narrationSubsumption(block, nextText);
-    if (verdict === "replaced" && !allowDrop) return "keep";
+    const verdict = narrationSubsumption(block, nextText, nextRole);
     if (verdict === "replaced") {
       blocks.splice(i, 1);
       for (const id of Object.keys(index)) delete index[id];
@@ -347,6 +362,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
           revision,
           blockId: previousText?.blockId ?? (explicit ? `agent-${turnId}-${stringValue(event.itemId) ?? key}` : key),
           partId: eventPartId ?? key,
+          ...(previousText?.suppressed ? { suppressed: true } : {}),
         };
         break;
       }
@@ -369,8 +385,8 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
           let suffix = 2;
           while (index[postId] !== undefined) postId = `${blockId}-${suffix++}`;
           blockId = postId;
-          if (reconcileRepeatedNarration(blocks, index, turnId, nextText) === "subsumed") {
-            foldState.textByKey[key] = { text: nextText, revision, blockId: `subsumed-${blockId}`, partId: eventPartId ?? key };
+          if (reconcileRepeatedNarration(blocks, index, turnId, nextText, role) === "subsumed") {
+            foldState.textByKey[key] = { text: nextText, revision, blockId, partId: eventPartId ?? key, suppressed: true };
             break;
           }
           foldState.activeItemKey = blockId;
@@ -406,8 +422,8 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
         // New block for this turn. Some models re-narrate everything said so
         // far at the start of every message; collapse the verbatim repeat
         // instead of stacking another copy in the feed.
-        if (reconcileRepeatedNarration(blocks, index, turnId, nextText, role !== "final") === "subsumed") {
-          foldState.textByKey[key] = { text: nextText, revision, blockId: `subsumed-${blockId}`, partId: eventPartId ?? key };
+        if (reconcileRepeatedNarration(blocks, index, turnId, nextText, role) === "subsumed") {
+          foldState.textByKey[key] = { text: nextText, revision, blockId, partId: eventPartId ?? key, suppressed: true };
           break;
         }
         const block: ThreadBlock = {
@@ -1304,19 +1320,18 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
       }
       if (text) {
         // Collapse models that repeat their previous narration in every
-        // message: the union stays, the verbatim repeat goes.
+        // message: the union stays, the verbatim repeat goes. The matcher
+        // itself owns the explicit-final guard so live/history stay aligned.
         let subsumed: NarrationSubsumption = "keep";
-        if (msg.presentationRole !== "final") {
-          for (let i = blocks.length - 1; i >= 0; i -= 1) {
-            const block = blocks[i];
-            if (block.kind === "user") break;
-            if (block.kind !== "agent") continue;
-            if (block.turnId && msg.turnId && block.turnId !== msg.turnId) continue;
-            if (block.turnId !== msg.turnId) break;
-            subsumed = narrationSubsumption(block, text);
-            if (subsumed === "replaced") blocks.splice(i, 1);
-            break;
-          }
+        for (let i = blocks.length - 1; i >= 0; i -= 1) {
+          const block = blocks[i];
+          if (block.kind === "user") break;
+          if (block.kind !== "agent") continue;
+          if (block.turnId && msg.turnId && block.turnId !== msg.turnId) continue;
+          if (block.turnId !== msg.turnId) break;
+          subsumed = narrationSubsumption(block, text, msg.presentationRole);
+          if (subsumed === "replaced") blocks.splice(i, 1);
+          break;
         }
         if (subsumed !== "subsumed") {
           blocks.push({
