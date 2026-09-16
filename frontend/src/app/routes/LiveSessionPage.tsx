@@ -43,6 +43,20 @@ const LazyVirtuoso = lazy(() => import("react-virtuoso").then(({ Virtuoso }) => 
 })));
 const SessionRunsPage = lazy(() => import("./RunsPage").then((m) => ({ default: m.RunsPage })));
 
+/** Virtuoso may transiently surface a stale slot while derived conversation
+ * data is rebased. Keep missing slots deterministic and non-renderable instead
+ * of letting one transient item crash the entire session page. */
+export function conversationTurnItemKey(index: number, turn: TurnPresentation | undefined): string {
+  return turn?.id ?? `__stale-turn:${index}`;
+}
+
+export function renderConversationTurnSlot(
+  turn: TurnPresentation | undefined,
+  render: (turn: TurnPresentation) => ReactNode,
+): ReactNode {
+  return turn ? render(turn) : null;
+}
+
 /**
  * Keep the virtual-list footer component type stable. Defining Footer inline
  * inside LiveSessionPage would give Virtuoso a new component type whenever a
@@ -353,7 +367,7 @@ export function LiveSessionPage() {
                   totalListHeightChanged={scroll.handleListHeightChanged}
                   firstItemIndex={virtualFirstItemIndex}
                   data={turns}
-                  computeItemKey={(_index, turn) => turn.id}
+                  computeItemKey={conversationTurnItemKey}
                   initialItemCount={Math.min(turns.length, 20)}
                   startReached={() => void handleLoadOlder()}
                   increaseViewportBy={{ top: 600, bottom: 800 }}
@@ -374,10 +388,10 @@ export function LiveSessionPage() {
                     ),
                     Footer: ConversationFooter,
                   }}
-                  itemContent={(_index, turn) => (
+                  itemContent={(_index, turn) => renderConversationTurnSlot(turn, (safeTurn) => (
                     <div className="mx-auto w-full max-w-[calc(var(--conversation-content-width)+4rem)] px-8 pb-3">
-                      {renderTurn(turn, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock)}
-                      {showSuggestions && turn.blocks.some((block) => block.id === suggestionAnchorBlockId) && (
+                      {renderTurn(safeTurn, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock)}
+                      {showSuggestions && safeTurn.blocks.some((block) => block.id === suggestionAnchorBlockId) && (
                         <div className="mt-3 flex flex-wrap gap-2" aria-label={t("conversation.suggestions")}>
                           {suggestions.map((suggestion) => (
                             <button
@@ -399,7 +413,7 @@ export function LiveSessionPage() {
                         </div>
                       )}
                     </div>
-                  )}
+                  ))}
                 />
               </Suspense>
             ) : (
