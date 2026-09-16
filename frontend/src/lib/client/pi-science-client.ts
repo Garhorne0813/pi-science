@@ -10,7 +10,7 @@ import { clearCachedMessages, readCachedMessages } from "./message-cache";
 import * as rest from "./rest";
 import { clearAiTitle, clearAiTitleAttempted, clearSessionName } from "./session-names";
 import { SseTransport } from "./sse-transport";
-import type { HistoryMessage, InteractionResponse, PiScienceEvent, SessionInfo, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
+import type { HistoryMessage, InteractionResponse, PiScienceEvent, SessionInfo, SessionListPage, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
 
 export type {
   AvailableModel,
@@ -18,6 +18,7 @@ export type {
   InteractionResponse,
   PiScienceEvent,
   SessionInfo,
+  SessionListPage,
   SessionMessagePage,
   SessionState,
   SessionStats,
@@ -65,8 +66,19 @@ export class PiScienceClient {
     return rest.listSessions(this.baseUrl, cwd);
   }
 
+  async listSessionsPage(cwd: string, options: { cursor?: string | null; limit?: number } = {}): Promise<SessionListPage> {
+    return rest.listSessionsPage(this.baseUrl, cwd, options);
+  }
+
   async getMessages(sessionId: string, cwd?: string): Promise<HistoryMessage[]> {
     return rest.getMessages(this.baseUrl, sessionId, cwd);
+  }
+
+  /** Gap recovery may resume only from a cursor whose event was accepted by
+   * the reducer. The server's newest durable cursor may be newer than the REST
+   * snapshot and would allow a snapshot→cursor TOCTOU window to skip an event. */
+  async getConversationResumeCursor(sessionId: string, cwd: string): Promise<string | null> {
+    return this.transport.getRecoveryResumeCursor(cwd, sessionId);
   }
 
   async getMessagesPage(
@@ -150,6 +162,10 @@ export class PiScienceClient {
     this.transport.clearCursor(cwd, sessionId);
   }
 
+  setResumeCursor(cwd: string, sessionId: string, cursor: string | null): void {
+    this.transport.setResumeCursor(cwd, sessionId, cursor);
+  }
+
   async respondToInteraction(
     sessionId: string,
     requestId: string,
@@ -178,7 +194,7 @@ export class PiScienceClient {
     this.transport.disconnect();
   }
 
-  onEvent(fn: (event: PiScienceEvent) => void): () => void {
+  onEvent(fn: (event: PiScienceEvent) => unknown): () => void {
     return this.transport.onEvent(fn);
   }
 }

@@ -85,6 +85,23 @@ describe("PiScienceClient message cache", () => {
     expect(cached![0].content[0]?.text).toBe("hi");
   });
 
+  it("keeps trajectory metadata in the sanitized cache", () => {
+    localStorage.setItem("pi-science.msg-cache", JSON.stringify({
+      "/workspace\0s": {
+        cachedAt: Date.now(),
+        messages: [{
+          id: "m1", role: "assistant", content: [], details: { rows: 3 },
+          presentationRole: "final", turnId: "turn-1", runId: "run-1", itemId: "item-1",
+          revision: 2, sequence: 7, classificationSource: "explicit",
+        }],
+      },
+    }));
+    expect(new PiScienceClient().getCachedMessages("s", "/workspace")?.[0]).toMatchObject({
+      details: { rows: 3 }, presentationRole: "final", turnId: "turn-1", runId: "run-1",
+      itemId: "item-1", revision: 2, sequence: 7, classificationSource: "explicit",
+    });
+  });
+
   it("returns null for a session that has never been fetched", () => {
     const client = new PiScienceClient();
     expect(client.getCachedMessages("never-fetched", "/workspace")).toBeNull();

@@ -3,13 +3,13 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { renderBlocks, renderTurn } from "./ConversationBlocks";
 import i18n from "../../i18n";
 import type { CodeRunner } from "../markdown-viewer/MarkdownViewer";
-import type { ThreadBlock, ToolCallBlock } from "../../types/thread";
+import type { AgentMessageBlock, ThreadBlock, ToolCallBlock } from "../../types/thread";
 import { buildTurnPresentations } from "../../lib/conversation/turn-presentation";
 import { useRuntimeStore } from "../../lib/agent-runtime";
 
 const codeRunner: CodeRunner = { cwd: "proj", sessionId: "s1" };
 const user = (id: string, text = id): ThreadBlock => ({ kind: "user", id, text, timestamp: new Date().toISOString() });
-const agent = (id: string, text: string, partial = false): ThreadBlock => ({ kind: "agent", id, parts: [{ id: `${id}-p0`, text }], ...(partial ? { partial: true } : {}) });
+const agent = (id: string, text: string, partial = false): AgentMessageBlock => ({ kind: "agent", id, parts: [{ id: `${id}-p0`, text }], ...(partial ? { partial: true } : {}) });
 const tool = (id: string, name: string, status: ToolCallBlock["status"] = "done", input?: Record<string, unknown>): ThreadBlock => ({ kind: "tool", id, callId: `${id}-call`, tool: name, status, input, output: "output" });
 
 beforeAll(async () => { await i18n.changeLanguage("en"); });
@@ -22,7 +22,7 @@ describe("turn-level conversation rendering", () => {
     expect(renderBlocks({} as unknown as ThreadBlock[], codeRunner)).toBeNull();
   });
 
-  it("renders one activity across narration-separated tools and hides intermediate narration", () => {
+  it("folds intermediate narration across narration-separated tools once the turn settles", () => {
     render(<>{renderBlocks([
       user("u1", "check module"),
       agent("a1", "I will read the component."),
@@ -31,46 +31,75 @@ describe("turn-level conversation rendering", () => {
       tool("grep", "grep", "done", { pattern: "tool.updated" }),
       agent("a3", "The final answer."),
     ], codeRunner)}</>);
-    expect(screen.getByText("Complete")).toBeInTheDocument();
-    expect(screen.getByLabelText("2 operations")).toBeInTheDocument();
     expect(screen.queryByText("I will read the component.")).not.toBeInTheDocument();
     expect(screen.queryByText("Now I will search events.")).not.toBeInTheDocument();
+    expect(screen.getByText(/Complete|Encountered a problem|Stopped|Working/)).toBeInTheDocument();
     expect(screen.getByText("The final answer.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Complete|Encountered a problem|Stopped/ }));
+    expect(screen.getByText("I will read the component.")).toBeInTheDocument();
+    expect(screen.getByText("Now I will search events.")).toBeInTheDocument();
   });
 
   it("excludes interleaved todo tools from the turn activity", () => {
     render(<>{renderBlocks([user("u1"), agent("a1", "planning"), tool("read", "read"), tool("todo", "todo"), agent("a2", "searching"), tool("grep", "grep"), tool("todo-2", "todo"), agent("final", "done")], codeRunner)}</>);
-    expect(screen.getByText("Complete")).toBeInTheDocument();
-    expect(screen.getByLabelText("2 operations")).toBeInTheDocument();
+    expect(screen.queryByText("planning")).not.toBeInTheDocument();
+    expect(screen.queryByText("searching")).not.toBeInTheDocument();
+    expect(screen.getByText(/Complete|Encountered a problem|Stopped|Working/)).toBeInTheDocument();
     expect(screen.queryByText(/todo/i)).not.toBeInTheDocument();
     expect(screen.getByText("done")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Complete|Encountered a problem|Stopped/ }));
+    expect(screen.getByText("planning")).toBeInTheDocument();
+    expect(screen.getByText("searching")).toBeInTheDocument();
+    expect(screen.queryByText(/todo/i)).not.toBeInTheDocument();
   });
 
-  it("keeps tool-only unfinished narration hidden and shows the phase label", () => {
+  it("shows process narration while tools are running", () => {
     const turn = buildTurnPresentations([user("u1"), agent("a1", "I will inspect it."), tool("read", "read", "running", { path: "event-fold.ts" })], { lastTurnLifecycle: "active" })[0];
     render(<>{renderTurn(turn, codeRunner)}</>);
-    expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
-    expect(screen.queryByText("I will inspect it.")).not.toBeInTheDocument();
+    expect(screen.getByText("Working")).toBeInTheDocument();
+    expect(screen.getByText("I will inspect it.")).toBeInTheDocument();
   });
 
-  it("hides streaming answer prose until the turn lifecycle settles", () => {
-    const turn = buildTurnPresentations([user("u1"), tool("read", "read"), agent("a1", "streaming answer")], { lastTurnLifecycle: "active" })[0];
+  it("shows streaming answer prose before the turn lifecycle settles", () => {
+    const turn = buildTurnPresentations([user("u1"), tool("read", "read"), agent("a1", "streaming answer", true)], { lastTurnLifecycle: "active" })[0];
     render(<>{renderTurn(turn, codeRunner)}</>);
-    expect(screen.queryByText("streaming answer")).not.toBeInTheDocument();
-    expect(screen.getByText("Reviewing the implementation")).toBeInTheDocument();
+    expect(screen.getByText("streaming answer")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByText("Working")).toBeInTheDocument();
     cleanup();
     const settled = buildTurnPresentations([user("u1"), tool("read", "read"), agent("a1", "streaming answer")])[0];
     render(<>{renderTurn(settled, codeRunner)}</>);
     expect(screen.getByText("streaming answer")).toBeInTheDocument();
-    expect(screen.getByText("Complete")).toBeInTheDocument();
-    expect(screen.getByLabelText("1 operation")).toBeInTheDocument();
+    expect(screen.getByText(/Complete|Encountered a problem|Stopped|Working/)).toBeInTheDocument();
+    expect(screen.queryByText("Reading file")).not.toBeInTheDocument();
+    expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
   });
 
   it("shows a completed summary when a settled turn ends on a tool", () => {
     render(<>{renderBlocks([user("u1"), agent("a1", "I will inspect it."), tool("read", "read")], codeRunner)}</>);
-    expect(screen.getByText("Complete")).toBeInTheDocument();
-    expect(screen.getByLabelText("1 operation")).toBeInTheDocument();
+    expect(screen.getByText(/Complete|Encountered a problem|Stopped|Working/)).toBeInTheDocument();
+    expect(screen.queryByText("Complete", { ignore: ".sr-only" })).not.toBeInTheDocument();
     expect(screen.queryByText("I will inspect it.")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Complete|Encountered a problem|Stopped/ }));
+    expect(screen.getByText("I will inspect it.")).toBeInTheDocument();
+  });
+
+  it("keeps an explicit final visible when later read-only verification completes", () => {
+    render(<>{renderBlocks([
+      user("u1", "generate an artifact"),
+      { ...agent("final", "Generated the artifact successfully."), presentationRole: "final" as const },
+      tool("verify", "read", "done", { path: "work/result.svg" }),
+      { ...agent("verification", "Verification confirmed the generated file."), presentationRole: "intermediate" as const },
+    ], codeRunner)}</>);
+
+    expect(screen.getByText("Generated the artifact successfully.")).toBeInTheDocument();
+    expect(screen.queryByText("Verification confirmed the generated file.")).not.toBeInTheDocument();
+    const summary = screen.getByText(/Complete|Encountered a problem|Stopped|Working/);
+    fireEvent.click(summary);
+    expect(screen.getByText("Verification confirmed the generated file.")).toBeInTheDocument();
   });
 
   it("copies only the final visible answer", () => {

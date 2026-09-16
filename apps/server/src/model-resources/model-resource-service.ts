@@ -960,7 +960,7 @@ export class ModelResourceService {
       const available = hasCredential || (!provider.auth.apiKey && !provider.auth.oauth);
       for (const entry of provider.models) {
         const modelId = entry.id;
-        const capabilities = resolveCapabilities(modelId, [{ reasoning: entry.reasoning, thinking_levels: entry.reasoning ? ["off", "minimal", "low", "medium", "high"] : ["off"], context_window: entry.contextWindow || null, max_output_tokens: entry.maxTokens || null, vision: entry.input.includes("image"), source: "provider" }]);
+        const capabilities = resolveCapabilities(modelId, [{ reasoning: entry.reasoning, thinking_levels: entry.reasoning ? entry.thinkingLevels ?? ["off", "minimal", "low", "medium", "high"] : ["off"], context_window: entry.contextWindow || null, max_output_tokens: entry.maxTokens || null, vision: entry.input.includes("image"), source: "provider" }]);
         result.push({
           provider_id: provider.id,
           model_id: modelId,

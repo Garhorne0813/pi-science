@@ -11,9 +11,32 @@ function queryCwd(request: { query: unknown }): string {
   return typeof query.cwd === "string" && query.cwd.length > 0 ? query.cwd : ".";
 }
 
+const SESSION_LIST_DEFAULT_LIMIT = 30;
+const SESSION_LIST_MAX_LIMIT = 100;
+
+function encodeSessionListCursor(session: { id: string; updated_at: string | null }): string {
+  return Buffer.from(JSON.stringify({ v: 1, u: session.updated_at ?? "", i: session.id })).toString("base64url");
+}
+
+function decodeSessionListCursor(cursor: string): { updatedAt: string; id: string } {
+  try {
+    const value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as { v?: unknown; u?: unknown; i?: unknown };
+    if (value.v !== 1 || typeof value.u !== "string" || typeof value.i !== "string" || !value.i) throw new Error();
+    return { updatedAt: value.u, id: value.i };
+  } catch {
+    throw new Error("invalid session list cursor");
+  }
+}
+
 export function registerSessionReadRoutes(app: FastifyInstance, sessionRepository: SessionRepository, nodeSessionService: NodeSessionService, titles: SessionTitleRepository = sessionTitleRepository): void {
   app.get("/api/sessions", async (request, reply) => {
     try {
+      const query = request.query as { cursor?: unknown; limit?: unknown };
+      const paginated = query.cursor !== undefined || query.limit !== undefined;
+      const limit = query.limit === undefined ? SESSION_LIST_DEFAULT_LIMIT : Number(query.limit);
+      if (paginated && (!Number.isSafeInteger(limit) || limit < 1 || limit > SESSION_LIST_MAX_LIMIT)) {
+        return reply.code(400).send({ error: `session list limit must be between 1 and ${SESSION_LIST_MAX_LIMIT}` });
+      }
       const cwd = await validateWorkspaceCwd(queryCwd(request));
       const project = await ensureProject(cwd);
       const sessions = await sessionRepository.list(cwd);
@@ -34,8 +57,31 @@ export function registerSessionReadRoutes(app: FastifyInstance, sessionRepositor
         const title = titleById.get(session.id);
         if (title) (session as { name: string | null }).name = title;
       }
-      return sessions;
+      sessions.sort((left, right) => (
+        (right.updated_at ?? "").localeCompare(left.updated_at ?? "") || right.id.localeCompare(left.id)
+      ));
+      if (!paginated) return sessions;
+
+      // Repository order is newest-first. Use a keyset cursor rather than an
+      // array offset so inserts at the head cannot skip or duplicate rows.
+      let pageCandidates = sessions;
+      if (query.cursor !== undefined) {
+        if (typeof query.cursor !== "string" || !query.cursor) return reply.code(400).send({ error: "invalid session list cursor" });
+        const cursor = decodeSessionListCursor(query.cursor);
+        pageCandidates = sessions.filter((session) => {
+          const updatedAt = session.updated_at ?? "";
+          return updatedAt < cursor.updatedAt || (updatedAt === cursor.updatedAt && session.id < cursor.id);
+        });
+      }
+      const page = pageCandidates.slice(0, limit);
+      const hasMore = pageCandidates.length > page.length;
+      return {
+        sessions: page,
+        next_cursor: hasMore && page.length > 0 ? encodeSessionListCursor(page[page.length - 1]!) : null,
+        has_more: hasMore,
+      };
     } catch (error) {
+      if (String(error).includes("session list cursor")) return reply.code(400).send({ error: String(error) });
       return reply.code(403).send({ error: String(error) });
     }
   });

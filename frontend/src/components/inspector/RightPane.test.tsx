@@ -18,6 +18,7 @@ describe("RightPane resizing", () => {
 
   beforeEach(() => {
     captured = false;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024, writable: true });
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
       callback(0);
       return 1;
@@ -39,7 +40,7 @@ describe("RightPane resizing", () => {
         captured = false;
       },
     });
-    useUiStore.setState({ inspectorWidth: 420, inspectorMaximized: false });
+    useUiStore.setState({ inspectorWidth: 420, inspectorRatio: 420 / 1024, inspectorMaximized: false });
   });
 
   afterEach(() => {
@@ -69,6 +70,7 @@ describe("RightPane resizing", () => {
     expect(useUiStore.getState().inspectorWidth).toBe(420);
     fireEvent.pointerUp(divider, { pointerId: 1 });
     expect(useUiStore.getState().inspectorWidth).toBe(324);
+    expect(useUiStore.getState().inspectorRatio).toBeCloseTo(324 / 1024);
   });
 
   it("uses a full-screen overlay on narrow viewports and a sized split pane on desktop", () => {
@@ -120,6 +122,7 @@ describe("RightPane resizing", () => {
     fireEvent.keyDown(divider, { key: "ArrowLeft" });
 
     expect(useUiStore.getState().inspectorWidth).toBe(436);
+    expect(useUiStore.getState().inspectorRatio).toBeCloseTo(436 / 1024);
     expect(divider).toHaveAttribute("aria-valuenow", "436");
   });
 
@@ -179,18 +182,18 @@ describe("RightPane resizing", () => {
     });
   });
 
-  it("re-clamps a persisted width when the viewport shrinks", () => {
-    useUiStore.setState({ inspectorWidth: 800 });
+  it("keeps the persisted split proportional when the viewport grows beyond the old pixel cap", () => {
     render(
       <RightPane onMinimize={vi.fn()}>
         <div>Preview</div>
       </RightPane>,
     );
 
-    expect(useUiStore.getState().inspectorWidth).toBe(800);
+    expect(useUiStore.getState().inspectorWidth).toBe(420);
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 2048, writable: true });
     fireEvent(window, new Event("resize"));
-    // 0.7 * jsdom viewport width (1024) = 717; the saved 800px no longer fits.
-    expect(useUiStore.getState().inspectorWidth).toBe(717);
+    expect(useUiStore.getState().inspectorWidth).toBe(840);
+    expect(useUiStore.getState().inspectorRatio).toBeCloseTo(420 / 1024);
   });
 
   it("presents the full-screen overlay as a dialog on mobile", () => {

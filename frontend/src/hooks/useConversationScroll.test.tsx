@@ -16,6 +16,10 @@ function agent(id: string, text = id): ThreadBlock {
   return { kind: "agent", id, parts: [{ id: `${id}-part`, text }] };
 }
 
+function tool(id: string): ThreadBlock {
+  return { kind: "tool", id, callId: `${id}-call`, tool: "read", status: "done" };
+}
+
 function thread(blocks: ThreadBlock[]) {
   const index: Record<string, number> = {};
   blocks.forEach((block, position) => { index[block.id] = position; });
@@ -59,7 +63,149 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("useConversationScroll follow output", () => {
+  it("expands a folded trace before focusing a linked tool", async () => {
+    setHistory([user("u1"), tool("tool-linked")], null, false);
+    const owner = document.createElement("div");
+    owner.dataset.threadBlockIds = "tool-linked";
+    const disclosure = document.createElement("button");
+    disclosure.setAttribute("aria-expanded", "false");
+    disclosure.setAttribute("aria-controls", "trace-1");
+    disclosure.addEventListener("click", () => {
+      disclosure.setAttribute("aria-expanded", "true");
+      const exact = document.createElement("div");
+      exact.id = "thread-block-tool-linked";
+      owner.append(exact);
+    });
+    owner.append(disclosure);
+    document.body.append(owner);
+    const click = vi.spyOn(disclosure, "click");
+
+    renderHook(() => useConversationScroll({ ...options(vi.fn(async () => 0), "tool-linked"), blocks: useRuntimeStore.getState().thread.blocks }));
+
+    await waitFor(() => expect(click).toHaveBeenCalledOnce());
+    expect(document.getElementById("thread-block-tool-linked")).not.toBeNull();
+    owner.remove();
+  });
+
+  it("follows a second turn after collapse and delayed measurements, but respects browsing", () => {
+    vi.useFakeTimers();
+    try {
+      const { result, rerender } = renderHook(
+        (props: ConversationScrollOptions) => useConversationScroll(props),
+        { initialProps: options(vi.fn(async () => 0)) },
+      );
+      const scroller = document.createElement("div");
+      let height = 2_400;
+      Object.defineProperties(scroller, {
+        scrollHeight: { get: () => height },
+        clientHeight: { value: 400 },
+      });
+      const scrollToIndex = vi.fn(() => { scroller.scrollTop = height - 400; });
+      result.current.virtuosoRef.current = { scrollToIndex } as unknown as VirtuosoHandle;
+      act(() => { result.current.attachScroller(scroller); vi.advanceTimersByTime(20); });
+      expect(scroller.scrollTop).toBe(2_000);
+
+      // Completion collapses the first turn, then the user browses its answer.
+      height = 1_600;
+      act(() => { result.current.handleListHeightChanged(); vi.advanceTimersByTime(20); });
+      act(() => { scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 })); });
+      scroller.scrollTop = 400;
+      expect(result.current.followOutput()).toBe(false);
+
+      // Sending happens before the next user block and virtual measurement.
+      act(() => { result.current.startNewTurn(); });
+      rerender({ ...options(vi.fn(async () => 0)), working: true, blocks: [user("u1"), agent("a1"), user("u2")] });
+      height = 3_200;
+      act(() => {
+        scroller.dispatchEvent(new Event("scroll")); // stale layout event
+        result.current.handleListHeightChanged();
+        vi.advanceTimersByTime(20);
+      });
+      expect(scroller.scrollTop).toBe(2_800);
+      expect(result.current.followOutput()).toBe("auto");
+
+      // A fresh gesture cancels even a pin already queued by token growth.
+      height = 3_600;
+      act(() => {
+        result.current.handleListHeightChanged();
+        scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+        scroller.scrollTop = 2_400;
+        vi.advanceTimersByTime(20);
+      });
+      expect(scroller.scrollTop).toBe(2_400);
+      expect(result.current.followOutput()).toBe(false);
+      expect(result.current.showScrollDown).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("starts a newly attached Virtuoso scroller at the latest turn", () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { callback(0); return 1; });
+    const { result } = renderHook(() => useConversationScroll(options(vi.fn(async () => 0))));
+    const scrollToIndex = vi.fn();
+    result.current.virtuosoRef.current = { scrollToIndex } as unknown as VirtuosoHandle;
+    const scroller = document.createElement("div");
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 400 },
+      scrollHeight: { configurable: true, value: 1_600 },
+      scrollTop: { configurable: true, value: 0, writable: true },
+    });
+
+    act(() => { result.current.attachScroller(scroller); });
+
+    expect(scroller.scrollTop).toBe(0); // Virtuoso is the only scroll owner.
+    expect(scrollToIndex).toHaveBeenCalledWith({ index: "LAST", align: "end", behavior: "auto" });
+  });
+
+  it("keeps follow output when a stale scroll event lags grown content", () => {
+    const { result } = renderHook(() => useConversationScroll(options(vi.fn(async () => 0))));
+    const scroller = document.createElement("div");
+    let scrollTop = 1_200;
+    let scrollHeight = 1_600;
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 400 },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+      scrollTop: { configurable: true, get: () => scrollTop, set: (value) => { scrollTop = value; } },
+    });
+
+    act(() => { result.current.attachScroller(scroller); });
+
+    // Streaming grew the content after the last pin; the browser then delivers
+    // the pin's scroll event while the viewport lags far above the new bottom.
+    // That lag must not be read as "user scrolled up".
+    scrollHeight = 2_400;
+    scrollTop = 1_220;
+    act(() => { scroller.dispatchEvent(new Event("scroll")); });
+    expect(result.current.showScrollDown).toBe(false);
+
+    // An explicit upward scroll does leave follow mode.
+    scrollTop = 800;
+    act(() => {
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    expect(result.current.showScrollDown).toBe(true);
+  });
+});
+
 describe("useConversationScroll history navigation", () => {
+  it("allows an in-place retry when an older-page attempt fails at the top", async () => {
+    const loadOlderMessages = vi.fn(async () => 0);
+    const { result } = renderHook(() => useConversationScroll(options(loadOlderMessages)));
+    const scroller = document.createElement("div");
+    Object.defineProperties(scroller, {
+      scrollTop: { configurable: true, value: 0, writable: true },
+      scrollHeight: { configurable: true, value: 1_000 },
+      clientHeight: { configurable: true, value: 500 },
+    });
+    act(() => { result.current.attachScroller(scroller); });
+
+    act(() => { scroller.dispatchEvent(new Event("scroll")); });
+    await waitFor(() => expect(loadOlderMessages).toHaveBeenCalledTimes(1));
+    act(() => { scroller.dispatchEvent(new Event("scroll")); });
+    await waitFor(() => expect(loadOlderMessages).toHaveBeenCalledTimes(2));
+  });
+
   it("loads older pages sequentially and keeps the virtual index aligned", async () => {
     let page = 0;
     const loadOlderMessages = vi.fn(async () => {
@@ -174,7 +320,7 @@ describe("useConversationScroll history navigation", () => {
     act(() => { resolvePage(2); });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(scrollToIndex).not.toHaveBeenCalled();
+    expect(scrollToIndex.mock.calls.every(([target]) => target.index === "LAST")).toBe(true);
     expect(result.current.virtualFirstItemIndex).toBe(100_000);
   });
 });

@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { getClient } from "../client/pi-science-client";
+import { queryClient } from "../client/query-client";
 import { workspaceFiles } from "../workspace";
 import { generations } from "./generations";
 import { useRuntimeStore } from "./index";
-import { reconcileAfterConnectionLoss, reconcilePromptAfterLateStream } from "./recovery";
+import { reconcileAfterConnectionLoss, reconcileAfterGap, reconcilePromptAfterLateStream, resyncCompletedHistory } from "./recovery";
 import { FakeEventSource, installRuntimeTestEnvironment, jsonResponse, state } from "./test-helpers";
 
 
@@ -12,6 +13,136 @@ installRuntimeTestEnvironment();
 
 
 describe("runtime conversation recovery", () => {
+  it.each([
+    ["settled-history resync", async () => resyncCompletedHistory("session-a", "/workspace")],
+    ["connection recovery", async () => reconcileAfterConnectionLoss(
+      getClient(),
+      "session-a",
+      "/workspace",
+      generations.connection,
+      generations.activity,
+    )],
+    ["stream-gap recovery", async () => reconcileAfterGap("session-a", "/workspace")],
+  ])("drops %s results when the session changes during lineage probing", async (_name, runRecovery) => {
+    let releaseProbe!: (page: {
+      messages: Array<{ id: string; role: "user"; content: Array<{ type: "text"; text: string }> }>;
+      next_cursor: null;
+      has_more: false;
+      snapshot_version: string;
+    }) => void;
+    const probe = new Promise<Parameters<typeof releaseProbe>[0]>((resolve) => { releaseProbe = resolve; });
+    const client = getClient();
+    vi.spyOn(client, "getMessagesPage").mockImplementation(async (_sessionId, _cwd, options) => {
+      if (options?.before) return probe;
+      return {
+        messages: [{ id: "a-new", role: "user", content: [{ type: "text", text: "A newest" }] }],
+        next_cursor: "a-probe",
+        has_more: true,
+        snapshot_version: "snapshot-a",
+      };
+    });
+    vi.spyOn(client, "getSessionState").mockResolvedValue(state("session-a"));
+    vi.spyOn(client, "getTurnArtifacts").mockResolvedValue({ turns: [] });
+    useRuntimeStore.setState({
+      activeSessionId: "session-a",
+      cwd: "/workspace",
+      working: false,
+      thread: {
+        blocks: [{ kind: "user", id: "a-old", text: "A old" }],
+        index: { "a-old": 0 },
+        loaded: true,
+      },
+      historyCursor: "a-cursor",
+      historyHasMore: true,
+    });
+
+    const recovering = runRecovery();
+    await vi.waitFor(() => expect(client.getMessagesPage).toHaveBeenCalledTimes(2));
+    ++generations.connection;
+    ++generations.activity;
+    useRuntimeStore.setState({
+      activeSessionId: "session-b",
+      thread: {
+        blocks: [{ kind: "user", id: "b-only", text: "B" }],
+        index: { "b-only": 0 },
+        loaded: true,
+      },
+      historyCursor: "b-cursor",
+      historyHasMore: false,
+      status: "connecting",
+    });
+    releaseProbe({
+      messages: [{ id: "a-old", role: "user", content: [{ type: "text", text: "A old" }] }],
+      next_cursor: null,
+      has_more: false,
+      snapshot_version: "snapshot-a",
+    });
+    await recovering;
+
+    expect(useRuntimeStore.getState().activeSessionId).toBe("session-b");
+    expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual(["b-only"]);
+    expect(useRuntimeStore.getState().historyCursor).toBe("b-cursor");
+    expect(useRuntimeStore.getState().status).toBe("connecting");
+  });
+
+  it("reruns gap recovery against a history page prepended while lineage probing is in flight", async () => {
+    let releaseProbe!: (page: {
+      messages: Array<{ id: string; role: "user"; content: Array<{ type: "text"; text: string }> }>;
+      next_cursor: string | null;
+      has_more: boolean;
+      snapshot_version: string;
+    }) => void;
+    const probe = new Promise<Parameters<typeof releaseProbe>[0]>((resolve) => { releaseProbe = resolve; });
+    const client = getClient();
+    vi.spyOn(client, "getMessagesPage").mockImplementation(async (_sessionId, _cwd, options) => {
+      if (!options?.before) {
+        return {
+          messages: [{ id: "u20", role: "user", content: [{ type: "text", text: "newest" }] }],
+          next_cursor: "recovery-probe",
+          has_more: true,
+          snapshot_version: "snapshot-new",
+        };
+      }
+      if (options.before === "recovery-probe") return probe;
+      if (options.before === "user-cursor") {
+        return {
+          messages: [{ id: "u1", role: "user", content: [{ type: "text", text: "oldest" }] }],
+          next_cursor: "older-cursor",
+          has_more: true,
+          snapshot_version: "snapshot-page",
+        };
+      }
+      throw new Error(`Unexpected cursor: ${options.before}`);
+    });
+    vi.spyOn(client, "getSessionState").mockResolvedValue(state("session-a"));
+    vi.spyOn(client, "getTurnArtifacts").mockResolvedValue({ turns: [] });
+    useRuntimeStore.setState({
+      activeSessionId: "session-a",
+      cwd: "/workspace",
+      status: "ready",
+      thread: { blocks: [{ kind: "user", id: "u10", text: "loaded" }], index: { u10: 0 }, loaded: true },
+      historyCursor: "user-cursor",
+      historyHasMore: true,
+      historyLoading: false,
+    });
+
+    const recovering = reconcileAfterGap("session-a", "/workspace");
+    await vi.waitFor(() => expect(client.getMessagesPage).toHaveBeenCalledWith("session-a", "/workspace", { before: "recovery-probe" }));
+    await useRuntimeStore.getState().loadOlderMessages();
+    expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual(["u1", "u10"]);
+
+    releaseProbe({
+      messages: [{ id: "u10", role: "user", content: [{ type: "text", text: "loaded" }] }],
+      next_cursor: "user-cursor",
+      has_more: true,
+      snapshot_version: "snapshot-new",
+    });
+    await recovering;
+
+    expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual(["u1", "u10", "u20"]);
+    expect(useRuntimeStore.getState().historyCursor).toBe("older-cursor");
+  });
+
   it.each([
     "session not found in this workspace",
     "session is not active in this workspace",
@@ -377,16 +508,23 @@ describe("runtime conversation recovery", () => {
     );
   });
 
-  it("merges history with live output that arrives while gap recovery is in flight", async () => {
+  it("automatically reruns a stale gap snapshot after new live activity arrives", async () => {
     let gapRead = false;
+    let recoveryReads = 0;
     let releaseMessages: (() => void) | undefined;
     const delayedMessages = new Promise<Response>((resolve) => { releaseMessages = () => resolve(jsonResponse({ messages: [
-      { id: "durable", role: "assistant", content: [{ type: "text", text: "durable" }] },
+      { id: "stale", role: "assistant", content: [{ type: "text", text: "stale" }] },
     ] })); });
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/messages")) {
-        if (gapRead) return delayedMessages;
+        if (gapRead) {
+          recoveryReads += 1;
+          if (recoveryReads === 1) return delayedMessages;
+          return jsonResponse({ messages: [
+            { id: "authoritative", role: "assistant", content: [{ type: "text", text: "authoritative" }] },
+          ] });
+        }
         return jsonResponse({ messages: [] });
       }
       if (url.includes("/state")) return jsonResponse(state("session-a", { is_streaming: true }));
@@ -395,18 +533,207 @@ describe("runtime conversation recovery", () => {
     }));
     await useRuntimeStore.getState().connect("/workspace", "session-a");
     gapRead = true;
-    const source = FakeEventSource.instances[0];
-    source.emit("stream.gap", { type: "stream.gap", sessionId: "session-a" });
-    FakeEventSource.instances.at(-1)!.emit("text.updated", { type: "text.updated", sessionId: "session-a", partId: "live", text: "live" });
+    const recovery = reconcileAfterGap("session-a", "/workspace");
+    await vi.waitFor(() => expect(recoveryReads).toBe(1));
+    ++generations.conversation;
+    ++generations.activity;
+    useRuntimeStore.setState({
+      working: true,
+      thread: {
+        blocks: [{ kind: "agent", id: "live", parts: [{ id: "live", text: "live" }] }],
+        index: { live: 0 },
+        loaded: true,
+      },
+    });
+    expect(reconcileAfterGap("session-a", "/workspace")).toBe(recovery);
     releaseMessages!();
 
-    await vi.waitFor(() => expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
-      expect.objectContaining({ kind: "agent", id: "durable" }),
-    ));
+    await recovery;
+    expect(recoveryReads).toBe(2);
     expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
-      expect.objectContaining({ kind: "agent", parts: [expect.objectContaining({ id: "live", text: "live" })] }),
+      expect.objectContaining({ kind: "agent", id: "authoritative" }),
     );
+    expect(useRuntimeStore.getState().thread.blocks).not.toContainEqual(expect.objectContaining({ id: "stale" }));
     expect(useRuntimeStore.getState().working).toBe(true);
+  });
+
+  it("coalesces repeated in-flight gap triggers into one additional round", async () => {
+    let releaseFirst!: () => void;
+    const first = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let historyReads = 0;
+    let concurrentReads = 0;
+    let maxConcurrentReads = 0;
+    const client = getClient();
+    vi.spyOn(client, "getMessagesPage").mockImplementation(async () => {
+      historyReads += 1;
+      concurrentReads += 1;
+      maxConcurrentReads = Math.max(maxConcurrentReads, concurrentReads);
+      if (historyReads === 1) await first;
+      concurrentReads -= 1;
+      return { messages: [], next_cursor: null, has_more: false, snapshot_version: `snapshot-${historyReads}` };
+    });
+    vi.spyOn(client, "getSessionState").mockResolvedValue(state("session-a"));
+    vi.spyOn(client, "getTurnArtifacts").mockResolvedValue({ turns: [] });
+    useRuntimeStore.setState({ activeSessionId: "session-a", cwd: "/workspace", status: "connecting" });
+
+    const recovery = reconcileAfterGap("session-a", "/workspace");
+    await vi.waitFor(() => expect(historyReads).toBe(1));
+    expect(reconcileAfterGap("session-a", "/workspace")).toBe(recovery);
+    expect(reconcileAfterGap("session-a", "/workspace")).toBe(recovery);
+    expect(reconcileAfterGap("session-a", "/workspace")).toBe(recovery);
+    releaseFirst();
+    await recovery;
+
+    expect(historyReads).toBe(2);
+    expect(maxConcurrentReads).toBe(1);
+  });
+
+  it("aborts gap recovery without rerunning when the session was deleted", async () => {
+    queryClient.clear();
+    const client = getClient();
+    const historyReads = vi.spyOn(client, "getMessagesPage").mockRejectedValue(
+      new Error("session not found in this workspace"),
+    );
+    const stateReads = vi.spyOn(client, "getSessionState").mockRejectedValue(
+      new Error("session not found in this workspace"),
+    );
+    vi.spyOn(client, "getTurnArtifacts").mockResolvedValue({ turns: [] });
+    useRuntimeStore.setState({ activeSessionId: "session-a", cwd: "/workspace", status: "connecting" });
+
+    await reconcileAfterGap("session-a", "/workspace");
+
+    expect(historyReads).toHaveBeenCalledOnce();
+    expect(stateReads).toHaveBeenCalledOnce();
+    expect(useRuntimeStore.getState().activeSessionId).toBeNull();
+    expect(useRuntimeStore.getState().status).toBe("ready");
+  });
+
+  it("refetches changed artifact metadata once without cancelling settled history", async () => {
+    queryClient.clear();
+    let releaseHistory!: (page: {
+      messages: Array<{ id: string; role: "user" | "assistant"; content: Array<{ type: "text"; text: string }> }>;
+      next_cursor: null;
+      has_more: false;
+      snapshot_version: string;
+    }) => void;
+    const history = new Promise<Parameters<typeof releaseHistory>[0]>((resolve) => { releaseHistory = resolve; });
+    const client = getClient();
+    vi.spyOn(client, "getMessagesPage").mockReturnValue(history);
+    const artifactReads = vi.spyOn(client, "getTurnArtifacts")
+      .mockResolvedValueOnce({ turns: [{
+        turn_id: "turn-1", session_id: "session-a", assistant_message_id: "agent-1", turn_ordinal: 1, ended_at: "", artifacts: [
+          { path: "old.csv", kind: "table", mime: "text/csv", size: 1 },
+        ],
+      }] })
+      .mockResolvedValueOnce({ turns: [{
+        turn_id: "turn-1", session_id: "session-a", assistant_message_id: "agent-1", turn_ordinal: 1, ended_at: "", artifacts: [
+          { path: "new.csv", kind: "table", mime: "text/csv", size: 2 },
+        ],
+      }] });
+    useRuntimeStore.setState({
+      activeSessionId: "session-a",
+      cwd: "/workspace",
+      working: false,
+      sessionStats: null,
+      thread: { blocks: [], index: {}, loaded: true },
+    });
+
+    const resync = resyncCompletedHistory("session-a", "/workspace");
+    await vi.waitFor(() => expect(artifactReads).toHaveBeenCalledOnce());
+    ++generations.presentationMetadata;
+    useRuntimeStore.setState({
+      sessionStats: { userMessages: 1, assistantMessages: 1, toolCalls: 0, toolResults: 0, totalMessages: 2, tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, total: 15 } },
+      thread: {
+        blocks: [{ kind: "artifact-summary", id: "turn-artifacts-turn-1", turnId: "turn-1", assistantMessageId: "agent-1", turnOrdinal: 1, artifacts: [
+          { path: "new.csv", kind: "table", mime: "text/csv", size: 2 },
+        ] }],
+        index: { "turn-artifacts-turn-1": 0 },
+        loaded: true,
+      },
+    });
+    releaseHistory({
+      messages: [
+        { id: "user-1", role: "user", content: [{ type: "text", text: "question" }] },
+        { id: "agent-1", role: "assistant", content: [{ type: "text", text: "answer" }] },
+      ],
+      next_cursor: null,
+      has_more: false,
+      snapshot_version: "snapshot-1",
+    });
+    await resync;
+
+    expect(artifactReads).toHaveBeenCalledTimes(2);
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(expect.objectContaining({
+      kind: "artifact-summary",
+      artifacts: [expect.objectContaining({ path: "new.csv" })],
+    }));
+    expect(useRuntimeStore.getState().sessionStats?.tokens.total).toBe(15);
+  });
+
+  it("uses one artifact read when metadata is unchanged", async () => {
+    queryClient.clear();
+    const client = getClient();
+    vi.spyOn(client, "getMessagesPage").mockResolvedValue({
+      messages: [{ id: "agent-1", role: "assistant", content: [{ type: "text", text: "answer" }] }],
+      next_cursor: null,
+      has_more: false,
+      snapshot_version: "snapshot-1",
+    });
+    const artifactReads = vi.spyOn(client, "getTurnArtifacts").mockResolvedValue({ turns: [] });
+    useRuntimeStore.setState({ activeSessionId: "session-a", cwd: "/workspace", working: false });
+
+    await resyncCompletedHistory("session-a", "/workspace");
+
+    expect(artifactReads).toHaveBeenCalledOnce();
+  });
+
+  it("commits history and preserves live artifacts when metadata refetch fails", async () => {
+    queryClient.clear();
+    let releaseHistory!: (page: {
+      messages: Array<{ id: string; role: "assistant"; content: Array<{ type: "text"; text: string }> }>;
+      next_cursor: null;
+      has_more: false;
+      snapshot_version: string;
+    }) => void;
+    const history = new Promise<Parameters<typeof releaseHistory>[0]>((resolve) => { releaseHistory = resolve; });
+    const client = getClient();
+    vi.spyOn(client, "getMessagesPage").mockReturnValue(history);
+    const artifactReads = vi.spyOn(client, "getTurnArtifacts")
+      .mockResolvedValueOnce({ turns: [{
+        turn_id: "turn-1", session_id: "session-a", assistant_message_id: "agent-1", turn_ordinal: 1, ended_at: "", artifacts: [
+          { path: "old.csv", kind: "table", mime: "text/csv", size: 1 },
+        ],
+      }] })
+      .mockRejectedValueOnce(new Error("metadata unavailable"));
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    useRuntimeStore.setState({ activeSessionId: "session-a", cwd: "/workspace", working: false });
+
+    const resync = resyncCompletedHistory("session-a", "/workspace");
+    await vi.waitFor(() => expect(artifactReads).toHaveBeenCalledOnce());
+    ++generations.presentationMetadata;
+    useRuntimeStore.setState({
+      thread: {
+        blocks: [{ kind: "artifact-summary", id: "turn-artifacts-turn-1", turnId: "turn-1", assistantMessageId: "agent-1", turnOrdinal: 1, artifacts: [
+          { path: "live.csv", kind: "table", mime: "text/csv", size: 3 },
+        ] }],
+        index: { "turn-artifacts-turn-1": 0 },
+        loaded: true,
+      },
+    });
+    releaseHistory({
+      messages: [{ id: "agent-1", role: "assistant", content: [{ type: "text", text: "answer" }] }],
+      next_cursor: null,
+      has_more: false,
+      snapshot_version: "snapshot-1",
+    });
+    await resync;
+
+    expect(artifactReads).toHaveBeenCalledTimes(2);
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(expect.objectContaining({
+      kind: "artifact-summary",
+      artifacts: [expect.objectContaining({ path: "live.csv" })],
+    }));
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(expect.objectContaining({ id: "agent-1" }));
   });
 
   it("does not report ready when gap snapshot requests fail", async () => {
@@ -426,8 +753,9 @@ describe("runtime conversation recovery", () => {
       throw new Error(`Unexpected request: ${url}`);
     }));
     await useRuntimeStore.getState().connect("/workspace", "session-a");
-    FakeEventSource.instances[0].emit("stream.gap", { type: "stream.gap", sessionId: "session-a" });
-    await vi.waitFor(() => expect(useRuntimeStore.getState().status).toBe("error"));
+    await reconcileAfterGap("session-a", "/workspace");
+    expect(useRuntimeStore.getState().status).toBe("error");
+    expect(reads).toBe(4);
   });
 
   it("keeps the stop state and shows an inline error when the SSE transport closes", async () => {

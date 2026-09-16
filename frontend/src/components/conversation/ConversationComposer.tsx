@@ -155,14 +155,14 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
               ) : (
                 <button
                   type="button"
-                  aria-label="Review"
+                  aria-label={t("conversation.review")}
                   onClick={onReview}
                   disabled={working || interactionPending || reviewingProject}
                   className="flex min-h-7 items-center gap-1 rounded-input px-2 py-1 text-xs text-muted hover:bg-surface-2 hover:text-text disabled:cursor-wait disabled:opacity-50"
                   title={t("conversation.reviewTitle")}
                 >
                   {reviewingProject ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                  <span className="composer-review-label">Review</span>
+                  <span className="composer-review-label">{t("conversation.review")}</span>
                 </button>
               )}
               {model.modelError && <span className="max-w-[180px] truncate text-[10px] text-error-text" title={model.modelError}>{model.modelError}</span>}
@@ -187,13 +187,13 @@ export function ConversationComposer({ workspaceCwd, status, activeSessionId, se
                 />
               )}
               {working ? (
-                <button type="button" aria-label="Stop generation" onClick={() => void onAbort().catch(() => undefined)} className="flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full bg-accent-fill text-accent-fg transition-colors hover:bg-error-fill">
+                <button type="button" aria-label={t("conversation.stopGeneration")} onClick={() => void onAbort().catch(() => undefined)} className="flex h-[var(--send-button-size)] w-[var(--send-button-size)] items-center justify-center rounded-full bg-accent-fill text-accent-fg transition-colors hover:bg-error-fill">
                   <Square size={14} fill="currentColor" />
                 </button>
               ) : (
                 <button
                   type="button"
-                  aria-label="Send message"
+                  aria-label={t("conversation.sendMessage")}
                   onClick={composer.handleSend}
                   disabled={working || interactionPending || (!model.selectedModel && !research.mode) || reviewingProject || research.busy || (!activeSessionId && status === "connecting") || (!input.trim() && files.length === 0 && workspaceReferences.length === 0)}
                   className={cn(

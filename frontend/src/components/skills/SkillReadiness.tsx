@@ -58,9 +58,10 @@ export function RequirementStatusList({ readiness }: { readiness: SkillReadiness
       if (!mounted.current) return;
       setCopyState({ hint, ok: false });
     } finally {
-      if (!mounted.current) return;
-      if (copyTimer.current) window.clearTimeout(copyTimer.current);
-      copyTimer.current = window.setTimeout(() => setCopyState((current) => (current && current.hint === hint ? null : current)), 1500);
+      if (mounted.current) {
+        if (copyTimer.current) window.clearTimeout(copyTimer.current);
+        copyTimer.current = window.setTimeout(() => setCopyState((current) => (current && current.hint === hint ? null : current)), 1500);
+      }
     }
   };
 

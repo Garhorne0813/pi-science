@@ -315,6 +315,27 @@ describe("SessionRepository messages streaming", () => {
     expect(older.next_cursor).toBeNull();
   });
 
+  it("rejects a cursor when bytes before its boundary were rewritten", async () => {
+    const cwd = await makeWorkspace();
+    const repo = new SessionRepository();
+    const path = join(cwd, ".pi-science", "sessions", "rewritten.jsonl");
+    const lines = [
+      sessionHeader("rewritten", cwd),
+      messageLine("m1", "user", "one"),
+      messageLine("m2", "assistant", "two"),
+      messageLine("m3", "user", "three"),
+      messageLine("m4", "assistant", "four"),
+    ];
+    await writeFile(path, lines.join(""), "utf8");
+    const latest = await repo.messagesPage(cwd, "rewritten", { limit: 2 });
+
+    lines[2] = messageLine("m2", "assistant", "TWO");
+    await writeFile(path, lines.join(""), "utf8");
+
+    await expect(repo.messagesPage(cwd, "rewritten", { limit: 2, before: latest.next_cursor! }))
+      .rejects.toThrow("stale history cursor");
+  });
+
   it("forwards toolResult details and drops oversized ones", async () => {
     const cwd = await makeWorkspace();
     const repo = new SessionRepository();

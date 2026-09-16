@@ -176,7 +176,7 @@ export function NotebookEditor({
     finally { setInterrupting(false); }
   };
   const requestClose = () => {
-    if (!dirty || window.confirm("Discard unsaved notebook changes?")) onClose();
+    if (!dirty || window.confirm(t("notebook.discardChanges"))) onClose();
   };
 
   const openInJupyter = async () => {

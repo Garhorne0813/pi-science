@@ -10,10 +10,6 @@ export default defineConfig({
     // BuiltInPluginBehaviors before the State namespace is initialized, which
     // makes PluginUIContext fail before a structure is parsed.
     exclude: ["molstar"],
-    // Mol*'s viewer extension registry imports this legacy CommonJS package
-    // even when MP4 export is disabled. Pre-bundle only that leaf dependency
-    // so its `module.exports` wrapper is browser-compatible.
-    include: ["molstar > h264-mp4-encoder"],
   },
   resolve: {
     alias: {
@@ -22,6 +18,10 @@ export default defineConfig({
       // Mol* stays unbundled in development, point that import at Mutative's
       // equivalent native ESM build so browsers can resolve `create`.
       "mutative/dist/index.js": "mutative/dist/mutative.esm.mjs",
+      // Mol* registers MP4 export even though Pi-Science does not expose it.
+      // Avoid bundling the encoder's Node entry (fs/path/crypto) or its 2 MB
+      // legacy web bundle until that feature has a first-class UI.
+      "h264-mp4-encoder": path.resolve(__dirname, "src/lib/viewers/h264-mp4-encoder-stub.ts"),
     },
   },
   server: {
@@ -61,6 +61,11 @@ export default defineConfig({
             id.includes("node_modules/remark-gfm") ||
             id.includes("node_modules/highlight.js")
           ) return "vendor-markdown";
+          // Generative Loaders is only reached through ProgressVisual's lazy
+          // renderer. Keep its animation runtime in the same async graph instead
+          // of folding ~135 KB of Framer Motion back into the initial common
+          // vendor chunk.
+          if (/[\\/]node_modules[\\/](?:generative-loaders|framer-motion|motion-dom|motion-utils)[\\/]/.test(id)) return "vendor-progress";
           // Keep Mol* and its parser/runtime dependencies in the molecule-only
           // dynamic graph. Everything else can share the existing common vendor
           // chunk without pulling the molecular viewer into the initial bundle.

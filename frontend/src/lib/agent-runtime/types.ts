@@ -62,6 +62,9 @@ export interface RuntimeState {
 
   // Session
   sessions: SessionInfo[];
+  sessionsCursor: string | null;
+  sessionsHasMore: boolean;
+  sessionsLoading: boolean;
   activeSessionId: string | null;
   cwd: string;
 
@@ -74,7 +77,7 @@ export interface RuntimeState {
   working: boolean;
   /** Explicit lifecycle for the newest turn. `working=false` alone cannot
    *  distinguish a settled answer from an abort or terminal failure. */
-  turnLifecycle: "queued" | "active" | "waiting" | "recovering" | "settled" | "aborted" | "failed";
+  turnLifecycle: "queued" | "active" | "waiting" | "recovering" | "stopping" | "settled" | "aborted" | "failed";
   model: string | null;
   thinking: string | null;
   contextTokens: number | null;
@@ -101,6 +104,7 @@ export interface RuntimeState {
   setModel: (model: string, thinking?: string) => Promise<string | null>;
   respondToInteraction: (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => Promise<void>;
   loadSessions: (cwd?: string) => Promise<SessionInfo[]>;
+  loadMoreSessions: () => Promise<number>;
   loadSession: (sessionId: string) => Promise<void>;
   loadOlderMessages: () => Promise<number>;
   forkSession: (sessionId: string) => Promise<string>;

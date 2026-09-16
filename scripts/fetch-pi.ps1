@@ -148,7 +148,7 @@ if (-not [string]::IsNullOrWhiteSpace($localRepository)) {
     exit 0
 }
 
-$version = Get-Setting "PI_ORBIT_VERSION" "0.3.1"
+$version = Get-Setting "PI_ORBIT_VERSION" "0.4.0"
 $releaseRepository = Get-Setting "PI_ORBIT_RELEASE_REPO" "Garhorne0813/pi-orbit"
 $architecture = Get-ReleaseArchitecture
 $archiveName = "pi-orbit-windows-$architecture.zip"

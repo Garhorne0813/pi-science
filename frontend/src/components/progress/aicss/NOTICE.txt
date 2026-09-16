@@ -1,0 +1,5 @@
+AICSS React free components vendored from https://github.com/kvnkld/aicss
+Source commit: 4556a918fd8c9358d42d2b24a3866301b8ea10a2
+License: MIT (see LICENSE)
+
+Only the public packages/react source is included. Pro components and website-only code are excluded.

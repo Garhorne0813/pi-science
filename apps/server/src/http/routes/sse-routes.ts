@@ -44,6 +44,22 @@ export function resolveLastEventId(headerValue: unknown, queryValue: unknown): s
 }
 
 export function registerSseRoutes(app: FastifyInstance, nodeSessionService: NodeSessionService, conversationEventHub: ConversationEventHub): void {
+  app.get<{ Params: { session_id: string } }>("/api/sessions/:session_id/events/cursor", async (request, reply) => {
+    const query = request.query as { cwd?: unknown };
+    const requestedCwd = typeof query.cwd === "string" && query.cwd.length > 0 ? query.cwd : ".";
+    let cwd: string;
+    try {
+      cwd = await validateWorkspaceCwd(requestedCwd);
+    } catch (error) {
+      return reply.code(403).send({ error: String(error) });
+    }
+    const sessionId = request.params.session_id;
+    const sessionExists = await nodeSessionService.exists(sessionId, cwd)
+      || nodeSessionService.liveSessions(cwd).some((session) => session.id === sessionId);
+    if (!sessionExists) return reply.code(404).send({ error: "session not found in this workspace" });
+    return { resumeCursor: await conversationEventHub.latestCursor(cwd, sessionId) };
+  });
+
   app.get<{ Params: { session_id: string } }>("/api/sessions/:session_id/events", async (request, reply) => {
     const query = request.query as { cwd?: unknown; lastEventId?: unknown };
     const requestedCwd = typeof query.cwd === "string" && query.cwd.length > 0 ? query.cwd : ".";

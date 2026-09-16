@@ -7,13 +7,14 @@ import { CodeViewer } from "@/components/code-viewer/CodeViewer";
 import { resolveArtifactContent } from "@/lib/artifacts";
 import { saveTextWithFeedback } from "@/lib/shared/download";
 import { IconButton } from "@/components/ui/Icon";
+import { useTranslation } from "react-i18next";
 
-const TABS: Array<{ id: ArtifactTab; label: string }> = [
-  { id: "code", label: "Code" },
-  { id: "log", label: "Execution Log" },
-  { id: "messages", label: "Messages" },
-  { id: "environment", label: "Environment" },
-  { id: "review", label: "Review" },
+const TABS: Array<{ id: ArtifactTab; labelKey: string }> = [
+  { id: "code", labelKey: "artifact.tabs.code" },
+  { id: "log", labelKey: "artifact.tabs.log" },
+  { id: "messages", labelKey: "artifact.tabs.messages" },
+  { id: "environment", labelKey: "artifact.tabs.environment" },
+  { id: "review", labelKey: "artifact.tabs.review" },
 ];
 
 export function ArtifactInspector({
@@ -26,6 +27,7 @@ export function ArtifactInspector({
   /** Pane-level header buttons (e.g. maximize), rendered before Close. */
   controls?: React.ReactNode;
 }) {
+  const { t } = useTranslation();
   const [tab, setTab] = useState<ArtifactTab>("code");
   const [versionIdx, setVersionIdx] = useState(() =>
     Math.max(
@@ -56,7 +58,7 @@ export function ArtifactInspector({
         <div className="ml-2 flex items-center gap-1 text-text">
           <IconButton
             icon={ChevronLeft}
-            label="Previous version"
+            label={t("artifact.previousVersion")}
             size="compact"
             className="text-text"
             disabled={versionIdx === 0}
@@ -65,7 +67,7 @@ export function ArtifactInspector({
           <span className="rounded bg-surface-2 px-1.5 text-xs text-muted">{activeLabel}</span>
           <IconButton
             icon={ChevronRight}
-            label="Next version"
+            label={t("artifact.nextVersion")}
             size="compact"
             className="text-text"
             disabled={versionIdx >= data.versions.length - 1}
@@ -75,7 +77,7 @@ export function ArtifactInspector({
         <div className="flex-1" />
         <IconButton
           icon={Download}
-          label="Download"
+          label={t("inspector.download")}
           size="compact"
           className="text-text"
           onClick={() => void saveTextWithFeedback(scriptName, content.code)}
@@ -85,7 +87,7 @@ export function ArtifactInspector({
       </header>
 
       <nav className="flex items-center gap-4 border-b border-border px-4">
-        {TABS.map(({ id, label }) => (
+        {TABS.map(({ id, labelKey }) => (
           <button
             key={id}
             onClick={() => setTab(id)}
@@ -96,7 +98,7 @@ export function ArtifactInspector({
                 : "border-transparent text-muted hover:text-text",
             )}
           >
-            <span className="text-ui-label">{label}</span>
+            <span className="text-ui-label">{t(labelKey)}</span>
             {id === "review" && content.reviewPassed && <Check size={13} className="text-ok-text" />}
           </button>
         ))}
@@ -109,11 +111,11 @@ export function ArtifactInspector({
               className="flex items-center gap-2 rounded-input bg-accent-fill px-3 py-1.5 text-sm font-medium text-accent-fg hover:opacity-90"
               onClick={() => void saveTextWithFeedback(scriptName, content.code)}
             >
-              <Download size={15} /> {"Download script"}
+              <Download size={15} /> {t("artifact.downloadScript")}
             </button>
             {(data.inputs ?? []).length > 0 && (
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs text-muted">{"Inputs"}</span>
+                <span className="text-xs text-muted">{t("artifact.inputs")}</span>
                 {(data.inputs ?? []).map((f) => (
                   <span
                     key={f}

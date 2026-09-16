@@ -16,6 +16,12 @@ export interface SessionInfo {
   project_id?: string | null;
 }
 
+export interface SessionListPage {
+  sessions: SessionInfo[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
 export interface AvailableModel {
   id: string;
   provider: string;
@@ -40,6 +46,13 @@ export interface HistoryMessage {
   details?: unknown;
   presentation?: ToolPresentation;
   presentationRole?: "intermediate" | "final";
+  turnId?: string;
+  runId?: string;
+  itemId?: string;
+  parentItemId?: string;
+  revision?: number;
+  sequence?: number;
+  classificationSource?: "explicit" | "legacy_inferred" | "unknown";
 }
 
 export interface SessionMessagePage {

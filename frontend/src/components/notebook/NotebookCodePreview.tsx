@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import hljs from "highlight.js/lib/common";
 import { Check, Copy } from "lucide-react";
 import { cn } from "../../lib/ui";
+import { useTranslation } from "react-i18next";
 
 export function NotebookCodePreview({
   code,
@@ -12,6 +13,7 @@ export function NotebookCodePreview({
   language?: string;
   className?: string;
 }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const html = useMemo(() => {
     try {
@@ -41,7 +43,7 @@ export function NotebookCodePreview({
       <button
         type="button"
         onClick={() => void copy()}
-        aria-label="Copy code"
+        aria-label={t("conversation.copy")}
         className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-md border border-border bg-surface-raised text-muted opacity-0 shadow-sm transition hover:text-text group-hover/code:opacity-100 focus:opacity-100"
       >
         {copied ? <Check size={12} className="text-ok" /> : <Copy size={12} />}

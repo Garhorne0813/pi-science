@@ -673,7 +673,20 @@ describe("stable Virtuoso footer", () => {
     expect(workingProps?.components?.Footer).toBe(Footer);
     if (!workingProps?.context) throw new Error("updated Virtuoso context was not captured");
     footerView.rerender(<Footer context={workingProps.context} />);
-    expect(footerView.container).toHaveTextContent("Understanding the context");
+    expect(footerView.container).not.toHaveTextContent("Thinking");
+
+    act(() => { useRuntimeStore.setState({
+      thread: { blocks: [
+        userBlock("u1", "Earlier question"),
+        { kind: "agent", id: "process", parts: [{ id: "p1", text: "Checking the request." }] },
+        { kind: "agent", id: "answer", partial: true, parts: [{ id: "p2", text: "Here is the answer." }] },
+      ], index: {}, loaded: true },
+    }); });
+    expect(footerView.container).not.toHaveTextContent("Thinking");
+    act(() => { useRuntimeStore.setState({
+      thread: { blocks: [...useRuntimeStore.getState().thread.blocks, userBlock("u2", "Next question")], index: {}, loaded: true },
+    }); });
+    expect(footerView.container).not.toHaveTextContent("Thinking");
 
     const interaction: PendingInteraction = {
       requestId: "questionnaire-request",
@@ -979,6 +992,7 @@ describe("conversation nav rail and scroll-to-latest", () => {
     Object.defineProperty(scrollerEl, "scrollHeight", { value: 2000, configurable: true });
     Object.defineProperty(scrollerEl, "clientHeight", { value: 600, configurable: true });
     scrollerEl.scrollTop = 500;
+    fireEvent.wheel(scrollerEl, { deltaY: -120 });
     fireEvent.scroll(scrollerEl);
     fireEvent.click(await screen.findByLabelText("Back to latest"));
     // followOutputRef is true again: the next streamed block pins to the bottom.
@@ -987,7 +1001,7 @@ describe("conversation nav rail and scroll-to-latest", () => {
         thread: { ...state.thread, blocks: [...state.thread.blocks, agentBlock("a2", "streamed reply")] },
       }));
     });
-    expect(scrollerEl.scrollTop).toBe(2000);
+    expect((virtuosoProps.at(-1)!.followOutput as () => string | false)()).toBe("auto");
   });
 
   it("shows the back-to-latest arrow after scrolling up and hides it near the bottom", async () => {
@@ -1000,10 +1014,12 @@ describe("conversation nav rail and scroll-to-latest", () => {
     Object.defineProperty(scrollerEl, "scrollHeight", { value: 2000, configurable: true });
     Object.defineProperty(scrollerEl, "clientHeight", { value: 600, configurable: true });
     scrollerEl.scrollTop = 500;
+    fireEvent.wheel(scrollerEl, { deltaY: -120 });
     fireEvent.scroll(scrollerEl);
     const arrow = await screen.findByLabelText("Back to latest");
     expect(arrow).toBeInTheDocument();
-    scrollerEl.scrollTop = 1940;
+    scrollerEl.scrollTop = 1380;
+    fireEvent.wheel(scrollerEl, { deltaY: 120 });
     fireEvent.scroll(scrollerEl);
     await waitFor(() => expect(screen.queryByLabelText("Back to latest")).toBeNull());
   });
@@ -1018,11 +1034,11 @@ describe("conversation nav rail and scroll-to-latest", () => {
     Object.defineProperty(scrollerEl, "scrollHeight", { value: 2000, configurable: true });
     Object.defineProperty(scrollerEl, "clientHeight", { value: 600, configurable: true });
     scrollerEl.scrollTop = 500;
+    fireEvent.wheel(scrollerEl, { deltaY: -120 });
     fireEvent.scroll(scrollerEl);
     fireEvent.click(await screen.findByLabelText("Back to latest"));
-    expect(Element.prototype.scrollTo).toHaveBeenCalledWith(
-      expect.objectContaining({ top: 2000 }),
-    );
+    expect((virtuosoProps.at(-1)!.followOutput as () => string | false)()).toBe("auto");
+    expect(screen.queryByLabelText("Back to latest")).not.toBeInTheDocument();
   });
 
   it("shows the rail for a single user message", async () => {
@@ -1144,7 +1160,7 @@ describe("scroll and nav behavior (docs/markdown.md §3.16 a/b/d)", () => {
     expect(target.scrollIntoView).toHaveBeenCalled();
   });
 
-  it("snaps to the bottom when a new turn starts (working false→true)", async () => {
+  it("keeps Virtuoso following while a new turn is measured", async () => {
     useRuntimeStore.setState({
       thread: { blocks: [userBlock("u1", "First question"), agentBlock("a1", "first reply")], index: { u1: 0, a1: 1 }, loaded: true },
     });
@@ -1154,7 +1170,8 @@ describe("scroll and nav behavior (docs/markdown.md §3.16 a/b/d)", () => {
     Object.defineProperty(scroller!, "scrollHeight", { value: 4000, configurable: true });
     (scroller as HTMLElement).scrollTop = 0;
     act(() => { useRuntimeStore.setState({ working: true }); });
-    expect((scroller as HTMLElement).scrollTop).toBe(4000);
+    expect((virtuosoProps.at(-1)!.followOutput as (atBottom: boolean) => string | false)(false)).toBe("auto");
+    expect(virtuosoProps.at(-1)!.totalListHeightChanged).toEqual(expect.any(Function));
   });
 
   it("does not snap when the user is reading history (followOutputRef false)", async () => {
@@ -1166,7 +1183,8 @@ describe("scroll and nav behavior (docs/markdown.md §3.16 a/b/d)", () => {
     Object.defineProperty(scroller, "scrollHeight", { value: 4000, configurable: true });
     Object.defineProperty(scroller, "clientHeight", { value: 100, configurable: true });
     scroller.scrollTop = 3000;
-    fireEvent.scroll(scroller); // nearBottom=false → followOutputRef=false
+    fireEvent.wheel(scroller, { deltaY: -120 });
+    fireEvent.scroll(scroller); // Explicit user intent pauses follow output.
     act(() => { useRuntimeStore.setState({ working: true }); });
     expect(scroller.scrollTop).toBe(3000);
   });

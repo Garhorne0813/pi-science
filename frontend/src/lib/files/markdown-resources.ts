@@ -11,6 +11,7 @@
  *     placeholder instead of a broken image). */
 
 import { previewUrl, type FileRoot } from "./files";
+import { normalizeSlashes, posixNormalize, stripCwdPrefix, WINDOWS_DRIVE } from "./workspace-path";
 
 export interface MarkdownResourceContext {
   /** Workspace root (absolute filesystem path, any platform separators). */
@@ -41,10 +42,6 @@ function splitQueryFragment(href: string): { clean: string; suffix: string } {
   return { clean: href.slice(0, q), suffix: href.slice(q) };
 }
 
-function normalizeSlashes(value: string): string {
-  return value.replace(/\\/g, "/");
-}
-
 /** Join path segments, collapsing `.` and resolving `..` without ever going
  *  above the base directory (escaping yields null). An absolute base keeps
  *  its leading slash; a Windows drive prefix survives as a plain segment. */
@@ -62,46 +59,6 @@ function joinWithin(baseDir: string, relative: string): string | null {
   }
   const joined = parts.join("/");
   return absolute ? `/${joined}` : joined;
-}
-
-/** Pure POSIX-style normalization for absolute forms: collapses `.` and
- *  resolves `..` against the root (never climbs above `/`). Relative inputs
- *  are resolved like posix.normalize (leading `..` segments survive). */
-function posixNormalize(value: string): string {
-  const absolute = value.startsWith("/");
-  const parts: string[] = [];
-  for (const segment of value.split("/")) {
-    if (segment === "" || segment === ".") continue;
-    if (segment === "..") {
-      if (parts.length > 0 && parts[parts.length - 1] !== "..") parts.pop();
-      else if (!absolute) parts.push("..");
-      continue;
-    }
-    parts.push(segment);
-  }
-  const joined = parts.join("/");
-  return absolute ? `/${joined}` : joined;
-}
-
-/** Windows drive prefix (`C:`, `c:` — case-insensitive). */
-const WINDOWS_DRIVE = /^[a-zA-Z]:/;
-
-/** Strip a workspace cwd prefix. The drive letter is compared
- *  case-insensitively (Windows `C:` vs `c:`); everything else is exact.
- *  Returns the workspace-relative path or null when the candidate is not
- *  under cwd. */
-function stripCwdPrefix(candidate: string, cwd: string): string | null {
-  const prefix = `${cwd}/`;
-  if (candidate === cwd) return null;
-  if (candidate.startsWith(prefix)) return candidate.slice(prefix.length);
-  if (WINDOWS_DRIVE.test(prefix) && WINDOWS_DRIVE.test(candidate)) {
-    // Compare drive-less forms so `c:` vs `C:` (and optional leading slash
-    // after the drive) never matters.
-    const candidateRest = candidate.replace(WINDOWS_DRIVE, "").replace(/^\/+/, "");
-    const prefixRest = prefix.replace(WINDOWS_DRIVE, "").replace(/^\/+/, "");
-    if (candidateRest.startsWith(prefixRest)) return candidateRest.slice(prefixRest.length);
-  }
-  return null;
 }
 
 /** Resolve a markdown href against the given document/workspace context. */

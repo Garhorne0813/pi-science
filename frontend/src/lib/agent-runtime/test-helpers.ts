@@ -17,7 +17,7 @@ export class FakeEventSource {
   onopen: ((event: Event) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
   readonly url: string;
-  private handlers = new Map<string, Array<(event: { data?: string }) => void>>();
+  private handlers = new Map<string, Array<(event: { data?: string; lastEventId?: string }) => void>>();
 
   constructor(url: string) {
     this.url = url;
@@ -26,8 +26,8 @@ export class FakeEventSource {
 
   addEventListener(type: string, handler: EventListenerOrEventListenerObject): void {
     const callback = typeof handler === "function"
-      ? handler as unknown as (event: { data?: string }) => void
-      : (event: { data?: string }) => handler.handleEvent(event as unknown as Event);
+      ? handler as unknown as (event: { data?: string; lastEventId?: string }) => void
+      : (event: { data?: string; lastEventId?: string }) => handler.handleEvent(event as unknown as Event);
     this.handlers.set(type, [...(this.handlers.get(type) || []), callback]);
   }
 
@@ -40,8 +40,8 @@ export class FakeEventSource {
     this.onopen?.({} as Event);
   }
 
-  emit(type: string, payload: unknown): void {
-    const event = { data: JSON.stringify(payload) };
+  emit(type: string, payload: unknown, lastEventId?: string): void {
+    const event = { data: JSON.stringify(payload), lastEventId };
     for (const handler of this.handlers.get(type) || []) handler(event);
   }
 }

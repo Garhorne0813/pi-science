@@ -119,7 +119,7 @@ describe("QuestionnairePrompt", () => {
     expect(screen.getByRole("button", { name: /Follow-up.*Should the follow-up be automated/ })).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("supports a custom answer, collapsible notes, and cancellation", () => {
+  it("supports a custom answer and collapsible notes", () => {
     const onRespond = vi.fn();
     const singleQuestion = { ...questionnaire, toolCallId: "call-2", questions: [questionnaire.questions[0]!] };
     render(<QuestionnairePrompt questionnaire={singleQuestion} interaction={interaction} onRespond={onRespond} />);
@@ -137,9 +137,15 @@ describe("QuestionnairePrompt", () => {
       answer: "A bespoke mode",
       notes: "Keep latency low.",
     });
+  });
+
+  it("cancels the questionnaire through the interaction response", () => {
+    const onRespond = vi.fn();
+    const singleQuestion = { ...questionnaire, toolCallId: "call-cancel", questions: [questionnaire.questions[0]!] };
+    render(<QuestionnairePrompt questionnaire={singleQuestion} interaction={interaction} onRespond={onRespond} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(onRespond).toHaveBeenLastCalledWith({ cancelled: true });
+    expect(onRespond).toHaveBeenCalledWith({ cancelled: true });
   });
 
   it("toggles the custom editor and clears its draft from the inner cancel", () => {

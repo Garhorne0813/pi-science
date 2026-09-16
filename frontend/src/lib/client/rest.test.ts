@@ -76,6 +76,17 @@ describe("PiScienceClient REST calls", () => {
     expect(page.messages[0]?.id).toBe("m2");
   });
 
+  it("preserves structured tool details through the history wire schema", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      messages: [{ id: "r1", role: "toolResult", content: [], details: { rows: 3 } }],
+      next_cursor: null,
+      has_more: false,
+      snapshot_version: "1:1",
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    const page = await new PiScienceClient().getMessagesPage("session-a", "/workspace");
+    expect(page.messages[0]?.details).toEqual({ rows: 3 });
+  });
+
   it("requests the lightweight user-message index", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       messages: [{ id: "u1", text: "first question", before: "cursor-u1" }],

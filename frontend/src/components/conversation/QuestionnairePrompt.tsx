@@ -38,7 +38,7 @@ export function QuestionnairePrompt({
 }: {
   questionnaire: PendingQuestionnaire;
   interaction: PendingInteraction;
-  onRespond: (response: InteractionResponse) => void;
+  onRespond: (response: InteractionResponse) => void | Promise<void>;
 }) {
   const { t } = useTranslation();
   const questions = questionnaire.questions;
@@ -52,6 +52,7 @@ export function QuestionnairePrompt({
   const [hoveredOption, setHoveredOption] = useState<number | null>(null);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   useEffect(() => {
     setOpenIndex(0);
@@ -64,6 +65,7 @@ export function QuestionnairePrompt({
     setHoveredOption(null);
     setPreviewIndex(null);
     setSubmitting(false);
+    setSubmitError(null);
   }, [questionnaire.toolCallId, questionnaire.questions]);
 
   if (questions.length === 0) return null;
@@ -203,14 +205,25 @@ export function QuestionnairePrompt({
     return selectedPreviewIndex(question, questionIndex) === optionIndex || previewIndex === optionIndex;
   };
 
+  const respond = async (response: InteractionResponse) => {
+    if (submitting) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      await onRespond(response);
+    } catch (cause) {
+      setSubmitError(cause instanceof Error && cause.message ? cause.message : t("interaction.responseFailed"));
+      setSubmitting(false);
+    }
+  };
+
   const submit = () => {
     if (!canSubmit) return;
-    setSubmitting(true);
     const payload = {
       cancelled: false,
       answers: answers.flatMap((answer, index) => answer ? [{ ...answer, notes: notes[index]?.trim() || undefined }] : []),
     };
-    onRespond({ value: JSON.stringify(payload) });
+    void respond({ value: JSON.stringify(payload) });
   };
 
   const previous = () => {
@@ -268,7 +281,7 @@ export function QuestionnairePrompt({
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-[11px] font-medium uppercase tracking-[0.06em] text-accent">{questionLabel}</span>
-                  <span className="block truncate text-sm font-medium leading-snug text-text">{question.question}</span>
+                  <span className="block whitespace-pre-wrap break-words text-sm font-medium leading-snug text-text">{question.question}</span>
                   {!isOpen && answered && (
                     <span className="mt-0.5 block truncate text-xs text-muted">{answerLabel(answer, noneLabel, customLabel)}</span>
                   )}
@@ -439,7 +452,7 @@ export function QuestionnairePrompt({
                   <span className="w-5 shrink-0 text-[11px] font-mono text-muted">{questionIndex + 1}</span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-xs font-medium text-text">{question.header || t("questionnaire.question", { number: questionIndex + 1 })}</span>
-                    <span className="block truncate text-xs text-text">{question.question}</span>
+                    <span className="block whitespace-pre-wrap break-words text-xs text-text">{question.question}</span>
                     <span className="block truncate text-xs text-muted">{answer ? answerLabel(answer, noneLabel, customLabel) : t("questionnaire.unanswered")}</span>
                   </span>
                   {answer ? <Check size={13} className="mt-0.5 shrink-0 text-ok-text" /> : <span className="mt-0.5 shrink-0 text-[11px] text-warn-text">—</span>}
@@ -459,7 +472,7 @@ export function QuestionnairePrompt({
             </button>
           </div>
           <div className="flex items-center gap-1.5">
-            <button type="button" onClick={() => onRespond({ cancelled: true })} className="inline-flex items-center rounded-input border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:bg-surface-2 hover:text-text">
+            <button type="button" disabled={submitting} onClick={() => void respond({ cancelled: true })} className="inline-flex items-center rounded-input border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:bg-surface-2 hover:text-text disabled:opacity-50">
               {t("common.cancel")}
             </button>
             <button type="button" onClick={submit} disabled={!canSubmit} className="inline-flex items-center gap-1.5 rounded-input bg-accent-fill px-3 py-1 text-xs text-accent-fg disabled:opacity-50">
@@ -468,6 +481,7 @@ export function QuestionnairePrompt({
             </button>
           </div>
         </div>
+        {submitError && <p role="alert" className="mx-4 mb-2 rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text sm:mx-5">{submitError}</p>}
       </footer>
     </section>
   );

@@ -34,9 +34,13 @@ function formatTokensPerSecond(value: number | null): string | null {
   return value >= 10 ? String(Math.round(value)) : value.toFixed(1);
 }
 
+const STATS_LINE_CLASS = "mx-auto max-w-[var(--conversation-composer-width)] overflow-hidden whitespace-nowrap px-4 pb-1 pt-1.5 text-center text-ellipsis text-[12px] leading-[20px] text-muted";
+
 export function ConversationStatsLine({ stats }: { stats: SessionStats | null }) {
   const { t } = useTranslation();
-  if (!stats || stats.userMessages === 0) return null;
+  if (!stats || stats.userMessages === 0) {
+    return <div aria-hidden className={STATS_LINE_CLASS}>&nbsp;</div>;
+  }
 
   const tokensPerSecond = stats.decodeMs && stats.decodeMs > 0
     ? stats.tokens.output / (stats.decodeMs / 1000)
@@ -76,7 +80,7 @@ export function ConversationStatsLine({ stats }: { stats: SessionStats | null })
   const full = groups.map((group) => group.text).join(" | ");
   return (
     <div
-      className="mx-auto max-w-[var(--conversation-composer-width)] overflow-hidden whitespace-nowrap px-4 pb-1 pt-1.5 text-center text-ellipsis text-[12px] leading-[20px] text-muted"
+      className={STATS_LINE_CLASS}
       aria-label={t("conversation.stats.label")}
       title={full}
     >

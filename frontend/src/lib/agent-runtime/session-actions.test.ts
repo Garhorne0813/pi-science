@@ -85,6 +85,34 @@ describe("runtime session actions", () => {
     expect(useRuntimeStore.getState().historyHasMore).toBe(true);
   });
 
+  it("retries one transient older-page failure without stranding pagination", async () => {
+    useRuntimeStore.setState({
+      activeSessionId: "session-a",
+      cwd: "/workspace",
+      thread: emptyThread(),
+      historyCursor: "cursor-newest",
+      historyHasMore: true,
+      historyLoading: false,
+    });
+    let attempts = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (!String(input).includes("/messages?")) throw new Error(`Unexpected request: ${String(input)}`);
+      attempts += 1;
+      if (attempts === 1) return jsonResponse({ error: "backend restarting" }, 503);
+      return jsonResponse({
+        messages: [{ id: "user-old", role: "user", content: [{ type: "text", text: "older" }] }],
+        next_cursor: null,
+        has_more: false,
+        snapshot_version: "v2",
+      });
+    }));
+
+    await expect(useRuntimeStore.getState().loadOlderMessages()).resolves.toBe(1);
+    expect(attempts).toBe(2);
+    expect(useRuntimeStore.getState().historyHasMore).toBe(false);
+    expect(useRuntimeStore.getState().thread.blocks[0]?.id).toBe("user-old");
+  });
+
   it("restores persisted session titles before slow session activation finishes", async () => {
     let resolveMessages!: (response: Response) => void;
     let resolveState!: (response: Response) => void;

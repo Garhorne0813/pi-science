@@ -44,7 +44,7 @@ describe("central conversation event hub", () => {
         return [...records];
       },
     };
-    const hub = new ConversationEventHub(store);
+    const hub = new ConversationEventHub(store, { createStreamEpoch: () => "epoch-window" });
     const received: SseEventRecord[] = [];
     const subscribing = hub.subscribe(cwd, "session-race", undefined, (event) => received.push(event));
     await started;
@@ -76,6 +76,126 @@ describe("central conversation event hub", () => {
     expect(hub.hasSubscribers(cwd, "session-live")).toBe(false);
   });
 
+  it("writes an identity-bearing V2 envelope with a flat legacy view", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub(
+      { append: async () => undefined, readAfter: async () => [] },
+      { createStreamEpoch: () => "epoch-test" },
+    );
+    const received: SseEventRecord[] = [];
+    await hub.subscribe(cwd, "session-v2", undefined, (record) => received.push(record), false);
+
+    await hub.publish(cwd, "session-v2", {
+      type: "text.updated",
+      sessionId: "session-v2",
+      turnId: "turn-1",
+      runId: "run-1",
+      streamEpoch: "epoch-1",
+      partId: "answer-1",
+      text: "answer",
+    });
+
+    const event = JSON.parse(received[0]!.data) as Record<string, unknown>;
+    expect(event).toMatchObject({
+      schemaVersion: 2,
+      workspaceId: cwd,
+      sessionId: "session-v2",
+      streamEpoch: "epoch-test",
+      eventId: "epoch-test:1",
+      seq: 1,
+      turnId: "turn-1",
+      runId: "run-1",
+      type: "text.updated",
+      text: "answer",
+      payload: expect.objectContaining({ type: "text.updated", partId: "answer-1", text: "answer" }),
+    });
+    expect(typeof event.occurredAt).toBe("string");
+  });
+
+  it("chunks large UTF-8 text records before the durable record limit", async () => {
+    const cwd = await workspace();
+    const records: SseEventRecord[] = [];
+    const hub = new ConversationEventHub({
+      append: async (_cwd, _sessionId, record) => { records.push(record); },
+      readAfter: async () => [],
+    }, { createStreamEpoch: () => "epoch-text" });
+    const text = "科研".repeat(40_000);
+
+    await hub.publish(cwd, "session-large-text", {
+      type: "text.updated",
+      sessionId: "session-large-text",
+      turnId: "turn-large",
+      runId: "run-large",
+      partId: "part-large",
+      revision: 1,
+      baseRevision: 0,
+      text,
+    });
+
+    expect(records.length).toBeGreaterThan(1);
+    expect(records.every((record) => Buffer.byteLength(JSON.stringify(record), "utf8") <= 256 * 1024)).toBe(true);
+    expect(records.map((record) => (JSON.parse(record.data) as Record<string, unknown>).text).join(""))
+      .toBe(text);
+    expect(records.map((record) => record.id)).toEqual(records.map((_record, index) => `epoch-text:${index + 1}`));
+  });
+
+  it("rotates the stream epoch after an append failure while preserving live delivery", async () => {
+    const cwd = await workspace();
+    const persisted: SseEventRecord[] = [];
+    let fail = true;
+    const epochs = ["epoch-failed", "epoch-recovered"];
+    const hub = new ConversationEventHub({
+      append: async (_cwd, _sessionId, record) => {
+        if (fail) {
+          fail = false;
+          throw new Error("disk unavailable");
+        }
+        persisted.push(record);
+      },
+      readAfter: async () => persisted,
+    }, { createStreamEpoch: () => epochs.shift() ?? "epoch-fallback" });
+    const received: SseEventRecord[] = [];
+    await hub.subscribe(cwd, "session-persistence", undefined, (record) => received.push(record), false);
+
+    await hub.publish(cwd, "session-persistence", { type: "status.updated", sessionId: "session-persistence", status: "live-only" });
+    await hub.publish(cwd, "session-persistence", { type: "status.updated", sessionId: "session-persistence", status: "recovered" });
+
+    expect(received.map((record) => record.id)).toEqual(["epoch-failed:1", "epoch-recovered:1"]);
+    expect(persisted.map((record) => record.id)).toEqual(["epoch-recovered:1"]);
+  });
+
+  it("never persists a later text chunk in a tainted epoch", async () => {
+    const cwd = await workspace();
+    const persisted: SseEventRecord[] = [];
+    let fail = true;
+    const epochs = ["epoch-chunk-failed", "epoch-chunk-recovered"];
+    const hub = new ConversationEventHub({
+      append: async (_cwd, _sessionId, record) => {
+        if (fail) {
+          fail = false;
+          throw new Error("disk unavailable");
+        }
+        persisted.push(record);
+      },
+      readAfter: async () => persisted,
+    }, { createStreamEpoch: () => epochs.shift() ?? "epoch-chunk-fallback" });
+
+    await hub.publish(cwd, "session-chunk-failure", {
+      type: "text.updated",
+      sessionId: "session-chunk-failure",
+      turnId: "turn-chunk",
+      runId: "run-chunk",
+      partId: "part-chunk",
+      revision: 1,
+      baseRevision: 0,
+      text: "大文本".repeat(40_000),
+    });
+    await hub.publish(cwd, "session-chunk-failure", { type: "status.updated", sessionId: "session-chunk-failure", status: "next" });
+
+    expect(persisted.map((record) => record.id)).toEqual(["epoch-chunk-recovered:1"]);
+    expect(persisted.every((record) => !record.id?.startsWith("epoch-chunk-failed:"))).toBe(true);
+  });
+
   it("does not append or deliver a guarded publication that is invalid before publishing", async () => {
     const cwd = await workspace();
     let allowed = false;
@@ -84,7 +204,7 @@ describe("central conversation event hub", () => {
       append: async (_cwd: string, _sessionId: string, record: SseEventRecord) => { appended.push(record); },
       readAfter: async () => [],
     };
-    const hub = new ConversationEventHub(store);
+    const hub = new ConversationEventHub(store, { createStreamEpoch: () => "epoch-window" });
     const received: SseEventRecord[] = [];
     await hub.subscribe(cwd, "session-guarded", undefined, (record) => received.push(record), false);
 
@@ -113,7 +233,7 @@ describe("central conversation event hub", () => {
       },
       readAfter: async () => [],
     };
-    const hub = new ConversationEventHub(store);
+    const hub = new ConversationEventHub(store, { createStreamEpoch: () => "epoch-window" });
     const received: SseEventRecord[] = [];
     await hub.subscribe(cwd, "session-window", undefined, (record) => received.push(record), false);
 
@@ -128,7 +248,7 @@ describe("central conversation event hub", () => {
 
     await hub.publish(cwd, "session-window", { type: "agent_start", sessionId: "session-window" });
     expect(received.map((record) => JSON.parse(record.data).type)).toEqual(["agent_start"]);
-    expect(received[0]?.id).toBe("1");
+    expect(received[0]?.id).toBe("epoch-window:1");
   });
 
   it("re-delivers pending interactions to a fresh subscriber without a cursor", async () => {
@@ -252,9 +372,98 @@ describe("central conversation event hub", () => {
 
     const text = received.filter((event) => event.type === "text.updated");
     expect(text).toHaveLength(4);
-    expect(text[0]).toMatchObject({ text: "Hello", partId: "m1" });
+    expect(text[0]).toMatchObject({ text: "Hello", partId: "m1:0", itemId: "m1" });
     expect(text[1]?.partId).not.toBe(text[2]?.partId);
-    expect(text.at(-1)).toMatchObject({ text: "replacement", replace: true, partId: "m2" });
+    expect(text.at(-1)).toMatchObject({ text: "replacement", replace: true, partId: "m2:0", itemId: "m2" });
+  });
+
+  it("streams thinking deltas as thinking.updated without touching the text stream", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub();
+    const process = new EventEmitter() as PiProcess;
+    const received: Array<Record<string, unknown>> = [];
+    hub.bind(cwd, process, { activeSessionId: () => "session-thinking", onBusy: () => undefined, onExit: () => undefined });
+    await hub.subscribe(cwd, "session-thinking", undefined, (record) => received.push(JSON.parse(record.data)));
+
+    process.emit("event", { type: "agent_start" });
+    process.emit("event", { type: "message_update", message: { id: "m1" }, assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "Let me " } });
+    process.emit("event", { type: "message_update", message: { id: "m1" }, assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "think." } });
+    process.emit("event", { type: "message_update", message: { id: "m1" }, assistantMessageEvent: { type: "thinking_end", contentIndex: 0, thinking: "Let me think." } });
+    process.emit("event", { type: "message_update", message: { id: "m1" }, assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "Answer" } });
+    process.emit("event", { type: "agent_settled" });
+    await eventually(() => received.some((event) => event.type === "session.idle"));
+
+    // The two thinking deltas coalesce into one batched record; the redundant
+    // thinking_end emits nothing. Text keeps its own stream and payload.
+    const thinking = received.filter((event) => event.type === "thinking.updated");
+    expect(thinking.map((event) => event.text)).toEqual(["Let me think."]);
+    expect(thinking[0]).toMatchObject({ partId: "m1:0", itemId: "m1" });
+    const text = received.filter((event) => event.type === "text.updated");
+    expect(text.map((event) => event.text)).toEqual(["Answer"]);
+    expect(text[0]).toMatchObject({ partId: "m1:1", itemId: "m1" });
+  });
+
+  it("gives independently revised text content parts distinct wire identities", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub();
+    const process = new EventEmitter() as PiProcess;
+    const received: Array<Record<string, unknown>> = [];
+    hub.bind(cwd, process, { activeSessionId: () => "session-parts", onBusy: () => undefined, onExit: () => undefined });
+    await hub.subscribe(cwd, "session-parts", undefined, (record) => received.push(JSON.parse(record.data)));
+
+    process.emit("event", { type: "agent_start" });
+    process.emit("event", { type: "message_update", message: { id: "m1" }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "first" } });
+    process.emit("event", { type: "message_update", message: { id: "m1" }, assistantMessageEvent: { type: "text_delta", contentIndex: 2, delta: "second" } });
+    process.emit("event", { type: "agent_settled" });
+    await eventually(() => received.some((event) => event.type === "session.idle"));
+
+    expect(received.filter((event) => event.type === "text.updated")).toEqual([
+      expect.objectContaining({ itemId: "m1", partId: "m1:0", baseRevision: 0, revision: 1, text: "first" }),
+      expect.objectContaining({ itemId: "m1", partId: "m1:2", baseRevision: 0, revision: 1, text: "second" }),
+    ]);
+  });
+
+  it("streams bash output tails as throttled tool updates", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub();
+    const process = new EventEmitter() as PiProcess;
+    const received: Array<Record<string, unknown>> = [];
+    hub.bind(cwd, process, { activeSessionId: () => "session-bash-tail", onBusy: () => undefined, onExit: () => undefined });
+    await hub.subscribe(cwd, "session-bash-tail", undefined, (record) => received.push(JSON.parse(record.data)));
+
+    const snapshot = (text: string) => JSON.stringify({ content: text ? [{ type: "text", text }] : [] });
+    process.emit("event", { type: "agent_start" });
+    process.emit("event", { type: "tool_execution_start", toolCallId: "b1", toolName: "bash", args: { command: "pip install -U scikit-learn" } });
+    process.emit("event", { type: "bash_execution_update", id: "b1", delta: snapshot("Collecting scikit-learn\n") });
+    await eventually(() => received.some((event) => event.type === "tool.updated" && String(event.partialOutput ?? "").includes("Collecting scikit-learn")));
+    // An empty shell inside the throttle window must not clobber the tail.
+    process.emit("event", { type: "bash_execution_update", id: "b1", delta: snapshot("") });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // The next snapshot beyond the throttle window replaces the tail.
+    process.emit("event", { type: "bash_execution_update", id: "b1", delta: snapshot("Downloading wheel\n") });
+    await eventually(() => received.some((event) => event.type === "tool.updated" && String(event.partialOutput ?? "").includes("Downloading wheel")));
+    process.emit("event", { type: "tool_execution_end", toolCallId: "b1", toolName: "bash", result: "installed" });
+    await eventually(() => received.some((event) => event.type === "tool.updated" && event.status === "done"));
+    const tails = received.filter((event) => event.type === "tool.updated" && typeof event.partialOutput === "string" && String(event.partialOutput).length > 0);
+    expect(tails.length).toBeGreaterThanOrEqual(2);
+    expect(tails.every((event) => event.callId === "b1")).toBe(true);
+  });
+
+  it("preview-truncates oversized tool output with byte metadata", async () => {
+    const cwd = await workspace();
+    const hub = new ConversationEventHub();
+    const process = new EventEmitter() as PiProcess;
+    const received: Array<Record<string, unknown>> = [];
+    hub.bind(cwd, process, { activeSessionId: () => "session-tool-output", onBusy: () => undefined, onExit: () => undefined });
+    await hub.subscribe(cwd, "session-tool-output", undefined, (record) => received.push(JSON.parse(record.data)));
+
+    process.emit("event", { type: "tool_execution_end", toolCallId: "large", toolName: "read", result: "结果".repeat(100_000) });
+    await eventually(() => received.some((event) => event.type === "tool.updated" && event.status === "done"));
+
+    const output = received.find((event) => event.type === "tool.updated" && event.status === "done")!;
+    expect(output.outputTruncated).toBe(true);
+    expect(output.originalOutputBytes).toBeGreaterThan(64 * 1024);
+    expect(Buffer.byteLength(String(output.output), "utf8")).toBeLessThanOrEqual(64 * 1024);
   });
 
   it("uses partial snapshots to discard repeated and overlapping streaming deltas", async () => {
@@ -300,9 +509,13 @@ describe("central conversation event hub", () => {
     await secondHub.publish(cwd, "session-restart", { type: "status.updated", sessionId: "session-restart", status: "second" });
     const all = await store.readAfter(cwd, "session-restart");
 
-    expect(first[0]?.id).toBe("1");
-    expect(all.map((record) => record.id)).toEqual(["1", "2"]);
-    expect((await store.readAfter(cwd, "session-restart", first[0]?.id)).map((record) => record.id)).toEqual(["2"]);
+    expect(first[0]?.id).toMatch(/^[0-9a-f-]+:1$/);
+    expect(all.map((record) => record.id)).toEqual([first[0]?.id, expect.stringMatching(/^[0-9a-f-]+:1$/)]);
+    expect(all[1]?.id).not.toBe(first[0]?.id);
+    const replay = await store.readAfter(cwd, "session-restart", first[0]?.id);
+    expect(replay).toHaveLength(1);
+    expect(replay[0]?.event).toBe("stream.gap");
+    expect(JSON.parse(replay[0]!.data)).toMatchObject({ type: "stream.gap", reason: "epoch_changed" });
   });
 
   it("does not classify tool, interaction, or artifact-only turns as empty", async () => {

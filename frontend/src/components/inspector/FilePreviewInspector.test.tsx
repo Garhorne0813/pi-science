@@ -75,6 +75,33 @@ afterEach(() => {
 });
 
 describe("FilePreviewInspector edit capability", () => {
+  it("limits select-all to the code preview contents", async () => {
+    renderInspector("x.txt", "x.txt", "text");
+
+    const code = await screen.findByText((_, element) => element?.tagName === "CODE" && element.textContent === "line1\nline2\n");
+    const preview = code.closest("[tabindex='0']") as HTMLElement;
+    expect(preview).toBeTruthy();
+
+    preview.focus();
+    fireEvent.keyDown(preview, { key: "a", metaKey: true });
+
+    expect(window.getSelection()?.toString()).toBe("line1\nline2\n");
+  });
+
+  it("limits select-all to the rendered markdown preview", async () => {
+    renderInspector("readme.md", "readme.md", "text", "# Heading\n\nBody text");
+
+    const heading = await screen.findByRole("heading", { name: "Heading" });
+    const preview = heading.closest("[tabindex='0']") as HTMLElement;
+    preview.focus();
+    fireEvent.keyDown(preview, { key: "a", ctrlKey: true });
+
+    const selected = window.getSelection()?.toString();
+    expect(selected).toContain("Heading");
+    expect(selected).toContain("Body text");
+    expect(selected).not.toContain("readme.md");
+  });
+
   it("shows an edit button for a text file and saves edits through the write API", async () => {
     renderInspector("x.txt", "x.txt", "text");
 
@@ -110,6 +137,19 @@ describe("FilePreviewInspector edit capability", () => {
   it("does not offer editing for binary formats like pdf", async () => {
     renderInspector("doc.pdf", "doc.pdf", "pdf");
     await waitFor(() => expect(screen.queryByLabelText("Edit file")).toBeNull());
+  });
+
+  it("uses the viewport scroller for both axes and renders tables flush to it", async () => {
+    renderInspector("wide.csv", "wide.csv", "text", "a,b,c\n1,2,3\n4,5,6");
+
+    const table = await screen.findByRole("table");
+    const tableSurface = table.parentElement as HTMLElement;
+    const scroller = screen.getByTestId("table-preview-scroller");
+
+    expect(scroller).toHaveClass("min-h-0", "flex-1", "overflow-auto");
+    expect(tableSurface.parentElement).toBe(scroller);
+    expect(tableSurface).not.toHaveClass("p-3", "overflow-x-auto");
+    expect(table).toHaveClass("w-max", "min-w-full");
   });
 
   it("shows a missing-file error for a markdown artifact reference", async () => {

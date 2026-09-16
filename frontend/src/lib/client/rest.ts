@@ -3,7 +3,7 @@
 
 import { request, responseError, RUNTIME_START_TIMEOUT_MS } from "./http";
 import { cacheMessages } from "./message-cache";
-import type { HistoryMessage, InteractionResponse, SessionInfo, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
+import type { HistoryMessage, InteractionResponse, SessionInfo, SessionListPage, SessionMessagePage, SessionState, SessionStats, SessionUserMessageIndex, TurnArtifactTurn } from "./types";
 import { parseWirePayload } from "./wire-schema";
 
 export async function createSession(baseUrl: string, cwd: string, model?: string): Promise<{ id: string; cwd?: string; project_id?: string }> {
@@ -39,6 +39,35 @@ export async function listSessions(baseUrl: string, cwd: string): Promise<Sessio
   }));
 }
 
+export async function listSessionsPage(
+  baseUrl: string,
+  cwd: string,
+  options: { cursor?: string | null; limit?: number } = {},
+): Promise<SessionListPage> {
+  const params = new URLSearchParams({ cwd, limit: String(options.limit ?? 30) });
+  if (options.cursor) params.set("cursor", options.cursor);
+  const res = await request(`${baseUrl}/api/sessions?${params}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(responseError(data, `List sessions failed: ${res.statusText}`));
+  // Accept the pre-pagination shape during rolling upgrades and in older
+  // test fixtures; new servers always return the page envelope.
+  const normalized = Array.isArray(data)
+    ? { sessions: data, next_cursor: null, has_more: false }
+    : data;
+  const { sessionListPageSchema } = await import("@pi-science/contracts");
+  const page = parseWirePayload(normalized, sessionListPageSchema, "List sessions failed");
+  return {
+    sessions: page.sessions.map((session) => ({
+      ...session,
+      name: session.name ?? undefined,
+      created_at: session.created_at ?? undefined,
+      updated_at: session.updated_at ?? undefined,
+    })),
+    next_cursor: page.next_cursor,
+    has_more: page.has_more,
+  };
+}
+
 export async function getMessagesPage(
   baseUrl: string,
   sessionId: string,
@@ -66,6 +95,16 @@ export async function getMessagesPage(
 
 export async function getMessages(baseUrl: string, sessionId: string, cwd?: string): Promise<HistoryMessage[]> {
   return (await getMessagesPage(baseUrl, sessionId, cwd)).messages;
+}
+
+export async function getConversationResumeCursor(baseUrl: string, sessionId: string, cwd: string): Promise<string | null> {
+  const params = new URLSearchParams({ cwd });
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/events/cursor?${params}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    throw new Error(responseError(data, `Load conversation cursor failed: ${res.statusText}`));
+  }
+  return typeof data.resumeCursor === "string" && data.resumeCursor.length > 0 ? data.resumeCursor : null;
 }
 
 export async function getUserMessageIndex(baseUrl: string, sessionId: string, cwd?: string): Promise<SessionUserMessageIndex> {
@@ -237,6 +276,7 @@ export async function respondToInteraction(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(response),
+      timeoutMs: 15_000,
     },
   );
   const data = await res.json().catch(() => ({}));

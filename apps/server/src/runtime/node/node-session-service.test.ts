@@ -393,6 +393,33 @@ describe("Node session lifecycle", () => {
     await service.shutdownAll();
   });
 
+  it("delivers a live UI response while a session state operation holds its lock", async () => {
+    const service = testService();
+    const cwd = await workspaceWithSessions("session-a");
+    await service.resume("session-a", cwd);
+    let releaseLock!: () => void;
+    let lockEntered!: () => void;
+    const entered = new Promise<void>((resolve) => { lockEntered = resolve; });
+    const held = service["withLock"](`${cwd}\0session-a`, async () => {
+      lockEntered();
+      await new Promise<void>((resolve) => { releaseLock = resolve; });
+    });
+    await entered;
+    try {
+      const response = await Promise.race([
+        service.notify("session-a", cwd, "extension_ui_response", { id: "approval-1", value: "Allow once" }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("UI response waited behind the session lock")), 300)),
+      ]);
+      expect(response).toMatchObject({ success: true });
+      await waitFor(async () => (await readFile(process.env.FAKE_PI_LOG!, "utf8"))
+        .includes('"type":"extension_ui_response","id":"approval-1","value":"Allow once"'));
+    } finally {
+      releaseLock();
+      await held;
+      await service.shutdownAll();
+    }
+  });
+
   it("sends set_model with the projected runtime identity instead of the canonical ref", async () => {
     const credentials = new CredentialStore();
     await credentials.put({ id: "cred-a", kind: "api_key", backend: "managed", secret: "secret-a" });

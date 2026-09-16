@@ -295,11 +295,13 @@ export class NodeSessionService {
     let cwd: string;
     try { cwd = await validateWorkspaceCwd(cwdValue); }
     catch (error) { return { success: false, code: "workspace_invalid", error: String(error) }; }
-    return this.withLock(`${cwd}\0${sessionId}`, async () => {
-      const activated = await this.activateUnlocked(sessionId, cwd);
-      if ("error" in activated) return activated;
+    const key = runtimeKey(cwd, sessionId);
+    const deliver = async (runtime: RuntimeRecord): Promise<PiResult> => {
       try {
-        await activated.process.sendNotification(type, params);
+        await runtime.process.sendNotification(type, params);
+        if (runtime.closing || this.runtimes.get(key) !== runtime) {
+          return { success: false, code: "runtime_evicted", error: "Pi runtime changed while the interaction response was being sent" };
+        }
         if (type === "extension_ui_response" && typeof params.id === "string") {
           this.eventHub.resolvePendingInteraction(cwd, sessionId, params.id);
         }
@@ -307,6 +309,18 @@ export class NodeSessionService {
       } catch (error) {
         return { success: false, code: "write_failed", error: String(error) };
       }
+    };
+    // A pending UI dialog blocks the agent turn. Do not queue its response
+    // behind a state probe or recovery operation holding the session lock:
+    // those operations can themselves wait for the dialog to resolve.
+    const live = this.runtimes.get(key);
+    if (type === "extension_ui_response" && live?.activeSessionId === sessionId && !live.closing) {
+      return deliver(live);
+    }
+    return this.withLock(`${cwd}\0${sessionId}`, async () => {
+      const activated = await this.activateUnlocked(sessionId, cwd);
+      if ("error" in activated) return activated;
+      return deliver(activated);
     });
   }
 

@@ -51,7 +51,7 @@ describe("durable conversation event replay", () => {
     });
   });
 
-  it("uses epoch-qualified cursors when sequence numbers restart", async () => {
+  it("terminates replay when the durable stream crosses an epoch boundary", async () => {
     const cwd = await workspace();
     const store = new DurableEventStore();
     const sessionId = "session-epoch";
@@ -60,8 +60,15 @@ describe("durable conversation event replay", () => {
     await store.append(cwd, sessionId, record("epoch-b:2", "2026-07-23T00:00:02.000Z", "newer"));
 
     const replay = await store.readAfter(cwd, sessionId, "epoch-a:1");
-    expect(replay.map((item) => item.id)).toEqual(["epoch-b:1", "epoch-b:2"]);
-    expect(replay.map((item) => JSON.parse(item.data).text)).toEqual(["new", "newer"]);
+    expect(replay).toHaveLength(1);
+    expect(replay[0]?.event).toBe("stream.gap");
+    expect(JSON.parse(replay[0]!.data)).toMatchObject({
+      type: "stream.gap",
+      reason: "epoch_changed",
+      requestedCursor: "epoch-a:1",
+      observedEpoch: "epoch-b",
+    });
+    expect(replay[0]?.data).not.toContain("newer");
   });
 
   it("merges primary and fallback logs in order and deduplicates identical event IDs", async () => {
@@ -93,6 +100,15 @@ describe("durable conversation event replay", () => {
     expect((await store.readAfter(cwd, "session-clock")).map((item) => item.id)).toEqual(["epoch-clock:1", "epoch-clock:2"]);
   });
 
+  it("continues to replay legacy numeric cursors", async () => {
+    const cwd = await workspace();
+    const store = new DurableEventStore();
+    await store.append(cwd, "session-legacy", record("1", "2026-07-23T00:00:01.000Z", "one"));
+    await store.append(cwd, "session-legacy", record("2", "2026-07-23T00:00:02.000Z", "two"));
+
+    expect((await store.readAfter(cwd, "session-legacy", "1")).map((item) => item.id)).toEqual(["2"]);
+  });
+
   it("emits a stream gap instead of blindly replaying deltas for a missing cursor", async () => {
     const cwd = await workspace();
     const store = new DurableEventStore();
@@ -102,6 +118,58 @@ describe("durable conversation event replay", () => {
     expect(replay[0]?.event).toBe("stream.gap");
     expect(JSON.parse(replay[0]!.data)).toMatchObject({ type: "stream.gap", missingCursor: "epoch-gap:1" });
     expect(replay[0]?.data).not.toContain("unsafe delta");
+  });
+
+  it("emits a stream gap instead of replaying past a sequence hole", async () => {
+    const cwd = await workspace();
+    const store = new DurableEventStore();
+    const sessionId = "session-hole";
+    await store.append(cwd, sessionId, record("epoch-hole:1", "2026-07-23T00:00:00.000Z", "first"));
+    await store.append(cwd, sessionId, record("epoch-hole:3", "2026-07-23T00:00:02.000Z", "unsafe suffix"));
+
+    const replay = await store.readAfter(cwd, sessionId, "epoch-hole:1");
+    expect(replay).toHaveLength(1);
+    expect(JSON.parse(replay[0]!.data)).toMatchObject({ type: "stream.gap", reason: "sequence_hole", expectedSeq: 2, observedSeq: 3 });
+    expect(replay[0]?.data).not.toContain("unsafe suffix");
+  });
+
+  it("compacts by UTF-8 byte target and record count, not character count alone", async () => {
+    const cwd = await workspace();
+    const sessionId = "session-byte-bound";
+    const store = new DurableEventStore({
+      maxEventFileBytes: 500,
+      targetEventFileBytes: 220,
+      maxEventRecords: 2,
+      maxEventRecordBytes: 1_000,
+    });
+    await store.append(cwd, sessionId, record("epoch-bound:1", "2026-07-23T00:00:01.000Z", "你好".repeat(30)));
+    await store.append(cwd, sessionId, record("epoch-bound:2", "2026-07-23T00:00:02.000Z", "第二条".repeat(30)));
+    await store.append(cwd, sessionId, record("epoch-bound:3", "2026-07-23T00:00:03.000Z", "第三条".repeat(30)));
+    const target = paths(cwd, sessionId);
+    const bytes = Buffer.byteLength(await readFile(target.primary, "utf8"), "utf8");
+    expect(bytes).toBeLessThanOrEqual(500);
+    expect((await store.readAfter(cwd, sessionId)).length).toBeLessThanOrEqual(2);
+  });
+
+  it("rejects an individual serialized record above the hard record bound", async () => {
+    const cwd = await workspace();
+    const store = new DurableEventStore({ maxEventRecordBytes: 128 });
+    await expect(store.append(cwd, "session-oversized", record("epoch-size:1", "2026-07-23T00:00:00.000Z", "x".repeat(500)))).rejects.toThrow(/serialized bytes/);
+  });
+
+  it("keeps guarded appends subject to the same journal compaction bound", async () => {
+    const cwd = await workspace();
+    let compactions = 0;
+    const store = new DurableEventStore({
+      maxEventFileBytes: 1,
+      targetEventFileBytes: 1,
+      onCompaction: () => { compactions += 1; },
+    });
+
+    expect(await store.appendConditional(cwd, "session-conditional-bound", record("epoch-bound:1", "2026-07-23T00:00:00.000Z", "guarded"), () => true)).toBe(true);
+    expect(compactions).toBe(1);
+    const target = paths(cwd, "session-conditional-bound").primary;
+    expect((await readFile(target, "utf8")).trim().split("\n")).toHaveLength(1);
   });
 
   it("does not fallback-write an already appended event when compaction fails", async () => {

@@ -98,7 +98,7 @@ Re-run the platform-appropriate installer (`scripts/install.sh` or `powershell -
 PI_SCIENCE_SKIP_INSTALL=1 bash scripts/dev.sh
 ```
 
-The installers download Pi Orbit 0.3.1 by default. Pi Orbit Web Mode exposes
+The installers download Pi Orbit 0.4.0 by default. Pi Orbit Web Mode exposes
 `GET /api/catalog` for the complete provider/model runtime catalog while the
 existing `GET /api/models` endpoint keeps its available-models meaning. Set
 `PI_ORBIT_VERSION` to select another compatible release, or set `PI_ORBIT_REPO`

@@ -34,6 +34,32 @@ async function workspace(): Promise<string> {
 }
 
 describe("native control-plane business routes", () => {
+  it("uses normalized thinking levels from the Pi Orbit catalog", async () => {
+    const cwd = await workspace();
+    process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
+    const modules = createServerModules();
+    const runtimeCatalog = {
+      getCatalog: vi.fn(async () => ({
+        schemaVersion: 1 as const,
+        providers: [{
+          id: "openai",
+          name: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          auth: { apiKey: true, oauth: false, subscription: false, configured: true },
+          models: [{ id: "gpt-5.5", name: "GPT-5.5", api: "openai-responses", reasoning: true, thinkingLevels: ["off", "high", "max"], input: ["text"], contextWindow: 400000, maxTokens: 128000 }],
+        }],
+      })),
+    };
+    const app = buildApp(config(), { ...modules, runtimeCatalog: runtimeCatalog as unknown as typeof modules.runtimeCatalog });
+    apps.push(app);
+
+    const settings = (await app.inject({ method: "GET", url: "/api/settings/config" })).json();
+
+    expect(settings.available_models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "openai/gpt-5.5", thinking_levels: ["off", "high", "max"] }),
+    ]));
+  });
+
   it("persists the unified skill policy without replacing active sessions", async () => {
     const cwd = await workspace();
     process.env.PI_SCIENCE_HOME = join(cwd, "control-home");
@@ -129,7 +155,7 @@ describe("native control-plane business routes", () => {
       success: true,
       data: {
         models: [
-          { provider: "openrouter", id: "openai/gpt-5.1", name: "GPT-5.1", reasoning: true, contextWindow: 200000, thinkingLevelMap: { xhigh: "xhigh", max: null } },
+          { provider: "openrouter", id: "openai/gpt-5.1", name: "GPT-5.1", reasoning: true, contextWindow: 200000, thinkingLevels: ["xhigh", "off", "high"] },
           { provider: "openrouter", id: "openai/gpt-4o", name: "GPT-4o", reasoning: false },
         ],
       },
@@ -141,7 +167,7 @@ describe("native control-plane business routes", () => {
       model: "openrouter/openai/gpt-5.1",
       model_catalog_source: "pi",
       available_models: [
-        { id: "openrouter/openai/gpt-5.1", reasoning: true, thinking_levels: ["off", "minimal", "low", "medium", "high", "xhigh"], context_window: 200000 },
+        { id: "openrouter/openai/gpt-5.1", reasoning: true, thinking_levels: ["off", "high", "xhigh"], context_window: 200000 },
         { id: "openrouter/openai/gpt-4o", reasoning: false, thinking_levels: ["off"] },
       ],
     });

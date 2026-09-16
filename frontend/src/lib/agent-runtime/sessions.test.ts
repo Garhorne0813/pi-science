@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useRuntimeStore } from "./index";
 import { jsonResponse, installRuntimeTestEnvironment } from "./test-helpers";
-import { loadSessionsInternal } from "./sessions";
+import { loadMoreSessionsInternal, loadSessionsInternal } from "./sessions";
 
 installRuntimeTestEnvironment();
 
@@ -11,6 +11,25 @@ afterEach(() => {
 });
 
 describe("loadSessionsInternal stale protection", () => {
+  it("appends cursor pages without truncating older sessions", async () => {
+    useRuntimeStore.setState({ cwd: "/workspace", activeSessionId: null, sessions: [], sessionsCursor: null, sessionsHasMore: false, sessionsLoading: false });
+    const first = Array.from({ length: 30 }, (_, index) => ({ id: `s-${index}`, cwd: "/workspace" }));
+    const second = Array.from({ length: 25 }, (_, index) => ({ id: `s-${index + 30}`, cwd: "/workspace" }));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("cursor=next-page")) return jsonResponse({ sessions: second, next_cursor: null, has_more: false });
+      if (url.startsWith("/api/sessions?")) return jsonResponse({ sessions: first, next_cursor: "next-page", has_more: true });
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await loadSessionsInternal();
+    await expect(loadMoreSessionsInternal()).resolves.toBe(25);
+
+    expect(useRuntimeStore.getState().sessions).toHaveLength(55);
+    expect(useRuntimeStore.getState().sessions.at(-1)?.id).toBe("s-54");
+    expect(useRuntimeStore.getState().sessionsHasMore).toBe(false);
+  });
+
   it("does not let a stale in-flight list overwrite a fresher one that resolved later", async () => {
     useRuntimeStore.setState({ cwd: "/workspace", activeSessionId: null, sessions: [] });
     const releaseStale: Array<() => void> = [];

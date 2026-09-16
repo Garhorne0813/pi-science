@@ -1,4 +1,5 @@
 import { open, readdir, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join, relative, resolve } from "node:path";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
@@ -26,6 +27,15 @@ export interface SessionMessageRecord {
    *  snapshot). Forwarded to the frontend so read-only panels can rebuild
    *  tool state without live events. Capped: oversized details are dropped. */
   details?: unknown;
+  presentation?: Record<string, unknown>;
+  presentationRole?: "intermediate" | "final";
+  turnId?: string;
+  runId?: string;
+  itemId?: string;
+  parentItemId?: string;
+  revision?: number;
+  sequence?: number;
+  classificationSource?: "explicit" | "legacy_inferred" | "unknown";
 }
 
 export interface SessionMessagePage {
@@ -50,6 +60,8 @@ interface SessionFile {
   sessionInfo: boolean;
   aiTitle: boolean;
   modified: Date;
+  mtimeMs: number;
+  size: number;
 }
 
 interface CachedFile {
@@ -58,6 +70,8 @@ interface CachedFile {
   subagent: boolean;
   sessionInfo: boolean;
   aiTitle: boolean;
+  mtimeMs: number;
+  size: number;
 }
 
 interface ParsedSessionHeader {
@@ -81,11 +95,11 @@ function snapshotVersion(size: number, mtimeMs: number): string {
   return `${size}:${mtimeMs}`;
 }
 
-function encodeMessageCursor(offset: number): string {
-  return Buffer.from(JSON.stringify({ v: 1, o: Math.max(0, Math.floor(offset)) })).toString("base64url");
+function encodeMessageCursor(offset: number, boundaryHash?: string): string {
+  return Buffer.from(JSON.stringify({ v: boundaryHash ? 2 : 1, o: Math.max(0, Math.floor(offset)), ...(boundaryHash ? { p: boundaryHash } : {}) })).toString("base64url");
 }
 
-function decodeMessageCursor(cursor: string): number {
+function decodeMessageCursor(cursor: string): { offset: number; boundaryHash?: string } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
@@ -93,11 +107,24 @@ function decodeMessageCursor(cursor: string): number {
     throw new Error("invalid history cursor");
   }
   if (!parsed || typeof parsed !== "object") throw new Error("invalid history cursor");
-  const value = parsed as { v?: unknown; o?: unknown };
-  if (value.v !== 1 || typeof value.o !== "number" || !Number.isSafeInteger(value.o) || value.o < 0) {
+  const value = parsed as { v?: unknown; o?: unknown; p?: unknown };
+  if ((value.v !== 1 && value.v !== 2) || typeof value.o !== "number" || !Number.isSafeInteger(value.o) || value.o < 0) {
     throw new Error("invalid history cursor");
   }
-  return value.o;
+  if (value.v === 2 && (typeof value.p !== "string" || !value.p)) throw new Error("invalid history cursor");
+  return { offset: value.o, ...(value.v === 2 ? { boundaryHash: value.p as string } : {}) };
+}
+
+async function messageBoundaryHash(path: string, offset: number): Promise<string> {
+  const handle = await open(path, "r");
+  try {
+    const start = Math.max(0, offset - 64);
+    const buffer = Buffer.alloc(offset - start);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
+    return createHash("sha256").update(buffer.subarray(0, bytesRead)).digest("base64url").slice(0, 22);
+  } finally {
+    await handle.close();
+  }
 }
 
 const MAX_TOOL_DETAILS_BYTES = 100_000;
@@ -116,6 +143,15 @@ function parseMessageLine(line: string): SessionMessageRecord | null {
       toolName: typeof message.toolName === "string" ? message.toolName : undefined,
       isError: typeof message.isError === "boolean" ? message.isError : false,
       timestamp: typeof entry.timestamp === "string" ? entry.timestamp : null,
+      ...(message.presentation && typeof message.presentation === "object" && !Array.isArray(message.presentation) ? { presentation: message.presentation as Record<string, unknown> } : {}),
+      ...(message.presentationRole === "intermediate" || message.presentationRole === "final" ? { presentationRole: message.presentationRole } : {}),
+      ...(typeof message.turnId === "string" ? { turnId: message.turnId } : {}),
+      ...(typeof message.runId === "string" ? { runId: message.runId } : {}),
+      ...(typeof message.itemId === "string" ? { itemId: message.itemId } : {}),
+      ...(typeof message.parentItemId === "string" ? { parentItemId: message.parentItemId } : {}),
+      ...(typeof message.revision === "number" && Number.isInteger(message.revision) && message.revision >= 0 ? { revision: message.revision } : {}),
+      ...(typeof message.sequence === "number" && Number.isInteger(message.sequence) && message.sequence >= 0 ? { sequence: message.sequence } : {}),
+      ...(message.classificationSource === "explicit" || message.classificationSource === "legacy_inferred" || message.classificationSource === "unknown" ? { classificationSource: message.classificationSource } : {}),
     };
     if (message.details !== undefined) {
       try {
@@ -276,6 +312,28 @@ async function lastMessageTimestamp(path: string): Promise<string | null> {
   }
 }
 
+const lastMessageTimestampCache = new Map<string, { mtimeMs: number; size: number; timestamp: string | null }>();
+
+async function cachedLastMessageTimestamp(file: SessionFile): Promise<string | null> {
+  const cached = lastMessageTimestampCache.get(file.path);
+  if (cached && cached.mtimeMs === file.mtimeMs && cached.size === file.size) return cached.timestamp;
+  const timestamp = await lastMessageTimestamp(file.path);
+  lastMessageTimestampCache.set(file.path, { mtimeMs: file.mtimeMs, size: file.size, timestamp });
+  return timestamp;
+}
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index]!);
+    }
+  }));
+  return results;
+}
+
 // A candidate is every `.jsonl` file discovered while scanning, whether or not
 // its header currently parses as a valid session. Tracking the invalid ones
 // (with their mtime/size) lets us re-parse them later WITHOUT waiting for the
@@ -416,7 +474,7 @@ function filesFromDirs(dirs: Record<string, DirCache>): CachedFile[] {
         && candidate.header.type === "session"
         && typeof candidate.header.id === "string"
       ) {
-        files.push({ path: candidate.path, header: candidate.header, subagent: candidate.subagent, sessionInfo: candidate.sessionInfo, aiTitle: candidate.aiTitle });
+        files.push({ path: candidate.path, header: candidate.header, subagent: candidate.subagent, sessionInfo: candidate.sessionInfo, aiTitle: candidate.aiTitle, mtimeMs: candidate.mtimeMs, size: candidate.size });
       }
     }
   }
@@ -521,6 +579,9 @@ async function sessionFiles(root: string): Promise<CachedFile[]> {
 function invalidateCache(root: string): void {
   cacheGeneration.set(root, (cacheGeneration.get(root) ?? 0) + 1);
   sessionFileCache.delete(root);
+  for (const path of lastMessageTimestampCache.keys()) {
+    if (path === root || path.startsWith(`${root}/`)) lastMessageTimestampCache.delete(path);
+  }
 }
 
 /** Invalidate the cached session file list for a workspace.
@@ -533,24 +594,17 @@ export function invalidateSessionFileCache(cwd: string): void {
   cacheGeneration.set(root, (cacheGeneration.get(root) ?? 0) + 1);
   sessionFileCache.delete(root);
   scanInFlight.delete(root);
+  for (const path of lastMessageTimestampCache.keys()) {
+    if (path === root || path.startsWith(`${root}/`)) lastMessageTimestampCache.delete(path);
+  }
 }
 
-/** Refresh the cached file entries with fresh stat() calls for correct
- *  `modified` times. Returns results sorted newest-first. */
+/** Convert the freshly scanned/revalidated cache metadata into session files,
+ *  sorted newest-first without issuing a second unbounded stat() fan-out. */
 async function sessionFilesWithMtime(root: string): Promise<SessionFile[]> {
   const cached = await sessionFiles(root);
-  const refreshed = await Promise.all(
-    cached.map(async (file) => {
-      try {
-        const metadata = await stat(file.path);
-        return { path: file.path, header: file.header, subagent: file.subagent, sessionInfo: file.sessionInfo, aiTitle: file.aiTitle, modified: metadata.mtime };
-      } catch {
-        return null;
-      }
-    }),
-  );
-  return refreshed
-    .filter((item): item is SessionFile => item !== null)
+  return cached
+    .map((file) => ({ ...file, modified: new Date(file.mtimeMs) }))
     .sort((left, right) => right.modified.getTime() - left.modified.getTime());
 }
 
@@ -593,7 +647,7 @@ export class SessionRepository {
       readProject(cwd),
     ]);
     const root = sessionsRoot(cwd);
-    const rows = await Promise.all(files.filter((file) => {
+    const visibleFiles = files.filter((file) => {
       if (!isUserVisibleSession(root, file)) return false;
       const parentSession = typeof file.header.parentSession === "string" ? file.header.parentSession : "";
       // A named top-level session is a user-created fork. An unnamed session
@@ -603,11 +657,12 @@ export class SessionRepository {
       // remain and would otherwise resurface in the conversation list.
       if (file.sessionInfo) return true;
       return !parentSession;
-    }).map(async ({ header, modified, path }) => {
+    });
+    const rows = await mapWithConcurrency(visibleFiles, 16, async ({ header, modified, path, mtimeMs, size, ...fileFlags }) => {
       const headerTimestamp = typeof header.timestamp === "string" ? header.timestamp : null;
       // updated_at = last real message time, else the session header timestamp
       // (new sessions without messages), else the file mtime as a fallback.
-      const updatedAt = (await lastMessageTimestamp(path)) ?? headerTimestamp ?? modified.toISOString();
+      const updatedAt = (await cachedLastMessageTimestamp({ header, modified, path, mtimeMs, size, ...fileFlags })) ?? headerTimestamp ?? modified.toISOString();
       return {
         id: String(header.id),
         cwd: typeof header.cwd === "string" ? header.cwd : resolve(cwd),
@@ -616,10 +671,12 @@ export class SessionRepository {
         created_at: headerTimestamp,
         updated_at: updatedAt,
       };
-    }));
+    });
     // Sort by the effective updated_at (last message time when present) so the
     // list ordering matches the displayed timestamps.
-    return rows.sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+    return rows.sort((left, right) => (
+      right.updated_at.localeCompare(left.updated_at) || right.id.localeCompare(left.id)
+    ));
   }
 
   async messagesPage(
@@ -641,11 +698,18 @@ export class SessionRepository {
     if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > HISTORY_PAGE_MAX_SIZE) {
       throw new Error(`history limit must be an integer between 1 and ${HISTORY_PAGE_MAX_SIZE}`);
     }
-    const endOffset = options.before ? decodeMessageCursor(options.before) : metadata.size;
+    const decoded = options.before ? decodeMessageCursor(options.before) : null;
+    const endOffset = decoded?.offset ?? metadata.size;
+    if (decoded?.boundaryHash) {
+      if (endOffset > metadata.size || await messageBoundaryHash(file.path, endOffset) !== decoded.boundaryHash) {
+        throw new Error("stale history cursor");
+      }
+    }
     const page = await readMessagePage(file.path, endOffset, requestedLimit);
+    const nextBoundaryHash = page.nextOffset === null ? undefined : await messageBoundaryHash(file.path, page.nextOffset);
     return {
       messages: page.messages,
-      next_cursor: page.nextOffset === null ? null : encodeMessageCursor(page.nextOffset),
+      next_cursor: page.nextOffset === null ? null : encodeMessageCursor(page.nextOffset, nextBoundaryHash),
       has_more: page.hasMore,
       snapshot_version: snapshotVersion(metadata.size, metadata.mtimeMs),
     };

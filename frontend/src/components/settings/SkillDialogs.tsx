@@ -1,33 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Loader2, MessageSquarePlus, Upload, X } from "lucide-react";
+import { Loader2, MessageSquarePlus, Upload } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useUiStore } from "../../lib/ui";
 import { skillsMutations, type SkillUploadCandidate, type GithubSkillCandidate } from "../../lib/skills/skills-mutations";
+import { Modal } from "../ui/Modal";
 
 function DialogShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  return (
-    <div
-      className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4"
-      role="presentation"
-      onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        className="ui-dialog flex max-h-[86vh] w-[min(560px,calc(100vw-32px))] flex-col overflow-hidden rounded-large border border-border bg-surface-raised shadow-pop outline-none"
-      >
-        <header className="flex items-center justify-between gap-3 border-b border-faint px-5 py-3">
-          <h2 className="text-ui-title font-medium tracking-tight text-text">{title}</h2>
-          <button type="button" aria-label="Close" onClick={onClose} className="rounded-full p-1.5 text-muted hover:bg-surface-2 hover:text-text">
-            <X size={16} />
-          </button>
-        </header>
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
-      </div>
-    </div>
-  );
+  return <Modal title={title} onClose={onClose} contentClassName="ui-dialog">{children}</Modal>;
 }
 
 function ErrorNote({ message }: { message: string | null }) {

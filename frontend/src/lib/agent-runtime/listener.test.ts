@@ -9,6 +9,64 @@ installRuntimeTestEnvironment();
 
 
 describe("runtime event subscription", () => {
+  it("renders named thinking.updated events delivered through the SSE transport", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-thinking"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-thinking");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    source.emit("thinking.updated", {
+      type: "thinking.updated",
+      sessionId: "session-thinking",
+      turnId: "turn-1",
+      partId: "thinking-1",
+      text: "Inspecting the evidence",
+      revision: 1,
+    }, "epoch-1:1");
+
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(expect.objectContaining({
+      kind: "thinking",
+      parts: [expect.objectContaining({ text: "Inspecting the evidence" })],
+    }));
+    expect(useRuntimeStore.getState()).toMatchObject({ working: true, turnLifecycle: "active" });
+    source.emit("session.idle", { type: "session.idle", sessionId: "session-thinking" });
+  });
+
+  it("settles a live turn whose event stream goes silent while the runtime is idle", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/messages")) return jsonResponse({ messages: [] });
+        if (url.includes("/state")) return jsonResponse(state("session-a"));
+        if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+        throw new Error(`Unexpected request: ${url}`);
+      }));
+
+      await useRuntimeStore.getState().connect("/workspace", "session-a");
+      const source = FakeEventSource.instances[0];
+      source.open();
+      source.emit("agent_start", { type: "agent_start", sessionId: "session-a", turnId: "turn-1", runId: "run-1" });
+      expect(useRuntimeStore.getState().turnLifecycle).toBe("active");
+
+      // Silence past the watchdog threshold: one cursor-preserving reconnect,
+      // then the authoritative idle probe settles the turn.
+      await vi.advanceTimersByTimeAsync(26_000);
+      const current = useRuntimeStore.getState();
+      expect(current.working).toBe(false);
+      expect(current.turnLifecycle).toBe("settled");
+      expect(current.status).toBe("ready");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("renders a terminal runtime error and settles the active turn", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -148,11 +206,103 @@ describe("runtime event subscription", () => {
     });
     expect(useRuntimeStore.getState().pendingInteraction?.requestId).toBe("question-1");
 
-    await useRuntimeStore.getState().respondToInteraction({ value: "B" });
+    const firstResponse = useRuntimeStore.getState().respondToInteraction({ value: "B" });
+    const duplicateResponse = useRuntimeStore.getState().respondToInteraction({ value: "A" });
+    await Promise.all([firstResponse, duplicateResponse]);
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/interactions/question-1"))).toHaveLength(1);
     expect(useRuntimeStore.getState().pendingInteraction).toBeNull();
+    expect(useRuntimeStore.getState().turnLifecycle).toBe("active");
     source.emit("session.idle", { type: "session.idle", sessionId: "session-a" });
     expect(useRuntimeStore.getState().working).toBe(false);
     expect(useRuntimeStore.getState().status).toBe("ready");
+  });
+
+  it("marks a running questionnaire interaction resolved immediately after response", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-questionnaire"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      if (url.includes("/interactions/")) return jsonResponse({ ok: true });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await useRuntimeStore.getState().connect("/workspace", "session-questionnaire");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    source.emit("tool.updated", {
+      type: "tool.updated",
+      sessionId: "session-questionnaire",
+      turnId: "turn-q1",
+      callId: "call-q1",
+      itemId: "call-q1",
+      tool: "ask_user_question",
+      status: "running",
+    });
+    source.emit("question.asked", {
+      type: "question.asked",
+      sessionId: "session-questionnaire",
+      requestId: "request-q1",
+      method: "input",
+      title: "Questionnaire",
+      questionnaire: true,
+      toolCallId: "call-q1",
+    });
+
+    expect(useRuntimeStore.getState().turnLifecycle).toBe("waiting");
+    await useRuntimeStore.getState().respondToInteraction({ value: "answer" });
+
+    const interaction = useRuntimeStore.getState().thread.blocks.find((block) => block.kind === "tool");
+    expect(interaction).toMatchObject({ tool: "ask_user_question", status: "running", interactionResolved: true });
+    expect(useRuntimeStore.getState().pendingInteraction).toBeNull();
+    expect(useRuntimeStore.getState().turnLifecycle).toBe("active");
+  });
+
+  it("keeps the resume cursor at the contiguous waterline after projecting a sequence-gap event", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/messages")) return jsonResponse({ messages: [] });
+      if (url.includes("/state")) return jsonResponse(state("session-gap"));
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().connect("/workspace", "session-gap");
+    const source = FakeEventSource.instances[0];
+    source.open();
+    source.emit("run.started", {
+      schemaVersion: 2,
+      sessionId: "session-gap",
+      streamEpoch: "epoch-1",
+      eventId: "epoch-1:1",
+      seq: 1,
+      turnId: "turn-1",
+      runId: "run-1",
+      type: "run.started",
+      payload: {},
+    }, "epoch-1:1");
+    source.emit("item.text.delta", {
+      schemaVersion: 2,
+      sessionId: "session-gap",
+      streamEpoch: "epoch-1",
+      eventId: "epoch-1:3",
+      seq: 3,
+      turnId: "turn-1",
+      runId: "run-1",
+      itemId: "answer-1",
+      type: "item.text.delta",
+      payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "visible" },
+    }, "epoch-1:3");
+
+    expect(useRuntimeStore.getState().thread.blocks).toContainEqual(expect.objectContaining({
+      kind: "agent",
+      parts: [{ id: "answer-1", text: "visible" }],
+    }));
+
+    useRuntimeStore.getState().disconnect();
+    await useRuntimeStore.getState().connect("/workspace", "session-gap");
+    expect(FakeEventSource.instances[1].url).toContain("lastEventId=epoch-1%3A1");
+    expect(FakeEventSource.instances[1].url).not.toContain("epoch-1%3A3");
   });
 
   it("routes the structured questionnaire request through the browser bridge", async () => {

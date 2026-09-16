@@ -11,6 +11,7 @@ export type PiOrbitCatalogModel = {
   name: string;
   api: string;
   reasoning: boolean;
+  thinkingLevels?: string[];
   input: string[];
   contextWindow: number;
   maxTokens: number;
@@ -124,8 +125,17 @@ function parseModel(value: unknown): PiOrbitCatalogModel {
   if (typeof raw.id !== "string" || typeof raw.name !== "string" || typeof raw.api !== "string" || typeof raw.reasoning !== "boolean" || !Array.isArray(raw.input)) throw new PiOrbitCatalogError("runtime_catalog_incompatible", "Pi Orbit catalog model is missing required fields");
   const contextWindow = positiveNumber(raw.contextWindow);
   const maxTokens = positiveNumber(raw.maxTokens);
-  return { id: raw.id, name: raw.name, api: raw.api, reasoning: raw.reasoning, input: raw.input.map(String), contextWindow, maxTokens };
+  const thinkingLevels = raw.thinkingLevels === undefined ? undefined : parseThinkingLevels(raw.thinkingLevels);
+  return { id: raw.id, name: raw.name, api: raw.api, reasoning: raw.reasoning, ...(thinkingLevels ? { thinkingLevels } : {}), input: raw.input.map(String), contextWindow, maxTokens };
 }
 
 function rawBoolean(value: unknown): boolean { return value === true; }
 function positiveNumber(value: unknown): number { const number = Number(value); return Number.isInteger(number) && number > 0 ? number : 0; }
+function parseThinkingLevels(value: unknown): string[] {
+  const canonical = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+  if (!Array.isArray(value) || value.length === 0 || value.some((level) => !canonical.includes(String(level)))) {
+    throw new PiOrbitCatalogError("runtime_catalog_incompatible", "Pi Orbit catalog model contains invalid thinking levels");
+  }
+  const levels = new Set(value.map(String));
+  return canonical.filter((level) => levels.has(level));
+}
