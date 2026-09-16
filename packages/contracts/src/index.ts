@@ -54,6 +54,22 @@ export const sessionStateSchema = z.object({
   compaction_threshold_percent: z.number().min(0).max(100).nullable().optional(),
 });
 
+export const streamGapReasonSchema = z.enum([
+  "cursor_missing",
+  "sequence_hole",
+  "epoch_changed",
+  "invalid_cursor",
+  "client_detected_gap",
+]);
+export type StreamGapReason = z.infer<typeof streamGapReasonSchema>;
+
+export const streamCursorSchema = z.object({
+  epoch: z.string().min(1),
+  seq: z.number().int().nonnegative(),
+  id: z.string().min(1),
+});
+export type StreamCursor = z.infer<typeof streamCursorSchema>;
+
 export const toolPresentationSchema = z.object({
   version: z.literal(1).default(1),
   kind: z.enum(["read", "search", "fetch", "edit", "execute", "compute", "verify", "artifact", "interaction", "system", "other"]),
@@ -412,6 +428,10 @@ export const conversationSnapshotSchema = z.looseObject({
   items: z.array(z.unknown()),
   pendingInteractions: z.array(z.unknown()),
   page: z.object({ nextCursor: z.string().nullable(), hasMore: z.boolean() }),
+  // Optional during the compatibility window: older servers expose the flat
+  // snapshot fields but do not yet return a resumable cursor/state bundle.
+  resumeCursor: z.string().nullable().default(null),
+  sessionState: sessionStateSchema.optional(),
 });
 export type ConversationSnapshot = z.infer<typeof conversationSnapshotSchema>;
 

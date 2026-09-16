@@ -624,6 +624,83 @@ describe("conversation presentation protocol v2", () => {
     expect(thread.foldState?.lastSequence).toBe(1);
   });
 
+  it("treats an epoch change as a recovery boundary instead of dropping the event silently", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({
+      seq: 2,
+      type: "text.updated",
+      itemId: "old-item",
+      payload: { partId: "old-item", phase: "final_answer", baseRevision: 0, revision: 1, text: "old projection" },
+    }));
+
+    const changedEpoch = foldEvent(thread, envelope({
+      streamEpoch: "epoch-2",
+      eventId: "epoch-2:1",
+      seq: 1,
+      type: "run.started",
+      turnId: "turn-2",
+      runId: "run-2",
+      payload: {},
+    }));
+
+    expect(changedEpoch.blocks).toEqual(thread.blocks);
+    expect(changedEpoch.foldState?.reconciliationRequired).toBe(true);
+    expect(changedEpoch.foldState?.recoveryEpoch).toBe("epoch-2");
+    expect(changedEpoch.foldState?.pendingEvents.map((event) => event.eventId)).toEqual(["epoch-2:1"]);
+    expect(changedEpoch.foldState?.seenEventIds).toEqual([]);
+    expect(changedEpoch.foldState?.textByKey).toEqual({});
+    expect(changedEpoch.foldState?.terminalRunIds).toEqual([]);
+  });
+
+  it("reassembles replacement text split into ordered wire chunks", () => {
+    let thread = emptyThread();
+    thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));
+    thread = foldEvent(thread, envelope({
+      seq: 2,
+      type: "text.updated",
+      itemId: "answer-1",
+      payload: {
+        partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1,
+        replace: true, chunkIndex: 0, chunkCount: 2, text: "前半",
+      },
+    }));
+    thread = foldEvent(thread, envelope({
+      seq: 3,
+      type: "text.updated",
+      itemId: "answer-1",
+      payload: {
+        partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1,
+        chunkIndex: 1, chunkCount: 2, text: "后半",
+      },
+    }));
+
+    expect(thread.blocks).toContainEqual(expect.objectContaining({
+      kind: "agent",
+      parts: [{ id: "answer-1", text: "前半后半" }],
+    }));
+    expect(thread.foldState?.reconciliationRequired).toBe(false);
+    expect(thread.foldState?.lastSequence).toBe(3);
+  });
+
+  it("clears fold projection state when an authoritative history window is rebased", () => {
+    let current = emptyThread();
+    current = foldEvent(current, envelope({ seq: 1, type: "run.started", payload: {} }));
+    current = foldEvent(current, envelope({
+      seq: 2,
+      type: "text.updated",
+      itemId: "answer-1",
+      payload: { partId: "answer-1", phase: "final_answer", baseRevision: 0, revision: 1, text: "speculative" },
+    }));
+    const merged = mergeHistoryWindow(current, [
+      { id: "user-1", role: "user", content: [{ type: "text", text: "question" }] },
+      { id: "answer-1", role: "assistant", content: [{ type: "text", text: "authoritative" }] },
+    ], { keepLiveExtras: false, resetProjection: true });
+
+    expect(merged.thread.blocks).toContainEqual(expect.objectContaining({ kind: "agent", parts: [{ id: "answer-1", text: "authoritative" }] }));
+    expect(merged.thread.foldState).toBeUndefined();
+  });
+
   it("reorders speculative text without replaying it as a burst", () => {
     let thread = emptyThread();
     thread = foldEvent(thread, envelope({ seq: 1, type: "run.started", payload: {} }));

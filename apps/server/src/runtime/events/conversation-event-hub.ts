@@ -19,6 +19,16 @@ type EventStore = {
   nextSequence?: (cwd: string, sessionId: string) => Promise<number>;
 };
 
+type StreamIdentityState = {
+  epoch: string;
+  nextSequence: number;
+  tainted: boolean;
+};
+
+type ConversationEventHubOptions = {
+  createStreamEpoch?: () => string;
+};
+
 type BindingOptions = {
   activeSessionId: () => string | null;
   onBusy: (busy: boolean) => void;
@@ -57,6 +67,9 @@ type PendingText = {
 // recoverable. The UI owns the 8KB preview; the transport should not silently
 // turn a 100KB answer into a clipped message.
 const MAX_EVENT_TEXT = 1_000_000;
+const MAX_TEXT_CHUNK_BYTES = 32 * 1024;
+const MAX_METADATA_TEXT_BYTES = 8 * 1024;
+const MAX_TOOL_EVENT_OUTPUT_BYTES = 64 * 1024;
 const MAX_SUBSCRIBER_REPLAY_PENDING = 2_000;
 const STDERR_WINDOW_MS = 30_000;
 const TEXT_BATCH_MS = 50;
@@ -72,8 +85,60 @@ function streamKey(cwd: string, sessionId: string): string {
 }
 
 function cap(value: unknown, limit = MAX_EVENT_TEXT): string {
+  return capUtf8(value, limit).text;
+}
+
+function utf8Bytes(value: string): number {
+  return Buffer.byteLength(value, "utf8");
+}
+
+function utf8Prefix(value: string, maxBytes: number): string {
+  const bytes = Buffer.from(value, "utf8");
+  let end = Math.min(bytes.length, Math.max(0, maxBytes));
+  while (end > 0 && end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end -= 1;
+  if (end === 0 && bytes.length > 0 && maxBytes > 0) {
+    end = 1;
+    while (end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end += 1;
+  }
+  return bytes.subarray(0, end).toString("utf8");
+}
+
+function utf8Suffix(value: string, maxBytes: number): string {
+  const bytes = Buffer.from(value, "utf8");
+  let start = Math.max(0, bytes.length - Math.max(0, maxBytes));
+  while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start += 1;
+  return bytes.subarray(start).toString("utf8");
+}
+
+function capUtf8(value: unknown, limitBytes: number, mode: "head" | "tail" = "head"): { text: string; truncated: boolean; originalBytes: number } {
   const text = typeof value === "string" ? value : stringify(value);
-  return text.length <= limit ? text : `${text.slice(0, limit)}\n[truncated]`;
+  const originalBytes = utf8Bytes(text);
+  if (originalBytes <= limitBytes) return { text, truncated: false, originalBytes };
+  const marker = mode === "tail" ? "[truncated]\n" : "\n[truncated]";
+  const available = Math.max(0, limitBytes - utf8Bytes(marker));
+  const slice = mode === "tail" ? utf8Suffix(text, available) : utf8Prefix(text, available);
+  return { text: mode === "tail" ? `${marker}${slice}` : `${slice}${marker}`, truncated: true, originalBytes };
+}
+
+function splitUtf8(text: string, chunkBytes: number): string[] {
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length <= chunkBytes) return [text];
+  const chunks: string[] = [];
+  let offset = 0;
+  while (offset < bytes.length) {
+    let end = Math.min(bytes.length, offset + chunkBytes);
+    while (end > offset && end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end -= 1;
+    // A chunk boundary may land inside a multi-byte code point. If the first
+    // code point itself is wider than the budget, include it whole rather than
+    // emitting replacement characters that would corrupt the answer.
+    if (end === offset) {
+      end = Math.min(bytes.length, offset + 1);
+      while (end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end += 1;
+    }
+    chunks.push(bytes.subarray(offset, end).toString("utf8"));
+    offset = end;
+  }
+  return chunks;
 }
 
 /** A tool partial result arrives as the result shape itself
@@ -102,12 +167,19 @@ function stringify(value: unknown): string {
   try { return JSON.stringify(value ?? ""); } catch { return String(value ?? ""); }
 }
 
-function safeValue(value: unknown, depth = 0): unknown {
+function safeValue(value: unknown, depth = 0, key?: string): unknown {
   if (depth > 5) return "[depth limit]";
-  if (typeof value === "string") return cap(value);
-  if (Array.isArray(value)) return value.slice(0, 200).map((item) => safeValue(item, depth + 1));
+  if (typeof value === "string") {
+    const limit = key === "text" || key === "thinking"
+      ? MAX_TEXT_CHUNK_BYTES
+      : key === "output" || key === "partialOutput"
+        ? MAX_TOOL_EVENT_OUTPUT_BYTES
+        : MAX_METADATA_TEXT_BYTES;
+    return capUtf8(value, limit).text;
+  }
+  if (Array.isArray(value)) return value.slice(0, 200).map((item) => safeValue(item, depth + 1, key));
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 200).map(([key, item]) => [key, safeValue(item, depth + 1)]));
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 200).map(([childKey, item]) => [childKey, safeValue(item, depth + 1, childKey)]));
   }
   return value;
 }
@@ -257,19 +329,18 @@ function versionedPayload(
   sessionId: string,
   payload: Record<string, unknown>,
   sequence: number,
+  streamEpoch: string,
 ): Record<string, unknown> {
   const body = safeValue(payload);
   if (!body || typeof body !== "object" || Array.isArray(body)) return payload;
   const cleanBody = body as Record<string, unknown>;
   const turnId = typeof cleanBody.turnId === "string" && cleanBody.turnId ? cleanBody.turnId : null;
   const runId = typeof cleanBody.runId === "string" && cleanBody.runId ? cleanBody.runId : null;
-  if (!turnId || !runId) return cleanBody;
-  const streamEpoch = typeof cleanBody.streamEpoch === "string" && cleanBody.streamEpoch
-    ? cleanBody.streamEpoch
-    : `session-${sessionId}`;
+  const authoritativeBody = { ...cleanBody, streamEpoch };
+  if (!turnId || !runId) return authoritativeBody;
   const type = String(cleanBody.type ?? "runtime.event");
   return {
-    ...cleanBody,
+    ...authoritativeBody,
     schemaVersion: 2,
     workspaceId: resolve(cwd),
     sessionId,
@@ -280,8 +351,23 @@ function versionedPayload(
     runId,
     occurredAt: new Date().toISOString(),
     type,
-    payload: cleanBody,
+    payload: authoritativeBody,
   };
+}
+
+function chunkTextPayload(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const type = String(payload.type ?? "");
+  if (type !== "text.updated" && type !== "thinking.updated" && type !== "item.text.delta") return [payload];
+  if (typeof payload.text !== "string") return [payload];
+  const chunks = splitUtf8(payload.text, MAX_TEXT_CHUNK_BYTES);
+  if (chunks.length === 1) return [payload];
+  return chunks.map((text, index) => {
+    const chunk: Record<string, unknown> = { ...payload, text, chunkIndex: index, chunkCount: chunks.length };
+    // A replacement applies only to the first chunk; following chunks append
+    // to that replacement while retaining the original revision identity.
+    if (index > 0 && chunk.replace === true) delete chunk.replace;
+    return chunk;
+  });
 }
 
 function modelError(event: PiEvent): string | null {
@@ -293,8 +379,7 @@ function modelError(event: PiEvent): string | null {
 }
 
 export class ConversationEventHub {
-  private readonly sequences = new Map<string, number>();
-  private readonly sequenceInitializers = new Map<string, Promise<void>>();
+  private readonly streamIdentities = new Map<string, StreamIdentityState>();
   private readonly subscribers = new Map<string, Set<Subscriber>>();
   private readonly pendingInteractions = new Map<string, SseEventRecord[]>();
   private readonly publishing = new Map<string, Promise<void>>();
@@ -306,7 +391,10 @@ export class ConversationEventHub {
   private readonly stderrLogAt = new WeakMap<PiProcess, number>();
   private log: (level: "info" | "warn" | "error", message: string) => void = () => {};
 
-  constructor(private readonly eventStore: EventStore = durableEventStore) {}
+  constructor(
+    private readonly eventStore: EventStore = durableEventStore,
+    private readonly options: ConversationEventHubOptions = {},
+  ) {}
 
   /** Route runtime stderr diagnostics to the control-plane logger. */
   configureLogging(log: (level: "info" | "warn" | "error", message: string) => void): void {
@@ -327,6 +415,17 @@ export class ConversationEventHub {
 
   hasSubscribers(cwd: string, sessionId: string): boolean {
     return (this.subscribers.get(streamKey(cwd, sessionId))?.size ?? 0) > 0;
+  }
+
+  /** Return the newest durable cursor so a client can resume immediately
+   * after an authoritative snapshot instead of replaying every old epoch. */
+  async latestCursor(cwd: string, sessionId: string): Promise<string | null> {
+    const records = await this.eventStore.readAfter(cwd, sessionId);
+    for (let index = records.length - 1; index >= 0; index -= 1) {
+      const id = records[index]?.id;
+      if (id) return id;
+    }
+    return null;
   }
 
   resolvePendingInteraction(cwd: string, sessionId: string, requestId: string): void {
@@ -486,64 +585,10 @@ export class ConversationEventHub {
     const previous = this.publishing.get(key) ?? Promise.resolve();
     const canPublish = () => guard?.() !== false;
     const next = previous.catch(() => undefined).then(async () => {
-      if (!canPublish()) return;
-      await this.ensureSequence(cwd, sessionId, key);
-      if (!canPublish()) return;
-      const sequence = (this.sequences.get(key) ?? 0) + 1;
-      this.sequences.set(key, sequence);
-      const eventPayload = versionedPayload(cwd, sessionId, payload, sequence);
-      const record: SseEventRecord = {
-        event: String(payload.type ?? "runtime.event"),
-        id: String(sequence),
-        data: JSON.stringify(eventPayload),
-        created_at: new Date().toISOString(),
-      };
-      let appended = true;
-      try {
-        appended = guard && this.eventStore.appendConditional
-          ? await this.eventStore.appendConditional(cwd, sessionId, record, guard)
-          : (await this.eventStore.append(cwd, sessionId, record), canPublish());
-      } catch {
-        // Live delivery must survive a persistence outage, but a conditional
-        // event must never be sent after its generation has been invalidated.
-        appended = canPublish();
-      }
-      if (!appended || !canPublish()) {
-        if (this.sequences.get(key) === sequence) this.sequences.set(key, sequence - 1);
-        return;
-      }
-      const type = String(payload.type ?? "");
-      if (type === "questionnaire.asked") {
-        this.pendingInteractions.set(key, [record]);
-      } else if (type === "question.asked" && payload.questionnaire === true) {
-        const pending = this.pendingInteractions.get(key) ?? [];
-        const questionnaire = pending.find((candidate) => {
-          const candidatePayload = recordPayload(candidate);
-          return candidatePayload?.type === "questionnaire.asked"
-            && candidatePayload.toolCallId === payload.toolCallId;
-        });
-        this.pendingInteractions.set(key, questionnaire ? [questionnaire, record] : [record]);
-      } else if (type === "question.asked" || type === "permission.asked") {
-        this.pendingInteractions.set(key, [record]);
-      } else if (type === "questionnaire.finished" || type === "agent_settled" || type === "session.idle") {
-        this.pendingInteractions.delete(key);
-      }
-      for (const subscriber of this.subscribers.get(key) ?? []) {
+      for (const chunk of chunkTextPayload(payload)) {
+        const outcome = await this.publishOne(cwd, sessionId, key, chunk, guard);
+        if (outcome === "cancelled" || outcome === "persistence-failed") return;
         if (!canPublish()) return;
-        if (subscriber.cancelled) continue;
-        if (subscriber.ready) {
-          if (!canPublish()) return;
-          if (subscriber.deliver(record) === false) {
-            subscriber.cancelled = true;
-            this.subscribers.get(key)?.delete(subscriber);
-          }
-        } else if (subscriber.pending.length >= MAX_SUBSCRIBER_REPLAY_PENDING) {
-          subscriber.cancelled = true;
-          subscriber.pending.length = 0;
-          this.subscribers.get(key)?.delete(subscriber);
-        } else {
-          subscriber.pending.push(record);
-        }
       }
     });
     this.publishing.set(key, next);
@@ -553,19 +598,98 @@ export class ConversationEventHub {
     return next;
   }
 
-  private async ensureSequence(cwd: string, sessionId: string, key: string): Promise<void> {
-    if (this.sequences.has(key) || !this.eventStore.nextSequence) return;
-    const existing = this.sequenceInitializers.get(key);
+  private async publishOne(
+    cwd: string,
+    sessionId: string,
+    key: string,
+    payload: Record<string, unknown>,
+    guard?: EventPublishGuard,
+  ): Promise<"delivered" | "cancelled" | "persistence-failed"> {
+    const canPublish = () => guard?.() !== false;
+    if (!canPublish()) return "cancelled";
+    const identity = this.streamIdentity(cwd, sessionId);
+    if (identity.tainted) {
+      identity.epoch = this.options.createStreamEpoch?.() || randomUUID();
+      identity.nextSequence = 0;
+      identity.tainted = false;
+      const turn = this.turns.get(key);
+      if (turn) turn.streamEpoch = identity.epoch;
+      this.log("warn", `Rotated conversation stream epoch after persistence failure for ${sessionId}`);
+    }
+    const sequence = identity.nextSequence + 1;
+    identity.nextSequence = sequence;
+    const eventPayload = versionedPayload(cwd, sessionId, payload, sequence, identity.epoch);
+    const record: SseEventRecord = {
+      event: String(payload.type ?? "runtime.event"),
+      id: `${identity.epoch}:${sequence}`,
+      data: JSON.stringify(eventPayload),
+      created_at: new Date().toISOString(),
+    };
+    let persisted = false;
+    let persistenceFailed = false;
+    try {
+      persisted = guard && this.eventStore.appendConditional
+        ? await this.eventStore.appendConditional(cwd, sessionId, record, guard)
+        : (await this.eventStore.append(cwd, sessionId, record), true);
+    } catch (error) {
+      // A live event may still be useful during a transient persistence outage,
+      // but the next event must start a new epoch so the missing record cannot
+      // be mistaken for a durable contiguous prefix after reconnect.
+      persistenceFailed = true;
+      identity.tainted = true;
+      this.log("warn", `Conversation event persistence failed for ${sessionId} at ${record.id}: ${error instanceof Error ? error.message : String(error)}`);
+      persisted = false;
+    }
+    if (!persisted && !persistenceFailed) {
+      // A conditional append that observes an invalidated generation did not
+      // consume a durable cursor. It is safe to reuse this sequence.
+      if (identity.nextSequence === sequence) identity.nextSequence = sequence - 1;
+      return "cancelled";
+    }
+    if (!canPublish()) return "cancelled";
+    const type = String(payload.type ?? "");
+    if (type === "questionnaire.asked") {
+      this.pendingInteractions.set(key, [record]);
+    } else if (type === "question.asked" && payload.questionnaire === true) {
+      const pending = this.pendingInteractions.get(key) ?? [];
+      const questionnaire = pending.find((candidate) => {
+        const candidatePayload = recordPayload(candidate);
+        return candidatePayload?.type === "questionnaire.asked"
+          && candidatePayload.toolCallId === payload.toolCallId;
+      });
+      this.pendingInteractions.set(key, questionnaire ? [questionnaire, record] : [record]);
+    } else if (type === "question.asked" || type === "permission.asked") {
+      this.pendingInteractions.set(key, [record]);
+    } else if (type === "questionnaire.finished" || type === "agent_settled" || type === "session.idle") {
+      this.pendingInteractions.delete(key);
+    }
+    for (const subscriber of this.subscribers.get(key) ?? []) {
+      if (!canPublish()) return "cancelled";
+      if (subscriber.cancelled) continue;
+      if (subscriber.ready) {
+        if (!canPublish()) return "cancelled";
+        if (subscriber.deliver(record) === false) {
+          subscriber.cancelled = true;
+          this.subscribers.get(key)?.delete(subscriber);
+        }
+      } else if (subscriber.pending.length >= MAX_SUBSCRIBER_REPLAY_PENDING) {
+        subscriber.cancelled = true;
+        subscriber.pending.length = 0;
+        this.subscribers.get(key)?.delete(subscriber);
+      } else {
+        subscriber.pending.push(record);
+      }
+    }
+    return persistenceFailed ? "persistence-failed" : "delivered";
+  }
+
+  private streamIdentity(cwd: string, sessionId: string): StreamIdentityState {
+    const key = streamKey(cwd, sessionId);
+    const existing = this.streamIdentities.get(key);
     if (existing) return existing;
-    let initialization!: Promise<void>;
-    initialization = Promise.resolve(this.eventStore.nextSequence(cwd, sessionId)).then((sequence) => {
-      const current = this.sequences.get(key) ?? 0;
-      if (Number.isSafeInteger(sequence) && sequence >= 0) this.sequences.set(key, Math.max(current, sequence));
-    }).catch(() => undefined).finally(() => {
-      if (this.sequenceInitializers.get(key) === initialization) this.sequenceInitializers.delete(key);
-    });
-    this.sequenceInitializers.set(key, initialization);
-    return initialization;
+    const created = { epoch: this.options.createStreamEpoch?.() || randomUUID(), nextSequence: 0, tainted: false };
+    this.streamIdentities.set(key, created);
+    return created;
   }
 
   private async queueText(cwd: string, sessionId: string, payload: Record<string, unknown>, kind: AssistantContentKind): Promise<void> {
@@ -578,12 +702,12 @@ export class ConversationEventHub {
     if (current) {
       const incomingText = String(payload.text ?? "");
       if (payload.replace === true) {
-        current.payload = { ...current.payload, ...payload, text: cap(incomingText) };
+        current.payload = { ...current.payload, ...payload, text: capUtf8(incomingText, MAX_EVENT_TEXT).text };
       } else {
         current.payload = {
           ...current.payload,
           ...payload,
-          text: cap(`${String(current.payload.text ?? "")}${incomingText}`),
+          text: capUtf8(`${String(current.payload.text ?? "")}${incomingText}`, MAX_EVENT_TEXT).text,
           ...(current.payload.baseRevision !== undefined ? { baseRevision: current.payload.baseRevision } : {}),
           ...(current.payload.replace === true ? { replace: true } : {}),
         };
@@ -593,7 +717,7 @@ export class ConversationEventHub {
     const pending: PendingText = {
       cwd,
       sessionId,
-      payload: { ...payload, text: cap(payload.text) },
+      payload: { ...payload, text: capUtf8(payload.text, MAX_EVENT_TEXT).text },
       timer: setTimeout(() => {
         void this.flushPendingText(cwd, sessionId).catch(() => undefined);
       }, TEXT_BATCH_MS),
@@ -637,7 +761,7 @@ export class ConversationEventHub {
         turnOrdinal: 0,
         turnId: null,
         runId: null,
-        streamEpoch: `session-${sessionId}`,
+        streamEpoch: this.streamIdentity(cwd, sessionId).epoch,
       };
       this.turns.set(key, turn);
     }
@@ -716,7 +840,7 @@ export class ConversationEventHub {
         phase: eventPhase(content.presentationRole),
         baseRevision: previousRevision,
         revision,
-        text: cap(emitted),
+        text: capUtf8(emitted, MAX_EVENT_TEXT).text,
         ...(content.presentationRole ? { presentationRole: content.presentationRole } : {}),
         ...(replace ? { replace: true } : {}),
       }];
@@ -750,7 +874,7 @@ export class ConversationEventHub {
         }
         const title = toolActivityTitle(tool, event.args);
         const presentation = event.presentation && typeof event.presentation === "object" ? event.presentation : toolActivityPresentation(tool, event.args);
-        records.push({ type: "tool.updated", sessionId, callId, itemId: callId, ...turnFields(turn), ...(title ? { title } : {}), ...(presentation ? { presentation } : {}), tool, status: "running", input: safeValue(event.args ?? {}), startedAt: new Date().toISOString() });
+        records.push({ type: "tool.updated", sessionId, callId, itemId: callId, ...turnFields(turn), ...(title ? { title } : {}), ...(presentation ? { presentation: safeValue(presentation) } : {}), tool, status: "running", input: safeValue(event.args ?? {}), startedAt: new Date().toISOString() });
         return records;
       }
       case "tool_execution_update": {
@@ -761,7 +885,14 @@ export class ConversationEventHub {
         // clobber an already accumulated tail, so it is simply omitted.
         const unwrapped = event.partialResult !== undefined ? snapshotText(event.partialResult) : null;
         const partial = unwrapped !== null ? unwrapped : typeof event.partialResult === "string" ? event.partialResult : stringify(event.partialResult);
-        if (partial) record.partialOutput = cap(partial);
+        if (partial) {
+          const preview = capUtf8(partial, MAX_TOOL_EVENT_OUTPUT_BYTES, "tail");
+          record.partialOutput = preview.text;
+          if (preview.truncated) {
+            record.outputTruncated = true;
+            record.originalOutputBytes = preview.originalBytes;
+          }
+        }
         return [record];
       }
       case "bash_execution_update": {
@@ -774,7 +905,7 @@ export class ConversationEventHub {
         if (!callId || event.delta === undefined) return [];
         const text = snapshotText(event.delta) ?? (typeof event.delta === "string" ? event.delta : stringify(event.delta));
         const tail = turn.bashTails.get(callId) ?? { text: "", emittedAt: 0 };
-        if (text) tail.text = text.slice(-BASH_TAIL_BYTES);
+        if (text) tail.text = capUtf8(text, BASH_TAIL_BYTES, "tail").text;
         const now = Date.now();
         if (now - tail.emittedAt < BASH_EMIT_INTERVAL_MS) {
           turn.bashTails.set(callId, tail);
@@ -791,7 +922,21 @@ export class ConversationEventHub {
         const records: Record<string, unknown>[] = [];
         if (tool === "ask_user_question") records.push({ type: "questionnaire.finished", sessionId, toolCallId: callId, cancelled: event.isError === true });
         const presentation = event.presentation && typeof event.presentation === "object" ? event.presentation : toolActivityPresentation(tool, event.args);
-        records.push({ type: "tool.updated", sessionId, callId, itemId: callId, ...turnFields(turn), tool, status: event.isError ? "error" : "done", output: cap(event.result), ...(presentation ? { presentation } : {}), ...(event.details === undefined ? {} : { details: safeValue(event.details) }), endedAt: new Date().toISOString() });
+        const output = capUtf8(event.result, MAX_TOOL_EVENT_OUTPUT_BYTES, "tail");
+        records.push({
+          type: "tool.updated",
+          sessionId,
+          callId,
+          itemId: callId,
+          ...turnFields(turn),
+          tool,
+          status: event.isError ? "error" : "done",
+          output: output.text,
+          ...(output.truncated ? { outputTruncated: true, originalOutputBytes: output.originalBytes } : {}),
+          ...(presentation ? { presentation: safeValue(presentation) } : {}),
+          ...(event.details === undefined ? {} : { details: safeValue(event.details) }),
+          endedAt: new Date().toISOString(),
+        });
         return records;
       }
       case "extension_ui_request": {

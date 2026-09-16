@@ -74,6 +74,10 @@ export class PiScienceClient {
     return rest.getMessages(this.baseUrl, sessionId, cwd);
   }
 
+  async getConversationResumeCursor(sessionId: string, cwd: string): Promise<string | null> {
+    return rest.getConversationResumeCursor(this.baseUrl, sessionId, cwd);
+  }
+
   async getMessagesPage(
     sessionId: string,
     cwd?: string,
@@ -153,6 +157,10 @@ export class PiScienceClient {
    *  resuming from a cursor that no longer belongs to this session. */
   clearCursor(cwd: string, sessionId: string): void {
     this.transport.clearCursor(cwd, sessionId);
+  }
+
+  setResumeCursor(cwd: string, sessionId: string, cursor: string | null): void {
+    this.transport.setResumeCursor(cwd, sessionId, cursor);
   }
 
   async respondToInteraction(

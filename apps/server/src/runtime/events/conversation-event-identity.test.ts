@@ -38,6 +38,6 @@ describe("conversation event identities", () => {
     expect(starts).toHaveLength(2);
     expect(starts[1]?.runId).not.toBe(firstStart?.runId);
     expect(starts[1]?.turnId).not.toBe(firstStart?.turnId);
-    expect(starts[1]?.streamEpoch).toBe(firstStart?.streamEpoch);
+    expect(starts[1]?.streamEpoch).not.toBe(firstStart?.streamEpoch);
   });
 });

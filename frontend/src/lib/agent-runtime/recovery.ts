@@ -21,6 +21,7 @@ type KnownRuntimeState = { busy: boolean; activityGeneration: number };
 type ConnectionRecoveryRun = { connectionGeneration: number; activityGeneration: number; promise: Promise<void> };
 const knownRuntimeStates = new WeakMap<PiScienceClient, Map<string, KnownRuntimeState>>();
 const connectionRecoveryRuns = new WeakMap<PiScienceClient, Map<string, ConnectionRecoveryRun>>();
+const gapRecoveryRuns = new Map<string, Promise<void>>();
 const suppressedConnectionRecoveries = new WeakMap<PiScienceClient, Set<string>>();
 
 function runtimeKey(sessionId: string, cwd: string): string {
@@ -89,6 +90,7 @@ function waitForRecovery(ms: number): Promise<void> {
 
 export async function resyncCompletedHistory(sessionId: string, cwd: string): Promise<void> {
   const generation = generations.connection;
+  const conversationGeneration = generations.conversation;
   const activityGeneration = generations.activity;
   try {
     const client = getClient();
@@ -100,6 +102,7 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
     if (historyResult.status !== "fulfilled") return;
     if (
       generation !== generations.connection
+      || conversationGeneration !== generations.conversation
       || activityGeneration !== generations.activity
       || current.activeSessionId !== sessionId
       || current.cwd !== cwd
@@ -115,10 +118,11 @@ export async function resyncCompletedHistory(sessionId: string, cwd: string): Pr
     // a long tool-heavy turn. Walk older pages until lineage is established;
     // only a complete no-overlap history may replace the window wholesale.
     const historyWindowGeneration = generations.historyWindow;
-    const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, current.thread, history, { keepLiveExtras: false });
+    const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, current.thread, history, { keepLiveExtras: false, resetProjection: true });
     const latest = useRuntimeStore.getState();
     if (
       generation !== generations.connection
+      || conversationGeneration !== generations.conversation
       || activityGeneration !== generations.activity
       || historyWindowGeneration !== generations.historyWindow
       || latest.activeSessionId !== sessionId
@@ -325,12 +329,15 @@ export function reconcileAfterConnectionLoss(
  *  base `working` on the authoritative state rather than blindly clearing it.
  *  The new SSE subscription (rebuilt by the client transport) only carries
  *  future events, so this REST snapshot is what restores the visible history. */
-export async function reconcileAfterGap(
+async function runGapRecovery(
   sessionId: string,
   cwd: string,
+  resetTransport: boolean,
+  reconnectTransport: boolean,
 ): Promise<void> {
   const client = getClient();
   const connectionGeneration = generations.connection;
+  const conversationGeneration = generations.conversation;
   const activityGeneration = generations.activity;
   const [historyResult, stateResult, artifactsResult] = await Promise.allSettled([
     client.getMessagesPage(sessionId, cwd),
@@ -340,6 +347,7 @@ export async function reconcileAfterGap(
   const current = useRuntimeStore.getState();
   if (
     connectionGeneration !== generations.connection
+    || conversationGeneration !== generations.conversation
     || current.activeSessionId !== sessionId
     || current.cwd !== cwd
   ) return;
@@ -349,20 +357,22 @@ export async function reconcileAfterGap(
   // call must keep Send disabled until the backend reports idle.
   if (stateResult.status === "fulfilled") {
     rememberRuntimeState(client, sessionId, cwd, stateResult.value, activityGeneration);
-    if (activityGeneration === generations.activity) applyRuntimeState(stateResult.value, useRuntimeStore.getState());
+    if (conversationGeneration === generations.conversation && activityGeneration === generations.activity) {
+      applyRuntimeState(stateResult.value, useRuntimeStore.getState());
+    }
   }
-  // History recovery is independent from busy state. Merge the REST snapshot
-  // with live blocks so a text.updated arriving during this request is kept.
-  // If the latest page moved beyond the loaded window, probe older pages until
-  // the overlap (or the actual history beginning) is known.
+  // History recovery is authoritative. Any real conversation activity that
+  // arrives while this request is in flight invalidates the run below, so an
+  // old snapshot cannot overwrite the newer live projection.
   if (historyResult.status === "fulfilled") {
     const turns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
     const lineageActivityGeneration = generations.activity;
     const historyWindowGeneration = generations.historyWindow;
-    const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, current.thread, historyResult.value, { keepLiveExtras: true });
+    const merged = await mergeRecoveryHistoryWindow(client, sessionId, cwd, current.thread, historyResult.value, { keepLiveExtras: false, resetProjection: true });
     const latest = useRuntimeStore.getState();
     if (
       connectionGeneration !== generations.connection
+      || conversationGeneration !== generations.conversation
       || lineageActivityGeneration !== generations.activity
       || historyWindowGeneration !== generations.historyWindow
       || latest.activeSessionId !== sessionId
@@ -379,10 +389,41 @@ export async function reconcileAfterGap(
     });
     backfillSessionName(cwd, sessionId, useRuntimeStore.getState().thread);
   }
-  useRuntimeStore.setState({
-    status: historyResult.status === "fulfilled" && stateResult.status === "fulfilled" ? "ready" : "error",
-  });
+  const recoveryStatus = historyResult.status === "fulfilled" && stateResult.status === "fulfilled" ? "ready" : "error";
+  if (resetTransport && historyResult.status === "fulfilled" && stateResult.status === "fulfilled") {
+    // The old cursor is precisely what caused this recovery. Drop it only
+    // after the authoritative projection has been installed, then start a
+    // fresh live subscription. A later server gap remains recoverable and is
+    // coalesced by the single-flight wrapper below.
+    const resumeCursor = await client.getConversationResumeCursor(sessionId, cwd).catch(() => null);
+    client.clearCursor(cwd, sessionId);
+    client.setResumeCursor(cwd, sessionId, resumeCursor);
+    if (reconnectTransport && client.isConnectedTo(sessionId, cwd)) client.reconnect(sessionId, cwd);
+  }
+  // Set the status after an intentional reconnect so the synchronous
+  // connection.connecting notification does not overwrite a completed
+  // authoritative recovery. A later connection.open will also settle it.
+  useRuntimeStore.setState({ status: recoveryStatus });
   void loadSessionsInternal();
+}
+
+/** Single-flight authoritative recovery for both explicit server gaps and
+ * client-detected sequence/epoch discontinuities. Multiple out-of-order
+ * events from one broken stream must not start competing REST rebases. */
+export function reconcileAfterGap(
+  sessionId: string,
+  cwd: string,
+  options: { resetTransport?: boolean; reconnectTransport?: boolean } = {},
+): Promise<void> {
+  const key = runtimeKey(sessionId, cwd);
+  const existing = gapRecoveryRuns.get(key);
+  if (existing) return existing;
+  const promise = runGapRecovery(sessionId, cwd, options.resetTransport === true, options.reconnectTransport === true);
+  gapRecoveryRuns.set(key, promise);
+  void promise.finally(() => {
+    if (gapRecoveryRuns.get(key) === promise) gapRecoveryRuns.delete(key);
+  }).catch(() => undefined);
+  return promise;
 }
 
 /** How many consecutive one-second idle REST rounds with no confirmed reply

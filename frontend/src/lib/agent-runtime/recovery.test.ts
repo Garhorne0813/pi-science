@@ -507,7 +507,7 @@ describe("runtime conversation recovery", () => {
     );
   });
 
-  it("merges history with live output that arrives while gap recovery is in flight", async () => {
+  it("does not install a stale gap snapshot after new live activity arrives", async () => {
     let gapRead = false;
     let releaseMessages: (() => void) | undefined;
     const delayedMessages = new Promise<Response>((resolve) => { releaseMessages = () => resolve(jsonResponse({ messages: [
@@ -530,9 +530,10 @@ describe("runtime conversation recovery", () => {
     FakeEventSource.instances.at(-1)!.emit("text.updated", { type: "text.updated", sessionId: "session-a", partId: "live", text: "live" });
     releaseMessages!();
 
-    await vi.waitFor(() => expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(useRuntimeStore.getState().thread.blocks).not.toContainEqual(
       expect.objectContaining({ kind: "agent", id: "durable" }),
-    ));
+    );
     expect(useRuntimeStore.getState().thread.blocks).toContainEqual(
       expect.objectContaining({ kind: "agent", parts: [expect.objectContaining({ id: "live", text: "live" })] }),
     );

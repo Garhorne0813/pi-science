@@ -12,8 +12,17 @@ export interface SseEventRecord {
 
 export type EventPublishGuard = () => boolean;
 
-const MAX_EVENT_FILE_BYTES = 20 * 1024 * 1024;
-const RETAIN_EVENT_LINES = 5_000;
+export const MAX_EVENT_FILE_BYTES = 20 * 1024 * 1024;
+export const TARGET_EVENT_FILE_BYTES = 16 * 1024 * 1024;
+export const MAX_EVENT_RECORDS = 5_000;
+export const MAX_EVENT_RECORD_BYTES = 256 * 1024;
+
+class ConditionalAppendRollbackError extends Error {
+  constructor() {
+    super("conditional event append could not be rolled back safely");
+    this.name = "ConditionalAppendRollbackError";
+  }
+}
 
 // Bounded LRU cache of parsed event logs. A file-count cap is unsafe because
 // each file may be close to the compaction threshold. Use the on-disk byte
@@ -101,13 +110,32 @@ function parseRecords(text: string): SseEventRecord[] {
   });
 }
 
-function sequenceFromCursor(id: string | null): number | null {
+export interface ParsedStreamCursor {
+  epoch: string;
+  sequence: number;
+  legacy: boolean;
+}
+
+/** Parse both the new opaque `<epoch>:<seq>` cursor and the legacy numeric
+ * cursor. Epoch strings are intentionally treated as opaque; callers should
+ * never infer ordering from them. */
+export function parseStreamCursor(id: string | null): ParsedStreamCursor | null {
   if (!id) return null;
   const separator = id.lastIndexOf(":");
   const value = separator >= 0 ? id.slice(separator + 1) : id;
   if (!/^\d+$/.test(value)) return null;
   const sequence = Number(value);
-  return Number.isSafeInteger(sequence) ? sequence : null;
+  if (!Number.isSafeInteger(sequence)) return null;
+  if (separator >= 0 && !id.slice(0, separator)) return null;
+  return {
+    epoch: separator >= 0 ? id.slice(0, separator) : "legacy",
+    sequence,
+    legacy: separator < 0,
+  };
+}
+
+function sequenceFromCursor(id: string | null): number | null {
+  return parseStreamCursor(id)?.sequence ?? null;
 }
 
 function compareEventRecords(left: SseEventRecord, right: SseEventRecord): number {
@@ -133,7 +161,16 @@ export class DurableEventStore {
 
   constructor(private readonly options: {
     maxEventFileBytes?: number;
+    targetEventFileBytes?: number;
+    maxEventRecords?: number;
+    maxEventRecordBytes?: number;
     compact?: (path: string, records: SseEventRecord[]) => Promise<void>;
+    onCompaction?: (details: {
+      path: string;
+      beforeBytes: number;
+      afterBytes: number;
+      retainedRecords: number;
+    }) => void;
   } = {}) {}
 
   append(cwd: string, sessionId: string, event: SseEventRecord): Promise<void> {
@@ -176,19 +213,43 @@ export class DurableEventStore {
     }
     const events = [...unique.values()].sort(compareEventRecords);
     if (!lastEventId) return events.map((event) => ({ ...event }));
+    const requestedCursor = parseStreamCursor(lastEventId);
+    if (!requestedCursor) return [streamGap(sessionId, "invalid_cursor", { requestedCursor: lastEventId })];
     const index = events.findIndex((event) => event.id === lastEventId);
-    if (index !== -1) return events.slice(index + 1).map((event) => ({ ...event }));
-    return [{
-      event: "stream.gap",
-      id: null,
-      data: JSON.stringify({
-        type: "stream.gap",
-        sessionId,
-        missingCursor: lastEventId,
-        message: "The requested event cursor is no longer retained; reload the conversation snapshot before applying new deltas.",
-      }),
-      created_at: new Date().toISOString(),
-    }];
+    if (index === -1) return [streamGap(sessionId, "cursor_missing", { requestedCursor: lastEventId })];
+
+    // Validate the whole replay tail before returning any ordinary event. A
+    // client must never apply a suffix after the server has discovered that a
+    // durable hole or epoch boundary exists later in the same replay.
+    let previous = requestedCursor;
+    for (let position = index + 1; position < events.length; position += 1) {
+      const current = parseStreamCursor(events[position]?.id ?? null);
+      if (!current) {
+        return [streamGap(sessionId, "invalid_cursor", {
+          requestedCursor: lastEventId,
+          expectedSeq: previous.sequence + 1,
+          observedSeq: undefined,
+        })];
+      }
+      if (current.epoch !== previous.epoch) {
+        return [streamGap(sessionId, "epoch_changed", {
+          requestedCursor: lastEventId,
+          expectedSeq: previous.sequence + 1,
+          observedSeq: current.sequence,
+          observedEpoch: current.epoch,
+        })];
+      }
+      if (current.sequence !== previous.sequence + 1) {
+        return [streamGap(sessionId, "sequence_hole", {
+          requestedCursor: lastEventId,
+          expectedSeq: previous.sequence + 1,
+          observedSeq: current.sequence,
+          observedEpoch: current.epoch,
+        })];
+      }
+      previous = current;
+    }
+    return events.slice(index + 1).map((event) => ({ ...event }));
   }
 
   private async appendOrdered(cwd: string, sessionId: string, event: SseEventRecord): Promise<void> {
@@ -212,25 +273,31 @@ export class DurableEventStore {
     let appended: boolean;
     try {
       appended = await this.appendRecordConditional(primary, event, guard);
-    } catch {
+    } catch (error) {
+      if (error instanceof ConditionalAppendRollbackError) throw error;
       if (!guard()) return false;
       target = fallbackEventPath(cwd, sessionId);
       appended = await this.appendRecordConditional(target, event, guard);
     }
     if (!appended) return false;
-    // A conditional append deliberately skips compaction. Compaction would add
-    // another asynchronous commit window after the guard was checked; the
-    // next ordinary append will compact the file if it is still oversized.
+    // Compaction is still required for guarded publications: normal runtime
+    // events use this path, so skipping it would let a busy turn grow past the
+    // journal bound indefinitely. A guard change after the append only
+    // suppresses live delivery; the durable record remains replayable from its
+    // contiguous cursor and may safely be compacted here.
     removeCachedEvents(target);
+    await this.compactIfNeeded(target).catch(() => undefined);
     return true;
   }
 
   private async appendRecord(path: string, event: SseEventRecord): Promise<void> {
+    this.assertRecordSize(event);
     await mkdir(dirname(path), { recursive: true });
     await appendFile(path, `${JSON.stringify(event)}\n`, "utf8");
   }
 
   private async appendRecordConditional(path: string, event: SseEventRecord, guard: EventPublishGuard): Promise<boolean> {
+    this.assertRecordSize(event);
     if (!guard()) return false;
     await mkdir(dirname(path), { recursive: true });
     let existed = true;
@@ -240,11 +307,13 @@ export class DurableEventStore {
     if (!guard()) return false;
     await appendFile(path, `${JSON.stringify(event)}\n`, "utf8");
     if (guard()) return true;
+    let rollbackFailed = false;
     try {
       await truncate(path, originalSize);
       if (!existed && originalSize === 0) await unlink(path);
-    } catch { /* best effort rollback; the guard still prevents live delivery */ }
+    } catch { rollbackFailed = true; }
     removeCachedEvents(path);
+    if (rollbackFailed) throw new ConditionalAppendRollbackError();
     return false;
   }
 
@@ -252,15 +321,82 @@ export class DurableEventStore {
     let size = 0;
     try { size = (await stat(path)).size; } catch { return; }
     if (size <= (this.options.maxEventFileBytes ?? MAX_EVENT_FILE_BYTES)) return;
-    const records = parseRecords(await readFile(path, "utf8")).slice(-RETAIN_EVENT_LINES);
+    const targetBytes = Math.min(
+      this.options.targetEventFileBytes ?? TARGET_EVENT_FILE_BYTES,
+      this.options.maxEventFileBytes ?? MAX_EVENT_FILE_BYTES,
+    );
+    const maxRecords = this.options.maxEventRecords ?? MAX_EVENT_RECORDS;
+    const records = parseRecords(await readFile(path, "utf8"));
+    const retained: SseEventRecord[] = [];
+    let retainedBytes = 0;
+    for (let index = records.length - 1; index >= 0 && retained.length < maxRecords; index -= 1) {
+      const record = records[index]!;
+      const recordBytes = serializedRecordBytes(record);
+      // Always retain the newest record, even if a test configuration makes
+      // the target smaller than one valid record. The single-record bound is
+      // enforced before this point, so the headroom remains finite.
+      if (retained.length > 0 && retainedBytes + recordBytes > targetBytes) break;
+      retained.unshift(record);
+      retainedBytes += recordBytes;
+    }
     if (this.options.compact) {
-      await this.options.compact(path, records);
+      await this.options.compact(path, retained);
+      this.reportCompaction(path, size, retained.length);
       return;
     }
     const temporary = `${path}.${process.pid}.compact.tmp`;
-    await writeFile(temporary, records.map((record) => JSON.stringify(record)).join("\n") + "\n", "utf8");
-    await rename(temporary, path);
+    try {
+      await writeFile(temporary, retained.map((record) => JSON.stringify(record)).join("\n") + "\n", "utf8");
+      await rename(temporary, path);
+      const afterBytes = await stat(path).then((metadata) => metadata.size).catch(() => 0);
+      this.options.onCompaction?.({ path, beforeBytes: size, afterBytes, retainedRecords: retained.length });
+    } finally {
+      await unlink(temporary).catch(() => undefined);
+    }
   }
+
+  private assertRecordSize(event: SseEventRecord): void {
+    const bytes = serializedRecordBytes(event);
+    const limit = this.options.maxEventRecordBytes ?? MAX_EVENT_RECORD_BYTES;
+    if (bytes > limit) throw new Error(`event record exceeds ${limit} serialized bytes`);
+  }
+
+  private reportCompaction(path: string, beforeBytes: number, retainedRecords: number): void {
+    // Custom compaction hooks own the write. Read the resulting size only for
+    // diagnostics and never let a logging callback break event delivery.
+    void stat(path).then((metadata) => {
+      try { this.options.onCompaction?.({ path, beforeBytes, afterBytes: metadata.size, retainedRecords }); }
+      catch { /* diagnostics are best effort */ }
+    }).catch(() => undefined);
+  }
+}
+
+function serializedRecordBytes(record: SseEventRecord): number {
+  return Buffer.byteLength(JSON.stringify(record), "utf8") + 1;
+}
+
+function streamGap(
+  sessionId: string,
+  reason: "cursor_missing" | "sequence_hole" | "epoch_changed" | "invalid_cursor",
+  details: { requestedCursor?: string; expectedSeq?: number; observedSeq?: number; observedEpoch?: string },
+): SseEventRecord {
+  return {
+    event: "stream.gap",
+    id: null,
+    data: JSON.stringify({
+      type: "stream.gap",
+      sessionId,
+      reason,
+      requestedCursor: details.requestedCursor,
+      // Keep the old field during the compatibility window.
+      missingCursor: details.requestedCursor,
+      expectedSeq: details.expectedSeq,
+      observedSeq: details.observedSeq,
+      observedEpoch: details.observedEpoch,
+      message: "The requested event cursor cannot be replayed continuously; reload the conversation snapshot before applying new deltas.",
+    }),
+    created_at: new Date().toISOString(),
+  };
 }
 
 export const durableEventStore = new DurableEventStore();

@@ -6,7 +6,7 @@ import { aiTitleAttemptedAt, hasAiTitle, markAiTitleAttempted } from "../client/
 import { appendRuntimeError, isMissingSessionError } from "./errors";
 import { markWorkspaceFilesChanged } from "./file-revision";
 import { foldEvent, resetTurnBuffer } from "./event-fold";
-import { generations, turnState } from "./generations";
+import { bumpConversationGeneration, bumpPresentationMetadataGeneration, generations, turnState } from "./generations";
 import { consumeSuppressedConnectionRecovery, reconcileAfterConnectionLoss, reconcileAfterGap, reconcileWorkingState, recoverMissingSession, resyncCompletedHistory } from "./recovery";
 import { applyAiSessionName } from "./naming";
 import { applySessionReplacements } from "./session-replacement";
@@ -142,7 +142,7 @@ async function runTurnWatchdogTick(): Promise<void> {
       || runtimeState.pending_message_count > 0;
     if (!runtimeWorking) {
       const successful = !turnState.errored;
-      ++generations.activity;
+      bumpConversationGeneration();
       useRuntimeStore.setState({
         working: false,
         turnLifecycle: successful ? "settled" : "failed",
@@ -215,7 +215,7 @@ export function registerEventListener(client: PiScienceClient) {
     }
 
     if (event.type === "stream.gap") {
-      ++generations.activity;
+      bumpConversationGeneration();
       resetTurnBuffer();
       turnState.errored = false;
       useRuntimeStore.setState({
@@ -227,7 +227,7 @@ export function registerEventListener(client: PiScienceClient) {
       if (state.activeSessionId) {
         const sessionId = state.activeSessionId;
         const cwd = state.cwd;
-        void reconcileAfterGap(sessionId, cwd);
+        void reconcileAfterGap(sessionId, cwd, { resetTransport: true, reconnectTransport: true });
       }
       return false;
     }
@@ -322,7 +322,7 @@ export function registerEventListener(client: PiScienceClient) {
     if (event.type === "questionnaire.asked") {
       const questions = questionnaireQuestions(event.questions);
       if (questions.length === 0) return;
-      ++generations.activity;
+      bumpConversationGeneration();
       useRuntimeStore.setState({
         working: true,
         turnLifecycle: "waiting",
@@ -336,6 +336,7 @@ export function registerEventListener(client: PiScienceClient) {
     }
 
     if (event.type === "questionnaire.finished") {
+      bumpConversationGeneration();
       const current = useRuntimeStore.getState();
       const toolCallId = String(event.toolCallId || "");
       const questionnaireMatches = current.pendingQuestionnaire?.toolCallId === toolCallId;
@@ -355,7 +356,7 @@ export function registerEventListener(client: PiScienceClient) {
     if (event.type === "interaction.requested") {
       const interactionId = String(event.interactionId || event.requestId || payload.interactionId || payload.requestId || event.itemId || "");
       if (!interactionId) return false;
-      ++generations.activity;
+      bumpConversationGeneration();
       const method = String(event.method || payload.method || "input") as PendingInteraction["method"];
       useRuntimeStore.setState({
         working: true,
@@ -374,6 +375,7 @@ export function registerEventListener(client: PiScienceClient) {
       // The reducer still records the envelope; the interaction card is a
       // separate state dimension and must not be hidden by process folding.
     } else if (event.type === "interaction.resolved") {
+      bumpConversationGeneration();
       const interactionId = String(event.interactionId || event.requestId || payload.interactionId || payload.requestId || event.itemId || "");
       const current = useRuntimeStore.getState();
       if (current.pendingInteraction?.requestId === interactionId) {
@@ -382,7 +384,7 @@ export function registerEventListener(client: PiScienceClient) {
     }
 
     if (event.type === "permission.asked" || event.type === "question.asked") {
-      ++generations.activity;
+      bumpConversationGeneration();
       const method = event.type === "permission.asked"
         ? "confirm"
         : (event.method as PendingInteraction["method"]) || "input";
@@ -416,32 +418,32 @@ export function registerEventListener(client: PiScienceClient) {
       || event.type === "plan.updated";
     const knownTerminalRun = typeof event.runId === "string" && state.thread.foldState?.terminalRunIds.includes(event.runId);
     if (runStarted && !knownTerminalRun && state.turnLifecycle !== "stopping") {
-      ++generations.activity;
+      bumpConversationGeneration();
       resetTurnBuffer();
       turnState.errored = false;
       useRuntimeStore.setState({ working: true, turnLifecycle: "active", status: "ready" });
       ensureTurnWatchdog();
     } else if (activityEvent) {
-      ++generations.activity;
+      bumpConversationGeneration();
       if (!blocksLateEvents(state.turnLifecycle) && state.turnLifecycle !== "stopping" && !knownTerminalRun) {
         turnState.errored = false;
         useRuntimeStore.setState({ working: true, turnLifecycle: event.type === "tool.updated" && eventStatus === "waiting-approval" ? "waiting" : "active", status: "ready" });
         if (state.turnLifecycle !== "waiting") ensureTurnWatchdog();
       }
     } else if (event.type === "compaction.updated") {
-      ++generations.activity;
+      bumpConversationGeneration();
       const status = String(event.status || "");
       const failed = status === "error";
       const finished = status === "end" || failed;
       useRuntimeStore.setState({ working: !finished, turnLifecycle: failed ? "failed" : finished ? "settled" : "active", status: failed ? "error" : "ready" });
       if (finished) disarmTurnWatchdog();
     } else if (event.type === "turn.artifacts") {
-      ++generations.activity;
+      bumpPresentationMetadataGeneration();
       // No extra tree refresh here: the server publishes this event from the
       // agent_settled observer, and that settled event already bumped the
       // file revision above. Marking again would double-refresh every turn.
     } else if (event.type === "agent_settled" || event.type === "session.idle" || event.type === "run.completed" || event.type === "run.cancelled") {
-      ++generations.activity;
+      bumpConversationGeneration();
       if (!blocksLateEvents(state.turnLifecycle)) {
         const successful = !turnState.errored;
         const cancelled = event.type === "run.cancelled" || event.cancelled === true;
@@ -461,7 +463,7 @@ export function registerEventListener(client: PiScienceClient) {
       }
       void loadSessionsInternal();
     } else if (event.type === "session.stats") {
-      ++generations.activity;
+      bumpPresentationMetadataGeneration();
       const stats = event.stats as SessionStats | undefined;
       // Only the active session may write the stats line. Events without a
       // session id or for a session the user already left (late arrival) must
@@ -470,7 +472,7 @@ export function registerEventListener(client: PiScienceClient) {
         useRuntimeStore.setState({ sessionStats: stats });
       }
     } else if (event.type === "error" || event.type === "run.failed") {
-      ++generations.activity;
+      bumpConversationGeneration();
       if (event.recoverable === true) {
         if (!blocksLateEvents(state.turnLifecycle)) useRuntimeStore.setState({ turnLifecycle: "recovering", status: "connecting" });
       } else if (!blocksLateEvents(state.turnLifecycle)) {
@@ -484,6 +486,17 @@ export function registerEventListener(client: PiScienceClient) {
     const newThread = foldEvent(current.thread, event);
     if (newThread.blocks !== current.thread.blocks || newThread.foldState !== current.thread.foldState) {
       useRuntimeStore.setState({ thread: newThread });
+    }
+    if (newThread.foldState?.reconciliationRequired && event.type !== "stream.gap") {
+      const recoveryState = useRuntimeStore.getState();
+      const recoverySessionId = recoveryState.activeSessionId ?? (event.sessionId ? String(event.sessionId) : null);
+      if (recoverySessionId) {
+        useRuntimeStore.setState({ status: "connecting" });
+        void reconcileAfterGap(recoverySessionId, recoveryState.cwd, { resetTransport: true, reconnectTransport: true });
+      }
+      // Do not advance the applied SSE cursor while the authoritative rebase
+      // is in flight. The single-flight recovery owns the next reconnect.
+      return false;
     }
     if (
       event.schemaVersion === 2

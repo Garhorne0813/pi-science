@@ -97,6 +97,16 @@ export async function getMessages(baseUrl: string, sessionId: string, cwd?: stri
   return (await getMessagesPage(baseUrl, sessionId, cwd)).messages;
 }
 
+export async function getConversationResumeCursor(baseUrl: string, sessionId: string, cwd: string): Promise<string | null> {
+  const params = new URLSearchParams({ cwd });
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/events/cursor?${params}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    throw new Error(responseError(data, `Load conversation cursor failed: ${res.statusText}`));
+  }
+  return typeof data.resumeCursor === "string" && data.resumeCursor.length > 0 ? data.resumeCursor : null;
+}
+
 export async function getUserMessageIndex(baseUrl: string, sessionId: string, cwd?: string): Promise<SessionUserMessageIndex> {
   const params = new URLSearchParams();
   if (cwd) params.set("cwd", cwd);

@@ -47,6 +47,10 @@ interface TextFoldState {
 export interface EventFoldState {
   sessionId?: string;
   streamEpoch?: string;
+  /** Epoch that first forced authoritative recovery. While recovery is in
+   * flight, older epochs are ignored instead of being folded into the stale
+   * projection. */
+  recoveryEpoch?: string;
   activeTurnId?: string;
   activeRunId?: string;
   activeItemKey?: string;
@@ -120,6 +124,16 @@ function withFoldState(thread: Omit<Thread, "foldState">, foldState: EventFoldSt
 
 function preserveFoldState(thread: Omit<Thread, "foldState">, source: Thread): Thread {
   return source.foldState ? { ...thread, foldState: source.foldState } : thread;
+}
+
+/** Drop all reducer bookkeeping after an authoritative snapshot has been
+ * applied. The blocks remain the server projection; no client-side dedupe,
+ * speculative delta, suppression, or terminal identity may cross the rebase. */
+export function resetThreadProjection(thread: Thread): Thread {
+  const blocks = [...thread.blocks];
+  const index: Record<string, number> = {};
+  blocks.forEach((block, position) => { index[block.id] = position; });
+  return { blocks, index, loaded: thread.loaded };
 }
 
 function stringValue(value: unknown): string | undefined {
@@ -872,6 +886,14 @@ function isV2ContentEvent(event: PiScienceEvent): boolean {
   return event.type === "item.text.delta" || event.type === "item.snapshot" || event.type === "text.updated" || event.type === "thinking.updated";
 }
 
+function isContinuationChunk(event: PiScienceEvent): boolean {
+  if (!isV2ContentEvent(event)) return false;
+  const payload = recordValue(event.payload);
+  const chunkIndex = numberValue(payload.chunkIndex) ?? numberValue(event.chunkIndex);
+  const chunkCount = numberValue(payload.chunkCount) ?? numberValue(event.chunkCount);
+  return chunkIndex !== undefined && chunkIndex > 0 && chunkCount !== undefined && chunkIndex < chunkCount;
+}
+
 function staleContentDelta(foldState: EventFoldState, event: PiScienceEvent): boolean {
   if (!isV2ContentEvent(event)) return false;
   const payload = recordValue(event.payload);
@@ -888,6 +910,11 @@ function staleContentDelta(foldState: EventFoldState, event: PiScienceEvent): bo
   // Likewise, a delta whose base is ahead of the current projection is a
   // useful best-effort future segment while the base event is still missing.
   if (baseRevision !== undefined && baseRevision > current.revision) return false;
+  // A server-side oversized replacement is split into ordered wire chunks.
+  // Continuation chunks intentionally retain the logical revision/base pair;
+  // their event IDs and sequence numbers provide the ordering, so they must
+  // not be mistaken for stale duplicate deltas.
+  if (isContinuationChunk(event) && revision === current.revision) return false;
   if (baseRevision !== undefined && baseRevision !== current.revision) return true;
   return revision !== undefined && revision <= current.revision;
 }
@@ -1067,7 +1094,30 @@ function foldV2Event(state: Thread, event: PiScienceEvent): Thread {
   const sessionId = stringValue(event.sessionId);
   const streamEpoch = stringValue(event.streamEpoch);
   if (foldState.sessionId && sessionId && foldState.sessionId !== sessionId) return state;
-  if (foldState.streamEpoch && streamEpoch && foldState.streamEpoch !== streamEpoch) return state;
+  if (foldState.streamEpoch && streamEpoch && foldState.streamEpoch !== streamEpoch) {
+    // An epoch change is a recovery boundary, not an ordinary stale event.
+    // Keep the visible blocks until REST supplies the authoritative snapshot,
+    // but clear every identity/materialization that could leak across it.
+    if (foldState.recoveryEpoch && foldState.recoveryEpoch !== streamEpoch) return state;
+    foldState.recoveryEpoch = streamEpoch;
+    foldState.streamEpoch = streamEpoch;
+    foldState.activeTurnId = undefined;
+    foldState.activeRunId = undefined;
+    foldState.activeItemKey = undefined;
+    foldState.lastAgentBlockId = undefined;
+    foldState.textByKey = {};
+    foldState.thinkingByKey = {};
+    foldState.seenEventIds = [];
+    foldState.speculativeEventIds = [];
+    foldState.terminalRunIds = [];
+    foldState.terminalRunSequences = {};
+    foldState.lastSequence = undefined;
+    foldState.reconciliationRequired = true;
+    foldState.pendingEvents = foldState.pendingEvents.some((pending) => pending.eventId === event.eventId)
+      ? foldState.pendingEvents
+      : [event];
+    return withFoldState({ blocks: state.blocks, index: state.index, loaded: true }, foldState);
+  }
   if (sessionId) foldState.sessionId = sessionId;
   if (streamEpoch) foldState.streamEpoch = streamEpoch;
 
@@ -1155,7 +1205,7 @@ function mergeToolHistoryBlock(current: ToolCallBlock, older: ToolCallBlock): To
  *  rows carry no wall-clock fields, so step durations would silently vanish
  *  on every settle-time resync without this carry-over. Only missing fields
  *  are filled: explicit runtime timestamps stay authoritative. */
-function carryToolTiming(current: Thread, authoritative: Thread): Thread {
+function carryToolTiming(current: Thread, authoritative: Thread, preserveProjection = true): Thread {
   if (authoritative.blocks.length === 0) return authoritative;
   const timingByCallId = new Map<string, { startedAt?: string; endedAt?: string }>();
   for (const block of current.blocks) {
@@ -1174,7 +1224,8 @@ function carryToolTiming(current: Thread, authoritative: Thread): Thread {
   if (!changed) return authoritative;
   const index: Record<string, number> = {};
   blocks.forEach((block, position) => { index[block.id] = position; });
-  return preserveFoldState({ blocks, index, loaded: authoritative.loaded }, current);
+  const rebuilt = { blocks, index, loaded: authoritative.loaded };
+  return preserveProjection ? preserveFoldState(rebuilt, current) : rebuilt;
 }
 
 export function replaceHistoryTail(current: Thread, messages: HistoryMessage[]): Thread {
@@ -1206,15 +1257,24 @@ export interface HistoryWindowMerge {
  *  also preserves live blocks the snapshot does not cover yet (streaming
  *  text, just-finished tools) — used by mid-stream recovery paths. Without
  *  it the settled snapshot is authoritative and live extras are dropped. */
-export function mergeHistoryWindow(current: Thread, messages: HistoryMessage[], opts: { keepLiveExtras: boolean }): HistoryWindowMerge {
-  const authoritative = carryToolTiming(current, threadFromMessages(messages));
-  if (authoritative.blocks.length === 0) return { thread: current, retainedOlderPrefix: true };
+export function mergeHistoryWindow(current: Thread, messages: HistoryMessage[], opts: { keepLiveExtras: boolean; resetProjection?: boolean }): HistoryWindowMerge {
+  const authoritative = carryToolTiming(current, threadFromMessages(messages), !opts.resetProjection);
+  if (authoritative.blocks.length === 0) {
+    return {
+      thread: opts.resetProjection ? resetThreadProjection(authoritative) : current,
+      retainedOlderPrefix: true,
+    };
+  }
   const authoritativeIds = new Set(authoritative.blocks.map((block) => block.id));
   const firstOverlap = current.blocks.findIndex((block) => authoritativeIds.has(block.id));
   if (firstOverlap < 0) {
     // No shared lineage: the snapshot replaces the window wholesale and the
     // old boundary is meaningless — the caller must re-derive it.
-    const replacement = opts.keepLiveExtras ? mergeHistoryWithLive(authoritative, current) : preserveFoldState({ blocks: authoritative.blocks, index: authoritative.index, loaded: authoritative.loaded }, current);
+    const replacement = opts.keepLiveExtras
+      ? mergeHistoryWithLive(authoritative, current)
+      : opts.resetProjection
+        ? resetThreadProjection(authoritative)
+        : preserveFoldState({ blocks: authoritative.blocks, index: authoritative.index, loaded: authoritative.loaded }, current);
     return { thread: replacement, retainedOlderPrefix: false };
   }
   const tail = opts.keepLiveExtras
@@ -1223,7 +1283,8 @@ export function mergeHistoryWindow(current: Thread, messages: HistoryMessage[], 
   const blocks = [...current.blocks.slice(0, firstOverlap), ...tail.blocks];
   const index: Record<string, number> = {};
   blocks.forEach((block, position) => { index[block.id] = position; });
-  return { thread: preserveFoldState({ blocks, index, loaded: true }, current), retainedOlderPrefix: true };
+  const merged = { blocks, index, loaded: true };
+  return { thread: opts.resetProjection ? resetThreadProjection(merged) : preserveFoldState(merged, current), retainedOlderPrefix: true };
 }
 export function mergeHistoryWithLive(history: Thread, live: Thread): Thread {
   if (live.blocks.length === 0) return history;

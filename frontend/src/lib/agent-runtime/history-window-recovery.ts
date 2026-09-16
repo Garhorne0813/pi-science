@@ -20,7 +20,7 @@ export async function mergeRecoveryHistoryWindow(
   cwd: string,
   current: Thread,
   initial: SessionMessagePage,
-  opts: { keepLiveExtras: boolean },
+  opts: { keepLiveExtras: boolean; resetProjection?: boolean },
 ): Promise<RecoveryHistoryWindow> {
   let boundaryPage = initial;
   let messages = [...initial.messages];

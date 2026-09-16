@@ -5,8 +5,12 @@
  *  compares the generation it captured with the current one and drops itself
  *  when the two differ:
  *   - `connection`: bumped on every connect/reconnect/session replacement.
- *   - `activity`: bumped by any live event or local action, so a stale REST
- *     snapshot cannot clear a turn that is demonstrably alive.
+ *   - `conversation`: bumped by message/run activity and authoritative
+ *     recovery boundaries. It invalidates settled-history and projection work.
+ *   - `activity`: the legacy fine-grained activity counter, retained for
+ *     existing async guards and compatibility with older call sites.
+ *   - `presentationMetadata`: bumped by artifacts/stats-only updates. Those
+ *     updates may refresh metadata without cancelling a settled resync.
  *   - `localMutation`: bumped by user-initiated mutations (prompt, model,
  *     abort) so an in-flight history read cannot overwrite optimistic blocks.
  *   - `historyWindow`: bumped when pagination prepends an older page, so an
@@ -17,10 +21,23 @@
 
 export const generations = {
   connection: 0,
+  conversation: 0,
   activity: 0,
+  presentationMetadata: 0,
   localMutation: 0,
   historyWindow: 0,
   promptMonitor: 0,
 };
+
+export function bumpConversationGeneration(): number {
+  generations.conversation += 1;
+  generations.activity += 1;
+  return generations.conversation;
+}
+
+export function bumpPresentationMetadataGeneration(): number {
+  generations.presentationMetadata += 1;
+  return generations.presentationMetadata;
+}
 
 export const turnState = { errored: false };

@@ -242,6 +242,17 @@ export class SseTransport {
     }
   }
 
+  setResumeCursor(cwd: string, sessionId: string, cursor: string | null): void {
+    if (!cwd || !sessionId) return;
+    const key = sessionKey(cwd, sessionId);
+    if (cursor) {
+      this.lastEventIds.set(key, cursor);
+      this.receivedEventIds.set(key, cursor);
+    } else {
+      this.clearCursor(cwd, sessionId);
+    }
+  }
+
   private closeEventSource(): void {
     this.clearConnectionWatchdog();
     if (this.eventSource) {
