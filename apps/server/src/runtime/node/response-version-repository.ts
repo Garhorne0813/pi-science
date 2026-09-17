@@ -16,6 +16,8 @@ export interface ResponseVersion {
 export interface ResponseVersionGroup {
   id: string;
   versions: ResponseVersion[];
+  selectedVersionId?: string;
+  updatedAt?: string;
 }
 
 interface ResponseVersionDocument {
@@ -23,25 +25,38 @@ interface ResponseVersionDocument {
   groups: ResponseVersionGroup[];
 }
 
-const EMPTY: ResponseVersionDocument = { schemaVersion: 1, groups: [] };
 const MAX_GROUPS = 100;
 const MAX_VERSIONS_PER_GROUP = 50;
+
+function emptyDocument(): ResponseVersionDocument {
+  return { schemaVersion: 1, groups: [] };
+}
 
 function pathFor(cwd: string): string {
   return workspaceFile(cwd, "response-versions.json");
 }
 
 function validDocument(value: ResponseVersionDocument): ResponseVersionDocument {
-  if (value?.schemaVersion !== 1 || !Array.isArray(value.groups)) return EMPTY;
+  if (value?.schemaVersion !== 1 || !Array.isArray(value.groups)) return emptyDocument();
   return value;
 }
 
 export class ResponseVersionRepository {
   async list(cwd: string, sessionId?: string): Promise<ResponseVersionGroup[]> {
-    const document = validDocument(await readJson<ResponseVersionDocument>(pathFor(cwd), EMPTY));
-    return sessionId
+    const document = validDocument(await readJson<ResponseVersionDocument>(pathFor(cwd), emptyDocument()));
+    const groups = sessionId
       ? document.groups.filter((group) => group.versions.some((version) => version.sessionId === sessionId))
       : document.groups;
+    // Older files predate persisted selection. The newest generated version
+    // is the best reconstruction because regeneration immediately navigates
+    // to that branch.
+    return groups.map((group) => ({
+      ...group,
+      selectedVersionId: group.versions.some((version) => version.id === group.selectedVersionId)
+        ? group.selectedVersionId
+        : group.versions.at(-1)?.id,
+      updatedAt: group.updatedAt ?? group.versions.at(-1)?.createdAt,
+    }));
   }
 
   async append(cwd: string, input: {
@@ -52,7 +67,7 @@ export class ResponseVersionRepository {
   }): Promise<{ group: ResponseVersionGroup; version: ResponseVersion }> {
     const path = pathFor(cwd);
     return withFileWriteLock(path, async () => {
-      const document = validDocument(await readJson<ResponseVersionDocument>(path, EMPTY));
+      const document = validDocument(await readJson<ResponseVersionDocument>(path, emptyDocument()));
       let group = document.groups.find((candidate) => candidate.versions.some((version) => (
         version.sessionId === input.sourceSessionId && version.userMessageId === input.sourceUserMessageId
       )));
@@ -72,16 +87,19 @@ export class ResponseVersionRepository {
         document.groups.push(group);
       }
       const existing = group.versions.find((version) => version.sessionId === input.targetSessionId);
+      const createdAt = new Date().toISOString();
       const version = existing ?? {
         id: randomUUID(),
         sessionId: input.targetSessionId,
         userMessageId: null,
         parentSessionId: input.sourceSessionId,
         forkEntryId: input.forkEntryId ?? null,
-        createdAt: new Date().toISOString(),
+        createdAt,
         status: "generating" as const,
       };
       if (!existing) group.versions.push(version);
+      group.selectedVersionId = version.id;
+      group.updatedAt = createdAt;
       group.versions = group.versions.slice(-MAX_VERSIONS_PER_GROUP);
       document.groups = document.groups.slice(-MAX_GROUPS);
       await writeJsonAtomic(path, document);
@@ -100,7 +118,7 @@ export class ResponseVersionRepository {
   async setSessionStatus(cwd: string, sessionId: string, status: ResponseVersionStatus): Promise<void> {
     const path = pathFor(cwd);
     await withFileWriteLock(path, async () => {
-      const document = validDocument(await readJson<ResponseVersionDocument>(path, EMPTY));
+      const document = validDocument(await readJson<ResponseVersionDocument>(path, emptyDocument()));
       let changed = false;
       for (const group of document.groups) {
         group.versions = group.versions.map((version) => {
@@ -113,10 +131,22 @@ export class ResponseVersionRepository {
     });
   }
 
+  async select(cwd: string, versionId: string): Promise<ResponseVersionGroup | null> {
+    const path = pathFor(cwd);
+    return withFileWriteLock(path, async () => {
+      const document = validDocument(await readJson<ResponseVersionDocument>(path, emptyDocument()));
+      const group = document.groups.find((candidate) => candidate.versions.some((version) => version.id === versionId));
+      if (!group) return null;
+      group.selectedVersionId = versionId;
+      await writeJsonAtomic(path, document);
+      return group;
+    });
+  }
+
   private async update(cwd: string, versionId: string, mutate: (version: ResponseVersion) => ResponseVersion): Promise<ResponseVersion | null> {
     const path = pathFor(cwd);
     return withFileWriteLock(path, async () => {
-      const document = validDocument(await readJson<ResponseVersionDocument>(path, EMPTY));
+      const document = validDocument(await readJson<ResponseVersionDocument>(path, emptyDocument()));
       for (const group of document.groups) {
         const index = group.versions.findIndex((version) => version.id === versionId);
         if (index < 0) continue;

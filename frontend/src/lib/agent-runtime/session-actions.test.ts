@@ -25,11 +25,16 @@ describe("runtime session actions", () => {
       if (url.includes("regenerated/artifacts")) return jsonResponse({ turns: [] });
       if (url.includes("regenerated/state")) return jsonResponse(state("regenerated"));
       if (url.includes("regenerated/events/cursor")) return jsonResponse({ resumeCursor: "epoch-2:51" });
-      if (url.startsWith("/api/sessions?")) return jsonResponse([{ id: "regenerated", cwd: "/workspace" }]);
+      if (url.startsWith("/api/sessions?")) return jsonResponse([{ id: "parent", cwd: "/workspace", updated_at: "2026-09-18T00:00:00.000Z" }]);
       throw new Error(`Unexpected request: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
-    useRuntimeStore.setState({ cwd: "/workspace", activeSessionId: "parent", status: "ready" });
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: "parent",
+      status: "ready",
+      sessions: [{ id: "parent", cwd: "/workspace", updated_at: "2026-09-17T00:00:00.000Z" }],
+    });
 
     await expect(useRuntimeStore.getState().regenerateSession("parent", "u1", "u1", "edited prompt"))
       .resolves.toEqual({ sessionId: "regenerated", versionId: "v2" });
@@ -38,6 +43,9 @@ describe("runtime session actions", () => {
     expect(FakeEventSource.instances[0]?.url).toContain("/api/sessions/regenerated/events");
     expect(FakeEventSource.instances[0]?.url).toContain("lastEventId=epoch-2%3A51");
     expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual(["u2", "a2-thinking", "a2"]);
+    expect(useRuntimeStore.getState().sessions).toEqual([
+      expect.objectContaining({ id: "parent", updated_at: "2026-09-18T00:00:00.000Z" }),
+    ]);
   });
 
   it("does not jump to the durable SSE tail while a regenerated branch is still active", async () => {

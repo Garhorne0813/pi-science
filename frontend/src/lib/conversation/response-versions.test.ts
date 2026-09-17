@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bindResponseVersionMessage, responseVersionGroup, type ResponseVersionGroup } from "./response-versions";
+import { bindResponseVersionMessage, preferredResponseVersionSession, responseVersionGroup, type ResponseVersionGroup } from "./response-versions";
 
 const groups: ResponseVersionGroup[] = [{
   id: "g1",
@@ -19,5 +19,11 @@ describe("response versions", () => {
     const bound = bindResponseVersionMessage(groups, "v2", "u2");
     expect(responseVersionGroup(bound, "s2", "u2")?.versions).toHaveLength(2);
     expect(groups[0]?.versions[1]?.userMessageId).toBeNull();
+  });
+
+  it("resolves the persisted selection and falls back to the newest version", () => {
+    expect(preferredResponseVersionSession([{ ...groups[0]!, selectedVersionId: "v1" }], "s1")).toBe("s1");
+    expect(preferredResponseVersionSession(groups, "s1")).toBe("s2");
+    expect(preferredResponseVersionSession(groups, "unrelated")).toBe("unrelated");
   });
 });

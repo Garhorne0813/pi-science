@@ -17,7 +17,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ComponentType, ReactNode, Ref } from "react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import type { VirtuosoHandle } from "react-virtuoso";
 
 const { virtuosoProps } = vi.hoisted(() => ({ virtuosoProps: [] as Array<Record<string, unknown>> }));
@@ -190,13 +190,17 @@ function sendButton(): HTMLElement {
   return screen.getByLabelText("Send message");
 }
 
+function LocationProbe() {
+  return <span data-testid="location-path">{useLocation().pathname}</span>;
+}
+
 function renderPage(search = "") {
   return render(
     <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
       <MemoryRouter initialEntries={[`/workspace/${CWD}/session/${SESSION_ID}${search}`]}>
         <Routes>
           {/* The app mounts WorkspaceProvider around the route tree (app/router.tsx). */}
-          <Route path="/workspace/:cwd/session/:sessionId" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
+          <Route path="/workspace/:cwd/session/:sessionId" element={<><WorkspaceProvider><LiveSessionPage /></WorkspaceProvider><LocationProbe /></>} />
         </Routes>
       </MemoryRouter>
     </FeedbackContext.Provider>,
@@ -304,6 +308,24 @@ afterEach(() => {
 
 
 describe("composer send-failure restore", () => {
+  it("redirects a canonical conversation URL to its last selected response version", async () => {
+    overrides.push((url) => url.startsWith("/api/response-versions?") ? Promise.resolve(jsonResponse({
+      ok: true,
+      groups: [{
+        id: "g1",
+        selectedVersionId: "v2",
+        versions: [
+          { id: "v1", sessionId: "s1", userMessageId: "u1", parentSessionId: null, forkEntryId: null, createdAt: "2026-01-01", status: "ready" },
+          { id: "v2", sessionId: "s2", userMessageId: "u2", parentSessionId: "s1", forkEntryId: "u1", createdAt: "2026-01-02", status: "ready" },
+        ],
+      }],
+    })) : null);
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId("location-path").textContent).toBe("/workspace/proj/session/s2"));
+  });
+
   it("uses the compact conversation header height", async () => {
     await renderReady();
     expect(screen.getByRole("banner")).toHaveClass("h-11");

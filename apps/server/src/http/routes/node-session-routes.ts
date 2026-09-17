@@ -160,6 +160,14 @@ export function registerNodeSessionRoutes(
     return version ? { ok: true, version } : reply.code(404).send({ ok: false, code: "not_found", error: "response version not found" });
   });
 
+  app.put<{ Params: { version_id: string } }>("/api/response-versions/:version_id/selected", async (request, reply) => {
+    let workspace: string;
+    try { workspace = await validateWorkspaceCwd(cwd(request)); }
+    catch (error) { return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) }); }
+    const group = await responseVersionRepository.select(workspace, request.params.version_id);
+    return group ? { ok: true, group } : reply.code(404).send({ ok: false, code: "not_found", error: "response version not found" });
+  });
+
   app.post<{ Params: { session_id: string } }>("/api/sessions/:session_id/abort", async (request, reply) => {
     const result = await nodeSessionService.command(request.params.session_id, cwd(request), "abort");
     return result.success ? { ok: true } : sendFailure(reply, result);

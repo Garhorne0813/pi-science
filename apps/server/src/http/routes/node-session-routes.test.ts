@@ -433,6 +433,10 @@ describe("native Node conversation routes", () => {
     expect(regenerated.json()).toMatchObject({ ok: true, id: expect.any(String), version_id: expect.any(String), group_id: expect.any(String) });
 
     const versions = await server.inject({ method: "GET", url: `/api/response-versions?${query}&session_id=${encodeURIComponent(regenerated.json().id)}` });
+    expect(versions.json().groups[0]).toMatchObject({
+      selectedVersionId: regenerated.json().version_id,
+      updatedAt: expect.any(String),
+    });
     expect(versions.json().groups[0].versions).toEqual(expect.arrayContaining([
       expect.objectContaining({ sessionId: "session-regenerate", userMessageId: "session-regenerate-user", status: "ready" }),
       expect.objectContaining({ sessionId: regenerated.json().id, userMessageId: null, status: "generating" }),
@@ -443,6 +447,16 @@ describe("native Node conversation routes", () => {
       payload: { user_message_id: "regenerated-user" },
     });
     expect(bound.json()).toMatchObject({ ok: true, version: { userMessageId: "regenerated-user" } });
+    const firstVersionId = versions.json().groups[0].versions[0].id;
+    const selected = await server.inject({
+      method: "PUT",
+      url: `/api/response-versions/${firstVersionId}/selected?${query}`,
+    });
+    expect(selected.json()).toMatchObject({ ok: true, group: { selectedVersionId: firstVersionId } });
+
+    const listed = await server.inject({ method: "GET", url: `/api/sessions?${query}` });
+    const canonical = listed.json().find((session: { id: string }) => session.id === "session-regenerate");
+    expect(canonical.updated_at).toBe(versions.json().groups[0].updatedAt);
     await server.close();
   });
 

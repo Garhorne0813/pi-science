@@ -762,7 +762,6 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       ++generations.connection;
       ++generations.activity;
       ++generations.localMutation;
-      optimisticSessionIds.add(result.id);
       set({
         client,
         activeSessionId: result.id,
@@ -776,17 +775,22 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         historySnapshotVersion: history.snapshot_version,
         working: runtimeBusy,
         turnLifecycle: runtimeBusy ? "active" : "settled",
-        sessions: [
-          { id: result.id, cwd, project_id: get().sessions.find((session) => session.cwd === cwd)?.project_id ?? null, name: "New Session" },
-          ...get().sessions.filter((session) => session.id !== result.id),
-        ].slice(0, 50),
+        // Regeneration branches are response versions of the same logical
+        // conversation, not additional sidebar conversations.
+        sessions: get().sessions.filter((session) => session.id !== result.id),
       });
       registerEventListener(client);
       if (resumeCursor) client.setResumeCursor(cwd, result.id, resumeCursor);
       client.connect(result.id, cwd);
       if (runtimeBusy) ensureTurnWatchdog();
       if (historyResult.status === "rejected") appendRuntimeError(historyResult.reason, result.id, cwd);
-      await loadSessionsInternal();
+      const refreshedSessions = await loadSessionsInternal();
+      // loadSessionsInternal normally keeps a directly-opened hidden session
+      // as an active fallback. A regeneration branch is intentionally hidden:
+      // its canonical row carries the aggregate activity timestamp instead.
+      if (get().cwd === cwd && get().activeSessionId === result.id) {
+        set({ sessions: refreshedSessions.filter((session) => session.id !== result.id) });
+      }
       return { sessionId: result.id, versionId: result.versionId };
     },
 

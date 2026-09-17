@@ -18,6 +18,8 @@ import {
   fetchResponseVersionGroups,
   fetchDynamicCommands,
   persistResponseVersionMessage,
+  persistSelectedResponseVersion,
+  preferredResponseVersionSession,
   replayForkEntryId,
   resetDynamicCommands,
   responseVersionGroup,
@@ -144,11 +146,30 @@ export function LiveSessionPage() {
 
   useEffect(() => {
     let cancelled = false;
-    void fetchResponseVersionGroups(workspaceCwd, activeSessionId ?? sessionId)
-      .then((groups) => { if (!cancelled) setResponseVersionGroups(groups); })
+    const requestedSessionId = sessionId ?? activeSessionId;
+    void fetchResponseVersionGroups(workspaceCwd, requestedSessionId ?? undefined)
+      .then((groups) => {
+        if (cancelled) return;
+        setResponseVersionGroups(groups);
+        if (!sessionId) return;
+        const group = groups.find((candidate) => candidate.versions.some((version) => version.sessionId === sessionId));
+        const canonicalSessionId = group?.versions[0]?.sessionId;
+        const preferredSessionId = preferredResponseVersionSession(groups, sessionId);
+        // Sidebar rows point at the canonical session. Resolve that stable URL
+        // to the version the user most recently selected. A direct link to a
+        // non-canonical version instead makes that version the new selection.
+        if (canonicalSessionId === sessionId && preferredSessionId !== sessionId) {
+          navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/session/${preferredSessionId}`, { replace: true });
+          return;
+        }
+        const currentVersion = group?.versions.find((version) => version.sessionId === sessionId);
+        if (currentVersion && group?.selectedVersionId !== currentVersion.id) {
+          void persistSelectedResponseVersion(workspaceCwd, currentVersion.id).catch(() => undefined);
+        }
+      })
       .catch(() => { if (!cancelled) setResponseVersionGroups([]); });
     return () => { cancelled = true; };
-  }, [activeSessionId, sessionId, workspaceCwd]);
+  }, [activeSessionId, navigate, sessionId, workspaceCwd]);
 
   const messageIndexQuery = useQuery({
     queryKey: ["session-message-index", workspaceCwd, sessionId ?? null],
@@ -369,16 +390,20 @@ export function LiveSessionPage() {
     if (!group || group.versions.length < 2) return undefined;
     const index = group.versions.findIndex((version) => version.sessionId === activeSessionId && version.userMessageId === turn.user!.id);
     if (index < 0) return undefined;
-    const go = (nextIndex: number) => {
+    const go = async (nextIndex: number) => {
       const target = group.versions[nextIndex];
       if (!target || target.sessionId === activeSessionId) return;
+      setResponseVersionGroups((current) => current.map((candidate) => (
+        candidate.id === group.id ? { ...candidate, selectedVersionId: target.id } : candidate
+      )));
+      await persistSelectedResponseVersion(workspaceCwd, target.id).catch(() => undefined);
       navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/session/${target.sessionId}`);
     };
     return {
       index,
       total: group.versions.length,
-      onPrevious: () => go(index - 1),
-      onNext: () => go(index + 1),
+      onPrevious: () => { void go(index - 1); },
+      onNext: () => { void go(index + 1); },
     };
   };
 

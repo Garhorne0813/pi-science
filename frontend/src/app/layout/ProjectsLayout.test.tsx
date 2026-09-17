@@ -22,12 +22,17 @@ function session(id: string, name: string): SessionInfo {
   return { id, cwd: "proj", name, updated_at: new Date().toISOString() };
 }
 
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+}
+
 beforeAll(async () => {
   await i18n.changeLanguage("en");
 });
 
 beforeEach(() => {
   cleanup();
+  vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ ok: true, groups: [] })));
   useUiStore.setState({ settingsOpen: false, settingsScope: null, suppressAutoSessionNav: false });
   useRuntimeStore.setState({
     sessions: [],
@@ -125,6 +130,44 @@ describe("WorkspaceSessionList", () => {
     const inactiveDot = rowFor("Session B").firstElementChild;
     expect(inactiveDot?.className).not.toContain("bg-accent");
     expect((inactiveDot as HTMLElement).style.visibility).toBe("hidden");
+  });
+
+  it("opens the response version that was most recently selected", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({
+      ok: true,
+      groups: [{
+        id: "g1",
+        selectedVersionId: "v2",
+        versions: [
+          { id: "v1", sessionId: "s1", userMessageId: "u1", parentSessionId: null, forkEntryId: null, createdAt: "2026-01-01", status: "ready" },
+          { id: "v2", sessionId: "s2", userMessageId: "u2", parentSessionId: "s1", forkEntryId: "u1", createdAt: "2026-01-02", status: "ready" },
+        ],
+      }],
+    }));
+    useRuntimeStore.setState({ sessions: [session("s1", "Session A")], activeSessionId: null });
+    renderList();
+
+    fireEvent.click(screen.getByRole("button", { name: /Session A/ }));
+
+    await waitFor(() => expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/session/s2"));
+  });
+
+  it("marks the canonical conversation active while a hidden response version is displayed", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({
+      ok: true,
+      groups: [{
+        id: "g1",
+        selectedVersionId: "v2",
+        versions: [
+          { id: "v1", sessionId: "s1", userMessageId: "u1", parentSessionId: null, forkEntryId: null, createdAt: "2026-01-01", status: "ready" },
+          { id: "v2", sessionId: "s2", userMessageId: "u2", parentSessionId: "s1", forkEntryId: "u1", createdAt: "2026-01-02", status: "ready" },
+        ],
+      }],
+    }));
+    useRuntimeStore.setState({ sessions: [session("s1", "Session A")], activeSessionId: "s2" });
+    renderList("/workspace/proj/session/s2");
+
+    await waitFor(() => expect(rowFor("Session A").firstElementChild?.className).toContain("bg-accent"));
   });
 
   it("renders every loaded page and offers loading for older conversations", () => {
@@ -319,7 +362,7 @@ describe("WorkspaceSessionList", () => {
     fireEvent.click(deleteButtonOf("Session A"));
     // The delete is in flight; the user switches to the other session.
     fireEvent.click(screen.getByRole("button", { name: /Session B/ }));
-    expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/session/s2");
+    await waitFor(() => expect(screen.getByTestId("path").textContent).toBe("/workspace/proj/session/s2"));
 
     await act(async () => {
       releaseDelete();

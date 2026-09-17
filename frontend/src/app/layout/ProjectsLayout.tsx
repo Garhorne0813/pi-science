@@ -54,6 +54,7 @@ import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { workspacePathLeaf } from "../../lib/workspace";
 import { Icon, IconButton } from "../../components/ui/Icon";
+import { fetchResponseVersionGroups, preferredResponseVersionSession } from "../../lib/conversation/response-versions";
 import { conversationSessionId } from "../../lib/conversation/session-route";
 
 const SIDEBAR_MIN_WIDTH = 220;
@@ -335,6 +336,25 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
   const intentionalRootLanding = location.state?.suppressAutoSessionNavFor === cwd;
   const [deleting, setDeleting] = useState<string | null>(null);
   const [forking, setForking] = useState<string | null>(null);
+  const [activeSidebarSessionId, setActiveSidebarSessionId] = useState<string | null>(activeSessionId);
+  const sessionNavigationRef = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeSessionId) {
+      setActiveSidebarSessionId(null);
+      return () => { cancelled = true; };
+    }
+    setActiveSidebarSessionId(activeSessionId);
+    void fetchResponseVersionGroups(cwd, activeSessionId)
+      .then((groups) => {
+        if (cancelled) return;
+        const group = groups.find((candidate) => candidate.versions.some((version) => version.sessionId === activeSessionId));
+        setActiveSidebarSessionId(group?.versions[0]?.sessionId ?? activeSessionId);
+      })
+      .catch(() => { if (!cancelled) setActiveSidebarSessionId(activeSessionId); });
+    return () => { cancelled = true; };
+  }, [activeSessionId, cwd]);
 
   useEffect(() => {
     let cancelled = false;
@@ -454,16 +474,23 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
                   sessions keep an invisible dot so the list does not jump. */}
               <span
                 aria-hidden
-                className={cn("ml-1.5 h-1.5 w-1.5 shrink-0 rounded-full", activeSessionId === s.id && "bg-accent")}
-                style={activeSessionId === s.id ? undefined : { visibility: "hidden" }}
+                className={cn("ml-1.5 h-1.5 w-1.5 shrink-0 rounded-full", activeSidebarSessionId === s.id && "bg-accent")}
+                style={activeSidebarSessionId === s.id ? undefined : { visibility: "hidden" }}
               />
               <button
                 onClick={() => {
-                  navigate(`/workspace/${encodeURIComponent(cwd)}/session/${s.id}`);
+                  const navigation = ++sessionNavigationRef.current;
+                  void fetchResponseVersionGroups(cwd, s.id)
+                    .then((groups) => preferredResponseVersionSession(groups, s.id))
+                    .catch(() => s.id)
+                    .then((targetSessionId) => {
+                      if (navigation !== sessionNavigationRef.current) return;
+                      navigate(`/workspace/${encodeURIComponent(cwd)}/session/${targetSessionId}`);
+                    });
                 }}
                 className={cn(
                   "flex h-tool min-w-0 flex-1 items-center gap-2 pr-1 pl-2 text-left text-ui-label",
-                  activeSessionId === s.id ? "text-text font-medium" : "text-text/90",
+                  activeSidebarSessionId === s.id ? "text-text font-medium" : "text-text/90",
                 )}
               >
                 <span className="truncate flex-1">{s.name === "New Session" ? t("conversation.newSession") : s.name || s.id.slice(0, 8)}</span>

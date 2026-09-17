@@ -36,4 +36,19 @@ describe("ResponseVersionRepository", () => {
     await repository.setStatus(cwd, branch.version.id, "failed");
     expect((await repository.list(cwd))[0]?.versions[1]).toMatchObject({ id: branch.version.id, userMessageId: "u2", status: "failed" });
   });
+
+  it("persists the last selected response without changing group activity", async () => {
+    const cwd = await workspace();
+    const repository = new ResponseVersionRepository();
+    const branch = await repository.append(cwd, { sourceSessionId: "s1", sourceUserMessageId: "u1", targetSessionId: "s2" });
+    const initial = (await repository.list(cwd))[0]!;
+    expect(initial.selectedVersionId).toBe(branch.version.id);
+    expect(initial.updatedAt).toBe(branch.version.createdAt);
+
+    const firstVersionId = initial.versions[0]!.id;
+    await repository.select(cwd, firstVersionId);
+    const selected = (await repository.list(cwd))[0]!;
+    expect(selected.selectedVersionId).toBe(firstVersionId);
+    expect(selected.updatedAt).toBe(initial.updatedAt);
+  });
 });
