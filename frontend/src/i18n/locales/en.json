@@ -841,6 +841,8 @@
   "conversation.cancelEdit": "Cancel editing",
   "conversation.sendEdit": "Send edited message",
   "conversation.branchError": "Unable to create a new response branch",
+  "conversation.regenerateSideEffectTitle": "Run this response again?",
+  "conversation.regenerateSideEffectMessage": "This response used tools that may have changed files, executed code, or affected external systems. Regenerating creates a new conversation branch, but it does not undo those earlier side effects and may run them again.",
   "conversation.sources": "Sources",
   "conversation.suggestions": "Suggested follow-ups",
   "conversation.attach": "Attach files",

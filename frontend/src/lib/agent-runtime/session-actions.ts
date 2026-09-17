@@ -729,6 +729,58 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       return result.id;
     },
 
+    regenerateSession: async (sessionId: string, entryId: string, sourceUserMessageId: string, message: string) => {
+      const { cwd } = get();
+      const client = getClient();
+      const result = await client.regenerateSession(sessionId, cwd, { entryId, message, sourceUserMessageId });
+      if (get().cwd !== cwd) throw new Error("Workspace changed while the response was being regenerated");
+      // Keep the source turn's user bubble on screen while the target snapshot
+      // is loading. Switching the active id earlier would briefly expose the
+      // source trace or an empty conversation between fork and hydration.
+      const [historyResult, artifactsResult, stateResult] = await Promise.allSettled([
+        client.getMessagesPage(result.id, cwd),
+        fetchPersistedTurnArtifacts(result.id, cwd),
+        client.getSessionState(result.id, cwd),
+      ]);
+      if (get().cwd !== cwd) throw new Error("Workspace changed while the regenerated response was loading");
+      const history = historyResult.status === "fulfilled" ? historyResult.value : {
+        messages: [] as HistoryMessage[], next_cursor: null, has_more: false, snapshot_version: "",
+      };
+      const artifactTurns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
+      const runtimeBusy = stateResult.status !== "fulfilled"
+        || stateResult.value.is_streaming
+        || stateResult.value.is_compacting
+        || stateResult.value.pending_message_count > 0;
+      ++generations.connection;
+      ++generations.activity;
+      ++generations.localMutation;
+      optimisticSessionIds.add(result.id);
+      set({
+        client,
+        activeSessionId: result.id,
+        status: "connecting",
+        pendingInteraction: null,
+        pendingQuestionnaire: null,
+        thread: attachTurnArtifacts(threadFromMessages(history.messages), artifactTurns, { windowComplete: !history.has_more }),
+        historyCursor: history.next_cursor,
+        historyHasMore: history.has_more,
+        historyLoading: false,
+        historySnapshotVersion: history.snapshot_version,
+        working: runtimeBusy,
+        turnLifecycle: runtimeBusy ? "active" : "settled",
+        sessions: [
+          { id: result.id, cwd, project_id: get().sessions.find((session) => session.cwd === cwd)?.project_id ?? null, name: "New Session" },
+          ...get().sessions.filter((session) => session.id !== result.id),
+        ].slice(0, 50),
+      });
+      registerEventListener(client);
+      client.connect(result.id, cwd);
+      if (runtimeBusy) ensureTurnWatchdog();
+      if (historyResult.status === "rejected") appendRuntimeError(historyResult.reason, result.id, cwd);
+      await loadSessionsInternal();
+      return { sessionId: result.id, versionId: result.versionId };
+    },
+
     createNewSession: async () => {
       const requestCwd = get().cwd;
       const existing = _createSessionPromises.get(requestCwd);

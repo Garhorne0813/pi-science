@@ -6,6 +6,7 @@ import type { SessionTitleRepository } from "../../runtime/node/session-titles.j
 import { sessionTitleRepository } from "../../runtime/node/session-titles.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { AiTitleService } from "../../runtime/title/ai-title-service.js";
+import { responseVersionRepository } from "../../runtime/node/response-version-repository.js";
 
 function cwd(request: { query: unknown }): string {
   const value = (request.query as { cwd?: unknown }).cwd;
@@ -116,6 +117,47 @@ export function registerNodeSessionRoutes(
     return result.success && result.sessionId
       ? { ok: true, id: result.sessionId, cwd: cwd(request) }
       : sendFailure(reply, result);
+  });
+
+  app.post<{ Params: { session_id: string } }>("/api/sessions/:session_id/regenerate", async (request, reply) => {
+    const body = (request.body ?? {}) as { entry_id?: unknown; message?: unknown; source_user_message_id?: unknown };
+    if (typeof body.entry_id !== "string" || !body.entry_id || typeof body.message !== "string" || !body.message || typeof body.source_user_message_id !== "string" || !body.source_user_message_id) {
+      return reply.code(400).send({ ok: false, code: "invalid_request", error: "entry_id, message, and source_user_message_id are required" });
+    }
+    let workspace: string;
+    try { workspace = await validateWorkspaceCwd(cwd(request)); }
+    catch (error) { return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) }); }
+    const forked = await nodeSessionService.fork(request.params.session_id, workspace, body.entry_id);
+    if (!forked.success || !forked.sessionId) return sendFailure(reply, forked);
+    const branch = await responseVersionRepository.append(workspace, {
+      sourceSessionId: request.params.session_id,
+      sourceUserMessageId: body.source_user_message_id,
+      targetSessionId: forked.sessionId,
+      forkEntryId: body.entry_id,
+    });
+    const prompted = await nodeSessionService.command(forked.sessionId, workspace, "prompt", { message: body.message });
+    await responseVersionRepository.setStatus(workspace, branch.version.id, prompted.success ? "generating" : "failed");
+    if (!prompted.success) return sendFailure(reply, { ...prompted, id: forked.sessionId, version_id: branch.version.id, group_id: branch.group.id });
+    return { ok: true, id: forked.sessionId, version_id: branch.version.id, group_id: branch.group.id, cwd: workspace };
+  });
+
+  app.get("/api/response-versions", async (request, reply) => {
+    const query = request.query as { session_id?: unknown };
+    let workspace: string;
+    try { workspace = await validateWorkspaceCwd(cwd(request)); }
+    catch (error) { return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) }); }
+    const sessionId = typeof query.session_id === "string" && query.session_id ? query.session_id : undefined;
+    return { ok: true, groups: await responseVersionRepository.list(workspace, sessionId) };
+  });
+
+  app.put<{ Params: { version_id: string } }>("/api/response-versions/:version_id/message", async (request, reply) => {
+    const body = (request.body ?? {}) as { user_message_id?: unknown };
+    if (typeof body.user_message_id !== "string" || !body.user_message_id) return reply.code(400).send({ ok: false, code: "invalid_request", error: "user_message_id is required" });
+    let workspace: string;
+    try { workspace = await validateWorkspaceCwd(cwd(request)); }
+    catch (error) { return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) }); }
+    const version = await responseVersionRepository.bind(workspace, request.params.version_id, body.user_message_id);
+    return version ? { ok: true, version } : reply.code(404).send({ ok: false, code: "not_found", error: "response version not found" });
   });
 
   app.post<{ Params: { session_id: string } }>("/api/sessions/:session_id/abort", async (request, reply) => {

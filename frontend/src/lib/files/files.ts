@@ -109,6 +109,21 @@ export async function readArtifact(
   }
 }
 
+/** Read the immutable bytes captured when an artifact version was published. */
+export async function readArtifactVersion(cwd: string, artifactId: string, version: number, maxBytes?: number): Promise<ArtifactFile | null> {
+  const params = new URLSearchParams({ cwd, version: String(version) });
+  if (maxBytes !== undefined) params.set("maxBytes", String(maxBytes));
+  try {
+    return await apiRequest<ArtifactFile>(`${API}/artifacts/${encodeURIComponent(artifactId)}/content?${params}`);
+  } catch {
+    return null;
+  }
+}
+
+export function artifactVersionPreviewUrl(cwd: string, artifactId: string, version: number): string {
+  return `${API}/artifacts/${encodeURIComponent(artifactId)}/serve?${new URLSearchParams({ cwd, version: String(version) })}`;
+}
+
 /** Overwrite a workspace text file with new content. Uses REST API. */
 export async function writeArtifact(
   path: string,

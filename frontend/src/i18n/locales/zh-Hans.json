@@ -841,6 +841,8 @@
   "conversation.cancelEdit": "取消编辑",
   "conversation.sendEdit": "发送编辑后的消息",
   "conversation.branchError": "无法创建新的回复分支",
+  "conversation.regenerateSideEffectTitle": "要再次运行这条回复吗？",
+  "conversation.regenerateSideEffectMessage": "这条回复使用过可能修改文件、执行代码或影响外部系统的工具。重新生成会创建新的会话分支，但不会撤销之前的副作用，并且可能再次执行这些操作。",
   "conversation.sources": "引用来源",
   "conversation.suggestions": "建议追问",
   "conversation.attach": "添加附件",

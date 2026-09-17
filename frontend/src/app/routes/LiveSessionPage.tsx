@@ -14,14 +14,13 @@ import { useRequiredWorkspaceCwd } from "../../lib/workspace";
 import { projectKnowledgeApi, useReviewPolicy } from "../../lib/knowledge";
 import {
   agentActionTextByBlock,
-  appendResponseVersion,
   bindResponseVersionMessage,
+  fetchResponseVersionGroups,
   fetchDynamicCommands,
-  readResponseVersionGroups,
+  persistResponseVersionMessage,
   replayForkEntryId,
   resetDynamicCommands,
   responseVersionGroup,
-  writeResponseVersionGroups,
   type ResponseVersionGroup,
 } from "../../lib/conversation";
 import { ConversationComposer } from "../../components/conversation/ConversationComposer";
@@ -43,6 +42,7 @@ import { useResearchLoop } from "../../hooks/useResearchLoop";
 import { useComposer } from "../../hooks/useComposer";
 import { useConversationScroll } from "../../hooks/useConversationScroll";
 import type { ThreadBlock, UserMessageBlock } from "../../types/thread";
+import { toolEffect } from "../../lib/conversation/activity-policy";
 
 type ConversationVirtuosoContext = {
   renderInteractionPrompt: () => ReactNode;
@@ -100,7 +100,7 @@ export function ConversationFooter() {
 
 export function LiveSessionPage() {
   const { t } = useTranslation();
-  const { toast } = useFeedback();
+  const { toast, confirm } = useFeedback();
   const { sessionId } = useParams<{ sessionId: string }>();
   const workspaceCwd = useRequiredWorkspaceCwd();
   const navigate = useNavigate();
@@ -125,8 +125,7 @@ export function LiveSessionPage() {
   const connect = useRuntimeStore((s) => s.connect);
   const disconnect = useRuntimeStore((s) => s.disconnect);
   const abort = useRuntimeStore((s) => s.abort);
-  const sendPrompt = useRuntimeStore((s) => s.sendPrompt);
-  const forkSession = useRuntimeStore((s) => s.forkSession);
+  const regenerateSession = useRuntimeStore((s) => s.regenerateSession);
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
   const contextTokens = useRuntimeStore((s) => s.contextTokens);
   const contextWindow = useRuntimeStore((s) => s.contextWindow);
@@ -140,12 +139,16 @@ export function LiveSessionPage() {
   const [reviewingProject, setReviewingProject] = useState(false);
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
   const [replaying, setReplaying] = useState<{ sessionId: string; userMessageId: string } | null>(null);
-  const [responseVersionGroups, setResponseVersionGroups] = useState<ResponseVersionGroup[]>(() => readResponseVersionGroups(workspaceCwd));
+  const [responseVersionGroups, setResponseVersionGroups] = useState<ResponseVersionGroup[]>([]);
   const removeWorkspaceReference = useUiStore((state) => state.removeWorkspaceReference);
 
   useEffect(() => {
-    setResponseVersionGroups(readResponseVersionGroups(workspaceCwd));
-  }, [workspaceCwd]);
+    let cancelled = false;
+    void fetchResponseVersionGroups(workspaceCwd, activeSessionId ?? sessionId)
+      .then((groups) => { if (!cancelled) setResponseVersionGroups(groups); })
+      .catch(() => { if (!cancelled) setResponseVersionGroups([]); });
+    return () => { cancelled = true; };
+  }, [activeSessionId, sessionId, workspaceCwd]);
 
   const messageIndexQuery = useQuery({
     queryKey: ["session-message-index", workspaceCwd, sessionId ?? null],
@@ -199,19 +202,18 @@ export function LiveSessionPage() {
   const { suggestions, setSuggestions } = useTurnEffects(working, thread.blocks);
 
   useEffect(() => {
-    if (working || !activeSessionId) return;
+    if (!activeSessionId) return;
     const pending = responseVersionGroups
       .flatMap((group) => group.versions)
       .find((version) => version.sessionId === activeSessionId && version.userMessageId === null);
     if (!pending) return;
-    const user = thread.blocks.findLast((block): block is UserMessageBlock => block.kind === "user" && block.text === pending.message);
+    const user = thread.blocks.findLast((block): block is UserMessageBlock => block.kind === "user");
     if (!user) return;
-    setResponseVersionGroups((current) => {
-      const next = bindResponseVersionMessage(current, activeSessionId, user.id, pending.message);
-      if (next !== current) writeResponseVersionGroups(workspaceCwd, next);
-      return next;
+    setResponseVersionGroups((current) => bindResponseVersionMessage(current, pending.id, user.id));
+    void persistResponseVersionMessage(workspaceCwd, pending.id, user.id).catch(() => {
+      void fetchResponseVersionGroups(workspaceCwd, activeSessionId).then(setResponseVersionGroups).catch(() => undefined);
     });
-  }, [activeSessionId, responseVersionGroups, thread.blocks, working, workspaceCwd]);
+  }, [activeSessionId, responseVersionGroups, thread.blocks, workspaceCwd]);
 
   const userNavItems = useMemo<ConversationNavItem[]>(() => {
     const loadedUsers = thread.blocks.filter((block): block is Extract<ThreadBlock, { kind: "user" }> => block.kind === "user");
@@ -326,27 +328,29 @@ export function LiveSessionPage() {
 
   const handleResendUserMessage = async (block: UserMessageBlock, message: string) => {
     if (!activeSessionId || working || interactionPending || reviewingProject) return;
+    const sourceTurn = turns.find((turn) => turn.user?.id === block.id);
+    const hasReplaySideEffects = sourceTurn?.blocks.some((candidate) => candidate.kind === "tool" && (
+      toolEffect(candidate) === "mutate" || toolEffect(candidate) === "execute"
+    ));
+    if (hasReplaySideEffects) {
+      const approved = await confirm({
+        title: t("conversation.regenerateSideEffectTitle"),
+        message: t("conversation.regenerateSideEffectMessage"),
+        confirmLabel: t("conversation.regenerate"),
+      });
+      if (!approved) return;
+    }
     const sourceSessionId = activeSessionId;
     const entryId = replayForkEntryId(block);
     setReplaying({ sessionId: sourceSessionId, userMessageId: block.id });
     setSuggestions([]);
     try {
-      // Orbit's fork endpoint takes the selected user entry and branches
-      // immediately before it, including for the first conversational turn.
-      const targetSessionId = await forkSession(sourceSessionId, entryId);
-      setReplaying(null);
-      const sentSessionId = await sendPrompt(message);
-      const nextSessionId = sentSessionId ?? targetSessionId;
-      setResponseVersionGroups((current) => {
-        const next = appendResponseVersion(
-          current,
-          { sessionId: sourceSessionId, userMessageId: block.id, message: block.text },
-          { sessionId: nextSessionId, userMessageId: null, message },
-        );
-        writeResponseVersionGroups(workspaceCwd, next);
-        return next;
-      });
-      if (nextSessionId) navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/session/${nextSessionId}`);
+      // One server operation owns the fork + prompt transition and persists
+      // the branch before the newly generated response starts streaming.
+      const result = await regenerateSession(sourceSessionId, entryId, block.id, message);
+      const groups = await fetchResponseVersionGroups(workspaceCwd, result.sessionId);
+      setResponseVersionGroups(groups);
+      navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/session/${result.sessionId}`);
     } catch (error) {
       const recoverySessionId = useRuntimeStore.getState().activeSessionId;
       if (recoverySessionId && recoverySessionId !== sourceSessionId) {

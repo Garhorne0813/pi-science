@@ -420,6 +420,32 @@ describe("native Node conversation routes", () => {
     await server.close();
   });
 
+  it("forks, records, and starts a regenerated response in one request", async () => {
+    const cwd = await workspaceWithSessions("session-regenerate");
+    const server = app();
+    const query = `cwd=${encodeURIComponent(cwd)}`;
+    const regenerated = await server.inject({
+      method: "POST",
+      url: `/api/sessions/session-regenerate/regenerate?${query}`,
+      payload: { entry_id: "session-regenerate-user", source_user_message_id: "session-regenerate-user", message: "try again" },
+    });
+    expect(regenerated.statusCode, regenerated.body).toBe(200);
+    expect(regenerated.json()).toMatchObject({ ok: true, id: expect.any(String), version_id: expect.any(String), group_id: expect.any(String) });
+
+    const versions = await server.inject({ method: "GET", url: `/api/response-versions?${query}&session_id=${encodeURIComponent(regenerated.json().id)}` });
+    expect(versions.json().groups[0].versions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: "session-regenerate", userMessageId: "session-regenerate-user", status: "ready" }),
+      expect.objectContaining({ sessionId: regenerated.json().id, userMessageId: null, status: "generating" }),
+    ]));
+    const bound = await server.inject({
+      method: "PUT",
+      url: `/api/response-versions/${regenerated.json().version_id}/message?${query}`,
+      payload: { user_message_id: "regenerated-user" },
+    });
+    expect(bound.json()).toMatchObject({ ok: true, version: { userMessageId: "regenerated-user" } });
+    await server.close();
+  });
+
   it("returns runtime command errors and cancellations instead of disguising them as an empty command list", async () => {
     for (const [mode, statusCode, code] of [["commands-error", 502, "commands_failed"], ["commands-cancelled", 409, "cancelled"]] as const) {
       process.env.FAKE_PI_MODE = mode;

@@ -5,6 +5,7 @@ import { relative } from "node:path";
 import { appendJsonLineUnlocked, readJsonLines, withFileWriteLock, workspaceFile } from "../../storage/persistence.js";
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { previewKind, previewMime } from "./workspace-artifact-snapshot.js";
+import { snapshotArtifactVersion } from "./artifact-version-storage.js";
 
 const MAX_PUBLISH_BYTES = 2 * 1024 * 1024 * 1024;
 
@@ -21,6 +22,7 @@ interface ArtifactManifest {
   inputs?: unknown[];
   environment?: Record<string, unknown>;
   verification?: Record<string, unknown>;
+  snapshot_path?: string;
 }
 
 export interface PublishedWorkspaceArtifact {
@@ -154,6 +156,10 @@ async function publishWorkspaceArtifact(
     const artifacts = await readJsonLines<ArtifactManifest>(workspaceFile(cwd, "artifacts.jsonl"));
     const previous = artifacts.filter((item) => item.artifact_id === artifactId).at(-1);
     if (previous?.sha256 === digest.sha256) {
+      if (!previous.snapshot_path) {
+        previous.snapshot_path = await snapshotArtifactVersion(cwd, target, artifactId, previous.version, digest.sha256);
+        await appendJsonLineUnlocked(workspaceFile(cwd, "artifacts.jsonl"), previous);
+      }
       return {
         artifact_id: previous.artifact_id,
         version: previous.version,
@@ -192,6 +198,7 @@ async function publishWorkspaceArtifact(
         checked_at: publishedAt,
       },
     };
+    artifact.snapshot_path = await snapshotArtifactVersion(cwd, target, artifactId, version, digest.sha256);
     await appendJsonLineUnlocked(workspaceFile(cwd, "artifacts.jsonl"), artifact);
     await recordArtifactProvenance(cwd, artifact, options);
     return {

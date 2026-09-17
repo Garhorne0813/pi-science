@@ -284,6 +284,9 @@ export interface FilePreviewInspector {
   content?: string;
   root?: FileRoot;
   cwd?: string;
+  /** Immutable published artifact identity. When present, preview this exact version read-only. */
+  artifactId?: string;
+  artifactVersion?: number;
 }
 
 export interface NotebookFileInspector {

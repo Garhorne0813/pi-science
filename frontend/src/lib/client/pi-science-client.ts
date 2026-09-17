@@ -121,6 +121,10 @@ export class PiScienceClient {
     return rest.forkSession(this.baseUrl, sessionId, cwd, entryId);
   }
 
+  async regenerateSession(sessionId: string, cwd: string, input: { entryId: string; message: string; sourceUserMessageId: string }): Promise<{ id: string; versionId: string; groupId: string }> {
+    return rest.regenerateSession(this.baseUrl, sessionId, cwd, input);
+  }
+
   async sendPrompt(sessionId: string, message: string, cwd?: string): Promise<void> {
     return rest.sendPrompt(this.baseUrl, sessionId, message, cwd);
   }

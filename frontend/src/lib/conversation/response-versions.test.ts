@@ -1,45 +1,23 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import {
-  appendResponseVersion,
-  bindResponseVersionMessage,
-  readResponseVersionGroups,
-  responseVersionGroup,
-  writeResponseVersionGroups,
-} from "./response-versions";
+import { describe, expect, it } from "vitest";
+import { bindResponseVersionMessage, responseVersionGroup, type ResponseVersionGroup } from "./response-versions";
+
+const groups: ResponseVersionGroup[] = [{
+  id: "g1",
+  versions: [
+    { id: "v1", sessionId: "s1", userMessageId: "u1", parentSessionId: null, forkEntryId: null, createdAt: "2026-01-01", status: "ready" },
+    { id: "v2", sessionId: "s2", userMessageId: null, parentSessionId: "s1", forkEntryId: "e1", createdAt: "2026-01-02", status: "generating" },
+  ],
+}];
 
 describe("response versions", () => {
-  beforeEach(() => localStorage.clear());
-
-  it("creates a group and appends regeneration branches from any version", () => {
-    const first = appendResponseVersion([],
-      { sessionId: "s1", userMessageId: "u1", message: "question" },
-      { sessionId: "s2", userMessageId: null, message: "question" },
-    );
-    const bound = bindResponseVersionMessage(first, "s2", "u2", "question");
-    const second = appendResponseVersion(bound,
-      { sessionId: "s2", userMessageId: "u2", message: "question" },
-      { sessionId: "s3", userMessageId: null, message: "edited question" },
-    );
-    expect(second).toHaveLength(1);
-    expect(second[0]?.versions.map((version) => version.sessionId)).toEqual(["s1", "s2", "s3"]);
+  it("finds a persisted version group by exact session and user message identity", () => {
+    expect(responseVersionGroup(groups, "s1", "u1")?.id).toBe("g1");
+    expect(responseVersionGroup(groups, "s2", "u1")).toBeUndefined();
   });
 
-  it("binds a pending branch to its persisted user message", () => {
-    const groups = appendResponseVersion([],
-      { sessionId: "s1", userMessageId: "u1", message: "question" },
-      { sessionId: "s2", userMessageId: null, message: "edited" },
-    );
-    const bound = bindResponseVersionMessage(groups, "s2", "u2", "edited");
+  it("binds only the server-issued pending version id", () => {
+    const bound = bindResponseVersionMessage(groups, "v2", "u2");
     expect(responseVersionGroup(bound, "s2", "u2")?.versions).toHaveLength(2);
-  });
-
-  it("round-trips valid groups through workspace-scoped storage", () => {
-    const groups = appendResponseVersion([],
-      { sessionId: "s1", userMessageId: "u1", message: "question" },
-      { sessionId: "s2", userMessageId: null, message: "question" },
-    );
-    writeResponseVersionGroups("/workspace", groups);
-    expect(readResponseVersionGroups("/workspace")).toEqual(groups);
-    expect(readResponseVersionGroups("/other")).toEqual([]);
+    expect(groups[0]?.versions[1]?.userMessageId).toBeNull();
   });
 });

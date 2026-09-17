@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { File, FileText, FileSpreadsheet, FileImage, FileCode2, NotebookPen, ChevronDown, ChevronUp, ArrowUpRight } from "lucide-react";
-import { previewUrl, probeLargeFile, readArtifact } from "../../lib/files";
+import { artifactVersionPreviewUrl, previewUrl, probeLargeFile, readArtifact, readArtifactVersion } from "../../lib/files";
 import { extractArtifactRefs, fileInspectorForPath, normalizeArtifactPath } from "../../lib/artifacts";
 import { useUiStore } from "../../lib/ui";
 import type { TurnArtifactItem } from "../../types/thread";
@@ -72,7 +72,7 @@ function OpenAffordance() {
 }
 
 /** Capped first-bytes read of a workspace file for the snippet card. */
-function useSnippet(path: string, cwd?: string, enabled = true) {
+function useSnippet(item: TurnArtifactItem, cwd?: string, enabled = true) {
   const [state, setState] = useState<{ status: "loading" } | { status: "error" } | { status: "ready"; text: string }>({ status: "loading" });
   useEffect(() => {
     if (!enabled || !cwd) {
@@ -81,7 +81,10 @@ function useSnippet(path: string, cwd?: string, enabled = true) {
     }
     let cancelled = false;
     setState({ status: "loading" });
-    void readArtifact(path, "workspace", cwd, SNIPPET_BYTES)
+    const read = item.artifactId && item.version !== undefined
+      ? readArtifactVersion(cwd, item.artifactId, item.version, SNIPPET_BYTES)
+      : readArtifact(item.path, "workspace", cwd, SNIPPET_BYTES);
+    void read
       .then((file) => {
         if (cancelled) return;
         if (!file || file.encoding !== "utf8" || !file.data) {
@@ -96,8 +99,19 @@ function useSnippet(path: string, cwd?: string, enabled = true) {
     return () => {
       cancelled = true;
     };
-  }, [path, cwd, enabled]);
+  }, [item.artifactId, item.path, item.version, cwd, enabled]);
   return state;
+}
+
+function artifactInspector(item: TurnArtifactItem, filename: string, cwd: string) {
+  const inspector = fileInspectorForPath(item.path, filename, "workspace", cwd);
+  if (!item.artifactId || item.version === undefined) return inspector;
+  // Historical notebooks are intentionally opened as immutable JSON instead
+  // of letting the notebook editor point at the mutable workspace path.
+  if (inspector.variant === "notebook-file") {
+    return { variant: "file" as const, path: item.path, filename, root: "workspace" as const, cwd, artifact: "notebook" as const, language: "json", artifactId: item.artifactId, artifactVersion: item.version };
+  }
+  return { ...inspector, artifactId: item.artifactId, artifactVersion: item.version };
 }
 
 /** First non-empty value's rough type: numeric → "123", otherwise "abc". */
@@ -144,7 +158,7 @@ function IconCard({ item, cwd, Icon }: { item: TurnArtifactItem; cwd?: string; I
   const filename = item.path.split("/").pop() ?? item.path;
   const open = () => {
     if (!cwd) return;
-    openInspector(fileInspectorForPath(item.path, filename, "workspace", cwd));
+    openInspector(artifactInspector(item, filename, cwd));
   };
   return (
     <button
@@ -169,16 +183,16 @@ function SnippetCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string }) {
   const { t } = useTranslation();
   const filename = item.path.split("/").pop() ?? item.path;
   const [structureFailed, setStructureFailed] = useState(false);
-  const snippet = useSnippet(item.path, cwd, snippetKindFor(item) !== "structure");
+  const snippet = useSnippet(item, cwd, snippetKindFor(item) !== "structure");
   const open = () => {
     if (!cwd) return;
-    openInspector(fileInspectorForPath(item.path, filename, "workspace", cwd));
+    openInspector(artifactInspector(item, filename, cwd));
   };
 
   const ready = snippet.status === "ready";
 
   if (snippetKindFor(item) === "structure") {
-    if (structureFailed || !cwd) return <IconCard item={item} cwd={cwd} Icon={fileIcon(item.kind)} />;
+    if (structureFailed || !cwd || (item.artifactId && item.version !== undefined)) return <IconCard item={item} cwd={cwd} Icon={fileIcon(item.kind)} />;
     return (
       <button
         type="button"
@@ -263,7 +277,7 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
 
   const open = () => {
     if (!cwd) return;
-    openInspector(fileInspectorForPath(item.path, filename, "workspace", cwd));
+    openInspector(artifactInspector(item, filename, cwd));
   };
 
   if (isImage) {
@@ -277,7 +291,9 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
         <OpenAffordance />
         <div className={`relative ${PREVIEW_HEIGHT} overflow-hidden bg-surface-2 p-1.5`}>
           <img
-            src={previewUrl(item.path, "workspace", cwd ?? "")}
+            src={item.artifactId && item.version !== undefined
+              ? artifactVersionPreviewUrl(cwd ?? "", item.artifactId, item.version)
+              : previewUrl(item.path, "workspace", cwd ?? "")}
             alt={filename}
             loading="lazy"
             onError={() => setImageFailed(true)}
