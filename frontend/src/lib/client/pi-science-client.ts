@@ -81,6 +81,13 @@ export class PiScienceClient {
     return this.transport.getRecoveryResumeCursor(cwd, sessionId);
   }
 
+  /** Latest cursor durably stored by the server. Only seed a fresh transport
+   *  from this after an idle authoritative history snapshot; doing so while a
+   *  turn is active could skip an event written between the two reads. */
+  async getLatestConversationCursor(sessionId: string, cwd: string): Promise<string | null> {
+    return rest.getConversationResumeCursor(this.baseUrl, sessionId, cwd);
+  }
+
   async getMessagesPage(
     sessionId: string,
     cwd?: string,

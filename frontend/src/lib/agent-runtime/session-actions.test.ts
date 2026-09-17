@@ -9,6 +9,58 @@ installRuntimeTestEnvironment();
 
 
 describe("runtime session actions", () => {
+  it("seeds a completed regenerated branch at the durable SSE tail", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("parent/regenerate")) return jsonResponse({ ok: true, id: "regenerated", version_id: "v2", group_id: "g1" });
+      if (url.includes("regenerated/messages")) return jsonResponse({
+        messages: [
+          { id: "u2", role: "user", content: [{ type: "text", text: "edited prompt" }] },
+          { id: "a2", role: "assistant", content: [{ type: "thinking", thinking: "reasoning" }, { type: "text", text: "new answer" }] },
+        ],
+        next_cursor: null,
+        has_more: false,
+        snapshot_version: "snapshot-2",
+      });
+      if (url.includes("regenerated/artifacts")) return jsonResponse({ turns: [] });
+      if (url.includes("regenerated/state")) return jsonResponse(state("regenerated"));
+      if (url.includes("regenerated/events/cursor")) return jsonResponse({ resumeCursor: "epoch-2:51" });
+      if (url.startsWith("/api/sessions?")) return jsonResponse([{ id: "regenerated", cwd: "/workspace" }]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useRuntimeStore.setState({ cwd: "/workspace", activeSessionId: "parent", status: "ready" });
+
+    await expect(useRuntimeStore.getState().regenerateSession("parent", "u1", "u1", "edited prompt"))
+      .resolves.toEqual({ sessionId: "regenerated", versionId: "v2" });
+
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(FakeEventSource.instances[0]?.url).toContain("/api/sessions/regenerated/events");
+    expect(FakeEventSource.instances[0]?.url).toContain("lastEventId=epoch-2%3A51");
+    expect(useRuntimeStore.getState().thread.blocks.map((block) => block.id)).toEqual(["u2", "a2-thinking", "a2"]);
+  });
+
+  it("does not jump to the durable SSE tail while a regenerated branch is still active", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("parent/regenerate")) return jsonResponse({ ok: true, id: "regenerated-live", version_id: "v3", group_id: "g1" });
+      if (url.includes("regenerated-live/messages")) return jsonResponse({ messages: [], next_cursor: null, has_more: false, snapshot_version: "snapshot-3" });
+      if (url.includes("regenerated-live/artifacts")) return jsonResponse({ turns: [] });
+      if (url.includes("regenerated-live/state")) return jsonResponse(state("regenerated-live", { is_streaming: true }));
+      if (url.includes("events/cursor")) throw new Error("active regeneration must not read the durable tail cursor");
+      if (url.startsWith("/api/sessions?")) return jsonResponse([{ id: "regenerated-live", cwd: "/workspace" }]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useRuntimeStore.setState({ cwd: "/workspace", activeSessionId: "parent", status: "ready" });
+
+    await useRuntimeStore.getState().regenerateSession("parent", "u1", "u1", "edited prompt");
+
+    expect(FakeEventSource.instances[0]?.url).not.toContain("lastEventId=");
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("events/cursor"))).toBe(false);
+    expect(useRuntimeStore.getState().working).toBe(true);
+  });
+
   it("passes an entry id when forking from a historical turn", async () => {
     let forkBody: BodyInit | null | undefined;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {

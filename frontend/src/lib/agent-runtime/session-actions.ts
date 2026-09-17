@@ -751,6 +751,14 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         || stateResult.value.is_streaming
         || stateResult.value.is_compacting
         || stateResult.value.pending_message_count > 0;
+      // An idle snapshot already contains the complete regenerated turn. Seed
+      // the fresh EventSource at the server's durable tail so connecting does
+      // not replay those same thinking/tool events under their live block ids.
+      // For an active turn we deliberately start without this cursor: skipping
+      // ahead of the REST snapshot would create a snapshot→cursor loss window.
+      const resumeCursor = !runtimeBusy && historyResult.status === "fulfilled" && stateResult.status === "fulfilled"
+        ? await client.getLatestConversationCursor(result.id, cwd).catch(() => null)
+        : null;
       ++generations.connection;
       ++generations.activity;
       ++generations.localMutation;
@@ -774,6 +782,7 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         ].slice(0, 50),
       });
       registerEventListener(client);
+      if (resumeCursor) client.setResumeCursor(cwd, result.id, resumeCursor);
       client.connect(result.id, cwd);
       if (runtimeBusy) ensureTurnWatchdog();
       if (historyResult.status === "rejected") appendRuntimeError(historyResult.reason, result.id, cwd);

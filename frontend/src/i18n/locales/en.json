@@ -78,7 +78,7 @@
   "conversation.activity.processLive": "Working",
   "conversation.activity.exploreSummary": "Explored · {{count}} operations",
   "conversation.activity.exploreSummaryLive": "Exploring · {{done}} of {{count}} operations",
-  "conversation.activity.failureSummary": " · {{count}} failed",
+  "conversation.activity.failureSummary": " · Tool failures: {{count}}",
   "conversation.activity.noAnswer": "No final answer returned",
   "conversation.activity.operationCount_one": "{{count}} operation",
   "conversation.activity.operationCount_other": "{{count}} operations",
