@@ -5,10 +5,12 @@ import type { FilePreviewInspector as FilePreviewInspectorT, FileRoot } from "..
 import { previewKindForName, type PreviewKind } from "@/lib/artifacts";
 import {
   base64ToBytes,
+  artifactVersionPreviewUrl,
   openArtifactExternally,
   previewUrl,
   probeLargeFile,
   readArtifact,
+  readArtifactVersion,
   writeArtifact,
   type LargeFilePointer,
 } from "@/lib/files";
@@ -84,6 +86,7 @@ export function FilePreviewInspector({
   const needsUrl = policy.load.includes("url");
   const needsText = policy.load.includes("text");
   const needsBytes = policy.load.includes("bytes");
+  const historical = typeof data.artifactId === "string" && typeof data.artifactVersion === "number";
 
   const [url, setUrl] = useState<string | null>(null);
   const [text, setText] = useState<string | null>(data.content ?? null);
@@ -125,7 +128,9 @@ export function FilePreviewInspector({
     (async () => {
       try {
         if (needsUrl) {
-          const u = previewUrl(data.path, data.root, cwd);
+          const u = historical
+            ? artifactVersionPreviewUrl(cwd, data.artifactId!, data.artifactVersion!)
+            : previewUrl(data.path, data.root, cwd);
           if (cancelled) return;
           setUrl(u);
           // Browser dev has no local server; html can still preview inline content.
@@ -134,12 +139,10 @@ export function FilePreviewInspector({
           }
         }
         if (needsText && data.content === undefined) {
-          const f = await readArtifact(
-            data.path,
-            data.root,
-            cwd,
-            kind === "markdown" ? MARKDOWN_PREVIEW_BYTES : undefined,
-          );
+          const maxBytes = kind === "markdown" ? MARKDOWN_PREVIEW_BYTES : undefined;
+          const f = historical
+            ? await readArtifactVersion(cwd, data.artifactId!, data.artifactVersion!, maxBytes)
+            : await readArtifact(data.path, data.root, cwd, maxBytes);
           if (cancelled) return;
           if (f && f.encoding === "utf8") {
             setText(f.data);
@@ -149,7 +152,9 @@ export function FilePreviewInspector({
           else setError(t("filePreview.fileUnavailable"));
         }
         if (needsBytes) {
-          const f = await readArtifact(data.path, data.root, cwd);
+          const f = historical
+            ? await readArtifactVersion(cwd, data.artifactId!, data.artifactVersion!)
+            : await readArtifact(data.path, data.root, cwd);
           if (cancelled) return;
           if (f && f.encoding === "base64") setBytes(base64ToBytes(f.data));
           else setError(t("filePreview.fileUnavailable"));
@@ -167,7 +172,7 @@ export function FilePreviewInspector({
     // locale switch mid-load shouldn't re-trigger a network/disk read to refresh
     // an error string.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd, data.path, data.content, data.root, kind, needsUrl, needsText, needsBytes]);
+  }, [cwd, data.path, data.content, data.root, data.artifactId, data.artifactVersion, historical, kind, needsUrl, needsText, needsBytes]);
 
   const loadFullText = async () => {
     if (!textTruncated || fullTextLoading) return;
@@ -176,7 +181,9 @@ export function FilePreviewInspector({
     setFullTextLoading(true);
     setFullTextError(null);
     try {
-      const f = await readArtifact(targetPath, data.root, cwd);
+      const f = historical
+        ? await readArtifactVersion(cwd, data.artifactId!, data.artifactVersion!)
+        : await readArtifact(targetPath, data.root, cwd);
       if (fullTextLoadPathRef.current !== targetPath) return;
       if (f && f.encoding === "utf8") {
         setText(f.data);
@@ -203,6 +210,7 @@ export function FilePreviewInspector({
   // Editable text files: plain code/text, markdown, csv and html (html stays
   // read-only in its browser preview tab — editing happens on the code tab).
   const editable = (kind === "text" || kind === "markdown" || kind === "table" || kind === "html")
+    && !historical
     && !loading
     && !error
     && !textTruncated
@@ -337,7 +345,9 @@ export function FilePreviewInspector({
             size="compact"
             className="text-text"
             title={t("filePreview.openExternally")}
-            onClick={() => void openArtifactExternally(data.path, data.root, cwd)}
+            onClick={() => historical
+              ? window.open(artifactVersionPreviewUrl(cwd, data.artifactId!, data.artifactVersion!), "_blank")
+              : void openArtifactExternally(data.path, data.root, cwd)}
           />
         )}
         {controls}

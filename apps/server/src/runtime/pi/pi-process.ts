@@ -286,14 +286,14 @@ export class PiProcess extends EventEmitter {
           const result = await this.webRequest("POST", `${runtimePath}/resume`, { sessionPath: params.sessionPath });
           if (result.success) {
             await this.refreshRuntimeIdentity();
-            await this.replaceEventStream();
+            this.replaceEventStreamInBackground();
           }
           return result;
         }
         case "prompt":
         case "abort":
         case "compact":
-          return this.webRequest("POST", `${runtimePath}/${type}`, type === "prompt" ? { message: params.message } : undefined);
+          return this.webRequest("POST", `${runtimePath}/${type}`, type === "prompt" ? { message: params.message, images: params.images } : undefined);
         case "steer":
         case "follow_up":
           return this.webRequest("POST", `${runtimePath}/${type === "follow_up" ? "follow-up" : type}`, params);
@@ -301,7 +301,7 @@ export class PiProcess extends EventEmitter {
           const result = await this.webRequest("POST", `${runtimePath}/fork`, params.entryId ? { entryId: params.entryId } : {});
           if (result.success) {
             await this.refreshRuntimeIdentity();
-            await this.replaceEventStream();
+            this.replaceEventStreamInBackground();
           }
           return result;
         }
@@ -309,7 +309,7 @@ export class PiProcess extends EventEmitter {
           const result = await this.webRequest("POST", `${sessionPath}/clone`);
           if (result.success) {
             await this.refreshRuntimeIdentity();
-            await this.replaceEventStream();
+            this.replaceEventStreamInBackground();
           }
           return result;
         }
@@ -372,6 +372,15 @@ export class PiProcess extends EventEmitter {
     this.eventAbort?.abort();
     this.eventStreamAlive = false;
     await this.startEventStream();
+  }
+
+  /** Session replacement already succeeded before the stream is reopened.
+   *  Do not keep the mutating HTTP request or its session lock waiting on an
+   *  SSE server that may delay response headers until the next event. */
+  private replaceEventStreamInBackground(): void {
+    void this.replaceEventStream().catch((error: unknown) => {
+      if (!this.closed) this.emit("stderr", `Pi Orbit event stream reconnect failed: ${String(error)}\n`);
+    });
   }
 
   /** Re-establish the event stream from the last seen sequence. Public so the

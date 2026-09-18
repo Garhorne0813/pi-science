@@ -298,13 +298,14 @@ describe("SessionRepository messages streaming", () => {
       sessionHeader("paged", cwd),
       messageLine("m1", "user", "one"),
       messageLine("m2", "assistant", "two"),
-      messageLine("m3", "user", "three"),
+      `${JSON.stringify({ type: "message", id: "m3", parentId: "m2", timestamp: "2026-07-25T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: "three" }] } })}\n`,
       messageLine("m4", "assistant", "four"),
     ];
     await writeFile(join(cwd, ".pi-science", "sessions", "paged.jsonl"), lines.join(""), "utf8");
 
     const latest = await repo.messagesPage(cwd, "paged", { limit: 2 });
     expect(latest.messages.map((message) => message.id)).toEqual(["m3", "m4"]);
+    expect(latest.messages[0]?.parentId).toBe("m2");
     expect(latest.has_more).toBe(true);
     expect(latest.next_cursor).toEqual(expect.any(String));
     expect(latest.snapshot_version).toContain(":");

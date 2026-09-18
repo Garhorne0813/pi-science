@@ -1335,6 +1335,7 @@ export function convertHistoryToBlocks(messages: HistoryMessage[]): ThreadBlock[
       if (text || images.length > 0) blocks.push({
         kind: "user",
         id: msg.id,
+        parentId: msg.parentId,
         text,
         ...(images.length > 0 ? { images } : {}),
         ...(msg.turnId ? { turnId: msg.turnId } : {}),

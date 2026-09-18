@@ -48,10 +48,16 @@ export async function loadSessionsInternal(cwdOverride?: string): Promise<Sessio
     const optimistic = current.sessions.filter((session: SessionInfo) => (
       optimisticSessionIds.has(session.id) && !diskIds.has(session.id)
     ));
+    const currentActive = current.sessions.find((session) => session.id === current.activeSessionId);
     const activeFallback = current.activeSessionId
       && !named.some((session) => session.id === current.activeSessionId)
       && !optimistic.some((session) => session.id === current.activeSessionId)
-      ? [{ id: current.activeSessionId, cwd: requestedCwd, name: getSessionName(requestedCwd, current.activeSessionId) || undefined }]
+      ? [{
+          ...currentActive,
+          id: current.activeSessionId,
+          cwd: requestedCwd,
+          name: currentActive?.name || getSessionName(requestedCwd, current.activeSessionId) || undefined,
+        }]
       : [];
     const merged = [...activeFallback, ...optimistic, ...named];
     useRuntimeStore.setState({ sessions: merged, sessionsCursor: page.next_cursor, sessionsHasMore: page.has_more, sessionsLoading: false });

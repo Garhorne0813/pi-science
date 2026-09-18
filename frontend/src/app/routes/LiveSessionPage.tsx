@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, ReactNode, Ref } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -12,8 +12,22 @@ import { useUiStore } from "../../lib/ui";
 import { cn } from "../../lib/ui";
 import { useRequiredWorkspaceCwd } from "../../lib/workspace";
 import { projectKnowledgeApi, useReviewPolicy } from "../../lib/knowledge";
-import { agentActionTextByBlock, fetchDynamicCommands, resetDynamicCommands } from "../../lib/conversation";
+import {
+  agentActionTextByBlock,
+  bindResponseVersionMessage,
+  fetchResponseVersionGroups,
+  fetchDynamicCommands,
+  persistResponseVersionMessage,
+  persistSelectedResponseVersion,
+  preferredResponseVersionSession,
+  responseVersionRootSession,
+  replayForkEntryId,
+  resetDynamicCommands,
+  responseVersionGroup,
+  type ResponseVersionGroup,
+} from "../../lib/conversation";
 import { ConversationComposer } from "../../components/conversation/ConversationComposer";
+import { useFeedback } from "../../components/feedback/feedback-context";
 import { ConversationWelcome } from "../../components/conversation/ConversationWelcome";
 import { InteractionPrompt } from "../../components/conversation/InteractionPrompt";
 import { QuestionnairePrompt } from "../../components/conversation/QuestionnairePrompt";
@@ -30,7 +44,8 @@ import { useModelConfig } from "../../hooks/useModelConfig";
 import { useResearchLoop } from "../../hooks/useResearchLoop";
 import { useComposer } from "../../hooks/useComposer";
 import { useConversationScroll } from "../../hooks/useConversationScroll";
-import type { ThreadBlock } from "../../types/thread";
+import type { ThreadBlock, UserMessageBlock } from "../../types/thread";
+import { toolEffect } from "../../lib/conversation/activity-policy";
 
 type ConversationVirtuosoContext = {
   renderInteractionPrompt: () => ReactNode;
@@ -88,6 +103,7 @@ export function ConversationFooter() {
 
 export function LiveSessionPage() {
   const { t } = useTranslation();
+  const { toast, confirm } = useFeedback();
   const { sessionId } = useParams<{ sessionId: string }>();
   const workspaceCwd = useRequiredWorkspaceCwd();
   const navigate = useNavigate();
@@ -112,6 +128,7 @@ export function LiveSessionPage() {
   const connect = useRuntimeStore((s) => s.connect);
   const disconnect = useRuntimeStore((s) => s.disconnect);
   const abort = useRuntimeStore((s) => s.abort);
+  const regenerateSession = useRuntimeStore((s) => s.regenerateSession);
   const activeSessionId = useRuntimeStore((s) => s.activeSessionId);
   const contextTokens = useRuntimeStore((s) => s.contextTokens);
   const contextWindow = useRuntimeStore((s) => s.contextWindow);
@@ -124,7 +141,37 @@ export function LiveSessionPage() {
   const interactionPending = Boolean(pendingInteraction || pendingQuestionnaire);
   const [reviewingProject, setReviewingProject] = useState(false);
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
+  const [replaying, setReplaying] = useState<{ sessionId: string; userMessageId: string } | null>(null);
+  const replayingRef = useRef(false);
+  const [responseVersionGroups, setResponseVersionGroups] = useState<ResponseVersionGroup[]>([]);
   const removeWorkspaceReference = useUiStore((state) => state.removeWorkspaceReference);
+
+  useEffect(() => {
+    let cancelled = false;
+    const requestedSessionId = sessionId ?? activeSessionId;
+    void fetchResponseVersionGroups(workspaceCwd, requestedSessionId ?? undefined)
+      .then((groups) => {
+        if (cancelled) return;
+        setResponseVersionGroups(groups);
+        if (!sessionId) return;
+        const group = groups.find((candidate) => candidate.versions.some((version) => version.sessionId === sessionId));
+        const canonicalSessionId = responseVersionRootSession(groups, sessionId);
+        const preferredSessionId = preferredResponseVersionSession(groups, sessionId);
+        // Sidebar rows point at the canonical session. Resolve that stable URL
+        // to the version the user most recently selected. A direct link to a
+        // non-canonical version instead makes that version the new selection.
+        if (canonicalSessionId === sessionId && preferredSessionId !== sessionId) {
+          navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/session/${preferredSessionId}`, { replace: true });
+          return;
+        }
+        const currentVersion = group?.versions.find((version) => version.sessionId === sessionId);
+        if (currentVersion && group?.selectedVersionId !== currentVersion.id) {
+          void persistSelectedResponseVersion(workspaceCwd, currentVersion.id).catch(() => undefined);
+        }
+      })
+      .catch(() => { if (!cancelled) setResponseVersionGroups([]); });
+    return () => { cancelled = true; };
+  }, [activeSessionId, navigate, sessionId, workspaceCwd]);
 
   const messageIndexQuery = useQuery({
     queryKey: ["session-message-index", workspaceCwd, sessionId ?? null],
@@ -145,6 +192,30 @@ export function LiveSessionPage() {
   }, [sessionId, workspaceCwd, connect, disconnect]);
 
   const turns = useMemo(() => buildTurnPresentations(thread.blocks, { lastTurnLifecycle: turnLifecycle, lastTurnId: thread.foldState?.activeTurnId }), [thread.blocks, thread.foldState?.activeTurnId, turnLifecycle]);
+  const displayedTurns = useMemo(() => {
+    if (!replaying || replaying.sessionId !== activeSessionId) return turns;
+    const index = turns.findIndex((turn) => turn.user?.id === replaying.userMessageId);
+    if (index < 0) return turns;
+    const selected = turns[index]!;
+    const userOnly: TurnPresentation = {
+      ...selected,
+      blocks: selected.user ? [selected.user] : [],
+      executionTools: [],
+      planControlTools: [],
+      interactionTools: [],
+      activityTools: [],
+      activityBlocks: [],
+      systemBlocks: [],
+      intermediateAgents: [],
+      provisionalAgent: null,
+      finalAgent: null,
+      artifacts: [],
+      lifecycle: "settled",
+      active: false,
+      completed: false,
+    };
+    return [...turns.slice(0, index), userOnly];
+  }, [activeSessionId, replaying, turns]);
   // Copy-button eligibility computed across the WHOLE thread (not per group):
   // agentActionTextByBlock needs the trailing tool blocks after an agent block
   // to decide whether it is the final answer. A per-group computation would
@@ -152,6 +223,20 @@ export function LiveSessionPage() {
   const actionTextByBlock = useMemo(() => agentActionTextByBlock(thread.blocks), [thread.blocks]);
 
   const { suggestions, setSuggestions } = useTurnEffects(working, thread.blocks);
+
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const pending = responseVersionGroups
+      .flatMap((group) => group.versions)
+      .find((version) => version.sessionId === activeSessionId && version.userMessageId === null);
+    if (!pending) return;
+    const user = thread.blocks.findLast((block): block is UserMessageBlock => block.kind === "user");
+    if (!user) return;
+    setResponseVersionGroups((current) => bindResponseVersionMessage(current, pending.id, user.id));
+    void persistResponseVersionMessage(workspaceCwd, pending.id, user.id).catch(() => {
+      void fetchResponseVersionGroups(workspaceCwd, activeSessionId).then(setResponseVersionGroups).catch(() => undefined);
+    });
+  }, [activeSessionId, responseVersionGroups, thread.blocks, workspaceCwd]);
 
   const userNavItems = useMemo<ConversationNavItem[]>(() => {
     const loadedUsers = thread.blocks.filter((block): block is Extract<ThreadBlock, { kind: "user" }> => block.kind === "user");
@@ -264,6 +349,69 @@ export function LiveSessionPage() {
     }
   };
 
+  const handleResendUserMessage = async (block: UserMessageBlock, message: string) => {
+    if (!activeSessionId || working || interactionPending || reviewingProject || replayingRef.current) return;
+    const sourceTurn = turns.find((turn) => turn.user?.id === block.id);
+    const hasReplaySideEffects = sourceTurn?.blocks.some((candidate) => candidate.kind === "tool" && (
+      toolEffect(candidate) === "mutate" || toolEffect(candidate) === "execute"
+    ));
+    if (hasReplaySideEffects) {
+      const approved = await confirm({
+        title: t("conversation.regenerateSideEffectTitle"),
+        message: t("conversation.regenerateSideEffectMessage"),
+        confirmLabel: t("conversation.regenerate"),
+      });
+      if (!approved) return;
+    }
+    const sourceSessionId = activeSessionId;
+    const entryId = replayForkEntryId(block);
+    replayingRef.current = true;
+    setReplaying({ sessionId: sourceSessionId, userMessageId: block.id });
+    setSuggestions([]);
+    try {
+      // One server operation owns the fork + prompt transition and persists
+      // the branch before the newly generated response starts streaming.
+      const result = await regenerateSession(sourceSessionId, entryId, block.id, message);
+      const groups = await fetchResponseVersionGroups(workspaceCwd, result.sessionId);
+      setResponseVersionGroups(groups);
+      navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/session/${result.sessionId}`);
+    } catch (error) {
+      const recoverySessionId = useRuntimeStore.getState().activeSessionId;
+      if (recoverySessionId && recoverySessionId !== sourceSessionId) {
+        navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/session/${recoverySessionId}`);
+      }
+      toast(error instanceof Error ? error.message : t("conversation.branchError"), "error");
+      throw error;
+    } finally {
+      replayingRef.current = false;
+      setReplaying(null);
+    }
+  };
+
+  const versionControlsForTurn = (turn: TurnPresentation) => {
+    if (working || replaying || !activeSessionId || !turn.user || !turn.finalAgent) return undefined;
+    const group = responseVersionGroup(responseVersionGroups, activeSessionId, turn.user.id);
+    const versions = group?.versions.filter((version) => version.status !== "failed") ?? [];
+    if (!group || versions.length < 2) return undefined;
+    const index = versions.findIndex((version) => version.sessionId === activeSessionId && version.userMessageId === turn.user!.id);
+    if (index < 0) return undefined;
+    const go = async (nextIndex: number) => {
+      const target = versions[nextIndex];
+      if (!target || target.sessionId === activeSessionId) return;
+      setResponseVersionGroups((current) => current.map((candidate) => (
+        candidate.id === group.id ? { ...candidate, selectedVersionId: target.id } : candidate
+      )));
+      await persistSelectedResponseVersion(workspaceCwd, target.id).catch(() => undefined);
+      navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/session/${target.sessionId}`);
+    };
+    return {
+      index,
+      total: versions.length,
+      onPrevious: () => { void go(index - 1); },
+      onNext: () => { void go(index + 1); },
+    };
+  };
+
   // Empty new conversation: welcome copy sits directly above a vertically centered composer.
   const showWelcome = thread.blocks.length === 0 && !working && status !== "connecting" && !research.draft && !research.activeLoop;
   const activeSession = sessions.find((session) => session.id === activeSessionId);
@@ -366,9 +514,9 @@ export function LiveSessionPage() {
                   followOutput={scroll.followOutput}
                   totalListHeightChanged={scroll.handleListHeightChanged}
                   firstItemIndex={virtualFirstItemIndex}
-                  data={turns}
+                  data={displayedTurns}
                   computeItemKey={conversationTurnItemKey}
-                  initialItemCount={Math.min(turns.length, 20)}
+                  initialItemCount={Math.min(displayedTurns.length, 20)}
                   startReached={() => void handleLoadOlder()}
                   increaseViewportBy={{ top: 600, bottom: 800 }}
                   context={{ renderInteractionPrompt, working, pendingInteraction }}
@@ -390,7 +538,16 @@ export function LiveSessionPage() {
                   }}
                   itemContent={(_index, turn) => renderConversationTurnSlot(turn, (safeTurn) => (
                     <div className="mx-auto w-full max-w-[calc(var(--conversation-content-width)+4rem)] px-8 pb-3">
-                      {renderTurn(safeTurn, { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" }, actionTextByBlock)}
+                      {renderTurn(
+                        safeTurn,
+                        { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" },
+                        actionTextByBlock,
+                        {
+                          disabled: !activeSessionId || working || interactionPending || reviewingProject || Boolean(replaying),
+                          onResend: handleResendUserMessage,
+                        },
+                        versionControlsForTurn(safeTurn),
+                      )}
                       {showSuggestions && safeTurn.blocks.some((block) => block.id === suggestionAnchorBlockId) && (
                         <div className="mt-3 flex flex-wrap gap-2" aria-label={t("conversation.suggestions")}>
                           {suggestions.map((suggestion) => (

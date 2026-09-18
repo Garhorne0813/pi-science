@@ -81,6 +81,13 @@ export class PiScienceClient {
     return this.transport.getRecoveryResumeCursor(cwd, sessionId);
   }
 
+  /** Latest cursor durably stored by the server. Only seed a fresh transport
+   *  from this after an idle authoritative history snapshot; doing so while a
+   *  turn is active could skip an event written between the two reads. */
+  async getLatestConversationCursor(sessionId: string, cwd: string): Promise<string | null> {
+    return rest.getConversationResumeCursor(this.baseUrl, sessionId, cwd);
+  }
+
   async getMessagesPage(
     sessionId: string,
     cwd?: string,
@@ -121,6 +128,10 @@ export class PiScienceClient {
     return rest.forkSession(this.baseUrl, sessionId, cwd, entryId);
   }
 
+  async regenerateSession(sessionId: string, cwd: string, input: { entryId: string; message: string; sourceUserMessageId: string }): Promise<{ id: string; versionId: string; groupId: string }> {
+    return rest.regenerateSession(this.baseUrl, sessionId, cwd, input);
+  }
+
   async sendPrompt(sessionId: string, message: string, cwd?: string): Promise<void> {
     return rest.sendPrompt(this.baseUrl, sessionId, message, cwd);
   }
@@ -144,15 +155,18 @@ export class PiScienceClient {
     await rest.setSessionTitle(this.baseUrl, sessionId, title, cwd);
   }
 
-  async deleteSession(sessionId: string, cwd?: string): Promise<void> {
-    await rest.deleteSession(this.baseUrl, sessionId, cwd);
+  async deleteSession(sessionId: string, cwd?: string): Promise<{ rootSessionId: string; deletedSessionIds: string[] }> {
+    const result = await rest.deleteSession(this.baseUrl, sessionId, cwd);
     if (cwd) {
-      this.transport.clearCursor(cwd, sessionId);
-      clearCachedMessages(cwd, sessionId);
-      clearSessionName(cwd, sessionId);
-      clearAiTitle(cwd, sessionId);
-      clearAiTitleAttempted(cwd, sessionId);
+      for (const deletedSessionId of result.deletedSessionIds) {
+        this.transport.clearCursor(cwd, deletedSessionId);
+        clearCachedMessages(cwd, deletedSessionId);
+        clearSessionName(cwd, deletedSessionId);
+        clearAiTitle(cwd, deletedSessionId);
+        clearAiTitleAttempted(cwd, deletedSessionId);
+      }
     }
+    return result;
   }
 
   /** Remove the SSE resume cursor for a session (e.g. after it is replaced or

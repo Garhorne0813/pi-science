@@ -17,7 +17,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ComponentType, ReactNode, Ref } from "react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import type { VirtuosoHandle } from "react-virtuoso";
 
 const { virtuosoProps } = vi.hoisted(() => ({ virtuosoProps: [] as Array<Record<string, unknown>> }));
@@ -190,13 +190,17 @@ function sendButton(): HTMLElement {
   return screen.getByLabelText("Send message");
 }
 
+function LocationProbe() {
+  return <span data-testid="location-path">{useLocation().pathname}</span>;
+}
+
 function renderPage(search = "") {
   return render(
     <FeedbackContext.Provider value={{ toast: vi.fn(), confirm: async () => true }}>
       <MemoryRouter initialEntries={[`/workspace/${CWD}/session/${SESSION_ID}${search}`]}>
         <Routes>
           {/* The app mounts WorkspaceProvider around the route tree (app/router.tsx). */}
-          <Route path="/workspace/:cwd/session/:sessionId" element={<WorkspaceProvider><LiveSessionPage /></WorkspaceProvider>} />
+          <Route path="/workspace/:cwd/session/:sessionId" element={<><WorkspaceProvider><LiveSessionPage /></WorkspaceProvider><LocationProbe /></>} />
         </Routes>
       </MemoryRouter>
     </FeedbackContext.Provider>,
@@ -284,6 +288,8 @@ beforeEach(() => {
     disconnect: vi.fn(),
     sendPrompt: vi.fn(async (): Promise<string | null> => null),
     abort: vi.fn(async () => undefined),
+    forkSession: vi.fn(async () => "forked"),
+    regenerateSession: vi.fn(async () => ({ sessionId: "forked", versionId: "v2" })),
     createNewSession: vi.fn(async () => "s2"),
     // Session-local model changes go through the runtime store action; the
     // default stub mirrors the real action's success path (apply model/thinking
@@ -302,6 +308,24 @@ afterEach(() => {
 
 
 describe("composer send-failure restore", () => {
+  it("redirects a canonical conversation URL to its last selected response version", async () => {
+    overrides.push((url) => url.startsWith("/api/response-versions?") ? Promise.resolve(jsonResponse({
+      ok: true,
+      groups: [{
+        id: "g1",
+        selectedVersionId: "v2",
+        versions: [
+          { id: "v1", sessionId: "s1", userMessageId: "u1", parentSessionId: null, forkEntryId: null, createdAt: "2026-01-01", status: "ready" },
+          { id: "v2", sessionId: "s2", userMessageId: "u2", parentSessionId: "s1", forkEntryId: "u1", createdAt: "2026-01-02", status: "ready" },
+        ],
+      }],
+    })) : null);
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId("location-path").textContent).toBe("/workspace/proj/session/s2"));
+  });
+
   it("uses the compact conversation header height", async () => {
     await renderReady();
     expect(screen.getByRole("banner")).toHaveClass("h-11");
@@ -1343,6 +1367,56 @@ describe("defensive thread shape and copy actions (docs/pr30markdown.md 3.4/3.5/
 
     fireEvent.click(agentCopy!);
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith("Here is the final answer.");
+  });
+
+  it("regenerates from a historical user message in one server operation", async () => {
+    const regenerateSession = vi.fn(async () => {
+      useRuntimeStore.setState({ activeSessionId: "forked" });
+      return { sessionId: "forked", versionId: "v2" };
+    });
+    const secondUser = { ...userBlock("u2", "Try another approach"), parentId: "a1" };
+    useRuntimeStore.setState({
+      regenerateSession,
+      thread: {
+        blocks: [userBlock("u1", "First question"), agentBlock("a1", "First answer"), secondUser, agentBlock("a2", "Second answer")],
+        index: { u1: 0, a1: 1, u2: 2, a2: 3 },
+        loaded: true,
+      },
+    });
+    await renderReady();
+
+    fireEvent.click(within(document.getElementById("user-msg-u2")!).getByRole("button", { name: "Regenerate" }));
+
+    await waitFor(() => expect(regenerateSession).toHaveBeenCalledWith(SESSION_ID, "u2", "u2", "Try another approach"));
+  });
+
+  it("keeps the selected user bubble and immediately hides its old agent trace while regeneration is pending", async () => {
+    let finishRegeneration!: (result: { sessionId: string; versionId: string }) => void;
+    const regenerateSession = vi.fn(() => new Promise<{ sessionId: string; versionId: string }>((resolve) => { finishRegeneration = resolve; }));
+    useRuntimeStore.setState({
+      regenerateSession,
+      thread: {
+        blocks: [
+          userBlock("u1", "First question"),
+          agentBlock("a1", "Old first answer"),
+          userBlock("u2", "Regenerate this"),
+          agentBlock("a2", "Old execution trace and answer"),
+        ],
+        index: { u1: 0, a1: 1, u2: 2, a2: 3 },
+        loaded: true,
+      },
+    });
+    await renderReady();
+
+    fireEvent.click(within(document.getElementById("user-msg-u2")!).getByRole("button", { name: "Regenerate" }));
+
+    await waitFor(() => expect(regenerateSession).toHaveBeenCalledWith(SESSION_ID, "u2", "u2", "Regenerate this"));
+    expect(screen.getByText("Regenerate this")).toBeInTheDocument();
+    expect(screen.queryByText("Old execution trace and answer")).not.toBeInTheDocument();
+    expect(screen.queryByText("Old first answer")).toBeInTheDocument();
+
+    finishRegeneration({ sessionId: "forked", versionId: "v2" });
+    await waitFor(() => expect(regenerateSession).toHaveBeenCalledTimes(1));
   });
 
   it("hides the copy action when the turn ends on a tool call with no final assistant answer", async () => {

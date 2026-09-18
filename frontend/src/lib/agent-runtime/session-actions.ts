@@ -32,6 +32,7 @@ type GetState = StoreApi<RuntimeState>["getState"];
 const _createSessionPromises = new Map<string, Promise<string>>();
 const _historyPagePromises = new Map<string, Promise<number>>();
 const _interactionResponsePromises = new Map<string, Promise<void>>();
+const _regeneratingWorkspaces = new Set<string>();
 function connectionKey(cwd: string, sessionId?: string): string { return `${cwd}\u0000${sessionId ?? ""}`; }
 function historyPageKey(cwd: string, sessionId: string, before: string): string { return `${connectionKey(cwd, sessionId)}\u0000${before}`; }
 function interactionResponseKey(cwd: string, sessionId: string, requestId: string): string { return `${connectionKey(cwd, sessionId)}\u0000${requestId}`; }
@@ -678,10 +679,10 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       }
     },
 
-    forkSession: async (sessionId: string) => {
+    forkSession: async (sessionId: string, entryId?: string) => {
       const { cwd } = get();
       const client = getClient();
-      const result = await client.forkSession(sessionId, cwd);
+      const result = await client.forkSession(sessionId, cwd, entryId);
       if (get().cwd !== cwd) {
         throw new Error("Workspace changed while the conversation was being forked");
       }
@@ -727,6 +728,77 @@ export function createRuntimeActions(set: SetState, get: GetState) {
       if (historyError) appendRuntimeError(historyError, result.id, cwd);
       await loadSessionsInternal();
       return result.id;
+    },
+
+    regenerateSession: async (sessionId: string, entryId: string, sourceUserMessageId: string, message: string) => {
+      const { cwd } = get();
+      if (_regeneratingWorkspaces.has(cwd)) throw new Error("A response regeneration is already in progress");
+      _regeneratingWorkspaces.add(cwd);
+      try {
+      const client = getClient();
+      const result = await client.regenerateSession(sessionId, cwd, { entryId, message, sourceUserMessageId });
+      if (get().cwd !== cwd) throw new Error("Workspace changed while the response was being regenerated");
+      // Keep the source turn's user bubble on screen while the target snapshot
+      // is loading. Switching the active id earlier would briefly expose the
+      // source trace or an empty conversation between fork and hydration.
+      const [historyResult, artifactsResult, stateResult] = await Promise.allSettled([
+        client.getMessagesPage(result.id, cwd),
+        fetchPersistedTurnArtifacts(result.id, cwd),
+        client.getSessionState(result.id, cwd),
+      ]);
+      if (get().cwd !== cwd) throw new Error("Workspace changed while the regenerated response was loading");
+      const history = historyResult.status === "fulfilled" ? historyResult.value : {
+        messages: [] as HistoryMessage[], next_cursor: null, has_more: false, snapshot_version: "",
+      };
+      const artifactTurns = artifactsResult.status === "fulfilled" ? artifactsResult.value : [];
+      const runtimeBusy = stateResult.status !== "fulfilled"
+        || stateResult.value.is_streaming
+        || stateResult.value.is_compacting
+        || stateResult.value.pending_message_count > 0;
+      // An idle snapshot already contains the complete regenerated turn. Seed
+      // the fresh EventSource at the server's durable tail so connecting does
+      // not replay those same thinking/tool events under their live block ids.
+      // For an active turn we deliberately start without this cursor: skipping
+      // ahead of the REST snapshot would create a snapshot→cursor loss window.
+      const resumeCursor = !runtimeBusy && historyResult.status === "fulfilled" && stateResult.status === "fulfilled"
+        ? await client.getLatestConversationCursor(result.id, cwd).catch(() => null)
+        : null;
+      ++generations.connection;
+      ++generations.activity;
+      ++generations.localMutation;
+      set({
+        client,
+        activeSessionId: result.id,
+        status: "connecting",
+        pendingInteraction: null,
+        pendingQuestionnaire: null,
+        thread: attachTurnArtifacts(threadFromMessages(history.messages), artifactTurns, { windowComplete: !history.has_more }),
+        historyCursor: history.next_cursor,
+        historyHasMore: history.has_more,
+        historyLoading: false,
+        historySnapshotVersion: history.snapshot_version,
+        working: runtimeBusy,
+        turnLifecycle: runtimeBusy ? "active" : "settled",
+        // Regeneration branches are response versions of the same logical
+        // conversation, not additional sidebar conversations.
+        sessions: get().sessions.filter((session) => session.id !== result.id),
+      });
+      registerEventListener(client);
+      if (resumeCursor) client.setResumeCursor(cwd, result.id, resumeCursor);
+      client.connect(result.id, cwd);
+      if (runtimeBusy) ensureTurnWatchdog();
+      if (historyResult.status === "rejected") appendRuntimeError(historyResult.reason, result.id, cwd);
+      const refreshedSessions = await loadSessionsInternal();
+      // loadSessionsInternal normally keeps a directly-opened hidden session
+      // as an active fallback. A regeneration branch is intentionally hidden:
+      // its canonical row carries the aggregate activity timestamp instead.
+      if (get().cwd === cwd && get().activeSessionId === result.id) {
+        set({ sessions: refreshedSessions.filter((session) => session.id !== result.id) });
+      }
+      return { sessionId: result.id, versionId: result.versionId };
+      } finally {
+        _regeneratingWorkspaces.delete(cwd);
+      }
     },
 
     createNewSession: async () => {
@@ -806,16 +878,17 @@ export function createRuntimeActions(set: SetState, get: GetState) {
 
     deleteSession: async (sessionId: string) => {
       const { cwd, activeSessionId } = get();
-      await getClient().deleteSession(sessionId, cwd);
-      if (activeSessionId === sessionId) {
+      const result = await getClient().deleteSession(sessionId, cwd);
+      const deletedSessionIds = result?.deletedSessionIds ?? [sessionId];
+      if (activeSessionId && deletedSessionIds.includes(activeSessionId)) {
         // Deleting the active conversation must clear its cursor/history/thread
         // state, not just drop the list row — reuse the full recovery reset.
         // Pass the client so the reset also disconnects any live SSE stream for
         // the deleted session (missing client leaves a phantom error state).
-        recoverMissingSession(sessionId, cwd, getClient());
+        recoverMissingSession(activeSessionId, cwd, getClient());
       } else {
-        optimisticSessionIds.delete(sessionId);
-        set((state) => ({ sessions: state.sessions.filter((session) => session.id !== sessionId) }));
+        for (const deletedSessionId of deletedSessionIds) optimisticSessionIds.delete(deletedSessionId);
+        set((state) => ({ sessions: state.sessions.filter((session) => !deletedSessionIds.includes(session.id)) }));
       }
       await loadSessionsInternal();
     },

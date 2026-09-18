@@ -36,6 +36,8 @@ export type ThreadBlock =
 export interface UserMessageBlock extends ConversationBlockIdentity {
   kind: "user";
   id: string;
+  /** Persisted conversation entry immediately before this message. */
+  parentId?: string | null;
   text: string;
   timestamp?: string;
   images?: ImageAttachment[];
@@ -282,6 +284,9 @@ export interface FilePreviewInspector {
   content?: string;
   root?: FileRoot;
   cwd?: string;
+  /** Immutable published artifact identity. When present, preview this exact version read-only. */
+  artifactId?: string;
+  artifactVersion?: number;
 }
 
 export interface NotebookFileInspector {

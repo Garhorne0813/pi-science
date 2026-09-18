@@ -177,6 +177,7 @@ export type ProgressAppearance = z.infer<typeof progressAppearanceSchema>;
 export const defaultProgressAppearance: ProgressAppearance = progressAppearanceSchema.parse({});
 export const historyMessageSchema = z.object({
   id: z.string().min(1),
+  parentId: z.string().nullable().optional(),
   role: z.string(),
   content: z.array(z.record(z.string(), z.unknown())),
   toolCallId: z.string().optional(),

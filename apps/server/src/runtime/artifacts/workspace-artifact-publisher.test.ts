@@ -46,6 +46,8 @@ describe("workspace artifact publisher", () => {
         cell_id: "cell-a",
       },
     });
+    const firstSnapshot = join(cwd, ".pi-science", String(manifests[0]?.snapshot_path));
+    expect(await readFile(firstSnapshot, "utf8")).toBe("value\n1\n");
 
     const provenance = JSON.parse(`[${(await readFile(join(cwd, ".pi-science", "provenance.jsonl"), "utf8")).trim().split("\n").join(",")}]`) as Array<Record<string, unknown>>;
     expect(provenance[0]).toMatchObject({
@@ -61,6 +63,7 @@ describe("workspace artifact publisher", () => {
       executionId: "exec-cell-2",
     });
     expect(second[0]).toMatchObject({ artifact_id: firstArtifact.artifact_id, version: 2 });
+    expect(await readFile(firstSnapshot, "utf8")).toBe("value\n1\n");
   });
 
   it("ignores a disappeared file but surfaces artifact persistence failures", async () => {

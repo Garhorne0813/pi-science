@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { renderBlocks, renderTurn } from "./ConversationBlocks";
 import i18n from "../../i18n";
 import type { CodeRunner } from "../markdown-viewer/MarkdownViewer";
@@ -110,11 +110,67 @@ describe("turn-level conversation rendering", () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith("visible answer");
   });
 
+  it("shows response version navigation to the right of the agent copy action", () => {
+    const onPrevious = vi.fn();
+    const onNext = vi.fn();
+    const turn = buildTurnPresentations([user("u1", "question"), agent("a1", "answer")])[0];
+    render(<>{renderTurn(turn, codeRunner, new Map([["a1", "answer"]]), undefined, { index: 1, total: 3, onPrevious, onNext })}</>);
+
+    const versions = screen.getByLabelText("Response versions");
+    const copy = versions.previousElementSibling!;
+    expect(copy).toHaveAttribute("aria-label", "Copy");
+    expect(copy.compareDocumentPosition(versions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("2/3")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Previous response version" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next response version" }));
+    expect(onPrevious).toHaveBeenCalledOnce();
+    expect(onNext).toHaveBeenCalledOnce();
+  });
+
   it("keeps user bubble geometry", () => {
     render(<>{renderBlocks([user("u1", "hello")], codeRunner)}</>);
     const bubble = document.getElementById("user-msg-u1")!;
     expect(bubble).toHaveClass("max-w-[min(var(--user-message-width),82%)]");
     expect(bubble.querySelector(".ui-user-message")).toHaveClass("rounded-bubble", "px-4", "py-2.5");
+  });
+
+  it("regenerates and edits user messages while preserving hidden references", async () => {
+    const onResend = vi.fn(async () => undefined);
+    const block: ThreadBlock = {
+      kind: "user",
+      id: "u-actions",
+      text: "Original\n\n<workspace_references>\n- file: \"data.csv\"\n</workspace_references>",
+    };
+    const turn = buildTurnPresentations([block])[0];
+    render(<>{renderTurn(turn, codeRunner, undefined, { onResend })}</>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+    await waitFor(() => expect(onResend).toHaveBeenCalledWith(block, block.text));
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Edit" }), { target: { value: "Revised" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send edited message" }));
+    await waitFor(() => expect(onResend).toHaveBeenLastCalledWith(
+      block,
+      "Revised\n\n<workspace_references>\n- file: \"data.csv\"\n</workspace_references>",
+    ));
+  });
+
+  it("regenerates an image-only user message", async () => {
+    const onResend = vi.fn(async () => undefined);
+    const block: ThreadBlock = { kind: "user", id: "u-image", text: "", images: [{ data: "aW1hZ2U=", mimeType: "image/png" }] };
+    const turn = buildTurnPresentations([block])[0];
+    render(<>{renderTurn(turn, codeRunner, undefined, { onResend })}</>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+    await waitFor(() => expect(onResend).toHaveBeenCalledWith(block, ""));
+  });
+
+  it("disables branching actions while the conversation is busy", () => {
+    const turn = buildTurnPresentations([user("u-disabled")])[0];
+    render(<>{renderTurn(turn, codeRunner, undefined, { disabled: true, onResend: vi.fn(async () => undefined) })}</>);
+    expect(screen.getByRole("button", { name: "Regenerate" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
   });
 
   it("renders artifacts after the final answer", () => {

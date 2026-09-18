@@ -6,6 +6,7 @@ import type { SessionTitleRepository } from "../../runtime/node/session-titles.j
 import { sessionTitleRepository } from "../../runtime/node/session-titles.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { AiTitleService } from "../../runtime/title/ai-title-service.js";
+import { responseVersionRepository } from "../../runtime/node/response-version-repository.js";
 
 function cwd(request: { query: unknown }): string {
   const value = (request.query as { cwd?: unknown }).cwd;
@@ -41,6 +42,30 @@ function status(code: unknown): number {
 
 function sendFailure(reply: FastifyReply, result: Record<string, unknown>) {
   return reply.code(status(result.code)).send({ ok: false, ...result });
+}
+
+interface PromptImage {
+  type: "image";
+  data: string;
+  mimeType: string;
+}
+
+function replayImages(content: Array<Record<string, unknown>>): PromptImage[] {
+  return content.flatMap((part) => {
+    if (part.type !== "image" && part.type !== "input_image") return [];
+    const source = part.source && typeof part.source === "object" ? part.source as Record<string, unknown> : {};
+    const data = typeof part.data === "string" ? part.data : typeof source.data === "string" ? source.data : null;
+    const mimeType = typeof part.mimeType === "string"
+      ? part.mimeType
+      : typeof part.mime === "string"
+        ? part.mime
+        : typeof source.media_type === "string"
+          ? source.media_type
+          : typeof source.mime_type === "string"
+            ? source.mime_type
+            : "image/png";
+    return data ? [{ type: "image" as const, data, mimeType }] : [];
+  });
 }
 
 export function registerNodeSessionRoutes(
@@ -116,6 +141,63 @@ export function registerNodeSessionRoutes(
     return result.success && result.sessionId
       ? { ok: true, id: result.sessionId, cwd: cwd(request) }
       : sendFailure(reply, result);
+  });
+
+  app.post<{ Params: { session_id: string } }>("/api/sessions/:session_id/regenerate", async (request, reply) => {
+    const body = (request.body ?? {}) as { entry_id?: unknown; message?: unknown; source_user_message_id?: unknown };
+    if (typeof body.entry_id !== "string" || !body.entry_id || typeof body.message !== "string" || typeof body.source_user_message_id !== "string" || !body.source_user_message_id) {
+      return reply.code(400).send({ ok: false, code: "invalid_request", error: "entry_id, message, and source_user_message_id are required" });
+    }
+    let workspace: string;
+    try { workspace = await validateWorkspaceCwd(cwd(request)); }
+    catch (error) { return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) }); }
+    const sourceMessage = (await sessionRepository.messages(workspace, request.params.session_id))
+      .find((message) => message.id === body.source_user_message_id && message.role === "user");
+    if (!sourceMessage) return reply.code(404).send({ ok: false, code: "not_found", error: "source user message not found" });
+    const images = replayImages(sourceMessage.content);
+    if (!body.message.trim() && images.length === 0) {
+      return reply.code(400).send({ ok: false, code: "invalid_request", error: "source user message has no replayable content" });
+    }
+    const forked = await nodeSessionService.fork(request.params.session_id, workspace, body.entry_id);
+    if (!forked.success || !forked.sessionId) return sendFailure(reply, forked);
+    const branch = await responseVersionRepository.append(workspace, {
+      sourceSessionId: request.params.session_id,
+      sourceUserMessageId: body.source_user_message_id,
+      targetSessionId: forked.sessionId,
+      forkEntryId: body.entry_id,
+    });
+    const prompted = await nodeSessionService.command(forked.sessionId, workspace, "prompt", { message: body.message, images });
+    await responseVersionRepository.setStatus(workspace, branch.version.id, prompted.success ? "generating" : "failed");
+    if (!prompted.success) return sendFailure(reply, { ...prompted, id: forked.sessionId, version_id: branch.version.id, group_id: branch.group.id });
+    await responseVersionRepository.select(workspace, branch.version.id);
+    return { ok: true, id: forked.sessionId, version_id: branch.version.id, group_id: branch.group.id, cwd: workspace };
+  });
+
+  app.get("/api/response-versions", async (request, reply) => {
+    const query = request.query as { session_id?: unknown };
+    let workspace: string;
+    try { workspace = await validateWorkspaceCwd(cwd(request)); }
+    catch (error) { return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) }); }
+    const sessionId = typeof query.session_id === "string" && query.session_id ? query.session_id : undefined;
+    return { ok: true, groups: await responseVersionRepository.list(workspace, sessionId) };
+  });
+
+  app.put<{ Params: { version_id: string } }>("/api/response-versions/:version_id/message", async (request, reply) => {
+    const body = (request.body ?? {}) as { user_message_id?: unknown };
+    if (typeof body.user_message_id !== "string" || !body.user_message_id) return reply.code(400).send({ ok: false, code: "invalid_request", error: "user_message_id is required" });
+    let workspace: string;
+    try { workspace = await validateWorkspaceCwd(cwd(request)); }
+    catch (error) { return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) }); }
+    const version = await responseVersionRepository.bind(workspace, request.params.version_id, body.user_message_id);
+    return version ? { ok: true, version } : reply.code(404).send({ ok: false, code: "not_found", error: "response version not found" });
+  });
+
+  app.put<{ Params: { version_id: string } }>("/api/response-versions/:version_id/selected", async (request, reply) => {
+    let workspace: string;
+    try { workspace = await validateWorkspaceCwd(cwd(request)); }
+    catch (error) { return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) }); }
+    const group = await responseVersionRepository.select(workspace, request.params.version_id);
+    return group ? { ok: true, group } : reply.code(404).send({ ok: false, code: "not_found", error: "response version not found" });
   });
 
   app.post<{ Params: { session_id: string } }>("/api/sessions/:session_id/abort", async (request, reply) => {
@@ -199,9 +281,20 @@ export function registerNodeSessionRoutes(
     } catch (error) {
       return reply.code(403).send({ ok: false, code: "workspace_invalid", error: String(error) });
     }
-    const result = await nodeSessionService.delete(request.params.session_id, cwd(request));
-    if (result.success) await titles.deleteTitle(workspace, sessionId);
-    return result.success ? { ok: true } : sendFailure(reply, result as Record<string, unknown>);
+    const conversation = await responseVersionRepository.conversation(workspace, sessionId);
+    // Delete hidden branches before the visible root. If an active branch is
+    // busy the canonical conversation remains available for a safe retry.
+    const orderedSessionIds = [
+      ...conversation.sessionIds.filter((candidate) => candidate !== conversation.rootSessionId),
+      conversation.rootSessionId,
+    ];
+    for (const candidate of orderedSessionIds) {
+      const result = await nodeSessionService.delete(candidate, workspace);
+      if (!result.success) return sendFailure(reply, result as Record<string, unknown>);
+    }
+    const deletedSessionIds = await responseVersionRepository.removeConversation(workspace, sessionId);
+    await Promise.all(deletedSessionIds.map((candidate) => titles.deleteTitle(workspace, candidate)));
+    return { ok: true, root_session_id: conversation.rootSessionId, deleted_session_ids: deletedSessionIds };
   });
 }
 

@@ -36,6 +36,7 @@ export interface AvailableModel {
 
 export interface HistoryMessage {
   id: string;
+  parentId?: string | null;
   role: string;
   content: Array<{ type: string; text?: string; [key: string]: unknown }>;
   toolCallId?: string;

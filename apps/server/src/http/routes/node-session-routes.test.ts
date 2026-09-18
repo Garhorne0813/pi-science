@@ -420,6 +420,75 @@ describe("native Node conversation routes", () => {
     await server.close();
   });
 
+  it("forks, records, and starts a regenerated response in one request", async () => {
+    const cwd = await workspaceWithSessions("session-regenerate");
+    const server = app();
+    const query = `cwd=${encodeURIComponent(cwd)}`;
+    const regenerated = await server.inject({
+      method: "POST",
+      url: `/api/sessions/session-regenerate/regenerate?${query}`,
+      payload: { entry_id: "session-regenerate-user", source_user_message_id: "session-regenerate-user", message: "try again" },
+    });
+    expect(regenerated.statusCode, regenerated.body).toBe(200);
+    expect(regenerated.json()).toMatchObject({ ok: true, id: expect.any(String), version_id: expect.any(String), group_id: expect.any(String) });
+
+    const versions = await server.inject({ method: "GET", url: `/api/response-versions?${query}&session_id=${encodeURIComponent(regenerated.json().id)}` });
+    expect(versions.json().groups[0]).toMatchObject({
+      selectedVersionId: regenerated.json().version_id,
+      updatedAt: expect.any(String),
+    });
+    expect(versions.json().groups[0].versions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: "session-regenerate", userMessageId: "session-regenerate-user", status: "ready" }),
+      expect.objectContaining({ sessionId: regenerated.json().id, userMessageId: null, status: "generating" }),
+    ]));
+    const bound = await server.inject({
+      method: "PUT",
+      url: `/api/response-versions/${regenerated.json().version_id}/message?${query}`,
+      payload: { user_message_id: "regenerated-user" },
+    });
+    expect(bound.json()).toMatchObject({ ok: true, version: { userMessageId: "regenerated-user" } });
+    const firstVersionId = versions.json().groups[0].versions[0].id;
+    const selected = await server.inject({
+      method: "PUT",
+      url: `/api/response-versions/${firstVersionId}/selected?${query}`,
+    });
+    expect(selected.json()).toMatchObject({ ok: true, group: { selectedVersionId: firstVersionId } });
+
+    const listed = await server.inject({ method: "GET", url: `/api/sessions?${query}` });
+    const canonical = listed.json().find((session: { id: string }) => session.id === "session-regenerate");
+    expect(canonical.updated_at).toBe(versions.json().groups[0].updatedAt);
+    await server.inject({ method: "POST", url: `/api/sessions/${regenerated.json().id}/abort?${query}` });
+    const deleted = await server.inject({ method: "DELETE", url: `/api/sessions/session-regenerate?${query}` });
+    expect(deleted.json()).toMatchObject({
+      ok: true,
+      root_session_id: "session-regenerate",
+      deleted_session_ids: expect.arrayContaining(["session-regenerate", regenerated.json().id]),
+    });
+    expect((await server.inject({ method: "GET", url: `/api/response-versions?${query}` })).json().groups).toEqual([]);
+    await server.close();
+  });
+
+  it("reconstructs image attachments from the persisted source message", async () => {
+    const cwd = await workspaceWithSessions("session-image");
+    const sessionPath = join(cwd, ".pi-science", "sessions", "session-image.jsonl");
+    const raw = await readFile(sessionPath, "utf8");
+    await writeFile(sessionPath, raw.replace(
+      '{"type":"text","text":"<hello session-image>"}',
+      '{"type":"input_image","source":{"type":"base64","media_type":"image/png","data":"aW1hZ2U="}}',
+    ), "utf8");
+    const server = app();
+    const query = `cwd=${encodeURIComponent(cwd)}`;
+    const regenerated = await server.inject({
+      method: "POST",
+      url: `/api/sessions/session-image/regenerate?${query}`,
+      payload: { entry_id: "session-image-user", source_user_message_id: "session-image-user", message: "" },
+    });
+    expect(regenerated.statusCode, regenerated.body).toBe(200);
+    const log = await readFile(process.env.FAKE_PI_LOG!, "utf8");
+    expect(log).toContain('"type":"prompt","message":"","images":[{"type":"image","data":"aW1hZ2U=","mimeType":"image/png"}]');
+    await server.close();
+  });
+
   it("returns runtime command errors and cancellations instead of disguising them as an empty command list", async () => {
     for (const [mode, statusCode, code] of [["commands-error", 502, "commands_failed"], ["commands-cancelled", 409, "cancelled"]] as const) {
       process.env.FAKE_PI_MODE = mode;

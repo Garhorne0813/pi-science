@@ -40,6 +40,7 @@ async function fakeWebRuntime(
   busyMs = 0,
   detachEventsOnResume = false,
   replayGapOnReconnect = false,
+  stallEventsAfterFork = false,
 ): Promise<{
   cwd: string;
   command: string;
@@ -73,6 +74,8 @@ async function fakeWebRuntime(
     `const detachEventsOnResume = ${detachEventsOnResume};`,
     'let deleteCount = 0;',
     `const replayGapOnReconnect = ${replayGapOnReconnect};`,
+    `const stallEventsAfterFork = ${stallEventsAfterFork};`,
+    'let stallEventStream = false;',
     'import { appendFileSync, writeFileSync } from "node:fs";',
     'function json(response, status, value) { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); }',
     'function event(runtimeId, value) { for (const response of clients.get(runtimeId) ?? []) response.write(`event: runtime_event\\nid: 1\\ndata: ${JSON.stringify({ sequence: 1, event: value })}\\n\\n`); }',
@@ -89,7 +92,7 @@ async function fakeWebRuntime(
     '    const runtimeId = parts[3]; const suffix = parts.length > 4 ? `/${parts.slice(4).join("/")}` : ""; const runtime = runtimes.get(runtimeId);',
     '    if (!runtime) return json(response, 404, { error: "Runtime not found" });',
     '    if (!suffix && request.method === "GET") { const busy = busyGets > 0 || (busyUntil > 0 && Date.now() < busyUntil); if (busyGets > 0) busyGets -= 1; return json(response, 200, { ...runtime, busy }); }',
-    '    if (suffix === "/events") { const after = parsed.searchParams.get("after") ?? ""; appendFileSync("event-after.log", `${after}\\n`); if (replayGapOnReconnect && after === "1") return json(response, 409, { error: "Requested event sequence is no longer buffered", code: "event_replay_gap", oldestSequence: 5, latestSequence: 7 }); response.writeHead(200, { "content-type": "text/event-stream" }); response.write(`event: connected\\ndata: ${JSON.stringify({ runtimeId })}\\n\\n`); const set = clients.get(runtimeId) ?? new Set(); set.add(response); clients.set(runtimeId, set); request.on("close", () => set.delete(response)); return; }',
+    '    if (suffix === "/events") { const after = parsed.searchParams.get("after") ?? ""; appendFileSync("event-after.log", `${after}\\n`); if (stallEventStream) { request.on("close", () => response.destroy()); return; } if (replayGapOnReconnect && after === "1") return json(response, 409, { error: "Requested event sequence is no longer buffered", code: "event_replay_gap", oldestSequence: 5, latestSequence: 7 }); response.writeHead(200, { "content-type": "text/event-stream" }); response.write(`event: connected\\ndata: ${JSON.stringify({ runtimeId })}\\n\\n`); const set = clients.get(runtimeId) ?? new Set(); set.add(response); clients.set(runtimeId, set); request.on("close", () => set.delete(response)); return; }',
     '    if (suffix === "/state") return json(response, 200, { piSessionId: runtime.piSessionId, isStreaming: false, pendingMessageCount: 0 });',
     '    if (suffix === "/commands") return json(response, 200, { commands: [{ name: "review", source: "skill" }] });',
     '    if (suffix === "/skills" && request.method === "GET") return json(response, 200, { policy: runtime.skillPolicy, skills: [{ name: "review", description: "Review", enabled: runtime.skillPolicy.mode !== "none" }], diagnostics: [] });',
@@ -97,7 +100,7 @@ async function fakeWebRuntime(
     '    if (suffix === "/skills/refresh" && request.method === "POST") { event(runtimeId, { type: "runtime_skills_changed", reason: "refresh", policy: runtime.skillPolicy, enabledSkills: [] }); return json(response, 200, { policy: runtime.skillPolicy, skills: [], diagnostics: [] }); }',
     '    if (suffix === "/resume" && request.method === "POST") { const value = await body(request); runtime.piSessionId = "restored-session"; runtime.sessionPath = value.sessionPath; if (detachEventsOnResume) clients.set(runtimeId, new Set()); return json(response, 200, { success: true, runtimeId, piSessionId: runtime.piSessionId }); }',
     '    if (suffix === "/prompt" && request.method === "POST") { await body(request); json(response, 202, { success: true }); event(runtimeId, { type: "agent_start", sessionId: runtime.piSessionId }); return; }',
-    '    if (suffix === "/fork" && request.method === "POST") { await body(request); runtime.piSessionId = `fork-${++counter}`; runtime.sessionPath = `${runtime.sessionDir}/${runtime.piSessionId}.jsonl`; return json(response, 200, { success: true, runtimeId, piSessionId: runtime.piSessionId }); }',
+    '    if (suffix === "/fork" && request.method === "POST") { await body(request); runtime.piSessionId = `fork-${++counter}`; runtime.sessionPath = `${runtime.sessionDir}/${runtime.piSessionId}.jsonl`; if (stallEventsAfterFork) stallEventStream = true; return json(response, 200, { success: true, runtimeId, piSessionId: runtime.piSessionId }); }',
     '    if (!suffix && request.method === "DELETE") { deleteCount += 1; writeFileSync("delete-count.json", String(deleteCount)); if (deleteBusyTurns > 0) { deleteBusyTurns -= 1; return json(response, 409, { error: "Runtime is busy", code: "runtime_busy" }); } runtimes.delete(runtimeId); return json(response, 200, { success: true }); }',
     '  }',
     '  return json(response, 404, { error: "Not found" });',
@@ -189,6 +192,23 @@ describe("Node Pi Orbit adapter", () => {
     await expect(manager.sendCommand("web-workspace-2", "get_state")).resolves.toMatchObject({ success: true });
     await manager.shutdownAll();
     expect(manager.hostProcessCount).toBe(0);
+    await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it("does not hold a successful fork response open while the replacement event stream stalls", async () => {
+    const manager = new PiManager();
+    managers.push(manager);
+    const runtime = await fakeWebRuntime(false, null, 0, 0, 0, false, false, true);
+    const process = await manager.start("web-workspace-stalled-fork-stream", runtime);
+
+    const result = await Promise.race([
+      process.sendCommand("fork", { entryId: "user-entry-1" }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("fork response remained pending")), 1_000)),
+    ]);
+
+    expect(result).toMatchObject({ success: true, piSessionId: "fork-2" });
+    expect(process.runtimeIdentity).toMatchObject({ piSessionId: "fork-2" });
+    await manager.shutdownAll();
     await rm(runtime.cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 

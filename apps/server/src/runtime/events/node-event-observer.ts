@@ -4,6 +4,8 @@ import { extname, relative, resolve } from "node:path";
 import { appendJsonLine, readJsonLines, workspaceFile } from "../../storage/persistence.js";
 import type { PiEvent } from "../pi/pi-process.js";
 import { executionIdFor, executionRepository } from "../executions/execution-repository.js";
+import { snapshotArtifactVersionBytes } from "../artifacts/artifact-version-storage.js";
+import { responseVersionRepository } from "../node/response-version-repository.js";
 
 type Publish = (payload: Record<string, unknown>) => Promise<void>;
 
@@ -43,6 +45,11 @@ export async function observeNodePiEvent(
   sessionId: string,
   publish: Publish,
 ): Promise<void> {
+  if (event.type === "agent_settled") {
+    void responseVersionRepository.setSessionStatus(cwd, sessionId, "ready").catch(() => undefined);
+  } else if (event.type === "error") {
+    void responseVersionRepository.setSessionStatus(cwd, sessionId, "failed").catch(() => undefined);
+  }
   if (["agent_start", "agent_end", "agent_settled", "error"].includes(event.type)) {
     void serialized(workspaceFile(cwd, "skill-events.jsonl"), () => appendJsonLine(workspaceFile(cwd, "skill-events.jsonl"), {
       type: "skill_event", session_id: sessionId, ts: Date.now() / 1000, event: event.type,
@@ -116,6 +123,10 @@ async function observeWrittenArtifact(cwd: string, model: string | null, event: 
     const previous = artifacts.filter((item) => item.artifact_id === artifactId).at(-1);
     const previousVersion = Number(previous?.version ?? 0);
     if (previous?.sha256 === sha256) {
+      if (typeof previous.snapshot_path !== "string") {
+        previous.snapshot_path = await snapshotArtifactVersionBytes(cwd, absolute, bytes, artifactId, previousVersion, sha256);
+        await appendJsonLine(workspaceFile(cwd, "artifacts.jsonl"), previous);
+      }
       observed = { path, sha256, artifactId, version: previousVersion };
       return;
     }
@@ -125,6 +136,7 @@ async function observeWrittenArtifact(cwd: string, model: string | null, event: 
       artifact_id: artifactId, version: previousVersion + 1, path, kind: kind(path, contentType), mime: contentType,
       size: metadata.size, sha256, published_at: new Date().toISOString(),
       producer: { tool, session_id: sessionId, ...(model ? { model } : {}) }, inputs: [], environment: {}, verification,
+      snapshot_path: await snapshotArtifactVersionBytes(cwd, absolute, bytes, artifactId, previousVersion + 1, sha256),
     };
     await appendJsonLine(workspaceFile(cwd, "artifacts.jsonl"), manifest);
     await appendProvenance(cwd, path, tool, sessionId, model, event, sha256, artifactId, previousVersion + 1);

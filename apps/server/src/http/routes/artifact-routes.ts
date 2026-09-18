@@ -1,13 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { open, readFile, stat } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { provenanceRecordSchema, type ProvenanceRecord } from "@pi-science/contracts";
 import { appendJsonLine, appendJsonLineUnlocked, metadataRoot, readJsonLines, withFileWriteLock, workspaceFile } from "../../storage/persistence.js";
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/workspace-security.js";
+import { resolveArtifactVersionPath, snapshotArtifactVersion } from "../../runtime/artifacts/artifact-version-storage.js";
 
-interface Artifact { artifact_id: string; version: number; path: string; kind: string; mime: string; size: number; sha256: string; published_at: string; producer?: Record<string, unknown>; inputs?: unknown[]; environment?: Record<string, unknown>; verification?: Record<string, unknown> }
+interface Artifact { artifact_id: string; version: number; path: string; kind: string; mime: string; size: number; sha256: string; published_at: string; snapshot_path?: string; producer?: Record<string, unknown>; inputs?: unknown[]; environment?: Record<string, unknown>; verification?: Record<string, unknown> }
 const MAX_PUBLISH_BYTES = 2 * 1024 * 1024 * 1024;
 
 async function hashFile(path: string): Promise<{ sha256: string; size: number }> {
@@ -21,6 +22,38 @@ async function ws(request: { query: unknown }, reply: { code: (status: number) =
 function mime(path: string): string { const table: Record<string, string> = { ".json": "application/json", ".csv": "text/csv", ".txt": "text/plain", ".md": "text/markdown", ".html": "text/html", ".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg" }; return table[extname(path).toLowerCase()] ?? "application/octet-stream"; }
 function kind(path: string, contentType: string): string { if (contentType.startsWith("image/")) return "image"; if (contentType.startsWith("text/") || [".md", ".json", ".yaml", ".yml", ".py", ".sh"].includes(extname(path).toLowerCase())) return "text"; if ([".csv", ".tsv", ".xlsx", ".parquet"].includes(extname(path).toLowerCase())) return "table"; if ([".pdf", ".docx", ".pptx"].includes(extname(path).toLowerCase())) return "document"; return "file"; }
 
+async function artifactVersion(cwd: string, artifactId: string, version?: string): Promise<Artifact | null> {
+  const rows = (await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl"))).filter((item) => item.artifact_id === artifactId);
+  return (version ? rows.findLast((row) => row.version === Number(version)) : rows.at(-1)) ?? null;
+}
+
+async function artifactContentPath(cwd: string, item: Artifact): Promise<string> {
+  if (item.snapshot_path) return resolveArtifactVersionPath(cwd, item.snapshot_path);
+  const target = await resolveWorkspaceFile(cwd, item.path);
+  const actual = await hashFile(target);
+  if (actual.sha256 !== item.sha256) throw Object.assign(new Error("Historical artifact content is unavailable because the workspace file has changed"), { code: "historical_content_unavailable" });
+  return target;
+}
+
+function textMime(contentType: string, path: string): boolean {
+  return contentType.startsWith("text/") || /\.(?:json|ya?ml|js|jsx|ts|tsx|py|r|sh|sql|ipynb)$/i.test(path);
+}
+
+async function readArtifactContent(path: string, maxBytes: number | null): Promise<{ bytes: Buffer; size: number }> {
+  const metadata = await stat(path);
+  if (!metadata.isFile()) throw new Error("Artifact content is not a file");
+  if (maxBytes === null) return { bytes: await readFile(path), size: metadata.size };
+  const length = Math.min(metadata.size, maxBytes);
+  const handle = await open(path, "r");
+  try {
+    const bytes = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(bytes, 0, length, 0);
+    return { bytes: bytes.subarray(0, bytesRead), size: metadata.size };
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function recordProvenance(cwd: string, body: Record<string, unknown>): Promise<ProvenanceRecord> {
   const path = String(body.path ?? "");
   return withFileWriteLock(workspaceFile(cwd, "provenance.jsonl"), async () => { const records = await readJsonLines<ProvenanceRecord>(workspaceFile(cwd, "provenance.jsonl")); const version = records.filter((record) => record.path === path).reduce((max, record) => Math.max(max, record.version), 0) + 1; const content = typeof body.content === "string" ? body.content : undefined; const record = provenanceRecordSchema.parse({ path, version, ts: Date.now() / 1000, tool: String(body.tool ?? "unknown"), sessionId: String(body.session_id ?? body.sessionId ?? ""), ...(body.tool_call_id ? { toolCallId: String(body.tool_call_id) } : {}), ...(body.model ? { model: String(body.model) } : {}), ...(content !== undefined ? { contentHash: createHash("sha256").update(content).digest("hex").slice(0, 16), content: content.slice(0, 100_000) } : {}), ...(body.diff ? { diff: String(body.diff) } : {}), ...(body.execution_id ? { executionId: String(body.execution_id) } : {}) }); await appendJsonLineUnlocked(workspaceFile(cwd, "provenance.jsonl"), record); return record; });
@@ -28,8 +61,37 @@ export async function recordProvenance(cwd: string, body: Record<string, unknown
 
 export function registerArtifactRoutes(app: FastifyInstance): void {
   app.get("/api/artifacts", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const query = request.query as { artifact_id?: string; limit?: string }; const all = await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl")); const filtered = query.artifact_id ? all.filter((item) => item.artifact_id === query.artifact_id) : all; return { artifacts: filtered.slice(-Math.min(1000, Math.max(1, Number(query.limit ?? 100)))).reverse() }; });
-  app.post("/api/artifacts/publish", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const body = (request.body ?? {}) as Record<string, unknown>; const path = String(body.path ?? ""); let target: string; try { target = await resolveWorkspaceFile(cwd, path); } catch (error) { return reply.code(400).send({ error: String(error) }); } let metadata; try { metadata = await stat(target); } catch { return reply.code(404).send({ error: `Artifact not found: ${path}` }); } if (!metadata.isFile()) return reply.code(400).send({ error: "Artifact path is not a file" }); let digest: { sha256: string; size: number }; try { digest = await hashFile(target); } catch (error) { return reply.code(413).send({ error: String(error) }); } const { sha256, size } = digest; const relative = target.slice(cwd.length + 1).replaceAll("\\", "/"); const artifactId = createHash("sha256").update(`${cwd}:${relative}`).digest("hex").slice(0, 24); return withFileWriteLock(workspaceFile(cwd, "artifacts.jsonl"), async () => { const existing = (await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl"))).filter((item) => item.artifact_id === artifactId).at(-1); if (existing?.sha256 === sha256) return existing; const artifact: Artifact = { artifact_id: artifactId, version: (existing?.version ?? 0) + 1, path: relative, kind: kind(relative, mime(relative)), mime: mime(relative), size, sha256, published_at: new Date().toISOString(), producer: { tool: body.tool ?? "publish_artifact", session_id: body.session_id ?? "", model: body.model ?? null, run_id: body.run_id ?? null }, inputs: Array.isArray(body.inputs) ? body.inputs : [], environment: typeof body.environment === "object" && body.environment ? body.environment as Record<string, unknown> : {}, verification: { status: "passed", checks: { exists: true, readable: true, size, sha256 }, checked_at: new Date().toISOString() } }; await appendJsonLineUnlocked(workspaceFile(cwd, "artifacts.jsonl"), artifact); await recordProvenance(cwd, { path: relative, session_id: body.session_id ?? "artifact-publisher", tool: body.tool ?? "publish_artifact", model: body.model, run_id: body.run_id, content: `artifact:${artifactId}:${artifact.version}:${sha256}` }); return artifact; }); });
-  app.get<{ Params: { artifact_id: string } }>("/api/artifacts/:artifact_id", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const query = request.query as { version?: string }; const rows = (await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl"))).filter((item) => item.artifact_id === request.params.artifact_id); const item = query.version ? rows.find((row) => row.version === Number(query.version)) : rows.at(-1); return item ?? reply.code(404).send({ error: "Artifact not found" }); });
+  app.post("/api/artifacts/publish", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const body = (request.body ?? {}) as Record<string, unknown>; const path = String(body.path ?? ""); let target: string; try { target = await resolveWorkspaceFile(cwd, path); } catch (error) { return reply.code(400).send({ error: String(error) }); } let metadata; try { metadata = await stat(target); } catch { return reply.code(404).send({ error: `Artifact not found: ${path}` }); } if (!metadata.isFile()) return reply.code(400).send({ error: "Artifact path is not a file" }); let digest: { sha256: string; size: number }; try { digest = await hashFile(target); } catch (error) { return reply.code(413).send({ error: String(error) }); } const { sha256, size } = digest; const relative = target.slice(cwd.length + 1).replaceAll("\\", "/"); const artifactId = createHash("sha256").update(`${cwd}:${relative}`).digest("hex").slice(0, 24); return withFileWriteLock(workspaceFile(cwd, "artifacts.jsonl"), async () => { const existing = (await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl"))).filter((item) => item.artifact_id === artifactId).at(-1); if (existing?.sha256 === sha256) { if (!existing.snapshot_path) { existing.snapshot_path = await snapshotArtifactVersion(cwd, target, artifactId, existing.version, sha256); await appendJsonLineUnlocked(workspaceFile(cwd, "artifacts.jsonl"), existing); } return existing; } const artifact: Artifact = { artifact_id: artifactId, version: (existing?.version ?? 0) + 1, path: relative, kind: kind(relative, mime(relative)), mime: mime(relative), size, sha256, published_at: new Date().toISOString(), producer: { tool: body.tool ?? "publish_artifact", session_id: body.session_id ?? "", model: body.model ?? null, run_id: body.run_id ?? null }, inputs: Array.isArray(body.inputs) ? body.inputs : [], environment: typeof body.environment === "object" && body.environment ? body.environment as Record<string, unknown> : {}, verification: { status: "passed", checks: { exists: true, readable: true, size, sha256 }, checked_at: new Date().toISOString() } }; artifact.snapshot_path = await snapshotArtifactVersion(cwd, target, artifactId, artifact.version, sha256); await appendJsonLineUnlocked(workspaceFile(cwd, "artifacts.jsonl"), artifact); await recordProvenance(cwd, { path: relative, session_id: body.session_id ?? "artifact-publisher", tool: body.tool ?? "publish_artifact", model: body.model, run_id: body.run_id, content: `artifact:${artifactId}:${artifact.version}:${sha256}` }); return artifact; }); });
+  app.get<{ Params: { artifact_id: string } }>("/api/artifacts/:artifact_id", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const query = request.query as { version?: string }; const rows = (await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl"))).filter((item) => item.artifact_id === request.params.artifact_id); const item = query.version ? rows.findLast((row) => row.version === Number(query.version)) : rows.at(-1); return item ?? reply.code(404).send({ error: "Artifact not found" }); });
+  app.get<{ Params: { artifact_id: string } }>("/api/artifacts/:artifact_id/content", async (request, reply) => {
+    const cwd = await ws(request, reply); if (!cwd) return;
+    const query = request.query as { version?: string; maxBytes?: string };
+    let maxBytes: number | null = null;
+    if (query.maxBytes !== undefined) {
+      const parsed = Number(query.maxBytes);
+      if (!/^\d+$/.test(query.maxBytes) || !Number.isSafeInteger(parsed) || parsed <= 0) {
+        return reply.code(400).send({ error: "maxBytes must be a positive integer" });
+      }
+      maxBytes = parsed;
+    }
+    const item = await artifactVersion(cwd, request.params.artifact_id, query.version);
+    if (!item) return reply.code(404).send({ error: "Artifact not found" });
+    try {
+      const target = await artifactContentPath(cwd, item);
+      const { bytes, size } = await readArtifactContent(target, maxBytes);
+      return {
+        path: item.path,
+        mime: item.mime,
+        encoding: textMime(item.mime, item.path) ? "utf8" : "base64",
+        data: textMime(item.mime, item.path) ? bytes.toString("utf8") : bytes.toString("base64"),
+        size,
+        ...(bytes.length < size ? { truncated: true } : {}),
+      };
+    } catch (error) {
+      return reply.code((error as { code?: string }).code === "historical_content_unavailable" ? 409 : 404).send({ error: String(error), code: (error as { code?: string }).code });
+    }
+  });
+  app.get<{ Params: { artifact_id: string } }>("/api/artifacts/:artifact_id/serve", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const query = request.query as { version?: string }; const item = await artifactVersion(cwd, request.params.artifact_id, query.version); if (!item) return reply.code(404).send({ error: "Artifact not found" }); try { const target = await artifactContentPath(cwd, item); return reply.type(item.mime).send(createReadStream(target)); } catch (error) { return reply.code((error as { code?: string }).code === "historical_content_unavailable" ? 409 : 404).send({ error: String(error), code: (error as { code?: string }).code }); } });
   app.post("/api/artifacts/verify", async (request, reply) => { const cwd = await ws(request, reply); if (!cwd) return; const body = (request.body ?? {}) as Record<string, unknown>; const rows = await readJsonLines<Artifact>(workspaceFile(cwd, "artifacts.jsonl")); const item = rows.filter((row) => row.artifact_id === String(body.artifact_id)).find((row) => body.version ? row.version === Number(body.version) : row.version === Math.max(...rows.filter((row) => row.artifact_id === String(body.artifact_id)).map((row) => row.version))); if (!item) return reply.code(404).send({ error: "Artifact not found" }); try { const target = await resolveWorkspaceFile(cwd, item.path); const bytes = await readFile(target); const actual = createHash("sha256").update(bytes).digest("hex"); const updated = { ...item, verification: { status: actual === item.sha256 ? "passed" : "failed", checks: { sha256: actual, expected: item.sha256 }, checked_at: new Date().toISOString() } }; await appendJsonLine(workspaceFile(cwd, "artifacts.jsonl"), updated); return updated; } catch (error) { return reply.code(404).send({ error: String(error) }); } });
   app.post("/api/artifacts/claim-check", async (request, reply) => { const body = (request.body ?? {}) as Record<string, unknown>; const values = Array.isArray(body.values) ? body.values.map(Number) : []; if (!values.length || values.some((value) => !Number.isFinite(value))) return reply.code(422).send({ error: "values must contain finite numbers" }); const direction = body.direction === undefined ? undefined : body.direction === "positive" || body.direction === "negative" ? body.direction : null; if (direction === null) return reply.code(422).send({ error: "direction must be positive or negative" }); const parseBound = (value: unknown): number | undefined => { if (value === undefined) return undefined; const parsed = Number(value); return Number.isFinite(parsed) ? parsed : undefined; }; const minimum = parseBound(body.minimum); const maximum = parseBound(body.maximum); if (body.minimum !== undefined && minimum === undefined || body.maximum !== undefined && maximum === undefined) return reply.code(422).send({ error: "minimum and maximum must be finite numbers" }); if (minimum !== undefined && maximum !== undefined && minimum > maximum) return reply.code(422).send({ error: "minimum must not exceed maximum" }); const violations = [...(direction === "positive" && values.some((value) => value < 0) ? ["values must be non-negative"] : []), ...(direction === "negative" && values.some((value) => value > 0) ? ["values must be non-positive"] : []), ...(minimum !== undefined && values.some((value) => value < minimum) ? [`values must be >= ${minimum}`] : []), ...(maximum !== undefined && values.some((value) => value > maximum) ? [`values must be <= ${maximum}`] : [])]; return { claim: String(body.claim ?? ""), status: violations.length ? "failed" : "passed", violations, summary: violations.length ? violations.join("; ") : "claim checks passed" }; });
 

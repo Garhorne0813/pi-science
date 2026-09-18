@@ -186,6 +186,23 @@ export async function forkSession(baseUrl: string, sessionId: string, cwd: strin
   return { id: data.id };
 }
 
+export async function regenerateSession(baseUrl: string, sessionId: string, cwd: string, input: {
+  entryId: string;
+  message: string;
+  sourceUserMessageId: string;
+}): Promise<{ id: string; versionId: string; groupId: string }> {
+  const params = new URLSearchParams({ cwd });
+  const res = await request(`${baseUrl}/api/sessions/${sessionId}/regenerate?${params}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    timeoutMs: RUNTIME_START_TIMEOUT_MS,
+    body: JSON.stringify({ entry_id: input.entryId, message: input.message, source_user_message_id: input.sourceUserMessageId }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) throw new Error(responseError(data, `Regenerate response failed: ${res.statusText}`));
+  return { id: data.id, versionId: data.version_id, groupId: data.group_id };
+}
+
 export async function sendPrompt(baseUrl: string, sessionId: string, message: string, cwd?: string): Promise<void> {
   const params = cwd ? `?${new URLSearchParams({ cwd })}` : "";
   const res = await request(`${baseUrl}/api/sessions/${sessionId}/prompt${params}`, {
@@ -240,13 +257,17 @@ export async function abort(baseUrl: string, sessionId: string, cwd?: string): P
   }
 }
 
-export async function deleteSession(baseUrl: string, sessionId: string, cwd?: string): Promise<void> {
+export async function deleteSession(baseUrl: string, sessionId: string, cwd?: string): Promise<{ rootSessionId: string; deletedSessionIds: string[] }> {
   const params = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
   const res = await request(`${baseUrl}/api/sessions/${sessionId}${params}`, { method: "DELETE" });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.ok === false) {
     throw new Error(responseError(data, `Delete session failed: ${res.statusText}`));
   }
+  return {
+    rootSessionId: typeof data.root_session_id === "string" ? data.root_session_id : sessionId,
+    deletedSessionIds: Array.isArray(data.deleted_session_ids) ? data.deleted_session_ids.filter((value: unknown): value is string => typeof value === "string") : [sessionId],
+  };
 }
 
 export async function setSessionTitle(baseUrl: string, sessionId: string, title: string, cwd?: string): Promise<void> {

@@ -5,6 +5,7 @@ import { sessionTitleRepository } from "../../runtime/node/session-titles.js";
 import { validateWorkspaceCwd } from "../../security/workspace-security.js";
 import type { NodeSessionService } from "../../runtime/node/node-session-service.js";
 import { ensureProject } from "../../project/project-registry.js";
+import { responseVersionRepository } from "../../runtime/node/response-version-repository.js";
 
 function queryCwd(request: { query: unknown }): string {
   const query = request.query as { cwd?: unknown };
@@ -40,6 +41,16 @@ export function registerSessionReadRoutes(app: FastifyInstance, sessionRepositor
       const cwd = await validateWorkspaceCwd(queryCwd(request));
       const project = await ensureProject(cwd);
       const sessions = await sessionRepository.list(cwd);
+      // Regenerated responses live in hidden fork sessions. Surface their
+      // latest activity on the canonical (first-version) sidebar row so a
+      // resend updates both its relative time and chronological position.
+      const versionGroups = await responseVersionRepository.list(cwd);
+      for (const group of versionGroups) {
+        const canonical = sessions.find((session) => session.id === group.rootSessionId);
+        if (canonical && group.updatedAt && group.updatedAt > (canonical.updated_at ?? "")) {
+          canonical.updated_at = group.updatedAt;
+        }
+      }
       const live = nodeSessionService.liveSessions(cwd);
       for (const runtime of live.reverse()) {
         if (!sessions.some((session) => session.id === runtime.id)) {

@@ -627,6 +627,30 @@ describe("native control-plane business routes", () => {
     await expect(stat(root)).rejects.toThrow();
   });
 
+  it("reads only the requested artifact content window", async () => {
+    const cwd = await workspace();
+    const app = buildApp(config());
+    apps.push(app);
+    await writeFile(join(cwd, "large.txt"), "0123456789".repeat(10_000), "utf8");
+    const published = await app.inject({
+      method: "POST",
+      url: `/api/artifacts/publish?cwd=${encodeURIComponent(cwd)}`,
+      payload: { path: "large.txt", session_id: "s1" },
+    });
+    expect(published.statusCode, published.body).toBe(200);
+
+    const content = await app.inject({
+      method: "GET",
+      url: `/api/artifacts/${published.json().artifact_id}/content?cwd=${encodeURIComponent(cwd)}&maxBytes=12`,
+    });
+    expect(content.json()).toMatchObject({ data: "012345678901", size: 100_000, truncated: true });
+    const invalid = await app.inject({
+      method: "GET",
+      url: `/api/artifacts/${published.json().artifact_id}/content?cwd=${encodeURIComponent(cwd)}&maxBytes=invalid`,
+    });
+    expect(invalid.statusCode).toBe(400);
+  });
+
   // Requires the real pi-ai catalog (provider-scoped api-key storage);
   // skipped when the runtime is not installed (CI).
   it.skipIf(!piAiCatalogAvailable)("persists jobs, artifacts, provenance, and redacts settings secrets", async () => {
@@ -663,6 +687,10 @@ describe("native control-plane business routes", () => {
     const artifact = await app.inject({ method: "POST", url: `/api/artifacts/publish?cwd=${encodeURIComponent(cwd)}`, payload: { path: "result.txt", session_id: "s1" } });
     expect(artifact.statusCode).toBe(200);
     expect(artifact.json()).toMatchObject({ path: "result.txt", version: 1 });
+    await import("node:fs/promises").then(({ writeFile }) => writeFile(join(cwd, "result.txt"), "new artifact", "utf8"));
+    const historical = await app.inject({ method: "GET", url: `/api/artifacts/${artifact.json().artifact_id}/content?cwd=${encodeURIComponent(cwd)}&version=1` });
+    expect(historical.statusCode).toBe(200);
+    expect(historical.json()).toMatchObject({ data: "artifact", encoding: "utf8" });
     const provenance = await app.inject({ method: "GET", url: `/api/provenance?cwd=${encodeURIComponent(cwd)}` });
     expect(provenance.json().records.length).toBeGreaterThan(0);
   }, 20_000);
