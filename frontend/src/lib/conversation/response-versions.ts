@@ -14,6 +14,9 @@ export interface ResponseVersion {
 
 export interface ResponseVersionGroup {
   id: string;
+  rootSessionId?: string;
+  sourceSessionId?: string;
+  sourceUserMessageId?: string;
   versions: ResponseVersion[];
   selectedVersionId?: string;
   updatedAt?: string;
@@ -37,10 +40,39 @@ export function bindResponseVersionMessage(groups: ResponseVersionGroup[], versi
 }
 
 export function preferredResponseVersionSession(groups: ResponseVersionGroup[], sessionId: string): string {
-  const group = groups.find((candidate) => candidate.versions.some((version) => version.sessionId === sessionId));
-  if (!group) return sessionId;
-  const selected = group.versions.find((version) => version.id === group.selectedVersionId);
-  return selected?.sessionId ?? group.versions.at(-1)?.sessionId ?? sessionId;
+  let current = sessionId;
+  const visited = new Set<string>();
+  while (!visited.has(current)) {
+    visited.add(current);
+    const candidates = groups.filter((group) => (group.sourceSessionId ?? group.versions[0]?.sessionId) === current);
+    const group = candidates.sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""))[0];
+    if (!group) break;
+    const selected = group.selectedVersionId
+      ? group.versions.find((version) => version.id === group.selectedVersionId && version.status !== "failed")
+      : group.versions.findLast((version) => version.status !== "failed");
+    if (!selected || selected.sessionId === current) break;
+    current = selected.sessionId;
+  }
+  return current;
+}
+
+export function responseVersionRootSession(groups: ResponseVersionGroup[], sessionId: string): string {
+  const explicit = groups.find((group) => (
+    group.rootSessionId === sessionId || group.versions.some((version) => version.sessionId === sessionId)
+  ))?.rootSessionId;
+  if (explicit) return explicit;
+  let current = sessionId;
+  const visited = new Set<string>();
+  while (!visited.has(current)) {
+    visited.add(current);
+    const parent = groups.find((group) => (
+      (group.sourceSessionId ?? group.versions[0]?.sessionId) !== current
+      && group.versions.some((version) => version.sessionId === current)
+    ));
+    if (!parent) break;
+    current = parent.sourceSessionId ?? parent.versions[0]?.sessionId ?? current;
+  }
+  return current;
 }
 
 export async function fetchResponseVersionGroups(cwd: string, sessionId?: string): Promise<ResponseVersionGroup[]> {

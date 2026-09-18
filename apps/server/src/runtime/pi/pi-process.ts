@@ -293,7 +293,7 @@ export class PiProcess extends EventEmitter {
         case "prompt":
         case "abort":
         case "compact":
-          return this.webRequest("POST", `${runtimePath}/${type}`, type === "prompt" ? { message: params.message } : undefined);
+          return this.webRequest("POST", `${runtimePath}/${type}`, type === "prompt" ? { message: params.message, images: params.images } : undefined);
         case "steer":
         case "follow_up":
           return this.webRequest("POST", `${runtimePath}/${type === "follow_up" ? "follow-up" : type}`, params);

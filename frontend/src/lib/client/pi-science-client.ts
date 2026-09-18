@@ -155,15 +155,18 @@ export class PiScienceClient {
     await rest.setSessionTitle(this.baseUrl, sessionId, title, cwd);
   }
 
-  async deleteSession(sessionId: string, cwd?: string): Promise<void> {
-    await rest.deleteSession(this.baseUrl, sessionId, cwd);
+  async deleteSession(sessionId: string, cwd?: string): Promise<{ rootSessionId: string; deletedSessionIds: string[] }> {
+    const result = await rest.deleteSession(this.baseUrl, sessionId, cwd);
     if (cwd) {
-      this.transport.clearCursor(cwd, sessionId);
-      clearCachedMessages(cwd, sessionId);
-      clearSessionName(cwd, sessionId);
-      clearAiTitle(cwd, sessionId);
-      clearAiTitleAttempted(cwd, sessionId);
+      for (const deletedSessionId of result.deletedSessionIds) {
+        this.transport.clearCursor(cwd, deletedSessionId);
+        clearCachedMessages(cwd, deletedSessionId);
+        clearSessionName(cwd, deletedSessionId);
+        clearAiTitle(cwd, deletedSessionId);
+        clearAiTitleAttempted(cwd, deletedSessionId);
+      }
     }
+    return result;
   }
 
   /** Remove the SSE resume cursor for a session (e.g. after it is replaced or

@@ -257,13 +257,17 @@ export async function abort(baseUrl: string, sessionId: string, cwd?: string): P
   }
 }
 
-export async function deleteSession(baseUrl: string, sessionId: string, cwd?: string): Promise<void> {
+export async function deleteSession(baseUrl: string, sessionId: string, cwd?: string): Promise<{ rootSessionId: string; deletedSessionIds: string[] }> {
   const params = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
   const res = await request(`${baseUrl}/api/sessions/${sessionId}${params}`, { method: "DELETE" });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.ok === false) {
     throw new Error(responseError(data, `Delete session failed: ${res.statusText}`));
   }
+  return {
+    rootSessionId: typeof data.root_session_id === "string" ? data.root_session_id : sessionId,
+    deletedSessionIds: Array.isArray(data.deleted_session_ids) ? data.deleted_session_ids.filter((value: unknown): value is string => typeof value === "string") : [sessionId],
+  };
 }
 
 export async function setSessionTitle(baseUrl: string, sessionId: string, title: string, cwd?: string): Promise<void> {

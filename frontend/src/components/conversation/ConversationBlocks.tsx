@@ -65,7 +65,7 @@ function UserMessage({ block, actions }: { block: UserMessageBlock; actions?: Us
   const [editText, setEditText] = useState(visibleText);
   const [submitting, setSubmitting] = useState(false);
   const submit = async (message: string) => {
-    if (!actions || actions.disabled || !message.trim() || submitting) return;
+    if (!actions || actions.disabled || (!message.trim() && !block.images?.length) || submitting) return;
     setSubmitting(true);
     try {
       await actions.onResend(block, message);
@@ -98,7 +98,7 @@ function UserMessage({ block, actions }: { block: UserMessageBlock; actions?: Us
           />
           <div className="flex justify-end gap-1">
             <button type="button" disabled={submitting} onClick={() => setEditing(false)} className="flex h-7 w-7 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-text disabled:opacity-40" aria-label={t("conversation.cancelEdit")} title={t("conversation.cancelEdit")}><X size={13} /></button>
-            <button type="button" disabled={actions?.disabled || submitting || !editText.trim()} onClick={() => void submit(replaceVisibleUserMessage(block.text, editText)).catch(() => undefined)} className="flex h-7 w-7 items-center justify-center rounded-full bg-accent text-white disabled:opacity-40" aria-label={t("conversation.sendEdit")} title={t("conversation.sendEdit")}><Check size={13} /></button>
+            <button type="button" disabled={actions?.disabled || submitting || (!editText.trim() && !block.images?.length)} onClick={() => void submit(replaceVisibleUserMessage(block.text, editText)).catch(() => undefined)} className="flex h-7 w-7 items-center justify-center rounded-full bg-accent text-white disabled:opacity-40" aria-label={t("conversation.sendEdit")} title={t("conversation.sendEdit")}><Check size={13} /></button>
           </div>
         </div>
       ) : visibleText ? <div className="ui-user-message rounded-bubble px-4 py-2.5 text-sm leading-relaxed text-text whitespace-pre-wrap">{visibleText}</div> : null}

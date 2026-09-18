@@ -54,7 +54,7 @@ import { useTranslation } from "react-i18next";
 import { useFeedback } from "../../components/feedback/feedback-context";
 import { workspacePathLeaf } from "../../lib/workspace";
 import { Icon, IconButton } from "../../components/ui/Icon";
-import { fetchResponseVersionGroups, preferredResponseVersionSession } from "../../lib/conversation/response-versions";
+import { fetchResponseVersionGroups, preferredResponseVersionSession, responseVersionRootSession } from "../../lib/conversation/response-versions";
 import { conversationSessionId } from "../../lib/conversation/session-route";
 
 const SIDEBAR_MIN_WIDTH = 220;
@@ -349,8 +349,7 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
     void fetchResponseVersionGroups(cwd, activeSessionId)
       .then((groups) => {
         if (cancelled) return;
-        const group = groups.find((candidate) => candidate.versions.some((version) => version.sessionId === activeSessionId));
-        setActiveSidebarSessionId(group?.versions[0]?.sessionId ?? activeSessionId);
+        setActiveSidebarSessionId(responseVersionRootSession(groups, activeSessionId));
       })
       .catch(() => { if (!cancelled) setActiveSidebarSessionId(activeSessionId); });
     return () => { cancelled = true; };
@@ -398,7 +397,7 @@ export function WorkspaceSessionList({ cwd }: { cwd: string }) {
     // Read freshness after the await: the user may have switched sessions
     // while the delete was in flight, and we must not kick them out of the
     // session they are now viewing.
-    const wasActive = useRuntimeStore.getState().activeSessionId === sessionId;
+    const wasActive = activeSidebarSessionId === sessionId;
     try {
       await deleteSession(sessionId);
       // Only the active-session delete lands on the blank workspace, and only

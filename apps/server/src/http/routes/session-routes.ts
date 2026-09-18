@@ -46,8 +46,7 @@ export function registerSessionReadRoutes(app: FastifyInstance, sessionRepositor
       // resend updates both its relative time and chronological position.
       const versionGroups = await responseVersionRepository.list(cwd);
       for (const group of versionGroups) {
-        const canonicalSessionId = group.versions[0]?.sessionId;
-        const canonical = sessions.find((session) => session.id === canonicalSessionId);
+        const canonical = sessions.find((session) => session.id === group.rootSessionId);
         if (canonical && group.updatedAt && group.updatedAt > (canonical.updated_at ?? "")) {
           canonical.updated_at = group.updatedAt;
         }

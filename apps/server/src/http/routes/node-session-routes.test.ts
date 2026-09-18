@@ -457,6 +457,35 @@ describe("native Node conversation routes", () => {
     const listed = await server.inject({ method: "GET", url: `/api/sessions?${query}` });
     const canonical = listed.json().find((session: { id: string }) => session.id === "session-regenerate");
     expect(canonical.updated_at).toBe(versions.json().groups[0].updatedAt);
+    await server.inject({ method: "POST", url: `/api/sessions/${regenerated.json().id}/abort?${query}` });
+    const deleted = await server.inject({ method: "DELETE", url: `/api/sessions/session-regenerate?${query}` });
+    expect(deleted.json()).toMatchObject({
+      ok: true,
+      root_session_id: "session-regenerate",
+      deleted_session_ids: expect.arrayContaining(["session-regenerate", regenerated.json().id]),
+    });
+    expect((await server.inject({ method: "GET", url: `/api/response-versions?${query}` })).json().groups).toEqual([]);
+    await server.close();
+  });
+
+  it("reconstructs image attachments from the persisted source message", async () => {
+    const cwd = await workspaceWithSessions("session-image");
+    const sessionPath = join(cwd, ".pi-science", "sessions", "session-image.jsonl");
+    const raw = await readFile(sessionPath, "utf8");
+    await writeFile(sessionPath, raw.replace(
+      '{"type":"text","text":"<hello session-image>"}',
+      '{"type":"input_image","source":{"type":"base64","media_type":"image/png","data":"aW1hZ2U="}}',
+    ), "utf8");
+    const server = app();
+    const query = `cwd=${encodeURIComponent(cwd)}`;
+    const regenerated = await server.inject({
+      method: "POST",
+      url: `/api/sessions/session-image/regenerate?${query}`,
+      payload: { entry_id: "session-image-user", source_user_message_id: "session-image-user", message: "" },
+    });
+    expect(regenerated.statusCode, regenerated.body).toBe(200);
+    const log = await readFile(process.env.FAKE_PI_LOG!, "utf8");
+    expect(log).toContain('"type":"prompt","message":"","images":[{"type":"image","data":"aW1hZ2U=","mimeType":"image/png"}]');
     await server.close();
   });
 

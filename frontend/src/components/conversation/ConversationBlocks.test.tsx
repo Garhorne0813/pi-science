@@ -156,6 +156,16 @@ describe("turn-level conversation rendering", () => {
     ));
   });
 
+  it("regenerates an image-only user message", async () => {
+    const onResend = vi.fn(async () => undefined);
+    const block: ThreadBlock = { kind: "user", id: "u-image", text: "", images: [{ data: "aW1hZ2U=", mimeType: "image/png" }] };
+    const turn = buildTurnPresentations([block])[0];
+    render(<>{renderTurn(turn, codeRunner, undefined, { onResend })}</>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+    await waitFor(() => expect(onResend).toHaveBeenCalledWith(block, ""));
+  });
+
   it("disables branching actions while the conversation is busy", () => {
     const turn = buildTurnPresentations([user("u-disabled")])[0];
     render(<>{renderTurn(turn, codeRunner, undefined, { disabled: true, onResend: vi.fn(async () => undefined) })}</>);

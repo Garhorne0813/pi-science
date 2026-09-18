@@ -9,6 +9,33 @@ installRuntimeTestEnvironment();
 
 
 describe("runtime session actions", () => {
+  it("allows only one regeneration request per workspace at a time", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("parent/regenerate")) {
+        await gate;
+        return jsonResponse({ ok: true, id: "regenerated", version_id: "v2", group_id: "g1" });
+      }
+      if (url.includes("regenerated/messages")) return jsonResponse({ messages: [], next_cursor: null, has_more: false, snapshot_version: "s" });
+      if (url.includes("regenerated/artifacts")) return jsonResponse({ turns: [] });
+      if (url.includes("regenerated/state")) return jsonResponse(state("regenerated"));
+      if (url.includes("regenerated/events/cursor")) return jsonResponse({ resumeCursor: null });
+      if (url.startsWith("/api/sessions?")) return jsonResponse([{ id: "parent", cwd: "/workspace" }]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useRuntimeStore.setState({ cwd: "/workspace", activeSessionId: "parent", status: "ready" });
+
+    const first = useRuntimeStore.getState().regenerateSession("parent", "u1", "u1", "first");
+    await expect(useRuntimeStore.getState().regenerateSession("parent", "u2", "u2", "second"))
+      .rejects.toThrow("already in progress");
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/regenerate"))).toHaveLength(1);
+    release?.();
+    await first;
+  });
+
   it("seeds a completed regenerated branch at the durable SSE tail", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -622,6 +649,24 @@ describe("runtime session actions", () => {
     expect(state.pendingQuestionnaire).toBeNull();
     expect(state.status).toBe("ready");
     vi.unstubAllGlobals();
+  });
+
+  it("clears a hidden active branch when its canonical conversation is deleted", async () => {
+    useRuntimeStore.setState({
+      cwd: "/workspace",
+      activeSessionId: "hidden-branch",
+      sessions: [{ id: "canonical", cwd: "/workspace" }],
+      thread: { blocks: [{ id: "b1", kind: "text", text: "branch" } as never], index: { b1: 0 }, loaded: true },
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/sessions/canonical")) return jsonResponse({ ok: true, root_session_id: "canonical", deleted_session_ids: ["canonical", "hidden-branch"] });
+      if (url.startsWith("/api/sessions?")) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    await useRuntimeStore.getState().deleteSession("canonical");
+    expect(useRuntimeStore.getState()).toMatchObject({ activeSessionId: null, sessions: [], thread: emptyThread() });
   });
 
   it("removes deleted durable sessions instead of resurrecting them as optimistic", async () => {

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, ReactNode, Ref } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -20,6 +20,7 @@ import {
   persistResponseVersionMessage,
   persistSelectedResponseVersion,
   preferredResponseVersionSession,
+  responseVersionRootSession,
   replayForkEntryId,
   resetDynamicCommands,
   responseVersionGroup,
@@ -141,6 +142,7 @@ export function LiveSessionPage() {
   const [reviewingProject, setReviewingProject] = useState(false);
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
   const [replaying, setReplaying] = useState<{ sessionId: string; userMessageId: string } | null>(null);
+  const replayingRef = useRef(false);
   const [responseVersionGroups, setResponseVersionGroups] = useState<ResponseVersionGroup[]>([]);
   const removeWorkspaceReference = useUiStore((state) => state.removeWorkspaceReference);
 
@@ -153,7 +155,7 @@ export function LiveSessionPage() {
         setResponseVersionGroups(groups);
         if (!sessionId) return;
         const group = groups.find((candidate) => candidate.versions.some((version) => version.sessionId === sessionId));
-        const canonicalSessionId = group?.versions[0]?.sessionId;
+        const canonicalSessionId = responseVersionRootSession(groups, sessionId);
         const preferredSessionId = preferredResponseVersionSession(groups, sessionId);
         // Sidebar rows point at the canonical session. Resolve that stable URL
         // to the version the user most recently selected. A direct link to a
@@ -348,7 +350,7 @@ export function LiveSessionPage() {
   };
 
   const handleResendUserMessage = async (block: UserMessageBlock, message: string) => {
-    if (!activeSessionId || working || interactionPending || reviewingProject) return;
+    if (!activeSessionId || working || interactionPending || reviewingProject || replayingRef.current) return;
     const sourceTurn = turns.find((turn) => turn.user?.id === block.id);
     const hasReplaySideEffects = sourceTurn?.blocks.some((candidate) => candidate.kind === "tool" && (
       toolEffect(candidate) === "mutate" || toolEffect(candidate) === "execute"
@@ -363,6 +365,7 @@ export function LiveSessionPage() {
     }
     const sourceSessionId = activeSessionId;
     const entryId = replayForkEntryId(block);
+    replayingRef.current = true;
     setReplaying({ sessionId: sourceSessionId, userMessageId: block.id });
     setSuggestions([]);
     try {
@@ -380,18 +383,20 @@ export function LiveSessionPage() {
       toast(error instanceof Error ? error.message : t("conversation.branchError"), "error");
       throw error;
     } finally {
+      replayingRef.current = false;
       setReplaying(null);
     }
   };
 
   const versionControlsForTurn = (turn: TurnPresentation) => {
-    if (working || !activeSessionId || !turn.user || !turn.finalAgent) return undefined;
+    if (working || replaying || !activeSessionId || !turn.user || !turn.finalAgent) return undefined;
     const group = responseVersionGroup(responseVersionGroups, activeSessionId, turn.user.id);
-    if (!group || group.versions.length < 2) return undefined;
-    const index = group.versions.findIndex((version) => version.sessionId === activeSessionId && version.userMessageId === turn.user!.id);
+    const versions = group?.versions.filter((version) => version.status !== "failed") ?? [];
+    if (!group || versions.length < 2) return undefined;
+    const index = versions.findIndex((version) => version.sessionId === activeSessionId && version.userMessageId === turn.user!.id);
     if (index < 0) return undefined;
     const go = async (nextIndex: number) => {
-      const target = group.versions[nextIndex];
+      const target = versions[nextIndex];
       if (!target || target.sessionId === activeSessionId) return;
       setResponseVersionGroups((current) => current.map((candidate) => (
         candidate.id === group.id ? { ...candidate, selectedVersionId: target.id } : candidate
@@ -401,7 +406,7 @@ export function LiveSessionPage() {
     };
     return {
       index,
-      total: group.versions.length,
+      total: versions.length,
       onPrevious: () => { void go(index - 1); },
       onNext: () => { void go(index + 1); },
     };
@@ -538,7 +543,7 @@ export function LiveSessionPage() {
                         { cwd: workspaceCwd, sessionId: activeSessionId ?? "scratch" },
                         actionTextByBlock,
                         {
-                          disabled: !activeSessionId || working || interactionPending || reviewingProject,
+                          disabled: !activeSessionId || working || interactionPending || reviewingProject || Boolean(replaying),
                           onResend: handleResendUserMessage,
                         },
                         versionControlsForTurn(safeTurn),

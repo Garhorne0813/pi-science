@@ -32,6 +32,7 @@ type GetState = StoreApi<RuntimeState>["getState"];
 const _createSessionPromises = new Map<string, Promise<string>>();
 const _historyPagePromises = new Map<string, Promise<number>>();
 const _interactionResponsePromises = new Map<string, Promise<void>>();
+const _regeneratingWorkspaces = new Set<string>();
 function connectionKey(cwd: string, sessionId?: string): string { return `${cwd}\u0000${sessionId ?? ""}`; }
 function historyPageKey(cwd: string, sessionId: string, before: string): string { return `${connectionKey(cwd, sessionId)}\u0000${before}`; }
 function interactionResponseKey(cwd: string, sessionId: string, requestId: string): string { return `${connectionKey(cwd, sessionId)}\u0000${requestId}`; }
@@ -731,6 +732,9 @@ export function createRuntimeActions(set: SetState, get: GetState) {
 
     regenerateSession: async (sessionId: string, entryId: string, sourceUserMessageId: string, message: string) => {
       const { cwd } = get();
+      if (_regeneratingWorkspaces.has(cwd)) throw new Error("A response regeneration is already in progress");
+      _regeneratingWorkspaces.add(cwd);
+      try {
       const client = getClient();
       const result = await client.regenerateSession(sessionId, cwd, { entryId, message, sourceUserMessageId });
       if (get().cwd !== cwd) throw new Error("Workspace changed while the response was being regenerated");
@@ -792,6 +796,9 @@ export function createRuntimeActions(set: SetState, get: GetState) {
         set({ sessions: refreshedSessions.filter((session) => session.id !== result.id) });
       }
       return { sessionId: result.id, versionId: result.versionId };
+      } finally {
+        _regeneratingWorkspaces.delete(cwd);
+      }
     },
 
     createNewSession: async () => {
@@ -871,16 +878,17 @@ export function createRuntimeActions(set: SetState, get: GetState) {
 
     deleteSession: async (sessionId: string) => {
       const { cwd, activeSessionId } = get();
-      await getClient().deleteSession(sessionId, cwd);
-      if (activeSessionId === sessionId) {
+      const result = await getClient().deleteSession(sessionId, cwd);
+      const deletedSessionIds = result?.deletedSessionIds ?? [sessionId];
+      if (activeSessionId && deletedSessionIds.includes(activeSessionId)) {
         // Deleting the active conversation must clear its cursor/history/thread
         // state, not just drop the list row — reuse the full recovery reset.
         // Pass the client so the reset also disconnects any live SSE stream for
         // the deleted session (missing client leaves a phantom error state).
-        recoverMissingSession(sessionId, cwd, getClient());
+        recoverMissingSession(activeSessionId, cwd, getClient());
       } else {
-        optimisticSessionIds.delete(sessionId);
-        set((state) => ({ sessions: state.sessions.filter((session) => session.id !== sessionId) }));
+        for (const deletedSessionId of deletedSessionIds) optimisticSessionIds.delete(deletedSessionId);
+        set((state) => ({ sessions: state.sessions.filter((session) => !deletedSessionIds.includes(session.id)) }));
       }
       await loadSessionsInternal();
     },
