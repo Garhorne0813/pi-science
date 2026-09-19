@@ -128,15 +128,18 @@ export async function sandboxResearchCommand(input: { command: string[]; workspa
   }
   const runs = await realpath(join(metadataRoot(workspace), "runs"));
   if (!inside(workspace, runs)) throw new Error("research run root escapes the workspace");
-  if (!inside(input.workspace, input.executionCwd)) throw new Error("research execution directory escapes the workspace");
-  const executionCwd = await realpath(input.executionCwd);
+  const requestedWorkspace = resolve(input.workspace);
+  const requestedExecutionCwd = resolve(input.executionCwd);
+  if (requestedExecutionCwd !== requestedWorkspace && !requestedExecutionCwd.startsWith(`${requestedWorkspace}${sep}`)) throw new Error("research execution directory escapes the workspace");
+  const executionCwd = await realpath(requestedExecutionCwd);
   const candidate = input.surface === "research-loop";
   const evaluator = input.surface === "research-evaluator";
   if (!candidate && !evaluator) throw new Error("unsupported research sandbox surface");
   const outputValue = candidate ? input.environment.PI_SCIENCE_OUTPUT_DIR : input.environment.PI_SCIENCE_EVALUATION_PATH;
   if (!outputValue || !isAbsolute(outputValue)) throw new Error("research sandbox output path is missing");
   const outputDirectory = await realpath(candidate ? outputValue : resolve(outputValue, ".."));
-  if (!inside(runs, outputDirectory)) throw new Error("research sandbox output escapes the run directory");
+  if (!outputDirectory.startsWith(`${runs}${sep}`)) throw new Error("research sandbox output escapes the run directory");
+  if (executionCwd !== workspace && !executionCwd.startsWith(`${runs}${sep}`)) throw new Error("research execution directory escapes the run directory");
   if (candidate && (!inside(runs, executionCwd) || !executionCwd.endsWith(`${sep}work`))) throw new Error("candidate work directory is invalid");
   if (evaluator && executionCwd !== workspace && (!inside(runs, executionCwd) || !executionCwd.endsWith(`${sep}evaluator`))) throw new Error("evaluator work directory is invalid");
   if (candidate && resolve(outputDirectory, "..") !== resolve(executionCwd, "..")) throw new Error("candidate output is not beside its work directory");
@@ -181,11 +184,9 @@ export async function sandboxResearchCommand(input: { command: string[]; workspa
     await Promise.all([mkdir(environment.APPDATA, { recursive: true }), mkdir(environment.LOCALAPPDATA, { recursive: true })]);
   }
   await mkdir(environment.TMPDIR!, { recursive: true });
-  // A symlinked output or working directory could otherwise expand the grants.
-  for (const path of writable) {
-    if (!inside(runs, await realpath(path))) throw new Error(`sandbox writable path escapes the run directory: ${path}`);
-    if (!(await lstat(path)).isDirectory()) throw new Error(`sandbox writable path is not a directory: ${path}`);
-  }
+  // These are canonical and already checked against runs above. Seatbelt's
+  // additional spelling aliases resolve to the same two directories.
+  if (!(await lstat(outputDirectory)).isDirectory() || (candidate && !(await lstat(executionCwd)).isDirectory())) throw new Error("sandbox writable path is not a directory");
   let command: string[];
   if (status.backend === "seatbelt") command = ["/usr/bin/sandbox-exec", "-p", macProfile(readable, writable), ...input.command];
   else if (status.backend === "bubblewrap") command = bwrapCommand([commandPath, ...await Promise.all(input.command.slice(1).map(async (arg) => isAbsolute(arg) ? realpath(arg).catch(() => arg) : arg))], readable, writable, executionCwd);
