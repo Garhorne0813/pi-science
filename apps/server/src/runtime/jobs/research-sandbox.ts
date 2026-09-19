@@ -190,7 +190,13 @@ export async function sandboxResearchCommand(input: { command: string[]; workspa
     // Validate the exact policy before the coordinator persists a runnable job.
     const dryRun = spawnSync(sandyExecutable(), ["--dry-run", "--string", config, "--exec", commandPath], { cwd: executionCwd, env: environment, timeout: 10_000, encoding: "utf8", windowsHide: true });
     if (dryRun.status !== 0) throw new Error(`research AppContainer policy rejected: ${dryRun.error?.message ?? dryRun.stderr?.trim() ?? dryRun.status}`);
-    command = [sandyExecutable(), "--quiet", "--string", config, "--exec", commandPath, ...input.command.slice(1)];
+    // Node resolves the main script through the drive root on Windows. The
+    // AppContainer deliberately cannot read that root, so preserve the already
+    // validated script path instead of asking Node to canonicalize it again.
+    const argumentsAfterExecutable = commandPath === await realpath(process.execPath)
+      ? ["--preserve-symlinks-main", ...input.command.slice(1)]
+      : input.command.slice(1);
+    command = [sandyExecutable(), "--quiet", "--string", config, "--exec", commandPath, ...argumentsAfterExecutable];
   }
   return { command, environment, backend: status.backend };
 }

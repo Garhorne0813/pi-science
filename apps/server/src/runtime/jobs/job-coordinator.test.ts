@@ -557,7 +557,7 @@ describe("job coordinator", () => {
     const childEnv = JSON.parse(finished?.stdout ?? "{}") as Record<string, string | undefined>;
     expect(childEnv.PATH).toBe(process.env.PATH);
     expect(childEnv.HOME).toBe(await realpath(outputs));
-    expect(childEnv.PI_SCIENCE_OUTPUT_DIR).toBe(outputs);
+    expect(await realpath(childEnv.PI_SCIENCE_OUTPUT_DIR!)).toBe(await realpath(outputs));
     expect(childEnv.hOmE).toBeUndefined();
     expect(childEnv.sEcReT_tOkEn).toBeUndefined();
   });

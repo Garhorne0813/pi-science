@@ -180,10 +180,8 @@ export class ResearchLoopCoordinator {
     await mkdir(runRoot, { recursive: true });
     const resultPath = join(runRoot, "evaluation.json");
     await unlink(resultPath).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
-    const bash = await findBashExecutable();
-    if (!bash) throw new Error("benchmark requires bash");
     const submitted = await this.jobs.submit(cwd, {
-      command: [bash, script], execution_cwd: cwd, surface: "research-evaluator",
+      command: await researchScriptCommand(script), execution_cwd: cwd, surface: "research-evaluator",
       env: { PI_SCIENCE_SUBJECT_DIR: cwd, PI_SCIENCE_EVALUATION_PATH: resultPath, PI_SCIENCE_BASELINE: "1" },
       requirement: { timeout_seconds: Math.min(loop.budget.max_wall_seconds, 300) },
     });
@@ -338,10 +336,8 @@ export class ResearchLoopCoordinator {
     await mkdir(outputs, { recursive: true });
     const script = resolve(work, candidate.proposal.solution.entrypoint);
     if (!within(work, script)) throw new Error("candidate entrypoint escapes work directory");
-    const bash = await findBashExecutable();
-    if (!bash) throw new Error("Research loop candidates require bash. Install Git for Windows or set PI_SCIENCE_BASH_PATH to bash.exe.");
     const job = await this.jobs.submit(cwd, {
-      command: [bash, script], execution_cwd: work, surface: "research-loop",
+      command: await researchScriptCommand(script), execution_cwd: work, surface: "research-loop",
       env: { PI_SCIENCE_OUTPUT_DIR: outputs, PI_SCIENCE_RUN_ID: runId, PI_SCIENCE_CANDIDATE_ID: candidate.candidate_id },
       requirement: { timeout_seconds: Math.min(loop.budget.max_wall_seconds, 86_400) },
     });
@@ -397,11 +393,9 @@ export class ResearchLoopCoordinator {
     const evaluatorScript = join(evaluatorRoot, "evaluate.mjs");
     await mkdir(evaluatorRoot, { recursive: true });
     if (!benchmark) await writeFile(evaluatorScript, builtinEvaluatorSource(evaluator.metrics), { encoding: "utf8", mode: 0o500 });
-    const bash = benchmark ? await findBashExecutable() : null;
-    if (benchmark && !bash) throw new Error("benchmark requires bash");
     const script = benchmark ? await verifiedBenchmarkScript(cwd, evaluator) : evaluatorScript;
     const job = await this.jobs.submit(cwd, {
-      command: benchmark ? [bash!, script] : [process.execPath, script], execution_cwd: evaluatorRoot, surface: "research-evaluator",
+      command: benchmark ? await researchScriptCommand(script) : [process.execPath, script], execution_cwd: evaluatorRoot, surface: "research-evaluator",
       env: { PI_SCIENCE_OUTPUT_DIR: outputsRoot, PI_SCIENCE_SUBJECT_DIR: outputsRoot, PI_SCIENCE_EVALUATION_PATH: evaluationPath, PI_SCIENCE_BASELINE: "0" },
       requirement: { timeout_seconds: Math.min(loop.budget.max_wall_seconds, 300) },
     });
@@ -722,6 +716,14 @@ async function benchmarkScript(cwd: string, command: string[]): Promise<string> 
   if (!info.isFile() || info.isSymbolicLink() || info.size > 1_000_000) throw new Error("benchmark script must be a regular file under 1 MB");
   if (!within(await realpath(cwd), await realpath(script))) throw new Error("benchmark script resolves outside workspace");
   return script;
+}
+
+async function researchScriptCommand(script: string): Promise<string[]> {
+  if (/\.(?:cjs|mjs|js)$/i.test(script)) return [process.execPath, script];
+  if (process.platform === "win32") throw new Error("Windows research scripts must use a .cjs, .mjs, or .js entrypoint; Git Bash cannot run in AppContainer");
+  const bash = await findBashExecutable();
+  if (!bash) throw new Error("research shell scripts require bash");
+  return [bash, script];
 }
 
 async function verifiedBenchmarkScript(cwd: string, evaluator: EvaluatorSpec): Promise<string> {

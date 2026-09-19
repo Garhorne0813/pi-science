@@ -53,13 +53,12 @@ it("runs a research candidate with only its work and output directories writable
   await mkdir(work, { recursive: true }); await mkdir(outputs);
   await writeFile(join(workspace, "private.txt"), "secret");
   const script = join(work, "solve.sh");
-  await writeFile(script, 'printf "ok" > "$PI_SCIENCE_OUTPUT_DIR/result.txt"\ncat "$PI_SCIENCE_OUTPUT_DIR/result.txt"\nprintf "hacked" > "$PI_SCIENCE_WORKSPACE_SECRET"\nln -s "$PI_SCIENCE_WORKSPACE_SECRET" "$PI_SCIENCE_OUTPUT_DIR/link"\nprintf "escaped" > "$PI_SCIENCE_OUTPUT_DIR/link"\ncat "$PI_SCIENCE_WORKSPACE_SECRET"\n');
+  await writeFile(script, 'printf "ok" > "$PI_SCIENCE_OUTPUT_DIR/result.txt"\ncat "$PI_SCIENCE_OUTPUT_DIR/result.txt"\nif printf "hacked" > "$PI_SCIENCE_WORKSPACE_SECRET" 2>/dev/null; then echo WRITE_ESCAPED; fi\nln -s "$PI_SCIENCE_WORKSPACE_SECRET" "$PI_SCIENCE_OUTPUT_DIR/link" 2>/dev/null\nif printf "escaped" > "$PI_SCIENCE_OUTPUT_DIR/link" 2>/dev/null; then echo SYMLINK_ESCAPED; fi\nif cat "$PI_SCIENCE_WORKSPACE_SECRET" 2>/dev/null; then echo READ_ESCAPED; fi\n');
   const isolated = await sandboxResearchCommand({ command: ["/bin/bash", script], workspace, executionCwd: work, surface: "research-loop", environment: { PATH: process.env.PATH, PI_SCIENCE_OUTPUT_DIR: outputs, PI_SCIENCE_WORKSPACE_SECRET: join(workspace, "private.txt") } });
   const result = spawnSync(isolated.command[0]!, isolated.command.slice(1), { cwd: work, env: isolated.environment, encoding: "utf8" });
   expect(await readFile(join(outputs, "result.txt"), "utf8")).toBe("ok");
   expect(result.stdout).toContain("ok");
-  expect(result.stdout).not.toContain("secret");
-  expect(result.status).not.toBe(0);
+  expect(result.stdout).not.toMatch(/secret|WRITE_ESCAPED|SYMLINK_ESCAPED|READ_ESCAPED/);
   expect(await readFile(join(workspace, "private.txt"), "utf8")).toBe("secret");
 });
 

@@ -66,6 +66,11 @@ class FakeRunner implements ResearchSubagentRunner {
       const score = this.scores[Math.min(this.candidateCalls, this.scores.length - 1)] ?? null;
       this.candidateCalls += 1;
       const write = score === null ? "" : `printf '%s\\n' '{"score":${score}}' > "$PI_SCIENCE_OUTPUT_DIR/result.json"\n`;
+      const windows = process.platform === "win32";
+      const entrypoint = windows ? "solve.cjs" : "solve.sh";
+      const source = windows
+        ? score === null ? "process.exit(1);" : `require('node:fs').writeFileSync(require('node:path').join(process.env.PI_SCIENCE_OUTPUT_DIR, 'result.json'), JSON.stringify({score:${score}}));`
+        : `#!/usr/bin/env bash\nset -eu\nmkdir -p "$PI_SCIENCE_OUTPUT_DIR"\n${write}`;
       return {
         run_id: request.operation_id,
         model_tokens: 10,
@@ -75,10 +80,8 @@ class FakeRunner implements ResearchSubagentRunner {
           proposal: {
             approach_summary: `candidate ${this.candidateCalls}`,
             rationale: "deterministic fixture",
-            files: {
-              "solve.sh": `#!/usr/bin/env bash\nset -eu\nmkdir -p "$PI_SCIENCE_OUTPUT_DIR"\n${write}`,
-            },
-            entrypoint: "solve.sh",
+            files: { [entrypoint]: source },
+            entrypoint,
             parent_candidate_ids: [],
             expected_artifacts: [{ path: "result.json", kind: "data" }],
           },
@@ -149,6 +152,11 @@ class SleepingRunner implements ResearchSubagentRunner {
   constructor(private readonly body = defaultSleepBody) {}
 
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
+    const windows = process.platform === "win32";
+    const entrypoint = windows ? "solve.cjs" : "solve.sh";
+    const source = windows
+      ? "require('node:fs').writeFileSync(require('node:path').join(process.env.PI_SCIENCE_OUTPUT_DIR, 'descendant-ready'), 'ready'); setTimeout(() => {}, 30000);"
+      : `#!/usr/bin/env bash\n${this.body}`;
     return {
       run_id: request.operation_id,
       model_tokens: 1,
@@ -156,8 +164,8 @@ class SleepingRunner implements ResearchSubagentRunner {
       output: {
         kind: "candidate",
         proposal: {
-          approach_summary: "sleep", rationale: "", files: { "solve.sh": `#!/usr/bin/env bash\n${this.body}` },
-          entrypoint: "solve.sh", parent_candidate_ids: [], expected_artifacts: [],
+          approach_summary: "sleep", rationale: "", files: { [entrypoint]: source },
+          entrypoint, parent_candidate_ids: [], expected_artifacts: [],
         },
       },
     };
@@ -221,7 +229,10 @@ async function configuredLoop(coordinator: ResearchLoopCoordinator, cwd: string,
 
 it("measures a baseline and candidates with the approved workspace benchmark", async () => {
   const cwd = await workspace();
-  await writeFile(join(cwd, "measure.sh"), `#!/usr/bin/env bash
+  const benchmark = process.platform === "win32" ? "measure.cjs" : "measure.sh";
+  await writeFile(join(cwd, benchmark), process.platform === "win32"
+    ? `require('node:fs').writeFileSync(process.env.PI_SCIENCE_EVALUATION_PATH, JSON.stringify({metrics:{score:process.env.PI_SCIENCE_BASELINE === '1' ? 1 : 2}}));`
+    : `#!/usr/bin/env bash
 set -eu
 if [ "$PI_SCIENCE_BASELINE" = "1" ]; then value=1; else value=2; fi
 printf '{"metrics":{"score":%s}}\\n' "$value" > "$PI_SCIENCE_EVALUATION_PATH"
@@ -231,7 +242,7 @@ printf '{"metrics":{"score":%s}}\\n' "$value" > "$PI_SCIENCE_EVALUATION_PATH"
   const registered = await coordinator.registerEvaluator(cwd, {
     evaluator_id: "fixed-benchmark", version: 1, digest: "server-computed", status: "approved",
     metrics: [{ name: "score", direction: "maximize" }], hard_checks: [],
-    command: ["workspace-benchmark", "measure.sh"],
+    command: ["workspace-benchmark", benchmark],
   });
   const loop = await coordinator.create(cwd, {
     title: "Measure", objective: "Improve score",
@@ -250,20 +261,21 @@ printf '{"metrics":{"score":%s}}\\n' "$value" > "$PI_SCIENCE_EVALUATION_PATH"
 
 it("rejects a benchmark changed after registration", async () => {
   const cwd = await workspace();
-  const script = join(cwd, "measure.sh");
-  await writeFile(script, "#!/usr/bin/env bash\nexit 0\n");
+  const benchmark = process.platform === "win32" ? "measure.cjs" : "measure.sh";
+  const script = join(cwd, benchmark);
+  await writeFile(script, process.platform === "win32" ? "process.exit(0);" : "#!/usr/bin/env bash\nexit 0\n");
   const coordinator = new ResearchLoopCoordinator(jobCoordinator(), new FakeRunner());
   coordinators.push(coordinator);
   const { evaluator } = await coordinator.registerEvaluator(cwd, {
     evaluator_id: "changed-benchmark", version: 1, digest: "server-computed", status: "approved",
     metrics: [{ name: "score", direction: "maximize" }], hard_checks: [],
-    command: ["workspace-benchmark", "measure.sh"],
+    command: ["workspace-benchmark", benchmark],
   });
   const loop = await coordinator.create(cwd, {
     title: "Measure", objective: "Improve score",
     evaluator_ref: { evaluator_id: evaluator.evaluator_id, version: 1, digest: evaluator.digest },
   });
-  await writeFile(script, "#!/usr/bin/env bash\nexit 1\n");
+  await writeFile(script, process.platform === "win32" ? "process.exit(1);" : "#!/usr/bin/env bash\nexit 1\n");
   const preflight = await coordinator.preflight(cwd, loop.loop_id);
   expect(preflight.ok).toBe(false);
   expect(preflight.blockers.join(" ")).toContain("benchmark script changed");
