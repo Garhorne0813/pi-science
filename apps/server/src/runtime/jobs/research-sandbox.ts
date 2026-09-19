@@ -90,7 +90,10 @@ function bwrapCommand(command: string[], readable: string[], writable: string[],
   const args = ["--unshare-user", "--disable-userns", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-net", "--new-session", "--die-with-parent", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"];
   for (const path of [...new Set(readable)]) args.push("--ro-bind", path, path);
   for (const path of [...new Set(writable)]) args.push("--bind", path, path);
-  return ["bwrap", ...args, "--chdir", cwd, "--", ...command];
+  // The empty mount namespace starts on a writable tmpfs. Lock its root after
+  // adding explicit mounts, or a child can create fake host-looking paths in
+  // otherwise unmounted parent directories.
+  return ["bwrap", ...args, "--remount-ro", "/", "--chdir", cwd, "--", ...command];
 }
 
 export function researchSandboxStatus(platform: NodeJS.Platform = process.platform): ResearchSandboxStatus {
@@ -127,6 +130,8 @@ export async function sandboxResearchCommand(input: { command: string[]; workspa
     if (cleanup.status !== 0) throw new Error(`research AppContainer cleanup failed: ${cleanup.error?.message ?? cleanup.stderr?.trim() ?? cleanup.status}`);
   }
   const runs = await realpath(join(metadataRoot(workspace), "runs"));
+  if (!inside(workspace, runs)) throw new Error("research run root escapes the workspace");
+  if (!inside(input.workspace, input.executionCwd)) throw new Error("research execution directory escapes the workspace");
   const executionCwd = await realpath(input.executionCwd);
   const candidate = input.surface === "research-loop";
   const evaluator = input.surface === "research-evaluator";
@@ -180,7 +185,10 @@ export async function sandboxResearchCommand(input: { command: string[]; workspa
   }
   await mkdir(environment.TMPDIR!, { recursive: true });
   // A symlinked output or working directory could otherwise expand the grants.
-  for (const path of writable) if (!(await lstat(path)).isDirectory()) throw new Error(`sandbox writable path is not a directory: ${path}`);
+  for (const path of writable) {
+    if (!inside(runs, await realpath(path))) throw new Error(`sandbox writable path escapes the run directory: ${path}`);
+    if (!(await lstat(path)).isDirectory()) throw new Error(`sandbox writable path is not a directory: ${path}`);
+  }
   let command: string[];
   if (status.backend === "seatbelt") command = ["/usr/bin/sandbox-exec", "-p", macProfile(readable, writable), ...input.command];
   else if (status.backend === "bubblewrap") command = bwrapCommand([commandPath, ...await Promise.all(input.command.slice(1).map(async (arg) => isAbsolute(arg) ? realpath(arg).catch(() => arg) : arg))], readable, writable, executionCwd);
