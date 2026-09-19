@@ -16,6 +16,7 @@ export interface ResearchLoopDraft { taskType: Extract<ResearchTaskType, "resear
 
 export function ResearchLoopDraftCard({ draft, busy, onCancel, onConfirm, onBenchmarkChange, onMetricChange, onDirectionChange }: { draft: ResearchLoopDraft; busy: boolean; onCancel: () => void; onConfirm: () => void; onBenchmarkChange: (path: string) => void; onMetricChange: (metric: string) => void; onDirectionChange: (direction: "maximize" | "minimize") => void }) {
   const { t } = useTranslation();
+  const benchmarkExample = typeof navigator !== "undefined" && /Win/i.test(navigator.platform) ? "benchmarks/measure.cjs" : "benchmarks/measure.sh";
   return <section className="ui-card-accent rounded-card p-4">
     <div className="flex items-start justify-between gap-3"><div><h3 className="flex items-center gap-2 text-sm font-semibold text-text"><FlaskConical size={15} className="text-accent" /> {t("research.confirmTitle", { mode: t(`research.mode.${draft.taskType}.label`) })}</h3><p className="mt-1 text-xs leading-5 text-muted">{t("research.confirmDescription")}</p></div><button type="button" onClick={onCancel} disabled={busy} aria-label={t("research.cancelSetup")} className="min-h-9 min-w-9 text-muted hover:text-text"><X size={15} /></button></div>
     <div className="mt-4 rounded-input border border-border/70 bg-surface px-4 py-3">
@@ -23,7 +24,7 @@ export function ResearchLoopDraftCard({ draft, busy, onCancel, onConfirm, onBenc
       <p className="mt-1 text-sm leading-6 text-text">{draft.objective}</p>
     </div>
     <label className="mt-3 block text-xs text-muted">{t("research.benchmarkPath")}
-      <input className="mt-1 w-full rounded-input border border-border bg-surface px-3 py-2 font-mono text-xs text-text" value={draft.benchmarkPath} onChange={(event) => onBenchmarkChange(event.target.value)} placeholder="benchmarks/measure.sh" disabled={busy} />
+      <input className="mt-1 w-full rounded-input border border-border bg-surface px-3 py-2 font-mono text-xs text-text" value={draft.benchmarkPath} onChange={(event) => onBenchmarkChange(event.target.value)} placeholder={benchmarkExample} disabled={busy} />
     </label>
     <p className="mt-1 text-xs leading-5 text-muted">{t("research.benchmarkHint")}</p>
     <div className="mt-3 grid gap-3 sm:grid-cols-2">

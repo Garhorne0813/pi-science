@@ -66,6 +66,7 @@ it("runs a research candidate with only its work and output directories writable
 
 it("runs a local Node evaluator inside the research sandbox", async () => {
   const status = researchSandboxStatus();
+  if (process.platform === "darwin") expect(status.available).toBe(true);
   if (!status.available) return;
   const workspace = await mkdtemp(join(tmpdir(), "pi-science-sandbox-"));
   cleanup.push(workspace);

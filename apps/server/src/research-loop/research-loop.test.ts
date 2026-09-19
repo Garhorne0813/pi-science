@@ -241,7 +241,8 @@ set -eu
 if [ "$PI_SCIENCE_BASELINE" = "1" ]; then value=1; else value=2; fi
 printf '{"metrics":{"score":%s}}\\n' "$value" > "$PI_SCIENCE_EVALUATION_PATH"
 `);
-  const coordinator = new ResearchLoopCoordinator(jobCoordinator(), new FakeRunner([0.95]));
+  const submittedJobs = jobCoordinator();
+  const coordinator = new ResearchLoopCoordinator(submittedJobs, new FakeRunner([0.95]));
   coordinators.push(coordinator);
   const registered = await coordinator.registerEvaluator(cwd, {
     evaluator_id: "fixed-benchmark", version: 1, digest: "server-computed", status: "approved",
@@ -257,6 +258,9 @@ printf '{"metrics":{"score":%s}}\\n' "$value" > "$PI_SCIENCE_EVALUATION_PATH"
   expect(preflight.ok).toBe(true);
   expect(preflight.loop.baseline).toEqual({ score: 1 });
   expect(preflight.loop.baseline_job_id).toMatch(/^job_/);
+  const baselineJob = await submittedJobs.get(cwd, preflight.loop.baseline_job_id!);
+  expect(baselineJob?.command.at(-1)).toContain(join(".pi-science", "evaluators", registered.evaluator.digest.slice(7)));
+  expect(baselineJob?.command.at(-1)).not.toBe(join(cwd, benchmark));
   await coordinator.action(cwd, loop.loop_id, "start");
   const detail = await waitFor(() => coordinator.detail(cwd, loop.loop_id), (value) => value?.status === "completed", 10_000);
   expect(detail?.candidates[0]?.evaluation?.metrics.score?.value).toBe(2);

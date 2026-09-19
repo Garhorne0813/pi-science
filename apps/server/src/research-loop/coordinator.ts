@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, cp, lstat, mkdir, readFile, readdir, realpath, stat, unlink, writeFile } from "node:fs/promises";
-import { join, relative, resolve, sep } from "node:path";
+import { extname, join, relative, resolve, sep } from "node:path";
 import {
   createResearchLoopSchema,
   evaluatorSpecSchema,
@@ -13,7 +13,7 @@ import type { JobCoordinator, JobRecord } from "../runtime/jobs/job-coordinator.
 import { publishResearchOutputArtifact } from "../runtime/artifacts/workspace-artifact-publisher.js";
 import { metadataRoot } from "../storage/persistence.js";
 import { findBashExecutable } from "../support/platform-utils.js";
-import { researchSandboxStatus } from "../runtime/jobs/research-sandbox.js";
+import { cachedResearchSandboxStatus } from "../runtime/jobs/research-sandbox.js";
 import { snapshotCandidate, within } from "./candidate-snapshot.js";
 import { researchDecision } from "./decision.js";
 import { listReducedLoops, reduceResearchRecords } from "./reducer.js";
@@ -64,8 +64,10 @@ export class ResearchLoopCoordinator {
     const supplied = input as Record<string, unknown>;
     const command = supplied.command;
     let digest = supplied.digest;
+    let source: { path: string; digest: string; bytes: Buffer } | null = null;
     if (Array.isArray(command) && command[0] === "workspace-benchmark") {
-      digest = (await benchmarkScript(cwd, command)).digest;
+      source = await benchmarkScript(cwd, command);
+      digest = source.digest;
     }
     const evaluator = evaluatorSpecSchema.parse({ ...supplied, digest, created_at: new Date().toISOString() });
     const repository = this.repository(cwd);
@@ -73,6 +75,7 @@ export class ResearchLoopCoordinator {
       const duplicate = records.some((row) => row.record_type === "evaluator.registered"
         && row.payload.evaluator_id === evaluator.evaluator_id && Number(row.payload.version) === evaluator.version);
       if (duplicate) throw new Error("evaluator version already exists");
+      if (source) await storeBenchmarkSnapshot(cwd, source);
       const record = await repository.appendUnlocked("evaluator.registered", evaluator, { producer: "user" });
       return { record_id: record.record_id, evaluator };
     });
@@ -97,7 +100,7 @@ export class ResearchLoopCoordinator {
     if (!snapshot.loop) return null;
     const records = await this.repository(cwd).records();
     const evaluator = snapshot.loop.evaluator_ref ? findEvaluator(records, snapshot.loop.evaluator_ref.evaluator_id, snapshot.loop.evaluator_ref.version) : null;
-    return { ...snapshot.loop, candidates: snapshot.candidates, operations: snapshot.operations, frontier: frontier(snapshot.candidates), decision: researchDecision(snapshot, evaluator), execution_isolation: researchSandboxStatus() };
+    return { ...snapshot.loop, candidates: snapshot.candidates, operations: snapshot.operations, frontier: frontier(snapshot.candidates), decision: researchDecision(snapshot, evaluator), execution_isolation: await cachedResearchSandboxStatus() };
   }
 
   async preflight(cwd: string, loopId: string) {
@@ -190,7 +193,6 @@ export class ResearchLoopCoordinator {
       job = await this.jobs.get(cwd, submitted.job_id) ?? job;
     }
     if (job.status !== "succeeded") throw new Error(`baseline benchmark failed: ${job.stderr.slice(-1000) || job.status}`);
-    await verifiedBenchmarkScript(cwd, evaluator);
     return { metrics: await readBenchmarkMetrics(resultPath, evaluator), job_id: submitted.job_id };
   }
 
@@ -234,9 +236,11 @@ export class ResearchLoopCoordinator {
 
   private async advance(cwd: string, snapshot: ResearchSnapshot): Promise<boolean> {
     const loop = requireLoop(snapshot);
-    const reason = stopReason(snapshot);
+    const records = await this.repository(cwd).records();
+    const evaluator = loop.evaluator_ref ? findEvaluator(records, loop.evaluator_ref.evaluator_id, loop.evaluator_ref.version) : null;
+    const reason = stopReason(snapshot, Date.now(), evaluator);
     if (reason) { await this.completeLoop(cwd, loop, reason); return true; }
-    const isolation = researchSandboxStatus();
+    const isolation = await cachedResearchSandboxStatus();
     if (!isolation.available) throw new Error(`research execution isolation unavailable: ${isolation.reason}`);
 
     const last = snapshot.candidates.at(-1);
@@ -686,7 +690,7 @@ function findEvaluator(records: ResearchSnapshot["records"], id: string, version
 
 async function evaluatorBlockers(cwd: string, records: ResearchSnapshot["records"], loop: ResearchLoop): Promise<string[]> {
   const blockers: string[] = [];
-  const isolation = researchSandboxStatus();
+  const isolation = await cachedResearchSandboxStatus();
   if (!isolation.available) blockers.push(`research execution isolation unavailable: ${isolation.reason}`);
   if (!loop.evaluator_ref) blockers.push("an approved deterministic evaluator is required");
   else {
@@ -707,7 +711,7 @@ async function evaluatorBlockers(cwd: string, records: ResearchSnapshot["records
   return blockers;
 }
 
-async function benchmarkScript(cwd: string, command: string[]): Promise<{ path: string; digest: string }> {
+async function benchmarkScript(cwd: string, command: string[]): Promise<{ path: string; digest: string; bytes: Buffer }> {
   if (command.length !== 2 || command[0] !== "workspace-benchmark") throw new Error("benchmark command must name one workspace script");
   const workspace = await realpath(cwd);
   const requested = resolve(workspace, command[1]!);
@@ -716,7 +720,28 @@ async function benchmarkScript(cwd: string, command: string[]): Promise<{ path: 
   if (!script.startsWith(`${workspace}${sep}`)) throw new Error("benchmark script resolves outside workspace");
   const info = await lstat(script);
   if (!info.isFile() || info.size > 1_000_000) throw new Error("benchmark script must be a regular file under 1 MB");
-  return { path: script, digest: `sha256:${createHash("sha256").update(await readFile(script)).digest("hex")}` };
+  const bytes = await readFile(script);
+  if (bytes.length > 1_000_000) throw new Error("benchmark script must be a regular file under 1 MB");
+  return { path: script, digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`, bytes };
+}
+
+function benchmarkSnapshotPath(cwd: string, digest: string, source: string): string {
+  if (!/^sha256:[a-f0-9]{64}$/.test(digest)) throw new Error("invalid benchmark digest");
+  const extension = extname(source).toLowerCase();
+  return join(metadataRoot(cwd), "evaluators", digest.slice(7), `benchmark${extension}`);
+}
+
+async function storeBenchmarkSnapshot(cwd: string, source: { path: string; digest: string; bytes: Buffer }): Promise<string> {
+  const path = benchmarkSnapshotPath(cwd, source.digest, source.path);
+  await mkdir(resolve(path, ".."), { recursive: true });
+  try { await writeFile(path, source.bytes, { flag: "wx", mode: 0o400 }); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  const info = await lstat(path);
+  if (!info.isFile() || info.isSymbolicLink() || info.size > 1_000_000
+    || `sha256:${createHash("sha256").update(await readFile(path)).digest("hex")}` !== source.digest) {
+    throw new Error("approved benchmark snapshot is missing or changed");
+  }
+  return path;
 }
 
 async function researchScriptCommand(script: string): Promise<string[]> {
@@ -728,9 +753,9 @@ async function researchScriptCommand(script: string): Promise<string[]> {
 }
 
 async function verifiedBenchmarkScript(cwd: string, evaluator: EvaluatorSpec): Promise<string> {
-  const { path: script, digest } = await benchmarkScript(cwd, evaluator.command);
-  if (digest !== evaluator.digest) throw new Error("benchmark script changed since approval");
-  return script;
+  const source = await benchmarkScript(cwd, evaluator.command);
+  if (source.digest !== evaluator.digest) throw new Error("benchmark script changed since approval");
+  return storeBenchmarkSnapshot(cwd, source);
 }
 
 async function readBenchmarkMetrics(path: string, evaluator: EvaluatorSpec): Promise<Record<string, number>> {

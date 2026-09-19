@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { lstat, mkdir, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
@@ -114,8 +114,61 @@ export function researchSandboxStatus(platform: NodeJS.Platform = process.platfo
   return { available: false, reason: `local research sandbox is unavailable on ${platform}` };
 }
 
+const statusCache = new Map<string, { expires: number; value: ResearchSandboxStatus }>();
+const pendingStatus = new Map<string, Promise<ResearchSandboxStatus>>();
+const STATUS_TTL_MS = 60_000;
+
+function probeAsync(binary: string, args: string[]): Promise<{ status: number | null; error?: string; stderr: string }> {
+  return new Promise((resolveProbe) => {
+    const child = spawn(binary, args, { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    let error: string | undefined;
+    child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-1000); });
+    child.on("error", (cause: Error) => { error = cause.message; });
+    const timer = setTimeout(() => child.kill(), 5_000);
+    child.on("close", (status) => { clearTimeout(timer); resolveProbe({ status, error, stderr: stderr.trim() }); });
+  });
+}
+
+function probeFailure(result: { status: number | null; error?: string; stderr: string }): string {
+  return result.error || result.stderr || String(result.status);
+}
+
+/** Nonblocking status for control-plane reads and execution preflight. */
+export async function cachedResearchSandboxStatus(platform: NodeJS.Platform = process.platform): Promise<ResearchSandboxStatus> {
+  const key = `${platform}:${platform === "win32" ? sandyExecutable() : ""}`;
+  const cached = statusCache.get(key);
+  if (cached && cached.expires > Date.now()) return cached.value;
+  const inFlight = pendingStatus.get(key);
+  if (inFlight) return inFlight;
+  const promise = (async (): Promise<ResearchSandboxStatus> => {
+    if (platform === "darwin") {
+      if (!existsSync("/usr/bin/sandbox-exec")) return { available: false, reason: "sandbox-exec is not installed" };
+      const result = await probeAsync("/usr/bin/sandbox-exec", ["-p", macProfile(availableSystemRoots(macSystemRoots), []), "/usr/bin/true"]);
+      return result.status === 0 ? { available: true, backend: "seatbelt" } : { available: false, reason: `sandbox-exec probe failed: ${probeFailure(result)}` };
+    }
+    if (platform === "linux") {
+      const result = await probeAsync("bwrap", bwrapCommand(["/usr/bin/true"], availableSystemRoots(linuxSystemRoots), []).slice(1));
+      return result.status === 0 ? { available: true, backend: "bubblewrap" } : { available: false, reason: `bubblewrap probe failed: ${probeFailure(result)}` };
+    }
+    if (platform === "win32") {
+      const binary = sandyExecutable();
+      if (!isAbsolute(binary) || !binary.toLowerCase().endsWith(".exe")) return { available: false, reason: "set PI_SCIENCE_SANDY_PATH to an absolute sandy.exe path" };
+      const result = await probeAsync(binary, ["--version"]);
+      return result.status === 0 ? { available: true, backend: "appcontainer" } : { available: false, reason: `Sandy AppContainer runner is unavailable: ${probeFailure(result)}. Install sandy.exe or set PI_SCIENCE_SANDY_PATH` };
+    }
+    return { available: false, reason: `local research sandbox is unavailable on ${platform}` };
+  })();
+  pendingStatus.set(key, promise);
+  try {
+    const value = await promise;
+    statusCache.set(key, { value, expires: Date.now() + STATUS_TTL_MS });
+    return value;
+  } finally { pendingStatus.delete(key); }
+}
+
 export async function sandboxResearchCommand(input: { command: string[]; workspace: string; executionCwd: string; surface: string; environment: NodeJS.ProcessEnv; managedEnvironmentPrefix?: string; timeoutSeconds?: number; platform?: NodeJS.Platform }): Promise<{ command: string[]; environment: NodeJS.ProcessEnv; backend: ResearchSandboxBackend }> {
-  const status = researchSandboxStatus(input.platform);
+  const status = await cachedResearchSandboxStatus(input.platform);
   if (!status.available) throw new Error(`research execution isolation unavailable: ${status.reason}`);
   const workspace = await realpath(input.workspace);
   if (status.backend === "appcontainer") {

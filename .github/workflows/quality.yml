@@ -123,3 +123,6 @@ jobs:
 
       - name: Test macOS launcher lifecycle
         run: bash scripts/test-launcher.sh
+
+      - name: Test macOS research sandbox integration
+        run: pnpm --filter @pi-science/server exec vitest run src/runtime/jobs/research-sandbox.test.ts
