@@ -73,7 +73,7 @@ class FakeRunner implements ResearchSubagentRunner {
       const windows = process.platform === "win32";
       const entrypoint = windows ? "solve.cjs" : "solve.sh";
       const source = windows
-        ? score === null ? "process.exit(1);" : `require('node:fs').writeFileSync(require('node:path').join(process.env.PI_SCIENCE_OUTPUT_DIR, 'result.json'), JSON.stringify({score:${score}}));`
+        ? score === null ? "// Intentionally produce no result artifact.\n" : `require('node:fs').writeFileSync(require('node:path').join(process.env.PI_SCIENCE_OUTPUT_DIR, 'result.json'), JSON.stringify({score:${score}}));`
         : `#!/usr/bin/env bash\nset -eu\nmkdir -p "$PI_SCIENCE_OUTPUT_DIR"\n${write}`;
       return {
         run_id: request.operation_id,
