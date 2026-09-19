@@ -9,11 +9,6 @@ export function activeWallMs(loop: ResearchLoop, now = Date.now()): number {
 export function stopReason(snapshot: ResearchSnapshot, now = Date.now()): string | null {
   const loop = snapshot.loop;
   if (!loop) return "loop_missing";
-  const lastCandidate = snapshot.candidates.at(-1);
-  if (snapshot.candidates.length >= loop.budget.max_candidates
-    && lastCandidate && ["failed", "cancelled", "evaluated"].includes(lastCandidate.status)) {
-    return "candidate_budget_exhausted";
-  }
   if (activeWallMs(loop, now) >= loop.budget.max_wall_seconds * 1000) return "wall_time_budget_exhausted";
 
   const evaluated = snapshot.candidates.filter((candidate) => candidate.evaluation_status === "passed" && candidate.evaluation);
@@ -37,17 +32,28 @@ export function stopReason(snapshot: ResearchSnapshot, now = Date.now()): string
     if (reached) return "target_metrics_reached";
   }
 
-  if (evaluated.length >= loop.stop_conditions.patience + 1) {
+  if (evaluated.length >= loop.stop_conditions.patience) {
     const metricName = Object.keys(evaluated[0]!.evaluation!.metrics)[0];
     if (metricName) {
-      const recent = evaluated.slice(-(loop.stop_conditions.patience + 1));
-      const first = recent[0]!.evaluation!.metrics[metricName];
-      const last = recent.at(-1)!.evaluation!.metrics[metricName];
-      if (first && last && first.direction === last.direction && first.source === "deterministic" && last.source === "deterministic") {
-        const improvement = first.direction === "minimize" ? first.value - last.value : last.value - first.value;
-        if (improvement <= 0 || improvement < loop.stop_conditions.min_improvement) return "patience_exhausted";
+      const direction = evaluated[0]!.evaluation!.metrics[metricName]?.direction;
+      let best = loop.baseline?.[metricName] ?? (direction === "minimize" ? Infinity : -Infinity);
+      let lastImprovement = -1;
+      for (const [index, candidate] of evaluated.entries()) {
+        const metric = candidate.evaluation!.metrics[metricName];
+        if (!metric || metric.source !== "deterministic" || metric.direction !== direction) continue;
+        const improvement = direction === "minimize" ? best - metric.value : metric.value - best;
+        if (improvement > loop.stop_conditions.min_improvement) {
+          best = metric.value;
+          lastImprovement = index;
+        }
       }
+      if (evaluated.length - 1 - lastImprovement >= loop.stop_conditions.patience) return "patience_exhausted";
     }
+  }
+  const lastCandidate = snapshot.candidates.at(-1);
+  if (snapshot.candidates.length >= loop.budget.max_candidates
+    && lastCandidate && ["failed", "cancelled", "evaluated"].includes(lastCandidate.status)) {
+    return "candidate_budget_exhausted";
   }
   return null;
 }

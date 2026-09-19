@@ -118,8 +118,14 @@ export function RunsPage({ sessionId }: { sessionId?: string } = {}) {
 
   const openArtifact = async (artifact: ExecutionRecord["artifacts"][number]) => {
     try {
-      const manifest = await apiRequest<{ path: string }>(`/api/artifacts/${encodeURIComponent(artifact.artifact_id)}?${new URLSearchParams({ cwd: workspaceCwd, version: String(artifact.version) })}`);
-      openFile(manifest.path);
+      const params = new URLSearchParams({ cwd: workspaceCwd, version: String(artifact.version) });
+      const base = `/api/artifacts/${encodeURIComponent(artifact.artifact_id)}`;
+      const manifest = await apiRequest<{ path: string; blob_sha256?: string }>(`${base}?${params}`);
+      if (!manifest.blob_sha256) throw new Error(t("runs.legacyArtifactUnavailable"));
+      const link = document.createElement("a");
+      link.href = `${base}/content?${params}`;
+      link.download = fileName(manifest.path);
+      link.click();
     } catch (error) {
       toast(error instanceof Error ? error.message : t("runs.artifactLoadError"), "error");
     }

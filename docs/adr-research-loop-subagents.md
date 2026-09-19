@@ -16,6 +16,7 @@ Hidden supervisor sessions are stored beneath `.pi-science/research-sessions/<lo
 
 - Browser closure does not stop orchestration.
 - Late subagent output cannot directly mutate loop state or formal metrics.
-- MVP evaluator support is intentionally limited to the built-in deterministic `result.json` evaluator.
+- New loops use an explicitly selected workspace benchmark script. Its SHA-256 is fixed at registration and rechecked before baseline and candidate evaluation. Preflight runs the baseline before a loop becomes ready; candidates are measured by the same script. The script reads `PI_SCIENCE_SUBJECT_DIR` (workspace for baseline, candidate outputs for experiments) and writes `{ "metrics": { "name": 1.23 } }` to `PI_SCIENCE_EVALUATION_PATH`. `PI_SCIENCE_BASELINE` distinguishes the runs. The legacy `builtin:result-json` evaluator remains available for existing API-created loops, but the UI no longer auto-approves it as a new benchmark.
+- A fixed script is a measurement boundary, not a security sandbox. Candidate, baseline, and evaluator jobs now require a fail-closed local OS sandbox; this protects job subprocesses, not the Pi supervisor or arbitrary extensions. Windows enforcement still requires validation on a real host.
 - Parallel candidates and LLM-judged stop metrics remain out of scope until serial recovery and security behavior are proven in production.
 - Workspace rename/delete is rejected while research or jobs are active.

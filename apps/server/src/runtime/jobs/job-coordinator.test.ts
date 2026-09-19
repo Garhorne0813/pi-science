@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { availableParallelism, tmpdir, totalmem } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { JobCoordinator, parseCommand, type JobOwnership, type JobRecord, type JobStatus, restrictLocalJobEnvironment, restrictResearchEnvironment, windowsTaskkillArgs } from "./job-coordinator.js";
+import { researchSandboxStatus } from "./research-sandbox.js";
 
 const cleanup: string[] = [];
 const jobs: JobCoordinator[] = [];
@@ -544,15 +545,19 @@ describe("job coordinator", () => {
   });
 
   it("passes only canonical research variables and requested PI_SCIENCE values to a POSIX child", async () => {
+    if (!researchSandboxStatus().available) return;
     const cwd = await workspace();
-    const coordinator = jobCoordinator({ PATH: process.env.PATH, HOME: "/tmp", hOmE: "/untrusted", sEcReT_tOkEn: "leak-me" }, { platform: "linux" });
-    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "console.log(JSON.stringify(process.env))"], surface: "research-loop", env: { PI_SCIENCE_OUTPUT_DIR: "/tmp/x" } });
+    const work = join(cwd, ".pi-science", "runs", "run-test", "work");
+    const outputs = join(cwd, ".pi-science", "runs", "run-test", "outputs");
+    await mkdir(work, { recursive: true }); await mkdir(outputs);
+    const coordinator = jobCoordinator({ PATH: process.env.PATH, HOME: "/tmp", hOmE: "/untrusted", sEcReT_tOkEn: "leak-me" });
+    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "console.log(JSON.stringify(process.env))"], execution_cwd: work, surface: "research-loop", env: { PI_SCIENCE_OUTPUT_DIR: outputs } });
     const finished = await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal);
     expect(finished?.status).toBe("succeeded");
     const childEnv = JSON.parse(finished?.stdout ?? "{}") as Record<string, string | undefined>;
     expect(childEnv.PATH).toBe(process.env.PATH);
-    expect(childEnv.HOME).toBe("/tmp");
-    expect(childEnv.PI_SCIENCE_OUTPUT_DIR).toBe("/tmp/x");
+    expect(childEnv.HOME).toBe(await realpath(outputs));
+    expect(await realpath(childEnv.PI_SCIENCE_OUTPUT_DIR!)).toBe(await realpath(outputs));
     expect(childEnv.hOmE).toBeUndefined();
     expect(childEnv.sEcReT_tOkEn).toBeUndefined();
   });
@@ -573,15 +578,19 @@ describe("job coordinator", () => {
   }, 15_000);
 
   it("keeps research surfaces on their narrower allowlist unchanged", async () => {
+    if (!researchSandboxStatus().available) return;
     const cwd = await workspace();
-    const coordinator = jobCoordinator({ PATH: process.env.PATH, HOME: "/tmp", PI_SCIENCE_ENVIRONMENT_ID: "env_123", sEcReT_tOkEn: "leak-me" }, { platform: "linux" });
-    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "console.log(JSON.stringify(process.env))"], surface: "research-loop" });
+    const work = join(cwd, ".pi-science", "runs", "run-test", "work");
+    const outputs = join(cwd, ".pi-science", "runs", "run-test", "outputs");
+    await mkdir(work, { recursive: true }); await mkdir(outputs);
+    const coordinator = jobCoordinator({ PATH: process.env.PATH, HOME: "/tmp", PI_SCIENCE_ENVIRONMENT_ID: "env_123", sEcReT_tOkEn: "leak-me" });
+    const submitted = await coordinator.submit(cwd, { command: [process.execPath, "-e", "console.log(JSON.stringify(process.env))"], execution_cwd: work, surface: "research-loop", env: { PI_SCIENCE_OUTPUT_DIR: outputs } });
     const finished = await waitFor(() => coordinator.get(cwd, submitted.job_id), terminal);
     expect(finished?.status).toBe("succeeded");
     const childEnv = JSON.parse(finished?.stdout ?? "{}") as Record<string, string | undefined>;
     expect(childEnv.PI_SCIENCE_ENVIRONMENT_ID).toBeUndefined();
     expect(childEnv.sEcReT_tOkEn).toBeUndefined();
-    expect(childEnv.HOME).toBe("/tmp");
+    expect(childEnv.HOME).toBe(await realpath(outputs));
   });
 
   it("restricts local job keys with the extended allowlist including windows toolchain locations", () => {

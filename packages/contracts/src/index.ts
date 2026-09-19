@@ -724,6 +724,8 @@ export const researchLoopSchema = z.object({
   status: researchLoopStatusSchema,
   mode: z.literal("serial").default("serial"),
   evaluator_ref: evaluatorRefSchema.nullable().default(null),
+  baseline: z.record(z.string(), z.number().finite()).nullable().default(null),
+  baseline_job_id: z.string().nullable().default(null),
   budget: researchBudgetSchema,
   stop_conditions: researchStopConditionsSchema,
   constraints: z.array(z.string().max(1000)).max(100).default([]),
@@ -771,6 +773,8 @@ export const candidateEvaluationSchema = z.object({
   artifact_refs: z.array(z.object({
     path: z.string().min(1),
     sha256: z.string().min(16).max(128).optional(),
+    artifact_id: z.string().min(1).optional(),
+    version: z.number().int().positive().optional(),
     kind: z.string().default("data"),
   })).default([]),
   findings: z.array(z.record(z.string(), z.unknown())).default([]),

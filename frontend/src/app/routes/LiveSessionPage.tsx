@@ -381,7 +381,7 @@ export function LiveSessionPage() {
                             {navigationLoading ? "Locating message…" : "Loading earlier messages…"}
                           </div>
                         )}
-                        {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
+                        {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} onBenchmarkChange={(benchmarkPath) => research.setDraft((draft) => draft ? { ...draft, benchmarkPath } : null)} onMetricChange={(metric) => research.setDraft((draft) => draft ? { ...draft, metric } : null)} onDirectionChange={(direction) => research.setDraft((draft) => draft ? { ...draft, direction } : null)} />}
                         {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
                         {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{research.error}</div>}
                       </div>
@@ -418,7 +418,7 @@ export function LiveSessionPage() {
               </Suspense>
             ) : (
               <>
-                {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} />}
+                {research.draft && <ResearchLoopDraftCard draft={research.draft} busy={research.busy} onCancel={() => { research.setDraft(null); research.setMode(null); research.setError(null); }} onConfirm={() => void research.confirm()} onBenchmarkChange={(benchmarkPath) => research.setDraft((draft) => draft ? { ...draft, benchmarkPath } : null)} onMetricChange={(metric) => research.setDraft((draft) => draft ? { ...draft, metric } : null)} onDirectionChange={(direction) => research.setDraft((draft) => draft ? { ...draft, direction } : null)} />}
                 {research.activeLoop && <ResearchLoopStatusCard loop={research.activeLoop} candidates={research.activeLoop.candidates} busy={research.busy} onRefresh={() => void research.refresh(research.activeLoop!.loop_id)} onAction={(action) => void research.action(action)} onOpenDetails={() => navigate(`/workspace/${encodeURIComponent(workspaceCwd)}/research`)} />}
                 {research.error && <div className="rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{research.error}</div>}
                 {renderInteractionPrompt()}

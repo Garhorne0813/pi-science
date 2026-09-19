@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { projectMemoryApi, projectMemoryKey, type ResearchLoopDetail } from "../lib/knowledge";
 import { queryClient } from "../lib/client/query-client";
 import { subscribeResearchInvalidation } from "../lib/research";
-import { contentDigest, randomIdSuffix } from "../lib/research";
+import { randomIdSuffix } from "../lib/research";
 import type { ResearchLoopDraft, ResearchStarter } from "../components/conversation/ResearchLoopControls";
 
 /** Research-loop intent → draft → confirm → run lifecycle for one workspace. */
@@ -49,20 +49,19 @@ export function useResearchLoop(cwd: string) {
         setMode(null); setPrompt(t("conversation.defaultPrompt"));
         return { kind: "conversation", message: result.draft.conversation_prompt ?? text };
       }
-      setDraft({ taskType: result.draft.task_type as ResearchLoopDraft["taskType"], title: result.draft.title, objective: result.draft.objective, successCriterion: result.draft.success_criterion ?? result.draft.objective, planSteps: result.draft.plan_steps, metric: result.draft.metric ?? "objective_progress", direction: result.draft.direction, maxCandidates: result.draft.budget.max_candidates, maxWallSeconds: result.draft.budget.max_wall_seconds });
+      setDraft({ taskType: result.draft.task_type as ResearchLoopDraft["taskType"], title: result.draft.title, objective: result.draft.objective, successCriterion: result.draft.success_criterion ?? result.draft.objective, planSteps: result.draft.plan_steps, metric: result.draft.metric ?? "objective_progress", direction: result.draft.direction, maxCandidates: result.draft.budget.max_candidates, maxWallSeconds: result.draft.budget.max_wall_seconds, benchmarkPath: "" });
       return { kind: "draft" };
     } catch (cause) { setError(cause instanceof Error ? cause.message : t("research.prepareError")); return null; }
     finally { setBusy(false); }
   };
 
   const confirm = async () => {
-    if (!draft || busy) return;
+    if (!draft || busy || !draft.benchmarkPath.trim() || !draft.metric.trim()) return;
     setBusy(true); setError(null);
     try {
       const evaluatorId = `eval-${randomIdSuffix()}`;
-      const evaluatorContent = JSON.stringify({ evaluatorId, metric: draft.metric, direction: draft.direction, source: "deterministic" });
-      const digest = await contentDigest(evaluatorContent);
-      await projectMemoryApi.registerEvaluator(cwd, { evaluator_id: evaluatorId, version: 1, digest, status: "approved", metrics: [{ name: draft.metric.trim(), direction: draft.direction, weight: 1, source: "deterministic" }], hard_checks: ["artifact_verified"] });
+      const registered = await projectMemoryApi.registerEvaluator(cwd, { evaluator_id: evaluatorId, version: 1, digest: "server-computed", status: "approved", metrics: [{ name: draft.metric.trim(), direction: draft.direction, weight: 1, source: "deterministic" }], hard_checks: [], command: ["workspace-benchmark", draft.benchmarkPath.trim()] });
+      const digest = registered.evaluator.digest;
       const loop = await projectMemoryApi.createLoop(cwd, { title: draft.title.trim(), objective: draft.objective.trim(), task_type: draft.taskType, constraints: [draft.successCriterion, ...draft.planSteps], evaluator_ref: { evaluator_id: evaluatorId, version: 1, digest }, budget: { max_candidates: draft.maxCandidates, max_wall_seconds: draft.maxWallSeconds, max_parallel: 1 }, stop_conditions: { target_metrics: {}, patience: 3, min_improvement: 0 } });
       const preflight = await projectMemoryApi.preflight(cwd, loop.loop_id);
       if (!preflight.ok) throw new Error(preflight.blockers.join("; "));

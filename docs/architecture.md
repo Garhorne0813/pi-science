@@ -168,6 +168,7 @@ project/
 │   ├── mcp-runtime.json      # generated enabled connectors and effective tool policy
 │   ├── runs/                 # execution workspaces and outputs
 │   ├── solutions/            # immutable research candidates
+│   ├── artifact-blobs/       # content-addressed bytes for published artifact versions
 │   ├── session-titles.jsonl
 │   ├── turn-artifacts.jsonl
 │   ├── artifacts.jsonl
@@ -175,6 +176,22 @@ project/
 │   └── research-records-v2.jsonl
 └── research files
 ```
+
+Publishing an artifact captures its bytes under `artifact-blobs/<sha-prefix>/<sha256>`
+before appending the version manifest. Both manual publication and automatic
+kernel-output publication use the same store. `/api/artifacts/:id/content` reads
+a specific saved version and verifies its digest and size before serving it;
+`/api/artifacts/verify` verifies those saved bytes rather than the current
+workspace file. Historical metadata-only manifests remain readable, but return
+HTTP 409 when immutable content is requested or verified. No migration can
+reconstruct bytes that were already overwritten before this store existed.
+
+The project-level Git status endpoint (`/api/git/status`) is read-only. It
+reports the current branch, HEAD, and worktree changes only when the repository
+root is the registered workspace. It excludes Pi-Science's own `.pi-science`
+metadata from the change list and does not initialize repositories, commit,
+push, or create worktrees. Mutating Git operations for research remain a
+separate policy-gated phase.
 
 The global configuration root is `PI_SCIENCE_HOME` when set, otherwise
 `~/.pi-science`; a checkout-local `.runtime/pi-science` directory is used as a
@@ -393,6 +410,32 @@ Research loops are coordinated by the Node control plane. A loop uses bounded
 Pi Orbit subagent runtimes for candidate generation and analysis, the job system
 for execution and deterministic evaluation, immutable candidate snapshots, and
 append-only records for recovery and provenance.
+
+Research candidate, baseline, and evaluator jobs run under a fail-closed local
+OS sandbox (Seatbelt on macOS, Bubblewrap on Linux, Sandy's AppContainer + Job
+Object on Windows). Candidate writes are
+limited to its run's work/output directories; evaluator writes are limited to
+its evaluation directory. The managed scientific environment is mounted read-only;
+network access is denied by default. Preflight and
+resume refuse to start if the sandbox probe fails. This isolates job subprocesses,
+not the Pi supervisor runtime or arbitrary extensions; it is not yet a complete
+boundary against a malicious agent. The deprecated macOS `sandbox-exec` also
+requires a replaceable VM/container backend in the longer term. Linux hosts need
+Bubblewrap with unprivileged user namespaces and `--disable-userns` support.
+Windows hosts need [Sandy](https://github.com/ahrvoje/sandy_cli) and an absolute
+`PI_SCIENCE_SANDY_PATH` pointing to its `sandy.exe` outside the workspace. Research jobs use
+its transient AppContainer mode with no network or clipboard, scoped file ACLs,
+and Job Object process/memory limits. No restricted-token fallback is allowed.
+Sandy's version probe gates preflight; launch failures remain fail-closed. The
+Windows backend needs end-to-end enforcement validation on a Windows host before
+it should be treated as a production security boundary.
+
+Once an evaluator job finishes, each valid declared output is published through
+the same content-addressed artifact store as notebook outputs. Candidate
+evaluation records include the saved artifact ID and version alongside the
+output path and checksum. Missing, escaped, symlinked, or unpublishable outputs
+cannot satisfy the `artifact_verified` hard check. Reconciliation may retry
+publication without creating a duplicate version for unchanged bytes.
 
 For the research-loop state machine and persistence contract, see the
 [research-loop ADR](adr-research-loop-subagents.md).
