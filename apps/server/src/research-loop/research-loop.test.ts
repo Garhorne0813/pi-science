@@ -1,7 +1,7 @@
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { researchLoopSchema } from "@pi-science/contracts";
 import { JobCoordinator, type JobRecord } from "../runtime/jobs/job-coordinator.js";
 import { artifactBlobPath } from "../runtime/artifacts/artifact-blob-store.js";
@@ -13,6 +13,10 @@ import type { AgentRunRequest, AgentRunResult, AgentRunUsage, ResearchSubagentRu
 const cleanup: string[] = [];
 const coordinators: ResearchLoopCoordinator[] = [];
 const jobs: JobCoordinator[] = [];
+
+// Sandy creates and tears down a fresh AppContainer for every native job.
+// Multi-candidate loop tests need more wall time on the Windows CI runner.
+if (process.platform === "win32") vi.setConfig({ testTimeout: 60_000 });
 
 afterEach(async () => {
   await Promise.allSettled(coordinators.splice(0).map((coordinator) => coordinator.shutdown()));
@@ -282,7 +286,7 @@ it("rejects a benchmark changed after registration", async () => {
 });
 
 async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean, timeoutMs = 8_000, diagnostics?: () => Promise<unknown>): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + timeoutMs * (process.platform === "win32" ? 3 : 1);
   let last: T;
   for (;;) {
     const value = await read();
@@ -398,7 +402,7 @@ describe("subagent research loop", () => {
     expect(manifest.at(-1)).toMatchObject({ artifact_id: output?.artifact_id, version: output?.version, producer: { loop_id: loop.loop_id, candidate_id: detail?.candidates.at(-1)?.candidate_id } });
     expect(runner.candidateCalls).toBe(2);
     expect(runner.analysisCalls).toBe(1);
-  }, 15_000);
+  }, process.platform === "win32" ? 45_000 : 15_000);
 
   it("passes the research task and evaluator contract into candidate generation", async () => {
     const cwd = await workspace();
@@ -429,7 +433,7 @@ describe("subagent research loop", () => {
       },
       budget_remaining: 4,
     });
-  }, 15_000);
+  }, process.platform === "win32" ? 45_000 : 15_000);
 
   it("recovers a lost reserved agent operation and retries it without duplicate candidate execution", async () => {
     const cwd = await workspace();
@@ -548,7 +552,7 @@ describe("subagent research loop", () => {
     expect(operation?.error).toMatch(/result\.json/);
     const records = await coordinator.repository(cwd).records();
     expect(records.some((row) => row.record_type === "loop.state_changed" && row.payload.status === "needs_attention")).toBe(false);
-  }, 20_000);
+  }, process.platform === "win32" ? 60_000 : 20_000);
 
   it("keeps a proposal generated while pausing and executes it after resume", async () => {
     const cwd = await workspace();
@@ -724,7 +728,7 @@ describe("subagent research loop", () => {
     expect(detail?.status).toBe("completed");
     expect(detail?.stop_reason).toBe("patience_exhausted");
     expect(detail?.candidates).toHaveLength(3);
-  }, 20_000);
+  }, process.platform === "win32" ? 60_000 : 20_000);
 
   it("charges the budget for the tokens a failed agent run already spent", async () => {
     const cwd = await workspace();

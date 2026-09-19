@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, cp, lstat, mkdir, readFile, readdir, realpath, stat, unlink, writeFile } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import {
   createResearchLoopSchema,
   evaluatorSpecSchema,
@@ -65,8 +65,7 @@ export class ResearchLoopCoordinator {
     const command = supplied.command;
     let digest = supplied.digest;
     if (Array.isArray(command) && command[0] === "workspace-benchmark") {
-      const script = await benchmarkScript(cwd, command);
-      digest = `sha256:${createHash("sha256").update(await readFile(script)).digest("hex")}`;
+      digest = (await benchmarkScript(cwd, command)).digest;
     }
     const evaluator = evaluatorSpecSchema.parse({ ...supplied, digest, created_at: new Date().toISOString() });
     const repository = this.repository(cwd);
@@ -708,14 +707,16 @@ async function evaluatorBlockers(cwd: string, records: ResearchSnapshot["records
   return blockers;
 }
 
-async function benchmarkScript(cwd: string, command: string[]): Promise<string> {
+async function benchmarkScript(cwd: string, command: string[]): Promise<{ path: string; digest: string }> {
   if (command.length !== 2 || command[0] !== "workspace-benchmark") throw new Error("benchmark command must name one workspace script");
-  const script = resolve(cwd, command[1]!);
-  if (!within(cwd, script)) throw new Error("benchmark script escapes workspace");
+  const workspace = await realpath(cwd);
+  const requested = resolve(workspace, command[1]!);
+  if (!requested.startsWith(`${workspace}${sep}`)) throw new Error("benchmark script escapes workspace");
+  const script = await realpath(requested);
+  if (!script.startsWith(`${workspace}${sep}`)) throw new Error("benchmark script resolves outside workspace");
   const info = await lstat(script);
-  if (!info.isFile() || info.isSymbolicLink() || info.size > 1_000_000) throw new Error("benchmark script must be a regular file under 1 MB");
-  if (!within(await realpath(cwd), await realpath(script))) throw new Error("benchmark script resolves outside workspace");
-  return script;
+  if (!info.isFile() || info.size > 1_000_000) throw new Error("benchmark script must be a regular file under 1 MB");
+  return { path: script, digest: `sha256:${createHash("sha256").update(await readFile(script)).digest("hex")}` };
 }
 
 async function researchScriptCommand(script: string): Promise<string[]> {
@@ -727,8 +728,7 @@ async function researchScriptCommand(script: string): Promise<string[]> {
 }
 
 async function verifiedBenchmarkScript(cwd: string, evaluator: EvaluatorSpec): Promise<string> {
-  const script = await benchmarkScript(cwd, evaluator.command);
-  const digest = `sha256:${createHash("sha256").update(await readFile(script)).digest("hex")}`;
+  const { path: script, digest } = await benchmarkScript(cwd, evaluator.command);
   if (digest !== evaluator.digest) throw new Error("benchmark script changed since approval");
   return script;
 }

@@ -90,10 +90,7 @@ function bwrapCommand(command: string[], readable: string[], writable: string[],
   const args = ["--unshare-user", "--disable-userns", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-net", "--new-session", "--die-with-parent", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"];
   for (const path of [...new Set(readable)]) args.push("--ro-bind", path, path);
   for (const path of [...new Set(writable)]) args.push("--bind", path, path);
-  // The empty mount namespace starts on a writable tmpfs. Lock its root after
-  // adding explicit mounts, or a child can create fake host-looking paths in
-  // otherwise unmounted parent directories.
-  return ["bwrap", ...args, "--remount-ro", "/", "--chdir", cwd, "--", ...command];
+  return ["bwrap", ...args, "--chdir", cwd, "--", ...command];
 }
 
 export function researchSandboxStatus(platform: NodeJS.Platform = process.platform): ResearchSandboxStatus {

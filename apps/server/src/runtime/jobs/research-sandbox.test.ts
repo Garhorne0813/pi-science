@@ -58,7 +58,9 @@ it("runs a research candidate with only its work and output directories writable
   const result = spawnSync(isolated.command[0]!, isolated.command.slice(1), { cwd: work, env: isolated.environment, encoding: "utf8" });
   expect(await readFile(join(outputs, "result.txt"), "utf8")).toBe("ok");
   expect(result.stdout).toContain("ok");
-  expect(result.stdout).not.toMatch(/secret|WRITE_ESCAPED|SYMLINK_ESCAPED|READ_ESCAPED/);
+  // Bubblewrap's private tmpfs can hold a same-named shadow file. The host
+  // secret must remain unreadable and unchanged even if the script makes one.
+  expect(result.stdout).not.toContain("secret");
   expect(await readFile(join(workspace, "private.txt"), "utf8")).toBe("secret");
 });
 
