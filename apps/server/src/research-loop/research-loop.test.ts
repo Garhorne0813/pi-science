@@ -1,9 +1,10 @@
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { researchLoopSchema } from "@pi-science/contracts";
 import { JobCoordinator, type JobRecord } from "../runtime/jobs/job-coordinator.js";
+import { artifactBlobPath } from "../runtime/artifacts/artifact-blob-store.js";
 import { snapshotCandidate } from "./candidate-snapshot.js";
 import { ResearchLoopCoordinator } from "./coordinator.js";
 import { activeWallMs, stopReason } from "./stop-policy.js";
@@ -218,6 +219,56 @@ async function configuredLoop(coordinator: ResearchLoopCoordinator, cwd: string,
   return preflight.loop;
 }
 
+it("measures a baseline and candidates with the approved workspace benchmark", async () => {
+  const cwd = await workspace();
+  await writeFile(join(cwd, "measure.sh"), `#!/usr/bin/env bash
+set -eu
+if [ "$PI_SCIENCE_BASELINE" = "1" ]; then value=1; else value=2; fi
+printf '{"metrics":{"score":%s}}\\n' "$value" > "$PI_SCIENCE_EVALUATION_PATH"
+`);
+  const coordinator = new ResearchLoopCoordinator(jobCoordinator(), new FakeRunner([0.95]));
+  coordinators.push(coordinator);
+  const registered = await coordinator.registerEvaluator(cwd, {
+    evaluator_id: "fixed-benchmark", version: 1, digest: "server-computed", status: "approved",
+    metrics: [{ name: "score", direction: "maximize" }], hard_checks: [],
+    command: ["workspace-benchmark", "measure.sh"],
+  });
+  const loop = await coordinator.create(cwd, {
+    title: "Measure", objective: "Improve score",
+    evaluator_ref: { evaluator_id: "fixed-benchmark", version: 1, digest: registered.evaluator.digest },
+    stop_conditions: { target_metrics: { score: 2 } }, budget: { max_candidates: 1, max_wall_seconds: 60 },
+  });
+  const preflight = await coordinator.preflight(cwd, loop.loop_id);
+  expect(preflight.ok).toBe(true);
+  expect(preflight.loop.baseline).toEqual({ score: 1 });
+  expect(preflight.loop.baseline_job_id).toMatch(/^job_/);
+  await coordinator.action(cwd, loop.loop_id, "start");
+  const detail = await waitFor(() => coordinator.detail(cwd, loop.loop_id), (value) => value?.status === "completed", 10_000);
+  expect(detail?.candidates[0]?.evaluation?.metrics.score?.value).toBe(2);
+  expect(detail?.candidates[0]?.evaluation?.metrics.score?.value).not.toBe(0.95);
+});
+
+it("rejects a benchmark changed after registration", async () => {
+  const cwd = await workspace();
+  const script = join(cwd, "measure.sh");
+  await writeFile(script, "#!/usr/bin/env bash\nexit 0\n");
+  const coordinator = new ResearchLoopCoordinator(jobCoordinator(), new FakeRunner());
+  coordinators.push(coordinator);
+  const { evaluator } = await coordinator.registerEvaluator(cwd, {
+    evaluator_id: "changed-benchmark", version: 1, digest: "server-computed", status: "approved",
+    metrics: [{ name: "score", direction: "maximize" }], hard_checks: [],
+    command: ["workspace-benchmark", "measure.sh"],
+  });
+  const loop = await coordinator.create(cwd, {
+    title: "Measure", objective: "Improve score",
+    evaluator_ref: { evaluator_id: evaluator.evaluator_id, version: 1, digest: evaluator.digest },
+  });
+  await writeFile(script, "#!/usr/bin/env bash\nexit 1\n");
+  const preflight = await coordinator.preflight(cwd, loop.loop_id);
+  expect(preflight.ok).toBe(false);
+  expect(preflight.blockers.join(" ")).toContain("benchmark script changed");
+});
+
 async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean, timeoutMs = 8_000, diagnostics?: () => Promise<unknown>): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   let last: T;
@@ -326,6 +377,13 @@ describe("subagent research loop", () => {
     expect(detail?.stop_reason).toBe("target_metrics_reached");
     expect(detail?.candidates).toHaveLength(2);
     expect(detail?.candidates.at(-1)?.evaluation?.metrics.score?.value).toBe(0.95);
+    const output = detail?.candidates.at(-1)?.evaluation?.artifact_refs[0];
+    expect(output).toMatchObject({ path: "result.json", kind: "data", version: 1 });
+    expect(output?.artifact_id).toBeTruthy();
+    expect(await readFile(artifactBlobPath(cwd, output!.sha256!), "utf8")).toContain('"score":0.95');
+    const manifest = (await readFile(join(cwd, ".pi-science", "artifacts.jsonl"), "utf8"))
+      .trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(manifest.at(-1)).toMatchObject({ artifact_id: output?.artifact_id, version: output?.version, producer: { loop_id: loop.loop_id, candidate_id: detail?.candidates.at(-1)?.candidate_id } });
     expect(runner.candidateCalls).toBe(2);
     expect(runner.analysisCalls).toBe(1);
   }, 15_000);

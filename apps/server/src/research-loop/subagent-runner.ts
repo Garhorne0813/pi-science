@@ -30,6 +30,15 @@ export class PiResearchSubagentRunner implements ResearchSubagentRunner {
     const index = options.args.indexOf("--session-dir");
     if (index >= 0) options.args[index + 1] = sessionDir;
     if (options.web) options.web.runtime.sessionDir = sessionDir;
+    // pi-subagents enforces this ceiling in its child launcher. The delegate
+    // normally has bash/edit/write, which a prompt alone cannot revoke.
+    const ceiling = Buffer.from(JSON.stringify({
+      version: 1, allowedAgents: ["planner", "delegate", "reviewer"],
+      allowedTools: ["read", "grep", "find", "ls"], denyExtensions: true,
+      sources: ["pi-science-research"],
+    })).toString("base64url");
+    if (options.web) options.web.runtime.runtimeEnv = { ...options.web.runtime.runtimeEnv, PI_SUBAGENT_CAPABILITY_CEILING_V1: ceiling };
+    else options.env = { ...options.env, PI_SUBAGENT_CAPABILITY_CEILING_V1: ceiling };
     options.requestTimeoutMs = 30_000;
 
     const managerKey = `research:${runId}`;
@@ -154,7 +163,7 @@ function parseJsonObject(value: string): unknown {
 function supervisorPrompt(request: AgentRunRequest): string {
   const context = JSON.stringify(request.context, null, 2);
   if (request.phase === "candidate") {
-    return `You are the parent research supervisor. Use the installed subagent tool. First ask planner to inspect the supplied research context and propose one conservative next experiment. Respect task_type: optimize tasks must make a measurable change against the supplied deterministic metrics; research_loop tasks may explore a broader hypothesis but must still produce those metrics. Use prior failed candidates as negative evidence and do not repeat them without a specific correction. Then ask a fresh delegate subagent to turn that strategy into a self-contained candidate. Subagents must not edit the workspace or run code. Return ONLY valid JSON matching this shape: {"kind":"candidate","proposal":{"approach_summary":"...","rationale":"...","files":{"solve.sh":"..."},"entrypoint":"solve.sh","parent_candidate_ids":[],"expected_artifacts":[{"path":"result.json","kind":"data"}]}}. The entrypoint must write all outputs beneath the PI_SCIENCE_OUTPUT_DIR environment variable, including result.json values for every required metric. Candidate source must be at most 2 MB. Research context:\n${context}`;
+    return `You are the parent research supervisor. Use the installed subagent tool. First ask planner to inspect the supplied research context and propose one falsifiable next experiment. Treat decision.best_candidate_id as the incumbent, decision.frontier_candidate_ids as nondominated alternatives, and decision.next_strategy as a hypothesis to test rather than a command. Compare the new approach with the incumbent and state the expected metric change in its rationale. Respect task_type: optimize tasks must make a measurable change against the supplied deterministic metrics; research_loop tasks may explore a broader hypothesis but must still produce those metrics. Use recent failures and diagnosis as negative evidence; do not repeat a failed approach without a specific correction. Then ask a fresh delegate subagent to turn that strategy into a self-contained candidate. Subagents must not edit the workspace or run code. Return ONLY valid JSON matching this shape: {"kind":"candidate","proposal":{"approach_summary":"...","rationale":"...","files":{"solve.sh":"..."},"entrypoint":"solve.sh","parent_candidate_ids":[],"expected_artifacts":[{"path":"result.json","kind":"data"}]}}. Put the incumbent in parent_candidate_ids when deriving from it. The entrypoint must write all outputs beneath PI_SCIENCE_OUTPUT_DIR. If evaluation.benchmark_path is present, inspect that workspace benchmark and produce inputs it can measure; never write formal metric values yourself. Otherwise write result.json values for every required metric. Candidate source must be at most 2 MB. Research context:\n${context}`;
   }
   return `You are the parent research supervisor. Ask a fresh reviewer subagent to analyze the supplied execution and evaluation context. Do not edit files and do not change formal metrics or hard-check results. Return ONLY valid JSON matching: {"kind":"analysis","findings":[{"summary":"..."}],"next_strategy":"..."}. Context:\n${context}`;
 }

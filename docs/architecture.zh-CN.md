@@ -324,5 +324,18 @@ Research loop 由 Node 控制面协调。它使用有界 Pi Orbit subagent runti
 candidate，使用任务系统执行和确定性评估，使用不可变 candidate snapshot，并通过
 append-only 记录支持恢复与谱系追踪。
 
+研究任务的候选脚本、基线和评估器通过本地 OS 沙箱启动：macOS 使用 Seatbelt，
+Linux 使用 Bubblewrap，Windows 使用 Sandy 的 AppContainer + Job Object。候选只能写当前 run 的 work/outputs，评估器只能写当前
+evaluation 目录；托管科学环境只读，网络默认禁止。预检、启动和恢复都要求沙箱可用，不会回退到
+普通本地进程。沙箱保护的是这些任务子进程；Pi supervisor 本身仍运行在常规
+Pi runtime 中，因此此实现尚不能把整个研究循环宣称为针对恶意模型/扩展的完整
+安全边界。macOS 的 sandbox-exec 已废弃，后续需要可替换的 VM/容器后端。
+Linux 主机需要支持非特权 user namespace 与 `--disable-userns` 的 Bubblewrap。
+Windows 主机需要安装 [Sandy](https://github.com/ahrvoje/sandy_cli)，
+并将工作区外的 `sandy.exe` 绝对路径写入 `PI_SCIENCE_SANDY_PATH`。研究任务使用临时 AppContainer，
+禁止网络和剪贴板访问，文件权限限定到批准目录，并由 Job Object 限制进程数和内存；
+不回退到权限较弱的 restricted token。预检目前验证 Sandy 可执行文件，启动失败仍安全关闭。
+在真实 Windows 主机完成端到端隔离验证前，不应将该后端视为已验证的生产安全边界。
+
 Research loop 状态机和持久化约定详见
 [research loop ADR](adr-research-loop-subagents.md)。

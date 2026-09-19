@@ -461,7 +461,9 @@ describe("conversation research workflows", () => {
     expect(await screen.findByText("Confirm Optimize")).toBeInTheDocument();
     expect(screen.getByText("Reduce latency with reproducible measurements while preserving required checks.")).toBeInTheDocument();
     expect(screen.getByText("Establish a reproducible baseline.")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Metric")).toBeNull();
+    expect(screen.getByLabelText("Metric")).toHaveValue("latency");
+    expect(screen.getByRole("button", { name: "Create and start" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/Benchmark script path in workspace/), { target: { value: "benchmarks/measure.sh" } });
     expect(screen.getByRole("button", { name: "Create and start" })).toBeEnabled();
     expect(sendPrompt).not.toHaveBeenCalled();
   });
