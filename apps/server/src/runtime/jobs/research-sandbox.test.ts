@@ -129,7 +129,12 @@ it("reads an approved managed environment without granting writes to it", async 
 
 it("denies outbound connections from a research job", async () => {
   if (!researchSandboxStatus().available) return;
-  const server = createServer();
+  const server = createServer((socket) => {
+    // The unsandboxed control client exits as soon as it connects. Windows can
+    // deliver its reset after the test body, so consume that socket error.
+    socket.on("error", () => {});
+    socket.resume();
+  });
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
   try {
     const workspace = await mkdtemp(join(tmpdir(), "pi-science-sandbox-"));
