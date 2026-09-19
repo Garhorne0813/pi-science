@@ -1,12 +1,10 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
-import { relative } from "node:path";
-import { appendJsonLineUnlocked, readJsonLines, withFileWriteLock, workspaceFile } from "../../storage/persistence.js";
+import { lstat, realpath, stat } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { appendJsonLineUnlocked, metadataRoot, readJsonLines, withFileWriteLock, workspaceFile } from "../../storage/persistence.js";
 import { resolveWorkspaceFile, validateWorkspaceCwd } from "../../security/workspace-security.js";
 import { previewKind, previewMime } from "./workspace-artifact-snapshot.js";
-
-const MAX_PUBLISH_BYTES = 2 * 1024 * 1024 * 1024;
+import { captureArtifactBlob } from "./artifact-blob-store.js";
 
 interface ArtifactManifest {
   artifact_id: string;
@@ -16,6 +14,7 @@ interface ArtifactManifest {
   mime: string;
   size: number;
   sha256: string;
+  blob_sha256?: string;
   published_at: string;
   producer?: Record<string, unknown>;
   inputs?: unknown[];
@@ -38,6 +37,10 @@ export interface PublishWorkspaceArtifactOptions {
   source?: string;
   notebookPath?: string | null;
   cellId?: string | null;
+  kind?: string;
+  loopId?: string;
+  candidateId?: string;
+  runId?: string;
   onFailure?: (failure: WorkspaceArtifactPublishFailure) => void;
 }
 
@@ -57,17 +60,6 @@ export class WorkspaceArtifactPublishError extends Error {
     super(`Failed to publish ${failures.length} workspace artifact${failures.length === 1 ? "" : "s"}`);
     this.name = "WorkspaceArtifactPublishError";
   }
-}
-
-async function hashFile(path: string): Promise<{ sha256: string; size: number }> {
-  const hash = createHash("sha256");
-  let size = 0;
-  for await (const chunk of createReadStream(path)) {
-    size += chunk.length;
-    if (size > MAX_PUBLISH_BYTES) throw new Error("artifact is too large to publish");
-    hash.update(chunk);
-  }
-  return { sha256: hash.digest("hex"), size };
 }
 
 /**
@@ -140,20 +132,63 @@ async function publishWorkspaceArtifact(
   }
   if (!metadata.isFile()) return null;
 
-  let digest: { sha256: string; size: number };
-  try {
-    digest = await hashFile(target);
-  } catch (error) {
+  try { return await publishValidatedArtifact(workspace, target, options); }
+  catch (error) {
     if (isMissingFileError(error)) return null;
     throw error;
   }
+}
+
+/** Research output lives under private workspace metadata, which the public
+ * workspace-file API intentionally forbids. Only this narrow internal entry
+ * point may publish it, after checking both lexical and real containment. */
+export async function publishResearchOutputArtifact(
+  cwd: string,
+  outputRoot: string,
+  expectedPath: string,
+  options: PublishWorkspaceArtifactOptions,
+): Promise<PublishedWorkspaceArtifact> {
+  const workspace = await validateWorkspaceCwd(cwd);
+  const runsRoot = join(metadataRoot(workspace), "runs");
+  const outputPath = resolve(outputRoot);
+  // macOS /var is a symlink to /private/var. Compare the supplied spelling
+  // first, then independently enforce containment after canonicalization.
+  const suppliedRunsRoot = join(metadataRoot(cwd), "runs");
+  if (!isContained(suppliedRunsRoot, outputPath) || outputPath === resolve(suppliedRunsRoot)) throw new Error("Research output directory escapes the run root");
+  const canonicalRuns = await realpath(runsRoot);
+  const canonicalOutput = await realpath(outputPath);
+  if (!isContained(canonicalRuns, canonicalOutput)) throw new Error("Research output directory escapes the run root");
+  if (!expectedPath || isAbsolute(expectedPath)) throw new Error("Invalid research artifact path");
+  const target = resolve(outputPath, expectedPath);
+  if (!isContained(outputPath, target) || target === outputPath) throw new Error("Research artifact escapes the output directory");
+  const info = await lstat(target);
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error("Research artifact must be a regular file");
+  const canonicalTarget = await realpath(target);
+  if (!isContained(canonicalOutput, canonicalTarget)) throw new Error("Research artifact escapes the output directory");
+  return publishValidatedArtifact(workspace, canonicalTarget, options);
+}
+
+function isContained(root: string, path: string): boolean {
+  const rel = relative(resolve(root), resolve(path));
+  return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+}
+
+async function publishValidatedArtifact(
+  workspace: string,
+  target: string,
+  options: PublishWorkspaceArtifactOptions,
+): Promise<PublishedWorkspaceArtifact> {
+  const digest = await captureArtifactBlob(workspace, target);
 
   const path = relative(workspace, target).replaceAll("\\", "/");
   const artifactId = createHash("sha256").update(`${workspace}:${path}`).digest("hex").slice(0, 24);
-  return withFileWriteLock(workspaceFile(cwd, "artifacts.jsonl"), async () => {
-    const artifacts = await readJsonLines<ArtifactManifest>(workspaceFile(cwd, "artifacts.jsonl"));
+  return withFileWriteLock(workspaceFile(workspace, "artifacts.jsonl"), async () => {
+    const artifacts = await readJsonLines<ArtifactManifest>(workspaceFile(workspace, "artifacts.jsonl"));
     const previous = artifacts.filter((item) => item.artifact_id === artifactId).at(-1);
-    if (previous?.sha256 === digest.sha256) {
+    if (previous?.sha256 === digest.sha256 && previous.blob_sha256 === digest.sha256) {
+      // A prior attempt may have saved the manifest and then failed while
+      // recording provenance. Repair that partial publication on retry.
+      await recordArtifactProvenance(workspace, previous, options);
       return {
         artifact_id: previous.artifact_id,
         version: previous.version,
@@ -173,15 +208,19 @@ async function publishWorkspaceArtifact(
       ...(options.source ? { source: options.source } : {}),
       ...(options.notebookPath ? { notebook_path: options.notebookPath } : {}),
       ...(options.cellId ? { cell_id: options.cellId } : {}),
+      ...(options.loopId ? { loop_id: options.loopId } : {}),
+      ...(options.candidateId ? { candidate_id: options.candidateId } : {}),
+      ...(options.runId ? { run_id: options.runId } : {}),
     };
     const artifact: ArtifactManifest = {
       artifact_id: artifactId,
       version,
       path,
-      kind: previewKind(path),
+      kind: options.kind ?? previewKind(path),
       mime: contentType,
       size: digest.size,
       sha256: digest.sha256,
+      blob_sha256: digest.sha256,
       published_at: publishedAt,
       producer,
       inputs: [],
@@ -192,8 +231,8 @@ async function publishWorkspaceArtifact(
         checked_at: publishedAt,
       },
     };
-    await appendJsonLineUnlocked(workspaceFile(cwd, "artifacts.jsonl"), artifact);
-    await recordArtifactProvenance(cwd, artifact, options);
+    await appendJsonLineUnlocked(workspaceFile(workspace, "artifacts.jsonl"), artifact);
+    await recordArtifactProvenance(workspace, artifact, options);
     return {
       artifact_id: artifact.artifact_id,
       version: artifact.version,
@@ -212,6 +251,7 @@ async function recordArtifactProvenance(
   const provenancePath = workspaceFile(cwd, "provenance.jsonl");
   await withFileWriteLock(provenancePath, async () => {
     const records = await readJsonLines<Record<string, unknown>>(provenancePath);
+    if (records.some((record) => record.artifactId === artifact.artifact_id && record.artifactVersion === artifact.version)) return;
     const version = records
       .filter((record) => record.path === artifact.path)
       .reduce((max, record) => Math.max(max, Number(record.version ?? 0)), 0) + 1;
