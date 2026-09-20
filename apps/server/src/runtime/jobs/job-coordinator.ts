@@ -78,7 +78,7 @@ export class JobCoordinator {
     const isolated = surface === "research-loop" || surface === "research-evaluator"
       ? await sandboxResearchCommand({ command, workspace: cwd, executionCwd, surface, environment, managedEnvironmentPrefix: baseEnvironment.PI_SCIENCE_ENVIRONMENT_PREFIX, timeoutSeconds: Math.max(1, Number(requirement.timeout_seconds ?? 3600) - 1), platform })
       : surface === "conversation"
-        ? await sandboxConversationCommand({ command, workspace: cwd, environment, managedEnvironmentPrefix: baseEnvironment.PI_SCIENCE_ENVIRONMENT_PREFIX, timeoutSeconds: Math.max(1, Number(requirement.timeout_seconds ?? 3600) - 1), platform })
+        ? await sandboxConversationCommand({ command, conversationScript: typeof body.conversation_script === "string" ? body.conversation_script : undefined, workspace: cwd, environment, managedEnvironmentPrefix: baseEnvironment.PI_SCIENCE_ENVIRONMENT_PREFIX, timeoutSeconds: Math.max(1, Number(requirement.timeout_seconds ?? 3600) - 1), platform })
         : null;
     const now = this.now();
     const ownership = this.leases.createOwnership(now);

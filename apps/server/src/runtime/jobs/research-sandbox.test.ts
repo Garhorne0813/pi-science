@@ -144,7 +144,7 @@ it("runs a conversation command with project writes and a read-only managed envi
   try {
     const script = 'cat "$PI_SCIENCE_ENVIRONMENT_PREFIX/library.txt" > result.txt; if cat "../host-secret.txt" 2>/dev/null; then echo READ_ESCAPED; fi; if cat .pi-science/control-secret.txt 2>/dev/null; then echo METADATA_READ; fi; if printf hacked > .pi-science/control-secret.txt 2>/dev/null; then echo METADATA_WRITE; fi; if printf hacked > "$PI_SCIENCE_ENVIRONMENT_PREFIX/library.txt" 2>/dev/null; then echo WRITE_ESCAPED; fi';
     const isolated = await sandboxConversationCommand({
-      command: ["/bin/bash", "-c", script], workspace,
+      command: ["/bin/bash"], conversationScript: script, workspace,
       environment: { PATH: process.env.PATH, PI_SCIENCE_ENVIRONMENT_PREFIX: prefix, PI_SCIENCE_ENVIRONMENT_REVISION_ID: "rev-test" },
       managedEnvironmentPrefix: prefix,
     });

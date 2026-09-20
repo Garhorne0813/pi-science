@@ -310,6 +310,7 @@ describe("Node session lifecycle", () => {
       explicitExtension,
       join(import.meta.dirname, "../pi/extensions/pi-science-notebook.ts"),
       join(import.meta.dirname, "../pi/extensions/pi-science-mcp.ts"),
+      join(import.meta.dirname, "../pi/extensions/pi-science-sandbox.ts"),
     ]);
     await service.shutdownAll();
   });

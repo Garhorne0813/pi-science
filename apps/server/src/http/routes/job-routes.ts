@@ -29,10 +29,10 @@ export function registerJobRoutes(app: FastifyInstance, jobs: JobCoordinator): v
     const timeout = body.timeout_seconds === undefined ? 3600 : Number(body.timeout_seconds);
     if (!Number.isFinite(timeout) || timeout < 1 || timeout > 3600) return reply.code(400).send({ error: "Invalid conversation timeout" });
     const command = process.platform === "win32"
-      ? [requireWindowsShell(), "/d", "/s", "/c", body.command]
-      : ["/bin/bash", "-c", body.command];
+      ? [requireWindowsShell()]
+      : ["/bin/bash"];
     try {
-      return publicJobRecord(await jobs.submit(cwd, { command, surface: "conversation", requirement: { timeout_seconds: timeout }, env: body.env }));
+      return publicJobRecord(await jobs.submit(cwd, { command, conversation_script: body.command, surface: "conversation", requirement: { timeout_seconds: timeout }, env: body.env }));
     } catch (error) {
       return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
     }

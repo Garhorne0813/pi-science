@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { lstat, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { tmpdir } from "node:os";
 import { configRoot, metadataRoot } from "../../storage/persistence.js";
@@ -268,7 +268,7 @@ export async function sandboxResearchCommand(input: { command: string[]; workspa
 
 /** Isolate a conversation command while keeping the project writable and its
  * shared, versioned interpreter read-only. The caller owns cleanupDirectory. */
-export async function sandboxConversationCommand(input: { command: string[]; workspace: string; environment: NodeJS.ProcessEnv; managedEnvironmentPrefix?: string; trustedReadPaths?: string[]; timeoutSeconds?: number; platform?: NodeJS.Platform }): Promise<{ command: string[]; environment: NodeJS.ProcessEnv; backend: ResearchSandboxBackend; cleanupDirectory: string }> {
+export async function sandboxConversationCommand(input: { command: string[]; conversationScript?: string; workspace: string; environment: NodeJS.ProcessEnv; managedEnvironmentPrefix?: string; trustedReadPaths?: string[]; timeoutSeconds?: number; platform?: NodeJS.Platform }): Promise<{ command: string[]; environment: NodeJS.ProcessEnv; backend: ResearchSandboxBackend; cleanupDirectory: string }> {
   const status = await cachedResearchSandboxStatus(input.platform);
   if (!status.available) throw new Error(`conversation execution isolation unavailable: ${status.reason}`);
   if (status.backend === "appcontainer") throw new Error("conversation execution isolation is not yet available on Windows: workspace metadata cannot be excluded from Sandy grants");
@@ -284,17 +284,21 @@ export async function sandboxConversationCommand(input: { command: string[]; wor
   const trustedReadPaths = await Promise.all((input.trustedReadPaths ?? []).map((path) => realpath(path)));
   const cleanupDirectory = await mkdtemp(join(tmpdir(), "pi-science-conversation-"));
   try {
+    const canonicalCleanupDirectory = await realpath(cleanupDirectory);
+    const scriptPath = input.conversationScript === undefined ? null : join(cleanupDirectory, "command.sh");
+    if (scriptPath) await writeFile(scriptPath, input.conversationScript!, { encoding: "utf8", mode: 0o600 });
+    const executionCommand = scriptPath ? [...input.command, scriptPath] : input.command;
     const aliases = status.backend === "seatbelt";
     const metadata = join(workspace, ".pi-science");
     if (!(await lstat(metadata)).isDirectory()) throw new Error("conversation workspace metadata directory is missing");
-    const readable = [...availableSystemRoots(systemRoots), workspace, prefix, cleanupDirectory, ...trustedReadPaths, ...(aliases ? [input.workspace, input.managedEnvironmentPrefix, input.command[0]!, ...(input.trustedReadPaths ?? [])] : [])];
-    const writable = [workspace, cleanupDirectory, ...(aliases ? [input.workspace] : [])];
+    const readable = [...availableSystemRoots(systemRoots), workspace, prefix, cleanupDirectory, canonicalCleanupDirectory, ...trustedReadPaths, ...(aliases ? [input.workspace, input.managedEnvironmentPrefix, input.command[0]!, ...(input.trustedReadPaths ?? [])] : [])];
+    const writable = [workspace, cleanupDirectory, canonicalCleanupDirectory, ...(aliases ? [input.workspace] : [])];
     const environment: NodeJS.ProcessEnv = { ...input.environment, HOME: cleanupDirectory, TMPDIR: cleanupDirectory, TMP: cleanupDirectory, TEMP: cleanupDirectory };
-    let command: string[] = ["/usr/bin/sandbox-exec", "-p", macProfile(readable, writable, [metadata, join(input.workspace, ".pi-science")]), ...input.command];
+    let command: string[] = ["/usr/bin/sandbox-exec", "-p", macProfile(readable, writable, [metadata, join(input.workspace, ".pi-science")]), ...executionCommand];
     if (status.backend === "bubblewrap") {
       const emptyMetadata = join(cleanupDirectory, "hidden-metadata");
       await mkdir(emptyMetadata);
-      command = bwrapCommand([commandPath, ...input.command.slice(1)], readable, writable, workspace, [{ source: emptyMetadata, target: metadata }]);
+      command = bwrapCommand([commandPath, ...executionCommand.slice(1)], readable, writable, workspace, [{ source: emptyMetadata, target: metadata }]);
     }
     return { command, environment, backend: status.backend, cleanupDirectory };
   } catch (error) {

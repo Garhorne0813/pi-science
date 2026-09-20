@@ -153,7 +153,9 @@ function compareEventRecords(left: SseEventRecord, right: SseEventRecord): numbe
   }
   const time = left.created_at.localeCompare(right.created_at);
   if (time) return time;
-  return leftId.localeCompare(rightId);
+  // Different epochs can share a millisecond. Keep their durable append
+  // order instead of sorting unrelated UUIDs lexicographically.
+  return 0;
 }
 
 export class DurableEventStore {
