@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { buildApp } from "./app.js";
 import { createServerModules } from "./server-modules.js";
 import type { ServerConfig } from "../config/config.js";
-import type { KernelExecuteOptions, NodeKernelManager } from "../runtime/kernel/node-kernel-manager.js";
+import { NodeKernelManager, type KernelExecuteOptions } from "../runtime/kernel/node-kernel-manager.js";
 import { InMemorySqliteStateStore } from "../storage/sqlite/state-store.js";
 
 const openApps: Array<{ close(): Promise<unknown> }> = [];
@@ -31,6 +31,8 @@ function config(_pythonOrigin: string, overrides: Partial<ServerConfig> = {}): S
 }
 
 const fakeKernels = {
+  status() { return { execution_available: true, unavailable_reason: null, interpreters: { python: true, r: true }, sessions: [], active_count: 0, native: true }; },
+  executionCapability() { return { execution_available: true, unavailable_reason: null }; },
   async execute(options: KernelExecuteOptions) {
     if (options.code === "write-output") await writeFile(join(options.cwd, "cell-output.csv"), "value\n42\n", "utf8");
     if (options.code === "kernel-error") return { ok: false, stdout: "before failure\n", stderr: "", result: null, error: "cell failed", interrupted: false, mime: {} };
@@ -147,6 +149,21 @@ describe("Node control plane", () => {
     const status = await app.inject({ method: "GET", url: "/api/kernels/status" });
     expect(status.json()).toMatchObject({ native: true, active_count: 0, interpreters: { python: expect.any(Boolean), r: expect.any(Boolean) } });
   });
+
+  it("returns explicit capability and 503 for Windows Notebook execution", async () => {
+    const workspace = join(tmpdir(), `pi-science-win-kernel-${Date.now()}`);
+    await mkdir(join(workspace, ".pi-science"), { recursive: true });
+    const modules = { ...createServerModules(config("http://127.0.0.1:1")), kernels: new NodeKernelManager({ platform: "win32", interpreterAvailable: () => true }) };
+    const app = buildApp(config("http://127.0.0.1:1"), modules);
+    openApps.push(app);
+    expect((await app.inject({ method: "GET", url: "/api/kernels/status" })).json()).toMatchObject({ execution_available: false, interpreters: { python: false, r: false } });
+    for (const path of ["execute", "execute-stream"]) {
+      const response = await app.inject({ method: "POST", url: `/api/kernels/${path}?cwd=${encodeURIComponent(workspace)}`, payload: { language: "python", code: "1+1" } });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ code: "kernel_execution_unavailable" });
+    }
+    await rm(workspace, { recursive: true, force: true });
+  }, 30_000);
 
   it("provisions the workspace environment before forwarding kernel execution", async () => {
     const workspace = join(tmpdir(), `pi-science-kernel-environment-${Date.now()}-${Math.random().toString(16).slice(2)}`);

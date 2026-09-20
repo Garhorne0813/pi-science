@@ -1282,6 +1282,7 @@
   "notebook.checkingKernels": "Checking…",
   "notebook.kernelsReady": "{{kernels}} Ready",
   "notebook.noKernel": "No Kernel",
+  "notebook.windowsUnavailable": "Notebook execution is unavailable on Windows while AppContainer isolation is being implemented.",
   "notebook.panelEmpty": "No kernel cells yet. Run code below to get started.",
   "notebook.namespaceHint": "This kernel is shared with the agent and keeps variables alive for the session.",
   "notebook.languageCell": "{{language}} Cell",

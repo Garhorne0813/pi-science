@@ -63,6 +63,8 @@ export interface KernelSessionSnapshot {
 
 export interface KernelManagerStatus {
   interpreters: { python: boolean; r: boolean };
+  execution_available: boolean;
+  unavailable_reason: string | null;
   sessions: KernelSessionSnapshot[];
   active_count: number;
   native: boolean;
@@ -81,6 +83,7 @@ const PYTHON_BRIDGE = fileURLToPath(new URL("./bridges/kernel_bridge.py", import
 const R_BRIDGE = fileURLToPath(new URL("./bridges/kernel_bridge.R", import.meta.url));
 const HEALTH_CHECK_CODE = "1+1";
 const INTERRUPT_GRACE_MS = 2_000;
+export const WINDOWS_KERNEL_UNAVAILABLE = "Notebook execution is unavailable on Windows until the AppContainer policy can isolate workspace metadata";
 
 class KernelTimeoutError extends Error {
   constructor(message: string) {
@@ -147,7 +150,20 @@ export class NodeKernelManager {
     };
   }
 
+  private windowsSandboxUnavailable(): boolean {
+    // Production uses the real sandbox function. Protocol tests inject a fake
+    // sandbox so they can still exercise Windows process lifecycle semantics.
+    return this.deps.platform === "win32" && this.deps.sandboxCommand === sandboxConversationCommand;
+  }
+
+  executionCapability(): Pick<KernelManagerStatus, "execution_available" | "unavailable_reason"> {
+    return this.windowsSandboxUnavailable()
+      ? { execution_available: false, unavailable_reason: WINDOWS_KERNEL_UNAVAILABLE }
+      : { execution_available: true, unavailable_reason: null };
+  }
+
   async execute(options: KernelExecuteOptions): Promise<KernelResult> {
+    if (this.windowsSandboxUnavailable()) throw new Error(WINDOWS_KERNEL_UNAVAILABLE);
     const key = sessionKey(options);
     const session = await this.ensureSession(key, options);
     try {
@@ -192,10 +208,13 @@ export class NodeKernelManager {
 
   status(): KernelManagerStatus {
     const sessions = [...this.sessions.values()];
-    const python = this.deps.interpreterAvailable(this.deps.platform === "win32" ? "python" : "python3");
-    const r = this.deps.interpreterAvailable("Rscript");
+    const capability = this.executionCapability();
+    const executionAvailable = capability.execution_available;
+    const python = executionAvailable && this.deps.interpreterAvailable(this.deps.platform === "win32" ? "python" : "python3");
+    const r = executionAvailable && this.deps.interpreterAvailable("Rscript");
     return {
       interpreters: { python, r },
+      ...capability,
       sessions: sessions.map((session) => session.snapshot()),
       active_count: sessions.filter((session) => !session.exited).length,
       native: true,

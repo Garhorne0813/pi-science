@@ -4,13 +4,23 @@ import { tmpdir } from "node:os";
 import { createServer, type AddressInfo } from "node:net";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { sandboxConversationCommand, sandboxResearchCommand, researchSandboxStatus, windowsResearchSandboxConfig } from "./research-sandbox.js";
+import { probeAsync, sandboxConversationCommand, sandboxResearchCommand, researchSandboxStatus, windowsResearchSandboxConfig } from "./research-sandbox.js";
 
 const cleanup: string[] = [];
 afterEach(async () => { await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
 
 it("fails closed on platforms without a native sandbox", () => {
   expect(researchSandboxStatus("freebsd")).toEqual({ available: false, reason: "local research sandbox is unavailable on freebsd" });
+});
+
+it("runs sandbox preflight without blocking the control-plane event loop", async () => {
+  let timerFired = false;
+  const timer = setTimeout(() => { timerFired = true; }, 20);
+  const check = probeAsync(process.execPath, ["-e", "setTimeout(() => {}, 150)"], { timeoutMs: 1_000 });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  expect(timerFired).toBe(true);
+  expect((await check).status).toBe(0);
+  clearTimeout(timer);
 });
 
 it("requires an absolute Windows sandbox executable path", () => {

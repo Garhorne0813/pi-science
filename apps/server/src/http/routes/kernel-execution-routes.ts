@@ -85,6 +85,8 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
     }
 
     const body = parsed.data;
+    const capability = kernels.executionCapability();
+    if (!capability.execution_available) return reply.code(503).send({ error: capability.unavailable_reason, code: "kernel_execution_unavailable" });
     const environment = await environments.ensure(cwd);
     if (body.environment_revision_id && environment.revision_id !== body.environment_revision_id) {
       return reply.code(409).send({ error: "Requested environment revision is not bound to this workspace" });
@@ -190,6 +192,8 @@ export function registerKernelExecutionRoutes(app: FastifyInstance, config: Serv
     catch (error) { return reply.code(403).send({ error: error instanceof Error ? error.message : String(error) }); }
 
     const body = parsed.data;
+    const capability = kernels.executionCapability();
+    if (!capability.execution_available) return reply.code(503).send({ error: capability.unavailable_reason, code: "kernel_execution_unavailable" });
     const environment = await environments.ensure(cwd);
     if (body.environment_revision_id && environment.revision_id !== body.environment_revision_id) {
       return reply.code(409).send({ error: "Requested environment revision is not bound to this workspace" });

@@ -121,14 +121,14 @@ const statusCache = new Map<string, { expires: number; value: ResearchSandboxSta
 const pendingStatus = new Map<string, Promise<ResearchSandboxStatus>>();
 const STATUS_TTL_MS = 60_000;
 
-function probeAsync(binary: string, args: string[]): Promise<{ status: number | null; error?: string; stderr: string }> {
+export function probeAsync(binary: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {}): Promise<{ status: number | null; error?: string; stderr: string }> {
   return new Promise((resolveProbe) => {
-    const child = spawn(binary, args, { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(binary, args, { windowsHide: true, stdio: ["ignore", "ignore", "pipe"], cwd: options.cwd, env: options.env });
     let stderr = "";
     let error: string | undefined;
     child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-1000); });
     child.on("error", (cause: Error) => { error = cause.message; });
-    const timer = setTimeout(() => child.kill(), 5_000);
+    const timer = setTimeout(() => { error = `timed out after ${options.timeoutMs ?? 5_000} ms`; child.kill(); }, options.timeoutMs ?? 5_000);
     child.on("close", (status) => { clearTimeout(timer); resolveProbe({ status, error, stderr: stderr.trim() }); });
   });
 }
@@ -148,17 +148,17 @@ export async function cachedResearchSandboxStatus(platform: NodeJS.Platform = pr
     if (platform === "darwin") {
       if (!existsSync("/usr/bin/sandbox-exec")) return { available: false, reason: "sandbox-exec is not installed" };
       const result = await probeAsync("/usr/bin/sandbox-exec", ["-p", macProfile(availableSystemRoots(macSystemRoots), []), "/usr/bin/true"]);
-      return result.status === 0 ? { available: true, backend: "seatbelt" } : { available: false, reason: `sandbox-exec probe failed: ${probeFailure(result)}` };
+      return result.status === 0 && !result.error ? { available: true, backend: "seatbelt" } : { available: false, reason: `sandbox-exec probe failed: ${probeFailure(result)}` };
     }
     if (platform === "linux") {
       const result = await probeAsync("bwrap", bwrapCommand(["/usr/bin/true"], availableSystemRoots(linuxSystemRoots), []).slice(1));
-      return result.status === 0 ? { available: true, backend: "bubblewrap" } : { available: false, reason: `bubblewrap probe failed: ${probeFailure(result)}` };
+      return result.status === 0 && !result.error ? { available: true, backend: "bubblewrap" } : { available: false, reason: `bubblewrap probe failed: ${probeFailure(result)}` };
     }
     if (platform === "win32") {
       const binary = sandyExecutable();
       if (!isAbsolute(binary) || !binary.toLowerCase().endsWith(".exe")) return { available: false, reason: "set PI_SCIENCE_SANDY_PATH to an absolute sandy.exe path" };
       const result = await probeAsync(binary, ["--version"]);
-      return result.status === 0 ? { available: true, backend: "appcontainer" } : { available: false, reason: `Sandy AppContainer runner is unavailable: ${probeFailure(result)}. Install sandy.exe or set PI_SCIENCE_SANDY_PATH` };
+      return result.status === 0 && !result.error ? { available: true, backend: "appcontainer" } : { available: false, reason: `Sandy AppContainer runner is unavailable: ${probeFailure(result)}. Install sandy.exe or set PI_SCIENCE_SANDY_PATH` };
     }
     return { available: false, reason: `local research sandbox is unavailable on ${platform}` };
   })();
@@ -179,8 +179,8 @@ export async function sandboxResearchCommand(input: { command: string[]; workspa
     if (inside(workspace, launcher)) throw new Error("research AppContainer launcher must be outside the workspace");
     // taskkill may terminate the broker before it can restore transient ACLs.
     // Sandy records those grants and repairs only stale instances on cleanup.
-    const cleanup = spawnSync(sandyExecutable(), ["--cleanup"], { timeout: 10_000, encoding: "utf8", windowsHide: true });
-    if (cleanup.status !== 0) throw new Error(`research AppContainer cleanup failed: ${cleanup.error?.message ?? cleanup.stderr?.trim() ?? cleanup.status}`);
+    const cleanup = await probeAsync(sandyExecutable(), ["--cleanup"], { timeoutMs: 10_000 });
+    if (cleanup.status !== 0 || cleanup.error) throw new Error(`research AppContainer cleanup failed: ${probeFailure(cleanup)}`);
   }
   const runs = await realpath(join(metadataRoot(workspace), "runs"));
   if (!inside(workspace, runs)) throw new Error("research run root escapes the workspace");
@@ -253,8 +253,8 @@ export async function sandboxResearchCommand(input: { command: string[]; workspa
     const config = windowsResearchSandboxConfig({ commandPath, executionCwd, readable, writable, executableRoots, timeoutSeconds: input.timeoutSeconds });
     if (config.length > 20_000) throw new Error("research AppContainer policy exceeds the Windows command-line limit");
     // Validate the exact policy before the coordinator persists a runnable job.
-    const dryRun = spawnSync(sandyExecutable(), ["--dry-run", "--string", config, "--exec", commandPath], { cwd: executionCwd, env: environment, timeout: 10_000, encoding: "utf8", windowsHide: true });
-    if (dryRun.status !== 0) throw new Error(`research AppContainer policy rejected: ${dryRun.error?.message ?? dryRun.stderr?.trim() ?? dryRun.status}`);
+    const dryRun = await probeAsync(sandyExecutable(), ["--dry-run", "--string", config, "--exec", commandPath], { cwd: executionCwd, env: environment, timeoutMs: 10_000 });
+    if (dryRun.status !== 0 || dryRun.error) throw new Error(`research AppContainer policy rejected: ${probeFailure(dryRun)}`);
     // Node resolves the main script through the drive root on Windows. The
     // AppContainer deliberately cannot read that root, so preserve the already
     // validated script path instead of asking Node to canonicalize it again.

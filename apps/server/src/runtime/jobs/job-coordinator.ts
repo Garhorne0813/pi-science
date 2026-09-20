@@ -134,6 +134,15 @@ export class JobCoordinator {
     const record = await readJson<JobRecord | null>(this.jobPath(cwd, id), null); return record ? this.healOrphan(record) : null;
   }
   async logs(cwd: string, id: string) { const record = await this.get(cwd, id); return record ? { job_id: record.job_id, stdout: record.stdout, stderr: record.stderr, stdout_truncated: record.stdout_truncated === true, stderr_truncated: record.stderr_truncated === true } : null; }
+  async outputSince(cwd: string, id: string, cursor: number) {
+    const record = await this.get(cwd, id);
+    if (!record) return null;
+    const live = this.processes.outputSince(id, cursor);
+    return { job_id: id, status: record.status, return_code: record.return_code ?? null, ...(live ?? { cursor: 0, lost: false, frames: cursor === 0 ? [
+      { cursor: 1, stream: "stdout" as const, data: Buffer.from(record.stdout).toString("base64") },
+      { cursor: 2, stream: "stderr" as const, data: Buffer.from(record.stderr).toString("base64") },
+    ] : [] }), stdout_truncated: record.stdout_truncated === true, stderr_truncated: record.stderr_truncated === true };
+  }
   async cancel(cwd: string, id: string): Promise<JobRecord | null> {
     this.cancelled.add(id);
     const child = this.processes.get(id);

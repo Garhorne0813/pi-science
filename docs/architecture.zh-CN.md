@@ -323,7 +323,7 @@ flowchart LR
 必装的 Pi Science sandbox extension 将内置 Bash 工具和 `!` 命令路由到控制面的
 conversation job；Notebook 的 Python/R 内核使用同一套 OS 沙箱。工作区可写，绑定的
 micromamba 修订版只读，网络禁止，`.pi-science` 元数据被隐藏。环境修订版或原生沙箱不可用时
-执行会失败关闭。现有 Windows Sandy 授权无法排除工作区元数据，因此 Windows 上的普通对话执行
+执行会失败关闭。现有 Windows Sandy 授权无法排除工作区元数据，因此 Windows 上的普通对话 Bash 与 Notebook Python/R 执行
 目前失败关闭。
 
 Pi 内置文件工具仍在 supervisor 进程中运行；extension 会限制其路径在工作区内，并阻止访问

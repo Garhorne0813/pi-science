@@ -41,6 +41,13 @@ export function registerJobRoutes(app: FastifyInstance, jobs: JobCoordinator): v
   app.get<{ Params: { job_id: string } }>("/api/jobs/:job_id", async (request, reply) => { const cwd = await workspace(request, reply); if (!cwd) return; try { const record = await jobs.get(cwd, request.params.job_id); return record ? publicJobRecord(record) : reply.code(404).send({ error: "Job not found" }); } catch (error) { return reply.code(400).send({ error: String(error) }); } });
   app.delete<{ Params: { job_id: string } }>("/api/jobs/:job_id", async (request, reply) => { const cwd = await workspace(request, reply); if (!cwd) return; try { const record = await jobs.cancel(cwd, request.params.job_id); return record ? publicJobRecord(record) : reply.code(404).send({ error: "Job not found" }); } catch (error) { return reply.code(400).send({ error: String(error) }); } });
   app.get<{ Params: { job_id: string } }>("/api/jobs/:job_id/logs", async (request, reply) => { const cwd = await workspace(request, reply); if (!cwd) return; try { return await jobs.logs(cwd, request.params.job_id) ?? reply.code(404).send({ error: "Job not found" }); } catch (error) { return reply.code(400).send({ error: String(error) }); } });
+  app.get<{ Params: { job_id: string } }>("/api/jobs/:job_id/output", async (request, reply) => {
+    const cwd = await workspace(request, reply); if (!cwd) return;
+    const cursor = Number((request.query as { cursor?: string }).cursor ?? 0);
+    if (!Number.isSafeInteger(cursor) || cursor < 0) return reply.code(400).send({ error: "Invalid output cursor" });
+    try { return await jobs.outputSince(cwd, request.params.job_id, cursor) ?? reply.code(404).send({ error: "Job not found" }); }
+    catch (error) { return reply.code(400).send({ error: String(error) }); }
+  });
   app.addHook("onClose", () => jobs.shutdown());
 }
 

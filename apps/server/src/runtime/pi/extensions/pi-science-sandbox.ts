@@ -1,10 +1,10 @@
 /** Routes Pi's Bash tool and direct ! commands through the Node sandbox job. */
 import { realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { createBashTool } from "@earendil-works/pi-coding-agent";
 
 const TOKEN_HEADER = "x-pi-science-internal-token";
 const POLL_MS = 250;
-const MAX_OUTPUT_CHARS = 50_000;
 
 interface Job {
   job_id: string;
@@ -16,16 +16,26 @@ interface Job {
   stderr_truncated?: boolean;
 }
 
+interface OutputDelta {
+  status: Job["status"];
+  return_code: number | null;
+  cursor: number;
+  lost: boolean;
+  frames: Array<{ cursor: number; stream: "stdout" | "stderr"; data: string }>;
+  stdout_truncated: boolean;
+  stderr_truncated: boolean;
+}
+
 function baseUrl(): string {
   return (process.env.PI_SCIENCE_BACKEND_URL || "http://127.0.0.1:8787").replace(/\/+$/, "");
 }
 
-async function jobRequest(path: string, init: RequestInit = {}): Promise<Job> {
+async function jobRequest<T = Job>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   const token = process.env.PI_SCIENCE_INTERNAL_TOKEN;
   if (token) headers.set(TOKEN_HEADER, token);
   const response = await fetch(`${baseUrl()}${path}`, { ...init, headers });
-  const payload = await response.json() as Job & { error?: string };
+  const payload = await response.json() as T & { error?: string };
   if (!response.ok) throw new Error(payload.error || `Sandbox request failed (${response.status})`);
   return payload;
 }
@@ -40,12 +50,6 @@ function identity(env?: NodeJS.ProcessEnv): Record<string, string> {
 
 function terminal(status: Job["status"]): boolean {
   return status !== "pending" && status !== "running";
-}
-
-function output(job: Job): string {
-  const combined = `${job.stdout ?? ""}${job.stderr ? `${job.stdout ? "\n" : ""}${job.stderr}` : ""}`;
-  const tail = combined.length > MAX_OUTPUT_CHARS ? combined.slice(-MAX_OUTPUT_CHARS) : combined;
-  return `${combined.length > MAX_OUTPUT_CHARS || job.stdout_truncated || job.stderr_truncated ? "[Output truncated]\n" : ""}${tail}`;
 }
 
 async function executeSandboxed(command: string, cwd: string, options: { onData: (data: Buffer) => void; signal?: AbortSignal; timeout?: number; env?: NodeJS.ProcessEnv }): Promise<{ exitCode: number | null }> {
@@ -64,17 +68,22 @@ async function executeSandboxed(command: string, cwd: string, options: { onData:
   options.signal?.addEventListener("abort", cancel, { once: true });
   if (options.signal?.aborted) cancel();
   try {
-    let current = job;
-    while (!terminal(current.status)) {
+    let cursor = 0;
+    let status = job.status;
+    let returnCode = job.return_code;
+    do {
       if (cancelled) throw new Error("aborted");
-      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
-      current = await jobRequest(`/api/jobs/${encodeURIComponent(job.job_id)}?${query}`);
-    }
-    if (cancelled || current.status === "cancelled") throw new Error("aborted");
-    const text = output(current);
-    if (text) options.onData(Buffer.from(text));
-    if (current.status === "timed_out") throw new Error(`timeout:${options.timeout ?? 3600}`);
-    return { exitCode: current.return_code ?? (current.status === "succeeded" ? 0 : 1) };
+      const delta = await jobRequest<OutputDelta>(`/api/jobs/${encodeURIComponent(job.job_id)}/output?${query}&cursor=${cursor}`);
+      if (delta.lost) options.onData(Buffer.from("[Earlier sandbox output was dropped before it could be streamed]\n"));
+      for (const frame of delta.frames) options.onData(Buffer.from(frame.data, "base64"));
+      cursor = delta.cursor;
+      status = delta.status;
+      returnCode = delta.return_code;
+      if (!terminal(status)) await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    } while (!terminal(status));
+    if (cancelled || status === "cancelled") throw new Error("aborted");
+    if (status === "timed_out") throw new Error(`timeout:${options.timeout ?? 3600}`);
+    return { exitCode: returnCode ?? (status === "succeeded" ? 0 : 1) };
   } finally {
     options.signal?.removeEventListener("abort", cancel);
   }
@@ -111,25 +120,7 @@ async function fileToolPathAllowed(workspace: string, cwd: string, path: unknown
 
 export default function registerSandbox(pi: any): void {
   const cwd = process.env.PI_WORKSPACE_DIR || process.cwd();
-  pi.registerTool({
-    name: "bash",
-    label: "bash",
-    description: "Execute a Bash command in the current workspace sandbox. Returns stdout and stderr.",
-    promptSnippet: "Execute Bash commands in the workspace sandbox",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      required: ["command"],
-      properties: { command: { type: "string" }, timeout: { type: "number", minimum: 1, maximum: 3600 } },
-    },
-    async execute(_id: string, params: { command: string; timeout?: number }, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: any) {
-      let text = "";
-      const env = { PI_PROVIDER: ctx?.model?.provider, PI_MODEL: ctx?.model?.id, PI_REASONING_LEVEL: ctx?.thinkingLevel, PI_SESSION_ID: ctx?.sessionManager?.getSessionId?.() };
-      const result = await executeSandboxed(params.command, ctx?.cwd || cwd, { onData: (chunk) => { text += chunk.toString(); }, signal, timeout: params.timeout, env });
-      if (result.exitCode !== 0) throw new Error(`${text}${text ? "\n\n" : ""}Command exited with code ${result.exitCode}`);
-      return { content: [{ type: "text", text }], details: { sandboxed: true } };
-    },
-  });
+  pi.registerTool(createBashTool(cwd, { operations: { exec: executeSandboxed } }));
   pi.on("user_bash", () => ({ operations: { exec: executeSandboxed } }));
   pi.on("tool_call", async (event: { toolName: string; input: Record<string, unknown> }, ctx: { cwd?: string }) => {
     if (!FILE_TOOLS.has(event.toolName)) return;

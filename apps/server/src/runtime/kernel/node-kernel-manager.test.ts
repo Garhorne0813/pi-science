@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NodeKernelManager, type KernelResult, type NodeKernelManagerDependencies } from "./node-kernel-manager.js";
+import { NodeKernelManager, WINDOWS_KERNEL_UNAVAILABLE, type KernelResult, type NodeKernelManagerDependencies } from "./node-kernel-manager.js";
 import type { WorkspaceEnvironmentStatus } from "../workspace/workspace-environment.js";
 
 function systemPython(): string | null {
@@ -44,6 +44,16 @@ function newTestManager(deps: NodeKernelManagerDependencies = {}): NodeKernelMan
     sandboxCommand: async (input) => ({ command: input.command, environment: input.environment, backend: "seatbelt", cleanupDirectory: "" }),
   });
 }
+
+it("reports Windows Notebook unavailable and rejects the production sandbox path before spawning", async () => {
+  const spawnProcess = vi.fn();
+  const interpreterAvailable = vi.fn(() => true);
+  const manager = new NodeKernelManager({ platform: "win32", spawnProcess: spawnProcess as never, interpreterAvailable });
+  expect(manager.status()).toMatchObject({ execution_available: false, unavailable_reason: WINDOWS_KERNEL_UNAVAILABLE, interpreters: { python: false, r: false } });
+  await expect(manager.execute({ language: "python", code: "1+1", cwd: "C:\\workspace", environment: {} as WorkspaceEnvironmentStatus, timeoutMs: 1000 })).rejects.toThrow(WINDOWS_KERNEL_UNAVAILABLE);
+  expect(spawnProcess).not.toHaveBeenCalled();
+  expect(interpreterAvailable).not.toHaveBeenCalled();
+});
 
 afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));

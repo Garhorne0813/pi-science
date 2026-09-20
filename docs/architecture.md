@@ -412,7 +412,7 @@ kernels use the same OS sandbox. The workspace is writable, the bound
 micromamba revision is read-only, network access is denied, and `.pi-science`
 metadata is hidden. Commands fail closed when the revision or native sandbox is
 unavailable. The existing Windows Sandy grants cannot exclude workspace
-metadata, so conversation execution currently fails closed on Windows.
+metadata, so conversation Bash and Notebook Python/R execution currently fail closed on Windows. The kernel status API reports this limitation and the UI disables execution.
 
 Pi's built-in file tools remain in the supervisor process. The extension checks
 their paths against the workspace and blocks `.pi-science` and symlink escapes;

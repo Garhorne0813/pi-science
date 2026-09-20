@@ -1282,6 +1282,7 @@
   "notebook.checkingKernels": "正在检查…",
   "notebook.kernelsReady": "{{kernels}} 已就绪",
   "notebook.noKernel": "无可用内核",
+  "notebook.windowsUnavailable": "Windows 的 AppContainer 隔离尚未完成，暂时无法执行 Notebook。",
   "notebook.panelEmpty": "暂无内核单元格。在下方运行代码即可开始。",
   "notebook.namespaceHint": "该内核与 Agent 共享，并在会话期间保留变量。",
   "notebook.languageCell": "{{language}} 单元格",
