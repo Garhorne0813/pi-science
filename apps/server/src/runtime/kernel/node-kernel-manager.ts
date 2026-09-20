@@ -2,7 +2,8 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createInterface, type Interface } from "node:readline";
 import {
@@ -10,6 +11,8 @@ import {
   workspaceEnvironmentVariables,
   type WorkspaceEnvironmentStatus,
 } from "../workspace/workspace-environment.js";
+import { restrictResearchEnvironment } from "../jobs/job-environment.js";
+import { sandboxConversationCommand } from "../jobs/research-sandbox.js";
 
 export type KernelLanguage = "python" | "r";
 
@@ -71,6 +74,7 @@ export interface NodeKernelManagerDependencies {
   interpreterAvailable?: (command: string) => boolean;
   spawnProcess?: typeof spawn;
   killProcessTree?: (pid: number) => void;
+  sandboxCommand?: typeof sandboxConversationCommand;
 }
 
 const PYTHON_BRIDGE = fileURLToPath(new URL("./bridges/kernel_bridge.py", import.meta.url));
@@ -139,6 +143,7 @@ export class NodeKernelManager {
       interpreterAvailable: deps.interpreterAvailable ?? defaultInterpreterAvailable,
       spawnProcess: deps.spawnProcess ?? spawn,
       killProcessTree: deps.killProcessTree ?? defaultKillProcessTree,
+      sandboxCommand: deps.sandboxCommand ?? sandboxConversationCommand,
     };
   }
 
@@ -255,6 +260,7 @@ class NodeKernelSession {
   private readonly stderrTail: string[] = [];
   private tail: Promise<void> = Promise.resolve();
   private stopPromise?: Promise<void>;
+  private sandboxCleanupDirectory?: string;
 
   private constructor(
     private readonly options: KernelExecuteOptions,
@@ -262,7 +268,7 @@ class NodeKernelSession {
   ) {
     if (options.language === "r") {
       const hash = createHash("sha256").update([options.cwd, options.environmentRevisionId ?? "legacy", randomUUID()].join("\0")).digest("hex").slice(0, 20);
-      this.rCodeFile = join(options.cwd, ".pi-science", "runtime", "kernels", `${hash}.R`);
+      this.rCodeFile = join(tmpdir(), "pi-science-kernels", `${hash}.R`);
     }
   }
 
@@ -375,6 +381,7 @@ class NodeKernelSession {
     this.reader?.close();
     this.reader = undefined;
     if (this.rCodeFile) await rm(this.rCodeFile, { force: true }).catch(() => undefined);
+    if (this.sandboxCleanupDirectory) await rm(this.sandboxCleanupDirectory, { recursive: true, force: true }).catch(() => undefined);
   }
 
   private async start(signal?: AbortSignal): Promise<void> {
@@ -383,14 +390,24 @@ class NodeKernelSession {
       ? [PYTHON_BRIDGE]
       : [R_BRIDGE, this.rCodeFile!];
     if (this.rCodeFile) {
-      await mkdir(join(this.options.cwd, ".pi-science", "runtime", "kernels"), { recursive: true });
-      await writeFile(this.rCodeFile, "", "utf8");
+      await mkdir(dirname(this.rCodeFile), { recursive: true, mode: 0o700 });
+      await writeFile(this.rCodeFile, "", { encoding: "utf8", mode: 0o600 });
     }
     if (signal?.aborted) throw kernelStartCancelledError();
-    const env = this.deps.workspaceEnvironmentVariables(this.options.environment);
-    const child = this.deps.spawnProcess(executable, args, {
+    if (!this.options.environment.ready || this.options.environment.manager !== "micromamba" || !this.options.environment.revision_id) throw new Error("Kernel execution requires a ready managed micromamba revision");
+    const env = restrictResearchEnvironment(this.deps.workspaceEnvironmentVariables(this.options.environment), this.deps.platform);
+    const isolated = await this.deps.sandboxCommand({
+      command: [executable, ...args],
+      workspace: this.options.cwd,
+      environment: env,
+      managedEnvironmentPrefix: this.options.environment.prefix,
+      trustedReadPaths: [dirname(this.options.language === "python" ? PYTHON_BRIDGE : R_BRIDGE), ...(this.rCodeFile ? [this.rCodeFile] : [])],
+      platform: this.deps.platform,
+    });
+    this.sandboxCleanupDirectory = isolated.cleanupDirectory;
+    const child = this.deps.spawnProcess(isolated.command[0]!, isolated.command.slice(1), {
       cwd: this.options.cwd,
-      env,
+      env: isolated.environment,
       stdio: ["pipe", "pipe", "pipe"],
       // A new process group lets Windows deliver CTRL_BREAK_EVENT (SIGBREAK)
       // to the kernel alone instead of terminating the whole tree.

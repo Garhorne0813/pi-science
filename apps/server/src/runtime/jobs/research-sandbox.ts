@@ -1,7 +1,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { lstat, mkdir, realpath } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
+import { tmpdir } from "node:os";
 import { configRoot, metadataRoot } from "../../storage/persistence.js";
 
 export type ResearchSandboxBackend = "seatbelt" | "bubblewrap" | "appcontainer";
@@ -24,7 +25,7 @@ function parents(path: string): string[] {
   return result;
 }
 
-function macProfile(readable: string[], writable: string[]): string {
+function macProfile(readable: string[], writable: string[], denied: string[] = []): string {
   const ancestorRules = [...new Set([...readable, ...writable].flatMap(parents))].map((path) => `(literal ${quote(path)})`);
   const readRules = [...new Set(readable)].map((path) => `(subpath ${quote(path)})`);
   const writeRules = [...new Set(writable)].map((path) => `(subpath ${quote(path)})`);
@@ -36,6 +37,7 @@ function macProfile(readable: string[], writable: string[]): string {
     "(allow mach-lookup (global-name \"com.apple.system.opendirectoryd.libinfo\") (global-name \"com.apple.system.opendirectoryd.membership\") (global-name \"com.apple.logd\"))",
     `(allow file-read* ${[...ancestorRules, ...readRules].join(" ")})`,
     `(allow file-write* ${writeRules.join(" ")})`,
+    ...denied.map((path) => `(deny file-read* file-write* (subpath ${quote(path)}))`),
   ].join("\n");
 }
 
@@ -86,10 +88,11 @@ export function windowsResearchSandboxConfig(input: { commandPath: string; execu
   ].join("\n");
 }
 
-function bwrapCommand(command: string[], readable: string[], writable: string[], cwd = "/"): string[] {
+function bwrapCommand(command: string[], readable: string[], writable: string[], cwd = "/", hidden: Array<{ source: string; target: string }> = []): string[] {
   const args = ["--unshare-user", "--disable-userns", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-net", "--new-session", "--die-with-parent", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"];
   for (const path of [...new Set(readable)]) args.push("--ro-bind", path, path);
   for (const path of [...new Set(writable)]) args.push("--bind", path, path);
+  for (const { source, target } of hidden) args.push("--ro-bind", source, target);
   return ["bwrap", ...args, "--chdir", cwd, "--", ...command];
 }
 
@@ -261,4 +264,41 @@ export async function sandboxResearchCommand(input: { command: string[]; workspa
     command = [sandyExecutable(), "--quiet", "--string", config, "--exec", commandPath, ...argumentsAfterExecutable];
   }
   return { command, environment, backend: status.backend };
+}
+
+/** Isolate a conversation command while keeping the project writable and its
+ * shared, versioned interpreter read-only. The caller owns cleanupDirectory. */
+export async function sandboxConversationCommand(input: { command: string[]; workspace: string; environment: NodeJS.ProcessEnv; managedEnvironmentPrefix?: string; trustedReadPaths?: string[]; timeoutSeconds?: number; platform?: NodeJS.Platform }): Promise<{ command: string[]; environment: NodeJS.ProcessEnv; backend: ResearchSandboxBackend; cleanupDirectory: string }> {
+  const status = await cachedResearchSandboxStatus(input.platform);
+  if (!status.available) throw new Error(`conversation execution isolation unavailable: ${status.reason}`);
+  if (status.backend === "appcontainer") throw new Error("conversation execution isolation is not yet available on Windows: workspace metadata cannot be excluded from Sandy grants");
+  if (!input.managedEnvironmentPrefix || !input.environment.PI_SCIENCE_ENVIRONMENT_REVISION_ID) throw new Error("conversation execution requires a bound managed environment revision");
+  const workspace = await realpath(input.workspace);
+  const environmentRoot = await realpath(join(configRoot(), "micromamba", "envs"));
+  const prefix = await realpath(input.managedEnvironmentPrefix);
+  if (prefix === environmentRoot || !inside(environmentRoot, prefix) || !(await lstat(prefix)).isDirectory()) throw new Error("conversation environment prefix is outside the managed environment root");
+  if (inside(workspace, prefix) || inside(prefix, workspace)) throw new Error("conversation workspace overlaps the managed environment prefix");
+  const commandPath = await realpath(input.command[0]!);
+  const systemRoots = status.backend === "seatbelt" ? macSystemRoots : linuxSystemRoots;
+  if (![...availableSystemRoots(systemRoots), workspace, prefix].some((root) => inside(root, commandPath))) throw new Error("conversation executable is outside the approved roots");
+  const trustedReadPaths = await Promise.all((input.trustedReadPaths ?? []).map((path) => realpath(path)));
+  const cleanupDirectory = await mkdtemp(join(tmpdir(), "pi-science-conversation-"));
+  try {
+    const aliases = status.backend === "seatbelt";
+    const metadata = join(workspace, ".pi-science");
+    if (!(await lstat(metadata)).isDirectory()) throw new Error("conversation workspace metadata directory is missing");
+    const readable = [...availableSystemRoots(systemRoots), workspace, prefix, cleanupDirectory, ...trustedReadPaths, ...(aliases ? [input.workspace, input.managedEnvironmentPrefix, input.command[0]!, ...(input.trustedReadPaths ?? [])] : [])];
+    const writable = [workspace, cleanupDirectory, ...(aliases ? [input.workspace] : [])];
+    const environment: NodeJS.ProcessEnv = { ...input.environment, HOME: cleanupDirectory, TMPDIR: cleanupDirectory, TMP: cleanupDirectory, TEMP: cleanupDirectory };
+    let command: string[] = ["/usr/bin/sandbox-exec", "-p", macProfile(readable, writable, [metadata, join(input.workspace, ".pi-science")]), ...input.command];
+    if (status.backend === "bubblewrap") {
+      const emptyMetadata = join(cleanupDirectory, "hidden-metadata");
+      await mkdir(emptyMetadata);
+      command = bwrapCommand([commandPath, ...input.command.slice(1)], readable, writable, workspace, [{ source: emptyMetadata, target: metadata }]);
+    }
+    return { command, environment, backend: status.backend, cleanupDirectory };
+  } catch (error) {
+    await rm(cleanupDirectory, { recursive: true, force: true });
+    throw error;
+  }
 }

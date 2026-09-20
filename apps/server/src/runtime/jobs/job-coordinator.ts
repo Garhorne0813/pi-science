@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readdir } from "node:fs/promises";
+import { readdir, rm } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { metadataRoot, readJson, withFileWriteLock, writeJsonAtomic } from "../../storage/persistence.js";
 import type { JobRepository } from "../../storage/sqlite/repositories/job-repository.js";
@@ -10,7 +10,7 @@ import { detectJobCapabilities, type JobCapabilityOptions, type JobCapabilityRep
 import { restrictLocalJobEnvironment, restrictResearchEnvironment } from "./job-environment.js";
 import { JobLeaseManager } from "./job-lease-manager.js";
 import { ProcessSupervisor, type SpawnedJobProcess } from "./job-process-supervisor.js";
-import { sandboxResearchCommand } from "./research-sandbox.js";
+import { sandboxConversationCommand, sandboxResearchCommand } from "./research-sandbox.js";
 import { isNonterminal, isTerminal, transitionJobStatus, type JobChildIdentity, type JobOwnerProcessIdentity, type JobOwnership, type JobProcessIdentity, type JobRecord, type JobRequirement, type JobStatus, publicJobRecord } from "./job-types.js";
 
 export type { JobChildIdentity, JobOwnerProcessIdentity, JobOwnership, JobProcessIdentity, JobRecord, JobRequirement, JobStatus, PublicJobRecord } from "./job-types.js";
@@ -60,13 +60,16 @@ export class JobCoordinator {
       environment_prefix: baseEnvironment.PI_SCIENCE_ENVIRONMENT_PREFIX ?? null,
     });
     if (check.status === "blocked") throw new Error(check.reasons.join("; "));
+    const surface = typeof body.surface === "string" ? body.surface : "local";
+    const allowedEnvironmentKey = surface === "conversation"
+      ? /^(?:PI_PROVIDER|PI_MODEL|PI_REASONING_LEVEL|PI_SESSION_ID)$/
+      : /^PI_SCIENCE_[A-Z0-9_]+$/;
     const requestedEnvironment = body.env && typeof body.env === "object"
       ? Object.fromEntries(Object.entries(body.env as Record<string, unknown>)
-        .filter((entry): entry is [string, string] => /^PI_SCIENCE_[A-Z0-9_]+$/.test(entry[0]) && typeof entry[1] === "string"))
+        .filter((entry): entry is [string, string] => allowedEnvironmentKey.test(entry[0]) && typeof entry[1] === "string"))
       : {};
-    const surface = typeof body.surface === "string" ? body.surface : "local";
     const platform = this.hooks.platform ?? process.platform;
-    const environment = { ...(surface.startsWith("research") ? restrictResearchEnvironment(baseEnvironment, platform) : restrictLocalJobEnvironment(baseEnvironment, platform)), ...requestedEnvironment };
+    const environment = { ...((surface.startsWith("research") || surface === "conversation") ? restrictResearchEnvironment(baseEnvironment, platform) : restrictLocalJobEnvironment(baseEnvironment, platform)), ...requestedEnvironment };
     const executionCwd = typeof body.execution_cwd === "string" ? resolve(body.execution_cwd) : resolve(cwd);
     const executionRelative = relative(resolve(cwd), executionCwd);
     if (isAbsolute(executionRelative) || executionRelative === ".." || executionRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) throw new Error("execution cwd escapes the workspace");
@@ -74,13 +77,15 @@ export class JobCoordinator {
     // sandbox before recording a runnable job; never fall back to host spawn.
     const isolated = surface === "research-loop" || surface === "research-evaluator"
       ? await sandboxResearchCommand({ command, workspace: cwd, executionCwd, surface, environment, managedEnvironmentPrefix: baseEnvironment.PI_SCIENCE_ENVIRONMENT_PREFIX, timeoutSeconds: Math.max(1, Number(requirement.timeout_seconds ?? 3600) - 1), platform })
-      : null;
+      : surface === "conversation"
+        ? await sandboxConversationCommand({ command, workspace: cwd, environment, managedEnvironmentPrefix: baseEnvironment.PI_SCIENCE_ENVIRONMENT_PREFIX, timeoutSeconds: Math.max(1, Number(requirement.timeout_seconds ?? 3600) - 1), platform })
+        : null;
     const now = this.now();
     const ownership = this.leases.createOwnership(now);
     const jobId = `job_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
     const executionId = executionIdFor("job", resolve(cwd), jobId);
     const record: JobRecord = { job_id: jobId, execution_id: executionId, command, cwd, ...(executionCwd !== resolve(cwd) ? { execution_cwd: executionCwd } : {}), surface, status: "pending", created_at: new Date(now).toISOString(), stdout: "", stderr: "", artifact_ids: [], environment: { platform: process.platform, node: process.version, prefix: environment.PI_SCIENCE_ENVIRONMENT_PREFIX, npm_prefix: environment.npm_config_prefix, ...(isolated ? { sandbox_backend: isolated.backend } : {}) }, requirement, ownership };
-    await this.executions.start(cwd, {
+    try { await this.executions.start(cwd, {
       execution_id: executionId,
       kind: "job",
       surface: executionSurface(surface),
@@ -90,14 +95,18 @@ export class JobCoordinator {
       request: { command: redactCommand(command), cwd: record.execution_cwd ?? record.cwd, requirement },
       runtime: record.environment,
     });
-    try { await this.save(record); } catch (error) {
+    await this.save(record); } catch (error) {
+      if (isolated && "cleanupDirectory" in isolated && typeof isolated.cleanupDirectory === "string") await rm(isolated.cleanupDirectory, { recursive: true, force: true }).catch(() => undefined);
       this.leases.release(ownership);
       await this.executions.finish(cwd, executionId, { status: "failed", producer: "node-job-coordinator", result: { error: String(error) } }).catch(() => undefined);
       throw error;
     }
     const task = this.run(record, isolated?.environment ?? environment, isolated?.command ?? command);
     this.jobs.set(record.job_id, task);
-    void task.catch(() => undefined).finally(() => { if (this.jobs.get(record.job_id) === task) this.jobs.delete(record.job_id); });
+    void task.catch(() => undefined).finally(() => {
+      if (this.jobs.get(record.job_id) === task) this.jobs.delete(record.job_id);
+      if (isolated && "cleanupDirectory" in isolated && typeof isolated.cleanupDirectory === "string") void rm(isolated.cleanupDirectory, { recursive: true, force: true }).catch(() => undefined);
+    });
     return record;
   }
 

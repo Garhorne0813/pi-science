@@ -404,6 +404,22 @@ The detailed API, schema, migration, and UI contract is documented in
   recovery reconciles interrupted work without allowing an older process to
   overwrite a newer terminal result.
 
+## Ordinary conversation execution
+
+The mandatory Pi Science sandbox extension routes the built-in Bash tool and
+direct `!` commands to a control-plane conversation job. Notebook Python/R
+kernels use the same OS sandbox. The workspace is writable, the bound
+micromamba revision is read-only, network access is denied, and `.pi-science`
+metadata is hidden. Commands fail closed when the revision or native sandbox is
+unavailable. The existing Windows Sandy grants cannot exclude workspace
+metadata, so conversation execution currently fails closed on Windows.
+
+Pi's built-in file tools remain in the supervisor process. The extension checks
+their paths against the workspace and blocks `.pi-science` and symlink escapes;
+this is an application path check, not an OS boundary. Other trusted extensions
+and control-plane local jobs can still execute host-side code, so the full Pi
+supervisor is not sandboxed.
+
 ## Research loops
 
 Research loops are coordinated by the Node control plane. A loop uses bounded

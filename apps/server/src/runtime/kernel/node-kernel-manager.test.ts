@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NodeKernelManager, type KernelResult } from "./node-kernel-manager.js";
+import { NodeKernelManager, type KernelResult, type NodeKernelManagerDependencies } from "./node-kernel-manager.js";
 import type { WorkspaceEnvironmentStatus } from "../workspace/workspace-environment.js";
 
 function systemPython(): string | null {
@@ -35,6 +35,15 @@ function systemRscript(): string | null {
 
 const rscript = systemRscript();
 const cleanup: string[] = [];
+
+// Kernel protocol tests use temporary interpreter symlinks; sandbox policy and
+// managed-prefix admission are verified separately from the bridge protocol.
+function newTestManager(deps: NodeKernelManagerDependencies = {}): NodeKernelManager {
+  return new NodeKernelManager({
+    ...deps,
+    sandboxCommand: async (input) => ({ command: input.command, environment: input.environment, backend: "seatbelt", cleanupDirectory: "" }),
+  });
+}
 
 afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
@@ -74,7 +83,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       const result = await manager.execute({
         language: "python",
@@ -97,7 +106,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       const result = await manager.execute({
         language: "python",
@@ -122,7 +131,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       const result = await manager.execute({
         language: "python",
@@ -144,7 +153,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       const result = await manager.execute({
         language: "python",
@@ -167,7 +176,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       await manager.execute({ language: "python", code: "x = 40", cwd: workspace, environment: status(workspace, prefix), timeoutMs: 10_000 });
       const second = await manager.execute({ language: "python", code: "x + 2", cwd: workspace, environment: status(workspace, prefix), timeoutMs: 10_000 });
@@ -185,7 +194,7 @@ describe("NodeKernelManager native execution", () => {
     await createTestEnvironment(prefix);
     await writeFile(join(workspace, "local_module.py"), "value = 41\n", "utf8");
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       const result = await manager.execute({
         language: "python",
@@ -207,7 +216,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       await manager.execute({ language: "python", code: "1+1", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-1", timeoutMs: 10_000 });
       const before = manager.status();
@@ -228,7 +237,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       const options = { language: "python" as const, cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-race", timeoutMs: 10_000 };
       const [first, second] = await Promise.all([
@@ -250,7 +259,7 @@ describe("NodeKernelManager native execution", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       const outcome = await manager.execute({ language: "python", code: "import time\ntime.sleep(5)", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-timeout", timeoutMs: 500 }).then(
         (value) => ({ resolved: true as const, value }),
@@ -294,7 +303,7 @@ describe("NodeKernelManager platform interrupt semantics", () => {
     const spawned: { command: string; args: string[]; options?: SpawnOptions }[] = [];
     const treeKills: number[] = [];
     const sessions: FakeSession[] = [];
-    const manager = new NodeKernelManager({
+    const manager = newTestManager({
       platform,
       workspaceEnvironmentVariables: () => ({}),
       interpreterAvailable: () => true,
@@ -491,7 +500,7 @@ describe("NodeKernelManager platform interrupt semantics", () => {
     const prefix = join(workspace, "env");
     await createTestEnvironment(prefix);
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       await manager.execute({ language: "python", code: "x = 41", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-recover", timeoutMs: 8_000 });
       const outcome = await manager.execute({ language: "python", code: "import time\ntime.sleep(5)", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-recover", timeoutMs: 500 }).then(
@@ -522,7 +531,7 @@ describe("NodeKernelManager platform interrupt semantics", () => {
     await mkdir(binDir, { recursive: true });
     await symlink(rscript!, join(binDir, "Rscript"));
 
-    const manager = new NodeKernelManager();
+    const manager = newTestManager();
     try {
       const first = await manager.execute({ language: "r", code: "answer <- 21", cwd: workspace, environment: status(workspace, prefix), notebookId: "nb-r", timeoutMs: 15_000 });
       expect(first.ok).toBe(true);

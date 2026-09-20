@@ -318,6 +318,18 @@ flowchart LR
 - 持久任务在 SQLite 中使用 owner generation 和带期限的 lease。启动恢复会协调被中断的
   工作，同时防止旧进程覆盖新 owner 已写入的终态结果。
 
+## 普通对话执行
+
+必装的 Pi Science sandbox extension 将内置 Bash 工具和 `!` 命令路由到控制面的
+conversation job；Notebook 的 Python/R 内核使用同一套 OS 沙箱。工作区可写，绑定的
+micromamba 修订版只读，网络禁止，`.pi-science` 元数据被隐藏。环境修订版或原生沙箱不可用时
+执行会失败关闭。现有 Windows Sandy 授权无法排除工作区元数据，因此 Windows 上的普通对话执行
+目前失败关闭。
+
+Pi 内置文件工具仍在 supervisor 进程中运行；extension 会限制其路径在工作区内，并阻止访问
+`.pi-science` 或通过符号链接越界。这是应用层路径检查，不是 OS 隔离。其他可信 extension 和
+控制面的普通 local job 仍可在宿主执行，因此 Pi supervisor 整体尚未进入沙箱。
+
 ## 研究循环
 
 Research loop 由 Node 控制面协调。它使用有界 Pi Orbit subagent runtime 生成与分析

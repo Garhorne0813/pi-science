@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { createServer, type AddressInfo } from "node:net";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { sandboxResearchCommand, researchSandboxStatus, windowsResearchSandboxConfig } from "./research-sandbox.js";
+import { sandboxConversationCommand, sandboxResearchCommand, researchSandboxStatus, windowsResearchSandboxConfig } from "./research-sandbox.js";
 
 const cleanup: string[] = [];
 afterEach(async () => { await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
@@ -122,6 +122,43 @@ it("reads an approved managed environment without granting writes to it", async 
     spawnSync(isolated.command[0]!, isolated.command.slice(1), { cwd: work, env: isolated.environment, encoding: "utf8" });
     expect(await readFile(join(outputs, "result.txt"), "utf8")).toBe("package-data");
     expect(await readFile(join(prefix, "library.txt"), "utf8")).toBe("package-data");
+  } finally {
+    if (previousHome === undefined) delete process.env.PI_SCIENCE_HOME;
+    else process.env.PI_SCIENCE_HOME = previousHome;
+  }
+});
+
+it("runs a conversation command with project writes and a read-only managed environment", async () => {
+  if (process.platform === "win32" || !researchSandboxStatus().available) return;
+  const root = await mkdtemp(join(tmpdir(), "pi-science-conversation-test-"));
+  cleanup.push(root);
+  const workspace = join(root, "project");
+  const home = join(root, "control-home");
+  const prefix = join(home, "micromamba", "envs", "rev-test");
+  await mkdir(join(workspace, ".pi-science"), { recursive: true }); await mkdir(prefix, { recursive: true });
+  await writeFile(join(prefix, "library.txt"), "package-data");
+  await writeFile(join(root, "host-secret.txt"), "secret");
+  await writeFile(join(workspace, ".pi-science", "control-secret.txt"), "control-secret");
+  const previousHome = process.env.PI_SCIENCE_HOME;
+  process.env.PI_SCIENCE_HOME = home;
+  try {
+    const script = 'cat "$PI_SCIENCE_ENVIRONMENT_PREFIX/library.txt" > result.txt; if cat "../host-secret.txt" 2>/dev/null; then echo READ_ESCAPED; fi; if cat .pi-science/control-secret.txt 2>/dev/null; then echo METADATA_READ; fi; if printf hacked > .pi-science/control-secret.txt 2>/dev/null; then echo METADATA_WRITE; fi; if printf hacked > "$PI_SCIENCE_ENVIRONMENT_PREFIX/library.txt" 2>/dev/null; then echo WRITE_ESCAPED; fi';
+    const isolated = await sandboxConversationCommand({
+      command: ["/bin/bash", "-c", script], workspace,
+      environment: { PATH: process.env.PATH, PI_SCIENCE_ENVIRONMENT_PREFIX: prefix, PI_SCIENCE_ENVIRONMENT_REVISION_ID: "rev-test" },
+      managedEnvironmentPrefix: prefix,
+    });
+    cleanup.push(isolated.cleanupDirectory);
+    const result = spawnSync(isolated.command[0]!, isolated.command.slice(1), { cwd: workspace, env: isolated.environment, encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("secret");
+    expect(result.stdout).not.toContain("READ_ESCAPED");
+    expect(result.stdout).not.toContain("WRITE_ESCAPED");
+    expect(result.stdout).not.toContain("METADATA_READ");
+    expect(result.stdout).not.toContain("METADATA_WRITE");
+    expect(await readFile(join(workspace, "result.txt"), "utf8")).toBe("package-data");
+    expect(await readFile(join(prefix, "library.txt"), "utf8")).toBe("package-data");
+    expect(await readFile(join(workspace, ".pi-science", "control-secret.txt"), "utf8")).toBe("control-secret");
   } finally {
     if (previousHome === undefined) delete process.env.PI_SCIENCE_HOME;
     else process.env.PI_SCIENCE_HOME = previousHome;
