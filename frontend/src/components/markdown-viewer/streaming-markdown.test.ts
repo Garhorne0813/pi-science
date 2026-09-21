@@ -37,6 +37,18 @@ describe("stabilizeStreamingMarkdown", () => {
       .toBe("> $$\n> x = 1\n> $$");
   });
 
+  it("ignores prose double dollars before an incomplete display block", () => {
+    expect(stabilizeStreamingMarkdown("In bash, $$ is the PID.\n\n$$\nE = mc^2"))
+      .toBe("In bash, $$ is the PID.\n\n$$\nE = mc^2\n$$");
+  });
+
+  it("does not close display math after its container has ended", () => {
+    const blockquote = "> $$\n> x = 1\n\noutside";
+    const list = "- equation\n  $$\n  x = 1\n\noutside";
+    expect(stabilizeStreamingMarkdown(blockquote)).toBe(blockquote);
+    expect(stabilizeStreamingMarkdown(list)).toBe(list);
+  });
+
   it("resumes display-math handling after an implicitly closed code container", () => {
     expect(stabilizeStreamingMarkdown("> ```python\n> done\n\n$$\nx = 1"))
       .toBe("> ```python\n> done\n\n$$\nx = 1\n$$");

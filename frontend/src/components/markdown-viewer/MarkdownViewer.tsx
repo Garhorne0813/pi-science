@@ -1,5 +1,5 @@
-import { isValidElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import { isValidElement, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown, { type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -19,6 +19,10 @@ import { stabilizeStreamingMarkdown, type MarkdownRenderMode } from "./streaming
 export type { MarkdownRenderMode } from "./streaming-markdown";
 
 type Variant = "chat" | "document";
+
+const MemoizedReactMarkdown = memo(ReactMarkdown);
+const REMARK_PLUGINS: NonNullable<Options["remarkPlugins"]> = [remarkGfm, remarkMath];
+const REHYPE_PLUGINS: NonNullable<Options["rehypePlugins"]> = [[rehypeKatex, { throwOnError: false }]];
 
 const STYLES: Record<Variant, Record<string, string>> = {
   chat: {
@@ -245,16 +249,20 @@ export function MarkdownViewer({
 }) {
   const s = STYLES[variant];
   const cwd = codeRunner?.cwd;
+  const sessionId = codeRunner?.sessionId;
   const openInspector = useUiStore((s) => s.openInspector);
   const { t } = useTranslation();
   const visibleValue = useFrameCoalescedValue(children, mode === "streaming");
   const renderedValue = useMemo(() => normalizeMathInput(
     mode === "streaming" ? stabilizeStreamingMarkdown(visibleValue) : visibleValue,
   ), [mode, visibleValue]);
-  const context = useMemo<MarkdownResourceContext | undefined>(
-    () => resourceContext ?? (cwd ? { cwd, documentPath: undefined } : undefined),
-    [cwd, resourceContext],
-  );
+  const resourceCwd = resourceContext?.cwd;
+  const resourceRoot = resourceContext?.root;
+  const resourceDocumentPath = resourceContext?.documentPath;
+  const context = useMemo<MarkdownResourceContext | undefined>(() => {
+    if (resourceCwd) return { cwd: resourceCwd, root: resourceRoot, documentPath: resourceDocumentPath };
+    return cwd ? { cwd, documentPath: undefined } : undefined;
+  }, [cwd, resourceCwd, resourceDocumentPath, resourceRoot]);
   const handleFileLink = useCallback((href: string) => {
     if (!context) return;
     const resolved = resolveMarkdownResource(href, context);
@@ -262,103 +270,104 @@ export function MarkdownViewer({
     const filename = resolved.path.split(/[\\/]/).at(-1) || resolved.path;
     openInspector(fileInspectorForPath(resolved.path, filename, context.root, cwd));
   }, [context, cwd, openInspector]);
+  const components = useMemo<Components>(() => ({
+    p: ({ children }) => <p className={s.p}>{children}</p>,
+    img: ({ src, alt }) => {
+      const href = src ?? "";
+      if (!href.trim()) {
+        return (
+          <span role="img" aria-label={alt ?? ""} className="my-3 inline-block rounded-input border border-border bg-surface-2 px-3 py-2 text-xs text-muted">
+            {t("filePreview.imageFailed")}
+          </span>
+        );
+      }
+      if (!context) return <ResourceImage src={href} alt={alt} />;
+      const resolved = resolveMarkdownResource(href, context);
+      if (resolved.kind === "invalid") {
+        return (
+          <span role="img" aria-label={alt ?? ""} className="my-3 inline-block rounded-input border border-border bg-surface-2 px-3 py-2 text-xs text-muted">
+            {t("filePreview.imageFailed")}
+          </span>
+        );
+      }
+      return <ResourceImage src={resolved.url} alt={alt} />;
+    },
+    a: ({ children, href: rawHref }) => {
+      const href = rawHref ?? "";
+      if (context && FILE_HREF.test(href)) {
+        return (
+          <span
+            onClick={(e) => { e.preventDefault(); handleFileLink(href); }}
+            className={`${s.a} inline-flex items-center gap-1 cursor-pointer`}
+            title={href}
+            role="link"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === "Enter") handleFileLink(href); }}
+          >
+            <File size={12} className="shrink-0" />
+            {children}
+          </span>
+        );
+      }
+      return <a href={rawHref} className={s.a}>{children}</a>;
+    },
+    code: ({ children }) => <code className={s.code}>{children}</code>,
+    span: ({ children, className, node: _node, ...props }) => {
+      if (className === "katex-display") return <MathBlock variant={variant}>{children}</MathBlock>;
+      return <span {...props} className={className}>{children}</span>;
+    },
+    pre: ({ children, node }) => {
+      const codeEl = Array.isArray(children) ? children[0] : children;
+      const codeProps = isValidElement(codeEl) ? (codeEl.props as { className?: string; children?: React.ReactNode }) : null;
+      const language = codeProps ? fenceLanguage(codeProps.className) : null;
+      const code = codeProps ? reactText(codeProps.children) : "";
+      const chrome = variant === "chat" && (codeChrome ?? true);
+      const start = node?.position?.start.offset;
+      const end = node?.position?.end.offset;
+      const isUnclosedFence = mode === "streaming"
+        && start !== undefined
+        && end !== undefined
+        && isUnclosedFencedCodeBlock(renderedValue, start, end);
+      if (chrome && codeProps) {
+        if (!isUnclosedFence && cwd && sessionId && runnableLanguage(language)) {
+          return (
+            <RunnableCodeBlock code={code} language={language} cwd={cwd} sessionId={sessionId} preClassName={s.pre}>
+              {children}
+            </RunnableCodeBlock>
+          );
+        }
+        return <CodeBlockFrame language={language} code={code} preClassName={s.pre}>{children}</CodeBlockFrame>;
+      }
+      if (variant === "chat") return <pre className={cn(s.pre, "my-2 rounded-input border border-border bg-surface-2")}>{children}</pre>;
+      return <pre className={s.pre}>{children}</pre>;
+    },
+    ul: ({ children }) => <ul className={s.ul}>{children}</ul>,
+    ol: ({ children }) => <ol className={s.ol}>{children}</ol>,
+    li: ({ children }) => <li>{children}</li>,
+    h1: ({ children }) => <h1 className={s.h1}>{children}</h1>,
+    h2: ({ children }) => <h2 className={s.h2}>{children}</h2>,
+    h3: ({ children }) => <h3 className={s.h3}>{children}</h3>,
+    h4: ({ children }) => <h4 className={s.h4}>{children}</h4>,
+    h5: ({ children }) => <h5 className={s.h5}>{children}</h5>,
+    h6: ({ children }) => <h6 className={s.h6}>{children}</h6>,
+    blockquote: ({ children }) => <blockquote className={s.blockquote}>{children}</blockquote>,
+    hr: () => <hr className={s.hr} />,
+    table: ({ children }) => (
+      <div className="my-4 overflow-x-auto"><table className={s.table}>{children}</table></div>
+    ),
+    th: ({ children, style }) => <th className={s.th} style={style}>{children}</th>,
+    td: ({ children, style }) => <td className={s.td} style={style}>{children}</td>,
+  }), [codeChrome, context, cwd, handleFileLink, mode, renderedValue, s, sessionId, t, variant]);
   return (
     <div className={cn(s.root, className)}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[[rehypeKatex, { throwOnError: false }]]}
+      <MemoizedReactMarkdown
+        remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={REHYPE_PLUGINS}
         skipHtml
-        components={{
-          p: ({ children }) => <p className={s.p}>{children}</p>,
-          img: ({ src, alt }) => {
-            const href = src ?? "";
-            if (!href.trim()) {
-              return (
-                <span role="img" aria-label={alt ?? ""} className="my-3 inline-block rounded-input border border-border bg-surface-2 px-3 py-2 text-xs text-muted">
-                  {t("filePreview.imageFailed")}
-                </span>
-              );
-            }
-            if (!context) return <ResourceImage src={href} alt={alt} />;
-            const resolved = resolveMarkdownResource(href, context);
-            if (resolved.kind === "invalid") {
-              return (
-                <span role="img" aria-label={alt ?? ""} className="my-3 inline-block rounded-input border border-border bg-surface-2 px-3 py-2 text-xs text-muted">
-                  {t("filePreview.imageFailed")}
-                </span>
-              );
-            }
-            return <ResourceImage src={resolved.url} alt={alt} />;
-          },
-          a: ({ children, href: rawHref }) => {
-            const href = rawHref ?? "";
-            if (context && FILE_HREF.test(href)) {
-              return (
-                <span
-                  onClick={(e) => { e.preventDefault(); handleFileLink(href); }}
-                  className={`${s.a} inline-flex items-center gap-1 cursor-pointer`}
-                  title={href}
-                  role="link"
-                  tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === "Enter") handleFileLink(href); }}
-                >
-                  <File size={12} className="shrink-0" />
-                  {children}
-                </span>
-              );
-            }
-            return <a href={rawHref} className={s.a}>{children}</a>;
-          },
-          code: ({ children }) => <code className={s.code}>{children}</code>,
-          span: ({ children, className, node: _node, ...props }) => {
-            if (className === "katex-display") return <MathBlock variant={variant}>{children}</MathBlock>;
-            return <span {...props} className={className}>{children}</span>;
-          },
-          pre: ({ children, node }) => {
-            const codeEl = Array.isArray(children) ? children[0] : children;
-            const codeProps = isValidElement(codeEl) ? (codeEl.props as { className?: string; children?: React.ReactNode }) : null;
-            const language = codeProps ? fenceLanguage(codeProps.className) : null;
-            const code = codeProps ? reactText(codeProps.children) : "";
-            const chrome = variant === "chat" && (codeChrome ?? true);
-            const start = node?.position?.start.offset;
-            const end = node?.position?.end.offset;
-            const isUnclosedFence = mode === "streaming"
-              && start !== undefined
-              && end !== undefined
-              && isUnclosedFencedCodeBlock(renderedValue, start, end);
-            if (chrome && codeProps) {
-              if (!isUnclosedFence && codeRunner && runnableLanguage(language)) {
-                return (
-                  <RunnableCodeBlock code={code} language={language} cwd={codeRunner.cwd} sessionId={codeRunner.sessionId} preClassName={s.pre}>
-                    {children}
-                  </RunnableCodeBlock>
-                );
-              }
-              return <CodeBlockFrame language={language} code={code} preClassName={s.pre}>{children}</CodeBlockFrame>;
-            }
-            if (variant === "chat") return <pre className={cn(s.pre, "my-2 rounded-input border border-border bg-surface-2")}>{children}</pre>;
-            return <pre className={s.pre}>{children}</pre>;
-          },
-          ul: ({ children }) => <ul className={s.ul}>{children}</ul>,
-          ol: ({ children }) => <ol className={s.ol}>{children}</ol>,
-          li: ({ children }) => <li>{children}</li>,
-          h1: ({ children }) => <h1 className={s.h1}>{children}</h1>,
-          h2: ({ children }) => <h2 className={s.h2}>{children}</h2>,
-          h3: ({ children }) => <h3 className={s.h3}>{children}</h3>,
-          h4: ({ children }) => <h4 className={s.h4}>{children}</h4>,
-          h5: ({ children }) => <h5 className={s.h5}>{children}</h5>,
-          h6: ({ children }) => <h6 className={s.h6}>{children}</h6>,
-          blockquote: ({ children }) => <blockquote className={s.blockquote}>{children}</blockquote>,
-          hr: () => <hr className={s.hr} />,
-          table: ({ children }) => (
-            <div className="my-4 overflow-x-auto"><table className={s.table}>{children}</table></div>
-          ),
-          th: ({ children, style }) => <th className={s.th} style={style}>{children}</th>,
-          td: ({ children, style }) => <td className={s.td} style={style}>{children}</td>,
-        }}
+        components={components}
       >
         {renderedValue}
-      </ReactMarkdown>
+      </MemoizedReactMarkdown>
     </div>
   );
 }
