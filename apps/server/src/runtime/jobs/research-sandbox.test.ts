@@ -49,7 +49,10 @@ it("renders a Windows AppContainer policy with no network or profile access", ()
   expect(config).toContain("processes = 64");
   expect(config).toContain('"C:\\\\Users\\\\researcher\\\\tools"');
   expect(config).toContain('"C:\\\\Users\\\\researcher\\\\env"');
-  expect(config).toContain('read = ["C:\\\\Users\\\\researcher\\\\env"]');
+  expect(config).toContain('execute = ["C:\\\\Users\\\\researcher\\\\tools", "C:\\\\Users\\\\researcher\\\\env"]');
+  expect(config).toContain("read = []");
+  expect(config).toContain("[allow.this]");
+  expect(config).toContain('"C:\\\\"');
   expect(config).not.toContain("restricted");
 });
 

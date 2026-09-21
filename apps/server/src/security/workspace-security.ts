@@ -28,8 +28,7 @@ export async function validateWorkspaceCwd(cwd: string): Promise<string> {
   // This canonicalization is followed immediately by an exact registered
   // project, legacy migration, or managed-root containment check. Requests are
   // also protected by the control-plane token before reaching this function.
-  // codeql[js/path-injection]
-  const root = await realpath(requested);
+  const root = await realpath(requested); // lgtm[js/path-injection] registration and containment checks authorize this canonicalization
   const rootStat = await stat(root);
   if (!rootStat.isDirectory()) throw new Error(`Not a directory: ${cwd}`);
   if (await readProject(root)) { await ensureProject(root); return root; }

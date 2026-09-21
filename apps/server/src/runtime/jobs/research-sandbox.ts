@@ -61,17 +61,40 @@ function tomlString(value: string): string { return JSON.stringify(value); }
 
 function tomlArray(values: string[]): string { return `[${[...new Set(values)].map(tomlString).join(", ")}]`; }
 
+function windowsAncestorDirectories(paths: string[]): string[] {
+  const result = new Map<string, string>();
+  for (const path of paths) {
+    const resolved = win32.resolve(path);
+    const root = win32.parse(resolved).root;
+    for (let current = win32.dirname(resolved);; current = win32.dirname(current)) {
+      result.set(current.toLowerCase(), current);
+      if (current.toLowerCase() === root.toLowerCase()) break;
+    }
+  }
+  return [...result.values()];
+}
+
+function windowsInside(root: string, target: string): boolean {
+  const path = win32.relative(win32.resolve(root), win32.resolve(target));
+  return path === "" || (!win32.isAbsolute(path) && path !== ".." && !path.startsWith(`..${win32.sep}`));
+}
+
 /** Sandy uses a per-run AppContainer SID and a Job Object; no restricted-token fallback. */
 export function windowsResearchSandboxConfig(input: { commandPath: string; executionCwd: string; readable: string[]; writable: string[]; executableRoots?: string[]; timeoutSeconds?: number }): string {
   const runtimeRoot = windowsRuntimeReadRoot(input.commandPath);
+  const executableRoots = [runtimeRoot, ...(input.executableRoots ?? [])].filter((path): path is string => Boolean(path));
+  const ancestorDirectories = windowsAncestorDirectories([...executableRoots, ...input.readable, ...input.writable]);
+  const readableOnly = input.readable.filter((path) => ![...executableRoots, ...input.writable].some((root) => windowsInside(root, path)));
   return [
     "[sandbox]",
     "token = 'appcontainer'",
     `workdir = ${tomlString(input.executionCwd)}`,
     "[allow.deep]",
-    `execute = ${tomlArray([runtimeRoot, ...(input.executableRoots ?? [])].filter((path): path is string => Boolean(path)))}`,
-    `read = ${tomlArray(input.readable)}`,
+    `execute = ${tomlArray(executableRoots)}`,
+    `read = ${tomlArray(readableOnly)}`,
     `all = ${tomlArray(input.writable)}`,
+    "[allow.this]",
+    `read = ${tomlArray(ancestorDirectories)}`,
     "[privileges]",
     "network = false",
     "lan = false",
@@ -312,8 +335,9 @@ export async function sandboxConversationCommand(input: { command: string[]; con
     const aliases = status.backend === "seatbelt";
     const legacyMetadata = metadataRoot(workspace);
     const nestedLegacyMetadata = inside(workspace, legacyMetadata) ? legacyMetadata : null;
-    const readable = [...(status.backend === "appcontainer" ? [] : availableSystemRoots(systemRoots)), workspace, prefix, cleanupDirectory, canonicalCleanupDirectory, ...trustedReadPaths, ...(aliases ? [input.workspace, input.managedEnvironmentPrefix, input.command[0]!, ...(input.trustedReadPaths ?? [])] : [])];
-    const writable = [workspace, cleanupDirectory, canonicalCleanupDirectory, ...(aliases ? [input.workspace] : [])];
+    const cleanupPaths = status.backend === "appcontainer" ? [canonicalCleanupDirectory] : [cleanupDirectory, canonicalCleanupDirectory];
+    const readable = [...(status.backend === "appcontainer" ? [] : availableSystemRoots(systemRoots)), workspace, prefix, ...cleanupPaths, ...trustedReadPaths, ...(aliases ? [input.workspace, input.managedEnvironmentPrefix, input.command[0]!, ...(input.trustedReadPaths ?? [])] : [])];
+    const writable = [workspace, ...cleanupPaths, ...(aliases ? [input.workspace] : [])];
     const environment: NodeJS.ProcessEnv = { ...input.environment, HOME: cleanupDirectory, TMPDIR: cleanupDirectory, TMP: cleanupDirectory, TEMP: cleanupDirectory };
     let command: string[] = ["/usr/bin/sandbox-exec", "-p", macProfile(readable, writable, nestedLegacyMetadata ? [nestedLegacyMetadata] : []), ...executionCommand];
     if (status.backend === "bubblewrap") {
