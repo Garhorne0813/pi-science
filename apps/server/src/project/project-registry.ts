@@ -50,6 +50,19 @@ async function migrateLegacyMetadata(cwd: string): Promise<void> {
   const target = workspaceStateRoot(cwd);
   await mkdir(dirname(target), { recursive: true });
   await withFileWriteLock(`${target}.migration`, async () => {
+    try { await lstat(legacy); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT" && (await stat(target).catch(() => null))?.isDirectory()) return;
+      throw error;
+    }
+    try {
+      const targetInfo = await lstat(target);
+      if (targetInfo.isSymbolicLink() || !targetInfo.isDirectory()) throw new Error(`Global workspace state is not a directory: ${target}`);
+      if ((await readdir(target)).length > 0) throw new Error(`Cannot migrate legacy workspace metadata because the global state directory is not empty: ${target}`);
+      await rm(target, { recursive: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
     try {
       await rename(legacy, target);
       try { await assertSafeMetadataTree(target); }
@@ -60,7 +73,7 @@ async function migrateLegacyMetadata(cwd: string): Promise<void> {
       if (code === "ENOENT") {
         try { if ((await stat(target)).isDirectory()) return; } catch { /* continue to surface the original failure */ }
       }
-      if (code === "EEXIST" || code === "ENOTEMPTY") {
+      if (["EEXIST", "ENOTEMPTY", "EPERM", "EACCES"].includes(code ?? "")) {
         const entries = await readdir(target);
         if (entries.length > 0) throw new Error(`Cannot migrate legacy workspace metadata because the global state directory is not empty: ${target}`);
         await rm(target, { recursive: true });

@@ -168,6 +168,10 @@ export class NodeKernelManager {
       : { execution_available: true, unavailable_reason: null };
   }
 
+  activeCount(): number {
+    return [...this.sessions.values()].filter((session) => !session.exited).length;
+  }
+
   async execute(options: KernelExecuteOptions): Promise<KernelResult> {
     if (this.windowsSandboxUnavailable()) throw new Error(WINDOWS_KERNEL_UNAVAILABLE);
     const key = sessionKey(options);
@@ -222,7 +226,7 @@ export class NodeKernelManager {
       interpreters: { python, r },
       ...capability,
       sessions: sessions.map((session) => session.snapshot()),
-      active_count: sessions.filter((session) => !session.exited).length,
+      active_count: this.activeCount(),
       native: true,
     };
   }

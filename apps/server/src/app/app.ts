@@ -120,7 +120,9 @@ export function buildApp(config: ServerConfig, modules: ServerModules = createSe
   app.get("/api/health", async () => gatewayHealthSchema.parse({
     status: "ok",
     active_pi_processes: nodeSessionService.processCount,
-    active_kernels: kernels.status().active_count,
+    // Health polling must remain side-effect free. The full kernel status
+    // endpoint probes interpreters and is intentionally kept off this route.
+    active_kernels: kernels.activeCount(),
     service: "pi-science-server",
     control_plane: "node",
   }));

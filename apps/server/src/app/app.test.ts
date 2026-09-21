@@ -151,18 +151,25 @@ describe("Node control plane", () => {
   });
 
   it("returns explicit capability and 503 for Windows Notebook execution", async () => {
+    const sandy = process.env.PI_SCIENCE_SANDY_PATH;
+    delete process.env.PI_SCIENCE_SANDY_PATH;
     const workspace = join(tmpdir(), `pi-science-win-kernel-${Date.now()}`);
-    await mkdir(join(workspace, ".pi-science"), { recursive: true });
-    const modules = { ...createServerModules(config("http://127.0.0.1:1")), kernels: new NodeKernelManager({ platform: "win32", interpreterAvailable: () => true }) };
-    const app = buildApp(config("http://127.0.0.1:1"), modules);
-    openApps.push(app);
-    expect((await app.inject({ method: "GET", url: "/api/kernels/status" })).json()).toMatchObject({ execution_available: false, interpreters: { python: false, r: false } });
-    for (const path of ["execute", "execute-stream"]) {
-      const response = await app.inject({ method: "POST", url: `/api/kernels/${path}?cwd=${encodeURIComponent(workspace)}`, payload: { language: "python", code: "1+1" } });
-      expect(response.statusCode).toBe(503);
-      expect(response.json()).toMatchObject({ code: "kernel_execution_unavailable" });
+    try {
+      await mkdir(join(workspace, ".pi-science"), { recursive: true });
+      const modules = { ...createServerModules(config("http://127.0.0.1:1")), kernels: new NodeKernelManager({ platform: "win32", interpreterAvailable: () => true }) };
+      const app = buildApp(config("http://127.0.0.1:1"), modules);
+      openApps.push(app);
+      expect((await app.inject({ method: "GET", url: "/api/kernels/status" })).json()).toMatchObject({ execution_available: false, interpreters: { python: false, r: false } });
+      for (const path of ["execute", "execute-stream"]) {
+        const response = await app.inject({ method: "POST", url: `/api/kernels/${path}?cwd=${encodeURIComponent(workspace)}`, payload: { language: "python", code: "1+1" } });
+        expect(response.statusCode).toBe(503);
+        expect(response.json()).toMatchObject({ code: "kernel_execution_unavailable" });
+      }
+    } finally {
+      if (sandy === undefined) delete process.env.PI_SCIENCE_SANDY_PATH;
+      else process.env.PI_SCIENCE_SANDY_PATH = sandy;
+      await rm(workspace, { recursive: true, force: true });
     }
-    await rm(workspace, { recursive: true, force: true });
   }, 30_000);
 
   it("provisions the workspace environment before forwarding kernel execution", async () => {

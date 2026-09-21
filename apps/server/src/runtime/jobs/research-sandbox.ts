@@ -296,7 +296,10 @@ export async function sandboxConversationCommand(input: { command: string[]; con
   if (inside(workspace, prefix) || inside(prefix, workspace)) throw new Error("conversation workspace overlaps the managed environment prefix");
   const commandPath = await realpath(input.command[0]!);
   const systemRoots = status.backend === "seatbelt" ? macSystemRoots : linuxSystemRoots;
-  if (![...availableSystemRoots(systemRoots), workspace, prefix].some((root) => inside(root, commandPath))) throw new Error("conversation executable is outside the approved roots");
+  const approvedCommand = status.backend === "appcontainer"
+    ? win32.extname(commandPath).toLowerCase() === ".exe"
+    : [...availableSystemRoots(systemRoots), workspace, prefix].some((root) => inside(root, commandPath));
+  if (!approvedCommand) throw new Error("conversation executable is outside the approved roots");
   const trustedReadPaths = await Promise.all((input.trustedReadPaths ?? []).map((path) => realpath(path)));
   const cleanupDirectory = await mkdtemp(join(tmpdir(), "pi-science-conversation-"));
   try {
