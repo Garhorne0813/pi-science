@@ -7,6 +7,7 @@ export type MarkdownSourceRange = { start: number; end: number };
 type MarkdownNode = {
   type: string;
   children?: MarkdownNode[];
+  value?: string;
   position?: { start: { offset?: number }; end: { offset?: number } };
 };
 
@@ -14,7 +15,7 @@ const markdownParser = unified().use(remarkParse).use(remarkGfm).freeze();
 let cachedMarkdown: string | null = null;
 let cachedRanges: MarkdownSourceRange[] = [];
 
-function collectCodeRanges(node: MarkdownNode, ranges: MarkdownSourceRange[]): void {
+export function collectCodeRanges(node: MarkdownNode, ranges: MarkdownSourceRange[]): void {
   if (node.type === "code" || node.type === "inlineCode") {
     const start = node.position?.start.offset;
     const end = node.position?.end.offset;
@@ -34,24 +35,70 @@ export function markdownCodeRanges(markdown: string): MarkdownSourceRange[] {
   return cachedRanges;
 }
 
-/** Whether a fenced code AST node still reaches the end of the streaming input. */
-export function isUnclosedFencedCodeBlock(markdown: string, start: number, end: number): boolean {
-  // A containing block can implicitly close a fence before the stream ends.
-  // In that case later non-whitespace source exists beyond this AST node and
-  // the code block is stable even without an explicit closing delimiter.
-  if (markdown.slice(end).trim() !== "") return false;
+/**
+ * The prefix that continues a fence or flow-math container on the next line.
+ * A trailing list marker becomes spaces of the same width, so a probe line
+ * continues `- ``` ` as an item line instead of opening a second item.
+ */
+export function containerContinuationPrefix(prefix: string): string {
+  let column = 0;
+  let expanded = "";
+  for (const character of prefix) {
+    if (character === "\t") {
+      const width = 4 - (column % 4);
+      expanded += " ".repeat(width);
+      column += width;
+    } else {
+      expanded += character;
+      column += 1;
+    }
+  }
+  return expanded.replace(/(?:[-*+]|\d{1,9}[.)])([ \t]+)$/, (marker) => " ".repeat(marker.length));
+}
 
+const FENCE_PROBE = "PISCIENCE_FENCE_PROBE";
+const FENCE_OPENING = /^(`{3,}|~{3,})/;
+const CONTINUATION_PREFIX = /^[ \t>]*$/;
+
+let probeCache: { markdown: string; start: number; open: boolean } | null = null;
+
+/**
+ * Whether a fenced code AST node can still receive more content from future
+ * streaming deltas. The parser is the authority: append a continuation line
+ * and check whether the code value grows. A container that already ended
+ * (blank line in a blockquote, missing list indentation) does not grow, and a
+ * closing fence was already excluded from the parsed value.
+ */
+export function isUnclosedFencedCodeBlock(markdown: string, start: number, end: number, code: string): boolean {
+  // Non-whitespace after the node means a container boundary already closed it.
+  if (markdown.slice(end).trim() !== "") return false;
+  if (probeCache && probeCache.markdown === markdown && probeCache.start === start) return probeCache.open;
+  const open = probeFenceOpen(markdown, start, code);
+  probeCache = { markdown, start, open };
+  return open;
+}
+
+function probeFenceOpen(markdown: string, start: number, code: string): boolean {
   const firstLineEnd = markdown.indexOf("\n", start);
   const openingLine = markdown.slice(start, firstLineEnd < 0 ? markdown.length : firstLineEnd);
-  const opening = /^(`{3,}|~{3,})/.exec(openingLine);
-  if (!opening) return false;
+  if (!FENCE_OPENING.test(openingLine)) return false;
+  const lineStart = markdown.lastIndexOf("\n", start - 1) + 1;
+  const openerPrefix = markdown.slice(lineStart, start);
+  const continuation = containerContinuationPrefix(openerPrefix);
+  // The probe line must continue the fence's container, not start a new block.
+  if (!CONTINUATION_PREFIX.test(continuation)) return false;
+  const probe = markdown.endsWith("\n")
+    ? `${markdown}${continuation}${FENCE_PROBE}`
+    : `${markdown}\n${continuation}${FENCE_PROBE}`;
+  const node = findCodeNodeAt(markdownParser.parse(probe) as MarkdownNode, start);
+  return node?.value !== undefined && node.value.length > code.length;
+}
 
-  const marker = opening[1]![0]!;
-  const minimumLength = opening[1]!.length;
-  const finalSourceOffset = Math.max(start, end - 1);
-  const lastLineStart = markdown.lastIndexOf("\n", finalSourceOffset) + 1;
-  const lastLine = markdown.slice(lastLineStart, end);
-  const containerPrefix = "(?:(?: {0,3}>[ \\t]?)+)?[ \\t]*";
-  const closing = new RegExp(`^${containerPrefix}${marker === "`" ? "`" : "~"}{${minimumLength},}[ \\t]*$`);
-  return !closing.test(lastLine);
+function findCodeNodeAt(node: MarkdownNode, start: number): MarkdownNode | null {
+  if (node.type === "code" && node.position?.start.offset === start) return node;
+  for (const child of node.children ?? []) {
+    const found = findCodeNodeAt(child, start);
+    if (found) return found;
+  }
+  return null;
 }

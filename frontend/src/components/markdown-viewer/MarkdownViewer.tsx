@@ -13,8 +13,8 @@ import { CodeBlockFrame } from "./CodeBlockFrame";
 import { fileInspectorForPath } from "@/lib/artifacts";
 import { resolveMarkdownResource, type MarkdownResourceContext } from "@/lib/files/markdown-resources";
 import { useUiStore } from "@/lib/ui";
-import { isUnclosedFencedCodeBlock, markdownCodeRanges } from "./markdown-code-ranges";
-import { stabilizeStreamingMarkdown, type MarkdownRenderMode } from "./streaming-markdown";
+import { isUnclosedFencedCodeBlock, markdownCodeRanges, type MarkdownSourceRange } from "./markdown-code-ranges";
+import { prepareStreamingMarkdown, type MarkdownRenderMode } from "./streaming-markdown";
 
 export type { MarkdownRenderMode } from "./streaming-markdown";
 
@@ -188,8 +188,8 @@ const PLACEHOLDER_SALT = Math.random().toString(36).slice(2, 8);
 const placeholder = (index: number): string => `\uE000${PLACEHOLDER_SALT}${index}\uE001`;
 const PLACEHOLDER_RE = new RegExp(`\uE000${PLACEHOLDER_SALT}(\\d+)\uE001`, "g");
 
-function protectCodeSpans(md: string): { text: string; spans: string[] } {
-  const ranges = markdownCodeRanges(md);
+function protectCodeSpans(md: string, codeRanges?: MarkdownSourceRange[]): { text: string; spans: string[] } {
+  const ranges = codeRanges ?? markdownCodeRanges(md);
   const spans: string[] = [];
   let cursor = 0;
   let text = "";
@@ -209,8 +209,8 @@ function restoreCodeSpans(text: string, spans: string[]): string {
   });
 }
 
-export function normalizeMathInput(md: string): string {
-  const { text, spans } = protectCodeSpans(md);
+export function normalizeMathInput(md: string, codeRanges?: MarkdownSourceRange[]): string {
+  const { text, spans } = protectCodeSpans(md, codeRanges);
   const delimited = text
     .replace(/(^|\n)\\\[([\s\S]*?)\\\](?=[ \t]*(?:\n|$))/g, (_whole, lead: string, inner: string) =>
       `${lead}$$\n${stripStrayClosingBrace(inner).trim()}\n$$`)
@@ -253,9 +253,15 @@ export function MarkdownViewer({
   const openInspector = useUiStore((s) => s.openInspector);
   const { t } = useTranslation();
   const visibleValue = useFrameCoalescedValue(children, mode === "streaming");
-  const renderedValue = useMemo(() => normalizeMathInput(
-    mode === "streaming" ? stabilizeStreamingMarkdown(visibleValue) : visibleValue,
-  ), [mode, visibleValue]);
+  const prepared = useMemo(
+    () => (mode === "streaming" ? prepareStreamingMarkdown(visibleValue) : { text: visibleValue, codeRanges: undefined }),
+    [mode, visibleValue],
+  );
+  const renderedValue = useMemo(() => normalizeMathInput(prepared.text, prepared.codeRanges), [prepared]);
+  // Renderer components stay mounted across streaming frames, so `pre` reads
+  // the current source through a ref instead of forcing a new component type.
+  const renderedValueRef = useRef(renderedValue);
+  renderedValueRef.current = renderedValue;
   const resourceCwd = resourceContext?.cwd;
   const resourceRoot = resourceContext?.root;
   const resourceDocumentPath = resourceContext?.documentPath;
@@ -324,10 +330,14 @@ export function MarkdownViewer({
       const chrome = variant === "chat" && (codeChrome ?? true);
       const start = node?.position?.start.offset;
       const end = node?.position?.end.offset;
+      // Run is offered for a fence that has closed syntactically, even while
+      // the rest of the message is still streaming. A later replace/revision
+      // event can rewrite the block, so this runs a draft by design; it is a
+      // convenience, not a guarantee that the code will not change.
       const isUnclosedFence = mode === "streaming"
         && start !== undefined
         && end !== undefined
-        && isUnclosedFencedCodeBlock(renderedValue, start, end);
+        && isUnclosedFencedCodeBlock(renderedValueRef.current, start, end, code);
       if (chrome && codeProps) {
         if (!isUnclosedFence && cwd && sessionId && runnableLanguage(language)) {
           return (
@@ -357,7 +367,7 @@ export function MarkdownViewer({
     ),
     th: ({ children, style }) => <th className={s.th} style={style}>{children}</th>,
     td: ({ children, style }) => <td className={s.td} style={style}>{children}</td>,
-  }), [codeChrome, context, cwd, handleFileLink, mode, renderedValue, s, sessionId, t, variant]);
+  }), [codeChrome, context, cwd, handleFileLink, mode, s, sessionId, t, variant]);
   return (
     <div className={cn(s.root, className)}>
       <MemoizedReactMarkdown

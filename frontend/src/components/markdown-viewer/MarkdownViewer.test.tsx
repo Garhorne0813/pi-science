@@ -140,6 +140,33 @@ describe("MarkdownViewer streaming mode", () => {
     expect(screen.getAllByRole("button", { name: "Run" })).toHaveLength(1);
   });
 
+  it("does not treat a fence-like line inside an unclosed fence as a closer", () => {
+    render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {'```python\nprint("partial")\n> ```'}
+      </MarkdownViewer>,
+    );
+    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+  });
+
+  it("does not treat a four-space indented line as a closing fence", () => {
+    render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {"```python\nprint('partial')\n    ```"}
+      </MarkdownViewer>,
+    );
+    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+  });
+
+  it("offers execution once a blank line closes a blockquote fence", () => {
+    render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {"> ```python\n> print('done')\n\n"}
+      </MarkdownViewer>,
+    );
+    expect(screen.getByRole("button", { name: "Run" })).toBeInTheDocument();
+  });
+
   it("does not create a root-level code block when a list fence is unclosed", () => {
     const { container } = render(
       <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
@@ -181,6 +208,45 @@ describe("MarkdownViewer streaming mode", () => {
     streaming.unmount();
     const final = render(<MarkdownViewer mode="final">{markdown}</MarkdownViewer>);
     expect(final.container.innerHTML).toBe(streamingHtml);
+  });
+
+  it("keeps multi-dollar display math structurally equivalent while streaming", () => {
+    const markdown = "$$$\nx\n$$$";
+    const streaming = render(<MarkdownViewer mode="streaming">{markdown}</MarkdownViewer>);
+    const streamingHtml = streaming.container.innerHTML;
+    streaming.unmount();
+    const final = render(<MarkdownViewer mode="final">{markdown}</MarkdownViewer>);
+    expect(final.container.innerHTML).toBe(streamingHtml);
+  });
+
+  it("closes unclosed multi-dollar display math so it renders while streaming", () => {
+    const { container } = render(<MarkdownViewer mode="streaming">{"$$$\nE = mc^2"}</MarkdownViewer>);
+    expect(container.querySelector(".katex-display .katex")).toBeInTheDocument();
+  });
+
+  it("renders an open inline code span as code instead of flashing math", () => {
+    const open = render(
+      <MarkdownViewer mode="streaming">{'Use `formula = "\\(x^2\\)"'}</MarkdownViewer>,
+    );
+    expect(open.container.querySelector(".katex")).toBeNull();
+    const openHtml = open.container.innerHTML;
+    expect(open.container.querySelector("code")?.textContent).toBe('formula = "\\(x^2\\)"');
+    open.unmount();
+    const closed = render(
+      <MarkdownViewer mode="streaming">{'Use `formula = "\\(x^2\\)"`'}</MarkdownViewer>,
+    );
+    expect(closed.container.innerHTML).toBe(openHtml);
+  });
+
+  it("does not render dollars as math inside an open inline code span", () => {
+    const { container } = render(<MarkdownViewer mode="streaming">{"Use `$$x^2$$"}</MarkdownViewer>);
+    expect(container.querySelector(".katex")).toBeNull();
+    expect(container.querySelector("code")?.textContent).toBe("$$x^2$$");
+  });
+
+  it("renders same-line list display math while streaming", () => {
+    const { container } = render(<MarkdownViewer mode="streaming">{"- $$\n  E = mc^2"}</MarkdownViewer>);
+    expect(container.querySelector(".katex-display .katex")).toBeInTheDocument();
   });
 
   it("coalesces rapid deltas into one animation-frame paint", () => {

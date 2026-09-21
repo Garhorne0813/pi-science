@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { stabilizeStreamingMarkdown } from "./streaming-markdown";
+import { markdownCodeRanges } from "./markdown-code-ranges";
+import { prepareStreamingMarkdown, stabilizeStreamingMarkdown } from "./streaming-markdown";
 
 describe("stabilizeStreamingMarkdown", () => {
   it.each([
@@ -13,7 +14,7 @@ describe("stabilizeStreamingMarkdown", () => {
     ["currency before equation-like prose", "Cost is $50, and x = 2", "Cost is $50, and x = 2"],
     ["shell variable before equation-like prose", "Use $HOME and set x = 2", "Use $HOME and set x = 2"],
     ["currency before incomplete math", "Cost is $50, equation $x = 2", "Cost is $50, equation $x = 2"],
-    ["partial table", "| A | B |\n| --- | ---\n| 1", "| A | B |\n| --- | ---\n| 1"],
+    ["partial table", "| A | B |\n| --- |\n| 1", "| A | B |\n| --- |\n| 1"],
   ])("stabilizes %s without changing the source semantics", (_name, input, expected) => {
     expect(stabilizeStreamingMarkdown(input)).toBe(expected);
   });
@@ -64,10 +65,89 @@ describe("stabilizeStreamingMarkdown", () => {
     expect(stabilizeStreamingMarkdown(complete)).toBe(complete);
   });
 
+  it.each([
+    ["complete triple-dollar math", "$$$\nx\n$$$"],
+    ["complete math with a longer closer", "$$\nx\n$$$"],
+    ["complete math with a trailing newline", "$$$\nx\n$$$\n"],
+  ])("leaves %s byte-for-byte unchanged", (_name, complete) => {
+    expect(stabilizeStreamingMarkdown(complete)).toBe(complete);
+  });
+
+  it.each([
+    ["triple-dollar math", "$$$\nx", "$$$\nx\n$$$"],
+    ["quadruple-dollar math", "$$$$\nx", "$$$$\nx\n$$$$"],
+    ["short closer for a long opener", "$$$$\nx\n$$", "$$$$\nx\n$$\n$$$$"],
+  ])("closes unclosed %s with a matching run", (_name, input, expected) => {
+    expect(stabilizeStreamingMarkdown(input)).toBe(expected);
+  });
+
+  it("does not close display math after a blockquote container ended", () => {
+    const blockquote = "> $$\n> x = 1\n\n";
+    expect(stabilizeStreamingMarkdown(blockquote)).toBe(blockquote);
+  });
+
+  it("closes display math inside a list item that can still continue", () => {
+    expect(stabilizeStreamingMarkdown("- x\n  $$\n  y = 1\n\n"))
+      .toBe("- x\n  $$\n  y = 1\n\n  $$");
+  });
+
+  it("closes display math on the line that opened it in a list item", () => {
+    expect(stabilizeStreamingMarkdown("- $$\n  x")).toBe("- $$\n  x\n  $$");
+    expect(stabilizeStreamingMarkdown("> - $$\n>   x")).toBe("> - $$\n>   x\n>   $$");
+  });
+
+  it.each([
+    ["single backtick", 'Use `formula = "\\(x^2\\)"', 'Use `formula = "\\(x^2\\)"`'],
+    ["inline dollars", "Use `$$x^2$$", "Use `$$x^2$$`"],
+    ["double backticks", "Use ``\\(x\\)", "Use ``\\(x\\)``"],
+    ["triple backticks", "Use ```\\(x\\)", "Use ```\\(x\\)```"],
+  ])("closes an open inline code span: %s", (_name, input, expected) => {
+    expect(stabilizeStreamingMarkdown(input)).toBe(expected);
+  });
+
+  it("does not close a backtick run that later deltas cannot continue", () => {
+    expect(stabilizeStreamingMarkdown("Use `x\n\nmore")).toBe("Use `x\n\nmore");
+    expect(stabilizeStreamingMarkdown("Use `")).toBe("Use `");
+    expect(stabilizeStreamingMarkdown("Use \\` literal")).toBe("Use \\` literal");
+    expect(stabilizeStreamingMarkdown("# Heading `x\n")).toBe("# Heading `x\n");
+  });
+
+  it("reports the synthetic code span range for the stabilized text", () => {
+    const prepared = prepareStreamingMarkdown("Use `\\(x\\)");
+    expect(prepared.text).toBe("Use `\\(x\\)`");
+    expect(prepared.codeRanges).toEqual([{ start: 4, end: prepared.text.length }]);
+  });
+
   it("handles a 10k-character streaming buffer without truncation", () => {
     const input = `${"科研结果。".repeat(2_000)}\n\n$$\nE = mc^2`;
     const output = stabilizeStreamingMarkdown(input);
     expect(output.startsWith(input)).toBe(true);
     expect(output.length).toBe(input.length + 3);
   });
+
+  it("reports code ranges that match a fresh parse of the stabilized text", () => {
+    const inputs = [
+      "Use `\\(x\\)",
+      "Use `$$x^2$$",
+      "```python\nprice = '$$'",
+      "```python\nprint(1)\n```\n\ntext",
+      "- item\n  ```python\n  x = 1",
+      "Use ``a`b`` and `open",
+      "$$\nx\n\nUse `open",
+    ];
+    for (const input of inputs) {
+      const prepared = prepareStreamingMarkdown(input);
+      expect(prepared.codeRanges, input).toEqual(markdownCodeRanges(prepared.text));
+    }
+  });
+
+  it("prepares a 100k-character mixed buffer without truncation", () => {
+    const line = "\u79d1\u7814\u7ed3\u679c **bold** `code` \\(x\\) and $E = mc^2$\n";
+    const input = `${line.repeat(Math.ceil(100_000 / line.length))}\n$$\nE = mc^2`;
+    const prepared = prepareStreamingMarkdown(input);
+    expect(prepared.text.startsWith(input)).toBe(true);
+    expect(prepared.text.endsWith("\n$$")).toBe(true);
+    expect(markdownCodeRanges(prepared.text)).toEqual(prepared.codeRanges);
+  });
+
 });
