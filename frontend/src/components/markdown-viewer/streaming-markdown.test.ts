@@ -37,6 +37,11 @@ describe("stabilizeStreamingMarkdown", () => {
       .toBe("> $$\n> x = 1\n> $$");
   });
 
+  it("resumes display-math handling after an implicitly closed code container", () => {
+    expect(stabilizeStreamingMarkdown("> ```python\n> done\n\n$$\nx = 1"))
+      .toBe("> ```python\n> done\n\n$$\nx = 1\n$$");
+  });
+
   it("ignores math delimiters inside code spans with any backtick length", () => {
     expect(stabilizeStreamingMarkdown("Use ```$HOME=x``` then\n\n$$\ny = 2"))
       .toBe("Use ```$HOME=x``` then\n\n$$\ny = 2\n$$");

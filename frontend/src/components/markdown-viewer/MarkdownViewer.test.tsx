@@ -112,6 +112,16 @@ describe("MarkdownViewer streaming mode", () => {
     expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
   });
 
+  it("preserves code and disables execution after length-changing math normalization", () => {
+    const { container } = render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {"\\[x\\]\n\n```python\nformula = \"\\(y^2\\)\""}
+      </MarkdownViewer>,
+    );
+    expect(container.querySelector("code")?.textContent).toContain("\\(y^2\\)");
+    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+  });
+
   it("keeps execution available for a completed fence while the message continues streaming", () => {
     render(
       <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
@@ -139,6 +149,29 @@ describe("MarkdownViewer streaming mode", () => {
     expect(container.querySelectorAll("pre")).toHaveLength(1);
     expect(container.querySelector("li pre")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+  });
+
+  it("disables execution for a deeply indented list fence", () => {
+    const { container } = render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {"- item\n    ```python\n    partial"}
+      </MarkdownViewer>,
+    );
+    expect(container.querySelector("li pre code")?.textContent).toContain("partial");
+    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+  });
+
+  it("only disables the current root fence after a blockquote container ends", () => {
+    const { container } = render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {"> ```python\n> print('done')\n\n```python\nprint('partial')"}
+      </MarkdownViewer>,
+    );
+    const codeBlocks = container.querySelectorAll("pre code");
+    expect(codeBlocks).toHaveLength(2);
+    expect(codeBlocks[0]?.closest(".relative")?.querySelector('button[aria-label="Run"]')).toBeInTheDocument();
+    expect(codeBlocks[1]?.closest(".relative")?.querySelector('button[aria-label="Run"]')).toBeUndefined();
+    expect(screen.getAllByRole("button", { name: "Run" })).toHaveLength(1);
   });
 
   it("keeps complete streaming and final output structurally equivalent", () => {

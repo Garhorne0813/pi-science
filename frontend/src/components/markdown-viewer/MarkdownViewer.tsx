@@ -13,7 +13,8 @@ import { CodeBlockFrame } from "./CodeBlockFrame";
 import { fileInspectorForPath } from "@/lib/artifacts";
 import { resolveMarkdownResource, type MarkdownResourceContext } from "@/lib/files/markdown-resources";
 import { useUiStore } from "@/lib/ui";
-import { findUnclosedFenceOffset, stabilizeStreamingMarkdown, type MarkdownRenderMode } from "./streaming-markdown";
+import { isUnclosedFencedCodeBlock, markdownCodeRanges } from "./markdown-code-ranges";
+import { stabilizeStreamingMarkdown, type MarkdownRenderMode } from "./streaming-markdown";
 
 export type { MarkdownRenderMode } from "./streaming-markdown";
 
@@ -179,39 +180,22 @@ export function stripStrayClosingBrace(tex: string): string {
   return tex;
 }
 
-/** Fenced and inline code are protected as spans. Indented code is protected
- * line-by-line so its newline stays visible to the later display-math checks.
- * A four-space line directly continuing a list item is prose in CommonMark,
- * not a top-level indented code block, so leave it eligible for math rewrite. */
-const FENCE_PATTERN = /^(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1[ \t]*$/gm;
-const INDENTED_CODE_LINE_PATTERN = /^(?: {4}|\t)[^\n]*$/;
-const LIST_ITEM_PATTERN = /^ {0,3}(?:[-+*]|\d+[.)])[ \t]+/;
-const INLINE_CODE_PATTERN = /(`+)[^`\n]*?\1/g;
-
 const PLACEHOLDER_SALT = Math.random().toString(36).slice(2, 8);
 const placeholder = (index: number): string => `\uE000${PLACEHOLDER_SALT}${index}\uE001`;
 const PLACEHOLDER_RE = new RegExp(`\uE000${PLACEHOLDER_SALT}(\\d+)\uE001`, "g");
 
-function protectIndentedCodeLines(md: string, protect: (match: string) => string): string {
-  const lines = md.split("\n");
-  let previousWasListItem = false;
-  return lines.map((line) => {
-    const isListItem = LIST_ITEM_PATTERN.test(line);
-    const shouldProtect = INDENTED_CODE_LINE_PATTERN.test(line) && !previousWasListItem;
-    previousWasListItem = isListItem;
-    return shouldProtect ? protect(line) : line;
-  }).join("\n");
-}
-
 function protectCodeSpans(md: string): { text: string; spans: string[] } {
+  const ranges = markdownCodeRanges(md);
   const spans: string[] = [];
-  const protect = (match: string) => {
-    spans.push(match);
-    return placeholder(spans.length - 1);
-  };
-  const withFences = md.replace(FENCE_PATTERN, protect);
-  const withIndented = protectIndentedCodeLines(withFences, protect);
-  return { text: withIndented.replace(INLINE_CODE_PATTERN, protect), spans };
+  let cursor = 0;
+  let text = "";
+  for (const range of ranges) {
+    text += md.slice(cursor, range.start);
+    spans.push(md.slice(range.start, range.end));
+    text += placeholder(spans.length - 1);
+    cursor = range.end;
+  }
+  return { text: text + md.slice(cursor), spans };
 }
 
 function restoreCodeSpans(text: string, spans: string[]): string {
@@ -267,10 +251,6 @@ export function MarkdownViewer({
   const renderedValue = useMemo(() => normalizeMathInput(
     mode === "streaming" ? stabilizeStreamingMarkdown(visibleValue) : visibleValue,
   ), [mode, visibleValue]);
-  const unclosedFenceOffset = useMemo(
-    () => mode === "streaming" ? findUnclosedFenceOffset(visibleValue) : null,
-    [mode, visibleValue],
-  );
   const context = useMemo<MarkdownResourceContext | undefined>(
     () => resourceContext ?? (cwd ? { cwd, documentPath: undefined } : undefined),
     [cwd, resourceContext],
@@ -342,11 +322,10 @@ export function MarkdownViewer({
             const chrome = variant === "chat" && (codeChrome ?? true);
             const start = node?.position?.start.offset;
             const end = node?.position?.end.offset;
-            const isUnclosedFence = unclosedFenceOffset !== null
+            const isUnclosedFence = mode === "streaming"
               && start !== undefined
               && end !== undefined
-              && start <= unclosedFenceOffset
-              && unclosedFenceOffset <= end;
+              && isUnclosedFencedCodeBlock(renderedValue, start, end);
             if (chrome && codeProps) {
               if (!isUnclosedFence && codeRunner && runnableLanguage(language)) {
                 return (
