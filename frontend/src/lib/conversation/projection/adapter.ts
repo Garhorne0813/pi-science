@@ -104,12 +104,19 @@ function projectActivity(block: Extract<ThreadBlock, { kind: "agent" | "thinking
       ...(block.kind === "thinking" && block.endedAt ? { endedAt: block.endedAt } : {}),
     };
   }
+  return projectToolActivity(block);
+}
+
+/** Public bridge for semantic activity renderers while ThreadBlock remains the
+ * event-fold compatibility model. */
+export function projectToolActivity(block: ToolCallBlock): ActivityProjection {
+  const kind = activityKind(block);
   return {
     // event-fold already makes retries/attempts distinct in the block id;
     // an enclosing protocol item id is not necessarily attempt-specific.
     id: block.id,
     revision: entityRevision(block),
-    kind: activityKind(block),
+    kind,
     state: activityState(block.status),
     title: block.presentation?.title ?? block.title ?? block.tool,
     ...(block.presentation?.description ? { subtitle: block.presentation.description } : {}),
@@ -120,8 +127,8 @@ function projectActivity(block: Extract<ThreadBlock, { kind: "agent" | "thinking
     ...(block.startedAt ? { startedAt: block.startedAt } : {}),
     ...(block.endedAt ? { endedAt: block.endedAt } : {}),
     presentation: {
-      renderer: activityKind(block),
-      groupKey: `${activityKind(block)}:${block.presentation?.domain ?? "generic"}`,
+      renderer: kind,
+      groupKey: `${kind}:${block.presentation?.domain ?? "generic"}`,
       importance: block.presentation?.importance === "interrupt" ? "high" : "normal",
     },
   };
@@ -155,23 +162,30 @@ function projectAnswer(block: AgentMessageBlock, lifecycle: TurnLifecycle, role:
 
 function projectArtifact(turn: TurnPresentation, summaryId: string, artifact: TurnArtifactItem): ArtifactProjection {
   const id = artifact.artifactId
-    ? `${artifact.artifactId}:${artifact.version ?? 0}`
+    ? artifact.artifactId
     : `${summaryId}:${artifact.path}`;
   return {
     id,
-    revision: artifact.version ?? 0,
+    revision: artifact.revision ?? artifact.version ?? 0,
     ...(artifact.version !== undefined ? { version: artifact.version } : {}),
     filename: artifact.path.split("/").at(-1) ?? artifact.path,
     path: artifact.path,
     kind: artifactKind(artifact),
     mime: artifact.mime,
     size: artifact.size,
-    state: "published",
-    generatedBy: { ...(turn.turnId ? { turnId: turn.turnId } : {}) },
+    ...(artifact.sha256 ? { sha256: artifact.sha256 } : {}),
+    state: artifact.state ?? "published",
+    generatedBy: {
+      ...(turn.turnId ? { turnId: turn.turnId } : {}),
+      ...(artifact.activityId ? { activityId: artifact.activityId } : {}),
+      ...(artifact.executionId ? { executionId: artifact.executionId } : {}),
+    },
+    ...(artifact.environmentRevision ? { environmentRevision: artifact.environmentRevision } : {}),
+    ...(artifact.provenanceRef ? { provenanceRef: artifact.provenanceRef } : {}),
   };
 }
 
-function activityKind(block: ToolCallBlock): ActivityKind {
+export function activityKind(block: ToolCallBlock): ActivityKind {
   const tool = block.tool.trim().toLowerCase();
   if (block.childSessionId || tool.includes("subagent") || tool.includes("agent")) return "subagent";
   if (tool.includes("python") || tool.includes("kernel") || tool === "r" || tool.includes("notebook")) return "kernel";

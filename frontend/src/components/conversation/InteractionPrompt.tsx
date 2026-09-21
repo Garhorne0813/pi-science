@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import type { PendingInteraction } from "../../lib/agent-runtime";
 import { useTranslation } from "react-i18next";
+import { PermissionCard } from "./interactions/PermissionCard";
 
 export function InteractionPrompt({
   interaction,
@@ -42,6 +43,16 @@ export function InteractionPrompt({
       ? { label: option, value: option }
       : { label: option.label || option.value || t("interaction.option"), value: option.value || option.label || "" }
   ));
+
+  const permission = interaction.kind === "permission"
+    || /\b(permission|approval|allow|deny)\b/i.test(`${interaction.title} ${interaction.message ?? ""}`);
+
+  if (permission) {
+    return <>
+      <PermissionCard interaction={interaction} submitting={submitting} selectedOption={selectedOption} onRespond={(response) => { void respond(response); }} />
+      {error && <p role="alert" className="mt-3 rounded-input border border-error/30 bg-error/5 px-3 py-2 text-xs text-error-text">{error}</p>}
+    </>;
+  }
 
   return (
     <div className="rounded-card border border-accent/30 bg-accent/5 p-4 animate-fadeIn">

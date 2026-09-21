@@ -169,6 +169,13 @@ export interface TurnArtifactItem {
   size: number;
   artifactId?: string;
   version?: number;
+  revision?: number;
+  sha256?: string;
+  state?: "declared" | "writing" | "published" | "failed";
+  activityId?: string;
+  executionId?: string;
+  environmentRevision?: string;
+  provenanceRef?: string;
 }
 
 /** Per-turn generated-file summary shown after the final assistant message.

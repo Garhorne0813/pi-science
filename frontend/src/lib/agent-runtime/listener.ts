@@ -364,12 +364,16 @@ export function registerEventListener(client: PiScienceClient) {
         status: "ready",
         pendingInteraction: {
           requestId: interactionId,
+          kind: method === "confirm" ? "confirmation" : "question",
           method: ["confirm", "select", "input", "editor"].includes(method) ? method : "input",
           title: String(event.title || payload.title || "Question"),
           message: String(event.message || payload.message || ""),
           options: Array.isArray(event.options || payload.options) ? (event.options || payload.options) as PendingInteraction["options"] : [],
           placeholder: String(event.placeholder || payload.placeholder || ""),
           prefill: String(event.prefill || payload.prefill || ""),
+          operation: String(event.operation || payload.operation || ""),
+          scope: String(event.scope || payload.scope || ""),
+          effect: String(event.effect || payload.effect || ""),
         },
       });
       // The reducer still records the envelope; the interaction card is a
@@ -394,12 +398,16 @@ export function registerEventListener(client: PiScienceClient) {
         status: "ready",
         pendingInteraction: {
           requestId: String(event.requestId || ""),
+          kind: event.type === "permission.asked" ? "permission" : "question",
           method,
           title: String(event.title || (method === "confirm" ? "Confirmation" : "Question")),
           message: String(event.message || ""),
           options: Array.isArray(event.options) ? event.options as PendingInteraction["options"] : [],
           placeholder: String(event.placeholder || ""),
           prefill: String(event.prefill || ""),
+          operation: String(event.operation || ""),
+          scope: String(event.scope || ""),
+          effect: String(event.effect || ""),
           ...(event.questionnaire === true ? { questionnaire: true, toolCallId: String(event.toolCallId || "") } : {}),
         },
       });

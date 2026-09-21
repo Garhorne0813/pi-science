@@ -8,12 +8,13 @@ import { ACTIVITY_SWITCH_DEBOUNCE_MS, MIN_ACTIVITY_VISIBLE_MS, selectDisplayedAc
 import type { PresentedActivity } from "../../lib/conversation/activity-narrative";
 import { groupActivityBlocks, type ActivityGroup } from "../../lib/conversation/activity-groups";
 import { isLiveLifecycle, type TurnLifecycle } from "../../lib/conversation/turn-presentation";
-import { presentToolActivity } from "../../lib/conversation/activity-presenters";
+import { projectToolActivity } from "../../lib/conversation/projection";
 import { ProgressVisual, useProgressAppearance } from "../progress/ProgressVisual";
 import type { ProgressActivityState } from "../progress/progress-activity-map";
 import { cn } from "../../lib/ui";
 import { MarkdownViewer } from "../markdown-viewer/MarkdownViewer";
 import { parseSuggestions } from "../../lib/conversation";
+import { activityRendererRegistry } from "./activity-renderers/registry";
 import styles from "./AgentActivity.module.css";
 
 export type ActivityBlock = AgentMessageBlock | ThinkingBlock | ToolCallBlock;
@@ -311,29 +312,30 @@ function ActivityIcon({ state, slot, config, label, activityState, compact = fal
 function TraceItem({ block, live }: { block: ToolCallBlock; live: boolean }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const hasStructuredDetails = block.details !== undefined && block.details !== null;
-  const hasDetails = Boolean(block.input || block.output || block.partialOutput || block.diff || hasStructuredDetails);
-  const output = block.output ?? block.partialOutput;
+  const activity = projectToolActivity(block);
+  const renderer = activityRendererRegistry.resolve(activity.presentation?.renderer ?? activity.kind);
+  const rendererProps = { activity, source: block, live, t };
+  const compact = renderer.compact(rendererProps);
+  const details = renderer.expanded(rendererProps);
+  const hasDetails = details.length > 1 || Boolean(block.input || block.output || block.partialOutput || block.diff || block.details !== undefined);
   const running = live && block.status === "running";
   const duration = running ? null : stepDuration(block);
   // While the operation streams, its freshest output line fills the right
   // edge of the row and the chevron sits at the far right; once the step
   // completes the tail makes way for the duration chip.
-  const liveTail = running && block.partialOutput ? lastStreamLine(block.partialOutput) : null;
+  const liveTail = running && block.partialOutput ? lastStreamLine(block.partialOutput) : compact.detail ?? null;
   return <div className={cn(styles.entry, styles.tool)} data-running={running}>
     <button type="button" disabled={!hasDetails} aria-expanded={hasDetails ? expanded : undefined} onClick={() => hasDetails && setExpanded((value) => !value)} className={cn(styles.toolButton, "flex min-h-primary max-w-full items-center gap-2 rounded-input py-1.5 text-left text-ui-label text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default sm:min-h-control")}>
       {running ? <span aria-hidden className="mx-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : block.status === "error" ? <CircleX size={14} aria-hidden className="shrink-0 text-error-text" /> : <Check size={14} aria-hidden className="shrink-0 text-muted" />}
-      <span className="min-w-0 truncate">{presentToolActivity(block, t)}</span>
+      <span className="min-w-0 truncate">{compact.title}</span>
       {liveTail && <span aria-hidden className="hidden min-w-0 flex-1 truncate text-right font-mono text-[10px] text-muted sm:block">{liveTail}</span>}
       {duration && <span aria-hidden="true" className="shrink-0 font-mono text-[10px] tabular-nums text-muted">{duration}</span>}
       {hasDetails && <ChevronRight size={12} aria-hidden className={cn(styles.chevron, "shrink-0 transition-transform", expanded && "rotate-90")} />}
     </button>
     {expanded && hasDetails && <div className={cn(styles.details, "space-y-2 pb-2 pl-6 text-xs")}>
-      <Detail label={t("conversation.activity.toolLabel")} value={block.tool} />
-      {block.input && <Detail label={t("conversation.activity.input")} value={JSON.stringify(block.input, null, 2)} pre />}
-      {output && <OutputDetail label={t("conversation.activity.output")} value={output} fullValue={block.output} partial={Boolean(block.partialOutput && !block.output)} t={t} />}
-      {hasStructuredDetails && <OutputDetail label={t("conversation.activity.details")} value={stringifyDetails(block.details)} fullValue={stringifyDetails(block.details)} t={t} />}
-      {block.diff && <OutputDetail label={t("conversation.activity.diff")} value={block.diff} fullValue={block.diff} t={t} />}
+      {details.map((detail, index) => detail.pre || detail.plain
+        ? <Detail key={`${detail.label}:${index}`} label={detail.label} value={detail.value} pre={detail.pre} />
+        : <OutputDetail key={`${detail.label}:${index}`} label={detail.label} value={detail.value} fullValue={detail.fullValue} partial={detail.partial} t={t} />)}
     </div>}
   </div>;
 }
@@ -378,10 +380,5 @@ function OutputDetail({
     </div>}
     {partial && !truncated && <div className="mt-1 text-[10px] text-muted">{t("conversation.activity.fullOutputUnavailable")}</div>}
   </div>;
-}
-function stringifyDetails(value: unknown): string {
-  if (typeof value === "string") return value;
-  try { return JSON.stringify(value, null, 2); }
-  catch { return String(value); }
 }
 function Detail({ label, value, pre = false }: { label: string; value: string; pre?: boolean }) { return <div><div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted">{label}</div>{pre ? <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-input bg-surface px-2 py-1.5 font-mono text-xs leading-5 text-text">{value}</pre> : <div className="font-mono text-xs text-text">{value}</div>}</div>; }

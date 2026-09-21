@@ -304,20 +304,21 @@ function ArtifactMiniCard({ item, cwd }: { item: TurnArtifactItem; cwd?: string 
 export function TurnArtifactStrip({ artifacts, cwd, heading = "generated" }: { artifacts: TurnArtifactItem[]; cwd?: string; heading?: "generated" | "referenced" }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const visible = useMemo(() => (expanded ? artifacts : artifacts.slice(0, MAX_VISIBLE)), [artifacts, expanded]);
-  const extra = artifacts.length - visible.length;
+  const stableArtifacts = useMemo(() => latestArtifactVersions(artifacts), [artifacts]);
+  const visible = useMemo(() => (expanded ? stableArtifacts : stableArtifacts.slice(0, MAX_VISIBLE)), [stableArtifacts, expanded]);
+  const extra = stableArtifacts.length - visible.length;
 
-  if (!artifacts.length) return null;
+  if (!stableArtifacts.length) return null;
 
   const ariaLabel = heading === "referenced" ? t("conversation.referencedFiles") : t("conversation.generatedFiles");
-  const headingLabel = heading === "referenced" ? t("conversation.referencedFilesLabel", { count: artifacts.length }) : t("conversation.generatedFilesLabel", { count: artifacts.length });
+  const headingLabel = heading === "referenced" ? t("conversation.referencedFilesLabel", { count: stableArtifacts.length }) : t("conversation.generatedFilesLabel", { count: stableArtifacts.length });
   return (
     <section aria-label={ariaLabel} className="mt-3.5">
       <div className="mb-1.5 text-[10.5px] font-medium tracking-[0.02em] text-muted">
         {headingLabel}
       </div>
       <div className="flex flex-wrap gap-2">
-        {visible.map((item) => <ArtifactMiniCard key={item.path} item={item} cwd={cwd} />)}
+        {visible.map((item) => <ArtifactMiniCard key={item.artifactId ?? item.path} item={item} cwd={cwd} />)}
         {extra > 0 && (
           <button
             type="button"
@@ -340,6 +341,27 @@ export function TurnArtifactStrip({ artifacts, cwd, heading = "generated" }: { a
       </div>
     </section>
   );
+}
+
+/** Keep the card identity stable while an artifact advances to a newer
+ * immutable version. Stale/replayed versions cannot create duplicate cards. */
+export function latestArtifactVersions(artifacts: TurnArtifactItem[]): TurnArtifactItem[] {
+  const positions = new Map<string, number>();
+  const result: TurnArtifactItem[] = [];
+  for (const artifact of artifacts) {
+    const id = artifact.artifactId ?? artifact.path;
+    const position = positions.get(id);
+    if (position === undefined) {
+      positions.set(id, result.length);
+      result.push(artifact);
+      continue;
+    }
+    const current = result[position];
+    const nextRevision = artifact.revision ?? artifact.version ?? 0;
+    const currentRevision = current.revision ?? current.version ?? 0;
+    if (nextRevision > currentRevision) result[position] = artifact;
+  }
+  return result;
 }
 
 /** Show existing workspace files cited by the final answer, even when the turn

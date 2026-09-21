@@ -89,6 +89,15 @@ describe("foldEvent turn.artifacts", () => {
     expect((summaries[0] as { artifacts: unknown[] }).artifacts).toHaveLength(2);
   });
 
+  it("rejects duplicate and stale artifact summary revisions", () => {
+    let state = threadWith([{ kind: "user", id: "user-1", text: "hi" }]);
+    const base = { type: "turn.artifacts", sessionId: "s", turnId: "turn-1" } as PiScienceEvent;
+    state = foldEvent(state, { ...base, revision: 2, artifacts: [{ path: "new.csv", kind: "table", mime: "text/csv", size: 2 }] });
+    state = foldEvent(state, { ...base, revision: 2, artifacts: [{ path: "duplicate.csv", kind: "table", mime: "text/csv", size: 2 }] });
+    state = foldEvent(state, { ...base, revision: 1, artifacts: [{ path: "stale.csv", kind: "table", mime: "text/csv", size: 1 }] });
+    expect(state.blocks.find((block) => block.kind === "artifact-summary")).toMatchObject({ revision: 2, artifacts: [{ path: "new.csv" }] });
+  });
+
   it("ignores empty artifact lists", () => {
     const state = threadWith([{ kind: "user", id: "user-1", text: "hi" }]);
     const next = foldEvent(state, { type: "turn.artifacts", sessionId: "s", turnId: "turn-1", artifacts: [] } as PiScienceEvent);

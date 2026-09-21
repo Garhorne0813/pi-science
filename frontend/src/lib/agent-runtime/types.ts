@@ -5,6 +5,7 @@ import type { Thread } from "./event-fold";
 
 export interface PendingInteraction {
   requestId: string;
+  kind?: "permission" | "question" | "confirmation";
   method: "confirm" | "select" | "input" | "editor";
   title: string;
   message?: string;
@@ -14,6 +15,9 @@ export interface PendingInteraction {
   /** True for the Pi-Science structured questionnaire bridge request. */
   questionnaire?: boolean;
   toolCallId?: string;
+  operation?: string;
+  scope?: string;
+  effect?: string;
 }
 
 export interface QuestionnaireOption {

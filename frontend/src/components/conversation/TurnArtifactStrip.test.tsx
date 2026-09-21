@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ReferencedArtifactStrip, TurnArtifactStrip } from "./TurnArtifactStrip";
+import { latestArtifactVersions, ReferencedArtifactStrip, TurnArtifactStrip } from "./TurnArtifactStrip";
 
 const { openInspector, mockReadArtifact, mockProbeLargeFile } = vi.hoisted(() => ({
   openInspector: vi.fn(),
@@ -42,6 +42,13 @@ beforeEach(() => {
 });
 
 describe("TurnArtifactStrip", () => {
+  it("keeps one stable card per artifact and selects its newest version", () => {
+    expect(latestArtifactVersions([
+      { path: "old.csv", artifactId: "a1", version: 1, revision: 1, kind: "table", mime: "text/csv", size: 1 },
+      { path: "new.csv", artifactId: "a1", version: 2, revision: 3, kind: "table", mime: "text/csv", size: 2 },
+      { path: "stale.csv", artifactId: "a1", version: 1, kind: "table", mime: "text/csv", size: 1 },
+    ])).toEqual([expect.objectContaining({ path: "new.csv", version: 2 })]);
+  });
   it("renders verified workspace paths cited by the final answer", async () => {
     mockProbeLargeFile.mockImplementation(async (path: string) => path === "work/plot.png" ? { path, name: "plot.png", size: 2048, is_dir: false } : null);
     render(<ReferencedArtifactStrip cwd="/workspace" text="See `work/plot.png` and missing/file.pdf." />);

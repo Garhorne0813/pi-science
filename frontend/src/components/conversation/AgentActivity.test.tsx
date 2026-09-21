@@ -23,6 +23,17 @@ describe("AgentActivity data filters", () => {
 });
 
 describe("AgentActivity live stream", () => {
+  it("uses semantic kernel and literature renderers", () => {
+    render(<AgentActivity blocks={[
+      { ...tool("python", "python", "done", { code: "print(42)" }), details: { outputs: [{ type: "text" }, { type: "image" }] } },
+      { ...tool("pubmed", "search_pubmed", "done", { query: "kinetics" }), details: { results: [{}, {}, {}], retained: [{}] } },
+    ]} />);
+    expect(screen.getByText("Python")).toBeInTheDocument();
+    expect(screen.getByText("2 outputs")).toBeInTheDocument();
+    expect(screen.getByText("PubMed")).toBeInTheDocument();
+    expect(screen.getByText("3 results · 1 retained")).toBeInTheDocument();
+  });
+
   it("updates the running tool line immediately when consecutive tools share the same phase", () => {
     const read = tool("read", "read", "running", { path: "a.ts", description: "Find why the second reply stops following" });
     const { rerender } = render(<AgentActivity blocks={[read]} />);

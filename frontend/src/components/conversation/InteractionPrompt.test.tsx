@@ -11,6 +11,16 @@ const approval = {
 };
 
 describe("InteractionPrompt", () => {
+  it("renders confirmation permissions as an accessible approval card", () => {
+    const onRespond = vi.fn();
+    render(<InteractionPrompt interaction={{ requestId: "install-1", kind: "permission", method: "confirm", title: "Install scipy", operation: "Install scipy 1.17", scope: "Project environment", effect: "Creates a new revision" }} onRespond={onRespond} />);
+    expect(screen.getByRole("region", { name: "Approval required" })).toBeInTheDocument();
+    expect(screen.getByText("Project environment")).toBeInTheDocument();
+    expect(screen.getByText("Creates a new revision")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+    expect(onRespond).toHaveBeenCalledWith({ confirmed: true });
+  });
+
   it("sends the selected MCP approval once and locks the buttons while pending", async () => {
     let resolveResponse!: () => void;
     const onRespond = vi.fn(() => new Promise<void>((resolve) => { resolveResponse = resolve; }));

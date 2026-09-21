@@ -619,6 +619,12 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       };
       const existing = index[blockId];
       if (existing !== undefined) {
+        const previous = blocks[existing];
+        const previousRevision = previous.kind === "artifact-summary" ? numberValue(previous.revision) : undefined;
+        const incomingRevision = numberValue(event.revision);
+        // Versioned projection updates are strictly monotonic. Replay and late
+        // delivery must never replace a newer published artifact set.
+        if (previousRevision !== undefined && incomingRevision !== undefined && incomingRevision <= previousRevision) break;
         blocks[existing] = block;
         break;
       }
