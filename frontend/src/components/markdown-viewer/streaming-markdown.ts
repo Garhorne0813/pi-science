@@ -2,13 +2,14 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
-import { collectCodeRanges, containerContinuationPrefix, type MarkdownSourceRange } from "./markdown-code-ranges";
+import { collectCodeRanges, containerContinuationPrefix, markdownCodeRanges, type MarkdownSourceRange } from "./markdown-code-ranges";
 
 export type MarkdownRenderMode = "streaming" | "final";
 
 export type PreparedStreamingMarkdown = {
   text: string;
-  codeRanges: MarkdownSourceRange[];
+  /** Code ranges of `text`, present only when stabilization changed it. */
+  codeRanges?: MarkdownSourceRange[];
 };
 
 type MarkdownNode = {
@@ -38,24 +39,28 @@ export function stabilizeStreamingMarkdown(markdown: string): string {
 /** Stabilize the buffer and report code ranges for the same output text. */
 export function prepareStreamingMarkdown(markdown: string): PreparedStreamingMarkdown {
   const tree = mathParser.parse(markdown) as MarkdownNode;
-  const codeRanges: MarkdownSourceRange[] = [];
-  collectCodeRanges(tree, codeRanges);
-  codeRanges.sort((a, b) => a.start - b.start);
-  const span = findOpenCodeSpan(markdown, tree, codeRanges);
+  const treeCodeRanges: MarkdownSourceRange[] = [];
+  collectCodeRanges(tree, treeCodeRanges);
+  treeCodeRanges.sort((a, b) => a.start - b.start);
+  const span = findOpenCodeSpan(markdown, tree, treeCodeRanges);
   if (span) {
     const closer = "`".repeat(span.length);
-    return {
-      text: `${markdown}${closer}`,
-      codeRanges: [...codeRanges, { start: span.start, end: markdown.length + closer.length }],
-    };
+    const insertAt = markdown.length - trailingLineBreakLength(markdown);
+    const text = `${markdown.slice(0, insertAt)}${closer}${markdown.slice(insertAt)}`;
+    // The synthetic closer changes what the grammar sees, so the ranges for
+    // the output must come from a fresh parse of the output itself.
+    return { text, codeRanges: markdownCodeRanges(text) };
   }
   const math = findOpenDisplayMath(markdown, tree);
-  if (!math) return { text: markdown, codeRanges };
+  if (!math) return { text: markdown };
   const closer = "$".repeat(math.openerLength);
-  return {
-    text: `${markdown}${markdown.endsWith("\n") ? "" : "\n"}${math.closingPrefix}${closer}`,
-    codeRanges,
-  };
+  const text = `${markdown}${markdown.endsWith("\n") ? "" : "\n"}${math.closingPrefix}${closer}`;
+  return { text, codeRanges: markdownCodeRanges(text) };
+}
+
+function trailingLineBreakLength(markdown: string): number {
+  if (markdown.endsWith("\r\n")) return 2;
+  return markdown.endsWith("\n") ? 1 : 0;
 }
 
 type BacktickRun = { start: number; length: number };
@@ -65,9 +70,12 @@ function findOpenCodeSpan(
   tree: MarkdownNode,
   codeRanges: MarkdownSourceRange[],
 ): BacktickRun | null {
-  // Appending at the end only closes a span when the closer stays a separate
-  // run; a trailing backtick or escape would merge with or escape it.
-  if (markdown.endsWith("`") || hasTrailingEscape(markdown)) return null;
+  // The closer is inserted before a trailing line break, so a multi-backtick
+  // opener cannot turn the next line into a fenced code block. It must stay a
+  // separate run: a preceding backtick would merge with it and an odd number
+  // of preceding backslashes would escape it.
+  const insertAt = markdown.length - trailingLineBreakLength(markdown);
+  if (markdown[insertAt - 1] === "`" || isEscaped(markdown, insertAt)) return null;
   const host = lastInlineHost(tree);
   if (!host) return null;
   const afterHost = markdown.slice(host.end);
@@ -77,9 +85,11 @@ function findOpenCodeSpan(
   if (!canContinue) return null;
 
   const runs: BacktickRun[] = [];
+  let rangeIndex = 0;
   for (let index = host.start; index < host.end; ) {
-    const excluded = codeRanges.find((range) => index >= range.start && index < range.end);
-    if (excluded) {
+    while (rangeIndex < codeRanges.length && codeRanges[rangeIndex]!.end <= index) rangeIndex += 1;
+    const excluded = codeRanges[rangeIndex];
+    if (excluded && index >= excluded.start && index < excluded.end) {
       index = excluded.end;
       continue;
     }
@@ -108,12 +118,6 @@ function findOpenCodeSpan(
 function isEscaped(markdown: string, index: number): boolean {
   let backslashes = 0;
   for (let i = index - 1; i >= 0 && markdown[i] === "\\"; i -= 1) backslashes += 1;
-  return backslashes % 2 === 1;
-}
-
-function hasTrailingEscape(markdown: string): boolean {
-  let backslashes = 0;
-  for (let i = markdown.length - 1; i >= 0 && markdown[i] === "\\"; i -= 1) backslashes += 1;
   return backslashes % 2 === 1;
 }
 
@@ -149,18 +153,43 @@ function findOpenDisplayMath(
   // Content after the node means a container boundary already closed it.
   if (/[^\s]/.test(markdown.slice(end))) return null;
   const lineStart = markdown.lastIndexOf("\n", start - 1) + 1;
-  const continuation = containerContinuationPrefix(markdown.slice(lineStart, start));
+  const openerPrefix = markdown.slice(lineStart, start);
+  const continuation = containerContinuationPrefix(openerPrefix);
   // The closing line must continue the same container. A trailing list marker
   // is blanked out, so `- $$` closes on an indented continuation line.
   if (!CONTAINER_PREFIX.test(continuation)) return null;
   const openerRun = /^\$+/.exec(markdown.slice(start))?.[0];
   if (!openerRun) return null;
+  // Root-level math has no container to end. The parsed value already tells
+  // whether the last source line was consumed as a closing fence, so skip the
+  // probe parse for the common root case.
+  if (openerPrefix === "") {
+    if (hasExplicitMathCloser(markdown, start, end, openerRun.length, candidate.value)) return null;
+    return { openerLength: openerRun.length, closingPrefix: "" };
+  }
   const probe = markdown.endsWith("\n")
     ? `${markdown}${continuation}${MATH_PROBE}`
     : `${markdown}\n${continuation}${MATH_PROBE}`;
   const after = findMathNodeAt(mathParser.parse(probe) as MarkdownNode, start);
   if (!after || after.value === undefined || after.value.length <= candidate.value.length) return null;
   return { openerLength: openerRun.length, closingPrefix: continuation };
+}
+
+/** Whether the parsed math value already excludes an explicit closing fence. */
+function hasExplicitMathCloser(
+  markdown: string,
+  start: number,
+  end: number,
+  openerLength: number,
+  value: string,
+): boolean {
+  const source = markdown.slice(start, end);
+  const lastBreak = source.lastIndexOf("\n");
+  // A node that ends with a line break has no closing line left to inspect.
+  if (lastBreak >= 0 && source.slice(lastBreak + 1) === "") return false;
+  const lastLine = lastBreak < 0 ? source.slice(openerLength) : source.slice(lastBreak + 1);
+  const body = value.replace(/\n+$/, "");
+  return !body.endsWith(lastLine.trimEnd());
 }
 
 function lastMathNode(node: MarkdownNode): MarkdownNode | null {

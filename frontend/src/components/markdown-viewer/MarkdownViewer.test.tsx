@@ -244,6 +244,25 @@ describe("MarkdownViewer streaming mode", () => {
     expect(container.querySelector("code")?.textContent).toBe("$$x^2$$");
   });
 
+  it("keeps a multi-backtick closer on the paragraph line before the newline", () => {
+    const open = render(<MarkdownViewer mode="streaming">{"Use ```\\(x\\)\n"}</MarkdownViewer>);
+    expect(open.container.querySelector(".katex")).toBeNull();
+    expect(open.container.querySelector("pre")).toBeNull();
+    expect(open.container.querySelector("code")?.textContent).toBe("\\(x\\)");
+    const openHtml = open.container.innerHTML;
+    open.unmount();
+    const closed = render(<MarkdownViewer mode="streaming">{"Use ```\\(x\\)```\n"}</MarkdownViewer>);
+    expect(closed.container.innerHTML).toBe(openHtml);
+  });
+
+  it("does not duplicate nested code spans inside an open span", () => {
+    const { container } = render(
+      <MarkdownViewer mode="streaming">{"Use `open and ``closed`` tail"}</MarkdownViewer>,
+    );
+    expect(container.textContent).toBe("Use open and ``closed`` tail");
+    expect(container.querySelector("code")?.textContent).toBe("open and ``closed`` tail");
+  });
+
   it("renders same-line list display math while streaming", () => {
     const { container } = render(<MarkdownViewer mode="streaming">{"- $$\n  E = mc^2"}</MarkdownViewer>);
     expect(container.querySelector(".katex-display .katex")).toBeInTheDocument();

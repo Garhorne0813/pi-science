@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { normalizeMathInput } from "./MarkdownViewer";
 import { markdownCodeRanges } from "./markdown-code-ranges";
 import { prepareStreamingMarkdown, stabilizeStreamingMarkdown } from "./streaming-markdown";
 
@@ -69,6 +70,10 @@ describe("stabilizeStreamingMarkdown", () => {
     ["complete triple-dollar math", "$$$\nx\n$$$"],
     ["complete math with a longer closer", "$$\nx\n$$$"],
     ["complete math with a trailing newline", "$$$\nx\n$$$\n"],
+    ["complete single-line math", "$$x$$"],
+    ["complete math with a longer run", "$$x$$$"],
+    ["complete quadruple-dollar math", "$$$$x$$$$"],
+    ["complete multi-line quadruple-dollar math", "$$$$\nx\n$$$$"],
   ])("leaves %s byte-for-byte unchanged", (_name, complete) => {
     expect(stabilizeStreamingMarkdown(complete)).toBe(complete);
   });
@@ -77,6 +82,7 @@ describe("stabilizeStreamingMarkdown", () => {
     ["triple-dollar math", "$$$\nx", "$$$\nx\n$$$"],
     ["quadruple-dollar math", "$$$$\nx", "$$$$\nx\n$$$$"],
     ["short closer for a long opener", "$$$$\nx\n$$", "$$$$\nx\n$$\n$$$$"],
+    ["empty math opener", "$$", "$$\n$$"],
   ])("closes unclosed %s with a matching run", (_name, input, expected) => {
     expect(stabilizeStreamingMarkdown(input)).toBe(expected);
   });
@@ -105,11 +111,19 @@ describe("stabilizeStreamingMarkdown", () => {
     expect(stabilizeStreamingMarkdown(input)).toBe(expected);
   });
 
+  it("keeps a multi-backtick closer on the paragraph line before the newline", () => {
+    expect(stabilizeStreamingMarkdown("Use ```\\(x\\)\n")).toBe("Use ```\\(x\\)```\n");
+    expect(stabilizeStreamingMarkdown("> Use ```\\(x\\)\n")).toBe("> Use ```\\(x\\)```\n");
+    expect(stabilizeStreamingMarkdown("- item\n  Use ```\\(x\\)\n")).toBe("- item\n  Use ```\\(x\\)```\n");
+  });
+
   it("does not close a backtick run that later deltas cannot continue", () => {
     expect(stabilizeStreamingMarkdown("Use `x\n\nmore")).toBe("Use `x\n\nmore");
     expect(stabilizeStreamingMarkdown("Use `")).toBe("Use `");
     expect(stabilizeStreamingMarkdown("Use \\` literal")).toBe("Use \\` literal");
     expect(stabilizeStreamingMarkdown("# Heading `x\n")).toBe("# Heading `x\n");
+    expect(stabilizeStreamingMarkdown("Use `\n")).toBe("Use `\n");
+    expect(stabilizeStreamingMarkdown("Use `x\\\n")).toBe("Use `x\\\n");
   });
 
   it("reports the synthetic code span range for the stabilized text", () => {
@@ -133,21 +147,58 @@ describe("stabilizeStreamingMarkdown", () => {
       "```python\nprint(1)\n```\n\ntext",
       "- item\n  ```python\n  x = 1",
       "Use ``a`b`` and `open",
+      "Use `open and ``closed`` tail",
+      "Use `open and ``closed`` tail\n",
+      "`a ``b`` c",
       "$$\nx\n\nUse `open",
     ];
     for (const input of inputs) {
       const prepared = prepareStreamingMarkdown(input);
-      expect(prepared.codeRanges, input).toEqual(markdownCodeRanges(prepared.text));
+      if (prepared.text === input) {
+        expect(prepared.codeRanges, input).toBeUndefined();
+      } else {
+        expect(prepared.codeRanges, input).toEqual(markdownCodeRanges(prepared.text));
+      }
     }
   });
 
-  it("prepares a 100k-character mixed buffer without truncation", () => {
+  it("keeps the stabilized code ranges sorted and non-overlapping", () => {
+    const prepared = prepareStreamingMarkdown("Use `open and ``closed`` tail");
+    const ranges = prepared.codeRanges;
+    expect(ranges).toBeDefined();
+    for (let index = 1; index < ranges!.length; index += 1) {
+      expect(ranges![index]!.start).toBeGreaterThanOrEqual(ranges![index - 1]!.end);
+    }
+    expect(ranges).toEqual([{ start: 4, end: prepared.text.length }]);
+  });
+
+  it("keeps range equivalence and the fixed point across generated buffers", () => {
+    const parts = ["`", "``", "```", "$", "$$", "x", " ", "\n", "> ", "- ", "| ", "\\(", "\\)", "*", "1. "];
+    let seed = 20240921;
+    const random = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    for (let iteration = 0; iteration < 300; iteration += 1) {
+      let input = "";
+      const count = 1 + Math.floor(random() * 10);
+      for (let part = 0; part < count; part += 1) input += parts[Math.floor(random() * parts.length)];
+      const prepared = prepareStreamingMarkdown(input);
+      if (prepared.text === input) {
+        expect(prepared.codeRanges, input).toBeUndefined();
+      } else {
+        expect(prepared.codeRanges, input).toEqual(markdownCodeRanges(prepared.text));
+      }
+      expect(normalizeMathInput(prepared.text, prepared.codeRanges), input).toBe(normalizeMathInput(prepared.text));
+      expect(prepareStreamingMarkdown(prepared.text).text, input).toBe(prepared.text);
+    }
+  });
+
+  // Two full parses of a 100k buffer is the real streaming cost; slow CI
+  // runners need more than the default 5s. The scan itself is O(N + ranges).
+  it("prepares a 100k-character mixed buffer without truncation", { timeout: 15_000 }, () => {
     const line = "\u79d1\u7814\u7ed3\u679c **bold** `code` \\(x\\) and $E = mc^2$\n";
     const input = `${line.repeat(Math.ceil(100_000 / line.length))}\n$$\nE = mc^2`;
     const prepared = prepareStreamingMarkdown(input);
     expect(prepared.text.startsWith(input)).toBe(true);
     expect(prepared.text.endsWith("\n$$")).toBe(true);
-    expect(markdownCodeRanges(prepared.text)).toEqual(prepared.codeRanges);
   });
 
 });

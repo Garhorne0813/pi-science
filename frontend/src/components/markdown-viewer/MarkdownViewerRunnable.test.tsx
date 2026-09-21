@@ -70,4 +70,25 @@ describe("MarkdownViewer runnable code across streaming frames", () => {
     expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
     expect(execute).toHaveBeenCalledTimes(1);
   });
+
+  it("does not show a result under code that replaced it mid-run", async () => {
+    const frames = stubFrames();
+    let resolveRun: (value: typeof RESULT) => void = () => {};
+    execute.mockReturnValue(new Promise((resolve) => { resolveRun = resolve; }));
+    const runner = { cwd: "/workspace", sessionId: "s1" };
+
+    const { rerender } = render(
+      <MarkdownViewer mode="streaming" codeRunner={runner}>{"```python\nprint(1)\n```\n\nNarration"}</MarkdownViewer>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    rerender(
+      <MarkdownViewer mode="streaming" codeRunner={runner}>{"```python\nprint(2)\n```\n\nNarration"}</MarkdownViewer>,
+    );
+    frames.flush();
+
+    await act(async () => { resolveRun(RESULT); });
+    expect(screen.queryByText("42")).toBeNull();
+    expect(screen.getByRole("button", { name: "Run" })).toBeEnabled();
+  });
 });

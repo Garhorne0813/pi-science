@@ -16,19 +16,28 @@ export function RunnableCodeBlock({ code, language, cwd, sessionId, preClassName
 }) {
   const { t } = useTranslation();
   const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<CellResult | null>(null);
+  // Results are attributed to the exact code that produced them: a streaming
+  // replacement can rewrite this fence while the previous execution is still
+  // in flight, and its output must not appear under the new code.
+  const [completed, setCompleted] = useState<{ code: string; result: CellResult } | null>(null);
+  const result = completed && completed.code === code ? completed.result : null;
   // One scratch notebook per conversation: every chat block shares that kernel,
   // so variables defined in one block persist into the next (Claude Science notebook behavior).
   const notebookId = `chat-${sessionId}`;
 
   const run = async () => {
     if (running || !code.trim()) return;
+    const snapshot = code;
     setRunning(true);
-    setResult(null);
+    setCompleted(null);
     try {
-      setResult(await notebookRuntime.execute(notebookId, cwd, "python", code, sessionId));
+      const next = await notebookRuntime.execute(notebookId, cwd, "python", snapshot, sessionId);
+      setCompleted({ code: snapshot, result: next });
     } catch (cause) {
-      setResult({ ok: false, stdout: "", result: null, error: cause instanceof Error ? cause.message : String(cause) });
+      setCompleted({
+        code: snapshot,
+        result: { ok: false, stdout: "", result: null, error: cause instanceof Error ? cause.message : String(cause) },
+      });
     } finally {
       setRunning(false);
     }
@@ -59,7 +68,7 @@ export function RunnableCodeBlock({ code, language, cwd, sessionId, preClassName
         <div className="mb-3 rounded-input bg-surface-2 font-mono text-[12px]">
           <div className="flex items-center justify-between gap-2 border-b border-faint px-3 py-1.5 font-sans text-[10px] uppercase tracking-wider text-muted">
             <span>{t("conversation.codeOutput")}</span>
-            <button type="button" aria-label={t("conversation.closeOutput")} onClick={() => setResult(null)} className="text-muted hover:text-text">
+            <button type="button" aria-label={t("conversation.closeOutput")} onClick={() => setCompleted(null)} className="text-muted hover:text-text">
               <X size={11} />
             </button>
           </div>
