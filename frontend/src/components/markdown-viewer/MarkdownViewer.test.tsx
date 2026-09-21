@@ -102,14 +102,43 @@ describe("MarkdownViewer streaming mode", () => {
     expect(table.container.textContent).toContain("1");
   });
 
-  it("does not offer execution for a synthetic partial code fence", () => {
+  it("does not offer execution for an unclosed code fence", () => {
     render(
       <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
         {"```python\nprint('partial')"}
       </MarkdownViewer>,
     );
-    expect(screen.queryByRole("button", { name: "Run code" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+  });
+
+  it("keeps execution available for a completed fence while the message continues streaming", () => {
+    render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {"```python\nprint('done')\n```\n\nMore explanation is still streaming..."}
+      </MarkdownViewer>,
+    );
+    expect(screen.getByRole("button", { name: "Run" })).toBeInTheDocument();
+  });
+
+  it("only disables execution for the unclosed fence in a streaming message", () => {
+    render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {"```python\nprint('done')\n```\n\n```python\nprint('partial')"}
+      </MarkdownViewer>,
+    );
+    expect(screen.getAllByRole("button", { name: "Run" })).toHaveLength(1);
+  });
+
+  it("does not create a root-level code block when a list fence is unclosed", () => {
+    const { container } = render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {"- item\n  ```python\n  x = 1"}
+      </MarkdownViewer>,
+    );
+    expect(container.querySelectorAll("pre")).toHaveLength(1);
+    expect(container.querySelector("li pre")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
   });
 
   it("keeps complete streaming and final output structurally equivalent", () => {

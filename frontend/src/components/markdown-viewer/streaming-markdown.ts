@@ -1,88 +1,140 @@
 export type MarkdownRenderMode = "streaming" | "final";
 
+type Fence = {
+  marker: "`" | "~";
+  length: number;
+  offset: number;
+};
+
+type FenceLine = {
+  marker: "`" | "~";
+  length: number;
+  offset: number;
+  rest: string;
+};
+
 /**
  * Add presentation-only closing delimiters to an in-flight Markdown buffer.
  * The source value is never changed, and final mode bypasses this adapter.
+ *
+ * Fenced code and inline math are deliberately left alone. CommonMark closes
+ * an unterminated fence at the end of its containing block, while guessing at
+ * a single-dollar delimiter can turn prices or shell variables into KaTeX.
  */
 export function stabilizeStreamingMarkdown(markdown: string): string {
-  const fenced = closeOpenFence(markdown);
-  const displayMath = closeOpenDisplayMath(fenced);
-  return closeLikelyInlineMath(displayMath);
+  return closeOpenDisplayMath(markdown);
 }
 
-function closeOpenFence(markdown: string): string {
-  let open: { marker: "`" | "~"; length: number } | null = null;
-  for (const line of markdown.split("\n")) {
-    const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (!match) continue;
-    const fence = match[1]!;
-    const marker = fence[0] as "`" | "~";
-    if (!open) {
-      open = { marker, length: fence.length };
-      continue;
+/** Return the source offset of the fence for the currently unclosed code block. */
+export function findUnclosedFenceOffset(markdown: string): number | null {
+  const state: { open: Fence | null } = { open: null };
+  visitLines(markdown, (line, offset) => {
+    const fence = parseFenceLine(line, offset);
+    if (!fence) return;
+    if (!state.open) {
+      if (fence.marker === "`" && fence.rest.includes("`")) return;
+      state.open = { marker: fence.marker, length: fence.length, offset: fence.offset };
+      return;
     }
-    if (marker === open.marker && fence.length >= open.length && new RegExp(`^ {0,3}${escapeRegExp(marker)}{${open.length},}[ \\t]*$`).test(line)) open = null;
-  }
-  if (!open) return markdown;
-  return `${markdown}${markdown.endsWith("\n") ? "" : "\n"}${open.marker.repeat(open.length)}`;
+    if (
+      fence.marker === state.open.marker
+      && fence.length >= state.open.length
+      && /^[ \t]*$/.test(fence.rest)
+    ) {
+      state.open = null;
+    }
+  });
+  return state.open?.offset ?? null;
 }
 
 function closeOpenDisplayMath(markdown: string): string {
   let open = false;
-  visitOutsideCode(markdown, (token) => {
-    if (token === "$$") open = !open;
+  let closingPrefix: string | null = null;
+  visitOutsideCode(markdown, (token, offset) => {
+    if (token !== "$$") return;
+    open = !open;
+    closingPrefix = open ? displayMathPrefix(markdown, offset) : null;
   });
-  return open ? `${markdown}${markdown.endsWith("\n") ? "" : "\n"}$$` : markdown;
+  if (!open || closingPrefix === null) return markdown;
+  return `${markdown}${markdown.endsWith("\n") ? "" : "\n"}${closingPrefix}$$`;
 }
 
-function closeLikelyInlineMath(markdown: string): string {
-  let openAt = -1;
-  visitOutsideCode(markdown, (token, offset) => {
-    if (token !== "$") return;
-    openAt = openAt < 0 ? offset : -1;
-  });
-  if (openAt < 0) return markdown;
-  const candidate = markdown.slice(openAt + 1);
-  // Avoid turning prices and shell variables into math merely because their
-  // closing delimiter has not arrived. Once mathematical syntax is visible,
-  // a synthetic close keeps the partial expression in a stable KaTeX region.
-  return /[\\^_={}]|\b(?:frac|sqrt|sum|int|alpha|beta|gamma)\b/.test(candidate)
-    ? `${markdown}$`
-    : markdown;
+function displayMathPrefix(markdown: string, offset: number): string | null {
+  const lineStart = markdown.lastIndexOf("\n", offset - 1) + 1;
+  const prefix = markdown.slice(lineStart, offset);
+  // Only synthesize a close for a block delimiter. Preserve blockquote and
+  // list indentation so the close remains inside the same Markdown container.
+  return /^(?:(?: {0,3}>[ \t]?)+)?[ \t]*$/.test(prefix) ? prefix : null;
 }
 
 function visitOutsideCode(markdown: string, visit: (token: "$" | "$$", offset: number) => void): void {
-  let fence: { marker: "`" | "~"; length: number } | null = null;
+  let fence: Fence | null = null;
   let inlineTicks = 0;
-  let lineStart = true;
-  for (let index = 0; index < markdown.length;) {
-    const char = markdown[index]!;
-    if (lineStart && inlineTicks === 0) {
-      const line = markdown.slice(index, markdown.indexOf("\n", index) < 0 ? markdown.length : markdown.indexOf("\n", index));
-      const match = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-      if (match) {
-        const run = match[1]!;
-        const marker = run[0] as "`" | "~";
-        if (!fence) fence = { marker, length: run.length };
-        else if (marker === fence.marker && run.length >= fence.length && /^ {0,3}(`{3,}|~{3,})[ \t]*$/.test(line)) fence = null;
+
+  visitLines(markdown, (line, lineOffset) => {
+    if (inlineTicks === 0) {
+      const delimiter = parseFenceLine(line, lineOffset);
+      if (delimiter) {
+        if (!fence) {
+          if (delimiter.marker !== "`" || !delimiter.rest.includes("`")) {
+            fence = { marker: delimiter.marker, length: delimiter.length, offset: delimiter.offset };
+            return;
+          }
+        } else if (
+          delimiter.marker === fence.marker
+          && delimiter.length >= fence.length
+          && /^[ \t]*$/.test(delimiter.rest)
+        ) {
+          fence = null;
+          return;
+        }
       }
     }
-    if (!fence && char === "`") {
-      const length = runLength(markdown, index, "`");
-      if (length < 3) inlineTicks = inlineTicks === 0 ? length : inlineTicks === length ? 0 : inlineTicks;
-      index += length;
-      lineStart = false;
-      continue;
+    if (fence) return;
+
+    for (let index = 0; index < line.length;) {
+      const char = line[index]!;
+      if (char === "`") {
+        const length = runLength(line, index, "`");
+        inlineTicks = inlineTicks === 0 ? length : inlineTicks === length ? 0 : inlineTicks;
+        index += length;
+        continue;
+      }
+      if (inlineTicks === 0 && char === "$" && !isEscaped(line, index)) {
+        const double = line[index + 1] === "$";
+        visit(double ? "$$" : "$", lineOffset + index);
+        index += double ? 2 : 1;
+        continue;
+      }
+      index += 1;
     }
-    if (!fence && inlineTicks === 0 && char === "$" && !isEscaped(markdown, index)) {
-      const double = markdown[index + 1] === "$";
-      visit(double ? "$$" : "$", index);
-      index += double ? 2 : 1;
-      lineStart = false;
-      continue;
+  });
+}
+
+function parseFenceLine(line: string, lineOffset: number): FenceLine | null {
+  // Blockquote markers are part of the container, not fence indentation.
+  // Up to three spaces are allowed before the fence within that container.
+  const match = /^((?:(?: {0,3}>[ \t]?)+)? {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
+  if (!match) return null;
+  const run = match[2]!;
+  return {
+    marker: run[0] as "`" | "~",
+    length: run.length,
+    offset: lineOffset + match[1]!.length,
+    rest: match[3]!,
+  };
+}
+
+function visitLines(markdown: string, visit: (line: string, offset: number) => void): void {
+  let offset = 0;
+  while (offset <= markdown.length) {
+    const end = markdown.indexOf("\n", offset);
+    if (end < 0) {
+      visit(markdown.slice(offset), offset);
+      return;
     }
-    lineStart = char === "\n";
-    index += 1;
+    visit(markdown.slice(offset, end), offset);
+    offset = end + 1;
   }
 }
 
@@ -96,8 +148,4 @@ function isEscaped(value: string, index: number): boolean {
   let slashes = 0;
   for (let cursor = index - 1; cursor >= 0 && value[cursor] === "\\"; cursor -= 1) slashes += 1;
   return slashes % 2 === 1;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

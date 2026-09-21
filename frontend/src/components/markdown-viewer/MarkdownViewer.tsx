@@ -13,7 +13,7 @@ import { CodeBlockFrame } from "./CodeBlockFrame";
 import { fileInspectorForPath } from "@/lib/artifacts";
 import { resolveMarkdownResource, type MarkdownResourceContext } from "@/lib/files/markdown-resources";
 import { useUiStore } from "@/lib/ui";
-import { stabilizeStreamingMarkdown, type MarkdownRenderMode } from "./streaming-markdown";
+import { findUnclosedFenceOffset, stabilizeStreamingMarkdown, type MarkdownRenderMode } from "./streaming-markdown";
 
 export type { MarkdownRenderMode } from "./streaming-markdown";
 
@@ -267,6 +267,10 @@ export function MarkdownViewer({
   const renderedValue = useMemo(() => normalizeMathInput(
     mode === "streaming" ? stabilizeStreamingMarkdown(visibleValue) : visibleValue,
   ), [mode, visibleValue]);
+  const unclosedFenceOffset = useMemo(
+    () => mode === "streaming" ? findUnclosedFenceOffset(visibleValue) : null,
+    [mode, visibleValue],
+  );
   const context = useMemo<MarkdownResourceContext | undefined>(
     () => resourceContext ?? (cwd ? { cwd, documentPath: undefined } : undefined),
     [cwd, resourceContext],
@@ -330,14 +334,21 @@ export function MarkdownViewer({
             if (className === "katex-display") return <MathBlock variant={variant}>{children}</MathBlock>;
             return <span {...props} className={className}>{children}</span>;
           },
-          pre: ({ children }) => {
+          pre: ({ children, node }) => {
             const codeEl = Array.isArray(children) ? children[0] : children;
             const codeProps = isValidElement(codeEl) ? (codeEl.props as { className?: string; children?: React.ReactNode }) : null;
             const language = codeProps ? fenceLanguage(codeProps.className) : null;
             const code = codeProps ? reactText(codeProps.children) : "";
             const chrome = variant === "chat" && (codeChrome ?? true);
+            const start = node?.position?.start.offset;
+            const end = node?.position?.end.offset;
+            const isUnclosedFence = unclosedFenceOffset !== null
+              && start !== undefined
+              && end !== undefined
+              && start <= unclosedFenceOffset
+              && unclosedFenceOffset <= end;
             if (chrome && codeProps) {
-              if (mode === "final" && codeRunner && runnableLanguage(language)) {
+              if (!isUnclosedFence && codeRunner && runnableLanguage(language)) {
                 return (
                   <RunnableCodeBlock code={code} language={language} cwd={codeRunner.cwd} sessionId={codeRunner.sessionId} preClassName={s.pre}>
                     {children}
