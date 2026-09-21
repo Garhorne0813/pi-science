@@ -320,20 +320,22 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
 
     case "item.completed": {
       const itemId = stringValue(event.itemId) ?? stringValue(event.partId);
+      const completedRevision = numberValue(event.revision);
+      const completedSequence = numberValue(event.seq);
       const content = itemId ? foldState.textByKey[itemId] ?? foldState.thinkingByKey[itemId] : undefined;
       const blockIndex = content ? index[content.blockId] : undefined;
       if (blockIndex !== undefined && (blocks[blockIndex]?.kind === "agent" || blocks[blockIndex]?.kind === "thinking")) {
         const completed = blocks[blockIndex];
         blocks[blockIndex] = completed.kind === "thinking"
-          ? { ...completed, partial: false, endedAt: completed.endedAt ?? new Date().toISOString() }
-          : { ...completed, partial: false };
+          ? { ...completed, ...(completedRevision !== undefined ? { revision: completedRevision } : {}), ...(completedSequence !== undefined ? { sequence: completedSequence } : {}), partial: false, endedAt: completed.endedAt ?? new Date().toISOString() }
+          : { ...completed, ...(completedRevision !== undefined ? { revision: completedRevision } : {}), ...(completedSequence !== undefined ? { sequence: completedSequence } : {}), partial: false };
       } else if (itemId) {
         for (let i = 0; i < blocks.length; i += 1) {
           const block = blocks[i];
           if ((block.kind === "agent" || block.kind === "thinking") && (block.itemId === itemId || block.id === itemId)) {
             blocks[i] = block.kind === "thinking"
-              ? { ...block, partial: false, endedAt: block.endedAt ?? new Date().toISOString() }
-              : { ...block, partial: false };
+              ? { ...block, ...(completedRevision !== undefined ? { revision: completedRevision } : {}), ...(completedSequence !== undefined ? { sequence: completedSequence } : {}), partial: false, endedAt: block.endedAt ?? new Date().toISOString() }
+              : { ...block, ...(completedRevision !== undefined ? { revision: completedRevision } : {}), ...(completedSequence !== undefined ? { sequence: completedSequence } : {}), partial: false };
           }
         }
       }
@@ -415,6 +417,8 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
             parts: [{ id: eventPartId ?? blockId, text: nextText }],
             ...(role ? { presentationRole: role } : {}),
             classificationSource: role ? "explicit" : "legacy_inferred",
+            revision,
+            ...(numberValue(event.seq) !== undefined ? { sequence: numberValue(event.seq) } : {}),
             partial: true,
             timestamp: new Date().toISOString(),
           });
@@ -427,6 +431,8 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
             itemId: stringValue(event.itemId) ?? eventPartId ?? (blocks[existingIdx].kind === "agent" ? blocks[existingIdx].itemId : undefined),
             parts: updatedAgentParts(blocks[existingIdx], eventPartId ?? blockId, nextText),
             ...(role ? { presentationRole: role, classificationSource: "explicit" as const } : {}),
+            revision,
+            ...(numberValue(event.seq) !== undefined ? { sequence: numberValue(event.seq) } : {}),
             partial: true,
             timestamp: blocks[existingIdx].kind === "agent" ? blocks[existingIdx].timestamp : undefined,
           } as ThreadBlock;
@@ -449,6 +455,8 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
           parts: [{ id: eventPartId ?? blockId, text: nextText }],
           ...(role ? { presentationRole: role } : {}),
           classificationSource: role ? "explicit" : "legacy_inferred",
+          revision,
+          ...(numberValue(event.seq) !== undefined ? { sequence: numberValue(event.seq) } : {}),
           partial: true,
           timestamp: new Date().toISOString(),
         };
@@ -470,6 +478,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       const key = `thinking:${eventPartId ?? eventItemKey(event, foldState)}`;
       const previous = foldState.thinkingByKey[key];
       const nextText = event.replace === true ? incomingText : (previous?.text ?? "") + incomingText;
+      const revision = numberValue(event.revision) ?? ((previous?.revision ?? 0) + 1);
       const turnId = turnIdentity(event, foldState);
       const runId = runIdentity(event, foldState);
       const blockId = previous?.blockId ?? `thinking-${turnId}-${eventPartId ?? key}`;
@@ -489,6 +498,8 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
             endedAt: undefined,
             turnId,
             ...(runId ? { runId } : {}),
+            revision,
+            ...(numberValue(event.seq) !== undefined ? { sequence: numberValue(event.seq) } : {}),
           } as ThreadBlock;
         } else {
           index[blockId] = blocks.length;
@@ -499,6 +510,8 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
             ...(runId ? { runId } : {}),
             ...(stringValue(event.itemId) || eventPartId ? { itemId: stringValue(event.itemId) ?? eventPartId } : {}),
             parts: [{ id: blockId, text: nextText }],
+            revision,
+            ...(numberValue(event.seq) !== undefined ? { sequence: numberValue(event.seq) } : {}),
             partial: true,
             startedAt: nowIso,
             timestamp: nowIso,
@@ -507,7 +520,7 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       }
       foldState.thinkingByKey[key] = {
         text: nextText,
-        revision: numberValue(event.revision) ?? ((previous?.revision ?? 0) + 1),
+        revision,
         blockId,
         partId: eventPartId ?? key,
         ...(previous?.segments ? { segments: previous.segments } : {}),
@@ -539,12 +552,17 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
       // Runtimes rarely ship wall-clock fields. Arrival times are the honest
       // fallback: first sight starts the clock, a terminal status ends it.
       const nowIso = new Date().toISOString();
+      const revision = numberValue(event.revision) ?? ((previous?.revision ?? -1) + 1);
       const block: ThreadBlock = {
         kind: "tool",
         id: blockId,
         callId,
         turnId: stringValue(event.turnId) ?? previous?.turnId ?? foldState.activeTurnId,
         runId: stringValue(event.runId) ?? previous?.runId ?? foldState.activeRunId,
+        ...(stringValue(event.itemId) || previous?.itemId ? { itemId: stringValue(event.itemId) ?? previous?.itemId } : {}),
+        ...(stringValue(event.parentItemId) || previous?.parentItemId ? { parentItemId: stringValue(event.parentItemId) ?? previous?.parentItemId } : {}),
+        revision,
+        ...(numberValue(event.seq) !== undefined || previous?.sequence !== undefined ? { sequence: numberValue(event.seq) ?? previous?.sequence } : {}),
         ...(operationId || previous?.operationId ? { operationId: operationId ?? previous?.operationId } : {}),
         ...(attemptId || previous?.attemptId ? { attemptId: attemptId ?? previous?.attemptId } : {}),
         tool: (event.tool as string) || previous?.tool || "unknown",
@@ -593,6 +611,8 @@ function foldLegacyEvent(state: Thread, event: PiScienceEvent): Thread {
         kind: "artifact-summary",
         id: blockId,
         turnId,
+        ...(numberValue(event.revision) !== undefined ? { revision: numberValue(event.revision) } : {}),
+        ...(numberValue(event.seq) !== undefined ? { sequence: numberValue(event.seq) } : {}),
         assistantMessageId: event.assistantMessageId ? String(event.assistantMessageId) : null,
         ...(Number.isInteger(turnOrdinal) && turnOrdinal > 0 ? { turnOrdinal } : {}),
         artifacts: items,
