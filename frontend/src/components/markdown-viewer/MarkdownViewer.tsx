@@ -1,4 +1,4 @@
-import { isValidElement, useCallback, useMemo, useState } from "react";
+import { isValidElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -13,6 +13,9 @@ import { CodeBlockFrame } from "./CodeBlockFrame";
 import { fileInspectorForPath } from "@/lib/artifacts";
 import { resolveMarkdownResource, type MarkdownResourceContext } from "@/lib/files/markdown-resources";
 import { useUiStore } from "@/lib/ui";
+import { stabilizeStreamingMarkdown, type MarkdownRenderMode } from "./streaming-markdown";
+
+export type { MarkdownRenderMode } from "./streaming-markdown";
 
 type Variant = "chat" | "document";
 
@@ -60,6 +63,33 @@ const STYLES: Record<Variant, Record<string, string>> = {
 };
 
 export type CodeRunner = { cwd: string; sessionId: string };
+
+function useFrameCoalescedValue(value: string, enabled: boolean): string {
+  const [coalesced, setCoalesced] = useState(value);
+  const latest = useRef(value);
+  const frame = useRef<number | null>(null);
+  latest.current = value;
+
+  useEffect(() => {
+    if (!enabled) {
+      if (frame.current !== null) cancelAnimationFrame(frame.current);
+      frame.current = null;
+      setCoalesced(value);
+      return;
+    }
+    if (frame.current !== null || coalesced === value) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = null;
+      setCoalesced(latest.current);
+    });
+  }, [coalesced, enabled, value]);
+
+  useEffect(() => () => {
+    if (frame.current !== null) cancelAnimationFrame(frame.current);
+  }, []);
+
+  return enabled ? coalesced : value;
+}
 
 function reactText(node: React.ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
@@ -219,6 +249,7 @@ export function MarkdownViewer({
   codeRunner,
   resourceContext,
   codeChrome,
+  mode = "final",
 }: {
   children: string;
   className?: string;
@@ -226,11 +257,16 @@ export function MarkdownViewer({
   codeRunner?: CodeRunner;
   resourceContext?: MarkdownResourceContext;
   codeChrome?: boolean;
+  mode?: MarkdownRenderMode;
 }) {
   const s = STYLES[variant];
   const cwd = codeRunner?.cwd;
   const openInspector = useUiStore((s) => s.openInspector);
   const { t } = useTranslation();
+  const visibleValue = useFrameCoalescedValue(children, mode === "streaming");
+  const renderedValue = useMemo(() => normalizeMathInput(
+    mode === "streaming" ? stabilizeStreamingMarkdown(visibleValue) : visibleValue,
+  ), [mode, visibleValue]);
   const context = useMemo<MarkdownResourceContext | undefined>(
     () => resourceContext ?? (cwd ? { cwd, documentPath: undefined } : undefined),
     [cwd, resourceContext],
@@ -301,7 +337,7 @@ export function MarkdownViewer({
             const code = codeProps ? reactText(codeProps.children) : "";
             const chrome = variant === "chat" && (codeChrome ?? true);
             if (chrome && codeProps) {
-              if (codeRunner && runnableLanguage(language)) {
+              if (mode === "final" && codeRunner && runnableLanguage(language)) {
                 return (
                   <RunnableCodeBlock code={code} language={language} cwd={codeRunner.cwd} sessionId={codeRunner.sessionId} preClassName={s.pre}>
                     {children}
@@ -331,7 +367,7 @@ export function MarkdownViewer({
           td: ({ children, style }) => <td className={s.td} style={style}>{children}</td>,
         }}
       >
-        {normalizeMathInput(children)}
+        {renderedValue}
       </ReactMarkdown>
     </div>
   );

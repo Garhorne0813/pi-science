@@ -5,6 +5,9 @@ export type ProjectionSessionState = "idle" | "running" | "waiting_user" | "reco
 
 export interface RevisionedProjection {
   id: string;
+  /** UI-local monotonic version token. Adapters may derive it from either an
+   * entity revision or a stream-global sequence; it is not a wire revision or
+   * an optimistic-concurrency token. */
   revision: number;
 }
 

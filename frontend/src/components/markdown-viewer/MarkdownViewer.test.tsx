@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { useUiStore } from "@/lib/ui";
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   useUiStore.setState({ inspectorOpen: false, inspectorData: null });
 });
 
@@ -81,6 +82,62 @@ print(1)
     );
     expect(container.querySelector(".sticky")).toBeNull();
     expect(container.querySelector("button")).toBeNull();
+  });
+});
+
+describe("MarkdownViewer streaming mode", () => {
+  it("renders incomplete code and display math without throwing", () => {
+    const code = render(
+      <MarkdownViewer mode="streaming">{"```python\ndef fit("}</MarkdownViewer>,
+    );
+    expect(code.container.querySelector("pre")).toBeInTheDocument();
+    code.unmount();
+
+    const math = render(<MarkdownViewer mode="streaming">{"$$\nE_a = 54.2"}</MarkdownViewer>);
+    expect(math.container.querySelector(".katex-display .katex")).toBeInTheDocument();
+    math.unmount();
+
+    const table = render(<MarkdownViewer mode="streaming">{"| A | B |\n| --- | ---\n| 1"}</MarkdownViewer>);
+    expect(table.container.textContent).toContain("A");
+    expect(table.container.textContent).toContain("1");
+  });
+
+  it("does not offer execution for a synthetic partial code fence", () => {
+    render(
+      <MarkdownViewer mode="streaming" codeRunner={{ cwd: "/workspace", sessionId: "s1" }}>
+        {"```python\nprint('partial')"}
+      </MarkdownViewer>,
+    );
+    expect(screen.queryByRole("button", { name: "Run code" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+  });
+
+  it("keeps complete streaming and final output structurally equivalent", () => {
+    const markdown = "中文 $E = mc^2$\n\n| A | B |\n| --- | --- |\n| 1 | 2 |";
+    const streaming = render(<MarkdownViewer mode="streaming">{markdown}</MarkdownViewer>);
+    const streamingHtml = streaming.container.innerHTML;
+    streaming.unmount();
+    const final = render(<MarkdownViewer mode="final">{markdown}</MarkdownViewer>);
+    expect(final.container.innerHTML).toBe(streamingHtml);
+  });
+
+  it("coalesces rapid deltas into one animation-frame paint", () => {
+    let paint: FrameRequestCallback | null = null;
+    const requestFrame = vi.fn((callback: FrameRequestCallback) => {
+      paint = callback;
+      return 1;
+    });
+    vi.stubGlobal("requestAnimationFrame", requestFrame);
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const { container, rerender } = render(<MarkdownViewer mode="streaming">{"one"}</MarkdownViewer>);
+
+    rerender(<MarkdownViewer mode="streaming">{"two"}</MarkdownViewer>);
+    rerender(<MarkdownViewer mode="streaming">{"three"}</MarkdownViewer>);
+
+    expect(container.textContent).toBe("one");
+    expect(requestFrame).toHaveBeenCalledTimes(1);
+    act(() => paint?.(16));
+    expect(container.textContent).toBe("three");
   });
 });
 
